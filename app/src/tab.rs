@@ -1501,7 +1501,7 @@ impl<'a> TabComponent<'a> {
                     }
                 } else {
                     let icon_color = self.appearance.theme().nonactive_ui_text_color();
-                    Some(Icon::Oz.to_warpui_icon(icon_color).finish())
+                    Some(Icon::Agent.to_warpui_icon(icon_color).finish())
                 }
             }
             Indicator::AmbientAgent => {
@@ -1515,8 +1515,9 @@ impl<'a> TabComponent<'a> {
                 let mouse_state = self.tab.indicator_hover_state.clone();
                 Some(
                     Hoverable::new(mouse_state, move |state| {
-                        let mut stack = Stack::new()
-                            .with_child(Icon::OzCloud.to_warpui_icon(icon_color.into()).finish());
+                        let mut stack = Stack::new().with_child(
+                            Icon::CloudFilled.to_warpui_icon(icon_color.into()).finish(),
+                        );
 
                         if state.is_hovered() {
                             let tooltip = ui_builder

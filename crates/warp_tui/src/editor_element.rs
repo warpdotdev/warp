@@ -4,8 +4,8 @@
 //! The element *paints and interacts*; it does not compute row structure.
 //! Rows come from the render state's single display-row implementation
 //! (`CharCellState::display_lattice`), which interleaves ghost rows and
-//! elides hidden line ranges; the element slices its text snapshot by each
-//! row's char range, applies consumer-supplied styles, prefixes gutter cells,
+//! elides hidden line ranges; the element obtains each row's paint-ready text
+//! from the lattice, applies consumer-supplied styles, prefixes gutter cells,
 //! and windows by scroll. Interaction geometry (cursor placement, mouse
 //! hit-testing) queries the same lattice, so what is painted and what a click
 //! resolves to can never disagree.
@@ -25,9 +25,7 @@ use std::rc::Rc;
 use string_offset::CharOffset;
 use warp::editor::CodeEditorModel;
 use warp_editor::model::CoreEditorModel;
-use warp_editor::render::model::{
-    CharCellTemporaryBlock, DisplayLattice, DisplayRow, DisplayRowKind,
-};
+use warp_editor::render::model::{DisplayLattice, DisplayRow, DisplayRowKind};
 use warpui_core::elements::tui::{
     TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex, TuiGridPoint, TuiLayoutContext,
     TuiLocalPoint, TuiPaintContext, TuiPaintSurface, TuiParentElement, TuiScreenPoint,
@@ -105,8 +103,8 @@ pub(crate) struct TuiEditorElement {
     text: String,
     /// Cursor gap offset (1-based) captured at construction.
     cursor_offset: CharOffset,
-    /// Selection as a 0-based character-offset range, if any.
-    sel_char_range: Option<Range<CharOffset>>,
+    /// Selections as 0-based character-offset ranges.
+    selection_ranges: Vec<Range<CharOffset>>,
     /// Model-derived hidden line ranges captured at construction. Structural
     /// extras are folded in via [`Self::effective_hidden_ranges`], which is
     /// also what the event path uses over fresh model state.
@@ -128,6 +126,8 @@ pub(crate) struct TuiEditorElement {
     /// Whether to elide the buffer's final empty line (see
     /// [`Self::hide_trailing_empty_line`]).
     hide_trailing_empty_line: bool,
+    /// Whether buffer characters are painted as fixed-width mask glyphs.
+    masked: bool,
     styles: TuiEditorStyles,
     trailing_ghost_text: Option<(String, TuiStyle)>,
     /// Resolves the empty-buffer placeholder hint against fresh app state
@@ -179,14 +179,16 @@ impl TuiEditorElement {
             .unwrap_or_default();
         let sel = inner.buffer_selection_model().as_ref(app);
         let (head, tail) = (sel.first_selection_head(), sel.first_selection_tail());
-        let sel_char_range = (head != tail).then(|| {
-            let start = CharOffset::from(head.min(tail).as_usize().saturating_sub(1));
-            let end = CharOffset::from(head.max(tail).as_usize().saturating_sub(1));
-            start..end
-        });
-        let hidden_line_ranges = inner
-            .render_state()
-            .as_ref(app)
+        let selection_ranges = (head != tail)
+            .then(|| {
+                let start = CharOffset::from(head.min(tail).as_usize().saturating_sub(1));
+                let end = CharOffset::from(head.max(tail).as_usize().saturating_sub(1));
+                start..end
+            })
+            .into_iter()
+            .collect();
+        let render_state = inner.render_state().as_ref(app);
+        let hidden_line_ranges = render_state
             .char_cell()
             .map(|char_cell| char_cell.hidden_line_ranges(app))
             .unwrap_or_default();
@@ -195,13 +197,14 @@ impl TuiEditorElement {
             model: model.clone(),
             text,
             cursor_offset,
-            sel_char_range,
+            selection_ranges,
             hidden_line_ranges,
             editable: false,
             is_focused: false,
             viewport_rows: None,
             line_number_gutter: false,
             hide_trailing_empty_line: false,
+            masked: false,
             styles: TuiEditorStyles::default(),
             trailing_ghost_text: None,
             placeholder_ghost_text_provider: None,
@@ -228,6 +231,19 @@ impl TuiEditorElement {
         self
     }
 
+    /// Replace the model selection snapshot with 1-based buffer ranges from a
+    /// non-mutating projection such as Vim Visual mode.
+    pub(crate) fn with_selection_ranges(mut self, ranges: Vec<Range<CharOffset>>) -> Self {
+        self.selection_ranges = ranges
+            .into_iter()
+            .map(|range| {
+                CharOffset::from(range.start.as_usize().saturating_sub(1))
+                    ..CharOffset::from(range.end.as_usize().saturating_sub(1))
+            })
+            .collect();
+        self
+    }
+
     /// Records the owning view's focus state (tracked by the view via
     /// `on_focus`/`on_blur`, like the GUI's `EditorView::focused`). Editable
     /// consumers must pass this: typed text is only consumed while focused.
@@ -242,6 +258,12 @@ impl TuiEditorElement {
     /// rows (e.g. the diff body, which scrolls with the transcript).
     pub(crate) fn with_viewport_rows(mut self, max_visible_rows: u32) -> Self {
         self.viewport_rows = Some(max_visible_rows);
+        self
+    }
+
+    /// Conceals buffer text while preserving the backing editor model for editing.
+    pub(crate) fn masked(mut self) -> Self {
+        self.masked = true;
         self
     }
 
@@ -429,7 +451,7 @@ impl TuiEditorElement {
             let mut styled_spans = Vec::new();
             let mut column = TuiFlex::column();
             for (vis_idx, row) in visible_slice.iter().enumerate() {
-                column.add_child(self.render_row(row, &chars, lattice.ghosts()));
+                column.add_child(self.render_row(row, &chars, &lattice));
                 if let Some((start_col, end_col)) = self.selection_span_in_row(row, &lattice) {
                     selected_spans.push((
                         vis_idx as u16,
@@ -499,11 +521,18 @@ impl TuiEditorElement {
         &self,
         row: &DisplayRow,
         chars: &[char],
-        ghosts: &[CharCellTemporaryBlock],
+        lattice: &DisplayLattice<'_>,
     ) -> Box<dyn TuiElement> {
         let (content, style) = match &row.kind {
             DisplayRowKind::Buffer { line_index } => {
-                let content = slice_chars(chars, &row.char_range);
+                let content = lattice
+                    .row_text(row, chars)
+                    .expect("buffer display rows have source text");
+                let content = if self.masked {
+                    "•".repeat(content.chars().count())
+                } else {
+                    content
+                };
                 let style = self
                     .styles
                     .line_overrides
@@ -513,12 +542,11 @@ impl TuiEditorElement {
                     .unwrap_or(self.styles.text);
                 (content, style)
             }
-            DisplayRowKind::Ghost { ghost_index } => {
-                let ghost_chars: Vec<char> = ghosts[*ghost_index].content.chars().collect();
-                (
-                    slice_chars(&ghost_chars, &row.char_range),
-                    self.styles.ghost,
-                )
+            DisplayRowKind::Ghost { .. } => {
+                let content = lattice
+                    .row_text(row, chars)
+                    .expect("ghost display rows have source text");
+                (content, self.styles.ghost)
             }
             DisplayRowKind::Gap { line_range } => {
                 (format!("… {} lines", line_range.len()), self.styles.gap)
@@ -562,8 +590,9 @@ impl TuiEditorElement {
         row: &DisplayRow,
         lattice: &DisplayLattice<'_>,
     ) -> Option<(u16, u16)> {
-        let selection = self.sel_char_range.clone()?;
-        Self::char_range_span_in_row(row, lattice, selection)
+        self.selection_ranges
+            .iter()
+            .find_map(|selection| Self::char_range_span_in_row(row, lattice, selection.clone()))
     }
 
     fn char_range_span_in_row(
@@ -861,7 +890,8 @@ impl TuiElement for TuiEditorElement {
                     handler(TuiEditorAction::PasteText(text.clone()), event_ctx);
                     return true;
                 }
-                TuiEvent::ScrollWheel { .. }
+                TuiEvent::ModifierKeyChanged { .. }
+                | TuiEvent::ScrollWheel { .. }
                 | TuiEvent::LeftMouseDown { .. }
                 | TuiEvent::LeftMouseUp { .. }
                 | TuiEvent::LeftMouseDragged { .. }
@@ -873,13 +903,6 @@ impl TuiElement for TuiEditorElement {
 
         false
     }
-}
-
-/// The chars in `range`, collected into the row's paint text.
-fn slice_chars(chars: &[char], range: &Range<CharOffset>) -> String {
-    let start = range.start.as_usize().min(chars.len());
-    let end = range.end.as_usize().min(chars.len());
-    chars[start..end].iter().collect()
 }
 
 /// The number of decimal digits in `n` (minimum 1), sizing the gutter's

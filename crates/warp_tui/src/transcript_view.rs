@@ -23,10 +23,11 @@ use warpui_core::{
 };
 
 use super::agent_block::{TuiAIBlock, TuiAIBlockEvent};
+use super::handoff::{TuiHandoffBlock, TuiHandoffBlockEvent};
 use super::terminal_block::{block_content_rows, should_render_terminal_block};
 use super::terminal_session_view::BlockingInputSource;
 use super::tui_block_list_viewport_source::{
-    AgentBlockRegistry, CLISubagentBlockRegistry, TuiBlockListViewportSource,
+    AgentBlockRegistry, CLISubagentBlockRegistry, HandoffBlockRegistry, TuiBlockListViewportSource,
 };
 use super::tui_builder::TuiUiBuilder;
 use super::tui_cli_subagent_view::{TuiCLISubagentView, TuiCLISubagentViewEvent};
@@ -83,11 +84,40 @@ pub(super) struct TuiTranscriptView {
     model_events: ModelHandle<ModelEventDispatcher>,
     agent_blocks: AgentBlockRegistry,
     cli_subagent_blocks: CLISubagentBlockRegistry,
+    handoff_blocks: HandoffBlockRegistry,
     viewport: TuiViewportedListState,
     selection: TuiSelectionHandle,
 }
 
 impl TuiTranscriptView {
+    pub(super) fn attach_handoff(
+        &mut self,
+        view: ViewHandle<TuiHandoffBlock>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let view_id = view.id();
+        if self.handoff_blocks.borrow().contains_key(&view_id) {
+            return;
+        }
+        ctx.subscribe_to_view(&view, move |transcript, _, event, ctx| match event {
+            TuiHandoffBlockEvent::LayoutInvalidated => {
+                transcript.mark_agent_block_dirty(view_id, ctx);
+            }
+        });
+        self.handoff_blocks.borrow_mut().insert(view_id, view);
+        {
+            let mut model = self.model.lock();
+            let block_list = model.block_list_mut();
+            block_list.append_rich_content(
+                RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
+                false,
+            );
+            block_list.mark_rich_content_dirty(view_id);
+        }
+        self.viewport.scroll_to_end();
+        ctx.notify();
+    }
+
     /// Creates a transcript view for one terminal surface.
     pub(super) fn new(
         terminal_surface_id: EntityId,
@@ -108,6 +138,7 @@ impl TuiTranscriptView {
             model_events: model_events.clone(),
             agent_blocks: Rc::new(RefCell::new(HashMap::new())),
             cli_subagent_blocks: Rc::new(RefCell::new(HashMap::new())),
+            handoff_blocks: Rc::new(RefCell::new(HashMap::new())),
             viewport: TuiViewportedListState::new_at_end(),
             selection: TuiSelectionHandle::default(),
         }
@@ -224,7 +255,7 @@ impl TuiTranscriptView {
                     .and_then(|conversation| conversation.get_task(task_id))
                     .is_some_and(should_show_task_in_blocklist);
                 if should_show {
-                    self.insert_agent_block(*conversation_id, *exchange_id, None, ctx);
+                    self.insert_agent_block(*conversation_id, *exchange_id, None, false, ctx);
                 }
             }
             BlocklistAIHistoryEvent::UpdatedStreamingExchange { exchange_id, .. } => {
@@ -306,7 +337,10 @@ impl TuiTranscriptView {
     /// the zero state. The session view fills the transcript slot with the zero
     /// state exactly while this holds.
     pub(super) fn is_empty(&self) -> bool {
-        if !self.agent_blocks.borrow().is_empty() || !self.cli_subagent_blocks.borrow().is_empty() {
+        if !self.agent_blocks.borrow().is_empty()
+            || !self.cli_subagent_blocks.borrow().is_empty()
+            || !self.handoff_blocks.borrow().is_empty()
+        {
             return false;
         }
         let model = self.model.lock();
@@ -358,6 +392,12 @@ impl TuiTranscriptView {
             .any(|block| block.as_ref(ctx).has_exposed_plan(ctx))
     }
 
+    pub(super) fn latest_agent_block_is_out_of_credits(&self, ctx: &AppContext) -> bool {
+        self.agent_blocks_in_canonical_order()
+            .last()
+            .is_some_and(|block| block.as_ref(ctx).has_out_of_credits_failure(ctx))
+    }
+
     /// Returns the view id of the agent block rendering `exchange_id`, if any.
     fn view_id_for_exchange(
         &self,
@@ -377,6 +417,7 @@ impl TuiTranscriptView {
         conversation_id: AIConversationId,
         exchange_id: AIAgentExchangeId,
         command_block_index: Option<BlockIndex>,
+        is_restored: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         if self.view_id_for_exchange(exchange_id, ctx).is_some() {
@@ -398,12 +439,12 @@ impl TuiTranscriptView {
         let terminal_model = self.model.clone();
         let view = ctx.add_typed_action_tui_view(|ctx| {
             TuiAIBlock::new(
-                conversation_id,
-                exchange_id,
+                (conversation_id, exchange_id),
                 block_model,
                 action_model,
                 &model_events,
                 terminal_model,
+                is_restored,
                 ctx,
             )
         });
@@ -457,6 +498,7 @@ impl TuiTranscriptView {
                 conversation_id,
                 restored_exchange.exchange().id,
                 restored_exchange.command_block_index(),
+                true,
                 ctx,
             );
         }
@@ -584,6 +626,15 @@ impl TuiTranscriptView {
                     (view.as_ref(ctx).conversation_id() == conversation_id).then_some(*view_id)
                 }),
         );
+        view_ids.extend(
+            self.handoff_blocks
+                .borrow()
+                .iter()
+                .filter_map(|(view_id, view)| {
+                    (view.as_ref(ctx).source_conversation_id(ctx) == Some(conversation_id))
+                        .then_some(*view_id)
+                }),
+        );
         for view_id in view_ids {
             let rows = {
                 let model = self.model.lock();
@@ -597,6 +648,7 @@ impl TuiTranscriptView {
             }
             self.agent_blocks.borrow_mut().remove(&view_id);
             self.cli_subagent_blocks.borrow_mut().remove(&view_id);
+            self.handoff_blocks.borrow_mut().remove(&view_id);
             self.model
                 .lock()
                 .block_list_mut()
@@ -633,8 +685,10 @@ impl TuiTranscriptView {
             .copied()
             .collect::<Vec<_>>();
         view_ids.extend(self.cli_subagent_blocks.borrow().keys().copied());
+        view_ids.extend(self.handoff_blocks.borrow().keys().copied());
         self.agent_blocks.borrow_mut().clear();
         self.cli_subagent_blocks.borrow_mut().clear();
+        self.handoff_blocks.borrow_mut().clear();
         self.selection.clear();
         let mut model = self.model.lock();
         for view_id in view_ids {
@@ -661,14 +715,16 @@ impl TuiView for TuiTranscriptView {
             .copied()
             .collect::<Vec<_>>();
         ids.extend(self.cli_subagent_blocks.borrow().keys().copied());
+        ids.extend(self.handoff_blocks.borrow().keys().copied());
         ids
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn TuiElement> {
-        let source = TuiBlockListViewportSource::new_with_cli_subagents(
+        let source = TuiBlockListViewportSource::new_with_rich_content(
             self.model.clone(),
             self.agent_blocks.clone(),
             self.cli_subagent_blocks.clone(),
+            self.handoff_blocks.clone(),
         );
         let viewport = TuiViewportedList::new(
             self.viewport.clone(),

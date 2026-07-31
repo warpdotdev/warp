@@ -495,7 +495,7 @@ impl CategoriesView {
         let user_workspaces = UserWorkspaces::as_ref(ctx);
         let cloud_model = CloudModel::as_ref(ctx);
 
-        for space in user_workspaces.all_user_spaces(ctx) {
+        for space in user_workspaces.spaces_for_window(ctx.window_id(), ctx) {
             let workflows_in_space = cloud_model.active_workflows_in_space(space, ctx);
             let new_workflows_in_space = Self::categorize_workflows(
                 // Don't include AI workflows in Voltron.
@@ -568,8 +568,9 @@ impl CategoriesView {
                 })
                 .unwrap_or_default(),
             WorkflowViewType::Team => {
-                // TODO: this only assumes one team
-                let team_uid = UserWorkspaces::as_ref(ctx).current_team_uid();
+                let team_uid = UserWorkspaces::as_ref(ctx)
+                    .team_for_view(ctx)
+                    .map(|team| team.uid);
                 if let Some(team_uid) = team_uid {
                     self.workflows_by_source
                         .get(&WorkflowSource::Team { team_uid })

@@ -603,15 +603,11 @@ impl AIRequestUsageModel {
         if self.buy_addon_credits_banner_dismissed {
             return BuyCreditsBannerDisplayState::Hidden;
         }
-        let current_workspace = UserWorkspaces::as_ref(ctx).current_workspace();
-        let policy_allows_purchasing = current_workspace
-            .map(|w| {
-                w.billing_metadata
-                    .tier
-                    .purchase_add_on_credits_policy
-                    .is_some_and(|p| p.enabled)
-            })
-            .unwrap_or(false);
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        let current_workspace = user_workspaces.current_workspace();
+        let policy_allows_purchasing = user_workspaces
+            .purchase_policy()
+            .is_some_and(|policy| policy.allows_purchases());
 
         // TODO: we might want to suggest credits purchase if request_remain/bonus credits is below certain threshold
         // something to consider after launch

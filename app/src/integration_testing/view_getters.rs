@@ -107,9 +107,10 @@ pub fn single_terminal_view_for_tab(
     tab_index: usize,
 ) -> ViewHandle<TerminalView> {
     pane_group_view(app, window_id, tab_index).read(app, |pane_group, ctx| {
-        let num_terminal_views = pane_group.terminal_pane_ids().count();
+        let mut terminal_views = pane_group.visible_terminal_views(ctx);
+        let num_terminal_views = terminal_views.len();
         assert_eq!(num_terminal_views, 1, "window_id={window_id}, tab_index={tab_index} doesn't have a single terminal view. Has {num_terminal_views} terminal views instead");
-        pane_group.terminal_view_at_pane_index(0, ctx).unwrap().to_owned()
+        terminal_views.pop().unwrap()
     })
 }
 
@@ -120,9 +121,20 @@ pub fn single_terminal_pane_view_for_tab(
     tab_index: usize,
 ) -> ViewHandle<PaneView<TerminalView>> {
     pane_group_view(app, window_id, tab_index).read(app, |pane_group, _ctx| {
-        let num_terminal_views = pane_group.terminal_pane_ids().count();
+        let terminal_pane_indices = pane_group
+            .visible_pane_ids()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(pane_index, pane_id)| {
+                pane_id.is_terminal_pane().then_some(pane_index)
+            })
+            .collect::<Vec<_>>();
+        let num_terminal_views = terminal_pane_indices.len();
         assert_eq!(num_terminal_views, 1, "window_id={window_id}, tab_index={tab_index} doesn't have a single terminal pane view. Has {num_terminal_views} pane views instead");
-        pane_group.terminal_pane_view_at_pane_index(0).unwrap().to_owned()
+        pane_group
+            .terminal_pane_view_at_pane_index(terminal_pane_indices[0])
+            .unwrap()
+            .to_owned()
     })
 }
 

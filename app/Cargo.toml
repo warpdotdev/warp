@@ -579,7 +579,6 @@ default = [
     "mcp_oauth",
     "expand_edit_to_pane",
     "fallback_model_load_output_messaging",
-    "api_key_authentication",
     "api_key_management",
     "summarization_cancellation_confirmation",
     "ui_zoom",
@@ -697,12 +696,14 @@ default = [
     "solo_user_byok",
     "custom_model_routers",
     "supergrok",
+    "gemini_enterprise",
     "billing_and_usage_page_v2",
     "remote_code_review",
     "git_operations_in_code_review",
     "terminal_lifecycle_recovery",
     "cloud_runners",
     "cloud_agent_runners",
+    "file_backed_execution_profiles",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -942,7 +943,6 @@ code_review_save_changes = []
 remote_code_review = []
 file_tree = []
 code_launch_modal = []
-api_key_authentication = []
 api_key_management = []
 diff_set_as_context = []
 discard_per_file_and_all_changes = []

@@ -223,6 +223,7 @@ impl CommandSearchView {
         ai_execution_context: Option<WarpAiExecutionContext>,
         ctx: &mut ViewContext<Self>,
     ) {
+        let window_id = ctx.window_id();
         self.mixer.update(ctx, |mixer, ctx| {
             mixer.reset(ctx);
 
@@ -258,7 +259,7 @@ impl CommandSearchView {
                 }
 
                 mixer.add_async_source(
-                    cloud_workflows_data_source(),
+                    cloud_workflows_data_source(window_id),
                     workflows_filters,
                     AddAsyncSourceOptions {
                         debounce_interval: Some(Duration::from_millis(50)),
@@ -592,7 +593,8 @@ impl CommandSearchView {
     ) -> Box<dyn Element> {
         if is_ratelimit_error {
             let current_user_id = self.auth_state.user_id().unwrap_or_default();
-            if let Some(team) = UserWorkspaces::as_ref(app).current_team() {
+            if let Some(team) = UserWorkspaces::as_ref(app).team_for_view_handle(&self.handle, app)
+            {
                 let current_user_email = self.auth_state.user_email().unwrap_or_default();
                 let has_admin_permissions = team.has_admin_permissions(&current_user_email);
                 if team.billing_metadata.can_upgrade_to_higher_tier_plan() {

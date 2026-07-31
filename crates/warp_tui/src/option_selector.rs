@@ -1169,6 +1169,7 @@ impl TuiOptionSelector {
             Some(OptionBadge::Default) => Some("default"),
             Some(OptionBadge::Recent) => Some("recent"),
             Some(OptionBadge::Connected) => Some("connected"),
+            Some(OptionBadge::Recommended) => Some("recommended"),
             None => None,
         };
         if let Some(badge) = badge {
@@ -1710,7 +1711,8 @@ impl TuiElement for SelectorInputElement {
                 true
             }
             TuiEvent::Paste { .. } => false,
-            TuiEvent::LeftMouseDown { .. }
+            TuiEvent::ModifierKeyChanged { .. }
+            | TuiEvent::LeftMouseDown { .. }
             | TuiEvent::LeftMouseUp { .. }
             | TuiEvent::LeftMouseDragged { .. }
             | TuiEvent::MiddleMouseDown { .. }

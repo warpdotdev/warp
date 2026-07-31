@@ -46,6 +46,9 @@ use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDisp
 use crate::terminal::view::TerminalAction;
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::terminal::{self, TerminalModel, prompt};
+use crate::ui_components::icon_with_status::{
+    CIRCLE_RATIO, IconWithStatusVariant, render_icon_with_status,
+};
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
 const CLOUD_AGENT_DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
@@ -403,7 +406,10 @@ impl View for AgentViewZeroStateBlock {
             HeaderProps {
                 title: "New Oz cloud agent conversation".into(),
                 description: AgentViewDescription::CloudModeWithDocsLink,
-                icon: Icon::OzCloud,
+                icon: IconWithStatusVariant::OzAgent {
+                    status: None,
+                    is_ambient: true,
+                },
             }
         } else {
             let mut local_description =
@@ -419,7 +425,10 @@ impl View for AgentViewZeroStateBlock {
             HeaderProps {
                 title: "New Oz agent conversation".into(),
                 description: AgentViewDescription::PlainText(vec![local_description.into()]),
-                icon: Icon::Oz,
+                icon: IconWithStatusVariant::OzAgent {
+                    status: None,
+                    is_ambient: false,
+                },
             }
         };
 
@@ -568,7 +577,7 @@ enum AgentViewDescription {
 struct HeaderProps {
     title: Cow<'static, str>,
     description: AgentViewDescription,
-    icon: Icon,
+    icon: IconWithStatusVariant,
 }
 
 fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box<dyn Element>> {
@@ -582,23 +591,17 @@ fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box
     } = props;
 
     let title_font_size = styles::title_font_size(appearance);
+    let icon_size = title_font_size / CIRCLE_RATIO;
     let title = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_child(
-            Container::new(
-                ConstrainedBox::new(
-                    icon.to_warpui_icon(
-                        theme
-                            .main_text_color(theme.background())
-                            .into_solid()
-                            .into(),
-                    )
-                    .finish(),
-                )
-                .with_height(title_font_size)
-                .with_width(title_font_size)
-                .finish(),
-            )
+            Container::new(render_icon_with_status(
+                icon,
+                icon_size,
+                0.,
+                theme,
+                theme.background(),
+            ))
             .with_margin_right(8.)
             .finish(),
         )
