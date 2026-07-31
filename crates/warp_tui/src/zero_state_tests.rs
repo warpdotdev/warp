@@ -19,7 +19,7 @@ use warpui_core::{App, AppContext};
 
 use super::{
     ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, build_zero_state_layout, build_zero_state_overlay,
-    changelog_bullets_from_changelog, mcp_status_label,
+    changelog_bullets_from_changelog, mcp_status_label, render_first_run_top_section,
 };
 use crate::tui_builder::TuiUiBuilder;
 use crate::zero_state_animation::{
@@ -72,6 +72,43 @@ fn changelog_bullets_use_only_the_first_three_tui_updates() {
 #[test]
 fn changelog_bullets_are_empty_when_only_other_surfaces_have_updates() {
     assert!(changelog_bullets_from_changelog(&changelog(Vec::new())).is_empty());
+}
+
+#[test]
+fn first_zero_state_matches_welcome_design_copy() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+
+        let lines = app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            render_element_lines(
+                render_first_run_top_section(&builder, ctx).finish(),
+                ctx,
+                LEFT_COLUMN_COLS,
+                16,
+            )
+        });
+        let rendered = lines.join("\n");
+        for expected in [
+            "Welcome to Warp",
+            "What’s different about Warp",
+            "✶ /natural-language-detection",
+            "to autodetect",
+            "prompts or shell commands",
+            "✶ /modify-settings to set up custom model",
+            "routers",
+            "✶ /orchestrate to spawn fleets of agents",
+            "✶ Run full-screen terminal apps and cd into",
+            "other directories",
+        ] {
+            assert!(
+                rendered.contains(expected),
+                "first zero state should contain {expected:?}:\n{rendered}"
+            );
+        }
+        assert!(!rendered.contains("What's new"));
+        assert!(!rendered.contains("████"));
+    });
 }
 
 #[test]

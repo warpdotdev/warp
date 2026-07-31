@@ -22,9 +22,9 @@ use warp::tui_export::{
     Harness, InputTypeAutoDetectionSource, LLMPreferences, LinkedWorkflowData,
     LongRunningCommandControlState, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate,
     SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope, TuiMcpAction,
-    TuiMcpServerId, TuiUpArrowHistoryItemKind, UserTakeOverReason, WarpConfig,
-    WarpConfigUpdateEvent, export_conversation_markdown, light_theme,
-    register_tui_session_view_test_singletons, slash_commands,
+    TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers, TuiUpArrowHistoryItemKind,
+    UserTakeOverReason, WarpConfig, WarpConfigUpdateEvent, export_conversation_markdown,
+    light_theme, register_tui_session_view_test_singletons, slash_commands,
 };
 use warp_core::channel::Channel;
 use warp_core::features::FeatureFlag;
@@ -3668,6 +3668,132 @@ fn zero_state_renders_with_only_zero_height_bootstrap_blocks() {
             "starfield content should extend beyond the centered logo panel:\n{}",
             lines.join("\n")
         );
+    });
+}
+
+#[test]
+fn first_zero_state_is_provisional_and_reconciles_without_replacing_the_session() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        app.update(|ctx| {
+            TuiOnboardingMarkers::handle(ctx).update(ctx, |markers, ctx| {
+                markers.reset_for_account_transition(ctx);
+            });
+        });
+        let (view, session_id) = add_focus_test_session(&mut app, &fixture, true);
+
+        app.read(|ctx| {
+            assert!(
+                view.as_ref(ctx)
+                    .session_state
+                    .as_ref(ctx)
+                    .show_first_zero_state()
+            );
+        });
+        let lines = render_session(&mut app, &view, 100, 24);
+        assert!(lines.iter().any(|line| line.contains("Welcome to Warp")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("What’s different about Warp"))
+        );
+        assert!(lines.iter().all(|line| !line.contains("████")));
+
+        app.update(|ctx| {
+            TuiOnboardingMarkers::handle(ctx).update(ctx, |markers, ctx| {
+                markers.set_ready_for_test(false, false, ctx);
+            });
+        });
+        app.read(|ctx| {
+            assert!(
+                !view
+                    .as_ref(ctx)
+                    .session_state
+                    .as_ref(ctx)
+                    .show_first_zero_state()
+            );
+            assert_eq!(
+                TuiSessions::as_ref(ctx).focused_session_id(),
+                Some(session_id)
+            );
+            assert!(TuiSessions::as_ref(ctx).session(session_id).is_some());
+        });
+    });
+}
+
+#[test]
+fn dismissed_provisional_zero_state_stays_hidden_but_consumes_ready_marker() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        app.update(|ctx| {
+            TuiOnboardingMarkers::handle(ctx).update(ctx, |markers, ctx| {
+                markers.reset_for_account_transition(ctx);
+            });
+        });
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.session_state.update(ctx, |state, ctx| {
+                state.set_show_first_zero_state(false, ctx);
+            });
+        });
+        app.update(|ctx| {
+            TuiOnboardingMarkers::handle(ctx).update(ctx, |markers, ctx| {
+                markers.set_ready_for_test(true, false, ctx);
+            });
+        });
+
+        app.read(|ctx| {
+            assert!(
+                !view
+                    .as_ref(ctx)
+                    .session_state
+                    .as_ref(ctx)
+                    .show_first_zero_state()
+            );
+        });
+        app.update(|ctx| {
+            let consumed_again = TuiOnboardingMarkers::handle(ctx).update(ctx, |markers, ctx| {
+                markers.consume(TuiOnboardingMarker::FirstZeroState, ctx)
+            });
+            assert!(!consumed_again);
+        });
+    });
+}
+
+#[test]
+fn account_transition_restores_provisional_zero_state_on_existing_session() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, session_id) = add_focus_test_session(&mut app, &fixture, true);
+        app.read(|ctx| {
+            assert!(
+                !view
+                    .as_ref(ctx)
+                    .session_state
+                    .as_ref(ctx)
+                    .show_first_zero_state()
+            );
+        });
+
+        app.update(|ctx| {
+            TuiOnboardingMarkers::handle(ctx).update(ctx, |markers, ctx| {
+                markers.reset_for_account_transition(ctx);
+            });
+        });
+        app.read(|ctx| {
+            assert!(
+                view.as_ref(ctx)
+                    .session_state
+                    .as_ref(ctx)
+                    .show_first_zero_state()
+            );
+            assert_eq!(
+                TuiSessions::as_ref(ctx).focused_session_id(),
+                Some(session_id)
+            );
+            assert!(TuiSessions::as_ref(ctx).session(session_id).is_some());
+        });
     });
 }
 

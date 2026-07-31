@@ -1,6 +1,6 @@
 //! The pre-first-interaction "zero state" filling the transcript area: the
-//! Warp Agent CLI title and version, a "What's new" changelog section, and the
-//! session's project context (rules and skills discovered).
+//! Warp title and version, either first-run guidance or a "What's new"
+//! changelog section, and the session's project context.
 //!
 //! The session view owns visibility: the zero state fills the transcript
 //! slot while the transcript has no visible content, so it dismisses once
@@ -50,6 +50,12 @@ const LEFT_COLUMN_COLS: u16 = 48;
 /// Width of the right-aligned animation region. This keeps the logo secondary
 /// to the copy and input while leaving enough cells for its wireframe detail.
 const ANIMATION_PANEL_COLS: u16 = 32;
+
+#[derive(Clone, Copy)]
+enum ZeroStateVariant {
+    Standard,
+    FirstRun,
+}
 // ---------------------------------------------------------------------------
 // TuiZeroStateView
 // ---------------------------------------------------------------------------
@@ -131,18 +137,12 @@ impl TuiZeroStateView {
             active_session,
         }
     }
-}
 
-impl Entity for TuiZeroStateView {
-    type Event = ();
-}
-
-impl TuiView for TuiZeroStateView {
-    fn ui_name() -> &'static str {
-        "TuiZeroStateView"
+    pub(crate) fn render_first_run(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        self.render_variant(ZeroStateVariant::FirstRun, ctx)
     }
 
-    fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+    fn render_variant(&self, variant: ZeroStateVariant, ctx: &AppContext) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(ctx);
         let session = self.active_session.as_ref(ctx);
         let cwd = session.current_working_directory().cloned().or_else(|| {
@@ -170,8 +170,30 @@ impl TuiView for TuiZeroStateView {
             ANIMATION_PANEL_COLS,
         )
         .finish();
-        let overlay = build_zero_state_overlay(cwd.as_deref(), &builder, ctx);
+        let overlay = match variant {
+            ZeroStateVariant::Standard => build_zero_state_overlay(cwd.as_deref(), &builder, ctx),
+            ZeroStateVariant::FirstRun => build_zero_state_overlay_with_variant(
+                cwd.as_deref(),
+                &builder,
+                ZeroStateVariant::FirstRun,
+                ctx,
+            ),
+        };
         build_zero_state_layout(starfield, animation, overlay)
+    }
+}
+
+impl Entity for TuiZeroStateView {
+    type Event = ();
+}
+
+impl TuiView for TuiZeroStateView {
+    fn ui_name() -> &'static str {
+        "TuiZeroStateView"
+    }
+
+    fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        self.render_variant(ZeroStateVariant::Standard, ctx)
     }
 }
 
@@ -226,6 +248,15 @@ fn build_zero_state_overlay(
     builder: &TuiUiBuilder,
     ctx: &AppContext,
 ) -> Box<dyn TuiElement> {
+    build_zero_state_overlay_with_variant(cwd, builder, ZeroStateVariant::Standard, ctx)
+}
+
+fn build_zero_state_overlay_with_variant(
+    cwd: Option<&str>,
+    builder: &TuiUiBuilder,
+    variant: ZeroStateVariant,
+    ctx: &AppContext,
+) -> Box<dyn TuiElement> {
     // Compute project context once — find_applicable_project_rules walks the
     // directory tree and clones rule file contents, so resolving it once
     // avoids a redundant allocation on every zero-state re-render (pwd change,
@@ -242,10 +273,11 @@ fn build_zero_state_overlay(
 
     // Title, version, and changelog — constrained to LEFT_COLUMN_COLS so changelog
     // bullets (which lack `.truncate()`) do not wrap against the full terminal width.
-    let constrained_top = TuiConstrainedBox::new(render_top_section(builder, ctx).finish())
-        .with_min_cols(LEFT_COLUMN_COLS)
-        .with_max_cols(LEFT_COLUMN_COLS)
-        .finish();
+    let constrained_top =
+        TuiConstrainedBox::new(render_top_section(builder, variant, ctx).finish())
+            .with_min_cols(LEFT_COLUMN_COLS)
+            .with_max_cols(LEFT_COLUMN_COLS)
+            .finish();
 
     // Project context body (rules / skills / placeholder) and MCP — also constrained
     // to LEFT_COLUMN_COLS, keeping those rows stable.
@@ -287,7 +319,18 @@ fn build_zero_state_overlay(
 /// This is wrapped in a [`TuiConstrainedBox`] with `min = max = LEFT_COLUMN_COLS` by the
 /// caller so that changelog bullets (which lack `.truncate()`) do not word-wrap against
 /// the full terminal width while still rendering stably during async content loads.
-fn render_top_section(builder: &TuiUiBuilder, app: &AppContext) -> TuiFlex {
+fn render_top_section(
+    builder: &TuiUiBuilder,
+    variant: ZeroStateVariant,
+    app: &AppContext,
+) -> TuiFlex {
+    match variant {
+        ZeroStateVariant::Standard => render_standard_top_section(builder, app),
+        ZeroStateVariant::FirstRun => render_first_run_top_section(builder, app),
+    }
+}
+
+fn render_standard_top_section(builder: &TuiUiBuilder, app: &AppContext) -> TuiFlex {
     let title_style = builder.accent_text_style().add_modifier(Modifier::BOLD);
     let header_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
     let muted = builder.muted_text_style();
@@ -322,6 +365,58 @@ fn render_top_section(builder: &TuiUiBuilder, app: &AppContext) -> TuiFlex {
         }
     }
     column
+}
+
+fn render_first_run_top_section(builder: &TuiUiBuilder, app: &AppContext) -> TuiFlex {
+    let title_style = builder.accent_text_style().add_modifier(Modifier::BOLD);
+    let muted = builder.muted_text_style();
+    let mut column = TuiFlex::column()
+        .child(
+            TuiText::new("Welcome to Warp")
+                .with_style(title_style)
+                .truncate()
+                .finish(),
+        )
+        .child(render_version_line(builder, app))
+        .child(render_login_line_with_prefix("logged in as", builder, app))
+        .child(blank_row())
+        .child(blank_row())
+        .child(
+            TuiText::new("What’s different about Warp")
+                .with_style(muted)
+                .truncate()
+                .finish(),
+        );
+    for (command, description) in [
+        (
+            Some("/natural-language-detection"),
+            "to autodetect prompts or shell commands",
+        ),
+        (Some("/modify-settings"), "to set up custom model routers"),
+        (Some("/orchestrate"), "to spawn fleets of agents"),
+        (
+            None,
+            "Run full-screen terminal apps and cd into other directories",
+        ),
+    ] {
+        column = column.child(render_first_run_capability(command, description, builder));
+    }
+    column.child(blank_row())
+}
+
+fn render_first_run_capability(
+    command: Option<&str>,
+    description: &str,
+    builder: &TuiUiBuilder,
+) -> Box<dyn TuiElement> {
+    let highlight = builder.success_glyph_style();
+    let primary = builder.primary_text_style();
+    let mut spans = vec![("✶ ".to_owned(), highlight)];
+    if let Some(command) = command {
+        spans.push((format!("{command} "), highlight));
+    }
+    spans.push((description.to_owned(), primary));
+    TuiText::from_spans(spans).finish()
 }
 
 /// Bottom section of the overlay column: project context body (rules / skills / placeholder)
@@ -459,6 +554,14 @@ fn mcp_status_label(snapshot: &warp::tui_export::TuiMcpSnapshot) -> (String, boo
 /// not. The zero state is normally only shown after login, but the unauthenticated
 /// branch keeps the surface honest if it is ever rendered before auth completes.
 fn render_login_line(builder: &TuiUiBuilder, app: &AppContext) -> Box<dyn TuiElement> {
+    render_login_line_with_prefix("Signed in as", builder, app)
+}
+
+fn render_login_line_with_prefix(
+    signed_in_prefix: &str,
+    builder: &TuiUiBuilder,
+    app: &AppContext,
+) -> Box<dyn TuiElement> {
     let muted = builder.muted_text_style();
     let dim = builder.dim_text_style();
     let user_info = TuiUserInfoManager::as_ref(app).snapshot(app);
@@ -467,7 +570,7 @@ fn render_login_line(builder: &TuiUiBuilder, app: &AppContext) -> Box<dyn TuiEle
         .filter(|email| !email.is_empty())
         .or(user_info.username.filter(|username| !username.is_empty()));
     let (label, style) = if let Some(display) = display {
-        (format!("Signed in as {display}"), muted)
+        (format!("{signed_in_prefix} {display}"), muted)
     } else if user_info.is_logged_in {
         ("Signed in".to_owned(), muted)
     } else {
