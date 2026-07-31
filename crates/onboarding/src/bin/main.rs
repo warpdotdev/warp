@@ -89,6 +89,11 @@ fn main() -> Result<()> {
     // Onboarding views read feature flags while rendering, and debug builds
     // assert that flags were initialized first. The demo has no channel
     // configuration, so the defaults are what it previews.
+    if demo_offer_variant().is_some() {
+        // The post-auth offer slide only exists on the account-first flow, so
+        // previewing it requires that flow to be on.
+        warp_core::features::FeatureFlag::AccountFirstOnboarding.set_enabled(true);
+    }
     warp_core::features::mark_initialized();
 
     let app_builder = warpui::platform::AppBuilder::new(
