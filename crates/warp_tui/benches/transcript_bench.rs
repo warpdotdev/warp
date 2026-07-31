@@ -2,7 +2,20 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use warp_tui::benchmark_support::{TranscriptBenchmark, TranscriptDataset};
+use warp_tui::benchmark_support::{
+    ClippedTerminalBlockBenchmark, TranscriptBenchmark, TranscriptDataset,
+};
+
+fn benchmark_clipped_terminal_block(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("tui_terminal_block/clipped_content");
+    for rows in [1_000, 10_000] {
+        let mut benchmark = ClippedTerminalBlockBenchmark::new(rows, 120, 50);
+        group.bench_with_input(BenchmarkId::new("end_frame", rows), &rows, |b, _| {
+            b.iter(|| black_box(benchmark.present()))
+        });
+    }
+    group.finish();
+}
 
 fn benchmark_many_small_blocks(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("tui_transcript/many_small_blocks");
@@ -93,6 +106,7 @@ criterion_group! {
         .warm_up_time(Duration::from_millis(500))
         .measurement_time(Duration::from_secs(1));
     targets =
+        benchmark_clipped_terminal_block,
         benchmark_many_small_blocks,
         benchmark_long_agent_response,
         benchmark_offscreen_streaming_tail

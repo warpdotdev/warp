@@ -187,3 +187,18 @@ fn nested_surface_clip_contains_cells_styles_and_widgets() {
     assert_eq!(b[(0, 2)].fg, Color::Red);
     assert_eq!(b[(0, 3)].fg, Color::Reset);
 }
+
+#[test]
+fn visible_rows_are_relative_to_the_element_origin() {
+    let mut b = buffer(3, 4);
+    let mut surface = TuiPaintSurface::new(&mut b);
+
+    assert_eq!(
+        surface.with_clip(
+            TuiScreenPosition::new(0, 1),
+            TuiSize::new(3, 2),
+            |surface| surface.visible_rows(TuiScreenPosition::new(0, -2), TuiSize::new(3, 6),),
+        ),
+        Some(Some(3..5)),
+    );
+}

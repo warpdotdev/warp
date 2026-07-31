@@ -10,6 +10,7 @@
 //! element tests: it renders each row to a `String`, skipping the trailing
 //! columns of wide graphemes so every glyph appears exactly once (mirroring how
 //! ratatui's own `Buffer` debug output collapses multi-width cells).
+use std::ops::Range;
 
 use ratatui::buffer::CellWidth;
 pub use ratatui::buffer::{Buffer as TuiBuffer, Cell};
@@ -153,6 +154,17 @@ impl<'a> TuiPaintSurface<'a> {
         };
         *destination = cell;
         true
+    }
+
+    /// Returns the element-local rows intersecting the active clip.
+    pub fn visible_rows(&self, origin: TuiScreenPosition, size: TuiSize) -> Option<Range<u16>> {
+        let visible = self.visible_widget_buffer_area(origin, size)?;
+        Some(
+            visible.clipped_rows_above
+                ..visible
+                    .clipped_rows_above
+                    .saturating_add(visible.area.height),
+        )
     }
 
     fn visible_widget_buffer_area(
