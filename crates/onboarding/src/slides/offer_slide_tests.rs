@@ -292,15 +292,14 @@ fn get_warping_buys_credits_when_the_credit_option_is_selected() {
         });
 
         // A second Get Warping while the purchase is in flight is a no-op.
-        onboarding_state.update(&mut app, |model, ctx| model.on_credit_checkout_opened(ctx));
+        onboarding_state.update(&mut app, |model, ctx| {
+            model.on_credit_checkout_opened(0, ctx)
+        });
         slide.update(&mut app, |slide, ctx| {
             slide.handle_action(&OfferSlideAction::GetWarping, ctx)
         });
         onboarding_state.read(&app, |model, _| {
-            assert_eq!(
-                model.credit_purchase_state(),
-                CreditPurchaseState::AwaitingCheckout
-            );
+            assert!(model.credit_purchase_state().is_awaiting_checkout());
         });
     });
 }
@@ -321,7 +320,7 @@ fn set_up_later_still_works_while_checkout_is_pending() {
             model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
             model.set_credit_pack_options(credit_packs(4), ctx);
             model.request_credit_purchase(ctx);
-            model.on_credit_checkout_opened(ctx);
+            model.on_credit_checkout_opened(0, ctx);
         });
 
         let events = Rc::new(RefCell::new(Vec::new()));

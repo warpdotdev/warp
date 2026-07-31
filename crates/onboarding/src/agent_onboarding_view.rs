@@ -387,9 +387,31 @@ impl AgentOnboardingView {
 
     /// The credit purchase needs browser checkout. Onboarding stays on the
     /// offer slide until the credits land.
-    pub fn on_credit_purchase_checkout_opened(&mut self, ctx: &mut ViewContext<Self>) {
+    ///
+    /// `credits_before` is the caller's current purchased-credit balance;
+    /// [`Self::on_purchased_credit_balance_observed`] advances only once that
+    /// balance actually grows.
+    pub fn on_credit_purchase_checkout_opened(
+        &mut self,
+        credits_before: i32,
+        ctx: &mut ViewContext<Self>,
+    ) {
         self.onboarding_state.update(ctx, |state, ctx| {
-            state.on_credit_checkout_opened(ctx);
+            state.on_credit_checkout_opened(credits_before, ctx);
+        });
+        ctx.notify();
+    }
+
+    /// Reports the purchased-credit balance seen on a refresh. Safe to call on
+    /// every refresh: it only completes a checkout-pending purchase, and only
+    /// when the balance has grown since checkout opened.
+    pub fn on_purchased_credit_balance_observed(
+        &mut self,
+        credits_now: i32,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.onboarding_state.update(ctx, |state, ctx| {
+            state.on_credit_balance_observed(credits_now, ctx);
         });
         ctx.notify();
     }

@@ -159,6 +159,17 @@ fn current_credit_pack_options(ctx: &AppContext) -> Vec<CreditPackOption> {
     onboarding_credit_pack_options(options, policy.effective_premium_bps())
 }
 
+/// The credits a purchase would add to: the non-expired bonus grants scoped to
+/// the user and to their current workspace. Purchased add-on credits are
+/// granted as bonus credits, so a rise here is attributable to the purchase —
+/// unlike "has any AI remaining", which is also true for base plan requests,
+/// BYOK credentials, overages and auto-reload.
+fn purchased_credit_balance(ctx: &AppContext) -> i32 {
+    let usage = AIRequestUsageModel::as_ref(ctx);
+    usage.total_user_interactive_bonus_credits_remaining()
+        + usage.total_current_workspace_bonus_credits_remaining(ctx)
+}
+
 /// Relays the outcome of an onboarding-initiated credit purchase back to the
 /// onboarding view. On the checkout path the credits arrive asynchronously, so
 /// this only opens the browser; completion is detected from a later usage
@@ -182,8 +193,9 @@ fn handle_onboarding_credit_purchase_event(
         }
         UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { checkout_url } => {
             let checkout_url = checkout_url.clone();
+            let credits_before = purchased_credit_balance(ctx);
             onboarding_view.update(ctx, |onboarding_view, ctx| {
-                onboarding_view.on_credit_purchase_checkout_opened(ctx);
+                onboarding_view.on_credit_purchase_checkout_opened(credits_before, ctx);
             });
             ctx.open_url(&checkout_url);
         }
@@ -2275,18 +2287,16 @@ impl RootView {
         let onboarding_view_for_usage = onboarding_view.clone();
         ctx.subscribe_to_model(
             &AIRequestUsageModel::handle(ctx),
-            move |_, usage, event, ctx| {
+            move |_, _usage, event, ctx| {
                 if !matches!(event, AIRequestUsageModelEvent::RequestUsageUpdated) {
                     return;
                 }
-                let awaiting = onboarding_view_for_usage
-                    .as_ref(ctx)
-                    .is_awaiting_purchased_credits(ctx);
-                if !awaiting || !usage.as_ref(ctx).has_any_ai_remaining(ctx) {
-                    return;
-                }
+                // The view completes the purchase only if this balance grew
+                // since checkout opened, so a canceled checkout can't advance
+                // a user who already had credits.
+                let credits_now = purchased_credit_balance(ctx);
                 onboarding_view_for_usage.update(ctx, |onboarding_view, ctx| {
-                    onboarding_view.on_credit_purchase_completed(ctx);
+                    onboarding_view.on_purchased_credit_balance_observed(credits_now, ctx);
                 });
             },
         );

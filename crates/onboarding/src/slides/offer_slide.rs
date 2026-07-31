@@ -571,7 +571,7 @@ impl OfferSlide {
                 "Starting your purchase\u{2026}",
                 internal_colors::text_sub(theme, theme.background().into_solid()),
             ),
-            CreditPurchaseState::AwaitingCheckout => (
+            CreditPurchaseState::AwaitingCheckout { .. } => (
                 "Finish your purchase in the browser. We'll continue as soon as your credits arrive \u{2014} or choose \"Set up AI later\" to skip.",
                 internal_colors::text_sub(theme, theme.background().into_solid()),
             ),
