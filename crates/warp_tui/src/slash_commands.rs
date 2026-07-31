@@ -297,6 +297,7 @@ impl TuiSlashCommandModel {
                     prefix: None,
                     description: row.description.clone(),
                     state_suffix: self.state_suffix(&row.title, ctx),
+                    promotional_suffix: None,
                     is_selectable: true,
                     style: TuiInlineMenuRowStyle::InlineMenuItem,
                 })

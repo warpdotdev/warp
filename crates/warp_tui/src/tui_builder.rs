@@ -97,6 +97,11 @@ impl TuiUiBuilder {
         self.muted_text_style().add_modifier(Modifier::ITALIC)
     }
 
+    /// Green italic promotional text used by model discount labels.
+    pub(crate) fn promotional_suffix_style(&self) -> TuiStyle {
+        self.success_glyph_style().add_modifier(Modifier::ITALIC)
+    }
+
     /// Muted and dimmed: de-emphasized status rows (e.g. tool-call stubs).
     pub(crate) fn dim_text_style(&self) -> TuiStyle {
         self.muted_text_style().add_modifier(Modifier::DIM)
@@ -220,6 +225,12 @@ impl TuiUiBuilder {
                 background, green,
             ))))
             .add_modifier(Modifier::BOLD)
+    }
+
+    /// Bold green italic promotional text over an inline-menu selection.
+    pub(crate) fn selection_promotional_suffix_style(&self) -> TuiStyle {
+        self.slash_command_selection_state_suffix_style()
+            .add_modifier(Modifier::ITALIC)
     }
 
     /// Bold accent prompt marker over the submitted-input background.
