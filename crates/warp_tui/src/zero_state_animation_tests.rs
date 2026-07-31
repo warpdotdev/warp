@@ -28,12 +28,12 @@ use super::config::{
     ZeroStateAnimationLoadFailure, ZeroStateShape, resolve_ascii_art_path,
 };
 use super::{
-    BUILT_IN_LOGO_CELL_ASPECT_RATIO, LogoCell, LogoSurface, MAX_INTERACTIVE_RADIANS_PER_SECOND,
-    MIN_ANIMATION_COLS, MIN_ANIMATION_ROWS, MOMENTUM_SETTLE_DURATION, REPAINT_INTERVAL,
-    WarpLogoStyles, ZeroStateAnimationElement, ZeroStateInteractionHandle,
-    configured_idle_velocity, fitted_logo_size, idle_angle, logo_frame_at, object_frame_at,
-    object_frame_at_angle, object_frame_at_with_background, star_count_for_size,
-    starfield_emitter_x, warp_logo_contains,
+    ActivePress, BUILT_IN_LOGO_CELL_ASPECT_RATIO, FLICK_RELEASE_VELOCITY_GAIN, LogoCell,
+    LogoSurface, MAX_INTERACTIVE_RADIANS_PER_SECOND, MIN_ANIMATION_COLS, MIN_ANIMATION_ROWS,
+    MOMENTUM_SETTLE_DURATION, REPAINT_INTERVAL, WarpLogoStyles, ZeroStateAnimationElement,
+    ZeroStateInteractionHandle, configured_idle_velocity, fitted_logo_size, idle_angle,
+    logo_frame_at, object_frame_at, object_frame_at_angle, object_frame_at_with_background,
+    star_count_for_size, starfield_emitter_x, warp_logo_contains,
 };
 
 const PANEL_SIZE: TuiSize = TuiSize::new(52, 20);
@@ -53,6 +53,18 @@ fn custom_config(
         extrusion_depth,
         load_failure: None,
     }
+}
+fn release_velocity_from_samples(samples: &[(u16, u64)], release_at_ms: u64) -> Option<f64> {
+    let start = Instant::now();
+    let (first_x, first_at_ms) = samples[0];
+    let mut press = ActivePress::new(
+        TuiPoint::new(first_x, 1),
+        start + Duration::from_millis(first_at_ms),
+    );
+    for &(x, at_ms) in &samples[1..] {
+        press.record_horizontal_sample(TuiPoint::new(x, 1), start + Duration::from_millis(at_ms));
+    }
+    press.release_velocity(start + Duration::from_millis(release_at_ms))
 }
 #[test]
 fn starfield_density_scales_with_the_full_panel_area() {
@@ -728,38 +740,112 @@ fn vertical_only_drag_leaves_idle_motion_untouched() {
 }
 
 #[test]
-fn release_velocity_scales_with_signed_total_drag_distance_even_after_a_pause() {
+fn recent_release_velocity_tracks_speed_for_the_same_distance() {
+    let slow = release_velocity_from_samples(&[(100, 0), (104, 100), (108, 200)], 200).unwrap();
+    let fast = release_velocity_from_samples(&[(100, 100), (104, 150), (108, 200)], 200).unwrap();
+
+    assert_approx_eq(slow, 40.0 * FLICK_RELEASE_VELOCITY_GAIN * TAU / 96.0);
+    assert_approx_eq(fast, 80.0 * FLICK_RELEASE_VELOCITY_GAIN * TAU / 96.0);
+    assert!(fast > slow);
+}
+
+#[test]
+fn recent_release_velocity_follows_the_final_direction_after_reversal() {
+    let velocity =
+        release_velocity_from_samples(&[(100, 0), (120, 50), (118, 100), (116, 150)], 150).unwrap();
+
+    assert_approx_eq(velocity, -40.0 * FLICK_RELEASE_VELOCITY_GAIN * TAU / 96.0);
+}
+
+#[test]
+fn recent_release_velocity_rejects_stale_or_one_cell_motion() {
+    assert_eq!(
+        release_velocity_from_samples(&[(100, 0), (104, 50), (108, 100)], 251),
+        None,
+    );
+    assert_eq!(
+        release_velocity_from_samples(&[(100, 0), (101, 50), (100, 100)], 100),
+        None,
+    );
+}
+
+#[test]
+fn recent_release_velocity_is_hard_clamped() {
+    assert_approx_eq(
+        release_velocity_from_samples(&[(100, 0), (200, 30), (300, 60)], 60).unwrap(),
+        MAX_INTERACTIVE_RADIANS_PER_SECOND,
+    );
+    assert_approx_eq(
+        release_velocity_from_samples(&[(300, 0), (200, 30), (100, 60)], 60).unwrap(),
+        -MAX_INTERACTIVE_RADIANS_PER_SECOND,
+    );
+    // Six cells in 60 ms is 100 cells per second: below the cap unadjusted, but
+    // above it once amplified, so the gain must be applied before clamping.
+    assert_approx_eq(
+        release_velocity_from_samples(&[(100, 0), (106, 60)], 60).unwrap(),
+        MAX_INTERACTIVE_RADIANS_PER_SECOND,
+    );
+    let unamplified_cells_per_second = std::hint::black_box(100.0);
+    assert!(unamplified_cells_per_second * TAU / 96.0 < MAX_INTERACTIVE_RADIANS_PER_SECOND);
+}
+
+#[test]
+fn recent_release_velocity_handles_sparse_edge_crossing_flick() {
+    let interaction = ZeroStateInteractionHandle::default();
     let start = Instant::now();
     let idle_velocity = TAU / 5.0;
-    for (end_x, expected_velocity) in [
-        (112, TAU / 4.0),
-        (148, TAU),
-        (52, -TAU),
-        (300, MAX_INTERACTIVE_RADIANS_PER_SECOND),
-        (0, -MAX_INTERACTIVE_RADIANS_PER_SECOND),
-    ] {
-        let interaction = ZeroStateInteractionHandle::default();
-        assert!(interaction.press_at(TuiPoint::new(100, 1), start));
-        assert!(interaction.drag_at(
-            TuiPoint::new(end_x, 1),
-            Duration::from_millis(500),
-            idle_velocity,
-            start + Duration::from_millis(500),
-        ));
-        let release_at = start + Duration::from_secs(2);
-        assert!(interaction.release_at(
-            TuiPoint::new(end_x, 1),
-            Duration::from_secs(2),
-            idle_velocity,
-            release_at,
-        ));
-        assert_approx_eq(
-            interaction
-                .resolve_at(Duration::from_secs(2), idle_velocity, release_at)
-                .velocity,
-            expected_velocity,
-        );
-    }
+    assert!(interaction.press_at(TuiPoint::new(70, 1), start));
+    assert!(interaction.drag_at(
+        TuiPoint::new(46, 1),
+        Duration::from_millis(20),
+        idle_velocity,
+        start + Duration::from_millis(20),
+    ));
+    let release_at = start + Duration::from_millis(25);
+    assert!(interaction.release_at(
+        TuiPoint::new(46, 1),
+        Duration::from_millis(25),
+        idle_velocity,
+        release_at,
+    ));
+
+    assert_approx_eq(
+        interaction
+            .resolve_at(Duration::from_millis(25), idle_velocity, release_at)
+            .velocity,
+        -MAX_INTERACTIVE_RADIANS_PER_SECOND,
+    );
+}
+#[test]
+fn recent_release_velocity_pause_before_release_resumes_idle_phase_continuously() {
+    let start = Instant::now();
+    let idle_velocity = TAU / 5.0;
+    let interaction = ZeroStateInteractionHandle::default();
+    assert!(interaction.press_at(TuiPoint::new(100, 1), start));
+    assert!(interaction.drag_at(
+        TuiPoint::new(104, 1),
+        Duration::from_millis(50),
+        idle_velocity,
+        start + Duration::from_millis(50),
+    ));
+    assert!(interaction.drag_at(
+        TuiPoint::new(108, 1),
+        Duration::from_millis(100),
+        idle_velocity,
+        start + Duration::from_millis(100),
+    ));
+    let release_at = start + Duration::from_millis(251);
+    let before_release =
+        interaction.resolve_at(Duration::from_millis(251), idle_velocity, release_at);
+    assert!(interaction.release_at(
+        TuiPoint::new(108, 1),
+        Duration::from_millis(251),
+        idle_velocity,
+        release_at,
+    ));
+    let released = interaction.resolve_at(Duration::from_millis(251), idle_velocity, release_at);
+    assert_approx_eq(released.angle, before_release.angle);
+    assert_approx_eq(released.velocity, idle_velocity);
 }
 
 #[test]
@@ -769,38 +855,44 @@ fn released_velocity_smoothly_settles_to_idle_in_three_seconds() {
         let start = Instant::now();
         let idle_velocity = TAU / period.as_secs_f64();
         assert!(interaction.press_at(TuiPoint::new(1, 1), start));
-        let release_at = start + Duration::from_millis(40);
         assert!(interaction.drag_at(
-            TuiPoint::new(40, 1),
+            TuiPoint::new(20, 1),
             Duration::from_millis(20),
             idle_velocity,
             start + Duration::from_millis(20),
         ));
+        assert!(interaction.drag_at(
+            TuiPoint::new(40, 1),
+            Duration::from_millis(60),
+            idle_velocity,
+            start + Duration::from_millis(60),
+        ));
+        let release_at = start + Duration::from_millis(80);
         let angle_before_release =
-            interaction.resolve_at(Duration::from_millis(40), idle_velocity, release_at);
+            interaction.resolve_at(Duration::from_millis(80), idle_velocity, release_at);
         assert!(interaction.release_at(
             TuiPoint::new(40, 1),
-            Duration::from_millis(40),
+            Duration::from_millis(80),
             idle_velocity,
             release_at,
         ));
-        let released = interaction.resolve_at(Duration::from_millis(40), idle_velocity, release_at);
+        let released = interaction.resolve_at(Duration::from_millis(80), idle_velocity, release_at);
         assert_approx_eq(released.angle, angle_before_release.angle);
 
         let halfway = interaction.resolve_at(
-            Duration::from_millis(1540),
+            Duration::from_millis(1580),
             idle_velocity,
             release_at + Duration::from_millis(1500),
         );
         assert_approx_eq(halfway.velocity, (released.velocity + idle_velocity) * 0.5);
         let settled = interaction.resolve_at(
-            Duration::from_millis(3040),
+            Duration::from_millis(3080),
             idle_velocity,
             release_at + MOMENTUM_SETTLE_DURATION,
         );
         assert_approx_eq(settled.velocity, idle_velocity);
         let after = interaction.resolve_at(
-            Duration::from_millis(4040),
+            Duration::from_millis(4080),
             idle_velocity,
             release_at + MOMENTUM_SETTLE_DURATION + Duration::from_secs(1),
         );
@@ -809,38 +901,222 @@ fn released_velocity_smoothly_settles_to_idle_in_three_seconds() {
     }
 }
 
+/// Drives a three-sample horizontal flick and returns its release instant. The
+/// gesture always spans 100 ms so callers vary only direction and distance.
+fn flick(
+    interaction: &ZeroStateInteractionHandle,
+    press_at: Instant,
+    press_elapsed: Duration,
+    columns: [u16; 3],
+    idle_velocity: f64,
+) -> Instant {
+    assert!(interaction.press_at(TuiPoint::new(columns[0], 1), press_at));
+    for (column, offset) in columns[1..].iter().zip([40, 80]) {
+        assert!(interaction.drag_at(
+            TuiPoint::new(*column, 1),
+            press_elapsed + Duration::from_millis(offset),
+            idle_velocity,
+            press_at + Duration::from_millis(offset),
+        ));
+    }
+    let release_at = press_at + Duration::from_millis(100);
+    assert!(interaction.release_at(
+        TuiPoint::new(columns[2], 1),
+        press_elapsed + Duration::from_millis(100),
+        idle_velocity,
+        release_at,
+    ));
+    release_at
+}
+
 #[test]
-fn reverse_flick_settles_back_to_forward_idle_direction() {
+fn reverse_flick_settles_to_reverse_idle_and_keeps_spinning_backward() {
     let interaction = ZeroStateInteractionHandle::default();
     let start = Instant::now();
     let idle_velocity = TAU / 5.0;
-    assert!(interaction.press_at(TuiPoint::new(100, 1), start));
-    let release_at = start + Duration::from_millis(500);
-    assert!(interaction.drag_at(
-        TuiPoint::new(52, 1),
-        Duration::from_millis(500),
+    let release_at = flick(
+        &interaction,
+        start,
+        Duration::ZERO,
+        [100, 76, 52],
         idle_velocity,
-        release_at,
-    ));
-    assert!(interaction.release_at(
-        TuiPoint::new(52, 1),
-        Duration::from_millis(500),
-        idle_velocity,
-        release_at,
-    ));
+    );
     assert!(
         interaction
-            .resolve_at(Duration::from_millis(500), idle_velocity, release_at)
+            .resolve_at(Duration::from_millis(100), idle_velocity, release_at)
             .velocity
             < 0.0
     );
-    let settled = interaction.resolve_at(
-        Duration::from_millis(3500),
+
+    let settled_at = release_at + MOMENTUM_SETTLE_DURATION;
+    let settled = interaction.resolve_at(Duration::from_millis(3100), idle_velocity, settled_at);
+    assert_approx_eq(settled.velocity, -idle_velocity);
+
+    let later = interaction.resolve_at(
+        Duration::from_millis(4100),
         idle_velocity,
-        release_at + MOMENTUM_SETTLE_DURATION,
+        settled_at + Duration::from_secs(1),
+    );
+    assert_approx_eq(later.velocity, -idle_velocity);
+    assert_approx_eq(later.angle - settled.angle, -idle_velocity);
+}
+
+#[test]
+fn reverse_idle_follows_configured_period_changes_without_turning_around() {
+    let interaction = ZeroStateInteractionHandle::default();
+    let start = Instant::now();
+    let idle_velocity = TAU / 5.0;
+    let updated_idle_velocity = TAU / 10.0;
+    let release_at = flick(
+        &interaction,
+        start,
+        Duration::ZERO,
+        [100, 76, 52],
+        idle_velocity,
+    );
+    let settled_at = release_at + MOMENTUM_SETTLE_DURATION;
+    let settled = interaction.resolve_at(Duration::from_millis(3100), idle_velocity, settled_at);
+
+    let reconfigured = interaction.resolve_at(
+        Duration::from_millis(3100),
+        updated_idle_velocity,
+        settled_at,
+    );
+    assert_approx_eq(reconfigured.angle, settled.angle);
+    assert_approx_eq(reconfigured.velocity, -updated_idle_velocity);
+
+    let after_reconfiguration = interaction.resolve_at(
+        Duration::from_millis(4100),
+        updated_idle_velocity,
+        settled_at + Duration::from_secs(1),
+    );
+    assert_approx_eq(
+        after_reconfiguration.angle - reconfigured.angle,
+        -updated_idle_velocity,
+    );
+}
+
+#[test]
+fn a_later_forward_flick_restores_forward_idle_direction() {
+    let interaction = ZeroStateInteractionHandle::default();
+    let start = Instant::now();
+    let idle_velocity = TAU / 5.0;
+    let reverse_release_at = flick(
+        &interaction,
+        start,
+        Duration::ZERO,
+        [100, 76, 52],
+        idle_velocity,
+    );
+    let reverse_settled_at = reverse_release_at + MOMENTUM_SETTLE_DURATION;
+    assert!(
+        interaction
+            .resolve_at(
+                Duration::from_millis(3100),
+                idle_velocity,
+                reverse_settled_at
+            )
+            .velocity
+            < 0.0
+    );
+
+    let forward_release_at = flick(
+        &interaction,
+        reverse_settled_at,
+        Duration::from_millis(3100),
+        [52, 76, 100],
+        idle_velocity,
+    );
+    assert!(
+        interaction
+            .resolve_at(
+                Duration::from_millis(3200),
+                idle_velocity,
+                forward_release_at
+            )
+            .velocity
+            > 0.0
+    );
+    let settled = interaction.resolve_at(
+        Duration::from_millis(6200),
+        idle_velocity,
+        forward_release_at + MOMENTUM_SETTLE_DURATION,
     );
     assert_approx_eq(settled.velocity, idle_velocity);
-    assert!(settled.velocity > 0.0);
+}
+
+#[test]
+fn filtered_releases_keep_the_established_reverse_direction() {
+    let interaction = ZeroStateInteractionHandle::default();
+    let start = Instant::now();
+    let idle_velocity = TAU / 5.0;
+    let release_at = flick(
+        &interaction,
+        start,
+        Duration::ZERO,
+        [100, 76, 52],
+        idle_velocity,
+    );
+    let settled_at = release_at + MOMENTUM_SETTLE_DURATION;
+
+    assert!(interaction.press_at(TuiPoint::new(52, 1), settled_at));
+    assert!(interaction.drag_at(
+        TuiPoint::new(56, 1),
+        Duration::from_millis(3150),
+        idle_velocity,
+        settled_at + Duration::from_millis(50),
+    ));
+    let stale_release_at = settled_at + Duration::from_millis(300);
+    let before_release =
+        interaction.resolve_at(Duration::from_millis(3400), idle_velocity, stale_release_at);
+    assert!(interaction.release_at(
+        TuiPoint::new(56, 1),
+        Duration::from_millis(3400),
+        idle_velocity,
+        stale_release_at,
+    ));
+
+    let released =
+        interaction.resolve_at(Duration::from_millis(3400), idle_velocity, stale_release_at);
+    assert_approx_eq(released.angle, before_release.angle);
+    assert_approx_eq(released.velocity, -idle_velocity);
+}
+
+#[test]
+fn leaving_the_zero_state_restores_forward_idle_direction() {
+    let interaction = ZeroStateInteractionHandle::default();
+    let start = Instant::now();
+    let idle_velocity = TAU / 5.0;
+    let release_at = flick(
+        &interaction,
+        start,
+        Duration::ZERO,
+        [100, 76, 52],
+        idle_velocity,
+    );
+    assert!(
+        interaction
+            .resolve_at(
+                Duration::from_millis(3100),
+                idle_velocity,
+                release_at + MOMENTUM_SETTLE_DURATION
+            )
+            .velocity
+            < 0.0
+    );
+
+    interaction.set_visible(false);
+    interaction.set_visible(true);
+    let returned = interaction.resolve_at(
+        Duration::from_secs(4),
+        idle_velocity,
+        release_at + Duration::from_secs(4),
+    );
+    assert_approx_eq(returned.velocity, idle_velocity);
+    assert_approx_eq(
+        returned.angle,
+        idle_angle(Duration::from_secs(4), idle_velocity),
+    );
 }
 
 #[test]
@@ -851,34 +1127,40 @@ fn setting_changes_take_effect_phase_continuously_after_the_fixed_settle() {
     let updated_idle_velocity = TAU / 10.0;
     let later_idle_velocity = TAU / 20.0;
     assert!(interaction.press_at(TuiPoint::new(40, 1), start));
-    let release_at = start + Duration::from_millis(500);
+    assert!(interaction.drag_at(
+        TuiPoint::new(64, 1),
+        Duration::from_millis(40),
+        release_idle_velocity,
+        start + Duration::from_millis(40),
+    ));
     assert!(interaction.drag_at(
         TuiPoint::new(88, 1),
-        Duration::from_millis(500),
+        Duration::from_millis(80),
         release_idle_velocity,
-        release_at,
+        start + Duration::from_millis(80),
     ));
+    let release_at = start + Duration::from_millis(100);
     let release_angle = interaction
         .resolve_at(
-            Duration::from_millis(500),
+            Duration::from_millis(100),
             release_idle_velocity,
             release_at,
         )
         .angle;
     assert!(interaction.release_at(
         TuiPoint::new(88, 1),
-        Duration::from_millis(500),
+        Duration::from_millis(100),
         release_idle_velocity,
         release_at,
     ));
     let released = interaction.resolve_at(
-        Duration::from_millis(500),
+        Duration::from_millis(100),
         release_idle_velocity,
         release_at,
     );
 
     let halfway = interaction.resolve_at(
-        Duration::from_secs(2),
+        Duration::from_millis(1600),
         updated_idle_velocity,
         release_at + Duration::from_millis(1500),
     );
@@ -889,7 +1171,7 @@ fn setting_changes_take_effect_phase_continuously_after_the_fixed_settle() {
 
     let settled_at = release_at + MOMENTUM_SETTLE_DURATION;
     let settled = interaction.resolve_at(
-        Duration::from_millis(3500),
+        Duration::from_millis(3100),
         updated_idle_velocity,
         settled_at,
     );
@@ -903,7 +1185,7 @@ fn setting_changes_take_effect_phase_continuously_after_the_fixed_settle() {
     );
 
     let one_second_later = interaction.resolve_at(
-        Duration::from_millis(4500),
+        Duration::from_millis(4100),
         updated_idle_velocity,
         settled_at + Duration::from_secs(1),
     );
@@ -912,14 +1194,14 @@ fn setting_changes_take_effect_phase_continuously_after_the_fixed_settle() {
         updated_idle_velocity,
     );
     let reconfigured = interaction.resolve_at(
-        Duration::from_millis(4500),
+        Duration::from_millis(4100),
         later_idle_velocity,
         settled_at + Duration::from_secs(1),
     );
     assert_approx_eq(reconfigured.angle, one_second_later.angle);
     assert_approx_eq(reconfigured.velocity, later_idle_velocity);
     let after_reconfiguration = interaction.resolve_at(
-        Duration::from_millis(5500),
+        Duration::from_millis(5100),
         later_idle_velocity,
         settled_at + Duration::from_secs(2),
     );
@@ -933,6 +1215,12 @@ fn interaction_after_flick(start: Instant) -> (ZeroStateInteractionHandle, Insta
     let interaction = ZeroStateInteractionHandle::default();
     let idle_velocity = TAU / 5.0;
     assert!(interaction.press_at(TuiPoint::new(1, 1), start));
+    assert!(interaction.drag_at(
+        TuiPoint::new(5, 1),
+        Duration::from_millis(40),
+        idle_velocity,
+        start + Duration::from_millis(40),
+    ));
     assert!(interaction.drag_at(
         TuiPoint::new(9, 1),
         Duration::from_millis(80),

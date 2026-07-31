@@ -6,6 +6,7 @@
 //! each cell, while directional ASCII edges and sparse stippling retain depth
 //! without a solid fill.
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -52,10 +53,16 @@ const MAX_ASCII_ART_ROWS: usize = 64;
 /// Horizontal drag sensitivity. Ninety-six terminal columns produce one full
 /// revolution, keeping short gestures readable and making feel tuning local.
 const DRAG_RADIANS_PER_COLUMN: f64 = std::f64::consts::TAU / 96.0;
-/// Maps whole-gesture drag distance to release velocity: the angle represented
-/// by that distance is treated as motion over this response interval.
-const FLICK_DISTANCE_RESPONSE_DURATION: Duration = Duration::from_millis(500);
-const MAX_INTERACTIVE_REVOLUTIONS_PER_SECOND: f64 = 1.5;
+const FLICK_SAMPLE_CAPACITY: usize = 4;
+const FLICK_SAMPLE_HORIZON: Duration = Duration::from_millis(200);
+const FLICK_STALE_AFTER: Duration = Duration::from_millis(150);
+const FLICK_MIN_EFFECTIVE_SAMPLE_SPAN: Duration = Duration::from_millis(30);
+const FLICK_MIN_HORIZONTAL_CELLS: i32 = 2;
+/// Release momentum is deliberately livelier than the held scrub it follows, so
+/// estimated pointer speed is amplified here rather than by retuning
+/// [`DRAG_RADIANS_PER_COLUMN`], which must keep tracking the pointer one to one.
+const FLICK_RELEASE_VELOCITY_GAIN: f64 = 2.0;
+const MAX_INTERACTIVE_REVOLUTIONS_PER_SECOND: f64 = 2.0;
 const MAX_INTERACTIVE_RADIANS_PER_SECOND: f64 =
     MAX_INTERACTIVE_REVOLUTIONS_PER_SECOND * std::f64::consts::TAU;
 const MOMENTUM_SETTLE_DURATION: Duration = Duration::from_secs(3);
@@ -213,6 +220,12 @@ impl InteractionMotion {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct HorizontalSample {
+    x: u16,
+    at: Instant,
+}
+
 #[derive(Debug)]
 struct ActivePress {
     start_position: TuiPoint,
@@ -221,10 +234,16 @@ struct ActivePress {
     last_applied_offset: f64,
     drag_origin_angle: Option<f64>,
     drag_angle: Option<f64>,
+    horizontal_samples: VecDeque<HorizontalSample>,
 }
 
 impl ActivePress {
     fn new(position: TuiPoint, now: Instant) -> Self {
+        let mut horizontal_samples = VecDeque::with_capacity(FLICK_SAMPLE_CAPACITY);
+        horizontal_samples.push_back(HorizontalSample {
+            x: position.x,
+            at: now,
+        });
         Self {
             start_position: position,
             last_position: position,
@@ -232,6 +251,7 @@ impl ActivePress {
             last_applied_offset: 0.0,
             drag_origin_angle: None,
             drag_angle: None,
+            horizontal_samples,
         }
     }
 
@@ -264,14 +284,103 @@ impl ActivePress {
         self.last_applied_offset = applied;
         applied
     }
+    fn record_horizontal_sample(&mut self, position: TuiPoint, now: Instant) {
+        if self
+            .horizontal_samples
+            .back()
+            .is_some_and(|sample| sample.x == position.x)
+        {
+            return;
+        }
+        if self.horizontal_samples.len() == FLICK_SAMPLE_CAPACITY {
+            self.horizontal_samples.pop_front();
+        }
+        self.horizontal_samples.push_back(HorizontalSample {
+            x: position.x,
+            at: now,
+        });
+    }
 
-    fn release_velocity(&self, position: TuiPoint) -> f64 {
-        let velocity = self.horizontal_columns_to(position) * DRAG_RADIANS_PER_COLUMN
-            / FLICK_DISTANCE_RESPONSE_DURATION.as_secs_f64();
-        velocity.clamp(
+    fn release_velocity(&self, now: Instant) -> Option<f64> {
+        let last_sample = self.horizontal_samples.back()?;
+        if now.saturating_duration_since(last_sample.at) > FLICK_STALE_AFTER {
+            return None;
+        }
+
+        let first_recent = self
+            .horizontal_samples
+            .iter()
+            .position(|sample| now.saturating_duration_since(sample.at) <= FLICK_SAMPLE_HORIZON)?;
+        let recent = self
+            .horizontal_samples
+            .iter()
+            .skip(first_recent)
+            .copied()
+            .collect::<Vec<_>>();
+        if recent.len() < 2 {
+            return None;
+        }
+
+        let final_delta =
+            i32::from(recent[recent.len() - 1].x) - i32::from(recent[recent.len() - 2].x);
+        let final_direction = final_delta.signum();
+        let mut run_start = recent.len() - 2;
+        while run_start > 0 {
+            let delta = i32::from(recent[run_start].x) - i32::from(recent[run_start - 1].x);
+            if delta.signum() != final_direction {
+                break;
+            }
+            run_start -= 1;
+        }
+        let run = &recent[run_start..];
+        if run.len() < 2 {
+            return None;
+        }
+        let horizontal_cells = run
+            .windows(2)
+            .map(|samples| (i32::from(samples[1].x) - i32::from(samples[0].x)).abs())
+            .sum::<i32>();
+        if horizontal_cells < FLICK_MIN_HORIZONTAL_CELLS {
+            return None;
+        }
+        let sample_span = run.last()?.at.saturating_duration_since(run.first()?.at);
+        if sample_span.is_zero() {
+            return None;
+        }
+
+        let start_at = run.first()?.at;
+        let mean_time = run
+            .iter()
+            .map(|sample| sample.at.saturating_duration_since(start_at).as_secs_f64())
+            .sum::<f64>()
+            / run.len() as f64;
+        let mean_x = run.iter().map(|sample| f64::from(sample.x)).sum::<f64>() / run.len() as f64;
+        let (time_position_covariance, time_variance) =
+            run.iter()
+                .fold((0.0, 0.0), |(covariance, variance), sample| {
+                    let centered_time =
+                        sample.at.saturating_duration_since(start_at).as_secs_f64() - mean_time;
+                    (
+                        covariance + centered_time * (f64::from(sample.x) - mean_x),
+                        variance + centered_time * centered_time,
+                    )
+                });
+        if time_variance == 0.0 {
+            return None;
+        }
+        // Sparse terminal reporting can collapse a quick down-drag-up gesture
+        // into only two positions over a very short interval. Stretch that
+        // interval to a conservative floor instead of discarding the flick or
+        // allowing an arbitrarily large derivative.
+        let effective_sample_span = sample_span.max(FLICK_MIN_EFFECTIVE_SAMPLE_SPAN);
+        let velocity = time_position_covariance / time_variance * sample_span.as_secs_f64()
+            / effective_sample_span.as_secs_f64()
+            * DRAG_RADIANS_PER_COLUMN
+            * FLICK_RELEASE_VELOCITY_GAIN;
+        Some(velocity.clamp(
             -MAX_INTERACTIVE_RADIANS_PER_SECOND,
             MAX_INTERACTIVE_RADIANS_PER_SECOND,
-        )
+        ))
     }
 }
 
@@ -280,6 +389,12 @@ struct ZeroStateInteractionState {
     visible: bool,
     motion: InteractionMotion,
     active_press: Option<ActivePress>,
+    /// Sign of the idle rotation the object returns to, established by the most
+    /// recent flick. A reverse flick leaves the object idling in reverse until
+    /// another flick turns it around or the zero state exits, so the configured
+    /// rotation period keeps setting speed while the user keeps setting
+    /// direction.
+    idle_direction: f64,
 }
 
 impl Default for ZeroStateInteractionState {
@@ -288,7 +403,14 @@ impl Default for ZeroStateInteractionState {
             visible: true,
             motion: InteractionMotion::Idle,
             active_press: None,
+            idle_direction: 1.0,
         }
+    }
+}
+
+impl ZeroStateInteractionState {
+    fn directed_idle_velocity(&self, idle_velocity: f64) -> f64 {
+        idle_velocity * self.idle_direction
     }
 }
 
@@ -302,6 +424,7 @@ impl ZeroStateInteractionHandle {
         if state.visible && !visible {
             state.motion = InteractionMotion::Idle;
             state.active_press = None;
+            state.idle_direction = 1.0;
         }
         state.visible = visible;
     }
@@ -327,6 +450,7 @@ impl ZeroStateInteractionHandle {
             return false;
         }
         let mut press = state.active_press.take().expect("checked above");
+        let idle_velocity = state.directed_idle_velocity(idle_velocity);
         let horizontal_columns = press.horizontal_columns_to(position);
         if horizontal_columns != 0.0 || press.drag_origin_angle.is_some() {
             let is_first_update = press.drag_origin_angle.is_none();
@@ -343,6 +467,7 @@ impl ZeroStateInteractionHandle {
             let drag_offset = press.rate_limited_drag_offset(position, now, is_first_update);
             press.drag_angle = Some(origin_angle + drag_offset);
         }
+        press.record_horizontal_sample(position, now);
         press.last_position = position;
         state.active_press = Some(press);
         true
@@ -362,6 +487,7 @@ impl ZeroStateInteractionHandle {
         let Some(mut press) = state.active_press.take() else {
             return false;
         };
+        let established_idle_velocity = state.directed_idle_velocity(idle_velocity);
         if position != press.last_position {
             let horizontal_columns = press.horizontal_columns_to(position);
             if horizontal_columns != 0.0 || press.drag_origin_angle.is_some() {
@@ -371,7 +497,11 @@ impl ZeroStateInteractionHandle {
                 } else {
                     let origin_angle = state
                         .motion
-                        .resolve(idle_angle(idle_elapsed, idle_velocity), idle_velocity, now)
+                        .resolve(
+                            idle_angle(idle_elapsed, established_idle_velocity),
+                            established_idle_velocity,
+                            now,
+                        )
                         .angle;
                     press.drag_origin_angle = Some(origin_angle);
                     origin_angle
@@ -380,14 +510,26 @@ impl ZeroStateInteractionHandle {
                 press.drag_angle = Some(origin_angle + drag_offset);
             }
         }
+        press.record_horizontal_sample(position, now);
         let Some(release_angle) = press.drag_angle else {
             return true;
         };
-        state.motion = InteractionMotion::Settling {
-            release_at: now,
-            release_angle,
-            release_velocity: press.release_velocity(position),
-            settling_idle_velocity: idle_velocity,
+        state.motion = if let Some(release_velocity) = press.release_velocity(now) {
+            // The flick decides which way the object idles from here on; the
+            // configured rotation period keeps deciding how fast.
+            state.idle_direction = release_velocity.signum();
+            InteractionMotion::Settling {
+                release_at: now,
+                release_angle,
+                release_velocity,
+                settling_idle_velocity: state.directed_idle_velocity(idle_velocity),
+            }
+        } else {
+            InteractionMotion::TrackingIdle {
+                anchor_at: now,
+                anchor_angle: release_angle,
+                idle_velocity: established_idle_velocity,
+            }
         };
         true
     }
@@ -415,6 +557,7 @@ impl ZeroStateInteractionHandle {
                 velocity: 0.0,
             };
         }
+        let idle_velocity = state.directed_idle_velocity(idle_velocity);
         state
             .motion
             .resolve(idle_angle(idle_elapsed, idle_velocity), idle_velocity, now)
