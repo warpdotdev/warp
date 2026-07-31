@@ -8,8 +8,8 @@ use cfg_if::cfg_if;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use onboarding::{
-    AgentOnboardingEvent, AgentOnboardingView, OfferVariant, OnboardingEvent, OnboardingIntention,
-    SelectedSettings,
+    AgentOnboardingEvent, AgentOnboardingView, CreditPackOption, OfferVariant, OnboardingEvent,
+    OnboardingIntention, SelectedSettings,
 };
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
@@ -42,6 +42,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::blocklist::SerializedBlockListItem;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::onboarding::{build_onboarding_models, current_onboarding_auth_state};
+use crate::ai::request_usage_model::AIRequestUsageModelEvent;
 use crate::app_state::{AppState, PaneUuid, WindowSnapshot};
 use crate::appearance::Appearance;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
@@ -71,6 +72,7 @@ use crate::linear::LinearIssueWork;
 use crate::notebooks::manager::NotebookSource;
 use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::persistence::ModelEvent;
+use crate::pricing::{PricingInfoModel, PricingInfoModelEvent, onboarding_credit_pack_options};
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::auth::UserAuthenticationError;
@@ -137,6 +139,64 @@ fn offer_variant_for_account_class(account_class: FtueAccountClass) -> Option<Of
         FtueAccountClass::Paid => None,
         FtueAccountClass::FreeIcp => Some(OfferVariant::HeadStart),
         FtueAccountClass::FreeStandard => Some(OfferVariant::ChooseHowToStart),
+    }
+}
+
+/// The ad-hoc credit packs to offer during onboarding, priced for the current
+/// viewer. Empty when the server hasn't sent pricing yet or the viewer's plan
+/// can't buy packs at all, which hides the option.
+fn current_credit_pack_options(ctx: &AppContext) -> Vec<CreditPackOption> {
+    let workspaces = UserWorkspaces::as_ref(ctx);
+    let Some(policy) = workspaces.purchase_policy() else {
+        return Vec::new();
+    };
+    if !policy.allows_purchases() {
+        return Vec::new();
+    }
+    let Some(options) = PricingInfoModel::as_ref(ctx).addon_credits_options() else {
+        return Vec::new();
+    };
+    onboarding_credit_pack_options(options, policy.effective_premium_bps())
+}
+
+/// Relays the outcome of an onboarding-initiated credit purchase back to the
+/// onboarding view. On the checkout path the credits arrive asynchronously, so
+/// this only opens the browser; completion is detected from a later usage
+/// refresh.
+fn handle_onboarding_credit_purchase_event(
+    onboarding_view: &ViewHandle<AgentOnboardingView>,
+    event: &UserWorkspacesEvent,
+    ctx: &mut ViewContext<RootView>,
+) {
+    if !onboarding_view
+        .as_ref(ctx)
+        .is_awaiting_purchased_credits(ctx)
+    {
+        return;
+    }
+    match event {
+        UserWorkspacesEvent::PurchaseAddonCreditsSuccess => {
+            onboarding_view.update(ctx, |onboarding_view, ctx| {
+                onboarding_view.on_credit_purchase_completed(ctx);
+            });
+        }
+        UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { checkout_url } => {
+            let checkout_url = checkout_url.clone();
+            onboarding_view.update(ctx, |onboarding_view, ctx| {
+                onboarding_view.on_credit_purchase_checkout_opened(ctx);
+            });
+            ctx.open_url(&checkout_url);
+        }
+        UserWorkspacesEvent::PurchaseAddonCreditsRejected(err) => {
+            safe_error!(
+                safe: ("Onboarding add-on credits purchase failed"),
+                full: ("Onboarding add-on credits purchase failed: {err}")
+            );
+            onboarding_view.update(ctx, |onboarding_view, ctx| {
+                onboarding_view.on_credit_purchase_failed(ctx);
+            });
+        }
+        _ => {}
     }
 }
 
@@ -1690,6 +1750,9 @@ enum AccountFirstCompletion {
     PaidTeam,
     FreeIcpSetupLater,
     FreeStandardSetupLater,
+    /// The user bought a one-time credit pack on the offer slide instead of
+    /// subscribing. They stay on the free plan, so they remain free-standard.
+    FreeStandardCreditsPurchased,
     UpgradeCompleted,
 }
 
@@ -1700,6 +1763,9 @@ impl AccountFirstCompletion {
             AccountFirstCompletion::PaidTeam => "paid_team",
             AccountFirstCompletion::FreeIcpSetupLater => "free_icp_setup_later",
             AccountFirstCompletion::FreeStandardSetupLater => "free_standard_setup_later",
+            AccountFirstCompletion::FreeStandardCreditsPurchased => {
+                "free_standard_credits_purchased"
+            }
             AccountFirstCompletion::UpgradeCompleted => "upgrade_completed",
         }
     }
@@ -1711,7 +1777,10 @@ impl AccountFirstCompletion {
                 Some(FtueAccountClass::Paid)
             }
             AccountFirstCompletion::FreeIcpSetupLater => Some(FtueAccountClass::FreeIcp),
-            AccountFirstCompletion::FreeStandardSetupLater => Some(FtueAccountClass::FreeStandard),
+            AccountFirstCompletion::FreeStandardSetupLater
+            | AccountFirstCompletion::FreeStandardCreditsPurchased => {
+                Some(FtueAccountClass::FreeStandard)
+            }
         }
     }
 
@@ -1721,6 +1790,7 @@ impl AccountFirstCompletion {
             AccountFirstCompletion::PaidTeam
                 | AccountFirstCompletion::FreeIcpSetupLater
                 | AccountFirstCompletion::FreeStandardSetupLater
+                | AccountFirstCompletion::FreeStandardCreditsPurchased
                 | AccountFirstCompletion::UpgradeCompleted
         )
     }
@@ -2124,7 +2194,7 @@ impl RootView {
 
             let auth_state = current_onboarding_auth_state(ctx);
 
-            AgentOnboardingView::new(
+            let mut view = AgentOnboardingView::new(
                 themes.clone(),
                 false, // Always use unskippable onboarding.
                 models,
@@ -2133,8 +2203,23 @@ impl RootView {
                 FeatureFlag::AgentView.is_enabled(),
                 auth_state,
                 ctx,
-            )
+            );
+            view.set_credit_pack_options(current_credit_pack_options(ctx), ctx);
+            view
         });
+
+        // Keep the offer slide's credit packs in sync with server pricing.
+        let onboarding_view_for_pricing = onboarding_view.clone();
+        ctx.subscribe_to_model(
+            &PricingInfoModel::handle(ctx),
+            move |_, _pricing, event, ctx| {
+                let PricingInfoModelEvent::PricingInfoUpdated = event;
+                let options = current_credit_pack_options(ctx);
+                onboarding_view_for_pricing.update(ctx, |onboarding_view, ctx| {
+                    onboarding_view.set_credit_pack_options(options, ctx);
+                });
+            },
+        );
 
         let onboarding_view_clone = onboarding_view.clone();
         ctx.subscribe_to_model(
@@ -2169,9 +2254,39 @@ impl RootView {
                             .set_workspace_enforces_autonomy(workspace_enforces_autonomy, ctx);
                     });
                 }
+                handle_onboarding_credit_purchase_event(
+                    &onboarding_view_for_workspaces,
+                    event,
+                    ctx,
+                );
                 let auth_state = current_onboarding_auth_state(ctx);
+                let credit_pack_options = current_credit_pack_options(ctx);
                 onboarding_view_for_workspaces.update(ctx, |onboarding_view, ctx| {
                     onboarding_view.set_auth_state(auth_state, ctx);
+                    // The purchase policy (and so the premium) can change with
+                    // the user's teams, which moves the displayed prices.
+                    onboarding_view.set_credit_pack_options(credit_pack_options, ctx);
+                });
+            },
+        );
+
+        // Browser checkout doesn't report back to the app, so the purchase is
+        // only complete once the granted credits show up on a usage refresh.
+        let onboarding_view_for_usage = onboarding_view.clone();
+        ctx.subscribe_to_model(
+            &AIRequestUsageModel::handle(ctx),
+            move |_, usage, event, ctx| {
+                if !matches!(event, AIRequestUsageModelEvent::RequestUsageUpdated) {
+                    return;
+                }
+                let awaiting = onboarding_view_for_usage
+                    .as_ref(ctx)
+                    .is_awaiting_purchased_credits(ctx);
+                if !awaiting || !usage.as_ref(ctx).has_any_ai_remaining(ctx) {
+                    return;
+                }
+                onboarding_view_for_usage.update(ctx, |onboarding_view, ctx| {
+                    onboarding_view.on_credit_purchase_completed(ctx);
                 });
             },
         );
@@ -2849,6 +2964,23 @@ impl RootView {
                     self.complete_account_first(AccountFirstCompletion::FreeStandardSetupLater, ctx)
                 }
             },
+            AgentOnboardingEvent::PurchaseCreditsRequested { credits } => {
+                // `team_uid` is intentionally omitted: the server resolves the
+                // buyer's personal team and creates one when a brand-new free
+                // user doesn't have one yet.
+                let credits = *credits;
+                UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                    user_workspaces.purchase_addon_credits(None, credits, ctx);
+                });
+            }
+            AgentOnboardingEvent::OfferCreditsPurchased { variant } => match variant {
+                // Only the free-standard offer surfaces credit packs.
+                OfferVariant::ChooseHowToStart => self.complete_account_first(
+                    AccountFirstCompletion::FreeStandardCreditsPurchased,
+                    ctx,
+                ),
+                OfferVariant::HeadStart => {}
+            },
             AgentOnboardingEvent::AppBecameActive => {
                 // fetch the models / workspace metadata when the user tabs/intents back
                 // into the app during onboarding after potentially upgrading
@@ -2857,6 +2989,12 @@ impl RootView {
                 });
                 TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
                     drop(manager.refresh_workspace_metadata(ctx));
+                });
+                // Returning from browser checkout is the usual way an
+                // onboarding credit purchase completes, so refresh usage too:
+                // the granted credits are what allow onboarding to advance.
+                AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
+                    drop(model.refresh_request_usage(ctx));
                 });
             }
         }

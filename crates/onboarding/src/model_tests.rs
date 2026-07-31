@@ -5,8 +5,8 @@ use warpui_core::{App, ModelHandle};
 
 use crate::OnboardingIntention;
 use crate::model::{
-    AiSetupChoice, NoAiConfirmationSource, OnboardingAuthState, OnboardingStateModel,
-    OnboardingStep, SelectedSettings,
+    AiSetupChoice, CreditPackOption, CreditPurchaseState, NoAiConfirmationSource,
+    OnboardingAuthState, OnboardingStateModel, OnboardingStep, SelectedSettings,
 };
 use crate::slides::OfferVariant;
 
@@ -99,6 +99,183 @@ fn post_auth_offer_supports_back_to_theme_and_no_direct_next() {
             assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
         }
     });
+}
+
+fn credit_packs() -> Vec<CreditPackOption> {
+    vec![
+        CreditPackOption {
+            credits: 400,
+            price_usd_cents: 1_200,
+            savings_percent: 0,
+        },
+        CreditPackOption {
+            credits: 1_000,
+            price_usd_cents: 2_400,
+            savings_percent: 20,
+        },
+    ]
+}
+
+fn purchase_state(app: &App, model: &ModelHandle<OnboardingStateModel>) -> CreditPurchaseState {
+    model.read(app, |model, _| model.credit_purchase_state())
+}
+
+#[test]
+fn credit_packs_default_to_the_first_option_and_are_selectable() {
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        model.read(&app, |model, _| {
+            assert!(model.credit_pack_options().is_empty());
+            assert_eq!(model.selected_credit_pack(), None);
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.set_credit_pack_options(credit_packs(), ctx)
+        });
+        model.read(&app, |model, _| {
+            assert_eq!(model.selected_credit_pack_index(), 0);
+            assert_eq!(model.selected_credit_pack().map(|p| p.credits), Some(400));
+        });
+
+        model.update(&mut app, |model, ctx| model.select_credit_pack(1, ctx));
+        model.read(&app, |model, _| {
+            assert_eq!(model.selected_credit_pack().map(|p| p.credits), Some(1_000));
+        });
+
+        // Out-of-range selections are ignored rather than panicking.
+        model.update(&mut app, |model, ctx| model.select_credit_pack(9, ctx));
+        model.read(&app, |model, _| {
+            assert_eq!(model.selected_credit_pack_index(), 1);
+        });
+    });
+}
+
+/// Regression test for REV-1886: browser checkout must not advance onboarding
+/// on its own. The purchase stays in flight until the credits actually land,
+/// so abandoning checkout leaves the user on the offer slide.
+#[test]
+fn abandoned_checkout_leaves_the_purchase_in_flight() {
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        model.update(&mut app, |model, ctx| {
+            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
+            model.set_credit_pack_options(credit_packs(), ctx);
+            model.request_credit_purchase(ctx);
+        });
+        assert_eq!(
+            purchase_state(&app, &model),
+            CreditPurchaseState::Purchasing
+        );
+
+        model.update(&mut app, |model, ctx| model.on_credit_checkout_opened(ctx));
+        assert_eq!(
+            purchase_state(&app, &model),
+            CreditPurchaseState::AwaitingCheckout
+        );
+        assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
+
+        // Only observing the granted credits clears the in-flight purchase.
+        model.update(&mut app, |model, ctx| {
+            model.on_credit_purchase_completed(ctx)
+        });
+        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
+    });
+}
+
+#[test]
+fn a_synchronous_purchase_completes_without_checkout() {
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        model.update(&mut app, |model, ctx| {
+            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
+            model.set_credit_pack_options(credit_packs(), ctx);
+            model.request_credit_purchase(ctx);
+            model.on_credit_purchase_completed(ctx);
+        });
+        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
+    });
+}
+
+#[test]
+fn a_rejected_purchase_is_retryable() {
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        model.update(&mut app, |model, ctx| {
+            model.set_credit_pack_options(credit_packs(), ctx);
+            model.request_credit_purchase(ctx);
+            model.on_credit_purchase_failed(ctx);
+        });
+        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Failed);
+
+        model.update(&mut app, |model, ctx| model.request_credit_purchase(ctx));
+        assert_eq!(
+            purchase_state(&app, &model),
+            CreditPurchaseState::Purchasing
+        );
+    });
+}
+
+#[test]
+fn a_purchase_cannot_start_without_packs_or_while_one_is_in_flight() {
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+
+        // No packs offered yet: nothing to buy.
+        model.update(&mut app, |model, ctx| model.request_credit_purchase(ctx));
+        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
+
+        model.update(&mut app, |model, ctx| {
+            model.set_credit_pack_options(credit_packs(), ctx);
+            model.request_credit_purchase(ctx);
+            model.on_credit_checkout_opened(ctx);
+            // A second request must not restart checkout...
+            model.request_credit_purchase(ctx);
+            // ...and the pack being paid for must not change underneath it.
+            model.select_credit_pack(1, ctx);
+        });
+        assert_eq!(
+            purchase_state(&app, &model),
+            CreditPurchaseState::AwaitingCheckout
+        );
+        model.read(&app, |model, _| {
+            assert_eq!(model.selected_credit_pack_index(), 0);
+        });
+    });
+}
+
+/// Completion callbacks are safe to fire speculatively (they are driven by a
+/// generic usage refresh), so they must be inert when nothing was purchased.
+#[test]
+fn purchase_callbacks_are_inert_when_no_purchase_is_in_flight() {
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        model.update(&mut app, |model, ctx| {
+            model.set_credit_pack_options(credit_packs(), ctx);
+            model.on_credit_purchase_completed(ctx);
+            model.on_credit_checkout_opened(ctx);
+            model.on_credit_purchase_failed(ctx);
+        });
+        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
+    });
+}
+
+#[test]
+fn credit_pack_labels_are_formatted_for_display() {
+    let pack = CreditPackOption {
+        credits: 6_500,
+        price_usd_cents: 12_000,
+        savings_percent: 38,
+    };
+    assert_eq!(pack.credits_label(), "6,500 credits");
+    assert_eq!(pack.price_label(), "$120");
+
+    let fractional = CreditPackOption {
+        credits: 400,
+        price_usd_cents: 1_250,
+        savings_percent: 0,
+    };
+    assert_eq!(fractional.credits_label(), "400 credits");
+    assert_eq!(fractional.price_label(), "$12.50");
 }
 
 #[test]
