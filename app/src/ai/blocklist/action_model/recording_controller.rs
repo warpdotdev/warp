@@ -1,6 +1,7 @@
 //! Runtime-global state machine for the single per-runtime video recording.
 
 use std::mem;
+use std::path::Path;
 use std::time::Duration;
 
 use ai::agent::action_result::StopRecordingResult;
@@ -311,6 +312,27 @@ impl RecordingController {
         None
     }
 
+    /// Opens a recording action group for a shell `command` whose on-screen
+    /// work should survive the smart cut (currently `playwright-cli` browser
+    /// automation). Returns whether a group was opened, so the caller can settle
+    /// it with [`commit_action_group_now`] or [`discard_action_group`] once the
+    /// command resolves. Returns `false` for other commands or when no recording
+    /// is active for this conversation.
+    ///
+    /// [`commit_action_group_now`]: Self::commit_action_group_now
+    /// [`discard_action_group`]: Self::discard_action_group
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn maybe_begin_action_group(
+        &mut self,
+        conversation_id: AIConversationId,
+        command: &str,
+    ) -> bool {
+        is_playwright_cli_command(command)
+            && self
+                .begin_action_group(conversation_id, Vec::new())
+                .is_some()
+    }
+
     /// Commits the in-flight action group with its finish offset, derived from
     /// the capture start instant returned by [`begin_action_group`]. The finish
     /// is clamped to be no earlier than the start so the segment builder's
@@ -537,6 +559,27 @@ impl RecordingController {
             | RecordingState::Finalized { .. } => None,
         }
     }
+}
+
+/// Whether a requested command invokes the `playwright-cli` binary, whose
+/// on-screen browser automation should be kept in an active computer-use
+/// recording rather than trimmed away with other shell work.
+fn is_playwright_cli_command(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .find(|token| {
+            let is_env_assignment = token
+                .chars()
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+                && token.contains('=');
+            !is_env_assignment
+        })
+        .is_some_and(|program| {
+            Path::new(program)
+                .file_name()
+                .is_some_and(|name| name == "playwright-cli")
+        })
 }
 
 impl Entity for RecordingController {

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -260,16 +259,14 @@ impl ShellCommandExecutor {
                     } else {
                         command.clone()
                     };
-                // Keep `playwright-cli` browser automation visible in an active
-                // computer-use recording: open an action group before the command
-                // starts so the smart cut does not trim its on-screen work.
+                // Let the recording controller decide whether this command's
+                // on-screen work should be kept in an active computer-use
+                // recording, opening an action group before it starts if so.
                 let conversation_id = input.conversation_id;
-                let is_playwright_cli = is_playwright_cli_command(command);
-                if is_playwright_cli {
-                    RecordingController::handle(ctx).update(ctx, |controller, _| {
-                        controller.begin_action_group(conversation_id, Vec::new());
+                let opened_recording_group = RecordingController::handle(ctx)
+                    .update(ctx, |controller, _| {
+                        controller.maybe_begin_action_group(conversation_id, command)
                     });
-                }
                 ctx.emit(ShellCommandExecutorEvent::ExecuteCommand {
                     action_id: action_id.clone(),
                     command: decorated_command,
@@ -290,7 +287,7 @@ impl ShellCommandExecutor {
                             });
                         }
 
-                        if is_playwright_cli {
+                        if opened_recording_group {
                             RecordingController::handle(ctx).update(ctx, |controller, _| {
                                 match &result {
                                     // Commit regardless of exit code: failed browser
@@ -732,27 +729,6 @@ impl ShellCommandExecutor {
     ) -> BoxFuture<'static, ()> {
         futures::future::ready(()).boxed()
     }
-}
-
-/// Whether a requested command invokes the `playwright-cli` binary, whose
-/// on-screen browser automation should be kept in an active computer-use
-/// recording rather than trimmed away with other shell work.
-fn is_playwright_cli_command(command: &str) -> bool {
-    command
-        .split_whitespace()
-        .find(|token| {
-            let is_env_assignment = token
-                .chars()
-                .next()
-                .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
-                && token.contains('=');
-            !is_env_assignment
-        })
-        .is_some_and(|program| {
-            Path::new(program)
-                .file_name()
-                .is_some_and(|name| name == "playwright-cli")
-        })
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

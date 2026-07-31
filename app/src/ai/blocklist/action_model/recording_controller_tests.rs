@@ -390,6 +390,22 @@ fn commit_after_finalization_is_noop() {
 }
 
 #[test]
+fn detects_playwright_cli_commands() {
+    assert!(is_playwright_cli_command(
+        "playwright-cli open --headed https://example.com"
+    ));
+    assert!(is_playwright_cli_command(
+        "PLAYWRIGHT_MCP_SANDBOX=0 playwright-cli open https://example.com"
+    ));
+    assert!(is_playwright_cli_command(
+        "/usr/local/bin/playwright-cli attach"
+    ));
+    assert!(!is_playwright_cli_command("npm install playwright-cli"));
+    assert!(!is_playwright_cli_command("echo playwright-cli"));
+    assert!(!is_playwright_cli_command("cargo build"));
+}
+
+#[test]
 fn finalization_commits_open_pending_group() {
     let owner = AIConversationId::new();
     let mut controller = active_controller("recording", owner);

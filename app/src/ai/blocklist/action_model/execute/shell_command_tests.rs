@@ -5,29 +5,13 @@ use futures::channel::oneshot;
 use parking_lot::FairMutex;
 use warpui::{App, EntityId};
 
-use super::{BlockSelector, ShellCommandExecutor, is_playwright_cli_command};
+use super::{BlockSelector, ShellCommandExecutor};
 use crate::terminal::event::{BlockMetadataReceivedEvent, BlockWorkingDirectoryUpdatedEvent};
 use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::terminal_model::{BlockIndex, TerminalModel};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-
-#[test]
-fn detects_playwright_cli_commands() {
-    assert!(is_playwright_cli_command(
-        "playwright-cli open --headed https://example.com"
-    ));
-    assert!(is_playwright_cli_command(
-        "PLAYWRIGHT_MCP_SANDBOX=0 playwright-cli open https://example.com"
-    ));
-    assert!(is_playwright_cli_command(
-        "/usr/local/bin/playwright-cli attach"
-    ));
-    assert!(!is_playwright_cli_command("npm install playwright-cli"));
-    assert!(!is_playwright_cli_command("echo playwright-cli"));
-    assert!(!is_playwright_cli_command("cargo build"));
-}
 
 /// Locks in the contract that `ShellCommandExecutor`'s requested-command finish
 /// detector reacts only to `BlockMetadataReceived` (precmd) and not to
