@@ -130,7 +130,6 @@ async fn finalize_recording(
         handle,
         actions,
         frame_rate,
-        capture_thumbnail,
         ..
     } = recording;
     let recorder = computer_use::create_recorder();
@@ -192,14 +191,14 @@ async fn finalize_recording(
         uploader.upload_with_association(request, association).await
     }
     .await;
-    // Best-effort PR video thumbnail: when the server requested one
-    // (`capture_thumbnail`) and the video uploaded, extract a representative
-    // frame, composite a play-button glyph, and upload it as a separate PNG file
-    // artifact linked to the video by the filename convention. A missing/failed
-    // thumbnail must never block the video upload or PR creation, so any error is
-    // logged and dropped.
-    if capture_thumbnail
-        && let Ok(upload) = &upload_result
+    // Best-effort PR video thumbnail: after a successful non-discard video
+    // upload, extract a representative frame, composite a play-button glyph, and
+    // upload it as a separate PNG file artifact linked to the video by the
+    // `{video_uuid}-thumb.png` filename convention. Capture is unconditional; the
+    // team setting and feature flag are consulted only at server render time. A
+    // missing/failed thumbnail must never block the video upload or PR creation,
+    // so any error is logged and dropped.
+    if let Ok(upload) = &upload_result
         && let Err(error) = upload_recording_thumbnail(
             &thumbnail_source_path,
             &upload.artifact.artifact_uid,

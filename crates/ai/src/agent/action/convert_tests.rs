@@ -1,19 +1,11 @@
 use computer_use::Target;
 use warp_multi_agent_api as api;
-use warp_multi_agent_api::message::tool_call::start_recording::AttachmentSetting;
 
 use crate::agent::action::AIAgentActionType;
 use crate::agent::convert::ToolToAIAgentActionError;
 
 fn start_recording(
     target: Option<api::message::tool_call::ComputerUseTarget>,
-) -> api::message::tool_call::StartRecording {
-    start_recording_with_setting(target, AttachmentSetting::Unspecified)
-}
-
-fn start_recording_with_setting(
-    target: Option<api::message::tool_call::ComputerUseTarget>,
-    attachment_setting: AttachmentSetting,
 ) -> api::message::tool_call::StartRecording {
     api::message::tool_call::StartRecording {
         frame_rate: 15,
@@ -22,7 +14,6 @@ fn start_recording_with_setting(
         playback_speed_multiplier: 0,
         target,
         description: String::new(),
-        attachment_setting: attachment_setting as i32,
     }
 }
 
@@ -72,27 +63,4 @@ fn start_recording_without_target_records_whole_screen() {
         action,
         AIAgentActionType::StartRecording { window: None, .. }
     ));
-}
-
-#[test]
-fn start_recording_captures_thumbnail_only_for_embed() {
-    for (setting, expected) in [
-        (AttachmentSetting::Unspecified, false),
-        (AttachmentSetting::Disabled, false),
-        (AttachmentSetting::LinkOnly, false),
-        (AttachmentSetting::Embed, true),
-    ] {
-        let action = AIAgentActionType::try_from(start_recording_with_setting(None, setting))
-            .expect("recording should convert");
-        let AIAgentActionType::StartRecording {
-            capture_thumbnail, ..
-        } = action
-        else {
-            panic!("expected a StartRecording action, got {action:?}");
-        };
-        assert_eq!(
-            capture_thumbnail, expected,
-            "capture_thumbnail for {setting:?} should be {expected}"
-        );
-    }
 }

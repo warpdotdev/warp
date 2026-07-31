@@ -22,7 +22,6 @@ fn active_controller(recording_id: &str, conversation_id: AIConversationId) -> R
         None,
         None,
         computer_use::Target::Screen,
-        false,
     );
     controller
 }

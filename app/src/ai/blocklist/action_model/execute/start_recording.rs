@@ -51,7 +51,6 @@ impl StartRecordingExecutor {
             description,
             playback_speed_multiplier,
             window,
-            capture_thumbnail,
         } = action.action.clone()
         else {
             return ActionExecution::InvalidAction;
@@ -132,7 +131,6 @@ impl StartRecordingExecutor {
                             summary,
                             description,
                             target,
-                            capture_thumbnail,
                         );
                     });
                     #[cfg(not(target_family = "wasm"))]
