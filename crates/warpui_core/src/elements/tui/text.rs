@@ -47,6 +47,11 @@ enum TuiTextOverflow {
     Clip,
     Ellipsis,
 }
+#[derive(Clone, Copy)]
+struct TuiTextMeasurement {
+    available_width: u16,
+    natural_size: TuiSize,
+}
 
 pub struct TuiText {
     /// Styled runs that concatenate into the full text. Runs may contain hard
@@ -56,6 +61,7 @@ pub struct TuiText {
     style: TuiStyle,
     wrap: bool,
     overflow: TuiTextOverflow,
+    cached_measurement: Option<TuiTextMeasurement>,
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
 }
@@ -75,6 +81,7 @@ impl TuiText {
             style: TuiStyle::default(),
             wrap: true,
             overflow: TuiTextOverflow::default(),
+            cached_measurement: None,
             size: None,
             origin: None,
         }
@@ -88,6 +95,7 @@ impl TuiText {
     /// Lays each hard line out as a single (clipped) row instead of wrapping.
     pub fn truncate(mut self) -> Self {
         self.wrap = false;
+        self.cached_measurement = None;
         self
     }
     /// Truncates each hard line at grapheme boundaries and appends `...`
@@ -95,6 +103,7 @@ impl TuiText {
     pub fn truncate_with_ellipsis(mut self) -> Self {
         self.wrap = false;
         self.overflow = TuiTextOverflow::Ellipsis;
+        self.cached_measurement = None;
         self
     }
 
@@ -262,18 +271,30 @@ impl TuiElement for TuiText {
         _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> TuiSize {
-        let size = if self.is_empty() {
-            constraint.clamp(TuiSize::ZERO)
+        let width = constraint.max.width;
+        let natural_size = if self.is_empty() {
+            TuiSize::ZERO
+        } else if let Some(measurement) = self
+            .cached_measurement
+            .filter(|measurement| measurement.available_width == width)
+        {
+            measurement.natural_size
         } else {
             let paragraph = self.paragraph(constraint.max.width);
             let height =
                 u16::try_from(paragraph.line_count(constraint.max.width)).unwrap_or(u16::MAX);
             let content_width = u16::try_from(paragraph.line_width()).unwrap_or(u16::MAX);
-            TuiSize::new(
-                constraint.constrain_width(content_width),
-                constraint.constrain_height(height),
-            )
+            let size = TuiSize::new(content_width, height);
+            self.cached_measurement = Some(TuiTextMeasurement {
+                available_width: width,
+                natural_size: size,
+            });
+            size
         };
+        let size = TuiSize::new(
+            constraint.constrain_width(natural_size.width),
+            constraint.constrain_height(natural_size.height),
+        );
         self.size = Some(size);
         size
     }
