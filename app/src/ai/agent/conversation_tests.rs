@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 
 use ai::api_keys::{ApiKeyManager, CustomEndpointParams, CustomEndpointSchema};
+use base64::Engine as _;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
 
 use super::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
-    ConversationUsageTotals, RecordingSpanStatus, RestoreConversationError,
+    ConversationUsageTotals, MessageId, RecordingSpanStatus, RestoreConversationError,
     artifact_from_fork_proto, footer_model_token_usage,
 };
 use crate::ai::artifacts::Artifact;
@@ -34,6 +35,87 @@ fn restored_conversation(conversation_data: Option<AgentConversationData>) -> AI
         conversation_data,
     )
     .unwrap()
+}
+
+#[test]
+fn intent_span_derivation_tracks_terminal_and_open_statuses() {
+    let conversation = restored_conversation_with_messages(vec![
+        server_intent_tool_call(
+            "intent-start",
+            "request-1",
+            "intent-call",
+            server_intent_payload("Check login flow"),
+        ),
+        agent_output_message("middle", "request-1"),
+        server_intent_tool_call(
+            "intent-outcome",
+            "request-1",
+            "outcome-call",
+            server_outcome_payload("intent-1", 1, "Login succeeded"),
+        ),
+        server_intent_tool_call(
+            "open-start",
+            "request-1",
+            "open-call",
+            server_intent_payload("Check logout flow"),
+        ),
+        server_intent_tool_call(
+            "failure-start",
+            "request-1",
+            "failure-call",
+            server_intent_payload("Check payment flow"),
+        ),
+        server_intent_tool_call(
+            "failure-outcome",
+            "request-1",
+            "failure-outcome-call",
+            server_outcome_payload("intent-2", 2, "Payment failed"),
+        ),
+        server_intent_tool_call(
+            "inconclusive-start",
+            "request-1",
+            "inconclusive-call",
+            server_intent_payload("Check shipping flow"),
+        ),
+        server_intent_tool_call(
+            "inconclusive-outcome",
+            "request-1",
+            "inconclusive-outcome-call",
+            server_outcome_payload("intent-3", 3, "Shipping status unavailable"),
+        ),
+    ]);
+
+    let spans = conversation.intent_spans_by_message_id();
+    let completed = spans
+        .get(&MessageId::new("intent-start".to_string()))
+        .expect("completed span");
+    assert_eq!(completed.label, "Check login flow");
+    assert_eq!(completed.intent_id, "intent-1");
+    assert_eq!(completed.status, super::IntentSpanStatus::Success);
+    assert_eq!(completed.summary.as_deref(), Some("Login succeeded"));
+    assert_eq!(completed.output_message_ids.len(), 3);
+
+    let open = spans
+        .get(&MessageId::new("open-start".to_string()))
+        .expect("open span");
+    assert_eq!(open.label, "Check logout flow");
+    assert_eq!(open.status, super::IntentSpanStatus::Open);
+    assert!(open.summary.is_none());
+
+    let failure = spans
+        .get(&MessageId::new("failure-start".to_string()))
+        .expect("failure span");
+    assert_eq!(failure.status, super::IntentSpanStatus::Failure);
+    assert_eq!(failure.summary.as_deref(), Some("Payment failed"));
+
+    let inconclusive = spans
+        .get(&MessageId::new("inconclusive-start".to_string()))
+        .expect("inconclusive span");
+    assert_eq!(inconclusive.status, super::IntentSpanStatus::Inconclusive);
+    assert_eq!(
+        inconclusive.summary.as_deref(),
+        Some("Shipping status unavailable")
+    );
 }
 
 fn restored_conversation_with_root_description(description: &str) -> AIConversation {
@@ -194,6 +276,39 @@ fn stop_recording_error_result(message: &str) -> api::message::tool_call_result:
             },
         )),
     })
+}
+
+fn server_intent_payload(label: &str) -> String {
+    let label = label.as_bytes();
+    let mut bytes = vec![0xa2, 0x02, 0x0a, label.len() as u8];
+    bytes.extend_from_slice(label);
+    base64::engine::general_purpose::URL_SAFE.encode(bytes)
+}
+
+fn server_outcome_payload(intent_id: &str, status: u8, summary: &str) -> String {
+    let intent_id = intent_id.as_bytes();
+    let summary = summary.as_bytes();
+    let mut nested = vec![0x0a, intent_id.len() as u8];
+    nested.extend_from_slice(intent_id);
+    nested.extend_from_slice(&[0x10, status, 0x1a, summary.len() as u8]);
+    nested.extend_from_slice(summary);
+    let mut bytes = vec![0xaa, 0x02, nested.len() as u8];
+    bytes.extend_from_slice(&nested);
+    base64::engine::general_purpose::URL_SAFE.encode(bytes)
+}
+
+fn server_intent_tool_call(
+    id: &str,
+    request_id: &str,
+    tool_call_id: &str,
+    payload: String,
+) -> api::Message {
+    tool_call_message(
+        id,
+        request_id,
+        tool_call_id,
+        api::message::tool_call::Tool::Server(api::message::tool_call::Server { payload }),
+    )
 }
 fn restored_conversation_with_messages(messages: Vec<api::Message>) -> AIConversation {
     AIConversation::new_restored(

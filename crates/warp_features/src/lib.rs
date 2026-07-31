@@ -589,6 +589,9 @@ pub enum FeatureFlag {
     /// Enables video recording of computer-use sessions for cloud agents.
     VideoRecording,
 
+    /// Enables rendering server-reported intent spans in the AI blocklist.
+    IntentSpansInBlocklist,
+
     /// Enables team API key creation in the API key management UI.
     TeamApiKeys,
 
@@ -979,6 +982,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::SummarizationViaMessageReplacement,
     FeatureFlag::LocalComputerUse,
     FeatureFlag::VideoRecording,
+    FeatureFlag::IntentSpansInBlocklist,
     FeatureFlag::OzLaunchModal,
     // These are enabled via 100% experiment on prod warp-server,
     // but we need to enable here for dogfood builds.

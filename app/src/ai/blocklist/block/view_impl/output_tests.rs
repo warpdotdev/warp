@@ -94,28 +94,46 @@ fn start_recording_card_text_uses_static_title_and_description_subtext() {
         height_px: 720,
     });
 
-    let text = start_recording_card_text("Demo checkout flow", Some(&result));
+    let text =
+        start_recording_card_text("Checkout demo", Some("Demo checkout flow"), Some(&result));
 
     assert_eq!(
         text,
         RecordingCardText {
-            primary: "Recording started".to_string(),
-            subtext: Some("Demo checkout flow".to_string()),
+            eyebrow: "Recording started".to_string(),
+            title: Some("Checkout demo".to_string()),
+            description: Some("Demo checkout flow".to_string()),
         }
     );
+}
+
+#[test]
+fn start_recording_card_text_omits_empty_description() {
+    let result = StartRecordingResult::Success(RecordingStarted {
+        recording_id: "rec-1".to_string(),
+        started_at: SystemTime::UNIX_EPOCH,
+        width_px: 1280,
+        height_px: 720,
+    });
+
+    let text = start_recording_card_text("Checkout demo", Some("  "), Some(&result));
+
+    assert_eq!(text.description, None);
 }
 
 #[test]
 fn start_recording_card_text_includes_failure_copy() {
     let result = StartRecordingResult::Error("unsupported platform".to_string());
 
-    let text = start_recording_card_text("Demo checkout flow", Some(&result));
+    let text =
+        start_recording_card_text("Checkout demo", Some("Demo checkout flow"), Some(&result));
 
     assert_eq!(
         text,
         RecordingCardText {
-            primary: "Recording failed to start".to_string(),
-            subtext: Some("unsupported platform".to_string()),
+            eyebrow: "Recording failed to start".to_string(),
+            title: None,
+            description: Some("unsupported platform".to_string()),
         }
     );
 }
@@ -137,8 +155,9 @@ fn stop_recording_card_text_includes_complete_duration() {
     assert_eq!(
         text,
         RecordingCardText {
-            primary: "Recording saved".to_string(),
-            subtext: Some("0:02".to_string()),
+            eyebrow: "Recording saved".to_string(),
+            title: None,
+            description: Some("0:02".to_string()),
         }
     );
 }
@@ -160,8 +179,9 @@ fn stop_recording_card_text_includes_partial_duration_without_raw_reason() {
     assert_eq!(
         text,
         RecordingCardText {
-            primary: "Recording saved".to_string(),
-            subtext: Some("Partial recording • 0:12".to_string()),
+            eyebrow: "Recording saved".to_string(),
+            title: None,
+            description: Some("Partial recording • 0:12".to_string()),
         }
     );
 }

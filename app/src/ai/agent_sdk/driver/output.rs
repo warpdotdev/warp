@@ -512,6 +512,8 @@ pub mod text {
                 AIAgentOutputMessageType::EventsFromAgents { event_ids } => {
                     writeln!(w, "Received {} agent events", event_ids.len())?;
                 }
+                AIAgentOutputMessageType::IntentSpanStart { .. }
+                | AIAgentOutputMessageType::IntentSpanOutcome { .. } => {}
             }
         }
 
@@ -1180,7 +1182,9 @@ pub mod json {
                     })
                 }
                 AIAgentOutputMessageType::MessagesReceivedFromAgents { .. }
-                | AIAgentOutputMessageType::EventsFromAgents { .. } => None,
+                | AIAgentOutputMessageType::EventsFromAgents { .. }
+                | AIAgentOutputMessageType::IntentSpanStart { .. }
+                | AIAgentOutputMessageType::IntentSpanOutcome { .. } => None,
             }
         }
     }

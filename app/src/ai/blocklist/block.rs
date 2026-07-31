@@ -2532,7 +2532,9 @@ impl AIBlock {
                 | AIAgentOutputMessageType::DebugOutput { .. }
                 | AIAgentOutputMessageType::ArtifactCreated(_)
                 | AIAgentOutputMessageType::SkillInvoked(_)
-                | AIAgentOutputMessageType::EventsFromAgents { .. } => {}
+                | AIAgentOutputMessageType::EventsFromAgents { .. }
+                | AIAgentOutputMessageType::IntentSpanStart { .. }
+                | AIAgentOutputMessageType::IntentSpanOutcome { .. } => {}
             }
         }
     }

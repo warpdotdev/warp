@@ -651,6 +651,8 @@ impl AIAgentOutput {
                     result.push(format!("Received {} agent events", event_ids.len()));
                     last_was_action = false;
                 }
+                AIAgentOutputMessageType::IntentSpanStart { .. }
+                | AIAgentOutputMessageType::IntentSpanOutcome { .. } => continue,
             }
         }
 
@@ -1791,6 +1793,13 @@ impl Display for SubagentCall {
 pub struct InvokedSkill {
     pub name: String,
 }
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum IntentSpanStatus {
+    Open,
+    Success,
+    Failure,
+    Inconclusive,
+}
 
 /// Data for a single received message, used for rendering in the UI.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -1851,6 +1860,17 @@ pub enum AIAgentOutputMessageType {
     /// Lifecycle events received from other agent conversations.
     EventsFromAgents {
         event_ids: Vec<String>,
+    },
+    /// Opens a server-reported intent span in the transcript.
+    IntentSpanStart {
+        intent_id: String,
+        label: String,
+    },
+    /// Closes a server-reported intent span in the transcript.
+    IntentSpanOutcome {
+        intent_id: String,
+        status: IntentSpanStatus,
+        summary: String,
     },
 }
 
@@ -2047,6 +2067,12 @@ impl Display for AIAgentOutputMessage {
             AIAgentOutputMessageType::EventsFromAgents { event_ids } => {
                 write!(f, "Received {} agent events", event_ids.len())?
             }
+            AIAgentOutputMessageType::IntentSpanStart { label, .. } => {
+                write!(f, "Intent started: {label}")?
+            }
+            AIAgentOutputMessageType::IntentSpanOutcome {
+                status, summary, ..
+            } => write!(f, "Intent outcome ({status:?}): {summary}")?,
         }
 
         if !self.citations.is_empty() {
@@ -2190,6 +2216,31 @@ impl AIAgentOutputMessage {
         Self {
             id,
             message: AIAgentOutputMessageType::EventsFromAgents { event_ids },
+            citations: vec![],
+        }
+    }
+
+    pub fn intent_span_start(id: MessageId, intent_id: String, label: String) -> Self {
+        Self {
+            id,
+            message: AIAgentOutputMessageType::IntentSpanStart { intent_id, label },
+            citations: vec![],
+        }
+    }
+
+    pub fn intent_span_outcome(
+        id: MessageId,
+        intent_id: String,
+        status: IntentSpanStatus,
+        summary: String,
+    ) -> Self {
+        Self {
+            id,
+            message: AIAgentOutputMessageType::IntentSpanOutcome {
+                intent_id,
+                status,
+                summary,
+            },
             citations: vec![],
         }
     }

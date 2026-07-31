@@ -1,4 +1,5 @@
 //! Conversions from MAA API types to application types.
+use base64::Engine as _;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -9,6 +10,7 @@ use ai::skills::{
     SkillPathOrigin, skill_reference_from_api_skill_ref, skill_reference_from_read_skill_ref,
 };
 use api::ask_user_question::question::QuestionType;
+use prost::Message as ProstMessage;
 use warp_core::channel::ChannelState;
 use warp_multi_agent_api as api;
 
@@ -22,12 +24,75 @@ use crate::ai::agent::util::parse_markdown_into_text_and_code_sections;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionType, AIAgentAttachment, AIAgentCitation, AIAgentInput,
     AIAgentOutputMessage, AIAgentText, AIAgentTodo, ArtifactCreatedData, CloneRepositoryURL,
-    MessageId, RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest, SubagentCall,
-    SubagentType, SuggestedAgentModeWorkflow, SuggestedRule, Suggestions, SummarizationType,
-    TodoOperation, UserQueryMode, WebFetchStatus, WebSearchStatus,
+    IntentSpanStatus, MessageId, RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest,
+    SubagentCall, SubagentType, SuggestedAgentModeWorkflow, SuggestedRule, Suggestions,
+    SummarizationType, TodoOperation, UserQueryMode, WebFetchStatus, WebSearchStatus,
 };
 use crate::ai::artifact_download::sanitized_basename;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
+#[derive(Clone, PartialEq, ProstMessage)]
+struct ServerToolCall {
+    #[prost(oneof = "server_tool_call::Tool", tags = "36, 37")]
+    tool: Option<server_tool_call::Tool>,
+}
+
+mod server_tool_call {
+    use super::{ReportIntent, ReportOutcome};
+    use prost::Oneof;
+
+    #[derive(Clone, PartialEq, Oneof)]
+    pub enum Tool {
+        #[prost(message, tag = "36")]
+        ReportIntent(ReportIntent),
+        #[prost(message, tag = "37")]
+        ReportOutcome(ReportOutcome),
+    }
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct ReportIntent {
+    #[prost(string, tag = "1")]
+    label: String,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct ReportOutcome {
+    #[prost(string, tag = "1")]
+    intent_id: String,
+    #[prost(enumeration = "report_outcome::Status", tag = "2")]
+    status: i32,
+    #[prost(string, tag = "3")]
+    summary: String,
+}
+
+mod report_outcome {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Status {
+        Unspecified = 0,
+        Success = 1,
+        Failure = 2,
+        Inconclusive = 3,
+    }
+}
+
+fn decode_server_tool_call(payload: &str) -> Option<ServerToolCall> {
+    let bytes = base64::engine::general_purpose::URL_SAFE
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload))
+        .ok()?;
+    ServerToolCall::decode(bytes.as_slice()).ok()
+}
+
+fn intent_span_status(status: i32) -> IntentSpanStatus {
+    match report_outcome::Status::try_from(status) {
+        Ok(report_outcome::Status::Success) => IntentSpanStatus::Success,
+        Ok(report_outcome::Status::Failure) => IntentSpanStatus::Failure,
+        Ok(report_outcome::Status::Inconclusive)
+        | Ok(report_outcome::Status::Unspecified)
+        | Err(_) => IntentSpanStatus::Inconclusive,
+    }
+}
 
 impl TryFrom<api::Attachment> for AIAgentAttachment {
     type Error = anyhow::Error;
@@ -229,19 +294,48 @@ impl ConvertAPIMessageToClientOutputMessage for api::Message {
                     ),
                 ))
             }
-            api::message::Message::ToolCall(tool_call) => match tool_call.to_action(params)? {
-                MaybeAIAgentAction::Action(action) => Ok(MaybeAIAgentOutputMessage::Message(
-                    AIAgentOutputMessage::action(MessageId::new(self.id), action)
-                        .with_citations(citations),
-                )),
-                MaybeAIAgentAction::Subagent(subagent) => Ok(MaybeAIAgentOutputMessage::Message(
-                    AIAgentOutputMessage::subagent(MessageId::new(self.id), subagent)
-                        .with_citations(citations),
-                )),
-                MaybeAIAgentAction::NoClientRepresentation => {
-                    Ok(MaybeAIAgentOutputMessage::NoClientRepresentation)
+            api::message::Message::ToolCall(tool_call) => {
+                if let Some(api::message::tool_call::Tool::Server(server)) = &tool_call.tool
+                    && let Some(decoded) = decode_server_tool_call(&server.payload)
+                {
+                    let message_id = MessageId::new(self.id);
+                    let output = match decoded.tool {
+                        Some(server_tool_call::Tool::ReportIntent(intent)) => {
+                            AIAgentOutputMessage::intent_span_start(
+                                message_id,
+                                String::new(),
+                                intent.label,
+                            )
+                        }
+                        Some(server_tool_call::Tool::ReportOutcome(outcome)) => {
+                            AIAgentOutputMessage::intent_span_outcome(
+                                message_id,
+                                outcome.intent_id,
+                                intent_span_status(outcome.status),
+                                outcome.summary,
+                            )
+                        }
+                        None => return Ok(MaybeAIAgentOutputMessage::NoClientRepresentation),
+                    };
+                    return Ok(MaybeAIAgentOutputMessage::Message(output));
                 }
-            },
+
+                match tool_call.to_action(params)? {
+                    MaybeAIAgentAction::Action(action) => Ok(MaybeAIAgentOutputMessage::Message(
+                        AIAgentOutputMessage::action(MessageId::new(self.id), action)
+                            .with_citations(citations),
+                    )),
+                    MaybeAIAgentAction::Subagent(subagent) => {
+                        Ok(MaybeAIAgentOutputMessage::Message(
+                            AIAgentOutputMessage::subagent(MessageId::new(self.id), subagent)
+                                .with_citations(citations),
+                        ))
+                    }
+                    MaybeAIAgentAction::NoClientRepresentation => {
+                        Ok(MaybeAIAgentOutputMessage::NoClientRepresentation)
+                    }
+                }
+            }
             api::message::Message::WebSearch(web_search) => {
                 let status = match &web_search.status {
                     Some(api::message::web_search::Status {

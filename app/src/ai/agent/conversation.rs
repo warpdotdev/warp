@@ -36,8 +36,8 @@ use super::task_store::TaskStore;
 use super::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentContext,
     AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputStatus,
-    AIAgentTodo, AIAgentTodoId, FinishedAIAgentOutput, MessageId, OutputModelInfo,
-    RenderableAIError, RequestCost, ServerOutputId, Shared, StartRecordingResult,
+    AIAgentTodo, AIAgentTodoId, FinishedAIAgentOutput, IntentSpanStatus, MessageId,
+    OutputModelInfo, RenderableAIError, RequestCost, ServerOutputId, Shared, StartRecordingResult,
     StopRecordingResult, SuggestedLoggingId, Suggestions,
 };
 use crate::ai::agent::api::convert_conversation::{
@@ -103,6 +103,15 @@ pub struct RecordingSpanInfo {
 pub enum RecordingSpanStatus {
     Active,
     Captured,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntentSpanInfo {
+    pub intent_id: String,
+    pub label: String,
+    pub status: IntentSpanStatus,
+    pub summary: Option<String>,
+    pub output_message_ids: Vec<MessageId>,
 }
 
 fn footer_model_token_usage(
@@ -1879,6 +1888,69 @@ impl AIConversation {
         }
 
         spans_by_action_id
+    }
+
+    /// Returns intent spans keyed by the output message that opened each span.
+    ///
+    /// Server intent tools are persisted as opaque tool calls, but their client
+    /// representations are emitted in transcript order. This keeps the
+    /// derivation deterministic for both streaming and restored conversations.
+    pub fn intent_spans_by_message_id(&self) -> HashMap<MessageId, IntentSpanInfo> {
+        let mut active_span: Option<IntentSpanInfo> = None;
+        let mut spans_by_message_id = HashMap::new();
+
+        for exchange in self.all_exchanges() {
+            let Some(output) = exchange.output_status.output() else {
+                continue;
+            };
+            for output_message in &output.get().messages {
+                match &output_message.message {
+                    AIAgentOutputMessageType::IntentSpanStart { label, .. } => {
+                        if let Some(previous) = active_span.take() {
+                            if let Some(first_id) = previous.output_message_ids.first() {
+                                spans_by_message_id.insert(first_id.clone(), previous);
+                            }
+                        }
+                        active_span = Some(IntentSpanInfo {
+                            intent_id: String::new(),
+                            label: label.clone(),
+                            status: IntentSpanStatus::Open,
+                            summary: None,
+                            output_message_ids: vec![output_message.id.clone()],
+                        });
+                    }
+                    AIAgentOutputMessageType::IntentSpanOutcome {
+                        intent_id,
+                        status,
+                        summary,
+                    } => {
+                        let Some(mut span) = active_span.take() else {
+                            continue;
+                        };
+                        span.intent_id = intent_id.clone();
+                        span.status = *status;
+                        span.summary = Some(summary.clone()).filter(|summary| !summary.is_empty());
+                        span.output_message_ids.push(output_message.id.clone());
+                        if let Some(first_id) = span.output_message_ids.first() {
+                            spans_by_message_id.insert(first_id.clone(), span);
+                        }
+                    }
+                    _ => {
+                        if let Some(span) = active_span.as_mut() {
+                            span.output_message_ids.push(output_message.id.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(span) = active_span
+            && let Some(first_id) = span.output_message_ids.first()
+        {
+            spans_by_message_id.insert(first_id.clone(), span);
+        }
+
+        spans_by_message_id
     }
 
     pub fn contains_action(&self, action_id: &AIAgentActionId) -> bool {

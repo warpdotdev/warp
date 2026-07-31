@@ -55,17 +55,19 @@ use super::{
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::comment::ReviewComment;
-use crate::ai::agent::conversation::{RecordingSpanInfo, RecordingSpanStatus};
-use crate::ai::agent::icons::{self, gray_stop_icon, yellow_stop_icon};
+use crate::ai::agent::conversation::{IntentSpanInfo, RecordingSpanInfo, RecordingSpanStatus};
+use crate::ai::agent::icons::{
+    self, failed_icon, gray_stop_icon, in_progress_icon, succeeded_icon, yellow_stop_icon,
+};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentCitation, AIAgentInput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome, MessageId,
-    ReadFilesFailedFile, ReadFilesRequest, ReadFilesResult, RequestCommandOutputResult,
-    SearchCodebaseFailureReason, SearchCodebaseResult, StartRecordingResult, StopRecordingResult,
-    SubagentCall, SubagentType, SuggestNewConversationResult, SummarizationType, TodoOperation,
-    UploadArtifactResult,
+    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, CancellationOutcome,
+    IntentSpanStatus, MessageId, ReadFilesFailedFile, ReadFilesRequest, ReadFilesResult,
+    RequestCommandOutputResult, SearchCodebaseFailureReason, SearchCodebaseResult,
+    StartRecordingResult, StopRecordingResult, SubagentCall, SubagentType,
+    SuggestNewConversationResult, SummarizationType, TodoOperation, UploadArtifactResult,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -277,6 +279,16 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 } else {
                     HashMap::new()
                 };
+                let intent_spans_by_message_id = if FeatureFlag::IntentSpansInBlocklist.is_enabled()
+                {
+                    props
+                        .model
+                        .conversation(app)
+                        .map(|conversation| conversation.intent_spans_by_message_id())
+                        .unwrap_or_default()
+                } else {
+                    HashMap::new()
+                };
                 let is_complete = matches!(status, AIBlockOutputStatus::Complete { .. });
                 let is_output_for_static_prompt_suggestions =
                     props.model.contains_static_prompt_suggestion_input(app);
@@ -325,6 +337,9 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                 }
 
                 for output_message in output.messages.iter() {
+                    if let Some(intent_span) = intent_spans_by_message_id.get(&output_message.id) {
+                        output_items.add_child(render_intent_span_checklist(intent_span, app));
+                    }
                     match &output_message.message {
                         // Skip rendering text and reasoning sections if this is a passive conversation.
                         AIAgentOutputMessageType::Text(_)
@@ -786,7 +801,12 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             ));
                         }
                         AIAgentOutputMessageType::Action(AIAgentAction {
-                            action: AIAgentActionType::StartRecording { summary, .. },
+                            action:
+                                AIAgentActionType::StartRecording {
+                                    summary,
+                                    description,
+                                    ..
+                                },
                             id,
                             ..
                         }) => {
@@ -795,6 +815,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 props,
                                 id,
                                 summary.as_deref(),
+                                description.as_deref(),
                                 app,
                             ));
                         }
@@ -806,6 +827,8 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             should_render_footer = false;
                             output_items.add_child(render_stop_recording(props, id, app));
                         }
+                        AIAgentOutputMessageType::IntentSpanStart { .. }
+                        | AIAgentOutputMessageType::IntentSpanOutcome { .. } => {}
                         AIAgentOutputMessageType::Action(AIAgentAction {
                             action: AIAgentActionType::ReadSkill(request),
                             id,
@@ -2992,33 +3015,104 @@ fn recording_summary(props: Props, agent_summary: Option<&str>, app: &AppContext
         .map(ToString::to_string)
         .unwrap_or_else(|| "Recording computer-use session".to_string())
 }
+fn render_intent_span_checklist(
+    intent_span: &IntentSpanInfo,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let icon = match intent_span.status {
+        IntentSpanStatus::Open => in_progress_icon(appearance),
+        IntentSpanStatus::Success => succeeded_icon(appearance),
+        IntentSpanStatus::Failure => failed_icon(appearance),
+        IntentSpanStatus::Inconclusive => gray_stop_icon(appearance),
+    };
+    let icon = Container::new(
+        ConstrainedBox::new(icon.finish())
+            .with_width(icon_size(app) - 4.)
+            .with_height(icon_size(app) - 4.)
+            .finish(),
+    )
+    .with_margin_right(12.)
+    .finish();
+
+    let mut body = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
+    body.add_child(
+        Text::new(
+            intent_span.label.clone(),
+            appearance.ui_font_family(),
+            appearance.monospace_font_size(),
+        )
+        .with_color(blended_colors::text_main(theme, theme.background()))
+        .finish(),
+    );
+    if let Some(summary) = intent_span
+        .summary
+        .as_deref()
+        .filter(|summary| !summary.trim().is_empty())
+    {
+        body.add_child(
+            Text::new(
+                summary.to_string(),
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(blended_colors::text_sub(theme, theme.background()))
+            .finish(),
+        );
+    }
+
+    let row = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(icon)
+        .with_child(Shrinkable::new(1., body.finish()).finish())
+        .finish();
+
+    RenderableAction::new_with_element(row, app)
+        .with_background_color(theme.background().into_solid())
+        .with_highlighted_border()
+        .render(app)
+        .finish()
+}
 
 #[derive(Debug, PartialEq, Eq)]
 struct RecordingCardText {
-    primary: String,
-    subtext: Option<String>,
+    eyebrow: String,
+    title: Option<String>,
+    description: Option<String>,
 }
 
 fn start_recording_card_text(
-    description: &str,
+    title: &str,
+    description: Option<&str>,
     result: Option<&StartRecordingResult>,
 ) -> RecordingCardText {
     match result {
         Some(StartRecordingResult::Success(_)) => RecordingCardText {
-            primary: "Recording started".to_string(),
-            subtext: Some(description.to_string()),
+            eyebrow: "Recording started".to_string(),
+            title: Some(title.to_string()),
+            description: description
+                .map(str::trim)
+                .filter(|description| !description.is_empty())
+                .map(ToString::to_string),
         },
         Some(StartRecordingResult::Error(error)) => RecordingCardText {
-            primary: "Recording failed to start".to_string(),
-            subtext: Some(error.clone()),
+            eyebrow: "Recording failed to start".to_string(),
+            title: None,
+            description: Some(error.clone()),
         },
         Some(StartRecordingResult::Cancelled) => RecordingCardText {
-            primary: "Recording cancelled".to_string(),
-            subtext: None,
+            eyebrow: "Recording cancelled".to_string(),
+            title: None,
+            description: None,
         },
         None => RecordingCardText {
-            primary: "Starting recording".to_string(),
-            subtext: Some(description.to_string()),
+            eyebrow: "Starting recording".to_string(),
+            title: Some(title.to_string()),
+            description: description
+                .map(str::trim)
+                .filter(|description| !description.is_empty())
+                .map(ToString::to_string),
         },
     }
 }
@@ -3037,23 +3131,27 @@ fn stop_recording_card_text(result: Option<&StopRecordingResult>) -> RecordingCa
                 format!("Partial recording • {duration}")
             };
             RecordingCardText {
-                primary: "Recording saved".to_string(),
-                subtext: Some(subtext),
+                eyebrow: "Recording saved".to_string(),
+                title: None,
+                description: Some(subtext),
             }
         }
         Some(StopRecordingResult::Error(_)) | Some(StopRecordingResult::Cancelled) => {
             RecordingCardText {
-                primary: "Recording could not be saved".to_string(),
-                subtext: None,
+                eyebrow: "Recording could not be saved".to_string(),
+                title: None,
+                description: None,
             }
         }
         Some(StopRecordingResult::Discarded) => RecordingCardText {
-            primary: "Recording discarded".to_string(),
-            subtext: None,
+            eyebrow: "Recording discarded".to_string(),
+            title: None,
+            description: None,
         },
         None => RecordingCardText {
-            primary: "Saving recording".to_string(),
-            subtext: None,
+            eyebrow: "Saving recording".to_string(),
+            title: None,
+            description: None,
         },
     }
 }
@@ -3079,29 +3177,45 @@ fn recording_card(
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-    let primary = Text::new(
-        text.primary,
+    let eyebrow = Text::new(
+        text.eyebrow,
         appearance.ui_font_family(),
-        appearance.monospace_font_size(),
+        appearance.ui_font_size(),
     )
-    .with_color(blended_colors::text_main(theme, theme.background()))
+    .with_color(blended_colors::text_sub(theme, theme.background()))
     .finish();
     let mut body = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
-    body.add_child(primary);
-    if let Some(subtext) = text.subtext.filter(|subtext| !subtext.trim().is_empty()) {
+    body.add_child(eyebrow);
+    if let Some(title) = text.title.filter(|title| !title.trim().is_empty()) {
         body.add_child(
             Text::new(
-                subtext,
+                title,
+                appearance.ui_font_family(),
+                appearance.monospace_font_size(),
+            )
+            .with_color(blended_colors::text_main(theme, theme.background()))
+            .finish(),
+        );
+    }
+    if let Some(description) = text
+        .description
+        .filter(|description| !description.trim().is_empty())
+    {
+        body.add_child(
+            Text::new(
+                description,
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
-            .with_color(blended_colors::text_disabled(theme, theme.surface_2()))
+            .with_color(blended_colors::text_sub(theme, theme.background()))
             .finish(),
         );
     }
 
-    let mut action =
-        RenderableAction::new_with_element(body.finish(), app).with_icon(recording_icon(app));
+    let mut action = RenderableAction::new_with_element(body.finish(), app)
+        .with_icon(recording_icon(app))
+        .with_background_color(theme.background().into_solid())
+        .with_highlighted_border();
     if let Some(action_button) = action_button {
         action = action.with_action_button(action_button);
     }
@@ -3112,6 +3226,7 @@ fn render_start_recording(
     props: Props,
     action_id: &AIAgentActionId,
     agent_summary: Option<&str>,
+    description: Option<&str>,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let result = props
@@ -3122,7 +3237,8 @@ fn render_start_recording(
             AIAgentActionResultType::StartRecording(result) => Some(result),
             _ => None,
         });
-    let text = start_recording_card_text(&recording_summary(props, agent_summary, app), result);
+    let title = recording_summary(props, agent_summary, app);
+    let text = start_recording_card_text(&title, description, result);
     recording_card(text, None, app)
 }
 

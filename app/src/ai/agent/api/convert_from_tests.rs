@@ -1,5 +1,6 @@
 use ai::agent::action::AskUserQuestionType;
 use ai::skills::SkillPathOrigin;
+use base64::Engine as _;
 use warp_multi_agent_api as api;
 
 use super::{
@@ -8,6 +9,43 @@ use super::{
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{AIAgentActionType, AIAgentOutputMessageType};
+
+fn server_intent_payload(label: &str) -> String {
+    let label = label.as_bytes();
+    let mut bytes = vec![0xa2, 0x02, 0x0a, label.len() as u8];
+    bytes.extend_from_slice(label);
+    base64::engine::general_purpose::URL_SAFE.encode(bytes)
+}
+
+fn server_outcome_payload(intent_id: &str, status: u8, summary: &str) -> String {
+    let intent_id = intent_id.as_bytes();
+    let summary = summary.as_bytes();
+    let mut nested = vec![0x0a, intent_id.len() as u8];
+    nested.extend_from_slice(intent_id);
+    nested.extend_from_slice(&[0x10, status, 0x1a, summary.len() as u8]);
+    nested.extend_from_slice(summary);
+    let mut bytes = vec![0xaa, 0x02, nested.len() as u8];
+    bytes.extend_from_slice(&nested);
+    base64::engine::general_purpose::URL_SAFE.encode(bytes)
+}
+
+fn server_tool_call_message(payload: String) -> api::Message {
+    api::Message {
+        fetched_memories: vec![],
+        id: "message-id".to_string(),
+        task_id: "task-id".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+            tool_call_id: "tool-call-id".to_string(),
+            tool: Some(api::message::tool_call::Tool::Server(
+                api::message::tool_call::Server { payload },
+            )),
+        })),
+        request_id: "request-id".to_string(),
+        timestamp: None,
+    }
+}
 
 fn upload_artifact_tool_call_message(path: &str, description: &str) -> api::Message {
     api::Message {
@@ -30,6 +68,57 @@ fn upload_artifact_tool_call_message(path: &str, description: &str) -> api::Mess
         request_id: "request-id".to_string(),
         timestamp: None,
     }
+}
+
+#[test]
+fn converts_opaque_report_intent_server_tool_call() {
+    let task_id = TaskId::new("task-id".to_string());
+    let output = server_tool_call_message(server_intent_payload("Check login flow"))
+        .to_client_output_message(ConversionParams {
+            task_id: &task_id,
+            current_todo_list: None,
+            active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
+        })
+        .expect("conversion should succeed");
+
+    let MaybeAIAgentOutputMessage::Message(output) = output else {
+        panic!("expected intent output message");
+    };
+    assert!(matches!(
+        output.message,
+        AIAgentOutputMessageType::IntentSpanStart { label, .. }
+            if label == "Check login flow"
+    ));
+}
+
+#[test]
+fn converts_opaque_report_outcome_server_tool_call() {
+    let task_id = TaskId::new("task-id".to_string());
+    let output = server_tool_call_message(server_outcome_payload(
+        "intent-1",
+        2,
+        "The login flow failed",
+    ))
+    .to_client_output_message(ConversionParams {
+        task_id: &task_id,
+        current_todo_list: None,
+        active_code_review: None,
+        skill_path_origin: &SkillPathOrigin::Local,
+    })
+    .expect("conversion should succeed");
+
+    let MaybeAIAgentOutputMessage::Message(output) = output else {
+        panic!("expected intent output message");
+    };
+    assert!(matches!(
+        output.message,
+        AIAgentOutputMessageType::IntentSpanOutcome {
+            intent_id,
+            status: crate::ai::agent::IntentSpanStatus::Failure,
+            summary,
+        } if intent_id == "intent-1" && summary == "The login flow failed"
+    ));
 }
 
 fn file_artifact_created_message(filepath: &str, description: &str) -> api::Message {
