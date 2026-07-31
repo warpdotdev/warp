@@ -11,6 +11,25 @@ Use this skill for Rust integration tests in Warp's custom framework under `crat
 
 These are not ordinary unit tests. They boot a real Warp app instance, give it an isolated test home directory, drive it with synthetic UI and terminal events, and poll assertions until success or timeout.
 
+## When an integration test is the right tool
+
+Integration tests are the most expensive tests in the repo. They boot the app, they are orders of magnitude slower than a unit test, and they are the most likely to go flaky. Write one when the risk you are covering genuinely lives *between* components:
+
+- Real terminal/PTY and shell-integration behavior, especially across bash, zsh, and fish.
+- Wiring and configuration: settings, keybindings, and user preferences actually taking effect end to end.
+- Cross-component flows a unit test cannot see — command palette into editor into terminal, focus and pane management, tab/window lifecycle.
+- Input and rendering paths that only exist once a real app (and sometimes a real display) is running.
+- Regressions for user-visible bugs that escaped unit tests.
+
+Do **not** reach for an integration test when:
+
+- The logic is deterministic and reachable in-process. Push it into a unit test (`rust-unit-tests`); it will run in milliseconds and point straight at the failure.
+- You are re-covering branch logic a unit test already covers. This harness is for the seams between components, not for re-testing conditionals at full app-boot cost.
+- You only need TUI rendering. That is `tui-testing` — this harness does not drive the TUI at all.
+- What you actually want is a screenshot or a manual look. Use `computer_use` or the `gui-integration-test-video` skill instead of attaching weak assertions to a full app boot.
+
+If a behavior is hard to reach from a unit test *only* because of how the code is structured, prefer fixing the structure over writing a slow test around it.
+
 ## Framework map
 
 The core pieces are:
@@ -234,11 +253,57 @@ This is useful for saving measured positions, counts, IDs, or other values from 
 
 `set_retries(...)` can help for a legitimately retryable step, but do not use it to hide deterministic failures. Prefer making the step more robust first.
 
-### Use `PreconditionFailed` for known environmental flakes
+### Use `PreconditionFailed` for genuinely environmental flakes
 
-If the environment reaches a state where the rest of the test is invalid, return `AssertionOutcome::PreconditionFailed(...)` instead of failing hard. The outer harness can rerun the entire test up to 10 times.
+If the environment reaches a state where the rest of the test is invalid, return `AssertionOutcome::PreconditionFailed(...)` instead of failing hard. The outer harness can rerun the entire test up to 10 times. The existing bootstrap helper is a good model for this.
 
-The existing bootstrap helper is a good model for this.
+Use this deliberately. The rerun mechanism exists for conditions the test genuinely cannot control, such as bootstrap racing or shell startup timing. It is not a way to turn an intermittently failing test green. A real bug that reproduces one run in five will pass under rerun and ship to users.
+
+Before reaching for `PreconditionFailed`, confirm the failure is actually environmental by looking at the failure rate and the failure mode:
+
+```bash
+for i in {0..50}; do
+  RUST_BACKTRACE=full cargo run -p integration --bin integration -- test_name || break
+done
+```
+
+If the same assertion fails in different ways, or fails while the environment looks fine, it is a product or test bug. Fix it rather than absorbing it into a rerun.
+
+## Designing a good integration test
+
+### Keep the scope as small as the behavior allows
+
+The scope of a test follows the scope of what you boot and drive, so cover one user journey per test and let separate tests cover separate journeys. When a flow is long, prefer several shorter tests that each verify one hop over a single test that walks the whole path. A long test is slower, harder to diagnose, and fails for many unrelated reasons.
+
+### Assert on behavior a user could observe
+
+The framework can see internal state, which makes it tempting to assert on it. Anchor each test on the user-observable outcome:
+
+- output visible in the terminal
+- focus moved where expected
+- UI element opened or closed
+- selection changed
+- settings applied
+
+Internal state assertions are still useful, but they should support the visible behavior rather than replace it. Assertions that mirror internal call sequences become change detectors: they break on every refactor and catch no bugs.
+
+### Make the failure diagnosable by someone else
+
+An integration test spans processes, so a stack trace tells the next engineer almost nothing. The failure output has to carry the context instead:
+
+- Name every assertion with what it expects, not what it touches: `"terminal shows command output"`, not `"check blocks"`.
+- Give steps descriptive names; they are the breadcrumb trail through the run.
+- Put expected vs. actual into the assertion output rather than returning a bare failure.
+
+Assume the person reading the failure has never seen this test and does not own the code it covers.
+
+### Keep the test hermetic
+
+`Builder::new()` already gives you an isolated `HOME`, generated rc files, and file-backed preferences. Preserve that. Set up everything you depend on inside the test via `with_setup(...)` and `with_user_defaults(...)`, and never rely on the developer's dotfiles, real settings, network access, or state left behind by another test. A test that assumes a resource is already in the right state will fail for the wrong reason on someone else's machine or in CI.
+
+### Own the test
+
+Larger tests span components, so ownership is ambiguous by default and unowned tests rot. If you add one, you are the person who fixes it when it breaks. Put it in the module matching the feature area it covers so the next person can find the right owner.
 
 ## Common test-writing patterns
 
@@ -268,22 +333,6 @@ Prefer helpers like:
 - `execute_long_running_command(...)`
 
 These helpers already handle a lot of correctness and output validation.
-
-### 4. Assert visible behavior, not just internal mutation
-
-A good integration test verifies the user-observable behavior:
-
-- output visible in the terminal
-- focus moved where expected
-- UI element opened/closed
-- selection changed
-- settings applied
-
-Internal state assertions are still useful, but they should support the visible behavior rather than replace it.
-
-### 5. Keep tests feature-focused
-
-Write a test for one behavior or one closely related flow. If you need to cover multiple scenarios, consider multiple tests instead of one giant script.
 
 ## Running tests
 
@@ -363,7 +412,9 @@ Before considering a new integration test done, verify all of the following:
 - The test is listed in the correct nextest macro file and will run in CI by default, unless it was explicitly made manual-only with a documented reason.
 - The test passes when run directly through the integration binary.
 - The test passes through nextest if it is meant to be part of the automated suite.
+- An integration test is the right level for this behavior; it is not re-covering logic a unit test could reach.
 - The assertions check the intended user-visible behavior.
+- Every assertion is named, and the failure output would be actionable to someone who has never seen the test.
 - The test does not depend on the developer's real home directory, shell config, or machine state.
 - If the test uses screenshots/video, the produced artifacts were actually inspected rather than only assuming they exist.
 
@@ -374,7 +425,11 @@ Before considering a new integration test done, verify all of the following:
 - Using raw events everywhere when a helper already exists.
 - Adding sleeps instead of assertion polling.
 - Making the test depend on personal dotfiles, real settings, or non-hermetic filesystem state.
-- Using retries to paper over a deterministic bug.
+- Using retries or `PreconditionFailed` to paper over a deterministic bug.
+- Re-testing branch logic that a unit test already covers, at full app-boot cost.
+- Asserting on internal call sequences instead of user-visible behavior.
+- Unnamed assertions that produce failure output nobody can act on.
+- One long test that walks an entire user journey instead of several focused ones.
 - Leaving a real-display/manual test enabled in CI without a stable path.
 
 ## Good workflow for agents
