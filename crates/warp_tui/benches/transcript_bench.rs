@@ -8,7 +8,7 @@ use warp_tui::benchmark_support::{
 
 fn benchmark_clipped_terminal_block(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("tui_terminal_block/clipped_content");
-    for rows in [1_000, 10_000] {
+    for rows in [100, 1_000] {
         let mut benchmark = ClippedTerminalBlockBenchmark::new(rows, 120, 50);
         group.bench_with_input(BenchmarkId::new("end_frame", rows), &rows, |b, _| {
             b.iter(|| black_box(benchmark.present()))
