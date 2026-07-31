@@ -57,10 +57,6 @@ pub const TOGGLE_BUTTON_RIGHT_PADDING: f32 = 5.;
 pub const HEADER_PADDING: f32 = 15.;
 pub const CONTENT_FONT_SIZE: f32 = 12.;
 pub const SUBHEADER_MARGIN_BOTTOM: f32 = 4.;
-/// Gap between a page-level title and the first widget below it. Pages that render their title as
-/// page chrome (Account, Knowledge, Third party CLI agents, ...) previously carried a section
-/// sub-header instead, which left `HEADER_PADDING` below itself; match that so promoting a heading
-/// to page chrome doesn't tighten the layout.
 pub const PAGE_TITLE_MARGIN_BOTTOM: f32 = HEADER_PADDING;
 pub(super) const PAGE_PADDING: f32 = 28.;
 pub(super) const HEADER_FONT_SIZE: f32 = 23.;
