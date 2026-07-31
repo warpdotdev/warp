@@ -618,7 +618,6 @@ impl ReferralsWidget {
         view: &ReferralsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        // Leading spacing comes from the shared page-title chrome.
         Flex::column()
             .with_child(self.render_label("Link", appearance))
             .with_child(self.render_link_row(view, appearance))

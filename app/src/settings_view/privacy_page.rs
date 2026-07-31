@@ -1366,7 +1366,6 @@ impl SettingsWidget for SecretRedactionWidget {
             column.add_child(self.horizontal_divider(appearance));
         }
 
-        // Leading spacing comes from the shared page-title chrome.
         Container::new(column.finish()).finish()
     }
 }

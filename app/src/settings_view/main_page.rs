@@ -658,7 +658,6 @@ impl SettingsWidget for AccountWidget {
             )
         };
 
-        // Leading spacing comes from the shared page-title chrome.
         Flex::column()
             .with_child(Container::new(account_info).finish())
             .finish()

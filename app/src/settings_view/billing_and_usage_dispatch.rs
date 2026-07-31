@@ -155,7 +155,6 @@ impl SettingsWidget for BillingAndUsageWidget {
         _appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        // Leading spacing comes from the shared page-title chrome.
         if view.use_v2(app) {
             ChildView::new(&view.v2).finish()
         } else {

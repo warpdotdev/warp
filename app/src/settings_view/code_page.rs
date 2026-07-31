@@ -459,9 +459,6 @@ impl CodeSettingsPageView {
                         ]);
                     }
                 }
-                // Each Code subpage is single-topic: its one heading names the whole page.
-                // Render it as page chrome so filtering the setting widgets never removes
-                // the title.
                 self.page = PageType::new_uncategorized(widgets, Some(subpage.title()));
             } else {
                 // None: rebuild the full categorized page (all widgets).

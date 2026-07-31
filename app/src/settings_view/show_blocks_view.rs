@@ -797,7 +797,6 @@ impl SettingsWidget for ShowBlocksWidget {
             );
         }
 
-        // `render_page_title` already carries the shared title gap.
         let header = render_page_title("Shared blocks", HEADER_FONT_SIZE, appearance);
         let col = Flex::column()
             .with_child(header)
