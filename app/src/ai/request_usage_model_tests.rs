@@ -1,17 +1,19 @@
 use std::sync::Arc;
 
+use ai::LLMProvider;
 use ai::api_keys::{ApiKeyManager, GrokTokens};
 use chrono::Duration;
 use warp_core::features::FeatureFlag;
+use warp_core::telemetry::testing::MockTelemetryContextProvider;
 use warp_graphql::billing::{AddonCreditsOption, OveragesPricing, PricingInfo};
 use warpui::{App, ModelHandle};
 
 use super::*;
 use crate::auth::AuthStateProvider;
 use crate::pricing::PricingInfoModel;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
-use crate::server::server_api::ServerApiProvider;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AiOverages, ByoApiKeyPolicy, CustomerType, EnterpriseCreditsAutoReloadPolicy,
@@ -45,6 +47,11 @@ fn add_request_usage_model_for_anonymous_users(app: &mut App) -> ModelHandle<AIR
     app.add_singleton_model(|_| AuthStateProvider::new_anonymous_for_test());
     add_request_usage_model_without_auth(app)
 }
+
+fn add_request_usage_model_for_logged_out_users(app: &mut App) -> ModelHandle<AIRequestUsageModel> {
+    app.add_singleton_model(|_| AuthStateProvider::new_logged_out_for_test());
+    add_request_usage_model_without_auth(app)
+}
 fn register_user_preferences_for_tests(app: &mut App) {
     if app
         .models_of_type::<settings::PrivatePreferences>()
@@ -59,6 +66,7 @@ fn add_request_usage_model_without_auth(app: &mut App) -> ModelHandle<AIRequestU
     register_user_preferences_for_tests(app);
     app.update(|ctx| {
         warpui_extras::secure_storage::register_noop("test", ctx);
+        MockTelemetryContextProvider::register(ctx);
         ctx.add_singleton_model(ApiKeyManager::new);
     });
     app.add_singleton_model(|_| PricingInfoModel::new());
@@ -96,6 +104,16 @@ fn enable_auto_reload(workspace: &mut Workspace) {
         .selected_auto_reload_credit_denomination = Some(1000);
 }
 
+#[test]
+fn refresh_request_usage_returns_no_fresh_limit_when_logged_out() {
+    App::test((), |mut app| async move {
+        let request_usage_model = add_request_usage_model_for_logged_out_users(&mut app);
+        let refresh =
+            request_usage_model.update(&mut app, |model, ctx| model.refresh_request_usage(ctx));
+
+        assert_eq!(refresh.await.unwrap(), None);
+    });
+}
 #[test]
 fn test_request_limit_info() {
     App::test((), |mut app| async move {
@@ -693,7 +711,7 @@ fn test_has_any_ai_remaining_true_with_byok_enabled_and_key_provided() {
         let request_usage_model = add_request_usage_model(&mut app);
 
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
-            manager.set_openai_key(Some("test-key".to_string()), ctx);
+            manager.set_provider_key(LLMProvider::OpenAI, Some("test-key".to_string()), ctx);
         });
 
         request_usage_model.update(&mut app, |model, ctx| {
@@ -811,7 +829,7 @@ fn test_has_any_ai_remaining_true_with_byo_key_and_no_workspace() {
         let request_usage_model = add_request_usage_model(&mut app);
 
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
-            manager.set_openai_key(Some("test-key".to_string()), ctx);
+            manager.set_provider_key(LLMProvider::OpenAI, Some("test-key".to_string()), ctx);
         });
 
         request_usage_model.update(&mut app, |model, ctx| {
@@ -836,7 +854,7 @@ fn test_byo_api_key_disabled_for_anonymous_firebase_user() {
         let request_usage_model = add_request_usage_model_for_anonymous_users(&mut app);
 
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
-            manager.set_openai_key(Some("test-key".to_string()), ctx);
+            manager.set_provider_key(LLMProvider::OpenAI, Some("test-key".to_string()), ctx);
         });
 
         app.read(|ctx| {

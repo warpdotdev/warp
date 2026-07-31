@@ -7,9 +7,9 @@ use super::{
     HostRequestError, PendingHostRequest, RemoteServerManager, RemoteServerManagerEvent,
     RipgrepSearchParams,
 };
-use crate::proto::{host_scoped_request, ClientMessage, RemoteAgentContextSnapshot, WriteFile};
-use crate::protocol::RequestId;
 use crate::HostId;
+use crate::proto::{ClientMessage, RemoteAgentContextSnapshot, WriteFile, host_scoped_request};
+use crate::protocol::RequestId;
 
 #[test]
 fn abort_host_request_removes_pending_request_and_resolves_caller() {

@@ -25,7 +25,7 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::CustomerType;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 const MODAL_WIDTH: f32 = 360.;
 const MODAL_HEIGHT: f32 = 532.;
@@ -76,7 +76,7 @@ impl CloudAgentCapacityModal {
 
     fn get_upgrade_url(ctx: &ViewContext<Self>) -> Option<String> {
         let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
-        if let Some(team) = UserWorkspaces::handle(ctx).as_ref(ctx).current_team() {
+        if let Some(team) = UserWorkspaces::handle(ctx).as_ref(ctx).team_for_view(ctx) {
             return Some(UserWorkspaces::upgrade_link_for_team(team.uid));
         }
 

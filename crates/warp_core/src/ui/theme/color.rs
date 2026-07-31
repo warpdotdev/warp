@@ -12,9 +12,9 @@ use self::internal_colors::{
     neutral_4,
 };
 use super::{AnsiColor, AnsiColorIdentifier, Fill, TerminalColors, WarpTheme};
-use crate::ui::color::blend::Blend;
-use crate::ui::color::contrast::{pick_best_foreground_color, MinimumAllowedContrast};
 use crate::ui::color::Opacity;
+use crate::ui::color::blend::Blend;
+use crate::ui::color::contrast::{MinimumAllowedContrast, pick_best_foreground_color};
 
 const BLOCK_SELECTION_OPACITY: Opacity = 10;
 

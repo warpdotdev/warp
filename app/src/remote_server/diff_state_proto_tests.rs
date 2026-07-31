@@ -3,7 +3,7 @@ use std::sync::Arc;
 use warp_util::standardized_path::StandardizedPath;
 
 use super::super::proto;
-use crate::code_review::diff_size_limits::{DiffSize, UnrenderableReason, MAX_DIFF_SIZE};
+use crate::code_review::diff_size_limits::{DiffSize, MAX_DIFF_SIZE, UnrenderableReason};
 use crate::code_review::diff_state::{
     DiffMetadata, DiffMetadataAgainstBase, DiffMode, DiffState, FileDiff, FileDiffAndContent,
     FileStatusInfo, GitDiffWithBaseContent, GitFileStatus,

@@ -22,29 +22,29 @@ use super::{Event, PaneConfiguration, TerminalAction, TerminalViewState, Viewer}
 use crate::ai::agent::conversation::{
     AIConversation, ConversationStatus, ServerAIConversationMetadata,
 };
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::orchestration_conversation_links::parent_conversation_navigation_card;
 use crate::ai::blocklist::orchestration_topology::orchestration_aware_conversation_status;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
 use crate::drive::sharing::ShareableObject;
 use crate::features::FeatureFlag;
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent, PaneGroupFocusState};
-use crate::pane_group::pane::view::header::components::{
-    header_edge_min_width, render_pane_header_buttons, render_pane_header_title_text,
-    render_three_column_header, CenteredHeaderEdgeWidth,
-};
-use crate::pane_group::pane::view::header::{render_pane_header_draggable, PANE_HEADER_HEIGHT};
 use crate::pane_group::pane::view::PaneHeaderAction;
-use crate::pane_group::pane::{view, PaneStack};
+use crate::pane_group::pane::view::header::components::{
+    CenteredHeaderEdgeWidth, header_edge_min_width, render_pane_header_buttons,
+    render_pane_header_title_text, render_three_column_header,
+};
+use crate::pane_group::pane::view::header::{PANE_HEADER_HEIGHT, render_pane_header_draggable};
+use crate::pane_group::pane::{PaneStack, view};
 use crate::pane_group::{BackingView, SplitPaneState, TOGGLE_MAXIMIZE_PANE_BINDING_NAME};
 use crate::settings::app_installation_detection::{
     UserAppInstallDetectionSettings, UserAppInstallStatus,
 };
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::shared_session::participant_avatar_view::render_participants_and_role_elements;
 use crate::terminal::shared_session::render_util::shared_session_indicator_color;
-use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::{TerminalManager, TerminalView};
 use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::buttons::icon_button_with_color;
@@ -183,12 +183,11 @@ impl TerminalView {
         }
         let exchange_count = conversation.exchange_count();
         // If there's only one exchange, make sure it's completed (not still streaming)
-        if exchange_count == 1 {
-            if let Some(latest_exchange) = conversation.latest_exchange() {
-                if latest_exchange.output_status.is_streaming() {
-                    return None;
-                }
-            }
+        if exchange_count == 1
+            && let Some(latest_exchange) = conversation.latest_exchange()
+            && latest_exchange.output_status.is_streaming()
+        {
+            return None;
         }
 
         // Return the ShareableObject with the conversation ID
@@ -290,9 +289,7 @@ impl TerminalView {
             ClipConfig::start()
         };
 
-        let should_render_ambient_agent_indicator =
-            self.ambient_agent_task_id_for_details_panel(app).is_some()
-                || self.model.lock().is_shared_ambient_agent_session();
+        let should_render_ambient_agent_indicator = self.is_cloud_agent_session(app);
         let theme = appearance.theme();
         let render_agent_circle = |variant| {
             render_icon_with_status(
@@ -906,6 +903,27 @@ impl TerminalView {
                 .ambient_agent_view_model
                 .as_ref()
                 .is_some_and(|model| model.as_ref(ctx).is_ambient_agent())
+    }
+
+    /// Whether this pane should be treated as an ambient agent conversation for display
+    /// purposes (e.g. the ambient agent icon in the pane header and vertical tab). This is the
+    /// single source of truth for that check; surfaces should call it rather than re-deriving
+    /// the condition, so they can't drift apart.
+    ///
+    /// Two signals are combined because they live in different places and neither subsumes the
+    /// other:
+    /// - [`Self::is_ambient_agent_session`] reads the pane's [`AmbientAgentViewModel`], which is
+    ///   how a cloud/ambient run composed or spawned *in this view* is recognized before it has
+    ///   any shared-session source.
+    /// - [`TerminalModel::is_cloud_agent_conversation`] reads model state — a shared *ambient*
+    ///   session or viewing an ambient conversation transcript — which the view model doesn't
+    ///   carry (e.g. a viewer that joined someone else's ambient session).
+    ///
+    /// It deliberately does NOT treat a manually shared *local* (`User`) session as a cloud
+    /// agent session even though it now carries an orchestrator task id on its `source_task_id`
+    /// sidecar (see QUALITY-726).
+    pub fn is_cloud_agent_session(&self, ctx: &AppContext) -> bool {
+        self.is_ambient_agent_session(ctx) || self.model.lock().is_cloud_agent_conversation()
     }
 
     fn selected_conversation_for_user_facing_chrome<'a>(

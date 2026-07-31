@@ -1,7 +1,7 @@
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
-use warpui_core::elements::Align;
 use warpui_core::Element;
+use warpui_core::elements::Align;
 
 use super::onboarding_visual::{OnboardingVisual, Pill, RectPct};
 

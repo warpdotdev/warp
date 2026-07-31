@@ -10,24 +10,23 @@ use warp_cli::agent::Harness;
 use warp_graphql::ai::AgentTaskState;
 
 use super::super::claude_transcript::{
-    claude_config_dir, write_envelope, write_session_index_entry, ClaudeTranscriptEnvelope,
+    ClaudeTranscriptEnvelope, claude_config_dir, write_envelope, write_session_index_entry,
 };
 use super::super::{remove_claude_externally_managed_listener_env_vars, task_env_vars};
 use super::parent_bridge::{
     ensure_parent_bridge_state_dir, parent_bridge_root,
     prime_parent_bridge_staged_for_self_managed_wake,
 };
-use super::{claude_command, prepare_claude_environment_config, ClaudeHarness};
+use super::{ClaudeHarness, claude_command, prepare_claude_environment_config};
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent_events::{AgentMessageEventMetadata, MessageHydrator};
 use crate::ai::ambient_agents::{AmbientAgentTaskId, AmbientAgentTaskState};
+use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::harness_support::ResolvePromptRequest;
-use crate::server::server_api::ServerApi;
 use crate::terminal::CLIAgent;
 
-const CLAUDE_WAKE_PROMPT: &str =
-    "A lead agent mailbox message is available for this child run. Review the mailbox context and continue the task.";
+const CLAUDE_WAKE_PROMPT: &str = "A lead agent mailbox message is available for this child run. Review the mailbox context and continue the task.";
 pub(super) const CLAUDE_WAKE_PROMPT_FILE_NAME: &str = "wake-turn-prompt.txt";
 
 #[derive(Debug)]

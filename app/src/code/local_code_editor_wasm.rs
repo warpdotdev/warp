@@ -13,9 +13,9 @@ use warpui::{
     AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle, WindowId,
 };
 
+use super::ImmediateSaveError;
 pub use super::diff_viewer::DisplayMode;
 use super::editor::view::CodeEditorView;
-use super::ImmediateSaveError;
 use crate::code::buffer_location::LocalOrRemotePath as BufferFileLocation;
 use crate::code::editor::EditorReviewComment;
 use crate::code_review::comments::CommentId;
@@ -28,7 +28,7 @@ pub enum LocalCodeEditorEvent {
     #[allow(dead_code)]
     FailedToLoad { error: Rc<FileLoadError> },
     #[allow(dead_code)]
-    FileSaved,
+    FileSaved { auto_saved: bool },
     #[allow(dead_code)]
     FailedToSave { error: Arc<FileSaveError> },
     #[allow(dead_code)]
@@ -93,6 +93,14 @@ impl LocalCodeEditorView {
     }
 
     pub fn has_unsaved_changes(&self, _ctx: &AppContext) -> bool {
+        false
+    }
+
+    /// Stub: the WASM editor tracks no auto-save marker, so this is a no-op.
+    pub fn mark_next_save_as_auto_save(&mut self) {}
+
+    /// Stub: the WASM editor has no backing file, so nothing can be auto-saved.
+    pub fn can_auto_save(&self, _app: &AppContext) -> bool {
         false
     }
 

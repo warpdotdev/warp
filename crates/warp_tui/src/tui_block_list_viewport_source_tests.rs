@@ -15,8 +15,8 @@ use warp::tui_export::{
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, EntityId, EntityIdMap, ViewHandle};
 use warpui_core::elements::tui::{
-    TuiBufferExt, TuiConstraint, TuiGridPoint, TuiLayoutContext, TuiRect, TuiSelectionSpan,
-    TuiSize, TuiViewportContent, TuiViewportWindow, TuiViewportedElement,
+    TuiBufferExt, TuiConstraint, TuiGridPoint, TuiLayoutContext, TuiRect, TuiRowResize,
+    TuiSelectionSpan, TuiSize, TuiViewportContent, TuiViewportWindow, TuiViewportedElement,
 };
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, TuiView, TypedActionView, ViewContext};
@@ -24,7 +24,7 @@ use warpui_core::{App, AppContext, TuiView, TypedActionView, ViewContext};
 use super::{AgentBlockRegistry, TuiBlockListViewportItemId, TuiBlockListViewportSource};
 use crate::agent_block::{TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent};
 use crate::terminal_block::should_render_terminal_block;
-use crate::test_fixtures::{add_test_action_model_and_events, TestHostView};
+use crate::test_fixtures::{TestHostView, add_test_action_model_and_events};
 
 #[test]
 fn tui_block_list_viewport_source_uses_canonical_block_list_order() {
@@ -51,6 +51,7 @@ fn tui_block_list_viewport_source_uses_canonical_block_list_order() {
 #[test]
 fn tui_block_list_viewport_source_slices_terminal_blocks_to_visible_rows() {
     App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
         app.read(|app| {
             let mut model = TerminalModel::mock(None, None);
             model.simulate_block("printf", "one\r\ntwo\r\nthree\r\n");
@@ -145,6 +146,91 @@ fn viewport_layout_reports_original_agent_block_resize() {
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].old_rows, 0..99);
         assert_eq!(changes[0].new_height, expected);
+    });
+}
+
+#[test]
+fn zero_height_agent_block_contributes_no_rows_and_grows_with_content() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, model, agent_block, block_model) =
+            updating_agent_block_source(&mut app, AIBlockOutputStatus::Pending);
+
+        let empty_content = request_top_window(&app, &source, 10);
+        assert_eq!(empty_content.content_height, 0);
+        assert!(empty_content.items.is_empty());
+        assert_eq!(rich_content_height(&model, agent_block.id()), Some(0.0));
+        assert_eq!(
+            source.take_selection_row_resizes(),
+            vec![TuiRowResize {
+                old_rows: 0..1,
+                new_height: 0,
+            }]
+        );
+
+        block_model.update_status(
+            completed_markdown_status("Visible response"),
+            &agent_block,
+            &mut app,
+        );
+        let visible_content = request_top_window(&app, &source, 10);
+        assert!(visible_content.content_height > 0);
+        assert_eq!(visible_content.items.len(), 1);
+        assert_eq!(
+            rich_content_height(&model, agent_block.id()),
+            Some(visible_content.content_height as f64)
+        );
+        assert_eq!(
+            source.take_selection_row_resizes(),
+            vec![warpui_core::elements::tui::TuiRowResize {
+                old_rows: 0..0,
+                new_height: visible_content.content_height,
+            }]
+        );
+    });
+}
+
+#[test]
+fn read_only_content_omits_zero_height_rich_content_after_terminal_block() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let mut terminal_model = TerminalModel::mock(None, None);
+        terminal_model.simulate_block("printf", "terminal row\r\n");
+        let terminal_model = Arc::new(FairMutex::new(terminal_model));
+        let agent_block = add_agent_block_with(
+            &mut app,
+            Vec::new(),
+            AIBlockOutputStatus::Pending,
+            terminal_model.clone(),
+        );
+        let view_id = agent_block.id();
+        {
+            let mut model = terminal_model.lock();
+            model.block_list_mut().append_rich_content(
+                RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
+                false,
+            );
+            model
+                .block_list_mut()
+                .update_rich_content_heights_in_lines(&HashMap::from([(
+                    view_id,
+                    BlockHeight::zero(),
+                )]));
+        }
+        let source = TuiBlockListViewportSource::new(
+            terminal_model,
+            AgentBlockRegistry::new(RefCell::new(HashMap::from([(view_id, agent_block)]))),
+        );
+
+        let content = source.read_only_content(
+            TuiViewportWindow {
+                scroll_top: 0,
+                viewport_height: 100,
+            },
+            80,
+        );
+
+        assert_eq!(content.items.len(), 1);
     });
 }
 
@@ -292,6 +378,43 @@ fn tui_agent_streaming_block_remeasured_at_stable_width() {
         seed_clean_height(&app, &model, &agent_block, 1234.0, 80);
         request_top_window(&app, &source, 10);
         assert_ne!(rich_content_height(&model, agent_block.id()), Some(1234.0));
+    });
+}
+
+#[test]
+fn completed_markdown_output_update_refreshes_cached_scroll_extent() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, model, agent_block, block_model) =
+            updating_agent_block_source(&mut app, completed_markdown_status("Short response"));
+        let width = 40;
+
+        let initial_height = request_top_window_at_width(&app, &source, 4, width).content_height;
+        source.take_selection_row_resizes();
+
+        block_model.update_status(
+            completed_markdown_status(
+                "# Expanded response\n\n- first item\n- second item\n- third item\n\n\
+                 ## Details\n\nThis paragraph adds enough semantic Markdown rows to grow the block.",
+            ),
+            &agent_block,
+            &mut app,
+        );
+        let updated_height = request_top_window_at_width(&app, &source, 4, width).content_height;
+        let resizes = source.take_selection_row_resizes();
+
+        assert!(
+            updated_height > initial_height,
+            "completed Markdown growth must increase the canonical scroll extent \
+             ({updated_height} vs {initial_height})"
+        );
+        assert_eq!(resizes.len(), 1);
+        assert_eq!(resizes[0].old_rows, 0..initial_height);
+        assert_eq!(resizes[0].new_height, updated_height);
+        assert_eq!(
+            rich_content_height(&model, agent_block.id()),
+            Some(updated_height as f64)
+        );
     });
 }
 
@@ -637,6 +760,8 @@ fn reasoning_agent_block_source(
                     .block_list_mut()
                     .mark_rich_content_dirty(view_id);
             }
+            TuiAIBlockEvent::BlockingStateChanged
+            | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
         });
     });
     {
@@ -753,18 +878,101 @@ fn add_agent_block_with(
         );
         ctx.add_typed_action_tui_view(window_id, move |ctx| {
             TuiAIBlock::new(
-                AIConversationId::new(),
-                AIAgentExchangeId::new(),
+                (AIConversationId::new(), AIAgentExchangeId::new()),
                 Rc::new(QueryAgentBlockModel { inputs, status }),
                 action_model,
                 &model_events,
                 terminal_model,
+                false,
                 ctx,
             )
         })
     })
 }
 
+fn updating_agent_block_source(
+    app: &mut App,
+    status: AIBlockOutputStatus,
+) -> (
+    TuiBlockListViewportSource,
+    Arc<FairMutex<TerminalModel>>,
+    ViewHandle<TuiAIBlock>,
+    Rc<UpdatingAgentBlockModel>,
+) {
+    let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+    let block_model = Rc::new(UpdatingAgentBlockModel {
+        status: RefCell::new(status),
+        callback: RefCell::new(None),
+    });
+    let (action_model, model_events) = add_test_action_model_and_events(app);
+    let terminal_model_for_block = terminal_model.clone();
+    let block_model_for_block = block_model.clone();
+    let agent_block = app.update(|ctx| {
+        let (window_id, _) = ctx.add_tui_window(
+            AddWindowOptions {
+                window_style: WindowStyle::NotStealFocus,
+                ..Default::default()
+            },
+            |_| TestHostView,
+        );
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
+            TuiAIBlock::new(
+                (AIConversationId::new(), AIAgentExchangeId::new()),
+                block_model_for_block,
+                action_model,
+                &model_events,
+                terminal_model_for_block,
+                false,
+                ctx,
+            )
+        })
+    });
+    let view_id = agent_block.id();
+    let terminal_model_for_events = terminal_model.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_view(&agent_block, move |_, event, _| match event {
+            TuiAIBlockEvent::LayoutInvalidated => {
+                terminal_model_for_events
+                    .lock()
+                    .block_list_mut()
+                    .mark_rich_content_dirty(view_id);
+            }
+            TuiAIBlockEvent::BlockingStateChanged
+            | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+        });
+    });
+    terminal_model.lock().block_list_mut().append_rich_content(
+        RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
+        false,
+    );
+    let agent_blocks = AgentBlockRegistry::new(RefCell::new(HashMap::from([(
+        view_id,
+        agent_block.clone(),
+    )])));
+    (
+        TuiBlockListViewportSource::new(terminal_model.clone(), agent_blocks),
+        terminal_model,
+        agent_block,
+        block_model,
+    )
+}
+
+fn completed_markdown_status(markdown: &str) -> AIBlockOutputStatus {
+    AIBlockOutputStatus::Complete {
+        output: Shared::new(AIAgentOutput {
+            messages: vec![AIAgentOutputMessage {
+                id: MessageId::new("markdown-1".to_owned()),
+                message: AIAgentOutputMessageType::Text(AIAgentText {
+                    sections: vec![AIAgentTextSection::PlainText {
+                        text: markdown.to_owned().into(),
+                    }],
+                }),
+                citations: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    }
+}
 /// A finished (cancelled) status: the block is not streaming, so the viewport's
 /// width-gating alone decides whether to re-measure it.
 fn non_streaming_status() -> AIBlockOutputStatus {
@@ -854,6 +1062,68 @@ impl AIBlockModel for QueryAgentBlockModel {
         _callback: OutputStatusUpdateCallback<Self::View>,
         _ctx: &mut ViewContext<Self::View>,
     ) {
+    }
+
+    fn request_type(&self, _app: &AppContext) -> AIRequestType {
+        AIRequestType::Active
+    }
+}
+
+struct UpdatingAgentBlockModel {
+    status: RefCell<AIBlockOutputStatus>,
+    callback: RefCell<Option<OutputStatusUpdateCallback<TuiAIBlock>>>,
+}
+
+impl UpdatingAgentBlockModel {
+    fn update_status(
+        &self,
+        status: AIBlockOutputStatus,
+        view: &ViewHandle<TuiAIBlock>,
+        app: &mut App,
+    ) {
+        *self.status.borrow_mut() = status;
+        view.update(app, |view, ctx| {
+            self.callback
+                .borrow_mut()
+                .as_mut()
+                .expect("agent block registered its output callback")(view, ctx);
+        });
+    }
+}
+
+impl AIBlockModel for UpdatingAgentBlockModel {
+    type View = TuiAIBlock;
+
+    fn status(&self, _app: &AppContext) -> AIBlockOutputStatus {
+        self.status.borrow().clone()
+    }
+
+    fn server_output_id(&self, _app: &AppContext) -> Option<ServerOutputId> {
+        None
+    }
+
+    fn model_id(&self, _app: &AppContext) -> Option<LLMId> {
+        None
+    }
+
+    fn base_model<'a>(&'a self, _app: &'a AppContext) -> Option<&'a LLMId> {
+        None
+    }
+
+    fn inputs_to_render<'a>(&'a self, _app: &'a AppContext) -> &'a [AIAgentInput] {
+        &[]
+    }
+
+    fn conversation_id(&self, _app: &AppContext) -> Option<AIConversationId> {
+        None
+    }
+
+    fn on_updated_output(
+        &self,
+        callback: OutputStatusUpdateCallback<Self::View>,
+        _ctx: &mut ViewContext<Self::View>,
+    ) {
+        *self.callback.borrow_mut() = Some(callback);
     }
 
     fn request_type(&self, _app: &AppContext) -> AIRequestType {

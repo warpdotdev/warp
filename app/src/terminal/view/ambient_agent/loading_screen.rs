@@ -1,9 +1,9 @@
 //! Loading screen UI for cloud mode initialization.
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
+use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::AnsiColorIdentifier;
-use warp_core::ui::Icon;
 use warpui::elements::shimmering_text::ShimmeringTextStateHandle;
 use warpui::elements::{
     Align, Border, ConstrainedBox, Container, CrossAxisAlignment, Element, Expanded, Flex,
@@ -15,10 +15,11 @@ use warpui::prelude::{CornerRadius, Radius};
 use warpui::text_layout::TextAlignment;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, ModelHandle, SingletonEntity};
+use warpui::{AppContext, Entity, ModelHandle, SingletonEntity, WeakViewHandle};
 
 use crate::ai::agent_tips::{AITip, AITipModel};
 use crate::ai::loading::shimmering_warp_loading_text;
+use crate::ai::orchestration::{CloudAgentStartupAuthFlow, CloudAgentStartupPresentation};
 use crate::terminal::view::ambient_agent::CloudModeTip;
 use crate::ui_components::blended_colors;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -27,11 +28,12 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 const ERROR_ICON_SIZE: f32 = 24.;
 
 /// Renders the cloud mode loading screen with shimmering warp logo and tips.
-pub fn render_cloud_mode_loading_screen(
+pub fn render_cloud_mode_loading_screen<T: Entity>(
     message: &str,
     appearance: &Appearance,
     shimmer_handle: &ShimmeringTextStateHandle,
     tip_model: &ModelHandle<AITipModel<CloudModeTip>>,
+    view_handle: &WeakViewHandle<T>,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -83,7 +85,7 @@ pub fn render_cloud_mode_loading_screen(
     };
 
     // Get tier info for the concurrency limits footer
-    let tier_footer_element = render_tier_limits_footer(appearance, app);
+    let tier_footer_element = render_tier_limits_footer(appearance, view_handle, app);
 
     // Vertical layout with centered main content and footer at bottom
     Flex::column()
@@ -130,25 +132,24 @@ pub fn render_cloud_mode_loading_screen(
 
 /// Renders the tier limits footer showing concurrency limits and upgrade suggestions.
 /// Returns None if there are no specs to display.
-fn render_tier_limits_footer(
+fn render_tier_limits_footer<T: Entity>(
     appearance: &Appearance,
+    view_handle: &WeakViewHandle<T>,
     app: &AppContext,
 ) -> Option<Box<dyn Element>> {
     let theme = appearance.theme();
     let footer_font_size = appearance.monospace_font_size() - 2.;
-
-    // Get tier info and billing metadata from UserWorkspaces
-    let workspace = UserWorkspaces::as_ref(app).current_workspace()?;
-    let policy = workspace.billing_metadata.tier.ambient_agents_policy?;
+    let team = UserWorkspaces::as_ref(app).team_for_view_handle(view_handle, app)?;
+    let policy = team.billing_metadata.tier.ambient_agents_policy?;
 
     let shape = policy.instance_shape.as_ref()?;
     let specs = format!("{}CPU, {}GB", shape.vcpus, shape.memory_gb);
 
     // If there's no way to upgrade, don't render the footer at all
     // (Build Max users can still upgrade to Business plans)
-    if !workspace.billing_metadata.can_upgrade_to_build_plan()
-        && !workspace.billing_metadata.can_upgrade_to_build_max_plan()
-        && !workspace.billing_metadata.is_on_build_max_plan()
+    if !team.billing_metadata.can_upgrade_to_build_plan()
+        && !team.billing_metadata.can_upgrade_to_build_max_plan()
+        && !team.billing_metadata.is_on_build_max_plan()
     {
         return None;
     }
@@ -158,10 +159,7 @@ fn render_tier_limits_footer(
         specs
     ))];
 
-    // Get the upgrade URL for the current team
-    let upgrade_url = UserWorkspaces::as_ref(app)
-        .current_team()
-        .map(|team| UserWorkspaces::upgrade_link_for_team(team.uid))?;
+    let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
 
     fragments.push(FormattedTextFragment::hyperlink("Upgrade", upgrade_url));
     fragments.push(FormattedTextFragment::plain_text(
@@ -220,6 +218,7 @@ pub fn render_cloud_mode_error_screen(
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let error_color = AnsiColorIdentifier::Red.to_ansi_color(&theme.terminal_colors().normal);
+    let presentation = CloudAgentStartupPresentation::failure(error_message);
 
     // Error icon with fixed size constraints - using AlertTriangle icon
     let error_icon = ConstrainedBox::new(
@@ -233,7 +232,7 @@ pub fn render_cloud_mode_error_screen(
 
     // Error title text
     let title_text = Text::new(
-        "Failed to start environment",
+        presentation.title,
         appearance.ui_font_family(),
         appearance.monospace_font_size() + 2.,
     )
@@ -243,7 +242,7 @@ pub fn render_cloud_mode_error_screen(
 
     // Error message wrapped in SelectableArea to make it selectable for easy copying
     let error_text = Text::new(
-        error_message.to_string(),
+        presentation.detail,
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
     )
@@ -305,6 +304,10 @@ pub fn render_cloud_mode_github_auth_required_screen(
     _app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
+    let presentation = CloudAgentStartupPresentation::github_auth(
+        auth_url,
+        CloudAgentStartupAuthFlow::RetryRetainedRequest,
+    );
 
     // Use main text color for the icon and title
     let title_color = blended_colors::text_main(theme, theme.surface_1());
@@ -323,7 +326,7 @@ pub fn render_cloud_mode_github_auth_required_screen(
 
     // Title text - "GitHub Authentication Required"
     let title_text = Text::new(
-        "GitHub Authentication Required",
+        presentation.title,
         appearance.ui_font_family(),
         appearance.monospace_font_size() + 2.,
     )
@@ -333,7 +336,7 @@ pub fn render_cloud_mode_github_auth_required_screen(
 
     // Message text - "Please authenticate with GitHub to continue"
     let message_text = Text::new(
-        "Please authenticate with GitHub to continue",
+        presentation.detail,
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
     )
@@ -341,14 +344,19 @@ pub fn render_cloud_mode_github_auth_required_screen(
     .finish();
 
     // Create the authenticate button
-    let auth_url_clone = auth_url.to_string();
+    let auth_url = presentation
+        .primary_url
+        .expect("GitHub authentication presentation has a URL");
+    let action_label = presentation
+        .action_label
+        .expect("GitHub authentication presentation has an action label");
     let auth_button = appearance
         .ui_builder()
         .button(ButtonVariant::Accent, auth_button_mouse_state.clone())
-        .with_centered_text_label("Authenticate with GitHub".to_string())
+        .with_centered_text_label(action_label.to_string())
         .build()
         .on_click(move |_, app, _| {
-            app.open_url(&auth_url_clone);
+            app.open_url(&auth_url);
         })
         .finish();
 

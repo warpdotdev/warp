@@ -7,6 +7,7 @@ use warp_core::command::ExitCode;
 use warpui::color::ColorU;
 
 use super::*;
+use crate::features::FeatureFlag;
 use crate::terminal::model::ansi::InputBufferValue;
 use crate::terminal::model::index::VisibleRow;
 use crate::terminal::model::selection::ScrollDelta;
@@ -24,6 +25,7 @@ struct MockHandler {
     identity_reported: bool,
     d_proto_hooks: Vec<DProtoHook>,
     pluggable_notifications: Vec<(Option<String>, String)>,
+    hyperlink_events: Vec<Option<Hyperlink>>,
     cwd_updates: Vec<String>,
     registered_session_ids: HashSet<SessionId>,
     should_validate_dcs_hook_session_id: bool,
@@ -246,6 +248,10 @@ impl Handler for MockHandler {
         self.pluggable_notifications.push((title, body));
     }
 
+    fn set_hyperlink(&mut self, hyperlink: Option<Hyperlink>) {
+        self.hyperlink_events.push(hyperlink);
+    }
+
     fn set_current_working_directory(&mut self, path: String) {
         self.cwd_updates.push(path);
     }
@@ -273,6 +279,7 @@ impl Default for MockHandler {
             identity_reported: false,
             d_proto_hooks: Vec::new(),
             pluggable_notifications: Vec::new(),
+            hyperlink_events: Vec::new(),
             cwd_updates: Vec::new(),
             registered_session_ids: HashSet::new(),
             should_validate_dcs_hook_session_id: true,
@@ -998,6 +1005,109 @@ fn parse_sourced_rc_file_hook_with_uname() {
 }
 
 #[test]
+fn parse_osc8_hyperlink_open() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
+    // ESC ] 8 ; ; https://example.com ESC \
+    let bytes: &[u8] = b"\x1b]8;;https://example.com\x1b\\";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(handler.hyperlink_events.len(), 1);
+    let hyperlink = handler.hyperlink_events[0].as_ref().expect("opening link");
+    assert_eq!(hyperlink.id, None);
+    assert_eq!(hyperlink.uri, "https://example.com");
+}
+
+#[test]
+fn parse_osc8_hyperlink_open_with_id() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
+    let bytes: &[u8] = b"\x1b]8;id=link-1;https://example.com\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(handler.hyperlink_events.len(), 1);
+    let hyperlink = handler.hyperlink_events[0].as_ref().expect("opening link");
+    assert_eq!(hyperlink.id.as_deref(), Some("link-1"));
+    assert_eq!(hyperlink.uri, "https://example.com");
+}
+
+#[test]
+fn parse_osc8_hyperlink_close_canonical() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
+    // Canonical close: ESC ] 8 ; ; ESC \
+    let bytes: &[u8] = b"\x1b]8;;\x1b\\";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(handler.hyperlink_events.len(), 1);
+    assert!(handler.hyperlink_events[0].is_none());
+}
+
+#[test]
+fn parse_osc8_open_then_close_bell_terminator() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
+    // Open with bell terminator, write some bytes (irrelevant to the dispatch
+    // mock), then close. Both terminator forms must dispatch.
+    let bytes: &[u8] = b"\x1b]8;;https://example.com/report\x07Click me\x1b]8;;\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(handler.hyperlink_events.len(), 2);
+    let opened = handler.hyperlink_events[0].as_ref().expect("opening link");
+    assert_eq!(opened.uri, "https://example.com/report");
+    assert!(handler.hyperlink_events[1].is_none());
+}
+
+#[test]
+fn parse_osc8_uri_with_semicolons_dispatches_full_uri() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
+    // Anti-regression for the rejoin contract — the dispatcher must hand the
+    // full URI (including embedded `;`) to set_hyperlink.
+    let bytes: &[u8] = b"\x1b]8;;https://example.com/a?x=1;y=2\x1b\\";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(handler.hyperlink_events.len(), 1);
+    let hyperlink = handler.hyperlink_events[0].as_ref().expect("opening link");
+    assert_eq!(hyperlink.uri, "https://example.com/a?x=1;y=2");
+}
+
+#[test]
+fn parse_osc8_malformed_param_is_ignored_link_still_opens() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
+    // A param without `=` is ignored (per the OSC 8 spec); the link still opens.
+    let bytes: &[u8] = b"\x1b]8;notavalidparam;https://example.com\x07";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(handler.hyperlink_events.len(), 1);
+    let hyperlink = handler.hyperlink_events[0].as_ref().expect("opening link");
+    assert_eq!(hyperlink.id, None);
+    assert_eq!(hyperlink.uri, "https://example.com");
+}
+
+#[test]
+fn parse_osc8_dropped_when_feature_flag_disabled() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(false);
+    let bytes: &[u8] = b"\x1b]8;;https://example.com\x1b\\";
+    let (_, handler) = parse_bytes(bytes);
+
+    // Flag off -> dispatch falls through to `unhandled`, no event fires.
+    assert_eq!(handler.hyperlink_events.len(), 0);
+}
+
+#[test]
+fn parse_osc8_malformed_sequence_clears_active_hyperlink() {
+    let _guard = FeatureFlag::OscHyperlinks.override_enabled(true);
+    // Open a valid link, then send a malformed (non-UTF-8 URI) sequence. The
+    // parse error must clear the active hyperlink so subsequent output can't
+    // inherit the stale URI.
+    let bytes: &[u8] = b"\x1b]8;;https://example.com\x1b\\text\x1b]8;;\xff\xfe\x1b\\";
+    let (_, handler) = parse_bytes(bytes);
+
+    assert_eq!(handler.hyperlink_events.len(), 2);
+    assert_eq!(
+        handler.hyperlink_events[0].as_ref().map(|h| h.uri.as_str()),
+        Some("https://example.com")
+    );
+    assert!(handler.hyperlink_events[1].is_none());
+}
+
+#[test]
 fn parse_osc9_notification() {
     let bytes: &[u8] = b"\x1b]9;Hello from OSC 9\x07";
     let (_, handler) = parse_bytes(bytes);
@@ -1252,4 +1362,66 @@ fn parse_osc7_empty_payload_ignored() {
     let (_, handler) = parse_bytes(bytes);
 
     assert!(handler.cwd_updates.is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn parse_osc7_windows_drive_letter_normalized() {
+    let local = crate::terminal::model::session::get_local_hostname()
+        .expect("test requires a real local hostname");
+    let payload = format!("\x1b]7;file://{local}/E:/CLAUDE-BASE\x07");
+    let (_, handler) = parse_bytes(payload.as_bytes());
+
+    assert_eq!(handler.cwd_updates, vec![r"E:\CLAUDE-BASE".to_string()]);
+}
+
+#[cfg(windows)]
+#[test]
+fn parse_osc7_windows_drive_letter_root() {
+    let local = crate::terminal::model::session::get_local_hostname()
+        .expect("test requires a real local hostname");
+    let payload = format!("\x1b]7;file://{local}/E:/\x07");
+    let (_, handler) = parse_bytes(payload.as_bytes());
+
+    assert_eq!(handler.cwd_updates, vec![r"E:\".to_string()]);
+}
+
+#[cfg(windows)]
+#[test]
+fn parse_osc7_windows_drive_letter_percent_encoded() {
+    let local = crate::terminal::model::session::get_local_hostname()
+        .expect("test requires a real local hostname");
+    let payload = format!("\x1b]7;file://{local}/E:/My%20Code\x07");
+    let (_, handler) = parse_bytes(payload.as_bytes());
+
+    assert_eq!(handler.cwd_updates, vec![r"E:\My Code".to_string()]);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn parse_osc7_posix_path_not_mangled_non_windows() {
+    let local = crate::terminal::model::session::get_local_hostname()
+        .expect("test requires a real local hostname");
+
+    let payload = format!("\x1b]7;file://{local}/Users/foo/bar\x07");
+    let (_, handler) = parse_bytes(payload.as_bytes());
+    assert_eq!(handler.cwd_updates, vec!["/Users/foo/bar".to_string()]);
+
+    let payload = format!("\x1b]7;file://{local}/E:/CLAUDE-BASE\x07");
+    let (_, handler) = parse_bytes(payload.as_bytes());
+    assert_eq!(handler.cwd_updates, vec!["/E:/CLAUDE-BASE".to_string()]);
+}
+
+#[test]
+fn parse_osc7_non_drive_slash_letter_untouched() {
+    let local = crate::terminal::model::session::get_local_hostname()
+        .expect("test requires a real local hostname");
+
+    let payload = format!("\x1b]7;file://{local}/E/notdrive\x07");
+    let (_, handler) = parse_bytes(payload.as_bytes());
+    assert_eq!(handler.cwd_updates, vec!["/E/notdrive".to_string()]);
+
+    let payload = format!("\x1b]7;file://{local}/E:extra\x07");
+    let (_, handler) = parse_bytes(payload.as_bytes());
+    assert_eq!(handler.cwd_updates, vec!["/E:extra".to_string()]);
 }

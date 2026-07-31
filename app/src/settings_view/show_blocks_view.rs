@@ -20,11 +20,11 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use super::settings_page::{
-    render_page_title, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
-    SettingsWidget, HEADER_FONT_SIZE, PAGE_PADDING,
-};
 use super::SettingsSection;
+use super::settings_page::{
+    HEADER_FONT_SIZE, MatchData, PAGE_PADDING, PageType, SettingsPageMeta, SettingsPageViewHandle,
+    SettingsWidget, render_page_title,
+};
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
 use crate::channel::{Channel, ChannelState};
@@ -35,8 +35,7 @@ use crate::view_components::ToastFlavor;
 
 const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 
-const UNSHARE_BLOCK_CONFIRMATION_DIALOG_TEXT: &str =
-    "Are you sure you want to unshare this block?\n\
+const UNSHARE_BLOCK_CONFIRMATION_DIALOG_TEXT: &str = "Are you sure you want to unshare this block?\n\
 \nIt will no longer be accessible by link and will be permanently deleted from Warp servers.";
 
 #[derive(Clone, Debug)]
@@ -507,25 +506,24 @@ impl ShowBlocksView {
     }
 
     pub fn confirm_unshare(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(selected_index) = self.pending_unshared_block_index.take() {
-            if let GetBlocksForUserRequestState::Done(blocks) = &mut self.get_blocks_for_user_status
-            {
-                // Only attempt to unshare if there isn't already an inflight request to unshare
-                // the block.
-                let user_block = &mut blocks[selected_index];
-                if !matches!(
-                    user_block.unshare_request_status,
-                    UnshareBlockRequestState::InFlight
-                ) {
-                    user_block.unshare_request_status = UnshareBlockRequestState::InFlight;
+        if let Some(selected_index) = self.pending_unshared_block_index.take()
+            && let GetBlocksForUserRequestState::Done(blocks) = &mut self.get_blocks_for_user_status
+        {
+            // Only attempt to unshare if there isn't already an inflight request to unshare
+            // the block.
+            let user_block = &mut blocks[selected_index];
+            if !matches!(
+                user_block.unshare_request_status,
+                UnshareBlockRequestState::InFlight
+            ) {
+                user_block.unshare_request_status = UnshareBlockRequestState::InFlight;
 
-                    let block_client = self.block_client.clone();
-                    let block_id = user_block.id.clone();
-                    let _ = ctx.spawn(
-                        async move { (block_client.unshare_block(block_id).await, selected_index) },
-                        Self::on_block_unshare_complete,
-                    );
-                }
+                let block_client = self.block_client.clone();
+                let block_id = user_block.id.clone();
+                let _ = ctx.spawn(
+                    async move { (block_client.unshare_block(block_id).await, selected_index) },
+                    Self::on_block_unshare_complete,
+                );
             }
         }
         ctx.notify();

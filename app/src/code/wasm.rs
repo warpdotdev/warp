@@ -172,7 +172,13 @@ impl CodeView {
         false
     }
 
-    pub fn active_tab_has_unsaved_changes(&self, _ctx: &AppContext) -> bool {
+    /// Stub: the WASM code view has no tabs, so there is nothing to auto-save
+    /// and no unsaveable changes remain.
+    pub fn auto_save_all_unsaved_tabs(&mut self, _ctx: &mut ViewContext<Self>) -> bool {
+        false
+    }
+
+    pub fn active_tab_shows_unsaved_indicator(&self, _ctx: &AppContext) -> bool {
         false
     }
 

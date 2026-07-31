@@ -12,13 +12,13 @@ use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
 use super::{
-    agent_id_key_from_persisted_data, AIConversationMetadata, BlocklistAIHistoryModel,
-    MAX_HISTORICAL_CONVERSATIONS,
-};
-use crate::ai::agent::api::convert_conversation::{
-    convert_conversation_data_to_ai_conversation, RestorationMode,
+    AIConversationMetadata, BlocklistAIHistoryModel, MAX_HISTORICAL_CONVERSATIONS,
+    agent_id_key_from_persisted_data,
 };
 use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::api::convert_conversation::{
+    RestorationMode, convert_conversation_data_to_ai_conversation,
+};
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
 };
@@ -27,8 +27,8 @@ use crate::persistence::agent::read_agent_conversation_by_id;
 use crate::persistence::model::{
     AgentConversation, AgentConversationData, AgentConversationSummary,
 };
-use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::AIClient;
 use crate::terminal::model::block::SerializedBlock;
 
 /// A conversation transcript from a CLI agent harness (e.g. Claude Code).
@@ -215,6 +215,14 @@ impl AIConversationMetadata {
         if self.artifacts.is_empty() {
             self.artifacts = other.artifacts;
         }
+        // Preserve parent linkage so a merged record (e.g. cloud metadata merged
+        // with the in-memory child's metadata) keeps its child-agent status.
+        if self.parent_conversation_id.is_none() {
+            self.parent_conversation_id = other.parent_conversation_id;
+        }
+        if self.parent_agent_id.is_none() {
+            self.parent_agent_id = other.parent_agent_id;
+        }
         self
     }
 }
@@ -353,12 +361,11 @@ impl BlocklistAIHistoryModel {
             });
 
             // Convert the persisted conversation to an AIConversation
-            if let Some(persisted_conversation) = persisted_ai_conversation {
-                if let Some(conversation) =
+            if let Some(persisted_conversation) = persisted_ai_conversation
+                && let Some(conversation) =
                     convert_persisted_conversation_to_ai_conversation(persisted_conversation)
-                {
-                    return Some(conversation);
-                }
+            {
+                return Some(conversation);
             }
         }
 
@@ -380,10 +387,10 @@ impl BlocklistAIHistoryModel {
         // Collect tokens belonging to child agent conversations so we can skip them.
         let mut child_conversation_tokens: HashSet<String> = HashSet::new();
         for conv in self.conversations_by_id.values() {
-            if let Some(token) = conv.server_conversation_token() {
-                if conv.is_child_agent_conversation() {
-                    child_conversation_tokens.insert(token.as_str().to_string());
-                }
+            if let Some(token) = conv.server_conversation_token()
+                && conv.is_child_agent_conversation()
+            {
+                child_conversation_tokens.insert(token.as_str().to_string());
             }
         }
 
@@ -653,6 +660,17 @@ impl BlocklistAIHistoryModel {
                         artifacts,
                         // Only populated when loading from server, not from local DB
                         server_conversation_metadata: None,
+                        // Carry parent linkage from persisted data so child-agent
+                        // status survives even if the parent isn't resolvable
+                        // locally (the child-skip above only fires when the
+                        // parent conversation is known).
+                        parent_conversation_id: conversation_data
+                            .as_ref()
+                            .and_then(|data| data.parent_conversation_id.as_deref())
+                            .and_then(|id| AIConversationId::try_from(id.to_owned()).ok()),
+                        parent_agent_id: conversation_data
+                            .as_ref()
+                            .and_then(|data| data.parent_agent_id.clone()),
                     },
                 ))
             })

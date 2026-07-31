@@ -149,9 +149,10 @@ fn upload_file_to_target_returns_status_and_body_for_failed_uploads() {
     .unwrap_err();
 
     mock.assert();
-    assert!(err
-        .to_string()
-        .contains("Artifact upload failed with status 403 Forbidden: denied"));
+    assert!(
+        err.to_string()
+            .contains("Artifact upload failed with status 403 Forbidden: denied")
+    );
 }
 
 /// Mockito matcher that captures the raw request body so individual fields of
@@ -249,9 +250,10 @@ fn multipart_post_requires_content_data_field() {
             .await
             .unwrap_err();
 
-        assert!(err
-            .to_string()
-            .contains("Multipart upload must contain exactly one ContentData field"));
+        assert!(
+            err.to_string()
+                .contains("Multipart upload must contain exactly one ContentData field")
+        );
     });
 }
 

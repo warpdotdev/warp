@@ -1,5 +1,5 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use futures_util::stream::AbortHandle;
@@ -10,10 +10,10 @@ use warpui::{
     Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakViewHandle, WindowId,
 };
 
-use super::notebook::NotebookView;
 use super::CloudNotebook;
-use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use super::notebook::NotebookView;
 use crate::cloud_object::Owner;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::drive::OpenWarpDriveObjectSettings;
 use crate::pane_group::{NotebookPane, PaneContent};
 use crate::server::cloud_objects::update_manager::{
@@ -148,10 +148,10 @@ impl NotebookManager {
         event: &CloudModelEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let CloudModelEvent::ObjectUpdated { type_and_id, .. } = event {
-            if let Some(notebook_id) = type_and_id.as_notebook_id() {
-                self.update_raw_text_for_notebook(notebook_id, ctx);
-            }
+        if let CloudModelEvent::ObjectUpdated { type_and_id, .. } = event
+            && let Some(notebook_id) = type_and_id.as_notebook_id()
+        {
+            self.update_raw_text_for_notebook(notebook_id, ctx);
         }
     }
 

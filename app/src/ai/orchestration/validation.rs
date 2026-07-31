@@ -8,7 +8,7 @@ use super::config_state::{AuthSecretSelection, OrchestrationConfigState};
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::local_harness_setup::{
-    local_harness_is_product_enabled, local_harness_setup_state, LocalHarnessSetupState,
+    LocalHarnessSetupState, local_harness_is_product_enabled, local_harness_setup_state,
 };
 use crate::ai::orchestration::providers::ORCHESTRATION_WARP_WORKER_HOST;
 use crate::cloud_object::CloudObjectLookup as _;
@@ -16,6 +16,7 @@ use crate::cloud_object::CloudObjectLookup as _;
 /// Whether a harness's local setup allows selecting it: always true for
 /// Cloud, otherwise requires the local CLI to be installed and the
 /// harness to be product-enabled.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub(crate) fn local_harness_setup_is_ready(harness: Harness, is_local: bool) -> bool {
     !is_local || local_harness_setup_state(harness).is_selectable()
 }
@@ -24,6 +25,9 @@ pub(crate) fn local_harness_setup_is_ready(harness: Harness, is_local: bool) -> 
 /// Gemini (not yet supported for multi-agent runs), product-disabled
 /// local harnesses, and local harnesses whose CLI setup is not ready.
 /// Both frontends must filter/disable identically through this predicate.
+// Only the TUI consumes this predicate directly (via `tui_export`); the
+// GUI filters through the harness snapshot builder, which mirrors it.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub fn harness_is_selectable(harness: Harness, is_local: bool) -> bool {
     if harness == Harness::Gemini {
         return false;
@@ -82,17 +86,17 @@ pub fn accept_disabled_reason_with_auth(
     if let Some(reason) = state.accept_disabled_reason() {
         return Some(reason.to_string());
     }
-    if matches!(state.execution_mode, RunAgentsExecutionMode::Local) {
-        if let Some(harness) = Harness::parse_local_child_harness(&state.harness_type) {
-            match local_harness_setup_state(harness) {
-                LocalHarnessSetupState::MissingHarness { tooltip } => {
-                    return Some(tooltip.to_string());
-                }
-                LocalHarnessSetupState::ProductDisabled { message } => {
-                    return Some(message.to_string());
-                }
-                LocalHarnessSetupState::Ready => {}
+    if matches!(state.execution_mode, RunAgentsExecutionMode::Local)
+        && let Some(harness) = Harness::parse_local_child_harness(&state.harness_type)
+    {
+        match local_harness_setup_state(harness) {
+            LocalHarnessSetupState::MissingHarness { tooltip } => {
+                return Some(tooltip.to_string());
             }
+            LocalHarnessSetupState::ProductDisabled { message } => {
+                return Some(message.to_string());
+            }
+            LocalHarnessSetupState::Ready => {}
         }
     }
     if auth_secret_selection_required(state, ctx) {

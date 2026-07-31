@@ -1,8 +1,8 @@
 //! Provider command for linking third-party services.
 use comfy_table::Cell;
 use serde::Serialize;
-use warp_cli::provider::{ProviderCommand, ProviderType};
 use warp_cli::GlobalOptions;
+use warp_cli::provider::{ProviderCommand, ProviderType};
 use warp_core::channel::ChannelState;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
@@ -58,7 +58,7 @@ impl ProviderCommandRunner {
         // TODO(bens): initiate the OAuth flow and use the login-less auth URL
         let slug = provider_type.slug();
         let url = if use_team_auth {
-            let team_uid = match UserWorkspaces::as_ref(ctx).current_team_uid() {
+            let team_uid = match UserWorkspaces::as_ref(ctx).sole_team_uid() {
                 Some(uid) => uid,
                 None => {
                     return Err(anyhow::anyhow!("User is not on a team"));

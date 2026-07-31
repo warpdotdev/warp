@@ -64,7 +64,7 @@ fn returns_true_when_figma_text_chunk_follows_another_chunk() {
     bytes.extend_from_slice(b"tIME");
     bytes.extend_from_slice(preceding);
     bytes.extend_from_slice(&[0u8; 4]); // fake CRC
-                                        // tEXt chunk with Software: Figma
+    // tEXt chunk with Software: Figma
     let text_data = b"Software\x00Figma";
     bytes.extend_from_slice(&(text_data.len() as u32).to_be_bytes());
     bytes.extend_from_slice(b"tEXt");

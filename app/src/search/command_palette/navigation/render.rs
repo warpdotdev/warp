@@ -10,8 +10,8 @@ use warpui::{AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::context_chips::display_chip::{
-    chip_container, render_git_diff_stats_content, render_udi_chip, udi_font_size, GitLineChanges,
-    UdiChipConfig,
+    GitLineChanges, UdiChipConfig, chip_container, render_git_diff_stats_content, render_udi_chip,
+    udi_font_size,
 };
 use crate::context_chips::prompt_snapshot::PromptSnapshot;
 use crate::context_chips::{ChipValue, ContextChipKind};
@@ -19,13 +19,13 @@ use crate::search::command_palette::navigation::search::SessionHighlightIndices;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::session_management::{CommandContext, SessionNavigationData};
 use crate::settings::FontSettings;
+use crate::terminal::SizeInfo;
 use crate::terminal::blockgrid_element::BlockGridElement;
 use crate::terminal::grid_size_util::grid_cell_dimensions;
 use crate::terminal::ligature_settings::should_use_ligature_rendering;
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::grid::Dimensions;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::terminal::SizeInfo;
 
 /// Renders a navigation session.
 pub fn render_navigation_session(
@@ -254,40 +254,39 @@ fn render_command_context(
     let mut command_row = Flex::row();
     let command_row_font_size = appearance.monospace_font_size() - 2.;
 
-    if let Some(command_text) = command_render_info.command_text {
-        if !command_text.is_empty() {
-            let running_command_text_color =
-                item_highlight_state.main_text_fill(appearance).into_solid();
+    if let Some(command_text) = command_render_info.command_text
+        && !command_text.is_empty()
+    {
+        let running_command_text_color =
+            item_highlight_state.main_text_fill(appearance).into_solid();
 
-            let mut running_command_text =
-                appearance
-                    .ui_builder()
-                    .span(command_text)
-                    .with_style(UiComponentStyles {
-                        font_family_id: Some(appearance.monospace_font_family()),
-                        font_size: Some(command_row_font_size),
-                        font_color: Some(running_command_text_color),
-                        ..Default::default()
-                    });
+        let mut running_command_text =
+            appearance
+                .ui_builder()
+                .span(command_text)
+                .with_style(UiComponentStyles {
+                    font_family_id: Some(appearance.monospace_font_family()),
+                    font_size: Some(command_row_font_size),
+                    font_color: Some(running_command_text_color),
+                    ..Default::default()
+                });
 
-            if let Some(command_indices) = command_indices {
-                let highlight = Highlight::new()
-                    .with_properties(Properties::default().weight(Weight::Bold))
-                    .with_foreground_color(running_command_text_color);
-                running_command_text =
-                    running_command_text.with_highlights(command_indices, highlight);
-            }
-
-            command_row.add_child(
-                Shrinkable::new(
-                    1.,
-                    Container::new(running_command_text.build().finish())
-                        .with_margin_right(command_render_info.row_spacing)
-                        .finish(),
-                )
-                .finish(),
-            );
+        if let Some(command_indices) = command_indices {
+            let highlight = Highlight::new()
+                .with_properties(Properties::default().weight(Weight::Bold))
+                .with_foreground_color(running_command_text_color);
+            running_command_text = running_command_text.with_highlights(command_indices, highlight);
         }
+
+        command_row.add_child(
+            Shrinkable::new(
+                1.,
+                Container::new(running_command_text.build().finish())
+                    .with_margin_right(command_render_info.row_spacing)
+                    .finish(),
+            )
+            .finish(),
+        );
     }
 
     let hint_font_color = item_highlight_state.sub_text_fill(appearance).into_solid();

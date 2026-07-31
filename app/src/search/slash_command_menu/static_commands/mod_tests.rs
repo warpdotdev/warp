@@ -1,4 +1,4 @@
-use super::{commands, Availability};
+use super::{Availability, commands};
 
 #[test]
 fn argument_hint_uses_shared_command_prefix_and_text() {

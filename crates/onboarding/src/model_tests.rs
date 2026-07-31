@@ -3,14 +3,19 @@ use warp_core::features::FeatureFlag;
 use warp_core::telemetry::testing::MockTelemetryContextProvider;
 use warpui_core::{App, ModelHandle};
 
+use crate::OnboardingIntention;
 use crate::model::{
     AiSetupChoice, NoAiConfirmationSource, OnboardingAuthState, OnboardingStateModel,
     OnboardingStep, SelectedSettings,
 };
-use crate::OnboardingIntention;
+use crate::slides::OfferVariant;
 
 fn add_test_model(app: &mut App) -> ModelHandle<OnboardingStateModel> {
     app.update(MockTelemetryContextProvider::register);
+    add_model(app)
+}
+
+fn add_model(app: &mut App) -> ModelHandle<OnboardingStateModel> {
     app.add_model(|_| {
         OnboardingStateModel::new(
             Vec::new(),
@@ -24,6 +29,123 @@ fn add_test_model(app: &mut App) -> ModelHandle<OnboardingStateModel> {
 
 fn step(app: &App, model: &ModelHandle<OnboardingStateModel>) -> OnboardingStep {
     model.read(app, |model, _| model.step())
+}
+
+#[test]
+fn account_first_path_is_linear_and_reversible() {
+    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
+    let _settings_modes = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+
+        model.update(&mut app, |model, ctx| model.next(ctx));
+        assert_eq!(step(&app, &model), OnboardingStep::Customize);
+
+        model.update(&mut app, |model, ctx| model.next(ctx));
+        assert_eq!(step(&app, &model), OnboardingStep::ThemePicker);
+
+        model.update(&mut app, |model, ctx| model.back(ctx));
+        assert_eq!(step(&app, &model), OnboardingStep::Customize);
+
+        model.update(&mut app, |model, ctx| model.back(ctx));
+        assert_eq!(step(&app, &model), OnboardingStep::Intro);
+    });
+}
+
+#[test]
+fn post_auth_offer_is_unclassified_until_selected_and_does_not_switch() {
+    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        model.read(&app, |model, _| {
+            assert_eq!(model.offer_variant(), None);
+        });
+        model.update(&mut app, |model, ctx| {
+            model.show_post_auth_offer(OfferVariant::HeadStart, ctx);
+            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
+        });
+
+        assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
+        model.read(&app, |model, _| {
+            assert_eq!(model.offer_variant(), Some(OfferVariant::HeadStart));
+        });
+    });
+}
+
+#[test]
+fn post_auth_offer_supports_back_to_theme_and_no_direct_next() {
+    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
+    App::test((), |mut app| async move {
+        app.update(MockTelemetryContextProvider::register);
+        for variant in [OfferVariant::HeadStart, OfferVariant::ChooseHowToStart] {
+            let model = add_model(&mut app);
+            model.update(&mut app, |model, ctx| {
+                model.show_post_auth_offer(variant, ctx);
+            });
+
+            assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
+            model.read(&app, |model, _| {
+                assert_eq!(model.offer_variant(), Some(variant));
+                assert_eq!(model.progress(), (0, 0));
+            });
+
+            model.update(&mut app, |model, ctx| model.back(ctx));
+            assert_eq!(step(&app, &model), OnboardingStep::ThemePicker);
+
+            model.update(&mut app, |model, ctx| {
+                model.show_post_auth_offer(variant, ctx);
+                model.next(ctx);
+            });
+            assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
+        }
+    });
+}
+
+#[test]
+fn account_first_path_uses_three_step_progress() {
+    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        let cases = [
+            (OnboardingStep::Intro, (0, 3)),
+            (OnboardingStep::Customize, (0, 3)),
+            (OnboardingStep::ThemePicker, (1, 3)),
+        ];
+
+        for (target, expected) in cases {
+            model.update(&mut app, |model, ctx| model.set_step(target, ctx));
+            let progress = model.read(&app, |model, _| model.progress());
+            assert_eq!(progress, expected, "unexpected dots for {target:?}");
+        }
+    });
+}
+
+#[test]
+fn account_first_path_uses_agent_ui_defaults() {
+    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+
+        model.read(&app, |model, _| {
+            assert_eq!(
+                *model.intention(),
+                OnboardingIntention::AgentDrivenDevelopment
+            );
+            let SelectedSettings::AgentDrivenDevelopment {
+                ui_customization: Some(ui),
+                ..
+            } = model.settings()
+            else {
+                panic!("account-first onboarding should preserve agent UI defaults");
+            };
+            assert!(ui.use_vertical_tabs);
+            assert!(ui.show_conversation_history);
+            assert!(ui.show_project_explorer);
+            assert!(ui.show_global_search);
+            assert!(ui.show_warp_drive);
+            assert!(ui.show_code_review_button);
+        });
+    });
 }
 
 #[test]

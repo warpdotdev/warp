@@ -18,45 +18,45 @@ use warpui::{ModelHandle, ModelSpawner};
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::{
-    claude_config_dir, home_dir_for_claude_config, read_envelope, rehydrate_claude_transcript,
-    ClaudeResumeInfo, ClaudeTranscriptEnvelope,
+    ClaudeResumeInfo, ClaudeTranscriptEnvelope, claude_config_dir, home_dir_for_claude_config,
+    read_envelope, rehydrate_claude_transcript,
 };
 use super::json_utils::{read_json_file_or_default, write_json_file};
 use super::{
-    cli_agent_session_status, write_temp_file, HarnessCleanupDisposition, HarnessRunner,
-    JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness,
+    HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
+    ThirdPartyHarness, cli_agent_session_status, write_temp_file,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
-use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
-use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
 use crate::server::server_api::ServerApi;
+use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::terminal::CLIAgent;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::ExecuteCommandOptions;
-use crate::terminal::CLIAgent;
 mod parent_bridge;
 mod wake_driver;
 
 #[cfg(test)]
 use parent_bridge::{
+    MESSAGE_BRIDGE_CONTEXT_PREAMBLE, MessageBridgeHookOutput, MessageBridgeMessageRecord,
     acknowledge_parent_bridge_hook_output, ensure_parent_bridge_state_dir,
     parent_bridge_char_count, parent_bridge_event_cursor_file, parent_bridge_hook_output_ack_file,
     parent_bridge_hook_output_file, parent_bridge_root, parent_bridge_staged_message_path,
     parent_bridge_surfaced_message_path, prepare_parent_bridge_hook_output,
     prime_parent_bridge_staged_for_self_managed_wake, read_parent_bridge_event_cursor,
     render_parent_bridge_message_block, stage_parent_bridge_message,
-    write_parent_bridge_event_cursor, MessageBridgeHookOutput, MessageBridgeMessageRecord,
-    MESSAGE_BRIDGE_CONTEXT_PREAMBLE,
+    write_parent_bridge_event_cursor,
 };
 use parent_bridge::{MessageBridge, MessageBridgeCleanupDisposition};
 #[cfg(test)]
 use shell_words::quote as shell_quote;
 #[cfg(test)]
-use wake_driver::{ClaudeWakeRemoteContext, CLAUDE_WAKE_PROMPT_FILE_NAME};
+use wake_driver::{CLAUDE_WAKE_PROMPT_FILE_NAME, ClaudeWakeRemoteContext};
 use warp_errors::report_error;
 
 #[cfg(test)]
@@ -157,15 +157,15 @@ impl ThirdPartyHarness for ClaudeHarness {
         // and server context are most reliable when prepended directly to the prompt that gets
         // piped into the CLI. Order: resumption_prompt → context → prompt
         let mut parts: Vec<&str> = Vec::new();
-        if let Some(preamble) = resumption_prompt {
-            if !preamble.is_empty() {
-                parts.push(preamble);
-            }
+        if let Some(preamble) = resumption_prompt
+            && !preamble.is_empty()
+        {
+            parts.push(preamble);
         }
-        if let Some(ctx) = context {
-            if !ctx.is_empty() {
-                parts.push(ctx);
-            }
+        if let Some(ctx) = context
+            && !ctx.is_empty()
+        {
+            parts.push(ctx);
         }
         parts.push(prompt);
         let owned_prompt = parts.join("\n\n");
@@ -622,10 +622,10 @@ pub(crate) fn prepare_claude_environment_config(
 
 // This function is used specifically for determining where to land `.claude.json`.
 fn claude_global_config_path() -> Result<PathBuf> {
-    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
-        if !dir.is_empty() {
-            return Ok(PathBuf::from(dir).join(CLAUDE_JSON_FILE_NAME));
-        }
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR")
+        && !dir.is_empty()
+    {
+        return Ok(PathBuf::from(dir).join(CLAUDE_JSON_FILE_NAME));
     }
 
     home_dir_for_claude_config()
@@ -726,10 +726,10 @@ fn resolve_anthropic_api_key_suffix(
     resolved_env_vars: &HashMap<OsString, OsString>,
 ) -> Option<String> {
     // Worker-injected process env wins.
-    if let Ok(key) = std::env::var(ANTHROPIC_API_KEY_ENV) {
-        if !key.is_empty() {
-            return suffix_of(&key).map(str::to_owned);
-        }
+    if let Ok(key) = std::env::var(ANTHROPIC_API_KEY_ENV)
+        && !key.is_empty()
+    {
+        return suffix_of(&key).map(str::to_owned);
     }
     // Otherwise use the resolved value from the secrets map.
     resolved_env_vars

@@ -14,8 +14,8 @@ use chrono::Utc;
 use warp_cli::agent::Harness;
 
 use super::{
-    agent_conversation_entry_icon_variant, agent_icon_variant_for_run,
-    agent_icon_variant_from_terminal_inputs, CLISessionInputs, TerminalIconInputs,
+    CLISessionInputs, TerminalIconInputs, agent_conversation_entry_icon_variant,
+    agent_icon_variant_for_run, agent_icon_variant_from_terminal_inputs,
 };
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent_conversations_model::entry::{
@@ -438,4 +438,18 @@ fn non_ambient_entry_uses_display_harness() {
             is_ambient: false,
         }
     );
+    assert!(!entry.is_cloud_agent_run());
+
+    let mut cloud_agent_by_provenance = entry.clone();
+    cloud_agent_by_provenance.provenance = AgentConversationProvenance::AmbientRun;
+    assert!(cloud_agent_by_provenance.is_cloud_agent_run());
+
+    let mut cloud_agent_by_backing = entry.clone();
+    cloud_agent_by_backing.backing.has_ambient_run = true;
+    assert!(cloud_agent_by_backing.is_cloud_agent_run());
+
+    let mut cloud_agent_by_task_id = entry;
+    cloud_agent_by_task_id.identity.ambient_agent_task_id =
+        Some("00000000-0000-0000-0000-000000000001".parse().unwrap());
+    assert!(cloud_agent_by_task_id.is_cloud_agent_run());
 }

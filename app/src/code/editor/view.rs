@@ -11,7 +11,7 @@ use num_traits::SaturatingSub;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use string_offset::CharOffset;
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 use vim::vim::{Direction, InsertPosition, VimMode, VimModel, VimState, VimSubscriber};
 use warp_core::platform::SessionPlatform;
 use warp_editor::content::buffer::{
@@ -27,10 +27,10 @@ use warp_editor::render::element::{
     DisplayOptions, DisplayStateHandle, RichTextElement, VerticalExpansionBehavior,
 };
 use warp_editor::render::model::{
-    AutoScrollMode, BlockSpacing, Decoration, ExpansionType, LineCount, ParagraphStyles,
-    RichTextStyles, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES,
+    AutoScrollMode, BlockSpacing, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES, Decoration,
+    ExpansionType, LineCount, ParagraphStyles, RichTextStyles,
 };
-use warp_editor::search::{SearchEvent, Searcher, MATCH_FILL, SELECTED_MATCH_FILL};
+use warp_editor::search::{MATCH_FILL, SELECTED_MATCH_FILL, SearchEvent, Searcher};
 use warp_util::content_version::ContentVersion;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::elements::new_scrollable::{
@@ -53,6 +53,7 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
+use crate::code::editor::EditorReviewComment;
 use crate::code::editor::comment_editor::{CommentEditor, CommentEditorEvent};
 use crate::code::editor::comments::PendingComment;
 use crate::code::editor::diff::DiffStatus;
@@ -68,7 +69,6 @@ use crate::code::editor::model::{
 };
 use crate::code::editor::nav_bar::{NavBar, NavBarBehavior, NavBarEvent};
 use crate::code::editor::scroll::{ScrollPosition, ScrollTrigger, ScrollWheelBehavior};
-use crate::code::editor::EditorReviewComment;
 use crate::code::{
     NoopCommentEditorProvider, NoopFindReferencesCardProvider, ShowCommentEditorProvider,
     ShowFindReferencesCardProvider,
@@ -81,8 +81,8 @@ use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode, FontSettings}
 use crate::view_components::find::FindDirection;
 
 mod actions;
-pub use actions::init;
 pub(super) use actions::CodeEditorViewAction;
+pub use actions::init;
 
 mod vim_handler;
 
@@ -1027,24 +1027,25 @@ impl CodeEditorView {
             }
             FindViewEvent::SelectAll => {
                 // Get all search results from the find model
-                if let Some(results) = self.searcher.as_ref(ctx).results() {
-                    if !results.matches.is_empty() {
-                        // Convert all match ranges to selection offsets
-                        let selection_offsets: Vec<warp_editor::content::buffer::SelectionOffsets> =
-                            results
-                                .matches
-                                .iter()
-                                .map(|match_result| {
-                                    warp_editor::content::buffer::SelectionOffsets {
-                                        head: match_result.end,
-                                        tail: match_result.start,
-                                    }
-                                })
-                                .collect();
+                if let Some(results) = self.searcher.as_ref(ctx).results()
+                    && !results.matches.is_empty()
+                {
+                    // Convert all match ranges to selection offsets
+                    let selection_offsets: Vec<warp_editor::content::buffer::SelectionOffsets> =
+                        results
+                            .matches
+                            .iter()
+                            .map(
+                                |match_result| warp_editor::content::buffer::SelectionOffsets {
+                                    head: match_result.end,
+                                    tail: match_result.start,
+                                },
+                            )
+                            .collect();
 
-                        // Set multiple selections on the editor to highlight all matches
-                        if let Ok(selections) = vec1::Vec1::try_from_vec(selection_offsets) {
-                            self.model.update(ctx, |model, ctx| {
+                    // Set multiple selections on the editor to highlight all matches
+                    if let Ok(selections) = vec1::Vec1::try_from_vec(selection_offsets) {
+                        self.model.update(ctx, |model, ctx| {
                                 model.selection().update(ctx, |selection_model, ctx| {
                                     selection_model.update_selection(
                                         warp_editor::content::buffer::BufferSelectAction::SetSelectionOffsets { selections },
@@ -1053,7 +1054,6 @@ impl CodeEditorView {
                                     );
                                 });
                             });
-                        }
                     }
                 }
                 self.close_find_bar(true, ctx);
@@ -1097,33 +1097,34 @@ impl CodeEditorView {
                     });
                 if !replace_query.is_empty() {
                     // Get all search results from the find model
-                    if let Some(results) = self.searcher.as_ref(ctx).results() {
-                        if !results.matches.is_empty() {
-                            // Convert all match ranges to selection offsets with case preservation
-                            let edits: Vec<(String, Range<CharOffset>)> = results
-                                .matches
-                                .iter()
-                                .map(|match_result| {
-                                    let match_range = Range {
-                                        start: match_result.start,
-                                        end: match_result.end,
-                                    };
+                    if let Some(results) = self.searcher.as_ref(ctx).results()
+                        && !results.matches.is_empty()
+                    {
+                        // Convert all match ranges to selection offsets with case preservation
+                        let edits: Vec<(String, Range<CharOffset>)> = results
+                            .matches
+                            .iter()
+                            .map(|match_result| {
+                                let match_range = Range {
+                                    start: match_result.start,
+                                    end: match_result.end,
+                                };
 
-                                    let final_replace_text = if preserve_case_enabled {
-                                        self.preserve_case(match_range.clone(), &replace_query, ctx)
-                                    } else {
-                                        replace_query.clone()
-                                    };
+                                let final_replace_text = if preserve_case_enabled {
+                                    self.preserve_case(match_range.clone(), &replace_query, ctx)
+                                } else {
+                                    replace_query.clone()
+                                };
 
-                                    (final_replace_text, match_range)
-                                })
-                                .collect();
+                                (final_replace_text, match_range)
+                            })
+                            .collect();
 
-                            if let Ok(edits) = vec1::Vec1::try_from_vec(edits) {
-                                let selection_model =
-                                    self.model.as_ref(ctx).buffer_selection_model().clone();
-                                // Replace selections in the editor with replace query
-                                self.model.update(ctx, |model, ctx| {
+                        if let Ok(edits) = vec1::Vec1::try_from_vec(edits) {
+                            let selection_model =
+                                self.model.as_ref(ctx).buffer_selection_model().clone();
+                            // Replace selections in the editor with replace query
+                            self.model.update(ctx, |model, ctx| {
                                     model.update_content(|mut content_model, ctx| {
                                         content_model.apply_edit(
                                             warp_editor::content::buffer::BufferEditAction::InsertAtCharOffsetRanges { edits: &edits },
@@ -1133,7 +1134,6 @@ impl CodeEditorView {
                                         )
                                     }, ctx);
                                 });
-                            }
                         }
                     }
                 }
@@ -1425,12 +1425,11 @@ impl CodeEditorView {
         self.focus(ctx);
 
         // If there is a hovered symbol range, don't handle the cmd-click.
-        if modifiers.cmd {
-            if let Some(range) = self.model.as_ref(ctx).hovered_symbol_range() {
-                if range.range().contains(&offset) {
-                    return;
-                }
-            }
+        if modifiers.cmd
+            && let Some(range) = self.model.as_ref(ctx).hovered_symbol_range()
+            && range.range().contains(&offset)
+        {
+            return;
         }
 
         let multiselect = modifiers.alt && FeatureFlag::RichTextMultiselect.is_enabled();
@@ -1861,9 +1860,7 @@ impl CodeEditorView {
                     first_replace = if first_replace.is_uppercase() {
                         first_replace
                     } else {
-                        {
-                            first_replace.to_uppercase().next().unwrap_or(first_replace)
-                        }
+                        first_replace.to_uppercase().next().unwrap_or(first_replace)
                     };
                     result.push(first_replace);
                     result.push_str(&replace_chars.collect::<String>().to_lowercase());
@@ -2035,58 +2032,57 @@ impl CodeEditorView {
     /// character on the line as the beam cursor can. We call this "line capping." This helper
     /// method determines if line capping needs to be enforced, and if so, enforces it.
     fn vim_maybe_enforce_cursor_line_cap(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(VimMode::Normal) = self.vim_mode(ctx) {
-            if self.model.as_ref(ctx).vim_needs_line_capping(ctx) {
-                self.model.update(ctx, |model, ctx| {
-                    model.vim_enforce_cursor_line_cap(ctx);
-                });
-            }
+        if let Some(VimMode::Normal) = self.vim_mode(ctx)
+            && self.model.as_ref(ctx).vim_needs_line_capping(ctx)
+        {
+            self.model.update(ctx, |model, ctx| {
+                model.vim_enforce_cursor_line_cap(ctx);
+            });
         }
     }
 
     fn user_insert(&mut self, typed: &str, ctx: &mut ViewContext<Self>) {
         if ctx.is_self_focused() {
-            if let Some(first_char) = typed.chars().next() {
-                if typed.chars().count() == 1 {
-                    let all_cursors_next_character_matches_char =
-                        self.model.update(ctx, |model, ctx| {
-                            model.all_cursors_next_character_matches_char(first_char, ctx)
-                        });
+            if let Some(first_char) = typed.chars().next()
+                && typed.chars().count() == 1
+            {
+                let all_cursors_next_character_matches_char =
+                    self.model.update(ctx, |model, ctx| {
+                        model.all_cursors_next_character_matches_char(first_char, ctx)
+                    });
 
-                    // If the character is a closing symbol, we want to potentially step over it incase it's already a closing symbol.
-                    if CLOSING_SYMBOLS.contains(&first_char)
-                        && all_cursors_next_character_matches_char
-                    {
-                        let buffer = self.model.as_ref(ctx).buffer().as_ref(ctx);
-                        let selection_model =
-                            self.model.as_ref(ctx).buffer_selection_model().as_ref(ctx);
-                        if selection_model.all_single_cursors() {
-                            let selections = selection_model.selection_offsets();
-                            let should_step_over = selections.iter().all(|sel| {
-                                buffer.char_at(sel.head).is_some_and(|c| c == first_char)
-                            });
-                            if should_step_over {
-                                self.model.update(ctx, |model, ctx| {
-                                    model.selection_model().update(ctx, |selection, ctx| {
-                                        selection.update_selection(
-                                            warp_editor::content::buffer::BufferSelectAction::MoveRight,
-                                            warp_editor::content::buffer::AutoScrollBehavior::Selection,
-                                            ctx,
-                                        );
-                                    });
+                // If the character is a closing symbol, we want to potentially step over it incase it's already a closing symbol.
+                if CLOSING_SYMBOLS.contains(&first_char) && all_cursors_next_character_matches_char
+                {
+                    let buffer = self.model.as_ref(ctx).buffer().as_ref(ctx);
+                    let selection_model =
+                        self.model.as_ref(ctx).buffer_selection_model().as_ref(ctx);
+                    if selection_model.all_single_cursors() {
+                        let selections = selection_model.selection_offsets();
+                        let should_step_over = selections
+                            .iter()
+                            .all(|sel| buffer.char_at(sel.head).is_some_and(|c| c == first_char));
+                        if should_step_over {
+                            self.model.update(ctx, |model, ctx| {
+                                model.selection_model().update(ctx, |selection, ctx| {
+                                    selection.update_selection(
+                                        warp_editor::content::buffer::BufferSelectAction::MoveRight,
+                                        warp_editor::content::buffer::AutoScrollBehavior::Selection,
+                                        ctx,
+                                    );
                                 });
-                                return;
-                            }
+                            });
+                            return;
                         }
                     }
+                }
 
-                    // If the character is opening autocomplete symbol, we want to autocomplete it with a closing symbol.
-                    if let Some(close) = AUTOCOMPLETE_SYMBOLS.get(&first_char) {
-                        self.model.update(ctx, |model, ctx| {
-                            model.autocomplete_symbol(first_char, *close, ctx);
-                        });
-                        return;
-                    }
+                // If the character is opening autocomplete symbol, we want to autocomplete it with a closing symbol.
+                if let Some(close) = AUTOCOMPLETE_SYMBOLS.get(&first_char) {
+                    self.model.update(ctx, |model, ctx| {
+                        model.autocomplete_symbol(first_char, *close, ctx);
+                    });
+                    return;
                 }
             }
 
@@ -2297,8 +2293,8 @@ impl View for CodeEditorView {
             let render_state_ref = render_state.as_ref(app);
             let softwrap_point = render_state_ref.offset_to_softwrap_point(*offset);
             let line_number = LineCount::from(softwrap_point.row() as usize + 1); // Convert 0-indexed to 1-indexed
-                                                                                  // Create a simple EditorLineLocation::Current with the line number
-                                                                                  // We don't have hunk range info here, so use a single-line range
+            // Create a simple EditorLineLocation::Current with the line number
+            // We don't have hunk range info here, so use a single-line range
             let anchor_line = EditorLineLocation::Current {
                 line_number,
                 line_range: line_number..line_number + LineCount::from(1),
@@ -2340,10 +2336,10 @@ impl View for CodeEditorView {
         let mut stack = Stack::new()
             .with_constrain_absolute_children()
             .with_child(col.finish());
-        if let Some(find_bar) = &self.find_bar {
-            if find_bar.as_ref(app).is_open() {
-                stack.add_overlay_child(ChildView::new(find_bar).finish());
-            }
+        if let Some(find_bar) = &self.find_bar
+            && find_bar.as_ref(app).is_open()
+        {
+            stack.add_overlay_child(ChildView::new(find_bar).finish());
         }
         if self.goto_line_dialog.as_ref(app).is_open() {
             let dialog = Dismiss::new(ChildView::new(&self.goto_line_dialog).finish())

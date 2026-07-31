@@ -12,21 +12,21 @@ use warp_core::ui::theme::AnsiColorIdentifier;
 use warpui::{ModelContext, SingletonEntity as _, WindowId};
 
 use super::metadata::{
-    pane_entries_for_tabs, tab_entries_for_windows, PaneEntry, TabEntry, WindowEntry,
+    PaneEntry, TabEntry, WindowEntry, pane_entries_for_tabs, tab_entries_for_windows,
 };
 use super::settings_surfaces::{
-    public_theme_name, rejected_setting_key, setting_summary_for_key, ALLOWLISTED_SETTING_KEYS,
+    ALLOWLISTED_SETTING_KEYS, public_theme_name, rejected_setting_key, setting_summary_for_key,
 };
+use crate::WindowSettings;
+use crate::local_control::LocalControlBridge;
 use crate::local_control::handlers::ack;
 use crate::local_control::resolver::{require_active_window_id_for_action, workspace_for_window};
-use crate::local_control::LocalControlBridge;
 use crate::pane_group::PaneId;
 use crate::settings::{AccessibilitySettings, FontSettings, InputSettings, ThemeSettings};
 use crate::tab::SelectedTabColor;
 use crate::themes::theme::{SelectedSystemThemes, ThemeKind};
 use crate::user_config::WarpConfig;
 use crate::window_settings::ZoomLevel;
-use crate::WindowSettings;
 
 pub(crate) fn tab_rename(
     instance_id: &Option<InstanceId>,

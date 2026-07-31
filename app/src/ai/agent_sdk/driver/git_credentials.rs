@@ -348,10 +348,13 @@ async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<()>
         return Ok(());
     }
 
-    if let Err(e) = write_git_credentials(&credentials) {
-        log::warn!("Failed to write refreshed git credentials: {e:#}");
-    } else {
-        log::info!("Git credentials refreshed successfully");
+    match write_git_credentials(&credentials) {
+        Err(e) => {
+            log::warn!("Failed to write refreshed git credentials: {e:#}");
+        }
+        _ => {
+            log::info!("Git credentials refreshed successfully");
+        }
     }
     Ok(())
 }

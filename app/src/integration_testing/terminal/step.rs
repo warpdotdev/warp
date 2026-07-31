@@ -1,16 +1,16 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use warpui::integration::{AssertionOutcome, TestStep};
-use warpui::{async_assert, Event, SingletonEntity};
+use warpui::{Event, SingletonEntity, async_assert};
 
-use super::util::{current_shell_starter_and_version, nonce, ExpectedExitStatus, ExpectedOutput};
+use super::util::{ExpectedExitStatus, ExpectedOutput, current_shell_starter_and_version, nonce};
 use super::{
-    assert_active_block_output_for_single_terminal_in_tab, assert_active_block_received_precmd,
-    assert_alt_grid_active, assert_command_executed,
+    PYTHON_PROMPT_READY, assert_active_block_output_for_single_terminal_in_tab,
+    assert_active_block_received_precmd, assert_alt_grid_active, assert_command_executed,
     assert_long_running_block_executing_for_single_terminal_in_tab, assert_terminal_bootstrapped,
-    validate_block_output, PYTHON_PROMPT_READY,
+    validate_block_output,
 };
 use crate::cmd_or_ctrl_shift;
 use crate::integration_testing::block::assert_num_blocks_in_model;

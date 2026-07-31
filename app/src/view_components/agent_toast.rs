@@ -3,6 +3,7 @@ use std::time::Duration;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use uuid::Uuid;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult,
     DropShadow, EventHandler, Expanded, Flex, Hoverable, Icon, MouseStateHandle, OffsetPositioning,
@@ -10,7 +11,6 @@ use warpui::elements::{
     SavePosition, Stack,
 };
 use warpui::keymap::Keystroke;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Element, Entity, EntityId, SingletonEntity, TypedActionView, View, ViewContext,
@@ -111,10 +111,10 @@ impl AgentToastStack {
 
     /// Cancel the dismissal timeout for a toast
     pub fn cancel_dismissal_timeout(&mut self, uuid: &Uuid) {
-        if let Some(toast_data) = self.toasts.iter_mut().find(|toast| toast.uuid == *uuid) {
-            if let Some(abort_handle) = toast_data.abort_handle.take() {
-                abort_handle.abort();
-            }
+        if let Some(toast_data) = self.toasts.iter_mut().find(|toast| toast.uuid == *uuid)
+            && let Some(abort_handle) = toast_data.abort_handle.take()
+        {
+            abort_handle.abort();
         }
     }
 
@@ -223,14 +223,14 @@ impl TypedActionView for AgentToastStack {
                 {
                     ctx.windows().show_window_and_focus_app(window_id);
 
-                    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-                        if let Some(handle) = workspaces.first() {
-                            ctx.dispatch_typed_action_for_view(
-                                window_id,
-                                handle.id(),
-                                &WorkspaceAction::ActivateTab(tab_id),
-                            );
-                        }
+                    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+                        && let Some(handle) = workspaces.first()
+                    {
+                        ctx.dispatch_typed_action_for_view(
+                            window_id,
+                            handle.id(),
+                            &WorkspaceAction::ActivateTab(tab_id),
+                        );
                     }
                     ctx.dispatch_typed_action_for_view(
                         window_id,
