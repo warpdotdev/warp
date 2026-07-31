@@ -16,7 +16,9 @@ use crate::clipboard::copy_to_clipboard;
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::session_registry::{TuiSessionView, TuiSessions};
 use crate::transient_hint::TransientHint;
-use crate::ui::{login_failed, login_waiting, signed_out_welcome, terminal_starting};
+use crate::ui::{
+    LoginWaitingParams, login_failed, login_waiting, signed_out_welcome, terminal_starting,
+};
 use crate::zero_state_animation::ZeroStateAnimationConfig;
 
 /// Typed actions handled by [`RootTuiView`].
@@ -129,10 +131,12 @@ impl TuiView for RootTuiView {
                 TuiLoginPhase::AwaitingLogin { browser_url } => login_waiting(
                     self.auth_animation_clock,
                     self.auth_animation_config.clone(),
-                    browser_url.as_deref(),
-                    self.waiting_login_mouse.clone(),
-                    self.waiting_login_copy_mouse.clone(),
-                    self.login_copy_hint.current(),
+                    LoginWaitingParams {
+                        browser_url: browser_url.as_deref(),
+                        login_mouse: self.waiting_login_mouse.clone(),
+                        copy_mouse: self.waiting_login_copy_mouse.clone(),
+                        copy_feedback: self.login_copy_hint.current(),
+                    },
                     ctx,
                     {
                         let browser_url = browser_url.clone();

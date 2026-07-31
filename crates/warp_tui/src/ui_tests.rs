@@ -17,8 +17,8 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, EntityId, EntityIdMap};
 
 use super::{
-    compact_footer_path, conversation_restoring, horizontally_centered, login_waiting,
-    signed_out_welcome,
+    LoginWaitingParams, compact_footer_path, conversation_restoring, horizontally_centered,
+    login_waiting, signed_out_welcome,
 };
 use crate::transient_hint::TransientHintTone;
 use crate::zero_state_animation::ZeroStateAnimationConfig;
@@ -62,10 +62,12 @@ fn waiting_login_renders_copy_feedback() {
                     login_waiting(
                         AnimationClock::starting_at(Duration::ZERO),
                         Arc::new(ZeroStateAnimationConfig::default()),
-                        Some(browser_url),
-                        MouseStateHandle::default(),
-                        MouseStateHandle::default(),
-                        Some((message, tone)),
+                        LoginWaitingParams {
+                            browser_url: Some(browser_url),
+                            login_mouse: MouseStateHandle::default(),
+                            copy_mouse: MouseStateHandle::default(),
+                            copy_feedback: Some((message, tone)),
+                        },
                         app_ctx,
                         |_, _| {},
                         |_, _| {},
@@ -193,10 +195,12 @@ fn waiting_login_generated_url_handles_click() {
             let mut element = login_waiting(
                 AnimationClock::starting_at(Duration::ZERO),
                 Arc::new(ZeroStateAnimationConfig::default()),
-                Some(browser_url),
-                MouseStateHandle::default(),
-                MouseStateHandle::default(),
-                None,
+                LoginWaitingParams {
+                    browser_url: Some(browser_url),
+                    login_mouse: MouseStateHandle::default(),
+                    copy_mouse: MouseStateHandle::default(),
+                    copy_feedback: None,
+                },
                 app_ctx,
                 move |_, _| activated_for_click.set(true),
                 |_, _| {},
@@ -261,10 +265,12 @@ fn waiting_login_copy_control_handles_click_and_key() {
             let mut element = login_waiting(
                 AnimationClock::starting_at(Duration::ZERO),
                 Arc::new(ZeroStateAnimationConfig::default()),
-                Some(browser_url),
-                MouseStateHandle::default(),
-                MouseStateHandle::default(),
-                None,
+                LoginWaitingParams {
+                    browser_url: Some(browser_url),
+                    login_mouse: MouseStateHandle::default(),
+                    copy_mouse: MouseStateHandle::default(),
+                    copy_feedback: None,
+                },
                 app_ctx,
                 |_, _| {},
                 move |_, _| copy_count_for_action.set(copy_count_for_action.get() + 1),
@@ -376,10 +382,12 @@ fn waiting_login_renders_actual_browser_url_and_requesting_fallback() {
                     login_waiting(
                         AnimationClock::starting_at(Duration::ZERO),
                         Arc::new(ZeroStateAnimationConfig::default()),
-                        url,
-                        MouseStateHandle::default(),
-                        MouseStateHandle::default(),
-                        None,
+                        LoginWaitingParams {
+                            browser_url: url,
+                            login_mouse: MouseStateHandle::default(),
+                            copy_mouse: MouseStateHandle::default(),
+                            copy_feedback: None,
+                        },
                         app_ctx,
                         |_, _| {},
                         |_, _| {},

@@ -211,18 +211,29 @@ pub(crate) fn signed_out_welcome(
         .finish()
 }
 
+/// Browser interaction state for the waiting login screen.
+pub(crate) struct LoginWaitingParams<'a> {
+    pub(crate) browser_url: Option<&'a str>,
+    pub(crate) login_mouse: MouseStateHandle,
+    pub(crate) copy_mouse: MouseStateHandle,
+    pub(crate) copy_feedback: Option<(&'a str, TransientHintTone)>,
+}
+
 /// Waiting state shown after device authorization starts.
 pub(crate) fn login_waiting(
     clock: AnimationClock,
     animation_config: Arc<ZeroStateAnimationConfig>,
-    browser_url: Option<&str>,
-    login_mouse: MouseStateHandle,
-    copy_mouse: MouseStateHandle,
-    copy_feedback: Option<(&str, TransientHintTone)>,
+    params: LoginWaitingParams<'_>,
     app: &AppContext,
     on_open: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
     on_copy: impl FnMut(&mut TuiEventContext, &AppContext) + Clone + 'static,
 ) -> Box<dyn TuiElement> {
+    let LoginWaitingParams {
+        browser_url,
+        login_mouse,
+        copy_mouse,
+        copy_feedback,
+    } = params;
     let builder = TuiUiBuilder::from_app(app);
     let primary = builder.primary_text_style();
     let muted = builder.muted_text_style();
