@@ -41,12 +41,12 @@ lazy_static! {
     static ref MIN_SUPPORTED_LAVAPIPE_VERSION: Version<'static> = Version::from("24.0.2")
         .expect("should not fail to parse version");
 
-    /// The minimum supported driver version for Vulkan-backed Intel UHD integrated graphics.
+    /// The minimum supported Mesa driver version for Vulkan-backed Intel integrated graphics.
     ///
     /// Some issues we've seen: PLAT-744 and PLAT-599.
     /// Mesa changelog mentions a fix for flickering on Intel UHD:
     /// https://docs.mesa3d.org/relnotes/21.3.6.html#:~:text=Flickering%20Intel%20Uhd%20620%20Graphics
-    static ref MIN_SUPPORTED_INTEL_UHD_VERSION: Version<'static> = Version::from("21.3.6")
+    static ref MIN_SUPPORTED_INTEL_MESA_VERSION: Version<'static> = Version::from("21.3.6")
         .expect("should not fail to parse version");
 
     /// Nvidia drivers version 535 have problems with Wayland window managers, e.g. PLAT-667 and
@@ -469,37 +469,47 @@ fn is_gl_to_metal_adapter_on_windows_in_parallels(adapter_info: &wgpu::AdapterIn
         && adapter_info.name.to_lowercase().starts_with("parallels")
 }
 
-/// Returns whether or not the provided adapter is an unsupported Intel UHD Mesa driver version for
-/// warpui to render properly. Affected adapters include:
-/// - `Intel(R) HD Graphics 620` (KBL GT2) — flickering (PLAT-744)
-/// - `Intel(R) UHD Graphics (ICL GT1)` — stuck at "Starting zsh..." on Mesa 21.2.6 (GH #14325)
-/// - `Intel(R) UHD Graphics (TGL GT1)` — window flashing/flicker on older Mesa (PLAT-599, GH #4533)
+/// Returns whether the provided adapter uses the Mesa open-source Intel driver (ANV for Vulkan,
+/// Iris/i965 for GL).
+fn is_intel_mesa_adapter(adapter_info: &wgpu::AdapterInfo) -> bool {
+    // The Mesa Intel Vulkan driver reports itself as "Intel open-source Mesa driver", so requiring
+    // "Mesa" in the driver name keeps us from misinterpreting non-Mesa (e.g. Windows) Intel driver
+    // version strings as Mesa versions.
+    adapter_info.driver.contains("Mesa")
+        && (adapter_info.driver.contains("Intel") || adapter_info.name.contains("Intel"))
+}
+
+/// Returns whether or not the provided adapter is an Intel integrated GPU running a Mesa Vulkan
+/// driver that is too old for warpui to render properly.
+///
+/// This is keyed off the Mesa version rather than an allowlist of adapter names: every Intel
+/// integrated GPU we've seen fail this way (`Intel(R) HD Graphics 620` (KBL GT2), `Intel(R) UHD
+/// Graphics (ICL GT1)`, `Intel(R) UHD Graphics (TGL GT1)`, `Intel(R) Xe Graphics (TGL GT2)`) has
+/// been on Mesa older than [`MIN_SUPPORTED_INTEL_MESA_VERSION`], and name-based matching kept
+/// missing new Intel graphics families and GT tiers on the exact same broken drivers.
+///
+/// Symptoms range from flickering (PLAT-744, PLAT-599, GH #4533) to a permanently frozen window
+/// caused by every `get_current_texture` call returning a validation error (GH #14325, GH #14577).
+///
+/// Note that this only deprioritizes the adapter: if no other adapter can present to the surface,
+/// we still fall back to using it rather than failing to open a window.
 ///
 /// See the Mesa 21.3.6 changelog for the upstream fix:
 /// <https://docs.mesa3d.org/relnotes/21.3.6.html#:~:text=Flickering%20Intel%20Uhd%20620%20Graphics>
-fn is_older_vulkan_intel_uhd_adapter(adapter_info: &wgpu::AdapterInfo) -> bool {
+fn is_older_vulkan_intel_mesa_adapter(adapter_info: &wgpu::AdapterInfo) -> bool {
     if adapter_info.backend != wgpu::Backend::Vulkan
         || adapter_info.device_type != wgpu::DeviceType::IntegratedGpu
     {
         return false;
     }
 
-    let affected_names = [
-        "Intel(R) HD Graphics 620",
-        "Intel(R) UHD Graphics (ICL GT1)",
-        "Intel(R) UHD Graphics (TGL GT1)",
-    ];
-
-    if !affected_names
-        .iter()
-        .any(|name| adapter_info.name.contains(name))
-    {
+    if !is_intel_mesa_adapter(adapter_info) {
         return false;
     }
 
     mesa_driver_version_is_below_minimum(
         &adapter_info.driver_info,
-        &MIN_SUPPORTED_INTEL_UHD_VERSION,
+        &MIN_SUPPORTED_INTEL_MESA_VERSION,
     )
 }
 
@@ -753,8 +763,22 @@ fn adapter_stability_sort_func(
     windowing_system: Option<windowing::System>,
     downrank_non_nvidia_vulkan_adapters: bool,
 ) -> AdapterSupport {
-    let adapter_info = adapter.get_info();
+    adapter_support(
+        &adapter.get_info(),
+        windowing_system,
+        downrank_non_nvidia_vulkan_adapters,
+    )
+}
 
+/// Computes the [`AdapterSupport`] level for the given adapter info.
+///
+/// This is split out from [`adapter_stability_sort_func`] so that it can be unit tested without a
+/// real GPU adapter.
+fn adapter_support(
+    adapter_info: &wgpu::AdapterInfo,
+    windowing_system: Option<windowing::System>,
+    downrank_non_nvidia_vulkan_adapters: bool,
+) -> AdapterSupport {
     let window_server_is_wayland = matches!(
         windowing_system,
         Some(windowing::System::Wayland) | Some(windowing::System::X11 { is_x_wayland: true })
@@ -762,7 +786,7 @@ fn adapter_stability_sort_func(
 
     if downrank_non_nvidia_vulkan_adapters
         && adapter_info.backend == Backend::Vulkan
-        && !is_vulkan_nvidia_adapter(&adapter_info)
+        && !is_vulkan_nvidia_adapter(adapter_info)
     {
         log::info!(
             "Deprioritizing non-NVIDIA Vulkan adapter (the PRIME performance profile is likely enabled)"
@@ -770,37 +794,37 @@ fn adapter_stability_sort_func(
         return AdapterSupport::Unsupported;
     }
 
-    if is_v3d_vulkan_adapter(&adapter_info) {
+    if is_v3d_vulkan_adapter(adapter_info) {
         log::warn!("Deprioritizing Vulkan-backed V3D adapter");
         return AdapterSupport::Unsupported;
     }
 
-    if is_intel_uhd_620_adapter_on_windows_with_vulkan_backend(&adapter_info) {
+    if is_intel_uhd_620_adapter_on_windows_with_vulkan_backend(adapter_info) {
         log::warn!("Deprioritizing Vulkan-backed Intel UHD 620 adapter");
         return AdapterSupport::SupportedWithIssues;
     }
 
-    if is_intel_uhd_770_adapter_on_windows(&adapter_info) {
+    if is_intel_uhd_770_adapter_on_windows(adapter_info) {
         log::warn!("Deprioritizing Intel UHD 770 integrated GPU on Windows");
         return AdapterSupport::SupportedWithIssues;
     }
 
-    if is_older_vulkan_intel_uhd_adapter(&adapter_info) {
+    if is_older_vulkan_intel_mesa_adapter(adapter_info) {
         log::warn!(
-            "Deprioritizing Vulkan-backed Intel UHD adapter due to Mesa < {} (unsupported)",
-            *MIN_SUPPORTED_INTEL_UHD_VERSION
+            "Deprioritizing Vulkan-backed Intel adapter due to Mesa < {} (unsupported)",
+            *MIN_SUPPORTED_INTEL_MESA_VERSION
         );
         AdapterSupport::SupportedWithIssues
     }
     // Deprioritize older lavapipe adapters where we have evidence that they are less stable.
-    else if is_older_lavapipe_adapter(&adapter_info) {
+    else if is_older_lavapipe_adapter(adapter_info) {
         log::warn!(
             "Deprioritizing Vulkan-backed llvmpipe adapter due to Mesa < {} (unsupported)",
             *MIN_SUPPORTED_LAVAPIPE_VERSION
         );
         AdapterSupport::Unsupported
     // Same with Nvidia drivers, though this is only an issue with a Wayland window server.
-    } else if window_server_is_wayland && is_older_nvidia_adapter(&adapter_info) {
+    } else if window_server_is_wayland && is_older_nvidia_adapter(adapter_info) {
         log::warn!(
             "Deprioritizing Vulkan-backed Nvidia adapter due to version < {} (unsupported).\nSee \
             the \"Graphics\" secion of our docs here: \
@@ -808,7 +832,7 @@ fn adapter_stability_sort_func(
             *MIN_SUPPORTED_NVIDIA_VERSION
         );
         AdapterSupport::Unsupported
-    } else if is_newer_nondx12_nvidia_adapter_on_windows(&adapter_info) {
+    } else if is_newer_nondx12_nvidia_adapter_on_windows(adapter_info) {
         log::warn!(
             "Deprioritizing non DX12 Nvidia adapter due to version > {} (unsupported). Newer NVIDIA \
             drivers can crash if multiple windows are created if the `Vulkan / OpenGL Present Method\
@@ -816,7 +840,7 @@ fn adapter_stability_sort_func(
             *MAX_SUPPORTED_NVIDIA_VERSION_ON_WINDOWS
         );
         AdapterSupport::SupportedWithIssues
-    } else if is_gl_to_metal_adapter_on_windows_in_parallels(&adapter_info) {
+    } else if is_gl_to_metal_adapter_on_windows_in_parallels(adapter_info) {
         log::warn!("Deprioritizing integrated OpenGL Windows Parallels adapter.");
         AdapterSupport::SupportedWithIssues
     } else {
