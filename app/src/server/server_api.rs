@@ -12,6 +12,8 @@ pub mod object;
 pub(crate) mod presigned_upload;
 pub mod referral;
 pub mod team;
+#[cfg(feature = "tui")]
+pub mod tui_onboarding;
 pub mod workspace;
 
 use std::ops::Deref;
@@ -35,6 +37,8 @@ use referral::ReferralsClient;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use team::TeamClient;
+#[cfg(feature = "tui")]
+use tui_onboarding::TuiOnboardingClient;
 use url::Url;
 use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent;
@@ -1363,6 +1367,10 @@ impl ServerApiProvider {
     }
 
     pub fn get_team_client(&self) -> Arc<dyn TeamClient> {
+        self.server_api.clone()
+    }
+    #[cfg(feature = "tui")]
+    pub fn get_tui_onboarding_client(&self) -> Arc<dyn TuiOnboardingClient> {
         self.server_api.clone()
     }
 

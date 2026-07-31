@@ -700,7 +700,7 @@ fn terminal_screen_lifecycle_toggles_bracketed_paste() {
     );
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, true).unwrap();
+    leave_terminal_screen(&mut leave_output).unwrap();
     assert!(
         leave_output
             .windows(b"\x1b[?2004l".len())
@@ -721,7 +721,7 @@ fn terminal_screen_lifecycle_toggles_focus_reporting() {
     );
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, true).unwrap();
+    leave_terminal_screen(&mut leave_output).unwrap();
     assert!(
         leave_output
             .windows(b"\x1b[?1004l".len())
@@ -771,7 +771,7 @@ fn terminal_screen_lifecycle_toggles_keyboard_enhancement() {
     enter_terminal_screen(&mut enter_output, true, true).unwrap();
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, true).unwrap();
+    leave_terminal_screen(&mut leave_output).unwrap();
 
     #[cfg(not(windows))]
     {
@@ -824,22 +824,63 @@ fn terminal_screen_lifecycle_reconfigures_modifier_reporting() {
 }
 
 #[test]
-fn terminal_screen_lifecycle_skips_unsupported_keyboard_enhancement() {
+fn terminal_screen_lifecycle_uses_baseline_keyboard_enhancement_when_unconfirmed() {
     let mut enter_output = Vec::new();
     enter_terminal_screen(&mut enter_output, false, true).unwrap();
-    assert!(
-        !enter_output
-            .windows(b"\x1b[>15u".len())
-            .any(|window| window == b"\x1b[>15u")
-    );
+
+    #[cfg(not(windows))]
+    {
+        assert!(
+            enter_output
+                .windows(b"\x1b[>3u".len())
+                .any(|window| window == b"\x1b[>3u"),
+            "unconfirmed terminals should still receive safe baseline keyboard enhancements"
+        );
+        assert!(
+            !enter_output
+                .windows(b"\x1b[>15u".len())
+                .any(|window| window == b"\x1b[>15u"),
+            "unconfirmed terminals should not receive all-key reporting"
+        );
+    }
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, false).unwrap();
+    leave_terminal_screen(&mut leave_output).unwrap();
+    #[cfg(not(windows))]
     assert!(
-        !leave_output
+        leave_output
             .windows(b"\x1b[<1u".len())
-            .any(|window| window == b"\x1b[<1u")
+            .any(|window| window == b"\x1b[<1u"),
+        "leaving should pop the baseline keyboard enhancement request"
     );
+}
+
+#[test]
+fn keyboard_enhancement_probe_retries_a_negative_result_once() {
+    let mut results = VecDeque::from([Ok(false), Ok(true)]);
+    assert!(probe_keyboard_enhancement_support(|| {
+        results.pop_front().expect("probe should run at most twice")
+    }));
+    assert!(results.is_empty());
+}
+
+#[test]
+fn keyboard_enhancement_probe_does_not_retry_success_or_error() {
+    let mut successful_results = VecDeque::from([Ok(true), Ok(false)]);
+    assert!(probe_keyboard_enhancement_support(|| {
+        successful_results
+            .pop_front()
+            .expect("successful probe should run once")
+    }));
+    assert_eq!(successful_results.len(), 1);
+
+    let mut failed_results = VecDeque::from([Err(io::Error::other("probe failed")), Ok(true)]);
+    assert!(!probe_keyboard_enhancement_support(|| {
+        failed_results
+            .pop_front()
+            .expect("failed probe should run once")
+    }));
+    assert_eq!(failed_results.len(), 1);
 }
 #[test]
 fn raw_mode_guard_restores_on_drop() {

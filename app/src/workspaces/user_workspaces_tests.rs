@@ -2,6 +2,30 @@ use std::time::Duration;
 
 use mockall::Sequence;
 use settings::{PrivatePreferences, PublicPreferences};
+use warp_graphql::billing::{
+    BillingMetadata as GqlBillingMetadata, BonusGrantsInfo as GqlBonusGrantsInfo,
+    CustomerType as GqlCustomerType, DelinquencyStatus as GqlDelinquencyStatus,
+    PurchaseAddOnCreditsPolicy as GqlPurchaseAddOnCreditsPolicy, Tier as GqlTier,
+};
+use warp_graphql::queries::get_workspaces_metadata_for_user::{
+    User as GqlUser, UserProfile as GqlUserProfile, UserPurchasePolicyBillingMetadata,
+    UserPurchasePolicyTier,
+};
+use warp_graphql::workspace::{
+    AddonCreditsSettings as GqlAddonCreditsSettings,
+    AdminEnablementSetting as GqlAdminEnablementSetting,
+    AiAutonomySettings as GqlAiAutonomySettings, AiPermissionsSettings as GqlAiPermissionsSettings,
+    AvailableLlms as GqlAvailableLlms,
+    CloudConversationStorageSettings as GqlCloudConversationStorageSettings,
+    CodebaseContextSettings as GqlCodebaseContextSettings,
+    FeatureModelChoice as GqlFeatureModelChoice, LinkSharingSettings as GqlLinkSharingSettings,
+    LlmSettings as GqlLlmSettings, SecretRedactionSettings as GqlSecretRedactionSettings,
+    TelemetrySettings as GqlTelemetrySettings,
+    UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting,
+    UgcCollectionSettings as GqlUgcCollectionSettings,
+    UsageBasedPricingSettings as GqlUsageBasedPricingSettings, Workspace as GqlWorkspace,
+    WorkspaceSettings as GqlWorkspaceSettings,
+};
 use warpui::{AddSingletonModel, App, WindowId};
 use warpui_extras::user_preferences;
 
@@ -23,13 +47,14 @@ use crate::settings::{AISettings, CodeSettings, FocusedTerminalInfo};
 use crate::system::SystemStats;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
+use crate::workspaces::gql_convert::PLACEHOLDER_WORKSPACE_UID;
 use crate::workspaces::team::Team;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AdminEnablementSetting, CodebaseContextSettings, HostEnablementSetting, LlmHostSettings,
-    Workspace,
+    PurchaseAddOnCreditsPolicy, Workspace,
 };
 
 #[derive(Default)]
@@ -167,6 +192,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         joinable_teams: vec![],
                         experiments: None,
                         feature_model_choices: None,
+                        user_purchase_policy: None,
                     },
                     pricing_info: None,
                 })
@@ -184,6 +210,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         joinable_teams: vec![],
                         experiments: None,
                         feature_model_choices: None,
+                        user_purchase_policy: None,
                     },
                     pricing_info: None,
                 })
@@ -321,6 +348,7 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
                 joinable_teams: vec![],
                 experiments: None,
                 feature_model_choices: None,
+                user_purchase_policy: None,
             },
             pricing_info: None,
         })
@@ -377,6 +405,7 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
                 joinable_teams: vec![],
                 experiments: None,
                 feature_model_choices: None,
+                user_purchase_policy: None,
             },
             pricing_info: None,
         })
@@ -1388,6 +1417,466 @@ fn test_leaving_team_moves_objects() {
                 .unwrap()
                 .space(ctx);
             assert_eq!(space, Space::Shared);
+        });
+    })
+}
+
+#[test]
+fn test_team_billing_metadata_prefers_team_over_workspace() {
+    let mut team = team_for_test();
+    team.billing_metadata.customer_type = CustomerType::Build;
+    let mut workspace = workspace_for_test(&team);
+    workspace.billing_metadata.customer_type = CustomerType::Free;
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let team = user_workspaces.team_from_uid(123.into());
+            assert!(team.is_some(), "test team should exist");
+            assert_eq!(
+                user_workspaces
+                    .team_billing_metadata(team)
+                    .map(|billing| billing.customer_type),
+                Some(CustomerType::Build),
+                "the team's billing metadata should win when a team exists"
+            );
+            assert_eq!(
+                user_workspaces
+                    .team_billing_metadata(None)
+                    .map(|billing| billing.customer_type),
+                Some(CustomerType::Free),
+                "the workspace's billing metadata should be used without a team"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_team_billing_metadata_enables_teamless_premium_purchases() {
+    let team = team_for_test();
+    let mut workspace = workspace_for_test(&team);
+    workspace.teams.clear();
+    workspace
+        .billing_metadata
+        .tier
+        .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy {
+        enabled: false,
+        premium_enabled: true,
+        price_premium_bps: 1000,
+    });
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(!user_workspaces.has_teams(), "user should be teamless");
+            let billing = user_workspaces.team_billing_metadata(None);
+            assert!(
+                billing.is_some_and(|billing| billing.is_purchase_add_on_credits_policy_enabled()),
+                "premiumEnabled on the workspace policy should enable purchases without a team"
+            );
+            assert_eq!(
+                billing.map_or(0, |billing| billing.addon_credits_price_premium_bps()),
+                1000
+            );
+        });
+    })
+}
+
+#[test]
+fn test_team_billing_metadata_disabled_policy_stays_disabled_without_team() {
+    let team = team_for_test();
+    let mut workspace = workspace_for_test(&team);
+    workspace.teams.clear();
+    workspace
+        .billing_metadata
+        .tier
+        .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy {
+        enabled: false,
+        premium_enabled: false,
+        price_premium_bps: 0,
+    });
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            let billing = UserWorkspaces::as_ref(ctx).team_billing_metadata(None);
+            assert!(
+                !billing.is_some_and(|billing| billing.is_purchase_add_on_credits_policy_enabled()),
+                "a fully disabled policy should keep purchases disabled without a team"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_purchase_addon_credits_forwards_teamless_team_uid() {
+    App::test((), |mut app| async move {
+        let mut workspace_client = MockWorkspaceClient::new();
+        workspace_client
+            .expect_purchase_addon_credits()
+            .withf(|team_uid, credits| team_uid.is_none() && *credits == 1_000)
+            .times(1)
+            .returning(|_, _| {
+                Ok(PurchaseAddonCreditsOutcome::CheckoutRequired {
+                    checkout_url: "https://example.com/checkout".to_string(),
+                })
+            });
+
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(workspace_client),
+                vec![],
+                ctx,
+            )
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.purchase_addon_credits(None, 1_000, ctx);
+        });
+
+        // Give the spawned client call time to run so the mock expectation is
+        // exercised before the test ends.
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+    })
+}
+
+#[test]
+fn test_purchase_addon_credits_forwards_team_uid_when_present() {
+    App::test((), |mut app| async move {
+        let mut workspace_client = MockWorkspaceClient::new();
+        workspace_client
+            .expect_purchase_addon_credits()
+            .withf(|team_uid, credits| *team_uid == Some(123.into()) && *credits == 2_000)
+            .times(1)
+            .returning(|_, _| {
+                Ok(PurchaseAddonCreditsOutcome::CheckoutRequired {
+                    checkout_url: "https://example.com/checkout".to_string(),
+                })
+            });
+
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(workspace_client),
+                vec![],
+                ctx,
+            )
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.purchase_addon_credits(Some(123.into()), 2_000, ctx);
+        });
+
+        // Give the spawned client call time to run so the mock expectation is
+        // exercised before the test ends.
+        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
+    })
+}
+
+fn gql_tier(purchase_policy: Option<GqlPurchaseAddOnCreditsPolicy>) -> GqlTier {
+    GqlTier {
+        name: "Free".to_string(),
+        description: "Free tier".to_string(),
+        warp_ai_policy: None,
+        team_size_policy: None,
+        shared_notebooks_policy: None,
+        shared_workflows_policy: None,
+        session_sharing_policy: None,
+        ai_autonomy_policy: None,
+        telemetry_data_collection_policy: None,
+        ugc_data_collection_policy: None,
+        usage_based_pricing_policy: None,
+        codebase_context_policy: None,
+        byo_api_key_policy: None,
+        byo_endpoint_policy: None,
+        managed_byok_byoe_policy: None,
+        purchase_add_on_credits_policy: purchase_policy,
+        enterprise_pay_as_you_go_policy: None,
+        enterprise_credits_auto_reload_policy: None,
+        multi_admin_policy: None,
+        ambient_agents_policy: None,
+        usage_visibility_policy: None,
+    }
+}
+
+fn gql_workspace(
+    uid: &str,
+    purchase_policy: Option<GqlPurchaseAddOnCreditsPolicy>,
+) -> GqlWorkspace {
+    let empty_llms = GqlAvailableLlms {
+        default_id: String::new(),
+        choices: vec![],
+        preferred_codex_model_id: None,
+    };
+    GqlWorkspace {
+        uid: uid.into(),
+        name: "workspace".to_string(),
+        stripe_customer_id: None,
+        members: vec![],
+        teams: vec![],
+        billing_metadata: GqlBillingMetadata {
+            customer_type: GqlCustomerType::Free,
+            delinquency_status: GqlDelinquencyStatus::NoDelinquency,
+            tier: gql_tier(purchase_policy),
+            service_agreements: vec![],
+            ai_overages: None,
+        },
+        bonus_grants_info: GqlBonusGrantsInfo {
+            grants: vec![],
+            spending_info: None,
+        },
+        billing_cycle_usage_history: None,
+        settings: GqlWorkspaceSettings {
+            is_discoverable: false,
+            is_invite_link_enabled: false,
+            llm_settings: GqlLlmSettings {
+                enabled: false,
+                host_configs: vec![],
+            },
+            team_byo: None,
+            telemetry_settings: GqlTelemetrySettings {
+                force_enabled: false,
+            },
+            ugc_collection_settings: GqlUgcCollectionSettings {
+                setting: GqlUgcCollectionEnablementSetting::RespectUserSetting,
+            },
+            cloud_conversation_storage_settings: GqlCloudConversationStorageSettings {
+                setting: GqlAdminEnablementSetting::RespectUserSetting,
+            },
+            ai_permissions_settings: GqlAiPermissionsSettings {
+                allow_ai_in_remote_sessions: true,
+                remote_session_regex_list: vec![],
+            },
+            link_sharing_settings: GqlLinkSharingSettings {
+                anyone_with_link_sharing_enabled: true,
+                direct_link_sharing_enabled: true,
+            },
+            secret_redaction_settings: GqlSecretRedactionSettings {
+                enabled: false,
+                regexes: vec![],
+            },
+            ai_autonomy_settings: GqlAiAutonomySettings {
+                apply_code_diffs_setting: None,
+                read_files_setting: None,
+                read_files_allowlist: None,
+                create_plans_setting: None,
+                execute_commands_setting: None,
+                execute_commands_allowlist: None,
+                execute_commands_denylist: None,
+                write_to_pty_setting: None,
+                computer_use_setting: None,
+            },
+            usage_based_pricing_settings: GqlUsageBasedPricingSettings {
+                enabled: false,
+                max_monthly_spend_cents: None,
+            },
+            addon_credits_settings: GqlAddonCreditsSettings {
+                auto_reload_enabled: false,
+                max_monthly_spend_cents: None,
+                selected_auto_reload_credit_denomination: None,
+            },
+            codebase_context_settings: GqlCodebaseContextSettings {
+                enabled: true,
+                setting: GqlAdminEnablementSetting::RespectUserSetting,
+            },
+            sandboxed_agent_settings: None,
+            ambient_agent_settings: None,
+        },
+        has_billing_history: false,
+        invite_code: None,
+        pending_email_invites: vec![],
+        invite_link_domain_restrictions: vec![],
+        is_eligible_for_discovery: false,
+        feature_model_choice: GqlFeatureModelChoice {
+            agent_mode: empty_llms.clone(),
+            planning: empty_llms.clone(),
+            coding: empty_llms.clone(),
+            cli_agent: empty_llms.clone(),
+            computer_use_agent: empty_llms,
+        },
+        total_requests_used_since_last_refresh: 0,
+    }
+}
+
+fn gql_premium_purchase_policy() -> GqlPurchaseAddOnCreditsPolicy {
+    GqlPurchaseAddOnCreditsPolicy {
+        enabled: false,
+        premium_enabled: true,
+        price_premium_bps: 1000,
+    }
+}
+
+fn gql_user(
+    user_purchase_policy: Option<GqlPurchaseAddOnCreditsPolicy>,
+    workspaces: Vec<GqlWorkspace>,
+) -> GqlUser {
+    GqlUser {
+        profile: GqlUserProfile {
+            uid: "test-user".to_string(),
+        },
+        billing_metadata: user_purchase_policy.map(|policy| UserPurchasePolicyBillingMetadata {
+            tier: UserPurchasePolicyTier {
+                purchase_add_on_credits_policy: Some(policy),
+            },
+        }),
+        workspaces,
+        experiments: None,
+        discoverable_teams: vec![],
+    }
+}
+
+#[test]
+fn test_user_level_policy_survives_placeholder_filtering_for_teamless_users() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+
+        // The real conversion path: a teamless user's ONLY workspace is the
+        // placeholder, which must stay filtered out of `workspaces`, while
+        // the user-level purchase policy is captured separately.
+        let response: WorkspacesMetadataResponse = gql_user(
+            Some(gql_premium_purchase_policy()),
+            vec![gql_workspace(PLACEHOLDER_WORKSPACE_UID, None)],
+        )
+        .into();
+        assert!(
+            response.workspaces.is_empty(),
+            "the placeholder workspace must stay filtered out"
+        );
+        assert_eq!(
+            response.user_purchase_policy,
+            Some(PurchaseAddOnCreditsPolicy {
+                enabled: false,
+                premium_enabled: true,
+                price_premium_bps: 1000,
+            })
+        );
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.on_workspaces_updated(
+                Ok(WorkspacesMetadataWithPricing {
+                    metadata: response,
+                    pricing_info: None,
+                }),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                user_workspaces.current_workspace().is_none(),
+                "teamless users keep having no workspace"
+            );
+            let policy = user_workspaces.purchase_policy();
+            assert!(
+                policy.is_some_and(|policy| policy.allows_purchases()),
+                "the user-level policy should enable purchases without a team or workspace"
+            );
+            assert_eq!(
+                policy.map_or(0, |policy| policy.effective_premium_bps()),
+                1000
+            );
+        });
+    })
+}
+
+#[test]
+fn test_workspace_policy_wins_over_user_level_policy() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+
+        let standard_policy = GqlPurchaseAddOnCreditsPolicy {
+            enabled: true,
+            premium_enabled: false,
+            price_premium_bps: 0,
+        };
+        let response: WorkspacesMetadataResponse = gql_user(
+            Some(gql_premium_purchase_policy()),
+            vec![
+                gql_workspace(PLACEHOLDER_WORKSPACE_UID, None),
+                gql_workspace("workspace_uid123456789", Some(standard_policy)),
+            ],
+        )
+        .into();
+        assert_eq!(response.workspaces.len(), 1);
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.on_workspaces_updated(
+                Ok(WorkspacesMetadataWithPricing {
+                    metadata: response,
+                    pricing_info: None,
+                }),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            let policy = UserWorkspaces::as_ref(ctx).purchase_policy();
+            assert_eq!(
+                policy.map(|policy| policy.enabled),
+                Some(true),
+                "a real workspace's policy should win over the user-level fallback"
+            );
+            assert_eq!(
+                policy.map_or(-1, |policy| policy.effective_premium_bps()),
+                0
+            );
+        });
+    })
+}
+
+#[test]
+fn test_team_policy_wins_over_workspace_and_user_policy() {
+    let mut team = team_for_test();
+    team.billing_metadata.tier.purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy {
+        enabled: true,
+        premium_enabled: false,
+        price_premium_bps: 0,
+    });
+    let mut workspace = workspace_for_test(&team);
+    workspace
+        .billing_metadata
+        .tier
+        .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy {
+        enabled: false,
+        premium_enabled: true,
+        price_premium_bps: 1000,
+    });
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, _| {
+            user_workspaces.set_user_purchase_policy(Some(PurchaseAddOnCreditsPolicy {
+                enabled: false,
+                premium_enabled: true,
+                price_premium_bps: 2000,
+            }));
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let team = user_workspaces.team_from_uid(123.into());
+            assert_eq!(
+                user_workspaces
+                    .purchase_policy_for_team(team)
+                    .map(|policy| policy.enabled),
+                Some(true),
+                "the team's policy should win over workspace and user legs"
+            );
+            // Without a team, the workspace's policy still beats the user leg.
+            assert_eq!(
+                user_workspaces
+                    .purchase_policy()
+                    .map_or(0, |policy| policy.effective_premium_bps()),
+                1000
+            );
         });
     })
 }

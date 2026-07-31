@@ -93,6 +93,22 @@ fn set_addon_credits_pricing_info(app: &mut App) {
     });
 }
 
+fn standard_purchase_policy() -> PurchaseAddOnCreditsPolicy {
+    PurchaseAddOnCreditsPolicy {
+        enabled: true,
+        premium_enabled: false,
+        price_premium_bps: 0,
+    }
+}
+
+fn premium_purchase_policy() -> PurchaseAddOnCreditsPolicy {
+    PurchaseAddOnCreditsPolicy {
+        enabled: false,
+        premium_enabled: true,
+        price_premium_bps: 1000,
+    }
+}
+
 fn enable_auto_reload(workspace: &mut Workspace) {
     workspace
         .settings
@@ -239,7 +255,7 @@ fn test_buy_credits_banner_shows_with_only_ambient_bonus_credits() {
         workspace
             .billing_metadata
             .tier
-            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+            .purchase_add_on_credits_policy = Some(standard_purchase_policy());
 
         add_user_workspaces_with_workspace(&mut app, workspace);
         let request_usage_model = add_request_usage_model(&mut app);
@@ -267,13 +283,74 @@ fn test_buy_credits_banner_shows_with_only_ambient_bonus_credits() {
 }
 
 #[test]
+fn test_buy_credits_banner_shows_for_premium_enabled_plan_out_of_credits() {
+    App::test((), |mut app| async move {
+        // The test workspace has no teams: this covers the teamless fresh
+        // free user, whose purchase policy lives on the workspace billing
+        // metadata until their first purchase creates a team server-side.
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(premium_purchase_policy());
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            assert!(
+                !UserWorkspaces::as_ref(ctx).has_teams(),
+                "this test covers the teamless case"
+            );
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert_eq!(
+                model.compute_buy_addon_credits_banner_display_state(ctx),
+                BuyCreditsBannerDisplayState::OutOfCredits,
+            );
+        });
+    });
+}
+
+#[test]
+fn test_buy_credits_banner_hidden_when_policy_fully_disabled() {
+    App::test((), |mut app| async move {
+        // Also a teamless workspace: without premiumEnabled the purchase
+        // surfaces must stay hidden for fresh free users.
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy {
+            enabled: false,
+            premium_enabled: false,
+            price_premium_bps: 0,
+        });
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert_eq!(
+                model.compute_buy_addon_credits_banner_display_state(ctx),
+                BuyCreditsBannerDisplayState::Hidden,
+            );
+        });
+    });
+}
+
+#[test]
 fn test_buy_credits_banner_hidden_with_non_ambient_bonus_credits() {
     App::test((), |mut app| async move {
         let (_uid, mut workspace) = create_test_workspace();
         workspace
             .billing_metadata
             .tier
-            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+            .purchase_add_on_credits_policy = Some(standard_purchase_policy());
 
         add_user_workspaces_with_workspace(&mut app, workspace);
         let request_usage_model = add_request_usage_model(&mut app);
@@ -307,7 +384,7 @@ fn test_buy_credits_banner_shows_when_non_ambient_bonus_credits_are_depleted() {
         workspace
             .billing_metadata
             .tier
-            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+            .purchase_add_on_credits_policy = Some(standard_purchase_policy());
 
         add_user_workspaces_with_workspace(&mut app, workspace);
         let request_usage_model = add_request_usage_model(&mut app);
@@ -568,7 +645,7 @@ fn test_has_any_ai_remaining_true_with_self_serve_auto_reload() {
         workspace
             .billing_metadata
             .tier
-            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+            .purchase_add_on_credits_policy = Some(standard_purchase_policy());
         enable_auto_reload(&mut workspace);
 
         add_user_workspaces_with_workspace(&mut app, workspace);
@@ -588,6 +665,65 @@ fn test_has_any_ai_remaining_true_with_self_serve_auto_reload() {
 }
 
 #[test]
+fn test_has_any_ai_remaining_true_with_premium_auto_reload() {
+    App::test((), |mut app| async move {
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(premium_purchase_policy());
+        enable_auto_reload(&mut workspace);
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+        set_addon_credits_pricing_info(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be true when premium-plan auto-reload is enabled",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_has_any_ai_remaining_false_when_premium_auto_reload_would_exceed_limit() {
+    App::test((), |mut app| async move {
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(premium_purchase_policy());
+        enable_auto_reload(&mut workspace);
+        // The reload's list price is $10.00 but the premium price is $11.00;
+        // a $10.50 monthly limit only blocks the reload when the premium
+        // surcharge is included in the check.
+        workspace
+            .settings
+            .addon_credits_settings
+            .max_monthly_spend_cents = Some(1050);
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+        set_addon_credits_pricing_info(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                !model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be false when the premium-priced reload would exceed the monthly spend limit",
+            );
+        });
+    });
+}
+
+#[test]
 fn test_has_any_ai_remaining_true_with_self_serve_auto_reload_and_billing_v2_disabled() {
     App::test((), |mut app| async move {
         let _guard = FeatureFlag::BillingAndUsagePageV2.override_enabled(false);
@@ -596,7 +732,7 @@ fn test_has_any_ai_remaining_true_with_self_serve_auto_reload_and_billing_v2_dis
         workspace
             .billing_metadata
             .tier
-            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+            .purchase_add_on_credits_policy = Some(standard_purchase_policy());
         enable_auto_reload(&mut workspace);
 
         add_user_workspaces_with_workspace(&mut app, workspace);
@@ -622,7 +758,7 @@ fn test_has_any_ai_remaining_false_with_add_on_credits_policy_when_purchase_woul
         workspace
             .billing_metadata
             .tier
-            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+            .purchase_add_on_credits_policy = Some(standard_purchase_policy());
         enable_auto_reload(&mut workspace);
         workspace
             .settings

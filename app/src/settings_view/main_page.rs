@@ -659,11 +659,7 @@ impl SettingsWidget for AccountWidget {
         };
 
         Flex::column()
-            .with_child(
-                Container::new(account_info)
-                    .with_margin_top(VERTICAL_MARGIN)
-                    .finish(),
-            )
+            .with_child(Container::new(account_info).finish())
             .finish()
     }
 }

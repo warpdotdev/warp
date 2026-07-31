@@ -106,6 +106,7 @@ arboard = { workspace = true }
 arboard = { workspace = true, features = ["wayland-data-control"] }
 
 [dev-dependencies]
+criterion = { version = "0.5.1", features = ["html_reports"] }
 tempfile.workspace = true
 # `test-util` exposes `Appearance::mock()`, used to register the `Appearance`
 # singleton that the editor-backed TUI input view depends on in tests.
@@ -117,8 +118,14 @@ warp_editor = { workspace = true, features = ["test-util"] }
 command.workspace = true
 pathfinder_color.workspace = true
 warp = { workspace = true, features = ["tui", "test-util"] }
+[[bench]]
+name = "transcript_bench"
+harness = false
+required-features = ["test-util"]
 
 [features]
+# Exposes deterministic, production-shaped transcript fixtures to benchmarks.
+test-util = ["warp/test-util", "warp_core/test-util"]
 # Declared so the `warp_channel_config::load_config!` macro's
 # `cfg(feature = "release_bundle")` branch is a known cfg in this crate. Today it
 # stays off and the local bin uses the runtime generator; wiring the embedded

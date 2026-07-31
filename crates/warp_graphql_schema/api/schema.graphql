@@ -855,6 +855,8 @@ type ConversationUsageMetadata {
 
   """The total number of platform credits spent so far in the conversation."""
   platformCreditsSpent: Float!
+  """The cumulative provider cost in US cents, when available."""
+  totalProviderCostInCents: Float
   summarized: Boolean!
 
   """
@@ -2703,19 +2705,32 @@ type PullRequestArtifact {
 
 type PurchaseAddOnCreditsPolicy {
   enabled: Boolean!
+  premiumEnabled: Boolean!
+  pricePremiumBps: Int!
+}
+
+"""
+The purchase could not be charged synchronously because the customer has no
+saved payment method. The user must complete the purchase in the browser at
+`checkoutUrl`; credits are granted via webhook after checkout completes.
+"""
+type PurchaseAddonCreditsCheckoutOutput implements Response {
+  checkoutUrl: String!
+  responseContext: ResponseContext!
 }
 
 input PurchaseAddonCreditsInput {
   credits: Int!
-  teamUid: ID!
+  teamUid: ID
 }
 
+"""The purchase was charged synchronously and credits were granted."""
 type PurchaseAddonCreditsOutput implements Response {
   responseContext: ResponseContext!
   success: Boolean!
 }
 
-union PurchaseAddonCreditsResult = PurchaseAddonCreditsOutput | UserFacingError
+union PurchaseAddonCreditsResult = PurchaseAddonCreditsCheckoutOutput | PurchaseAddonCreditsOutput | UserFacingError
 
 """
 The request contains a UTC timestamp of when the action occurred. The JSON data
@@ -2895,6 +2910,13 @@ type ResetInviteLinksOutput implements Response {
 }
 
 union ResetInviteLinksResult = ResetInviteLinksOutput | UserFacingError
+type TuiOnboardingMarkersOutput implements Response {
+  firstZeroStateShown: Boolean!
+  firstCreditGateShown: Boolean!
+  responseContext: ResponseContext!
+}
+
+union TuiOnboardingMarkersResult = TuiOnboardingMarkersOutput | UserFacingError
 
 interface Response {
   responseContext: ResponseContext!
@@ -3207,6 +3229,7 @@ type RootQuery {
   task(input: TaskInput!, requestContext: RequestContext!): TaskResult!
   taskGitCredentials(input: TaskGitCredentialsInput!, requestContext: RequestContext!): TaskGitCredentialsResult!
   taskSecrets(input: TaskSecretsInput!, requestContext: RequestContext!): TaskSecretsResult!
+  tuiOnboardingMarkers(requestContext: RequestContext!): TuiOnboardingMarkersResult!
   updatedCloudObjects(input: UpdatedCloudObjectsInput!, requestContext: RequestContext!): UpdatedCloudObjectsResult!
   user(requestContext: RequestContext!): UserResult!
   userGithubInfo(requestContext: RequestContext!): UserGithubInfoResult!

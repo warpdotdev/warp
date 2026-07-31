@@ -147,6 +147,12 @@ where
         let Some(resolved) = self.state.resolved_viewport() else {
             return;
         };
+        let selection_is_valid = selection.validate_width(size.width);
+        let selection_range = selection_is_valid.then(|| selection.range()).flatten();
+        if selection_range.is_none() && !self.trim_selection_line_ends {
+            self.selection_snapshot.borrow_mut().take();
+            return;
+        }
         let visible_height = size.height.saturating_sub(resolved.screen_offset).min(
             resolved
                 .content_height
@@ -171,10 +177,7 @@ where
                 .collect::<Vec<_>>()
         });
         *self.selection_snapshot.borrow_mut() = Some((resolved, snapshot));
-        if !selection.validate_width(size.width) {
-            return;
-        }
-        let Some(range) = selection.range() else {
+        let Some(range) = selection_range else {
             return;
         };
         let viewport_bottom = resolved.window.scroll_top.saturating_add(usize::from(

@@ -26,20 +26,21 @@ use warp::tui_export::{
     BlocklistOrchestrationTelemetryEvent, CLISubagentController, CLISubagentEvent,
     CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel, ChangelogRequestType,
     CloudConversationData, CommandExecutionSource, ConversationFileExport, ConversationSelection,
-    ConversationSelectionHandle, ExecuteCommandEvent, GetRelevantFilesController, GitHubRepoModel,
-    GitRepoStatusModel, LLMId, LLMPreferences, LLMPreferencesEvent,
-    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, LinkedWorkflowData, ModelEvent,
-    ParsedSlashCommandInput, PersistenceWriter, PillBarActionKind, PillBarInteractionEvent,
-    PillBarPillKind, PillSwitchOutcome, PtyIntent, PtyIntentEvent, QueuedQueryEvent,
-    QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
-    SessionSettings, Sessions, ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference,
-    SlashCommandDataSource as _, SlashCommandKind, SlashCommandSelectionBehavior,
-    StartAgentExecutorEvent, StartAgentRequest, StaticCommand, TelemetryEvent, TerminalColorList,
-    TerminalColors, TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope,
-    TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue, TuiSlashCommandDataSource,
-    TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
-    TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
-    WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
+    ConversationSelectionHandle, ExecuteCommandEvent, FORK_PREFIX, ForkConversationError,
+    GetRelevantFilesController, GitHubRepoModel, GitRepoStatusModel, LLMId, LLMPreferences,
+    LLMPreferencesEvent, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, LinkedWorkflowData,
+    ModelEvent, ParsedSlashCommandInput, PersistenceWriter, PillBarActionKind,
+    PillBarInteractionEvent, PillBarPillKind, PillSwitchOutcome, PtyIntent, PtyIntentEvent,
+    QueuedQueryEvent, QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource,
+    ServerConversationToken, SessionSettings, Sessions, ShellCommandExecutorEvent, SizeInfo,
+    SizeUpdate, SkillReference, SlashCommandDataSource as _, SlashCommandKind,
+    SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest, StaticCommand,
+    TelemetryEvent, TerminalColorList, TerminalColors, TerminalModel, TerminalSurface,
+    TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiMcpServerId,
+    TuiMcpVariableValue, TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
+    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind,
+    TuiUserInfoManager, TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason,
+    WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
     build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown, log_out_tui,
     maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
     record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
@@ -146,6 +147,7 @@ use crate::warping_indicator::{render_response_summary, render_warping_indicator
 use crate::zero_state::TuiZeroStateView;
 use crate::zero_state_animation::{
     ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent, ZeroStateAnimationLoadFailure,
+    ZeroStateInteractionHandle,
 };
 mod completions;
 
@@ -168,6 +170,8 @@ const INITIAL_INPUT_WIDTH: u16 = 80;
 const INLINE_MENU_TOP_PADDING_ROWS: u16 = 1;
 const MAX_READ_ONLY_MENU_ROWS: u16 = 10;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
+/// Top and bottom border rows plus one padding row inside each border.
+const BORDERED_INPUT_CHROME_ROWS: u16 = 4;
 const AUTO_APPROVE_FEEDBACK_DURATION: Duration = Duration::from_secs(3);
 const VOICE_INPUT_BORDER_REPAINT_INTERVAL: Duration = Duration::from_millis(33);
 
@@ -322,6 +326,10 @@ fn zero_state_ascii_load_failure_hint(failure: ZeroStateAnimationLoadFailure) ->
 const COMMAND_ALREADY_RUNNING_HINT: &str = "cannot run — command already running";
 const NEW_CONVERSATION_COMMAND_RUNNING_HINT: &str =
     "cannot start new conversation while terminal command is running";
+const FORK_NO_ACTIVE_CONVERSATION_HINT: &str = "/fork requires an active conversation";
+const FORK_EMPTY_CONVERSATION_HINT: &str = "Nothing to fork — start a conversation first.";
+const FORK_NO_RESUME_ID_HINT: &str = "This conversation cannot be forked until it has a resume ID.";
+const FORK_FAILED_HINT: &str = "Conversation forking failed.";
 const SWITCH_COMMAND_RUNNING_HINT: &str =
     "Cannot switch conversations while a command is in progress.";
 const SWITCH_CONVERSATION_RUNNING_HINT: &str =
@@ -475,6 +483,7 @@ fn render_mcp_menu_footer(
 pub(crate) enum TuiConversationRestoreOrigin {
     Startup,
     ConversationList,
+    Fork,
 }
 
 impl TuiConversationRestoreOrigin {
@@ -483,6 +492,7 @@ impl TuiConversationRestoreOrigin {
             Self::Startup | Self::ConversationList => {
                 AgentViewEntryOrigin::RestoreExistingConversation
             }
+            Self::Fork => AgentViewEntryOrigin::Tui,
         }
     }
 
@@ -722,6 +732,7 @@ pub(crate) struct TuiTerminalSessionView {
     /// rather than exit the TUI. The footer shows [`CTRL_C_KILL_CHILD_HINT`]
     /// while armed, and a second ctrl-c within the window kills the child.
     child_kill_armed_conversation: Option<AIConversationId>,
+    zero_state_interaction: ZeroStateInteractionHandle,
     zero_state_view: ViewHandle<TuiZeroStateView>,
 }
 
@@ -1431,6 +1442,7 @@ impl TuiTerminalSessionView {
         exit_summary: TuiExitSummaryHandle,
         keyboard_enhancement_supported: bool,
         default_autoexecute_mode: AIConversationAutoexecuteMode,
+        handles_first_run_onboarding: bool,
         initial_settings_file_error: Option<SettingsFileError>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -1765,6 +1777,17 @@ impl TuiTerminalSessionView {
         let suggestions_mode_for_input = suggestions_mode.clone();
         let terminal_model_for_input = model.clone();
         let orchestration_tab_bar = ctx.add_typed_action_tui_view(|_| TuiTabBarView::empty());
+        let onboarding_markers =
+            handles_first_run_onboarding.then(|| TuiOnboardingMarkers::handle(ctx));
+        let show_first_zero_state = onboarding_markers.as_ref().is_some_and(|markers| {
+            markers.update(ctx, |markers, ctx| {
+                if markers.is_ready() {
+                    markers.consume(TuiOnboardingMarker::FirstZeroState, ctx)
+                } else {
+                    true
+                }
+            })
+        });
         let session_state = ctx.add_model(|_| {
             TuiTerminalSessionStateModel::new(
                 &model,
@@ -1773,8 +1796,32 @@ impl TuiTerminalSessionView {
                 &ai_input_model,
                 &suggestions_mode,
                 &orchestration_tab_bar,
+                show_first_zero_state,
             )
         });
+        if let Some(onboarding_markers) = onboarding_markers {
+            let session_state_for_markers = session_state.clone();
+            ctx.subscribe_to_model(
+                &onboarding_markers,
+                move |_, markers, event, ctx| match event {
+                    TuiOnboardingMarkersEvent::Loading => {
+                        session_state_for_markers.update(ctx, |state, ctx| {
+                            state.set_show_first_zero_state(true, ctx);
+                        });
+                    }
+                    TuiOnboardingMarkersEvent::Ready => {
+                        let keep_showing = markers.update(ctx, |markers, ctx| {
+                            markers.consume(TuiOnboardingMarker::FirstZeroState, ctx)
+                        });
+                        session_state_for_markers.update(ctx, |state, ctx| {
+                            if state.show_first_zero_state() {
+                                state.set_show_first_zero_state(keep_showing, ctx);
+                            }
+                        });
+                    }
+                },
+            );
+        }
         let input_editor_for_input = input_editor_model.clone();
         let session_state_for_input = session_state.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
@@ -2121,8 +2168,14 @@ impl TuiTerminalSessionView {
             |_, _| {},
         );
         ctx.spawn_stream_local(terminal_resize_rx, Self::handle_terminal_resize, |_, _| {});
-        let zero_state_view =
-            ctx.add_tui_view(|ctx| TuiZeroStateView::new(active_session.clone(), ctx));
+        let zero_state_interaction = ZeroStateInteractionHandle::default();
+        let zero_state_view = {
+            let interaction = zero_state_interaction.clone();
+            let zero_state_active_session = active_session.clone();
+            ctx.add_tui_view(move |ctx| {
+                TuiZeroStateView::new(zero_state_active_session, interaction, ctx)
+            })
+        };
         let mut view = Self {
             transcript,
             input_view,
@@ -2181,6 +2234,7 @@ impl TuiTerminalSessionView {
             orchestration_tab_bar,
             orchestration_tabs_focused: false,
             child_kill_armed_conversation: None,
+            zero_state_interaction,
             zero_state_view,
         };
         if let Some(failure) = initial_zero_state_load_failure {
@@ -2640,7 +2694,7 @@ impl TuiTerminalSessionView {
         }
         content = content.child(
             TuiConstrainedBox::new(input)
-                .with_max_rows(MAX_INPUT_TEXT_ROWS + 2)
+                .with_max_rows(MAX_INPUT_TEXT_ROWS + BORDERED_INPUT_CHROME_ROWS)
                 .finish(),
         );
         let footer = if let Some(footer) = self.api_keys_menu.as_ref(ctx).footer(ctx) {
@@ -3034,14 +3088,16 @@ impl TuiTerminalSessionView {
             TuiConversationRestoreOrigin::Startup => {
                 self.conversation_restore_state = ConversationRestoreState::Failed(message);
             }
-            TuiConversationRestoreOrigin::ConversationList => {
-                warp::send_telemetry_from_ctx!(
-                    TuiConversationRestoreTelemetryEvent {
-                        state: TuiConversationRestoreTelemetryState::Failed,
-                        target,
-                    },
-                    ctx
-                );
+            TuiConversationRestoreOrigin::ConversationList | TuiConversationRestoreOrigin::Fork => {
+                if origin.records_telemetry() {
+                    warp::send_telemetry_from_ctx!(
+                        TuiConversationRestoreTelemetryEvent {
+                            state: TuiConversationRestoreTelemetryState::Failed,
+                            target,
+                        },
+                        ctx
+                    );
+                }
                 self.conversation_restore_state = ConversationRestoreState::Idle;
                 self.show_transient_hint(message, ctx);
                 self.focus_input_if_active(ctx);
@@ -3668,6 +3724,9 @@ impl TuiTerminalSessionView {
         linked_workflow_data: Option<LinkedWorkflowData>,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.session_state.update(ctx, |state, ctx| {
+            state.set_show_first_zero_state(false, ctx);
+        });
         // A stale editor frame must not submit into a shell that is still
         // bootstrapping or has handed input to a foreground process.
         if !self.input_target().agent_editor_owns_input() {
@@ -4232,6 +4291,89 @@ impl TuiTerminalSessionView {
         self.input_view.update(ctx, |input, ctx| input.clear(ctx));
         true
     }
+    fn fork_current_conversation(
+        &mut self,
+        prompt: Option<&String>,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !self
+            .ai_context_model
+            .as_ref(ctx)
+            .can_start_new_conversation()
+        {
+            self.show_error_hint(NEW_CONVERSATION_COMMAND_RUNNING_HINT.to_owned(), ctx);
+            return false;
+        }
+        let Some(source_conversation_id) = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
+            self.show_error_hint(FORK_NO_ACTIVE_CONVERSATION_HINT.to_owned(), ctx);
+            return false;
+        };
+        let Some(source_conversation) = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&source_conversation_id)
+            .cloned()
+        else {
+            self.show_error_hint(FORK_NO_ACTIVE_CONVERSATION_HINT.to_owned(), ctx);
+            return false;
+        };
+        if let Err(ForkConversationError::EmptyConversation) =
+            BlocklistAIHistoryModel::validate_fork_source(&source_conversation)
+        {
+            self.show_error_hint(FORK_EMPTY_CONVERSATION_HINT.to_owned(), ctx);
+            return false;
+        }
+        let Some(source_token) = source_conversation.server_conversation_token().cloned() else {
+            self.show_error_hint(FORK_NO_RESUME_ID_HINT.to_owned(), ctx);
+            return false;
+        };
+
+        let forked_conversation =
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.fork_conversation(&source_conversation, FORK_PREFIX, false, None, ctx)
+            });
+        let forked_conversation = match forked_conversation {
+            Ok(conversation) => conversation,
+            Err(error) => {
+                match error.downcast_ref::<ForkConversationError>() {
+                    Some(ForkConversationError::EmptyConversation) => {
+                        self.show_error_hint(FORK_EMPTY_CONVERSATION_HINT.to_owned(), ctx);
+                    }
+                    None => {
+                        report_error!(error.context("TUI conversation forking failed"));
+                        self.show_error_hint(FORK_FAILED_HINT.to_owned(), ctx);
+                    }
+                }
+                return false;
+            }
+        };
+        self.replace_conversation_surface(
+            forked_conversation,
+            TuiConversationRestoreOrigin::Fork,
+            TuiConversationRestoreTelemetryTarget::Local,
+            ctx,
+        );
+        let resume_command =
+            tui_resume_shell_command(ChannelState::channel(), source_token.as_str());
+        self.transcript.update(ctx, |transcript, ctx| {
+            transcript.append_notice(
+                format!(
+                    "Forked conversation. To resume the original in another session, run: {resume_command}"
+                ),
+                ctx,
+            );
+        });
+        if let Some(prompt) = prompt
+            .map(|argument| argument.trim())
+            .filter(|argument| !argument.is_empty())
+        {
+            self.send_prompt(prompt.to_owned(), ctx);
+        }
+        self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+        true
+    }
 
     fn execute_tui_slash_command(
         &mut self,
@@ -4260,6 +4402,11 @@ impl TuiTerminalSessionView {
             }
             SlashCommandKind::MoveToCloud => {
                 self.start_handoff(argument, ctx);
+            }
+            SlashCommandKind::Fork => {
+                if self.fork_current_conversation(argument, ctx) {
+                    record_static_slash_command_accepted(command.name, true, ctx);
+                }
             }
             SlashCommandKind::AutoApprove => {
                 self.toggle_auto_approve(true, ctx);
@@ -4496,7 +4643,6 @@ impl TuiTerminalSessionView {
             | SlashCommandKind::RenameTab
             | SlashCommandKind::RenameConversation
             | SlashCommandKind::SetTabColor
-            | SlashCommandKind::Fork
             | SlashCommandKind::OpenCodeReview
             | SlashCommandKind::Index
             | SlashCommandKind::Init
@@ -4891,6 +5037,10 @@ impl TuiTerminalSessionView {
             ConversationRestoreState::Loading {
                 origin: TuiConversationRestoreOrigin::ConversationList,
                 ..
+            }
+            | ConversationRestoreState::Loading {
+                origin: TuiConversationRestoreOrigin::Fork,
+                ..
             } => {}
             ConversationRestoreState::Failed(message) => {
                 return (conversation_restore_failed(message), false);
@@ -4936,6 +5086,7 @@ impl TuiTerminalSessionView {
         let blocker_active = state.has_blocking_interaction();
 
         if state.is_alt_screen() {
+            self.zero_state_interaction.set_visible(false);
             let terminal_content = TuiTerminalContentElement::new(
                 self.terminal_resize_tx.clone(),
                 AltScreenElement::new(self.terminal_model.clone()).finish(),
@@ -5011,7 +5162,10 @@ impl TuiTerminalSessionView {
         // swaps the transcript back in.
         let mut content = TuiFlex::column();
         let transcript_is_empty = self.transcript.as_ref(ctx).is_empty();
-        if transcript_is_empty {
+        self.zero_state_interaction.set_visible(transcript_is_empty);
+        if transcript_is_empty && self.session_state.as_ref(ctx).show_first_zero_state() {
+            content = content.flex_child(self.zero_state_view.as_ref(ctx).render_first_run(ctx));
+        } else if transcript_is_empty {
             content = content.flex_child(TuiChildView::new(&self.zero_state_view).finish());
         } else {
             content = content.flex_child(TuiChildView::new(&self.transcript).finish());

@@ -755,7 +755,7 @@ impl TuiTerminalSessionView {
 
     /// The selected conversation's accumulated usage totals, or `None` (entry
     /// hidden) until any usage has been reported.
-    fn selected_conversation_usage_totals(
+    pub(super) fn selected_conversation_usage_totals(
         &self,
         ctx: &AppContext,
     ) -> Option<ConversationUsageTotals> {
@@ -764,6 +764,6 @@ impl TuiTerminalSessionView {
             .as_ref(ctx)
             .selected_conversation(ctx)?
             .usage_totals();
-        (totals != ConversationUsageTotals::default()).then_some(totals)
+        totals.has_usage.then_some(totals)
     }
 }
