@@ -3,6 +3,8 @@ use async_trait::async_trait;
 use cynic::{MutationBuilder, QueryBuilder};
 #[cfg(test)]
 use mockall::{automock, predicate::*};
+use thiserror::Error;
+use warp_errors::{ErrorExt, register_error};
 use warp_graphql::mutations::add_invite_link_domain_restriction::{
     AddInviteLinkDomainRestriction, AddInviteLinkDomainRestrictionInput,
     AddInviteLinkDomainRestrictionResult, AddInviteLinkDomainRestrictionVariables,
@@ -65,6 +67,20 @@ use crate::server::ids::ServerId;
 use crate::workspaces::team::{DiscoverableTeam, MembershipRole};
 use crate::workspaces::user_workspaces::{CreateTeamResponse, WorkspacesMetadataWithPricing};
 use crate::workspaces::workspace::Workspace;
+
+/// A server-provided error message intended for display to the end user.
+/// Preserved as a typed wrapper so the UI layer can show the server's message
+/// verbatim instead of a raw transport or DB error string.
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub(crate) struct LeaveTeamUserFacingError(pub String);
+
+impl ErrorExt for LeaveTeamUserFacingError {
+    fn is_actionable(&self) -> bool {
+        false
+    }
+}
+register_error!(LeaveTeamUserFacingError);
 
 #[cfg_attr(test, automock)]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
@@ -381,7 +397,8 @@ impl TeamClient for ServerApi {
                 }
             }
             RemoveUserFromTeamResult::UserFacingError(user_facing_error) => {
-                Err(anyhow!(get_user_facing_error_message(user_facing_error)))
+                let msg = get_user_facing_error_message(user_facing_error);
+                Err(anyhow::Error::new(LeaveTeamUserFacingError(msg)))
             }
             RemoveUserFromTeamResult::Unknown => Err(anyhow!("unknown error while leaving team")),
         }

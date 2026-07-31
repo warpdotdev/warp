@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use chrono::Utc;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use warp_graphql::billing::{AddonCreditAutoReloadStatus, ServiceAgreement, ServiceAgreementType};
+use warp_graphql::billing::{
+    AddonCreditAutoReloadStatus, ServiceAgreement, ServiceAgreementStatus, ServiceAgreementType,
+};
 pub use warp_graphql::billing::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource,
@@ -716,6 +718,29 @@ impl BillingMetadata {
     // Whether the enterprise customer is our Stable Warp Enterprise team (internal team of Warpers).
     pub fn is_warp_plan(&self) -> bool {
         self.tier.name == "Warp Plan"
+    }
+
+    /// Returns `true` when the workspace has a live, self-serviceable subscription that
+    /// prevents team deletion. Mirrors the server gate in
+    /// `logic/workspace_memberships.go` (`GetLiveServiceAgreement` + `IsSelfServicableAgreementType`):
+    /// - "live" means the first SA whose status is **not** `Canceled`
+    ///   (`PastDue`, `Unpaid`, and unknown statuses all count as live).
+    /// - "self-serviceable" means the SA's type is one of
+    ///   `SelfServe | Turbo | Prosumer | Business | Lightspeed`.
+    pub fn has_live_active_subscription(&self) -> bool {
+        self.service_agreements
+            .iter()
+            .find(|sa| !matches!(sa.status, ServiceAgreementStatus::Canceled))
+            .is_some_and(|sa| {
+                matches!(
+                    sa.type_,
+                    ServiceAgreementType::SelfServe
+                        | ServiceAgreementType::Turbo
+                        | ServiceAgreementType::Prosumer
+                        | ServiceAgreementType::Business
+                        | ServiceAgreementType::Lightspeed
+                )
+            })
     }
 
     pub fn has_active_subscription(&self) -> bool {

@@ -53,7 +53,7 @@ pub struct DiscoverableTeam {
     pub team_accepting_invites: bool,
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TeamDeleteDisabledReason {
     ActivePaidSubscription,
     RemainingBonusCredits,
@@ -154,7 +154,7 @@ impl Team {
         {
             return Some(TeamDeleteDisabledReason::OtherMembers);
         }
-        if self.billing_metadata.is_user_on_paid_plan() {
+        if self.billing_metadata.has_live_active_subscription() {
             return Some(TeamDeleteDisabledReason::ActivePaidSubscription);
         }
         if remaining_workspace_credits > 0 {
@@ -167,3 +167,7 @@ impl Team {
         self.organization_settings.llm_settings.enabled
     }
 }
+
+#[cfg(test)]
+#[path = "team_tests.rs"]
+mod tests;

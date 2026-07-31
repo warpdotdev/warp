@@ -27,11 +27,13 @@ use crate::server::retry_strategies::{
     OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL, PERIODIC_POLL_RETRY_STRATEGY,
 };
 use crate::server::server_api::ServerApiProvider;
-use crate::server::server_api::team::TeamClient;
+use crate::server::server_api::team::{LeaveTeamUserFacingError, TeamClient};
 
 pub enum TeamUpdateManagerEvent {
     LeaveSuccess,
-    LeaveError,
+    /// Emitted when the leave/delete team mutation fails. Carries a user-facing
+    /// description of the error so the UI can surface it in a toast.
+    LeaveError(String),
     RenameTeamSuccess,
     RenameTeamError,
 }
@@ -317,19 +319,16 @@ impl TeamUpdateManager {
         if let Some(user_uid) = user_uid {
             let team_client = self.team_client.clone();
             let _ = ctx.spawn(
-                async move {
-                    team_client
-                        .leave_team(user_uid, team_uid, entrypoint)
-                        .await
-                        .context("Error leaving team")
-                },
+                async move { team_client.leave_team(user_uid, team_uid, entrypoint).await },
                 move |me, result, ctx| {
                     me.on_team_left(team_uid, result, ctx);
                 },
             );
         } else {
             log::warn!("User is not authenticated, cannot leave team");
-            ctx.emit(TeamUpdateManagerEvent::LeaveError);
+            ctx.emit(TeamUpdateManagerEvent::LeaveError(
+                "Not authenticated — cannot leave team".to_string(),
+            ));
         }
     }
 
@@ -381,9 +380,16 @@ impl TeamUpdateManager {
                 ctx.emit(TeamUpdateManagerEvent::LeaveSuccess);
             }
             Err(e) => {
-                report_error!(e);
-
-                ctx.emit(TeamUpdateManagerEvent::LeaveError);
+                // Show the server's user-facing message when the server provided one;
+                // fall back to a generic message for transport/internal errors so we
+                // never leak raw DB or connection strings to customers.
+                let toast_msg = e
+                    .chain()
+                    .find_map(|cause| cause.downcast_ref::<LeaveTeamUserFacingError>())
+                    .map(|e| e.0.clone())
+                    .unwrap_or_else(|| "Failed to leave team. Please try again.".to_string());
+                report_error!(e.context("Failed to leave team"));
+                ctx.emit(TeamUpdateManagerEvent::LeaveError(toast_msg));
             }
         }
     }
