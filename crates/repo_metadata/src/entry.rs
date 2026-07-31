@@ -1039,7 +1039,7 @@ fn is_within_symlink(path: &Path, repo_root: &Path) -> bool {
         // The watched root itself may be a symlink (for example, a workspace
         // opened through a user-created alias). It is the boundary of this
         // check, not a symlinked directory to prune.
-        .take_while(|ancestor| *ancestor != repo_root)
+        .take_while(|ancestor| *ancestor != repo_root && ancestor.starts_with(repo_root))
         .any(|ancestor| {
             std::fs::symlink_metadata(ancestor)
                 .is_ok_and(|metadata| metadata.file_type().is_symlink())
