@@ -3,21 +3,8 @@ use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
 
-use string_offset::CharOffset;
-use warp::tui_export::{
-    AcceptSlashCommandOrSavedPrompt, AgentConversationEntryId, LLMId, TuiMcpAction,
-    TuiUpArrowHistoryItemKind,
-};
-use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InlineMenuSelection};
-use warpui_core::elements::tui::{
-    Modifier, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement, TuiEvent,
-    TuiEventContext, TuiFlex, TuiHoverable, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
-    TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiText,
-};
-use warpui_core::elements::{CrossAxisAlignment, MouseStateHandle};
-use warpui_core::{AppContext, ModelHandle};
-
 use crate::api_keys_menu::TuiApiKeysMenuModel;
+use crate::at_context_menu::TuiAtContextMenuAcceptance;
 use crate::completion_menu::TuiCompletionAcceptance;
 use crate::conversation_menu::TuiConversationMenuModel;
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
@@ -31,6 +18,19 @@ use crate::tui_builder::TuiUiBuilder;
 use crate::tui_column_layout::{
     TuiTwoColumnConstraints, TuiTwoColumnLayout, format_tui_first_column, tui_two_column_layout,
 };
+use string_offset::CharOffset;
+use warp::tui_export::{
+    AcceptSlashCommandOrSavedPrompt, AgentConversationEntryId, LLMId, TuiMcpAction,
+    TuiUpArrowHistoryItemKind,
+};
+use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InlineMenuSelection};
+use warpui_core::elements::tui::{
+    Modifier, TuiConstrainedBox, TuiConstraint, TuiContainer, TuiElement, TuiEvent,
+    TuiEventContext, TuiFlex, TuiHoverable, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
+    TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiText,
+};
+use warpui_core::elements::{CrossAxisAlignment, MouseStateHandle};
+use warpui_core::{AppContext, ModelHandle};
 
 const SLASH_COMMAND_COLUMN_CONSTRAINTS: TuiTwoColumnConstraints = TuiTwoColumnConstraints {
     preferred_first_columns: 29,
@@ -399,6 +399,7 @@ impl<Row> TuiInlineMenuListState<Row> {
 /// Domain action produced by accepting the selected item in an active menu.
 #[derive(Debug, Clone)]
 pub(crate) enum TuiInlineMenuAccepted {
+    AtContextMenu(TuiAtContextMenuAcceptance),
     SlashCommand(AcceptSlashCommandOrSavedPrompt),
     Conversation(AgentConversationEntryId),
     Model(LLMId),

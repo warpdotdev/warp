@@ -42,6 +42,8 @@ pub use crate::ai::agent::{
     StartAgentExecutionMode, StopRecordingResult, SuggestNewConversationResult, SummarizationType,
     TodoOperation, UserQueryMode,
 };
+#[cfg(feature = "local_fs")]
+pub use crate::ai::agent::{CurrentHead, DiffBase};
 pub use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationEntryId, AgentConversationListEntryState,
     AgentConversationListPolicy, AgentConversationsModel, AgentConversationsModelEvent,
@@ -164,14 +166,35 @@ pub use crate::changelog_model::{
     ChangelogModel, ChangelogRequestType, ChangelogState, Event as ChangelogModelEvent,
 };
 pub use crate::code::DiffResult;
+#[cfg(feature = "local_fs")]
+pub use crate::code_review::DiffSetScope;
+#[cfg(feature = "local_fs")]
+pub use crate::code_review::context::{
+    convert_file_diffs_to_diffset_hunks, create_attachment_reference_and_key,
+    register_diffset_attachment,
+};
+pub use crate::code_review::diff_state::DiffMode;
+#[cfg(feature = "local_fs")]
+pub use crate::code_review::diff_state::LocalDiffStateModel;
 pub use crate::code_review::git_repo_model::{
     GitRepoModels, GitRepoStatusModel, GitStatusMetadata,
 };
 pub use crate::code_review::github_repo_model::GitHubRepoModel;
 pub use crate::completer::SessionContext;
+pub use crate::drive::settings::WarpDriveSettings;
 pub use crate::global_resource_handles::GlobalResourceHandlesProvider;
 pub use crate::persistence::PersistenceWriter;
 pub use crate::prefix::longest_common_prefix;
+pub use crate::search::ai_context_menu::mixer::{
+    AIContextMenuMixer, AIContextMenuSearchableAction, AtContextMenuSourceContext,
+    at_context_menu_query, install_sources_for_all_categories, install_sources_for_category,
+};
+pub use crate::search::ai_context_menu::search::is_valid_search_query as is_valid_at_menu_query;
+pub use crate::search::ai_context_menu::{
+    AIContextMenuCategory, AtContextMenuCoreState, AtContextMenuGates,
+    AtContextMenuQueryTransition, NavigationState, is_at_menu_trigger, shared_inserted_text,
+    should_close_at_menu,
+};
 pub use crate::search::slash_command_menu::static_commands::commands::{
     self as slash_commands, COMMAND_REGISTRY,
 };

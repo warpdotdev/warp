@@ -138,6 +138,56 @@ fn mcp_install_footer_labels_final_value_as_install_and_enable() {
     });
 }
 
+#[test]
+fn at_context_menu_renders_supported_categories_and_enters_the_selected_category() {
+    App::test((), |mut app| async move {
+        let _at_menu = FeatureFlag::AIContextMenuEnabled.override_enabled(true);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.set_text("@", ctx);
+            });
+        });
+        Timer::after(Duration::from_millis(100)).await;
+        view.read(&app, |view, ctx| {
+            assert_eq!(
+                view.suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::AtContextMenu
+            );
+        });
+
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(rendered.contains("Add context"), "{rendered}");
+        assert!(rendered.contains("Files and folders"), "{rendered}");
+        // The test fixture has no Drive objects, rules, or conversations; their
+        // empty sources must not produce categories. Skill discovery is
+        // asynchronous and intentionally not asserted here.
+        assert!(!rendered.contains("Workflows"), "{rendered}");
+        assert!(!rendered.contains("Notebooks"), "{rendered}");
+        assert!(!rendered.contains("Plans"), "{rendered}");
+        assert!(!rendered.contains("Conversations"), "{rendered}");
+        assert!(!rendered.contains("Rules"), "{rendered}");
+        assert!(!rendered.contains("Blocks"), "{rendered}");
+        assert!(!rendered.contains("Code"), "{rendered}");
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view.update(ctx, |input, ctx| {
+                input.handle_action(&crate::input::view::TuiInputAction::Submit, ctx);
+            });
+        });
+
+        let rendered = render_session(&mut app, &view, 80, 24).join("\n");
+        assert!(rendered.contains("Files and folders"), "{rendered}");
+        view.read(&app, |view, ctx| {
+            let input = view.input_view.as_ref(ctx);
+            let content = input.model().as_ref(ctx).content().as_ref(ctx);
+            assert_eq!(content.text().into_string(), "@");
+        });
+    });
+}
+
 fn todo(id: &str, title: &str) -> AIAgentTodo {
     AIAgentTodo::new(id.to_owned().into(), title.to_owned(), String::new())
 }

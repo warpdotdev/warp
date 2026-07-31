@@ -12,7 +12,7 @@ use crate::appearance::Appearance;
 use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType, ObjectType};
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::ai_context_menu::{safe_truncate, styles};
-use crate::search::item::SearchItem;
+use crate::search::item::{SearchItem, SearchItemDetail};
 use crate::search::result_renderer::ItemHighlightState;
 
 const MAX_COMBINED_LENGTH: usize = 55;
@@ -223,6 +223,22 @@ impl SearchItem for RuleSearchItem {
 
     fn execute_result(&self) -> Self::Action {
         self.accept_result()
+    }
+
+    fn detail_data(&self) -> Option<SearchItemDetail> {
+        // Unnamed rules lead with their content, since that is all they have.
+        match &self.rule_name {
+            Some(rule_name) => Some(SearchItemDetail {
+                title: rule_name.clone(),
+                description: Some(self.rule_content.clone()),
+                title_font_family: None,
+            }),
+            None => Some(SearchItemDetail {
+                title: self.rule_content.clone(),
+                description: None,
+                title_font_family: None,
+            }),
+        }
     }
 
     fn accessibility_label(&self) -> String {

@@ -77,7 +77,10 @@ fn item_is_truncated_in_row(detail: &SearchItemDetail, app: &AppContext) -> bool
     let appearance = Appearance::as_ref(app);
     let font_size = inline_styles::font_size(appearance);
     let font_cache = app.font_cache();
-    let name_em = font_cache.em_width(detail.title_font_family, font_size);
+    let title_font_family = detail
+        .title_font_family
+        .unwrap_or_else(|| appearance.ui_font_family());
+    let name_em = font_cache.em_width(title_font_family, font_size);
     let name_px = name_em * detail.title.chars().count() as f32;
     let row_chrome_px = MENU_HORIZONTAL_PADDING * 2. + ICON_SIZE + inline_styles::ICON_MARGIN;
     let available = MENU_WIDTH - row_chrome_px;
@@ -972,7 +975,9 @@ impl CloudModeV2SlashCommandView {
 
         let title = Text::new_inline(
             detail.title.clone(),
-            detail.title_font_family,
+            detail
+                .title_font_family
+                .unwrap_or_else(|| appearance.ui_font_family()),
             inline_styles::font_size(appearance),
         )
         .with_color(primary.into())

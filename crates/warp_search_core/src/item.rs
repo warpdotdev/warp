@@ -10,7 +10,10 @@ use super::result_renderer::ItemHighlightState;
 pub struct SearchItemDetail {
     pub title: String,
     pub description: Option<String>,
-    pub title_font_family: FamilyId,
+    /// Font the title is rendered in, for pixel-rendering front-ends that need
+    /// to measure it. `None` when the item has no font opinion, which is every
+    /// item whose only consumer is a cell-grid front-end.
+    pub title_font_family: Option<FamilyId>,
 }
 
 /// Location where icon should be rendered relative to the [`SearchItem`].

@@ -36,8 +36,10 @@ use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::git_repo_model::GitRepoModels;
+use crate::drive::settings::WarpDriveSettings;
 use crate::network::NetworkStatus;
 use crate::persistence::PersistenceWriter;
+use crate::search::files::model::FileSearchModel;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 #[cfg(feature = "voice_input")]
@@ -234,6 +236,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     });
     app.update(AISettings::register_and_subscribe_to_events);
     app.update(TuiVoiceSettings::register);
+    WarpDriveSettings::register(app);
     CloudAgentSettings::register(app);
     app.add_singleton_model(ApiKeyManager::new);
 
@@ -321,6 +324,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(repo_metadata::watcher::DirectoryWatcher::new);
     #[cfg(feature = "local_fs")]
     app.add_singleton_model(repo_metadata::RepoMetadataModel::new);
+    app.add_singleton_model(FileSearchModel::new);
     app.add_singleton_model(
         crate::warp_managed_paths_watcher::WarpManagedPathsWatcher::new_for_testing,
     );

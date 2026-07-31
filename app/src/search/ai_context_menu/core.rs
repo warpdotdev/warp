@@ -105,6 +105,10 @@ pub struct AtContextMenuGates {
     /// Whether the surface is a CLI agent rich input, which only understands
     /// files, folders, and code symbols.
     pub is_cli_agent_input: bool,
+    /// Whether the surface can resolve terminal block references.
+    pub supports_blocks: bool,
+    /// Whether the surface has code outlines to search.
+    pub supports_code_symbols: bool,
 }
 
 impl Default for AtContextMenuGates {
@@ -114,6 +118,8 @@ impl Default for AtContextMenuGates {
             is_shared_session_viewer: false,
             is_in_ambient_agent: false,
             is_cli_agent_input: false,
+            supports_blocks: true,
+            supports_code_symbols: true,
         }
     }
 }
@@ -214,6 +220,8 @@ impl AtContextMenuCoreState {
             is_shared_session_viewer,
             is_in_ambient_agent,
             is_cli_agent_input,
+            supports_blocks,
+            supports_code_symbols,
         } = self.gates;
 
         // For CLI agent input, use a positive allowlist of categories that CLI agents
@@ -224,7 +232,7 @@ impl AtContextMenuCoreState {
             if !is_shared_session_viewer {
                 categories.push(self.files_category(is_active_dir_in_git_repo));
             }
-            if self.is_code_category_enabled(is_active_dir_in_git_repo, app)
+            if self.is_code_category_enabled(supports_code_symbols, is_active_dir_in_git_repo, app)
                 && !is_shared_session_viewer
             {
                 categories.push(AIContextMenuCategory::Code);
@@ -257,8 +265,10 @@ impl AtContextMenuCoreState {
             if FeatureFlag::AIContextMenuCommands.is_enabled() {
                 categories.push(AIContextMenuCategory::Commands);
             }
-            categories.push(AIContextMenuCategory::Blocks);
-            if self.is_code_category_enabled(is_active_dir_in_git_repo, app)
+            if supports_blocks {
+                categories.push(AIContextMenuCategory::Blocks);
+            }
+            if self.is_code_category_enabled(supports_code_symbols, is_active_dir_in_git_repo, app)
                 && !is_shared_session_viewer
             {
                 categories.push(AIContextMenuCategory::Code);
@@ -287,7 +297,8 @@ impl AtContextMenuCoreState {
             let mut categories = vec![self.files_category(is_active_dir_in_git_repo)];
 
             // Also show Code category in terminal mode when enabled
-            if self.is_code_category_enabled(is_active_dir_in_git_repo, app) {
+            if self.is_code_category_enabled(supports_code_symbols, is_active_dir_in_git_repo, app)
+            {
                 categories.push(AIContextMenuCategory::Code);
             }
 
@@ -306,8 +317,14 @@ impl AtContextMenuCoreState {
         }
     }
 
-    fn is_code_category_enabled(&self, is_active_dir_in_git_repo: bool, app: &AppContext) -> bool {
-        FeatureFlag::AIContextMenuCode.is_enabled()
+    fn is_code_category_enabled(
+        &self,
+        supports_code_symbols: bool,
+        is_active_dir_in_git_repo: bool,
+        app: &AppContext,
+    ) -> bool {
+        supports_code_symbols
+            && FeatureFlag::AIContextMenuCode.is_enabled()
             && *InputSettings::as_ref(app)
                 .outline_codebase_symbols_for_at_context_menu
                 .value()
@@ -333,7 +350,16 @@ impl AtContextMenuCoreState {
     /// The subset of [`Self::available_categories`] whose names match the
     /// main-menu filter query.
     pub fn filtered_categories(&self, app: &AppContext) -> Vec<AIContextMenuCategory> {
-        let categories = self.available_categories(app);
+        self.filtered_categories_from(self.available_categories(app))
+    }
+
+    /// Filters a caller-supplied category set with the current main-menu query.
+    /// Surfaces use this after discovering which potentially available
+    /// categories actually have entries.
+    pub fn filtered_categories_from(
+        &self,
+        categories: Vec<AIContextMenuCategory>,
+    ) -> Vec<AIContextMenuCategory> {
         if self.main_menu_query.is_empty() {
             return categories;
         }
@@ -374,6 +400,14 @@ impl AtContextMenuCoreState {
     pub fn clear_category_filter(&mut self) {
         self.main_menu_query = String::new();
         self.selected_category_index = 0;
+    }
+
+    /// Starts a fresh category-list session. Surfaces that discover source
+    /// availability dynamically use this even when only one potential category
+    /// exists, because that source may still be empty.
+    pub fn reset_to_main_menu(&mut self) {
+        self.navigation_state = NavigationState::MainMenu;
+        self.clear_category_filter();
     }
 
     /// Moves the category selection down the filtered list, wrapping at the end.
@@ -419,13 +453,23 @@ impl AtContextMenuCoreState {
     /// nothing matches, the menu falls through to searching every available
     /// category instead of showing an empty list.
     pub fn set_query(&mut self, query: &str, app: &AppContext) -> AtContextMenuQueryTransition {
+        self.set_query_for_categories(query, self.available_categories(app))
+    }
+
+    /// Applies a query against a caller-supplied set of categories, falling
+    /// through to all-category result search only when none of those names
+    /// match.
+    pub fn set_query_for_categories(
+        &mut self,
+        query: &str,
+        categories: Vec<AIContextMenuCategory>,
+    ) -> AtContextMenuQueryTransition {
         if self.navigation_state != NavigationState::MainMenu {
             return AtContextMenuQueryTransition::SourcesUnchanged;
         }
 
         self.main_menu_query = query.to_owned();
-
-        let filtered_count = self.filtered_categories(app).len();
+        let filtered_count = self.filtered_categories_from(categories).len();
         if self.selected_category_index >= filtered_count {
             self.selected_category_index = 0;
         }

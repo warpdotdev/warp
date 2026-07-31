@@ -749,7 +749,10 @@ impl TuiTerminalSessionView {
         ctx.notify();
     }
 
-    fn git_status_metadata<'a>(&self, ctx: &'a AppContext) -> Option<&'a GitStatusMetadata> {
+    pub(super) fn git_status_metadata<'a>(
+        &self,
+        ctx: &'a AppContext,
+    ) -> Option<&'a GitStatusMetadata> {
         self.git_repo_status.as_ref()?.as_ref(ctx).metadata(ctx)
     }
 

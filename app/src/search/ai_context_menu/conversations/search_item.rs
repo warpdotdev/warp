@@ -10,7 +10,7 @@ use super::ConversationContextItem;
 use crate::appearance::Appearance;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::ai_context_menu::styles;
-use crate::search::item::SearchItem;
+use crate::search::item::{SearchItem, SearchItemDetail};
 use crate::search::result_renderer::ItemHighlightState;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::util::truncation::truncate_from_end;
@@ -121,6 +121,14 @@ impl SearchItem for ConversationSearchItem {
 
     fn execute_result(&self) -> Self::Action {
         self.accept_result()
+    }
+
+    fn detail_data(&self) -> Option<SearchItemDetail> {
+        Some(SearchItemDetail {
+            title: self.item.title.clone(),
+            description: None,
+            title_font_family: None,
+        })
     }
 
     fn accessibility_label(&self) -> String {

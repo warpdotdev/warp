@@ -10,7 +10,7 @@ use crate::appearance::Appearance;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::ai_context_menu::styles;
 use crate::search::files::icon::icon_from_file_path;
-use crate::search::item::SearchItem;
+use crate::search::item::{SearchItem, SearchItemDetail};
 use crate::search::result_renderer::ItemHighlightState;
 use crate::ui_components::render_file_search_row::{FileSearchRowOptions, render_file_search_row};
 
@@ -75,6 +75,16 @@ impl SearchItem for FileSearchItem {
 
     fn execute_result(&self) -> Self::Action {
         self.accept_result()
+    }
+
+    fn detail_data(&self) -> Option<SearchItemDetail> {
+        // The path is the whole content of a file row, so there is nothing to
+        // put in a secondary line.
+        Some(SearchItemDetail {
+            title: self.path.to_string_lossy().to_string(),
+            description: None,
+            title_font_family: None,
+        })
     }
 
     fn accessibility_label(&self) -> String {

@@ -28,8 +28,9 @@ use vim::vim::{MotionType, VimMode, VimModel, VimSubscriber as _};
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::AppEditorSettings;
 use warp::tui_export::{
-    AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputType,
-    InputTypeAutoDetectionSource, LLMId, TuiMcpAction, TuiUpArrowHistoryItemKind,
+    AIContextMenuSearchableAction, AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel,
+    InputType, InputTypeAutoDetectionSource, LLMId, TuiMcpAction, TuiUpArrowHistoryItemKind,
+    shared_inserted_text,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity as _;
@@ -46,6 +47,7 @@ use warpui_core::{
     ViewContext,
 };
 
+use crate::at_context_menu::TuiAtContextMenuAcceptance;
 use crate::completion_menu::TuiCompletionAcceptance;
 use crate::editor_element::{TuiEditorAction, TuiEditorElement, TuiEditorStyles};
 use crate::editor_interaction::{
@@ -163,6 +165,12 @@ pub enum TuiInputViewEvent {
     AcceptedMcp(TuiMcpAction),
     /// The user advanced the explicit MCP installation flow.
     AcceptedMcpInstall(TuiMcpInstallFlowAction),
+    /// The user selected a diff set, which the owning session resolves into an
+    /// asynchronous context attachment.
+    AcceptedDiffSet {
+        diff_mode: warp::tui_export::DiffMode,
+        replacement_range: Range<usize>,
+    },
     /// Shift+Up should move focus from the first visual row to the region above.
     MoveFocusUp,
     /// The user accepted an item from the up-arrow prompt-and-command history menu.
@@ -484,6 +492,20 @@ impl TuiInputView {
     ) {
         self.voice_input.update(ctx, |voice_input, ctx| {
             voice_input.handle_hold_key(key, state, available, ctx);
+        });
+    }
+
+    /// Locks the current input to Agent because it now contains context that
+    /// cannot be submitted as a shell command.
+    pub(crate) fn force_agent_mode_for_attachment(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_input_buffer_empty = self.plain_text(ctx).is_empty();
+        self.input_mode.clone().update(ctx, |input_mode, ctx| {
+            input_mode.set_input_config(
+                AI_LOCKED_CONFIG,
+                is_input_buffer_empty,
+                Some(InputTypeAutoDetectionSource::AttachmentForcedAi),
+                ctx,
+            );
         });
     }
 
@@ -1310,6 +1332,9 @@ impl TuiInputView {
         ctx: &mut ViewContext<Self>,
     ) {
         match accepted {
+            TuiInlineMenuAccepted::AtContextMenu(acceptance) => {
+                self.apply_at_context_menu_acceptance(acceptance, ctx);
+            }
             TuiInlineMenuAccepted::SlashCommand(action) => {
                 ctx.emit(TuiInputViewEvent::AcceptedSlashCommand(action));
             }
@@ -1331,6 +1356,44 @@ impl TuiInputView {
             TuiInlineMenuAccepted::Completion(acceptance) => {
                 self.apply_shell_completion(acceptance, ctx);
             }
+        }
+    }
+
+    fn apply_at_context_menu_acceptance(
+        &mut self,
+        acceptance: TuiAtContextMenuAcceptance,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let TuiAtContextMenuAcceptance {
+            action,
+            replacement_range,
+        } = acceptance;
+        let insert_as_shell = {
+            let input_mode = self.input_mode.as_ref(ctx);
+            input_mode.is_input_type_locked() && !input_mode.is_ai_input_enabled()
+        };
+        let replacement = match action {
+            AIContextMenuSearchableAction::InsertFilePath { file_path } => file_path,
+            AIContextMenuSearchableAction::InsertDiffSet { diff_mode } => {
+                ctx.emit(TuiInputViewEvent::AcceptedDiffSet {
+                    diff_mode,
+                    replacement_range,
+                });
+                return;
+            }
+            action => shared_inserted_text(&action)
+                .expect("all non-file, non-diff @ context actions insert shared text"),
+        };
+        self.apply_shell_completion(
+            TuiCompletionAcceptance {
+                replacement,
+                replacement_range,
+                append_space: !insert_as_shell,
+            },
+            ctx,
+        );
+        if !insert_as_shell {
+            self.exit_shell_mode(ctx);
         }
     }
     fn handle_inline_menu_action(

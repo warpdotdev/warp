@@ -5,7 +5,7 @@ use warpui::{AppContext, Element, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
-use crate::search::item::SearchItem;
+use crate::search::item::{SearchItem, SearchItemDetail};
 use crate::search::result_renderer::ItemHighlightState;
 
 #[derive(Clone, Debug)]
@@ -82,5 +82,13 @@ impl SearchItem for CommandSearchItem {
 
     fn accessibility_label(&self) -> String {
         format!("Command: {}", self.command)
+    }
+
+    fn detail_data(&self) -> Option<SearchItemDetail> {
+        Some(SearchItemDetail {
+            title: self.command.clone(),
+            description: None,
+            title_font_family: None,
+        })
     }
 }

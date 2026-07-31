@@ -220,3 +220,40 @@ pub enum AIContextMenuSearchableAction {
         name: String,
     },
 }
+
+impl AIContextMenuSearchableAction {
+    /// Category that produced this action, for surfaces that discover category
+    /// availability from a combined zero-state query.
+    ///
+    /// File actions need the caller's current file category because repo and
+    /// current-folder files intentionally share one action shape.
+    pub fn category(&self, file_category: AIContextMenuCategory) -> Option<AIContextMenuCategory> {
+        match self {
+            AIContextMenuSearchableAction::InsertFilePath { .. } => Some(file_category),
+            // Blocks also use InsertText, but a surface that supports Blocks
+            // should not infer availability this way because the action cannot
+            // distinguish them from Commands.
+            AIContextMenuSearchableAction::InsertText { .. } => {
+                Some(AIContextMenuCategory::Commands)
+            }
+            AIContextMenuSearchableAction::InsertDriveObject { object_type, .. } => {
+                match object_type {
+                    ObjectType::Workflow => Some(AIContextMenuCategory::Workflows),
+                    ObjectType::Notebook => Some(AIContextMenuCategory::Notebooks),
+                    ObjectType::GenericStringObject(_) => Some(AIContextMenuCategory::Rules),
+                    ObjectType::Folder => None,
+                }
+            }
+            AIContextMenuSearchableAction::InsertPlan { .. } => Some(AIContextMenuCategory::Plans),
+            AIContextMenuSearchableAction::InsertDiffSet { .. } => {
+                Some(AIContextMenuCategory::DiffSet)
+            }
+            AIContextMenuSearchableAction::InsertConversation { .. } => {
+                Some(AIContextMenuCategory::Conversations)
+            }
+            AIContextMenuSearchableAction::InsertSkill { .. } => {
+                Some(AIContextMenuCategory::Skills)
+            }
+        }
+    }
+}

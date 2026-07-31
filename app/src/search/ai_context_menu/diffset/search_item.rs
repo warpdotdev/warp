@@ -9,7 +9,7 @@ use crate::appearance::Appearance;
 use crate::code_review::diff_state::DiffMode;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::ai_context_menu::styles;
-use crate::search::item::SearchItem;
+use crate::search::item::{SearchItem, SearchItemDetail};
 use crate::search::result_renderer::ItemHighlightState;
 
 #[derive(Debug, Clone)]
@@ -109,6 +109,14 @@ impl SearchItem for DiffSetSearchItem {
 
     fn execute_result(&self) -> Self::Action {
         self.accept_result()
+    }
+
+    fn detail_data(&self) -> Option<SearchItemDetail> {
+        Some(SearchItemDetail {
+            title: self.name(),
+            description: Some(self.description()),
+            title_font_family: None,
+        })
     }
 
     fn accessibility_label(&self) -> String {

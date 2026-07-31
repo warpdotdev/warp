@@ -11,7 +11,7 @@ use warpui::{AppContext, Element, SingletonEntity};
 use crate::appearance::Appearance;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::ai_context_menu::styles;
-use crate::search::item::SearchItem;
+use crate::search::item::{SearchItem, SearchItemDetail};
 use crate::search::result_renderer::ItemHighlightState;
 
 const MAX_DESCRIPTION_LEN: usize = 60;
@@ -126,6 +126,15 @@ impl SearchItem for SkillSearchItem {
 
     fn execute_result(&self) -> Self::Action {
         self.accept_result()
+    }
+
+    fn detail_data(&self) -> Option<SearchItemDetail> {
+        // Titled with the text acceptance inserts, matching the `/` skills menu.
+        Some(SearchItemDetail {
+            title: format!("/{}", self.name),
+            description: (!self.description.is_empty()).then(|| self.description.clone()),
+            title_font_family: None,
+        })
     }
 
     fn accessibility_label(&self) -> String {

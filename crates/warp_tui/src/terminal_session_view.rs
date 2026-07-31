@@ -17,22 +17,23 @@ use warp::settings::{
 };
 use warp::tui_export::{
     AIAgentActionId, AIAgentActionResultType, AIAgentContext, AIAgentExchangeId,
-    AIAgentPtyWriteMode, AIConversation, AIConversationAutoexecuteMode, AIConversationId,
-    AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent, AfterBlockCompletedEvent,
-    AgentConversationEntryId, AgentConversationListEntryState, AgentConversationsModel,
-    AgentInteractionMetadata, AgentViewEntryOrigin, Appearance, BlockId, BlockType,
-    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel,
+    AIAgentPtyWriteMode, AIContextMenuMixer, AIConversation, AIConversationAutoexecuteMode,
+    AIConversationId, AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent,
+    AfterBlockCompletedEvent, AgentConversationEntryId, AgentConversationListEntryState,
+    AgentConversationsModel, AgentInteractionMetadata, AgentViewEntryOrigin, Appearance, BlockId,
+    BlockType, BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel,
+    BlocklistAIController, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel,
     BlocklistOrchestrationTelemetryEvent, CLISubagentController, CLISubagentEvent,
     CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel, ChangelogRequestType,
     CloudConversationData, CommandExecutionSource, ConversationFileExport, ConversationSelection,
-    ConversationSelectionHandle, ExecuteCommandEvent, GetRelevantFilesController, GitHubRepoModel,
-    GitRepoStatusModel, LLMId, LLMPreferences, LLMPreferencesEvent,
-    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, LinkedWorkflowData, ModelEvent,
-    ParsedSlashCommandInput, PersistenceWriter, PillBarActionKind, PillBarInteractionEvent,
-    PillBarPillKind, PillSwitchOutcome, PtyIntent, PtyIntentEvent, QueuedQueryEvent,
-    QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
-    SessionSettings, Sessions, ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference,
+    ConversationSelectionHandle, CurrentHead, DiffBase, DiffMode, DiffSetScope,
+    ExecuteCommandEvent, GetRelevantFilesController, GitHubRepoModel, GitRepoStatusModel, LLMId,
+    LLMPreferences, LLMPreferencesEvent, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
+    LinkedWorkflowData, LocalDiffStateModel, ModelEvent, ParsedSlashCommandInput,
+    PersistenceWriter, PillBarActionKind, PillBarInteractionEvent, PillBarPillKind,
+    PillSwitchOutcome, PtyIntent, PtyIntentEvent, QueuedQueryEvent, QueuedQueryModel,
+    RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken, SessionSettings,
+    Sessions, ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference,
     SlashCommandDataSource as _, SlashCommandKind, SlashCommandSelectionBehavior,
     StartAgentExecutorEvent, StartAgentRequest, StaticCommand, TelemetryEvent, TerminalColorList,
     TerminalColors, TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope,
@@ -40,10 +41,11 @@ use warp::tui_export::{
     TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
     TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
     WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
-    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown, log_out_tui,
-    maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
+    build_slash_command_mixer, convert_file_diffs_to_diffset_hunks,
+    create_attachment_reference_and_key, detect_possible_git_repo, export_conversation_markdown,
+    log_out_tui, maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
     record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
-    record_static_slash_command_accepted, saved_prompt_text_for_id,
+    record_static_slash_command_accepted, register_diffset_attachment, saved_prompt_text_for_id,
     slash_command_selection_behavior, slash_commands, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
@@ -72,6 +74,7 @@ use warpui_core::{
 use crate::agent_block::OUT_OF_CREDITS_URL;
 use crate::alt_screen_view::AltScreenElement;
 use crate::api_keys_menu::{TuiApiKeysMenuEvent, TuiApiKeysMenuModel, render_api_keys_footer};
+use crate::at_context_menu::{TuiAtContextMenuEvent, TuiAtContextMenuModel};
 use crate::attachment_bar::{
     FOCUS_ATTACHMENTS_BINDING_NAME, TuiAttachmentBar, TuiAttachmentBarEvent, TuiAttachmentModel,
     TuiAttachmentPasteDisposition,
@@ -80,7 +83,7 @@ use crate::cli_agent_osc_event_publisher::{
     CliAgentOscEventPublisher, host_supports_cli_agent_notifications,
 };
 use crate::clipboard::copy_to_clipboard;
-use crate::completion_menu::TuiCompletionMenuModel;
+use crate::completion_menu::{TuiCompletionAcceptance, TuiCompletionMenuModel};
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
 use crate::conversation_selection::TuiConversationSelection;
 use crate::editor_interaction::TuiEditorCommand;
@@ -1592,6 +1595,20 @@ impl TuiTerminalSessionView {
         let input_editor_model =
             ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));
         let suggestions_mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
+        let at_context_menu_mixer = ctx.add_model(|_| AIContextMenuMixer::new());
+        let at_context_menu = ctx.add_model(|ctx| {
+            TuiAtContextMenuModel::new(
+                input_editor_model.clone(),
+                suggestions_mode.clone(),
+                active_session.clone(),
+                ai_input_model.clone(),
+                at_context_menu_mixer,
+                ctx,
+            )
+        });
+        ctx.subscribe_to_model(&at_context_menu, |_, _, _: &TuiAtContextMenuEvent, ctx| {
+            ctx.notify()
+        });
         let suggestions_mode_for_user_info = suggestions_mode.clone();
         ctx.subscribe_to_model(&TuiUserInfoManager::handle(ctx), move |_, _, event, ctx| {
             let TuiUserInfoManagerEvent::Updated = event;
@@ -1753,6 +1770,7 @@ impl TuiTerminalSessionView {
 
         let input_mode_for_input_view = ai_input_model.clone();
         let inline_menus = vec![
+            TuiInlineMenu::new(at_context_menu.clone()),
             TuiInlineMenu::new(slash_commands.clone()),
             TuiInlineMenu::new(api_keys_menu.clone()),
             TuiInlineMenu::new(conversation_menu.clone()),
@@ -1866,6 +1884,12 @@ impl TuiTerminalSessionView {
             }
             TuiInputViewEvent::AcceptedMcpInstall(action) => {
                 view.handle_accepted_mcp_install_action(action.clone(), ctx);
+            }
+            TuiInputViewEvent::AcceptedDiffSet {
+                diff_mode,
+                replacement_range,
+            } => {
+                view.handle_accepted_diff_set(diff_mode.clone(), replacement_range.clone(), ctx);
             }
             TuiInputViewEvent::AcceptedPromptAndCommandHistory { text, kind } => {
                 view.handle_accepted_prompt_and_command_history(text.clone(), kind.clone(), ctx);
@@ -4130,6 +4154,69 @@ impl TuiTerminalSessionView {
             }
         }
         ctx.notify();
+    }
+
+    fn handle_accepted_diff_set(
+        &mut self,
+        diff_mode: DiffMode,
+        replacement_range: std::ops::Range<usize>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(repo_path) = self
+            .current_repo_path
+            .as_ref()
+            .and_then(LocalOrRemotePath::to_local_path)
+            .map(Path::to_path_buf)
+        else {
+            return;
+        };
+
+        let metadata = self.git_status_metadata(ctx);
+        let current =
+            metadata.map(|metadata| CurrentHead::BranchName(metadata.current_branch_name.clone()));
+        let base = match &diff_mode {
+            DiffMode::Head => DiffBase::UncommittedChanges,
+            DiffMode::MainBranch => metadata
+                .map(|metadata| DiffBase::BranchName(metadata.main_branch_name.clone()))
+                .unwrap_or(DiffBase::UncommittedChanges),
+            DiffMode::OtherBranch(branch_name) => DiffBase::BranchName(branch_name.clone()),
+        };
+        let main_branch_name = metadata.map(|metadata| metadata.main_branch_name.clone());
+        let (attachment_reference, diff_set_key) = create_attachment_reference_and_key(
+            &DiffSetScope::All,
+            &diff_mode,
+            main_branch_name.as_deref(),
+        );
+
+        self.input_view.update(ctx, |input, ctx| {
+            input.apply_shell_completion(
+                TuiCompletionAcceptance {
+                    replacement: attachment_reference,
+                    replacement_range,
+                    append_space: true,
+                },
+                ctx,
+            );
+            input.force_agent_mode_for_attachment(ctx);
+        });
+
+        let context_model = self.ai_context_model.clone();
+        ctx.spawn(
+            LocalDiffStateModel::load_diff_data_for_mode(diff_mode, repo_path),
+            move |_, git_diff_data, ctx| {
+                let Some(git_diff_data) = git_diff_data else {
+                    return;
+                };
+                register_diffset_attachment(
+                    &context_model,
+                    diff_set_key.clone(),
+                    convert_file_diffs_to_diffset_hunks(git_diff_data.files.iter()),
+                    current.clone(),
+                    base.clone(),
+                    ctx,
+                );
+            },
+        );
     }
 
     fn handle_accepted_prompt_and_command_history(

@@ -184,7 +184,7 @@ impl SearchItem for InlineItem {
         Some(SearchItemDetail {
             title: self.name.clone(),
             description: self.description.clone(),
-            title_font_family: self.font_family,
+            title_font_family: Some(self.font_family),
         })
     }
 }
