@@ -363,21 +363,21 @@ fn tui_transcript_scroll_reuses_cached_heights_at_stable_width() {
 }
 
 #[test]
-fn tui_agent_streaming_block_remeasured_at_stable_width() {
+fn tui_agent_streaming_block_reuses_cached_height_without_an_update() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        // A streaming block's height can grow without a per-update
-        // invalidation, so it must be re-measured at a stable width.
+        // Agent output updates explicitly dirty their rich-content item, so
+        // streaming status alone does not require polling its full layout.
         let (source, model, agent_block) = streaming_agent_block_source(&mut app);
 
         request_top_window(&app, &source, 10);
         source.take_selection_row_resizes();
 
-        // Seed a wrong height at the same width without dirtying; the streaming
-        // block is still re-measured, correcting it.
+        // Seed a wrong height at the same width without dirtying. With no
+        // output update, the cached height remains untouched.
         seed_clean_height(&app, &model, &agent_block, 1234.0, 80);
         request_top_window(&app, &source, 10);
-        assert_ne!(rich_content_height(&model, agent_block.id()), Some(1234.0));
+        assert_eq!(rich_content_height(&model, agent_block.id()), Some(1234.0));
     });
 }
 

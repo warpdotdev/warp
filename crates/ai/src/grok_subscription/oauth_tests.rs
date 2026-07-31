@@ -101,6 +101,7 @@ fn bind_test_listener() -> (TcpListener, std::net::SocketAddr) {
 /// so a reintroduced teardown race is caught here instead of showing up as an
 /// intermittent CI failure.
 #[test]
+
 fn cancelling_loopback_wait_releases_listener() {
     const CANCEL_CYCLES: usize = 100;
 

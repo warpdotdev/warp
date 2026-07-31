@@ -29,7 +29,7 @@ use warpui_core::{
 use crate::agent_block_sections::render_fallback_tool_call_section;
 use crate::editor_view::{TuiEditorView, TuiEditorViewEvent};
 use crate::keybindings::{TUI_BINDING_GROUP, is_tui_owned_binding};
-use crate::terminal_block::TerminalBlockElement;
+use crate::terminal_block::{TerminalBlockElement, block_content_rows};
 use crate::terminal_use::user_controls_running_command;
 use crate::tool_call_labels::{
     CommandBlockState, ResolvedCommandBlock, styled_tool_call_label_spans, tool_call_display_state,
@@ -74,6 +74,12 @@ pub(crate) fn init(app: &mut AppContext) {
         .with_key_binding("numpadenter"),
     ]);
     app.register_tui_binding_validator::<TuiShellCommandView>(is_tui_owned_binding);
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ShellCommandContentExtent {
+    rendered_height: usize,
+    command_rows: usize,
+    output_rows: usize,
 }
 
 struct ShellCommandViewState {
@@ -120,7 +126,7 @@ pub(super) struct TuiShellCommandView {
     permission_prompt: ViewHandle<TuiPermissionPrompt>,
     command_was_edited: bool,
     state: ShellCommandViewState,
-    command_running: Cell<bool>,
+    last_measured_content_extent: Cell<Option<ShellCommandContentExtent>>,
     header_mouse_state: MouseStateHandle,
     cli_subagent_view: Option<ViewHandle<TuiCLISubagentView>>,
 }
@@ -196,7 +202,7 @@ impl TuiShellCommandView {
             permission_prompt,
             command_was_edited: false,
             state: ShellCommandViewState::new_collapsed(),
-            command_running: Cell::new(false),
+            last_measured_content_extent: Cell::new(None),
             header_mouse_state: MouseStateHandle::default(),
             cli_subagent_view: None,
         }
@@ -343,9 +349,31 @@ impl TuiShellCommandView {
             }
         });
     }
-    /// Whether expanded command output can still grow between layout events.
-    pub(super) fn needs_continuous_height_measurement(&self) -> bool {
-        !self.state.is_collapsed() && self.command_running.get()
+    /// Returns the live row extent when command output can change this view's height.
+    pub(super) fn dynamic_content_extent(&self) -> Option<ShellCommandContentExtent> {
+        let model = self.terminal_model.lock();
+        let block = model.block_list().block_for_ai_action_id(&self.action.id)?;
+        let expanded = !self.state.is_collapsed() || user_controls_running_command(block);
+        (expanded && !block.finished()).then(|| ShellCommandContentExtent {
+            rendered_height: block_content_rows(block).len(),
+            command_rows: usize::from(!block.should_hide_command_grid())
+                .saturating_mul(block.prompt_and_command_grid().len_displayed()),
+            output_rows: usize::from(!block.should_hide_output_grid())
+                .saturating_mul(block.output_grid().len_displayed()),
+        })
+    }
+    /// Whether running command output has changed height since the last layout.
+    pub(super) fn needs_height_measurement(&self) -> bool {
+        self.dynamic_content_extent()
+            .is_some_and(|extent| self.last_measured_content_extent.get() != Some(extent))
+    }
+
+    /// Records the row extent represented by the latest agent-block layout.
+    pub(super) fn record_content_extent_measurement(
+        &self,
+        extent: Option<ShellCommandContentExtent>,
+    ) {
+        self.last_measured_content_extent.set(extent);
     }
     pub(super) fn is_expanded(&self) -> bool {
         !self.state.is_collapsed()
@@ -437,11 +465,9 @@ impl TuiView for TuiShellCommandView {
             .as_ref(app)
             .get_action_status(&self.action.id);
         if matches!(status, Some(AIActionStatus::Blocked)) {
-            self.command_running.set(false);
             return self.render_blocked(app);
         }
         let Some(block) = self.resolved_block(status.as_ref()) else {
-            self.command_running.set(false);
             return render_fallback_tool_call_section(
                 &self.action,
                 status.as_ref(),
@@ -450,8 +476,6 @@ impl TuiView for TuiShellCommandView {
                 app,
             );
         };
-        self.command_running
-            .set(matches!(block.details.state, CommandBlockState::Running));
 
         let builder = TuiUiBuilder::from_app(app);
         let display_state =

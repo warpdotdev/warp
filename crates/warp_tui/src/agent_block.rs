@@ -1126,16 +1126,13 @@ impl TuiAIBlock {
     /// Whether the cached height is stale at `width`.
     pub(super) fn needs_height_measurement(&self, width: u16, app: &AppContext) -> bool {
         self.last_measured_width.get() != Some(width)
-            || self.block_model.status(app).is_streaming()
             || self.action_views.values().any(|view| match view {
                 TuiToolCallView::AskQuestion(_)
                 | TuiToolCallView::FileEdits(_)
                 | TuiToolCallView::Generic(_)
                 | TuiToolCallView::Plan(_)
                 | TuiToolCallView::OrchestrationBlock(_) => false,
-                TuiToolCallView::ShellCommand(view) => {
-                    view.as_ref(app).needs_continuous_height_measurement()
-                }
+                TuiToolCallView::ShellCommand(view) => view.as_ref(app).needs_height_measurement(),
             })
     }
 
@@ -1178,8 +1175,22 @@ impl TuiAIBlock {
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> usize {
+        let command_extents = self
+            .action_views
+            .values()
+            .filter_map(|view| match view {
+                TuiToolCallView::ShellCommand(view) => {
+                    Some((view, view.as_ref(app).dynamic_content_extent()))
+                }
+                TuiToolCallView::AskQuestion(_)
+                | TuiToolCallView::FileEdits(_)
+                | TuiToolCallView::Generic(_)
+                | TuiToolCallView::Plan(_)
+                | TuiToolCallView::OrchestrationBlock(_) => None,
+            })
+            .collect::<Vec<_>>();
         let mut element = self.render_element(app);
-        usize::from(
+        let height = usize::from(
             element
                 .layout(
                     TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
@@ -1187,7 +1198,12 @@ impl TuiAIBlock {
                     app,
                 )
                 .height,
-        )
+        );
+        for (view, command_extent) in command_extents {
+            view.as_ref(app)
+                .record_content_extent_measurement(command_extent);
+        }
+        height
     }
 
     /// Logical (unwrapped) text for a selection over this block's text

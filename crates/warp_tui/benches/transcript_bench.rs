@@ -17,6 +17,25 @@ fn benchmark_clipped_terminal_block(criterion: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_running_agent_command(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("tui_transcript/running_agent_command");
+    for rows in [100, 1_000] {
+        let mut benchmark =
+            TranscriptBenchmark::new(TranscriptDataset::RunningAgentCommand { rows }, 120, 50);
+        group.bench_with_input(
+            BenchmarkId::new("viewport_relayout_unchanged_frame", rows),
+            &rows,
+            |b, _| {
+                b.iter(|| {
+                    benchmark.invalidate_viewport();
+                    black_box(benchmark.present())
+                })
+            },
+        );
+    }
+    group.finish();
+}
+
 fn benchmark_many_small_blocks(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("tui_transcript/many_small_blocks");
     for blocks in [100, 1_000, 10_000] {
@@ -107,6 +126,7 @@ criterion_group! {
         .measurement_time(Duration::from_secs(1));
     targets =
         benchmark_clipped_terminal_block,
+        benchmark_running_agent_command,
         benchmark_many_small_blocks,
         benchmark_long_agent_response,
         benchmark_offscreen_streaming_tail

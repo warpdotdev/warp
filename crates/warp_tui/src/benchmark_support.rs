@@ -7,10 +7,11 @@ use std::sync::Arc;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
-    AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType,
-    AIAgentText, AIAgentTextSection, AIBlockModel, AIBlockOutputStatus, AIConversationId,
-    AIRequestType, Appearance, BlockId, LLMId, MessageId, OutputStatusUpdateCallback,
-    RichContentItem, RichContentType, ServerOutputId, Shared, TerminalModel,
+    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentInput,
+    AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText, AIAgentTextSection,
+    AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, Appearance, BlockId, LLMId,
+    MessageId, OutputStatusUpdateCallback, RichContentItem, RichContentType, ServerOutputId,
+    Shared, TaskId, TerminalModel,
 };
 use warpui::platform::WindowStyle;
 use warpui::{
@@ -30,6 +31,7 @@ use crate::tui_block_list_viewport_source::{
     AgentBlockRegistry, CLISubagentBlockRegistry, HandoffBlockRegistry, TuiBlockListViewportSource,
 };
 use crate::tui_builder::TuiUiBuilder;
+use crate::tui_shell_command_view::TuiShellCommandViewAction;
 
 /// Shape of the retained transcript fixture.
 #[derive(Clone, Copy, Debug)]
@@ -38,6 +40,8 @@ pub enum TranscriptDataset {
     ManySmallBlocks { blocks: usize },
     /// One rich agent response containing `rows` hard lines.
     LongAgentResponse { rows: usize },
+    /// One expanded agent-requested command that remains active at `rows` output rows.
+    RunningAgentCommand { rows: usize },
     /// A streaming rich response below `preceding_rows` of fixed history.
     OffscreenStreamingTail {
         preceding_rows: usize,
@@ -130,6 +134,24 @@ impl TranscriptBenchmark {
                     .lock()
                     .simulate_block("history", output.as_str());
             }
+            let running_command_action =
+                if let TranscriptDataset::RunningAgentCommand { rows } = dataset {
+                    let action = benchmark_command_action();
+                    let output = "running command output\r\n".repeat(rows);
+                    let mut model = terminal_model.lock();
+                    model.simulate_long_running_block("printf benchmark", output.as_str());
+                    model
+                        .block_list_mut()
+                        .active_block_mut()
+                        .set_agent_interaction_mode_for_requested_command(
+                            action.id.clone(),
+                            None,
+                            AIConversationId::new(),
+                        );
+                    Some(action)
+                } else {
+                    None
+                };
 
             let agent_blocks = AgentBlockRegistry::new(RefCell::new(HashMap::new()));
             let cli_subagent_blocks = CLISubagentBlockRegistry::new(RefCell::new(HashMap::new()));
@@ -167,7 +189,8 @@ impl TranscriptBenchmark {
                         TranscriptDataset::OffscreenStreamingTail { .. } => {
                             streaming_text_status(text)
                         }
-                        TranscriptDataset::ManySmallBlocks { .. } => unreachable!(),
+                        TranscriptDataset::ManySmallBlocks { .. }
+                        | TranscriptDataset::RunningAgentCommand { .. } => unreachable!(),
                     };
                     let terminal_model_for_block = terminal_model.clone();
                     let agent_block = app.update(|ctx| {
@@ -189,6 +212,48 @@ impl TranscriptBenchmark {
                         RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
                         false,
                     );
+                    Some(view_id)
+                }
+                TranscriptDataset::RunningAgentCommand { .. } => {
+                    let (action_model, model_events) = add_test_action_model_and_events(&mut app);
+                    let action =
+                        running_command_action.expect("running command dataset has an action");
+                    let status = running_command_status(action);
+                    let terminal_model_for_block = terminal_model.clone();
+                    let agent_block = app.update(|ctx| {
+                        ctx.add_typed_action_tui_view(window_id, move |ctx| {
+                            TuiAIBlock::new(
+                                (AIConversationId::new(), AIAgentExchangeId::new()),
+                                Rc::new(BenchmarkAgentBlockModel { status }),
+                                action_model,
+                                &model_events,
+                                terminal_model_for_block,
+                                false,
+                                ctx,
+                            )
+                        })
+                    });
+                    let view_id = agent_block.id();
+                    agent_blocks
+                        .borrow_mut()
+                        .insert(view_id, agent_block.clone());
+                    terminal_model.lock().block_list_mut().append_rich_content(
+                        RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false),
+                        false,
+                    );
+                    app.update(|ctx| {
+                        let shell_view_id = agent_block
+                            .as_ref(ctx)
+                            .child_view_ids(ctx)
+                            .into_iter()
+                            .next()
+                            .expect("running command agent block has a shell child");
+                        ctx.dispatch_typed_action_for_view(
+                            window_id,
+                            shell_view_id,
+                            &TuiShellCommandViewAction::ToggleExpanded,
+                        );
+                    });
                     Some(view_id)
                 }
             };
@@ -215,6 +280,18 @@ impl TranscriptBenchmark {
         frame.buffer.content.iter().fold(0u64, |checksum, cell| {
             checksum.wrapping_add(cell.symbol().len() as u64)
         })
+    }
+
+    /// Re-renders the transcript viewport without dirtying retained agent blocks.
+    pub fn invalidate_viewport(&mut self) {
+        let invalidation = WindowInvalidation {
+            updated: EntityIdSet::from_iter([self.root.id()]),
+            ..Default::default()
+        };
+        self.app.read(|ctx| {
+            self.presenter
+                .invalidate(&invalidation, ctx, self.root.window_id(ctx));
+        });
     }
 
     /// Re-renders the root and long agent block before the next frame.
@@ -343,6 +420,36 @@ impl AIBlockModel for BenchmarkAgentBlockModel {
 
     fn request_type(&self, _app: &AppContext) -> AIRequestType {
         AIRequestType::Active
+    }
+}
+
+fn benchmark_command_action() -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from("benchmark-command".to_owned()),
+        task_id: TaskId::new("benchmark-task".to_owned()),
+        action: AIAgentActionType::RequestCommandOutput {
+            command: "printf benchmark".to_owned(),
+            is_read_only: Some(true),
+            is_risky: Some(false),
+            wait_until_completion: true,
+            uses_pager: Some(false),
+            rationale: None,
+            citations: Vec::new(),
+        },
+        requires_result: true,
+    }
+}
+
+fn running_command_status(action: AIAgentAction) -> AIBlockOutputStatus {
+    AIBlockOutputStatus::Complete {
+        output: Shared::new(AIAgentOutput {
+            messages: vec![AIAgentOutputMessage {
+                id: MessageId::new("benchmark-command-message".to_owned()),
+                message: AIAgentOutputMessageType::Action(action),
+                citations: Vec::new(),
+            }],
+            ..Default::default()
+        }),
     }
 }
 

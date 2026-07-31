@@ -372,6 +372,50 @@ fn terminal_block_is_collapsed_by_default_and_expands_inline() {
 }
 
 #[test]
+fn running_expanded_command_remeasures_only_when_row_extent_changes() {
+    App::test((), |mut app| async move {
+        let action = command_action("action-1", "printf rows");
+        let terminal_model = terminal_model_with_running_command(&action, "printf rows", "partial");
+        let view = add_shell_view(&mut app, action, terminal_model.clone());
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiShellCommandViewAction::ToggleExpanded, ctx);
+        });
+
+        let initial_extent = app.read(|app| {
+            let view = view.as_ref(app);
+            let extent = view
+                .dynamic_content_extent()
+                .expect("expanded running command has dynamic content");
+            assert!(view.needs_height_measurement());
+            view.record_content_extent_measurement(Some(extent));
+            assert!(!view.needs_height_measurement());
+            extent
+        });
+
+        terminal_model.lock().process_bytes("\rshort");
+        app.read(|app| {
+            assert!(!view.as_ref(app).needs_height_measurement());
+        });
+
+        let added_rows = "next row\r\n".repeat(100);
+        terminal_model.lock().process_bytes(added_rows.as_str());
+        app.read(|app| {
+            let view = view.as_ref(app);
+            let current_extent = view
+                .dynamic_content_extent()
+                .expect("command remains active after receiving output");
+            assert_ne!(current_extent, initial_extent);
+            assert!(view.needs_height_measurement());
+        });
+
+        terminal_model.lock().finish_block();
+        app.read(|app| {
+            assert!(!view.as_ref(app).needs_height_measurement());
+        });
+    });
+}
+
+#[test]
 fn long_path_command_wraps_in_full_with_the_chevron_on_the_first_row() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -632,6 +676,24 @@ fn terminal_model_with_command(
         None,
         AIConversationId::new(),
     );
+    Arc::new(FairMutex::new(model))
+}
+
+fn terminal_model_with_running_command(
+    action: &AIAgentAction,
+    command: &str,
+    output: &str,
+) -> Arc<FairMutex<TerminalModel>> {
+    let mut model = TerminalModel::mock(None, None);
+    model.simulate_long_running_block(command, output);
+    model
+        .block_list_mut()
+        .active_block_mut()
+        .set_agent_interaction_mode_for_requested_command(
+            action.id.clone(),
+            None,
+            AIConversationId::new(),
+        );
     Arc::new(FairMutex::new(model))
 }
 

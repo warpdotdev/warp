@@ -103,64 +103,75 @@ impl TuiBlockListViewportSource {
     ///
     /// A non-dirty band block is re-measured only when its cached height cannot
     /// be trusted: its last measurement was at a different width (reflow), it
-    /// has never been measured (no recorded width), or it is still streaming
-    /// (its height can grow without a per-update invalidation — e.g. an
-    /// expanded, still-running shell command). At a stable width with no
-    /// dynamic height, nothing extra is measured and the cached
-    /// `last_laid_out_height` is reused. Off-band blocks keep their cached
-    /// height until they scroll into the band.
+    /// has never been measured (no recorded width), or an expanded running
+    /// shell command's terminal row extent changed. Agent output updates dirty
+    /// their block directly, so streaming status alone does not require layout
+    /// polling. At a stable width with no dynamic height change, the cached
+    /// height is reused. Off-band blocks keep their cached height until they
+    /// scroll into the band.
     fn agent_heights_to_measure(
         &self,
         window: TuiViewportWindow,
         available_width: u16,
         app: &AppContext,
     ) -> HashSet<EntityId> {
-        let mut model = self.model.lock();
-        let mut view_ids = model.block_list_mut().take_dirty_rich_content_items();
+        let mut view_ids = self
+            .model
+            .lock()
+            .block_list_mut()
+            .take_dirty_rich_content_items();
+        let band_view_ids = {
+            let model = self.model.lock();
+            let block_list = model.block_list();
+            let band_top = window.scroll_top.saturating_sub(OVERHANG_ROWS);
+            let band_bottom = window
+                .scroll_top
+                .saturating_add(usize::from(window.viewport_height))
+                .saturating_add(OVERHANG_ROWS);
+            let mut cursor = block_list
+                .block_heights()
+                .cursor::<BlockHeight, BlockHeightSummary>();
+            cursor.seek_clamped(&BlockHeight::from(band_top as f64), SeekBias::Left);
+            let mut band_view_ids = Vec::new();
+            while let Some(item) = cursor.item() {
+                let item_top = cursor.start().height.as_f64().floor().max(0.0) as usize;
+                if item_top >= band_bottom {
+                    break;
+                }
+                let item_bottom = item_top.saturating_add(item.height().as_f64().ceil() as usize);
+                if item_bottom > band_top
+                    && let BlockHeightItem::RichContent(rich_content) = item
+                    && !rich_content.should_hide
+                {
+                    band_view_ids.push(rich_content.view_id);
+                }
+                cursor.next();
+            }
+            band_view_ids
+        };
 
         let agent_blocks = self.agent_blocks.borrow();
         let cli_subagent_blocks = self.cli_subagent_blocks.borrow();
         let handoff_blocks = self.handoff_blocks.borrow();
-        let block_list = model.block_list();
-        let band_top = window.scroll_top.saturating_sub(OVERHANG_ROWS);
-        let band_bottom = window
-            .scroll_top
-            .saturating_add(usize::from(window.viewport_height))
-            .saturating_add(OVERHANG_ROWS);
-        let mut cursor = block_list
-            .block_heights()
-            .cursor::<BlockHeight, BlockHeightSummary>();
-        cursor.seek_clamped(&BlockHeight::from(band_top as f64), SeekBias::Left);
-        while let Some(item) = cursor.item() {
-            let item_top = cursor.start().height.as_f64().floor().max(0.0) as usize;
-            if item_top >= band_bottom {
-                break;
-            }
-            let item_bottom = item_top.saturating_add(item.height().as_f64().ceil() as usize);
-            if item_bottom > band_top
-                && let BlockHeightItem::RichContent(rich_content) = item
-                && !rich_content.should_hide
-            {
-                if let Some(view) = agent_blocks.get(&rich_content.view_id) {
-                    if view
-                        .as_ref(app)
-                        .needs_height_measurement(available_width, app)
-                    {
-                        view_ids.insert(rich_content.view_id);
-                    }
-                } else if let Some(view) = cli_subagent_blocks.get(&rich_content.view_id)
-                    && view
-                        .as_ref(app)
-                        .needs_height_measurement(available_width, app)
+        for view_id in band_view_ids {
+            if let Some(view) = agent_blocks.get(&view_id) {
+                if view
+                    .as_ref(app)
+                    .needs_height_measurement(available_width, app)
                 {
-                    view_ids.insert(rich_content.view_id);
-                } else if let Some(view) = handoff_blocks.get(&rich_content.view_id)
-                    && view.as_ref(app).needs_height_measurement(available_width)
-                {
-                    view_ids.insert(rich_content.view_id);
+                    view_ids.insert(view_id);
                 }
+            } else if let Some(view) = cli_subagent_blocks.get(&view_id)
+                && view
+                    .as_ref(app)
+                    .needs_height_measurement(available_width, app)
+            {
+                view_ids.insert(view_id);
+            } else if let Some(view) = handoff_blocks.get(&view_id)
+                && view.as_ref(app).needs_height_measurement(available_width)
+            {
+                view_ids.insert(view_id);
             }
-            cursor.next();
         }
         view_ids
     }
