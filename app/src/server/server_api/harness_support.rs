@@ -131,12 +131,33 @@ impl CheckpointGeneration {
         Self(value.into())
     }
 
+    /// True when `value` satisfies the server's `[A-Za-z0-9._-]{1,128}` format and does not
+    /// contain the reserved `__` separator used by
+    /// `checkpoint_<generation>__<logical_name>` storage object names.
+    fn is_valid(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 128
+            && !value.contains("__")
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+    }
+
     /// Construct from a pre-validated string. Crate-visible so `driver::snapshot` can
     /// mint generations without duplicating this type.
+    ///
+    /// The debug assertion keeps the type's documented invariant honest: previously nothing
+    /// enforced it, so "validated" was aspirational. `snapshot::mint_generation` is the only
+    /// production caller and provably satisfies it, hence a `debug_assert!` rather than a
+    /// fallible constructor.
     // Only called by `snapshot::mint_generation`, which is itself unused until the
     // periodic checkpoint coordinator (a follow-up, stacked PR) lands.
     #[allow(dead_code)]
     pub(crate) fn from_validated(value: String) -> Self {
+        debug_assert!(
+            Self::is_valid(&value),
+            "checkpoint generation must match [A-Za-z0-9._-]{{1,128}} and exclude `__`: {value}"
+        );
         Self(value)
     }
 

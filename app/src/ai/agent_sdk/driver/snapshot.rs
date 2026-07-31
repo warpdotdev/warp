@@ -584,7 +584,18 @@ struct SnapshotUploadFile {
 enum EntryStatus {
     Uploaded,
     Failed,
+    /// Deliberately dropped from the upload plan to honor [`MAX_SNAPSHOT_FILES_PER_RUN`].
+    /// This is a policy decision rather than a failure, so a checkpoint attempt may still
+    /// commit the kept subset.
     Skipped,
+    /// The server returned no presigned target for this blob — a contract violation of
+    /// `upload-snapshot`'s positional alignment (see the length-mismatch warning in
+    /// [`upload_gathered_snapshot`]).
+    ///
+    /// Deliberately distinct from [`EntryStatus::Skipped`]: nothing intentional happened
+    /// here, so a checkpoint attempt that hits this must be withheld rather than committing
+    /// a silently smaller object set over a previously complete selected checkpoint.
+    NoTarget,
     GatherFailed,
     ReadFailed,
 }
@@ -595,6 +606,7 @@ impl EntryStatus {
             Self::Uploaded => "uploaded",
             Self::Failed => "failed",
             Self::Skipped => "skipped",
+            Self::NoTarget => "no_target",
             Self::GatherFailed => "gather_failed",
             Self::ReadFailed => "read_failed",
         }
@@ -613,6 +625,7 @@ struct SnapshotSummary {
     uploaded: usize,
     failed: usize,
     skipped: usize,
+    no_target: usize,
     gather_failed: usize,
     read_failed: usize,
     total: usize,
@@ -625,6 +638,7 @@ impl SnapshotSummary {
             uploaded: 0,
             failed: 0,
             skipped: 0,
+            no_target: 0,
             gather_failed: 0,
             read_failed: 0,
             total: entries.len(),
@@ -635,6 +649,7 @@ impl SnapshotSummary {
                 EntryStatus::Uploaded => s.uploaded += 1,
                 EntryStatus::Failed => s.failed += 1,
                 EntryStatus::Skipped => s.skipped += 1,
+                EntryStatus::NoTarget => s.no_target += 1,
                 EntryStatus::GatherFailed => s.gather_failed += 1,
                 EntryStatus::ReadFailed => s.read_failed += 1,
             }
@@ -671,10 +686,15 @@ pub(super) enum CheckpointResult {
     /// beyond reading local state were made.
     Skipped,
     /// A required upload (a non-cap-skipped blob, or the manifest), the upload-target
-    /// allocation, or the commit call itself failed. `generation` is `None` only when the
-    /// attempt was cut off before a generation was even minted (e.g. an external timeout
-    /// wrapping the whole attempt). Any minted generation's objects (if uploaded) are left
-    /// as uncommitted debris in storage; the server's existing marker (if any) is untouched.
+    /// allocation, or the commit call itself failed. Any minted generation's objects (if
+    /// uploaded) are left as uncommitted debris in storage; the server's existing marker
+    /// (if any) is untouched.
+    ///
+    /// `generation` is `None` when the attempt never reported one back to the caller. That
+    /// covers both "cut off before a generation was minted" and "cut off by an external
+    /// timeout wrapping the whole attempt" — in the latter case a generation may well have
+    /// been minted and objects uploaded, so `None` must not be read as "nothing landed in
+    /// storage".
     Failed {
         generation: Option<CheckpointGeneration>,
         reason: String,
@@ -731,6 +751,10 @@ pub(super) fn mint_generation() -> CheckpointGeneration {
 /// field, so no client-side renaming is needed before that point.
 #[allow(dead_code)]
 fn storage_name(generation: &CheckpointGeneration, logical: &str) -> String {
+    debug_assert!(
+        !logical.contains("__"),
+        "logical snapshot filename must not contain the reserved `__` separator: {logical}"
+    );
     format!("checkpoint_{}__{logical}", generation.as_str())
 }
 
@@ -1036,10 +1060,6 @@ async fn run_checkpoint_pipeline(
         pre_upload_entries,
     )
     .await;
-    log::info!(
-        "Checkpoint attempt generation={generation} pending commit",
-        generation = generation.as_str()
-    );
     let Some(outcome) = outcome else {
         return CheckpointResult::Failed {
             generation: Some(generation),
@@ -1047,6 +1067,10 @@ async fn run_checkpoint_pipeline(
         };
     };
     log_snapshot_outcome(&outcome);
+    log::info!(
+        "Checkpoint attempt generation={generation} pending commit",
+        generation = generation.as_str()
+    );
 
     if !outcome.manifest_uploaded {
         return CheckpointResult::Failed {
@@ -1054,14 +1078,19 @@ async fn run_checkpoint_pipeline(
             reason: "manifest failed to upload".to_string(),
         };
     }
+    // `NoTarget` is fatal alongside `Failed`: the server owes us a presigned target for
+    // every requested filename, so a missing one means this attempt would otherwise commit
+    // a silently smaller object set and make it the selected checkpoint, discarding a
+    // previously complete one. Only `Skipped` (the deliberate per-run cap) is tolerated.
     if outcome
         .entries
         .iter()
-        .any(|e| e.status == EntryStatus::Failed)
+        .any(|e| matches!(e.status, EntryStatus::Failed | EntryStatus::NoTarget))
     {
         return CheckpointResult::Failed {
             generation: Some(generation),
-            reason: "one or more required blobs failed to upload".to_string(),
+            reason: "one or more required blobs failed to upload or had no upload target"
+                .to_string(),
         };
     }
 
@@ -1388,10 +1417,16 @@ async fn gather_file(
     let path = Path::new(file_path);
     match tokio::fs::read(path).await {
         Ok(content) => {
-            let preferred = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| file_path.to_string());
+            // Sanitize before uniquifying: the basename comes from an agent-created file, and
+            // it ends up inside the `checkpoint_<generation>__<logical_name>` storage name
+            // that the exact-set commit has to reproduce byte for byte.
+            let preferred = sanitize_name_component(
+                &path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| file_path.to_string()),
+                "snapshot_artifact",
+            );
             let filename = unique_filename(&preferred, used_filenames);
             let mime = mime_guess::from_path(path)
                 .first_or_octet_stream()
@@ -1430,18 +1465,21 @@ async fn gather_file(
 }
 
 /// Upload a single prepared file through the retry helper.
-/// Produces an [`EntryResult`] labelled with the file's filename, or marked `skipped` if the
-/// server did not return a target for it.
+/// Produces an [`EntryResult`] labelled with the file's filename, or marked
+/// [`EntryStatus::NoTarget`] if the server did not return a target for it.
 async fn upload_entry(
     http: &http_client::Client,
     file: &SnapshotUploadFile,
     target_map: &HashMap<String, UploadTarget>,
 ) -> EntryResult {
     let Some(target) = target_map.get(&file.filename) else {
-        log::warn!("No upload target for file '{}', skipping", file.filename);
+        log::warn!(
+            "No upload target returned by the server for file '{}'; it will not be uploaded",
+            file.filename
+        );
         return EntryResult {
             label: file.filename.clone(),
-            status: EntryStatus::Skipped,
+            status: EntryStatus::NoTarget,
             error: Some("no upload target returned by server".to_string()),
         };
     };
@@ -1488,7 +1526,11 @@ fn fold_upload_results(
                     repo_entry.status = "failed";
                     repo_entry.error = entry.error.clone();
                 }
-                EntryStatus::Skipped => {
+                // Both surface in the manifest as `skipped` so downstream rehydration
+                // consumers keep seeing a stable status vocabulary; the distinguishing
+                // detail lives in `error` (and in the checkpoint gate, which treats
+                // `NoTarget` as fatal).
+                EntryStatus::Skipped | EntryStatus::NoTarget => {
                     repo_entry.uploaded = Some(false);
                     repo_entry.status = "skipped";
                     repo_entry.error = entry.error.clone();
@@ -1514,7 +1556,7 @@ fn fold_upload_results(
                     file_entry.status = "failed";
                     file_entry.error = entry.error.clone();
                 }
-                EntryStatus::Skipped => {
+                EntryStatus::Skipped | EntryStatus::NoTarget => {
                     file_entry.uploaded = Some(false);
                     file_entry.status = "skipped";
                     file_entry.error = entry.error.clone();
@@ -1615,11 +1657,13 @@ fn log_snapshot_outcome(outcome: &SnapshotOutcome) {
         "manifest: failed"
     };
     let header = format!(
-        "Snapshot upload: {}/{} uploaded (failed: {}, skipped: {}, gather_failed: {}, read_failed: {}; {manifest_bit})",
+        "Snapshot upload: {}/{} uploaded (failed: {}, skipped: {}, no_target: {}, \
+         gather_failed: {}, read_failed: {}; {manifest_bit})",
         summary.uploaded,
         summary.total,
         summary.failed,
         summary.skipped,
+        summary.no_target,
         summary.gather_failed,
         summary.read_failed,
     );
@@ -1715,23 +1759,42 @@ async fn git_output_string(repo_dir: &Path, args: &[&str]) -> Option<String> {
     if value.is_empty() { None } else { Some(value) }
 }
 
-fn sanitize_filename_component(value: &str) -> String {
-    let sanitized = value
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
+/// Collapse `value` into the server's `[A-Za-z0-9._-]` charset, squashing runs of `_` so the
+/// result can never contain `__`.
+///
+/// `__` is reserved as the separator in `checkpoint_<generation>__<logical_name>` storage
+/// object names (see [`storage_name`] and [`CheckpointGeneration`]), and the logical name half
+/// is derived from **agent-controlled** input: workspace file basenames and repo directory
+/// names. Leaving it unsanitized lets an agent-created file such as `a__b.txt` (or, worse,
+/// `checkpoint_1700000000000-0__x.txt`) produce an ambiguous storage name, which either fails
+/// the server's existence check at commit time — losing the whole checkpoint — or lands under
+/// a different generation than intended.
+///
+/// Returns `fallback` when nothing usable survives sanitization.
+fn sanitize_name_component(value: &str, fallback: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len());
+    for c in value.chars() {
+        let c = if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+            c
+        } else {
+            '_'
+        };
+        // Squash runs so `__` can never appear in the output.
+        if c == '_' && sanitized.ends_with('_') {
+            continue;
+        }
+        sanitized.push(c);
+    }
     let trimmed = sanitized.trim_matches('_');
     if trimmed.is_empty() {
-        "repo".to_string()
+        fallback.to_string()
     } else {
         trimmed.to_string()
     }
+}
+
+fn sanitize_filename_component(value: &str) -> String {
+    sanitize_name_component(value, "repo")
 }
 
 fn unique_filename(preferred: &str, used: &mut HashSet<String>) -> String {
