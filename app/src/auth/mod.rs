@@ -41,6 +41,7 @@ use crate::code::editor_management::{CodeEditorStatus, CodeEditorSummary};
 use crate::env_vars::manager::EnvVarCollectionManager;
 use crate::notebooks::manager::NotebookManager;
 use crate::palette::PaletteMode;
+use crate::root_view::RootView;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::{PaletteSource, TelemetryEvent};
@@ -330,14 +331,17 @@ pub fn log_out(app: &mut AppContext) {
         manager.clear_joined();
     });
 
-    // Dispatch action on root view of every open window so the state can be updated
-    // correctly.
+    // Dispatch the GUI root-view action on every open GUI window so its state can be updated
+    // correctly. Other front-ends, such as the TUI, manage their logout transition separately.
     let window_ids = app.window_ids().collect_vec();
     for window_id in window_ids {
-        if let Some(root_view_id) = app.root_view_id(window_id) {
+        if let Some(root_views) = app.views_of_type::<RootView>(window_id) {
+            let Some(root_view) = root_views.first() else {
+                continue;
+            };
             app.dispatch_action(
                 window_id,
-                &[root_view_id],
+                &[root_view.id()],
                 "root_view:log_out",
                 &(),
                 log::Level::Info,
