@@ -325,10 +325,12 @@ fn ensure_terminal_session(
 
     let resume_token = sessions.update(ctx, |sessions, _| sessions.take_resume_token());
     let window_id = root.window_id(ctx);
+    let handles_first_run_onboarding = resume_token.is_none();
     let (_, surface) = TuiSessions::create_local_terminal_session(
         sessions,
         window_id,
         true,
+        handles_first_run_onboarding,
         std::env::current_dir().ok(),
         ctx,
     );

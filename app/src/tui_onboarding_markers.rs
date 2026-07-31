@@ -105,6 +105,7 @@ impl TuiOnboardingMarkers {
             load_timeout: MARKER_LOAD_TIMEOUT,
         }
     }
+
     #[cfg(test)]
     fn new_loading_for_test(
         onboarding_client: Arc<dyn TuiOnboardingClient>,
@@ -140,6 +141,7 @@ impl TuiOnboardingMarkers {
         );
         ctx.notify();
     }
+
     /// Invalidates the previous account snapshot before a signed-out terminal
     /// can be created for the next browser authentication flow.
     pub fn reset_for_account_transition(&mut self, ctx: &mut ModelContext<Self>) {

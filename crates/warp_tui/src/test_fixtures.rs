@@ -142,12 +142,34 @@ pub(crate) fn add_test_terminal_session(
     ViewHandle<TuiTerminalSessionView>,
     ModelHandle<Box<dyn TerminalManagerTrait>>,
 ) {
-    add_test_terminal_session_with_settings_file_error(app, window_id, None)
+    add_test_terminal_session_with_options(app, window_id, false, None)
+}
+
+pub(crate) fn add_test_terminal_session_with_first_run_onboarding(
+    app: &mut App,
+    window_id: WindowId,
+) -> (
+    ViewHandle<TuiTerminalSessionView>,
+    ModelHandle<Box<dyn TerminalManagerTrait>>,
+) {
+    add_test_terminal_session_with_options(app, window_id, true, None)
 }
 
 pub(crate) fn add_test_terminal_session_with_settings_file_error(
     app: &mut App,
     window_id: WindowId,
+    initial_settings_file_error: Option<SettingsFileError>,
+) -> (
+    ViewHandle<TuiTerminalSessionView>,
+    ModelHandle<Box<dyn TerminalManagerTrait>>,
+) {
+    add_test_terminal_session_with_options(app, window_id, false, initial_settings_file_error)
+}
+
+fn add_test_terminal_session_with_options(
+    app: &mut App,
+    window_id: WindowId,
+    handles_first_run_onboarding: bool,
     initial_settings_file_error: Option<SettingsFileError>,
 ) -> (
     ViewHandle<TuiTerminalSessionView>,
@@ -165,6 +187,7 @@ pub(crate) fn add_test_terminal_session_with_settings_file_error(
                 TuiExitSummaryHandle::default(),
                 false,
                 AIConversationAutoexecuteMode::RespectUserSettings,
+                handles_first_run_onboarding,
                 initial_settings_file_error,
                 ctx,
             )

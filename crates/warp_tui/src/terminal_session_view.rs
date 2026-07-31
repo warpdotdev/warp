@@ -1434,6 +1434,7 @@ impl TuiTerminalSessionView {
         exit_summary: TuiExitSummaryHandle,
         keyboard_enhancement_supported: bool,
         default_autoexecute_mode: AIConversationAutoexecuteMode,
+        handles_first_run_onboarding: bool,
         initial_settings_file_error: Option<SettingsFileError>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -1768,13 +1769,16 @@ impl TuiTerminalSessionView {
         let suggestions_mode_for_input = suggestions_mode.clone();
         let terminal_model_for_input = model.clone();
         let orchestration_tab_bar = ctx.add_typed_action_tui_view(|_| TuiTabBarView::empty());
-        let onboarding_markers = TuiOnboardingMarkers::handle(ctx);
-        let show_first_zero_state = onboarding_markers.update(ctx, |markers, ctx| {
-            if markers.is_ready() {
-                markers.consume(TuiOnboardingMarker::FirstZeroState, ctx)
-            } else {
-                true
-            }
+        let onboarding_markers =
+            handles_first_run_onboarding.then(|| TuiOnboardingMarkers::handle(ctx));
+        let show_first_zero_state = onboarding_markers.as_ref().is_some_and(|markers| {
+            markers.update(ctx, |markers, ctx| {
+                if markers.is_ready() {
+                    markers.consume(TuiOnboardingMarker::FirstZeroState, ctx)
+                } else {
+                    true
+                }
+            })
         });
         let session_state = ctx.add_model(|_| {
             TuiTerminalSessionStateModel::new(
@@ -1787,27 +1791,29 @@ impl TuiTerminalSessionView {
                 show_first_zero_state,
             )
         });
-        let session_state_for_markers = session_state.clone();
-        ctx.subscribe_to_model(
-            &onboarding_markers,
-            move |_, markers, event, ctx| match event {
-                TuiOnboardingMarkersEvent::Loading => {
-                    session_state_for_markers.update(ctx, |state, ctx| {
-                        state.set_show_first_zero_state(true, ctx);
-                    });
-                }
-                TuiOnboardingMarkersEvent::Ready => {
-                    let keep_showing = markers.update(ctx, |markers, ctx| {
-                        markers.consume(TuiOnboardingMarker::FirstZeroState, ctx)
-                    });
-                    session_state_for_markers.update(ctx, |state, ctx| {
-                        if state.show_first_zero_state() {
-                            state.set_show_first_zero_state(keep_showing, ctx);
-                        }
-                    });
-                }
-            },
-        );
+        if let Some(onboarding_markers) = onboarding_markers {
+            let session_state_for_markers = session_state.clone();
+            ctx.subscribe_to_model(
+                &onboarding_markers,
+                move |_, markers, event, ctx| match event {
+                    TuiOnboardingMarkersEvent::Loading => {
+                        session_state_for_markers.update(ctx, |state, ctx| {
+                            state.set_show_first_zero_state(true, ctx);
+                        });
+                    }
+                    TuiOnboardingMarkersEvent::Ready => {
+                        let keep_showing = markers.update(ctx, |markers, ctx| {
+                            markers.consume(TuiOnboardingMarker::FirstZeroState, ctx)
+                        });
+                        session_state_for_markers.update(ctx, |state, ctx| {
+                            if state.show_first_zero_state() {
+                                state.set_show_first_zero_state(keep_showing, ctx);
+                            }
+                        });
+                    }
+                },
+            );
+        }
         let input_editor_for_input = input_editor_model.clone();
         let session_state_for_input = session_state.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
