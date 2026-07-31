@@ -23,6 +23,7 @@ use warpui::{AppContext, Entity, SingletonEntity};
 use crate::TuiMountFn;
 use crate::ai::mcp::FileBasedMCPManager;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
+use crate::auth::auth_state::AuthState;
 use crate::auth::{self, AuthStateProvider};
 use crate::terminal::focus_env::FOCUS_URL_ENV;
 use crate::tui_onboarding_markers::TuiOnboardingMarkers;
@@ -30,7 +31,7 @@ use crate::tui_onboarding_markers::TuiOnboardingMarkers;
 /// Login state of the headless TUI, observed by the `warp_tui` root view to
 /// decide whether to show the login placeholder or the input UI.
 pub enum TuiLoginPhase {
-    /// Logged out and waiting for the user to explicitly begin browser login.
+    /// No validated user identity is available, so the login welcome remains visible.
     SignedOutWelcome,
     /// Waiting for the user to finish the device-authorization login. The
     /// exact URL opened in the browser is surfaced once known (the alt screen
@@ -168,13 +169,8 @@ impl SingletonEntity for TuiLoginModel {}
 /// Registers the [`TuiLoginModel`], mounts the TUI immediately, and shows an
 /// explicit welcome screen when the user isn't already logged in.
 pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
-    let logged_in = AuthStateProvider::as_ref(ctx).get().is_logged_in();
-
-    let initial_phase = if logged_in {
-        TuiLoginPhase::LoggedIn
-    } else {
-        TuiLoginPhase::SignedOutWelcome
-    };
+    let initial_phase = initial_login_phase(AuthStateProvider::as_ref(ctx).get());
+    let logged_in = matches!(&initial_phase, TuiLoginPhase::LoggedIn);
     ctx.add_singleton_model(move |_| TuiLoginModel {
         phase: initial_phase,
         browser_flow: TuiAuthBrowserFlow::DirectDeviceAuthorization,
@@ -199,6 +195,18 @@ pub(crate) fn init(mount: TuiMountFn, ctx: &mut AppContext) {
 
     if logged_in {
         activate_global_mcp_servers(ctx);
+    }
+}
+
+fn has_validated_identity(auth_state: &AuthState) -> bool {
+    auth_state.is_logged_in() && auth_state.user_id().is_some()
+}
+
+fn initial_login_phase(auth_state: &AuthState) -> TuiLoginPhase {
+    if has_validated_identity(auth_state) {
+        TuiLoginPhase::LoggedIn
+    } else {
+        TuiLoginPhase::SignedOutWelcome
     }
 }
 

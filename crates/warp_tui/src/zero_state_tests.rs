@@ -7,7 +7,8 @@ use chrono::DateTime;
 use uuid::Uuid;
 use warp::tui_export::{
     TuiMcpConfigDiagnostic, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerSource,
-    TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport, register_tui_session_view_test_singletons,
+    TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport, TuiUserInfoSnapshot,
+    register_tui_session_view_test_singletons,
 };
 use warpui::{EntityIdMap, SingletonEntity};
 use warpui_core::elements::animation::AnimationClock;
@@ -490,6 +491,30 @@ fn login_line_shows_signed_in_account_email() {
             lines.join("\n")
         );
     });
+}
+
+#[test]
+fn login_line_never_claims_signed_in_without_an_identity() {
+    let snapshot = TuiUserInfoSnapshot {
+        is_logged_in: true,
+        ..Default::default()
+    };
+
+    assert_eq!(super::login_line_label("Signed in as", snapshot), None);
+}
+
+#[test]
+fn login_line_falls_back_to_validated_user_id() {
+    let snapshot = TuiUserInfoSnapshot {
+        is_logged_in: true,
+        user_id: Some("user-123".to_owned()),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        super::login_line_label("Signed in as", snapshot),
+        Some("Signed in as user-123".to_owned())
+    );
 }
 
 /// At a narrow terminal the complete displayed path must wrap across rows

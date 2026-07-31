@@ -6394,38 +6394,55 @@ fn killing_child_does_not_exit_tui_parent_session_remains_alive() {
 }
 
 #[test]
-fn status_email_fallback_chain_covers_username_and_signed_in_arms() {
+fn status_email_fallback_chain_requires_a_validated_identity() {
     // Arm 1: non-empty email wins regardless of username.
     assert_eq!(
         super::resolve_status_email(
             Some("user@example.com".to_owned()),
             Some("display_name".to_owned()),
+            Some("user-123".to_owned()),
             true,
         ),
         "user@example.com"
     );
     // Arm 2a: empty email falls back to a non-empty username.
     assert_eq!(
-        super::resolve_status_email(Some(String::new()), Some("display_name".to_owned()), true,),
+        super::resolve_status_email(
+            Some(String::new()),
+            Some("display_name".to_owned()),
+            Some("user-123".to_owned()),
+            true,
+        ),
         "display_name"
     );
     // Arm 2b: None email falls back to a non-empty username.
     assert_eq!(
-        super::resolve_status_email(None, Some("display_name".to_owned()), true),
+        super::resolve_status_email(
+            None,
+            Some("display_name".to_owned()),
+            Some("user-123".to_owned()),
+            true,
+        ),
         "display_name"
     );
-    // Arm 3: both email and username absent/empty but logged in → "Signed in".
+    // Arm 3: user ID is the final validated identity fallback.
     assert_eq!(
-        super::resolve_status_email(None, None, true),
-        super::STATUS_SIGNED_IN
+        super::resolve_status_email(None, None, Some("user-123".to_owned()), true),
+        "user-123"
     );
+    // Arm 4: a missing identity never degrades to bare "Signed in".
     assert_eq!(
-        super::resolve_status_email(Some(String::new()), Some(String::new()), true,),
-        super::STATUS_SIGNED_IN
+        super::resolve_status_email(Some(String::new()), Some(String::new()), None, true),
+        super::STATUS_NOT_SIGNED_IN
     );
-    // Arm 4: fully logged out → "Not signed in".
+    // Arm 5: an identity is ignored unless auth has been validated.
     assert_eq!(
-        super::resolve_status_email(None, None, false),
+        super::resolve_status_email(
+            Some("user@example.com".to_owned()),
+            Some("display_name".to_owned()),
+            Some("user-123".to_owned()),
+            false,
+        ),
         super::STATUS_NOT_SIGNED_IN
     );
 }

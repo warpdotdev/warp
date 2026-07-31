@@ -17,7 +17,7 @@ use ai::project_context::model::{
 use warp::tui_export::{
     ActiveSession, ActiveSessionEvent, ChangelogModel, ChangelogModelEvent, ChangelogState,
     SkillManager, SkillManagerEvent, TuiMcpManager, TuiMcpServerStatus, TuiUserInfoManager,
-    TuiUserInfoManagerEvent,
+    TuiUserInfoManagerEvent, TuiUserInfoSnapshot,
 };
 use warp_core::channel::ChannelState;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -782,18 +782,24 @@ fn render_login_line_with_prefix(
     let muted = builder.muted_text_style();
     let dim = builder.dim_text_style();
     let user_info = TuiUserInfoManager::as_ref(app).snapshot(app);
-    let display = user_info
-        .email
-        .filter(|email| !email.is_empty())
-        .or(user_info.username.filter(|username| !username.is_empty()));
-    let (label, style) = if let Some(display) = display {
-        (format!("{signed_in_prefix} {display}"), muted)
-    } else if user_info.is_logged_in {
-        ("Signed in".to_owned(), muted)
+    let (label, style) = if let Some(label) = login_line_label(signed_in_prefix, user_info) {
+        (label, muted)
     } else {
         ("Not signed in".to_owned(), dim)
     };
     TuiText::new(label).with_style(style).truncate().finish()
+}
+
+fn login_line_label(signed_in_prefix: &str, user_info: TuiUserInfoSnapshot) -> Option<String> {
+    if !user_info.is_logged_in {
+        return None;
+    }
+    user_info
+        .email
+        .filter(|email| !email.is_empty())
+        .or(user_info.username.filter(|username| !username.is_empty()))
+        .or(user_info.user_id.filter(|user_id| !user_id.is_empty()))
+        .map(|display| format!("{signed_in_prefix} {display}"))
 }
 
 /// The version line: the release version (or "dev build"), with the

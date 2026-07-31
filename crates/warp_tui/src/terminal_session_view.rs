@@ -197,7 +197,6 @@ const STATUS_UNAVAILABLE: &str = "\u{2014}"; // em dash
 const STATUS_UNTITLED_SESSION: &str = "Untitled";
 const STATUS_DEV_BUILD: &str = "dev build";
 const STATUS_NOT_SIGNED_IN: &str = "Not signed in";
-const STATUS_SIGNED_IN: &str = "Signed in";
 
 fn status_menu_is_open(mode: TuiInputSuggestionsMode) -> bool {
     matches!(
@@ -542,23 +541,22 @@ fn export_file_success_message(export: &ConversationFileExport) -> String {
 /// chain as `render_login_line`:
 /// 1. `email` when non-empty
 /// 2. `username` when non-empty (display name or email fallback from auth)
-/// 3. `STATUS_SIGNED_IN` when `is_logged_in` is true but no identifier
-/// 4. `STATUS_NOT_SIGNED_IN` when fully logged out
+/// 3. `user_id` when non-empty
+/// 4. `STATUS_NOT_SIGNED_IN` when no validated identity is available
 fn resolve_status_email(
     email: Option<String>,
     username: Option<String>,
+    user_id: Option<String>,
     is_logged_in: bool,
 ) -> String {
+    if !is_logged_in {
+        return STATUS_NOT_SIGNED_IN.to_owned();
+    }
     email
         .filter(|e| !e.is_empty())
         .or_else(|| username.filter(|u| !u.is_empty()))
-        .unwrap_or_else(|| {
-            if is_logged_in {
-                STATUS_SIGNED_IN.to_owned()
-            } else {
-                STATUS_NOT_SIGNED_IN.to_owned()
-            }
-        })
+        .or_else(|| user_id.filter(|id| !id.is_empty()))
+        .unwrap_or_else(|| STATUS_NOT_SIGNED_IN.to_owned())
 }
 
 fn format_status_conversation_id(conversation_id: Option<AIConversationId>) -> String {
@@ -2750,8 +2748,12 @@ impl TuiTerminalSessionView {
         let org = user_info
             .org
             .unwrap_or_else(|| STATUS_UNAVAILABLE.to_owned());
-        let email =
-            resolve_status_email(user_info.email, user_info.username, user_info.is_logged_in);
+        let email = resolve_status_email(
+            user_info.email,
+            user_info.username,
+            user_info.user_id,
+            user_info.is_logged_in,
+        );
         status_menu::TuiStatusInfo {
             version,
             session: session_name,
