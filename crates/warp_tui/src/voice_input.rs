@@ -5,8 +5,9 @@ use std::time::Duration;
 use warp::settings::{AISettings, TuiVoiceSettings};
 pub(crate) use warp::tui_export::VoiceInputLifecycleState as TuiVoiceInputState;
 use warp::tui_export::{
-    AIRequestUsageModel, StartListeningError, TranscribeError, UserWorkspaces, VoiceInput,
-    VoiceInputToggledFrom, VoiceSessionResult, VoiceTranscriber,
+    AIRequestUsageModel, BlocklistAIInputModel, StartListeningError, TelemetryEvent,
+    TranscribeError, UserWorkspaces, VoiceInput, VoiceInputToggledFrom, VoiceSessionResult,
+    VoiceTranscriber,
 };
 use warp_core::settings::Setting as _;
 use warp_errors::report_error;
@@ -14,7 +15,7 @@ use warpui::event::KeyState;
 use warpui_core::r#async::SpawnedFutureHandle;
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::platform::keyboard::KeyCode;
-use warpui_core::{AppContext, Entity, ModelContext, SingletonEntity};
+use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TuiVoiceInputEvent {
@@ -69,6 +70,7 @@ impl VoiceInputStartSource {
 
 pub(crate) struct TuiVoiceInputModel {
     state: TuiVoiceInputState,
+    input_mode: ModelHandle<BlocklistAIInputModel>,
     /// The physical modifier holding the current recording open. Only ever set
     /// while a hold-to-talk press owns a `Listening` session, so a release can
     /// never stop a recording another entry point started.
@@ -83,9 +85,13 @@ impl Entity for TuiVoiceInputModel {
 }
 
 impl TuiVoiceInputModel {
-    pub(crate) fn new(_ctx: &mut ModelContext<Self>) -> Self {
+    pub(crate) fn new(
+        input_mode: ModelHandle<BlocklistAIInputModel>,
+        _ctx: &mut ModelContext<Self>,
+    ) -> Self {
         Self {
             state: TuiVoiceInputState::Idle,
+            input_mode,
             hold_key: None,
             animation_clock: AnimationClock::starting_at(Duration::ZERO),
             recording_handle: None,
@@ -150,6 +156,15 @@ impl TuiVoiceInputModel {
         self.hold_key = source.hold_key();
         self.animation_clock = AnimationClock::starting_at(Duration::ZERO);
         self.set_state(TuiVoiceInputState::Listening, ctx);
+        warp::send_telemetry_from_ctx!(
+            TelemetryEvent::VoiceInputUsed {
+                action: "start".to_owned(),
+                session_duration_ms: None,
+                is_udi_enabled: false,
+                current_input_mode: self.input_mode.as_ref(ctx).input_type(),
+            },
+            ctx
+        );
         self.recording_handle = Some(ctx.spawn(
             async move { session.await_result().await },
             Self::handle_session_result,
@@ -263,9 +278,37 @@ impl TuiVoiceInputModel {
             return;
         }
 
-        let VoiceSessionResult::Audio { wav_base64, .. } = result else {
-            self.fail("Voice input stopped", ctx);
-            return;
+        let wav_base64 = match result {
+            VoiceSessionResult::Audio {
+                wav_base64,
+                session_duration_ms,
+            } => {
+                warp::send_telemetry_from_ctx!(
+                    TelemetryEvent::VoiceInputUsed {
+                        action: "stop".to_owned(),
+                        session_duration_ms: Some(session_duration_ms),
+                        is_udi_enabled: false,
+                        current_input_mode: self.input_mode.as_ref(ctx).input_type(),
+                    },
+                    ctx
+                );
+                wav_base64
+            }
+            VoiceSessionResult::Aborted {
+                session_duration_ms,
+            } => {
+                warp::send_telemetry_from_ctx!(
+                    TelemetryEvent::VoiceInputUsed {
+                        action: "cancel".to_owned(),
+                        session_duration_ms,
+                        is_udi_enabled: false,
+                        current_input_mode: self.input_mode.as_ref(ctx).input_type(),
+                    },
+                    ctx
+                );
+                self.fail("Voice input stopped", ctx);
+                return;
+            }
         };
         let Some(transcriber) = VoiceTranscriber::as_ref(ctx).transcriber().cloned() else {
             self.fail("Voice transcription is unavailable", ctx);

@@ -2,10 +2,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use channel_versions::{Changelog, MarkdownSection, Section};
+use chrono::DateTime;
 use uuid::Uuid;
 use warp::tui_export::{
-    TuiMcpConfigState, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot,
-    TuiMcpTransport, register_tui_session_view_test_singletons,
+    TuiMcpConfigDiagnostic, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerSource,
+    TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport, register_tui_session_view_test_singletons,
 };
 use warpui::{EntityIdMap, SingletonEntity};
 use warpui_core::elements::animation::AnimationClock;
@@ -17,7 +19,7 @@ use warpui_core::{App, AppContext};
 
 use super::{
     ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, build_zero_state_layout, build_zero_state_overlay,
-    mcp_status_label,
+    changelog_bullets_from_changelog, mcp_status_label,
 };
 use crate::tui_builder::TuiUiBuilder;
 use crate::zero_state_animation::{
@@ -27,10 +29,12 @@ use crate::zero_state_animation::{
 
 fn server(id: u64, status: TuiMcpServerStatus) -> TuiMcpServerSnapshot {
     TuiMcpServerSnapshot {
-        id: TuiMcpServerId(id),
-        installation_uuid: Uuid::from_u128(id as u128),
+        id: TuiMcpServerId::Installation(Uuid::from_u128(id as u128)),
+        installation_uuid: Some(Uuid::from_u128(id as u128)),
         name: format!("server-{id}"),
-        transport: TuiMcpTransport::Stdio,
+        description: None,
+        source: TuiMcpServerSource::Installation,
+        transport: Some(TuiMcpTransport::Stdio),
         status,
         tool_count: 2,
         resource_count: 0,
@@ -39,25 +43,54 @@ fn server(id: u64, status: TuiMcpServerStatus) -> TuiMcpServerSnapshot {
     }
 }
 
+fn changelog(tui_updates: Vec<&str>) -> Changelog {
+    Changelog {
+        date: DateTime::parse_from_rfc3339("2026-07-30T12:00:00+00:00").unwrap(),
+        sections: vec![Section {
+            title: "Improvements".to_owned(),
+            items: vec!["Unrelated GUI improvement".to_owned()],
+        }],
+        markdown_sections: vec![MarkdownSection {
+            title: "Improvements".to_owned(),
+            markdown: "* Unrelated GUI improvement\n".to_owned(),
+        }],
+        image_url: None,
+        oz_updates: vec!["Unrelated Oz improvement".to_owned()],
+        tui_updates: tui_updates.into_iter().map(ToOwned::to_owned).collect(),
+    }
+}
+
 #[test]
-fn mcp_summary_keeps_missing_config_action_short() {
+fn changelog_bullets_use_only_the_first_three_tui_updates() {
+    let changelog = changelog(vec!["First", "Second", "Third", "Fourth"]);
+    assert_eq!(
+        changelog_bullets_from_changelog(&changelog),
+        ["First", "Second", "Third"]
+    );
+}
+
+#[test]
+fn changelog_bullets_are_empty_when_only_other_surfaces_have_updates() {
+    assert!(changelog_bullets_from_changelog(&changelog(Vec::new())).is_empty());
+}
+
+#[test]
+fn mcp_summary_keeps_empty_catalog_action_short() {
     let snapshot = TuiMcpSnapshot {
-        config_path: PathBuf::from("/tmp/.mcp.json"),
-        config_state: TuiMcpConfigState::Missing,
+        diagnostics: Vec::new(),
         servers: Vec::new(),
     };
 
     assert_eq!(
         mcp_status_label(&snapshot),
-        ("Not configured · /mcp".to_string(), false)
+        ("No servers available · run /mcp".to_string(), false)
     );
 }
 
 #[test]
 fn mcp_summary_reports_mixed_runtime_states() {
     let snapshot = TuiMcpSnapshot {
-        config_path: PathBuf::from("/tmp/.mcp.json"),
-        config_state: TuiMcpConfigState::Ready,
+        diagnostics: Vec::new(),
         servers: vec![
             server(1, TuiMcpServerStatus::Running),
             server(2, TuiMcpServerStatus::Starting),
@@ -70,13 +103,14 @@ fn mcp_summary_reports_mixed_runtime_states() {
                 },
             ),
             server(6, TuiMcpServerStatus::Offline),
+            server(7, TuiMcpServerStatus::Available),
         ],
     };
 
     assert_eq!(
         mcp_status_label(&snapshot),
         (
-            "1 connected · 1 starting · 1 needs auth · 1 stopping · 1 failed · 1 offline · /mcp"
+            "1 connected · 1 starting · 1 needs auth · 1 stopping · 1 failed · 1 offline · 1 available · /mcp"
                 .to_string(),
             false
         )
@@ -86,16 +120,24 @@ fn mcp_summary_reports_mixed_runtime_states() {
 #[test]
 fn mcp_summary_marks_config_errors() {
     let snapshot = TuiMcpSnapshot {
-        config_path: PathBuf::from("/tmp/.mcp.json"),
-        config_state: TuiMcpConfigState::Invalid {
-            message: "invalid JSON".to_string(),
-        },
+        diagnostics: vec![
+            TuiMcpConfigDiagnostic {
+                provider: "Claude".to_owned(),
+                config_path: PathBuf::from("/tmp/.claude.json"),
+                message: "invalid JSON".to_owned(),
+            },
+            TuiMcpConfigDiagnostic {
+                provider: "Codex".to_owned(),
+                config_path: PathBuf::from("/tmp/config.toml"),
+                message: "invalid TOML".to_owned(),
+            },
+        ],
         servers: Vec::new(),
     };
 
     assert_eq!(
         mcp_status_label(&snapshot),
-        ("Config error · run /mcp".to_string(), true)
+        ("2 config errors · /mcp".to_string(), true)
     );
 }
 
@@ -155,23 +197,31 @@ fn render_element_lines(
 }
 
 #[test]
-fn zero_state_copy_content_rectangle_is_centered_and_opaque_without_covering_margins() {
+fn zero_state_copy_rectangle_is_opaque_without_changing_the_background_color() {
     App::test((), |app| async move {
         app.read(|ctx| {
+            let stars = (0..9)
+                .map(|_| "*".repeat(80))
+                .collect::<Vec<_>>()
+                .join("\n");
             let layout = build_zero_state_layout(
-                TuiText::new("").finish(),
+                TuiText::new(stars).finish(),
                 TuiText::new("").finish(),
                 TuiText::new("copy here\n\nline").finish(),
-                Color::Red,
             );
             let buffer = render_to_buffer(layout, ctx, 80, 9);
             let lines = buffer.to_lines();
-            assert_eq!(lines[3].trim_end(), "copy here");
-            assert_eq!(lines[5].trim_end(), "line");
-            assert_eq!(buffer[(1, 3)].bg, Color::Red);
-            assert_eq!(buffer[(4, 3)].bg, Color::Red);
-            assert_eq!(buffer[(1, 4)].bg, Color::Red);
-            assert_eq!(buffer[(8, 5)].bg, Color::Red);
+            assert_eq!(&lines[3][..9], "copy here");
+            assert_eq!(&lines[5][..4], "line");
+            for y in 3..=5 {
+                for x in 0..9 {
+                    assert_ne!(buffer[(x, y)].symbol(), "*");
+                    assert_eq!(buffer[(x, y)].bg, Color::Reset);
+                }
+            }
+            assert_eq!(buffer[(1, 2)].symbol(), "*");
+            assert_eq!(buffer[(1, 6)].symbol(), "*");
+            assert_eq!(buffer[(9, 3)].symbol(), "*");
             assert_eq!(buffer[(1, 2)].bg, Color::Reset);
             assert_eq!(buffer[(1, 6)].bg, Color::Reset);
             assert_eq!(buffer[(9, 3)].bg, Color::Reset);
@@ -192,7 +242,6 @@ fn zero_state_starfield_spans_the_full_width() {
                 .finish(),
                 TuiText::new("").finish(),
                 TuiText::new("").finish(),
-                Color::Reset,
             );
             let buffer = render_to_buffer(layout, ctx, 120, 20);
             let occupied_columns = buffer
@@ -234,7 +283,6 @@ fn zero_state_animation_is_centered_in_remaining_space_and_hidden_when_space_is_
                 TuiText::new("").finish(),
                 animation(),
                 TuiText::new("").finish(),
-                Color::Reset,
             );
             let wide_width = 120;
             let wide = render_to_buffer(layout, ctx, wide_width, 20);
@@ -262,7 +310,6 @@ fn zero_state_animation_is_centered_in_remaining_space_and_hidden_when_space_is_
                 TuiText::new("").finish(),
                 animation(),
                 TuiText::new("").finish(),
-                Color::Reset,
             );
             assert!(
                 render_to_buffer(layout, ctx, 60, 20)

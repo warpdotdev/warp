@@ -146,6 +146,9 @@ pub struct TuiPaintContext<'a> {
     repaint_at: Option<Instant>,
     /// Hardware terminal cursor submitted during paint.
     terminal_cursor: Option<TuiScreenPoint>,
+    /// Stack-local captures of explicitly opaque paint regions. These regions
+    /// are compositing metadata only and never enter the terminal cell buffer.
+    opaque_region_captures: Vec<Vec<TuiScreenRect>>,
 }
 
 /// The soonest an element may request a repaint after the current paint.
@@ -162,6 +165,7 @@ impl<'a> TuiPaintContext<'a> {
             scene: TuiScene::default(),
             repaint_at: None,
             terminal_cursor: None,
+            opaque_region_captures: Vec::new(),
         }
     }
     /// Attaches the active scene layer to an absolute screen position.
@@ -212,6 +216,28 @@ impl<'a> TuiPaintContext<'a> {
     /// Makes the active scene layer transparent to hit testing.
     pub fn set_active_layer_click_through(&mut self) {
         self.scene.set_active_layer_click_through();
+    }
+
+    /// Captures explicit background fills painted by one stack child.
+    pub(crate) fn capture_opaque_regions<R>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> (R, Vec<TuiScreenRect>) {
+        self.opaque_region_captures.push(Vec::new());
+        let result = f(self);
+        let regions = self
+            .opaque_region_captures
+            .pop()
+            .expect("an opaque-region capture is active");
+        (result, regions)
+    }
+
+    /// Records an explicit background fill for the innermost containing stack.
+    /// Painting outside a stack needs no retained compositing metadata.
+    pub(crate) fn record_opaque_region(&mut self, region: TuiScreenRect) {
+        if let Some(regions) = self.opaque_region_captures.last_mut() {
+            regions.push(region);
+        }
     }
 
     /// Requests a repaint after `delay` (floored to [`MIN_REPAINT_DELAY`]),

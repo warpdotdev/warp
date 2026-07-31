@@ -1,9 +1,10 @@
 use warp::tui_export::register_tui_session_view_test_singletons;
+use warp::{TuiLoginModel, TuiLoginPhase};
 use warpui::platform::WindowStyle;
-use warpui::{AddWindowOptions, UpdateModel};
-use warpui_core::{App, TuiView as _, WindowId};
+use warpui::{AddWindowOptions, SingletonEntity, UpdateModel};
+use warpui_core::{App, TuiView as _, TypedActionView as _, WindowId};
 
-use super::RootTuiView;
+use super::{RootTuiAction, RootTuiView};
 use crate::cloud_run::TuiCloudRunState;
 use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
@@ -18,6 +19,26 @@ fn add_root(app: &mut App) -> (WindowId, warpui_core::ViewHandle<RootTuiView>) {
             |_| RootTuiView::new(),
         )
     })
+}
+
+#[test]
+fn start_device_login_action_transitions_from_welcome() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        app.add_singleton_model(|_| TuiLoginModel::signed_out_for_test());
+        let (_, root) = add_root(&mut app);
+
+        root.update(&mut app, |root, ctx| {
+            root.handle_action(&RootTuiAction::StartDeviceLogin, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(matches!(
+                TuiLoginModel::as_ref(ctx).phase(),
+                TuiLoginPhase::AwaitingLogin { browser_url: None }
+            ));
+        });
+    });
 }
 
 #[test]

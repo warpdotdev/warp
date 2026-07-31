@@ -1,11 +1,27 @@
+use std::cell::Cell;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
+
 use warp::appearance::Appearance;
-use warpui_core::App;
-use warpui_core::elements::tui::{TuiBufferExt, TuiElement, TuiRect, TuiText};
+use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::animation::AnimationClock;
+use warpui_core::elements::tui::{
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
+    TuiText,
+};
+use warpui_core::event::ModifiersState;
+use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::{App, EntityId, EntityIdMap};
 
 use super::{
-    compact_footer_path, conversation_restoring, horizontally_centered, login_placeholder,
+    LoginWaitingParams, compact_footer_path, conversation_restoring, horizontally_centered,
+    login_waiting, signed_out_welcome,
 };
+use crate::transient_hint::TransientHintTone;
+use crate::zero_state_animation::ZeroStateAnimationConfig;
 
 #[test]
 fn compact_footer_path_preserves_short_paths() {
@@ -26,6 +42,45 @@ fn horizontally_centered_balances_available_space() {
             let left = line.find("center").expect("centered text renders");
             let right = 20 - left - "center".len();
             assert!(left.abs_diff(right) <= 1, "{line:?}");
+        });
+    });
+}
+
+#[test]
+fn waiting_login_renders_copy_feedback() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let browser_url =
+                "https://app.warp.dev/device?user_code=ABCD-EFGH&source=warp-agent-cli";
+            for (message, tone) in [
+                ("Login URL copied to clipboard", TransientHintTone::Success),
+                ("Unable to copy login URL", TransientHintTone::Error),
+            ] {
+                let mut presenter = TuiPresenter::new();
+                let frame = presenter.present_element(
+                    login_waiting(
+                        AnimationClock::starting_at(Duration::ZERO),
+                        Arc::new(ZeroStateAnimationConfig::default()),
+                        LoginWaitingParams {
+                            browser_url: Some(browser_url),
+                            login_mouse: MouseStateHandle::default(),
+                            copy_mouse: MouseStateHandle::default(),
+                            copy_feedback: Some((message, tone)),
+                        },
+                        app_ctx,
+                        |_, _| {},
+                        |_, _| {},
+                    ),
+                    TuiRect::new(0, 0, 80, 24),
+                    app_ctx,
+                );
+                let lines = frame.buffer.to_lines();
+                assert!(
+                    lines.iter().any(|line| line.contains(message)),
+                    "waiting state should render copy feedback: {lines:?}"
+                );
+            }
         });
     });
 }
@@ -74,86 +129,306 @@ fn conversation_loader_is_centered_and_animated() {
 }
 
 #[test]
-fn login_placeholder_is_centered_for_all_states() {
-    const VIEWPORT_COLS: usize = 60;
-    const VIEWPORT_ROWS: usize = 8;
-
+fn signed_out_welcome_matches_designed_copy_and_layout() {
     App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
         app.read(|app_ctx| {
-            // Every line the placeholder renders for each login substate, so
-            // per-line centering is checked — not just the longest line. The
-            // shorter lines (e.g. the URI-only and URI+code substates' "Sign in
-            // to continue" and "and enter code" lines) are the ones a
-            // start-aligned column leaves flush with the block's left edge.
-            let states: Vec<(Option<&str>, Option<&str>, Vec<&str>)> = vec![
-                (
-                    None,
-                    None,
-                    vec!["Sign in to continue", "Requesting a sign-in link…"],
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                signed_out_welcome(
+                    AnimationClock::starting_at(Duration::ZERO),
+                    Arc::new(ZeroStateAnimationConfig::default()),
+                    app_ctx,
+                    |_, _| {},
                 ),
-                (
-                    Some("https://warp.dev/device"),
-                    None,
-                    vec![
-                        "Sign in to continue",
-                        "Open https://warp.dev/device in your browser",
-                    ],
-                ),
-                (
-                    Some("https://warp.dev/device"),
-                    Some("ABC-123"),
-                    vec![
-                        "Sign in to continue",
-                        "Open https://warp.dev/device in your browser",
-                        "and enter code: ABC-123",
-                    ],
-                ),
-            ];
+                TuiRect::new(0, 0, 80, 24),
+                app_ctx,
+            );
+            let lines = frame.buffer.to_lines();
 
-            for (verification_uri, user_code, expected_lines) in states {
-                let element = login_placeholder(verification_uri, user_code);
+            for expected in [
+                "Welcome to Warp",
+                "> Press enter to get started",
+                "What’s different about Warp",
+                "Prompts or shell commands autodetected",
+                "Set up custom model routers",
+                "Orchestrate fleets of agents",
+                "Run full-screen terminal apps",
+                "Persist sessions through state changes",
+            ] {
+                assert!(
+                    lines.iter().any(|line| line.contains(expected)),
+                    "welcome should render {expected:?}: {lines:?}"
+                );
+            }
+            let title_row = lines
+                .iter()
+                .position(|line| line.contains("Welcome to Warp"))
+                .expect("welcome title renders");
+            assert!(title_row > 0 && title_row < 12);
+            assert_eq!(
+                lines[title_row]
+                    .find("Welcome to Warp")
+                    .expect("welcome title offset"),
+                3
+            );
+            assert!(frame.repaint_at.is_some());
+            assert!(
+                lines
+                    .iter()
+                    .all(|line| !line.contains("https://app.warp.dev/login")),
+                "welcome must not render a URL before device authorization: {lines:?}"
+            );
+        });
+    });
+}
+
+#[test]
+fn waiting_login_generated_url_handles_click() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let activated = Rc::new(Cell::new(false));
+            let activated_for_click = activated.clone();
+            let browser_url =
+                "https://app.warp.dev/device?user_code=ABCD-EFGH&source=warp-agent-cli";
+            let mut element = login_waiting(
+                AnimationClock::starting_at(Duration::ZERO),
+                Arc::new(ZeroStateAnimationConfig::default()),
+                LoginWaitingParams {
+                    browser_url: Some(browser_url),
+                    login_mouse: MouseStateHandle::default(),
+                    copy_mouse: MouseStateHandle::default(),
+                    copy_feedback: None,
+                },
+                app_ctx,
+                move |_, _| activated_for_click.set(true),
+                |_, _| {},
+            );
+            let area = TuiRect::new(0, 0, 80, 24);
+            let mut rendered_views = EntityIdMap::default();
+            let mut layout_ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            element.layout(
+                TuiConstraint::tight(TuiSize::new(area.width, area.height)),
+                &mut layout_ctx,
+                app_ctx,
+            );
+            element.after_layout(&mut layout_ctx, app_ctx);
+            let mut buffer = TuiBuffer::empty(area);
+            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+            {
+                let mut surface = TuiPaintSurface::new(&mut buffer);
+                element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+            }
+            let lines = buffer.to_lines();
+            let row = lines
+                .iter()
+                .position(|line| line.contains("https://app.warp.dev/device?user_code="))
+                .expect("generated URL renders") as u16;
+            let col = lines[usize::from(row)]
+                .find("https://app.warp.dev/device?user_code=")
+                .expect("generated URL offset") as u16;
+            let scene = Rc::new(paint_ctx.scene.clone());
+            drop(paint_ctx);
+            let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+            event_ctx.set_origin_view(Some(EntityId::new()));
+            for event in [
+                TuiEvent::LeftMouseDown {
+                    position: (col, row).into(),
+                    modifiers: ModifiersState::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                TuiEvent::LeftMouseUp {
+                    position: (col, row).into(),
+                    modifiers: ModifiersState::default(),
+                },
+            ] {
+                assert!(element.dispatch_event(&event, &mut event_ctx, app_ctx));
+            }
+            assert!(activated.get());
+        });
+    });
+}
+
+#[test]
+fn waiting_login_copy_control_handles_click_and_key() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let copy_count = Rc::new(Cell::new(0));
+            let copy_count_for_action = copy_count.clone();
+            let browser_url =
+                "https://app.warp.dev/device?user_code=ABCD-EFGH&source=warp-agent-cli";
+            let mut element = login_waiting(
+                AnimationClock::starting_at(Duration::ZERO),
+                Arc::new(ZeroStateAnimationConfig::default()),
+                LoginWaitingParams {
+                    browser_url: Some(browser_url),
+                    login_mouse: MouseStateHandle::default(),
+                    copy_mouse: MouseStateHandle::default(),
+                    copy_feedback: None,
+                },
+                app_ctx,
+                |_, _| {},
+                move |_, _| copy_count_for_action.set(copy_count_for_action.get() + 1),
+            );
+            let area = TuiRect::new(0, 0, 80, 24);
+            let mut rendered_views = EntityIdMap::default();
+            let mut layout_ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            element.layout(
+                TuiConstraint::tight(TuiSize::new(area.width, area.height)),
+                &mut layout_ctx,
+                app_ctx,
+            );
+            element.after_layout(&mut layout_ctx, app_ctx);
+            let mut buffer = TuiBuffer::empty(area);
+            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+            {
+                let mut surface = TuiPaintSurface::new(&mut buffer);
+                element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+            }
+            let lines = buffer.to_lines();
+            let row = lines
+                .iter()
+                .position(|line| line.contains("Copy URL (c)"))
+                .expect("copy control renders") as u16;
+            let col = lines[usize::from(row)]
+                .find("Copy URL (c)")
+                .expect("copy control offset") as u16;
+            let scene = Rc::new(paint_ctx.scene.clone());
+            drop(paint_ctx);
+            let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+            event_ctx.set_origin_view(Some(EntityId::new()));
+            for event in [
+                TuiEvent::LeftMouseDown {
+                    position: (col, row).into(),
+                    modifiers: ModifiersState::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                TuiEvent::LeftMouseUp {
+                    position: (col, row).into(),
+                    modifiers: ModifiersState::default(),
+                },
+            ] {
+                assert!(element.dispatch_event(&event, &mut event_ctx, app_ctx));
+            }
+            assert_eq!(copy_count.get(), 1);
+
+            let copy_key = TuiEvent::KeyDown {
+                keystroke: Keystroke {
+                    key: "c".to_owned(),
+                    ..Default::default()
+                },
+                chars: String::new(),
+                details: Default::default(),
+                is_composing: false,
+            };
+            assert!(element.dispatch_event(&copy_key, &mut event_ctx, app_ctx));
+            assert_eq!(copy_count.get(), 2);
+        });
+    });
+}
+#[test]
+fn signed_out_welcome_handles_enter() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let activated = Rc::new(Cell::new(false));
+            let activated_for_enter = activated.clone();
+            let mut element = signed_out_welcome(
+                AnimationClock::starting_at(Duration::ZERO),
+                Arc::new(ZeroStateAnimationConfig::default()),
+                app_ctx,
+                move |_, _| activated_for_enter.set(true),
+            );
+            let mut rendered_views = EntityIdMap::default();
+            let scene = Rc::new(Default::default());
+            let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
+            event_ctx.set_origin_view(Some(EntityId::new()));
+            let key_down = |key: &str| TuiEvent::KeyDown {
+                keystroke: Keystroke {
+                    key: key.to_owned(),
+                    ..Default::default()
+                },
+                chars: String::new(),
+                details: Default::default(),
+                is_composing: false,
+            };
+
+            assert!(!element.dispatch_event(&key_down("a"), &mut event_ctx, app_ctx));
+            assert!(!activated.get());
+            assert!(element.dispatch_event(&key_down("enter"), &mut event_ctx, app_ctx));
+            assert!(activated.get());
+        });
+    });
+}
+
+#[test]
+fn waiting_login_renders_actual_browser_url_and_requesting_fallback() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|app_ctx| {
+            let browser_url =
+                "https://app.warp.dev/device?user_code=ABCD-EFGH&source=warp-agent-cli";
+            for url in [Some(browser_url), None] {
                 let mut presenter = TuiPresenter::new();
                 let frame = presenter.present_element(
-                    element,
-                    TuiRect::new(0, 0, VIEWPORT_COLS as u16, VIEWPORT_ROWS as u16),
+                    login_waiting(
+                        AnimationClock::starting_at(Duration::ZERO),
+                        Arc::new(ZeroStateAnimationConfig::default()),
+                        LoginWaitingParams {
+                            browser_url: url,
+                            login_mouse: MouseStateHandle::default(),
+                            copy_mouse: MouseStateHandle::default(),
+                            copy_feedback: None,
+                        },
+                        app_ctx,
+                        |_, _| {},
+                        |_, _| {},
+                    ),
+                    TuiRect::new(0, 0, 80, 24),
                     app_ctx,
                 );
                 let lines = frame.buffer.to_lines();
-
-                for expected_line in expected_lines {
-                    let row = lines
+                assert!(
+                    lines
                         .iter()
-                        .position(|line| line.contains(expected_line))
-                        .unwrap_or_else(|| {
-                            panic!("login state should render {expected_line:?}: {lines:?}")
-                        });
-                    let rendered_line = &lines[row];
-                    let left = rendered_line
-                        .find(expected_line)
-                        .map(|byte_offset| rendered_line[..byte_offset].chars().count())
-                        .unwrap_or_else(|| {
-                            panic!("expected login text should be present: {rendered_line:?}")
-                        });
-                    let text_width = expected_line.chars().count();
-                    let right = VIEWPORT_COLS
-                        .saturating_sub(left)
-                        .saturating_sub(text_width);
-
-                    // Centered means symmetric horizontal padding: the blank
-                    // columns on either side of the text differ by at most one
-                    // cell (the flex layout's integer-division slack). A
-                    // start-aligned column leaves shorter lines flush with the
-                    // block's left edge, producing lopsided padding, so this
-                    // catches the per-line centering the ticket requires.
+                        .any(|line| line.contains("Waiting for login...")),
+                    "{lines:?}"
+                );
+                if url.is_some() {
                     assert!(
-                        left.abs_diff(right) <= 1,
-                        "{expected_line:?} should be horizontally centered with symmetric padding \
-                         (left={left}, right={right}, width={text_width}, viewport={VIEWPORT_COLS}): \
-                         {rendered_line:?}"
+                        lines.iter().any(|line| line.contains("Copy URL (c)")),
+                        "waiting state should render the copy control: {lines:?}"
                     );
                     assert!(
-                        row > 0 && row < VIEWPORT_ROWS,
-                        "{expected_line:?} should remain vertically centered: row={row}, lines={lines:?}"
+                        lines.iter().any(|line| {
+                            line.contains("https://app.warp.dev/device?user_code=ABCD-EF")
+                        }),
+                        "waiting state should render the start of the real URL: {lines:?}"
+                    );
+                    assert!(
+                        lines
+                            .iter()
+                            .any(|line| line.contains("GH&source=warp-agent-cli")),
+                        "waiting state should render the rest of the real URL: {lines:?}"
+                    );
+                } else {
+                    assert!(
+                        lines.iter().all(|line| !line.contains("Copy URL (c)")),
+                        "requesting state must not render the copy control: {lines:?}"
+                    );
+                    assert!(
+                        lines
+                            .iter()
+                            .any(|line| line.contains("Requesting a secure sign-in link...")),
+                        "{lines:?}"
                     );
                 }
             }

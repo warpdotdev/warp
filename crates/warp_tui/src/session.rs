@@ -28,7 +28,7 @@ use crate::resume::TuiExitSummaryHandle;
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::telemetry::TuiStartupTelemetryEvent;
-use crate::terminal_background::probe_and_select_theme;
+use crate::terminal_background::TuiHostTerminalBackground;
 use crate::terminal_session_view::{
     TuiConversationRestoreOrigin, TuiConversationRestoreTarget, tui_resume_shell_command,
 };
@@ -141,7 +141,7 @@ pub fn run() -> Result<()> {
     let provider_api_key_command = if let Some(provider) = args.set_provider_api_key {
         if !provider.supports_pasted_api_key() {
             return Err(anyhow!(
-                "Grok credentials must be connected with /add-api-key grok in an active TUI"
+                "Grok credentials must be connected with /api-keys in an active TUI"
             ));
         }
         let Some(api_key) = read_provider_api_key()? else {
@@ -152,7 +152,7 @@ pub fn run() -> Result<()> {
         match args.clear_provider_api_key {
             Some(LLMProvider::Xai) => {
                 return Err(anyhow!(
-                    "Grok credentials must be cleared with /clear-provider-api-key grok in an active TUI"
+                    "Grok credentials must be cleared with /api-keys in an active TUI"
                 ));
             }
             Some(provider) => Some(ProviderApiKeyCommand::Clear { provider }),
@@ -220,7 +220,7 @@ fn init(
     exit_summary: TuiExitSummaryHandle,
     ctx: &mut AppContext,
 ) {
-    warp_core::send_telemetry_from_app_ctx!(TuiStartupTelemetryEvent, ctx);
+    warp_core::send_telemetry_from_app_ctx!(TuiStartupTelemetryEvent::from_environment(), ctx);
     // Register the TUI views' keybindings (and, in debug builds, the
     // cross-surface binding validators) before any input can be dispatched.
     crate::keybindings::init(ctx);
@@ -236,7 +236,7 @@ fn init(
     // Appearance theme at mount time, without changing normal GUI theme
     // selection or font settings.
     let selected_theme = TuiThemeSettings::as_ref(ctx).selected_theme();
-    let theme = probe_and_select_theme(selected_theme);
+    let (theme, probe) = TuiHostTerminalBackground::register(selected_theme, ctx);
     Appearance::handle(ctx).update(ctx, |appearance, ctx| {
         appearance.set_theme(theme, ctx);
     });
@@ -253,6 +253,7 @@ fn init(
         window_id,
         root.clone(),
         requires_modifier_key_reporting(ctx),
+        Some(probe),
     ) {
         Ok(driver) => {
             let sessions = ctx.add_singleton_model(|_| {

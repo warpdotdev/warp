@@ -16,6 +16,8 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
+use warp_core::telemetry::TelemetryEvent as _;
+use warp_core::{send_telemetry_from_app_ctx, send_telemetry_from_ctx};
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::start_agent::{StartAgentExecutor, StartAgentOutcome};
@@ -24,6 +26,9 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentInput,
     StartAgentExecutionMode,
+};
+use crate::ai::blocklist::telemetry::{
+    BlocklistOrchestrationTelemetryEvent, run_agents_completed_event,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::document::plan_publication::{
@@ -390,21 +395,33 @@ impl RunAgentsExecutor {
             &self.launched_agents,
             ctx,
         ) {
-            return ActionExecution::Sync(AIAgentActionResultType::RunAgents(
-                RunAgentsResult::Denied { reason },
-            ));
+            let result = RunAgentsResult::Denied { reason };
+            send_telemetry_from_ctx!(
+                BlocklistOrchestrationTelemetryEvent::RunAgentsCompleted(
+                    run_agents_completed_event(parent_conversation_id, &request, &result)
+                ),
+                ctx
+            );
+            return ActionExecution::Sync(AIAgentActionResultType::RunAgents(result));
         }
+        let telemetry_request = request.clone();
 
         let receiver =
             self.dispatch_prepared_run_agents(action_id, request, parent_conversation_id, ctx);
 
-        ActionExecution::new_async(
-            async move { receiver.recv().await },
-            |result, _| match result {
-                Ok(r) => AIAgentActionResultType::RunAgents(r),
-                Err(_) => AIAgentActionResultType::RunAgents(RunAgentsResult::Cancelled),
-            },
-        )
+        ActionExecution::new_async(async move { receiver.recv().await }, move |result, ctx| {
+            let result = match result {
+                Ok(result) => result,
+                Err(_) => RunAgentsResult::Cancelled,
+            };
+            send_telemetry_from_app_ctx!(
+                BlocklistOrchestrationTelemetryEvent::RunAgentsCompleted(
+                    run_agents_completed_event(parent_conversation_id, &telemetry_request, &result,)
+                ),
+                ctx
+            );
+            AIAgentActionResultType::RunAgents(result)
+        })
     }
 
     pub(super) fn should_autoexecute(

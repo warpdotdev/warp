@@ -95,6 +95,37 @@ fn run_cloud_help_lists_harness_and_auth_secret_flags() {
 }
 
 #[test]
+#[serial_test::serial]
+fn help_hides_api_key_env_value() {
+    const API_KEY: &str = "warp-cli-test-api-key-NOT-REAL";
+
+    let previous_api_key = set_env_var("WARP_API_KEY", API_KEY);
+
+    let mut command = <Args as clap::CommandFactory>::command();
+    let top_level_help = command.render_long_help().to_string();
+    let runner_help = command
+        .find_subcommand_mut("runner")
+        .expect("runner subcommand exists")
+        .render_long_help()
+        .to_string();
+    let args = Args::try_parse_from(["warp", "whoami"]).expect("API key env var should parse");
+
+    restore_env_var("WARP_API_KEY", previous_api_key);
+
+    for help in [&top_level_help, &runner_help] {
+        assert!(
+            help.contains("WARP_API_KEY"),
+            "help should identify the API key environment variable:\n{help}"
+        );
+        assert!(
+            !help.contains(API_KEY),
+            "help should not reveal the API key environment value:\n{help}"
+        );
+    }
+    assert_eq!(args.api_key().map(String::as_str), Some(API_KEY));
+}
+
+#[test]
 fn run_cloud_accepts_claude_auth_secret() {
     let args = parse_run_cloud(&[
         "agent",

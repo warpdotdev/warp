@@ -1,7 +1,7 @@
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
-    TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
-    TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport,
+    TuiMcpAction, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId, TuiMcpServerStatus,
+    TuiMcpSnapshot, TuiMcpTransport,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity as _};
@@ -11,7 +11,6 @@ use crate::inline_menu::{
     TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, result_row_capacity,
 };
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
-use crate::ui::abbreviate_home_prefix;
 
 const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, true, false);
 
@@ -187,30 +186,18 @@ impl TuiMcpMenuModel {
         let TuiMcpMenuState::Open { list } = &self.state else {
             return None;
         };
-        let mcp = TuiMcpManager::as_ref(app);
-        let snapshot = mcp.snapshot();
         let query = input_text(&self.input_editor, app);
         let status = list.rows().is_empty().then(|| {
             let label = if !query.trim().is_empty() {
                 "No matching MCP servers".to_owned()
             } else {
-                match &snapshot.config_state {
-                    TuiMcpConfigState::Missing => format!(
-                        "No MCP config found at {}",
-                        abbreviate_home_prefix(&snapshot.config_path.display().to_string())
-                    ),
-                    TuiMcpConfigState::Ready => "No MCP servers configured".to_string(),
-                    TuiMcpConfigState::Invalid { message } => format!("Config error: {message}"),
-                }
+                "No MCP servers available".to_owned()
             };
             TuiInlineMenuStatus::Empty(label)
         });
         Some(TuiInlineMenuSnapshot {
             header: Some(TuiInlineMenuHeader {
-                title: Some(format!(
-                    "MCP · {}",
-                    abbreviate_home_prefix(&snapshot.config_path.display().to_string())
-                )),
+                title: Some("MCP servers".to_owned()),
                 tabs: Vec::new(),
             }),
             rows: list
@@ -264,11 +251,15 @@ impl TuiMcpMenuModel {
 }
 fn menu_rows(snapshot: &TuiMcpSnapshot, query: &str) -> Vec<TuiMcpMenuRow> {
     let mut rows = Vec::new();
-    if let TuiMcpConfigState::Invalid { message } = &snapshot.config_state {
+    for diagnostic in &snapshot.diagnostics {
         rows.push(TuiMcpMenuRow {
             server_id: None,
-            title: "Config error".to_string(),
-            description: Some(message.clone()),
+            title: format!("{} config error", diagnostic.provider),
+            description: Some(format!(
+                "{} · {}",
+                diagnostic.config_path.display(),
+                diagnostic.message
+            )),
             primary_action: None,
             logout_action: None,
         });
@@ -278,13 +269,25 @@ fn menu_rows(snapshot: &TuiMcpSnapshot, query: &str) -> Vec<TuiMcpMenuRow> {
         snapshot
             .servers
             .iter()
-            .filter(|server| query.is_empty() || server.name.to_lowercase().contains(&query))
+            .filter(|server| {
+                query.is_empty()
+                    || server.name.to_lowercase().contains(&query)
+                    || server
+                        .description
+                        .as_deref()
+                        .is_some_and(|description| description.to_lowercase().contains(&query))
+                    || server.source.label().to_lowercase().contains(&query)
+            })
             .map(|server| {
-                let transport = match server.transport {
+                let transport = server.transport.map(|transport| match transport {
                     TuiMcpTransport::Stdio => "stdio",
                     TuiMcpTransport::HttpOrSse => "HTTP/SSE",
-                };
+                });
                 let (status, primary_action) = match &server.status {
+                    TuiMcpServerStatus::Available => (
+                        "available".to_owned(),
+                        Some(TuiMcpAction::Enable(server.id)),
+                    ),
                     TuiMcpServerStatus::Offline => {
                         ("offline".to_string(), Some(TuiMcpAction::Start(server.id)))
                     }
@@ -306,10 +309,15 @@ fn menu_rows(snapshot: &TuiMcpSnapshot, query: &str) -> Vec<TuiMcpMenuRow> {
                         Some(TuiMcpAction::Retry(server.id)),
                     ),
                 };
+                let mut description = vec![server.source.label()];
+                if let Some(transport) = transport {
+                    description.push(transport.to_owned());
+                }
+                description.push(status);
                 TuiMcpMenuRow {
                     server_id: Some(server.id),
                     title: server.name.clone(),
-                    description: Some(format!("{transport} · {status}")),
+                    description: Some(description.join(" · ")),
                     primary_action,
                     logout_action: server
                         .can_log_out

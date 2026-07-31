@@ -158,9 +158,8 @@ pub fn init(
         None
     };
 
-    // Always log a settings-load failure. The GUI additionally surfaces this
-    // via a banner/footer, but headless surfaces (e.g. the TUI) have no such
-    // UI, so the log is the baseline signal. Final user-facing UX is TBD.
+    // Always log a settings-load failure with its full details. User-facing
+    // surfaces may additionally present a shorter summary.
     if let Some(err) = &settings_file_error {
         match err {
             super::SettingsFileError::FileParseFailed(detail) => {
