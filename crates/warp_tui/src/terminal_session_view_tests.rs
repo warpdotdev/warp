@@ -71,7 +71,8 @@ use super::{
     TuiTerminalSessionEvent, TuiTerminalSessionView, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
     attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
     log_bundle_success_message, mcp_primary_action_hint, raw_prompt_if_not_blank,
-    render_mcp_menu_footer, voice_argument_is_empty, voice_command_argument,
+    render_mcp_install_footer, render_mcp_menu_footer, voice_argument_is_empty,
+    voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
@@ -91,6 +92,7 @@ use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessionId, TuiSessions};
 use crate::statusline_config_view::TuiStatuslineConfigEvent;
+use crate::telemetry::TuiConversationRestoreTelemetryTarget;
 use crate::terminal_background::TuiHostTerminalBackground;
 use crate::terminal_block::{block_content_rows, should_render_terminal_block};
 use crate::terminal_use::TuiInputTarget;
@@ -110,6 +112,30 @@ use crate::zero_state_animation::{
 struct FocusTestFixture {
     window_id: warpui_core::WindowId,
     sessions: ModelHandle<TuiSessions>,
+}
+
+#[test]
+fn only_conversation_list_restores_emit_restore_telemetry() {
+    assert!(!TuiConversationRestoreOrigin::Startup.records_telemetry());
+    assert!(TuiConversationRestoreOrigin::ConversationList.records_telemetry());
+}
+
+#[test]
+fn mcp_install_footer_labels_final_value_as_install_and_enable() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let footer = render_mcp_install_footer(
+                &TuiUiBuilder::from_app(ctx),
+                Some("to install and enable"),
+            )
+            .finish();
+            assert_eq!(
+                render_element(footer, ctx, 120).to_lines(),
+                vec!["Enter to install and enable  Esc to cancel".to_owned()],
+            );
+        });
+    });
 }
 
 fn todo(id: &str, title: &str) -> AIAgentTodo {
@@ -151,7 +177,7 @@ fn mcp_menu_footer_replaces_status_with_controls() {
             ctx.add_singleton_model(|_| Appearance::mock());
             let footer = render_mcp_menu_footer(
                 &TuiUiBuilder::from_app(ctx),
-                Some(TuiMcpAction::Stop(TuiMcpServerId(1))),
+                Some(TuiMcpAction::Stop(TuiMcpServerId::FileBased(1))),
                 true,
             )
             .finish();
@@ -163,6 +189,52 @@ fn mcp_menu_footer_replaces_status_with_controls() {
                 ],
             );
         });
+    });
+}
+
+#[test]
+fn out_of_credits_ctrl_o_binding_opens_pricing() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        app.read(|ctx| {
+            let ctrl_o = Trigger::Keystrokes(vec![Keystroke::parse("ctrl-o").unwrap()]);
+            assert!(
+                ctx.get_key_bindings().any(|binding| {
+                    *binding.trigger == ctrl_o
+                        && binding.name.is_empty()
+                        && binding.group == Some(TUI_BINDING_GROUP)
+                }),
+                "out-of-credits ctrl-o binding should be registered"
+            );
+        });
+
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        app.read(|ctx| {
+            let ctrl_o = Trigger::Keystrokes(vec![Keystroke::parse("ctrl-o").unwrap()]);
+            let input_view_id = view.as_ref(ctx).input_view.id();
+            assert!(
+                !ctx.key_bindings_for_view(fixture.window_id, input_view_id)
+                    .iter()
+                    .any(|binding| *binding.trigger == ctrl_o),
+                "ctrl-o should not be active without an out-of-credits failure"
+            );
+        });
+        let opened_urls = Rc::new(RefCell::new(Vec::new()));
+        let opened_urls_for_callback = opened_urls.clone();
+        app.update(|ctx| {
+            ctx.set_before_open_url(move |url, _| {
+                opened_urls_for_callback.borrow_mut().push(url.to_owned());
+                url.to_owned()
+            });
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::OpenOutOfCreditsUrl, ctx);
+        });
+        assert_eq!(
+            opened_urls.borrow().as_slice(),
+            &["https://www.warp.dev/pricing".to_owned()]
+        );
     });
 }
 
@@ -216,7 +288,11 @@ fn api_keys_slash_command_opens_inline_and_clears_the_input() {
 
 #[test]
 fn mcp_primary_action_hints_match_available_actions() {
-    let id = TuiMcpServerId(1);
+    let id = TuiMcpServerId::FileBased(1);
+    assert_eq!(
+        mcp_primary_action_hint(TuiMcpAction::Enable(id)),
+        Some("to install and enable")
+    );
     assert_eq!(
         mcp_primary_action_hint(TuiMcpAction::Start(id)),
         Some("to start")
@@ -243,7 +319,7 @@ fn mcp_menu_footer_hides_unavailable_logout_control() {
             ctx.add_singleton_model(|_| Appearance::mock());
             let footer = render_mcp_menu_footer(
                 &TuiUiBuilder::from_app(ctx),
-                Some(TuiMcpAction::Start(TuiMcpServerId(1))),
+                Some(TuiMcpAction::Start(TuiMcpServerId::FileBased(1))),
                 false,
             )
             .finish();
@@ -2295,7 +2371,7 @@ fn input_adjacent_surfaces_follow_figma_outer_edge_alignment() {
         let lines = render_session(&mut app, &view, 80, 24);
         let input_border_column = lines
             .iter()
-            .find(|line| line.contains('┌'))
+            .find(|line| line.contains('▏'))
             .map(|line| first_visible_column(line))
             .unwrap_or_else(|| panic!("input border must render:\n{}", lines.join("\n")));
         let statusline_column = lines
@@ -2711,7 +2787,7 @@ fn bootstrap_renders_starting_shell_above_input() {
             .iter()
             .enumerate()
             .skip(status_index + 1)
-            .find(|(_, line)| line.contains('┌') || line.contains('─'))
+            .find(|(_, line)| line.contains('▏') || line.contains('▁') || line.contains('─'))
             .map(|(index, _)| index)
             .expect("bootstrap input border should render below the status");
         assert!(status_index < input_index);
@@ -2949,7 +3025,7 @@ fn long_running_command_keeps_input_hidden() {
         assert!(
             !lines
                 .iter()
-                .any(|line| line.contains('┌') || line.contains('─')),
+                .any(|line| line.chars().any(|glyph| "┌┐└┘─│▁▏▕▔".contains(glyph))),
             "LRC must keep the input editor hidden:\n{}",
             lines.join("\n")
         );
@@ -3091,7 +3167,7 @@ fn manual_attach_and_detach_switch_running_command_input_ownership() {
 
         let lines = render_session(&mut app, &view, 80, 40);
         assert!(
-            lines.iter().any(|line| line.contains('┌')),
+            lines.iter().any(|line| line.contains('▏')),
             "tagging in should render the composer:\n{}",
             lines.join("\n")
         );
@@ -3251,7 +3327,7 @@ fn tagged_in_alt_screen_keeps_output_and_composer_visible() {
             lines.join("\n")
         );
         assert!(
-            lines.iter().any(|line| line.contains('┌')),
+            lines.iter().any(|line| line.contains('▏')),
             "tagged-in alternate screen should render the composer:\n{}",
             lines.join("\n")
         );
@@ -3332,7 +3408,7 @@ fn agent_controlled_alt_screen_keeps_output_and_composer_visible() {
             .expect("alternate-screen output should start in the output area");
         let input_row = lines
             .iter()
-            .position(|line| line.contains('┌'))
+            .position(|line| line.contains('▏'))
             .expect("agent-controlled alternate screen should render the composer");
         assert!(
             alt_screen_row < input_row,
@@ -3379,9 +3455,10 @@ fn user_controlled_alt_screen_keeps_full_session_input_on_the_pty() {
             lines.join("\n")
         );
         assert!(
-            !lines
-                .iter()
-                .any(|line| line.contains('┌') || line.contains("auto (cost-efficient)")),
+            !lines.iter().any(|line| {
+                line.chars().any(|glyph| "┌┐└┘─│▁▏▕▔".contains(glyph))
+                    || line.contains("auto (cost-efficient)")
+            }),
             "user-controlled alternate screen should not render the agent composer:\n{}",
             lines.join("\n")
         );
@@ -4184,6 +4261,7 @@ fn footer_transient_state_replaces_all_sections() {
             view.exit_confirmation.disarm();
             view.conversation_restore_state = ConversationRestoreState::Loading {
                 origin: TuiConversationRestoreOrigin::ConversationList,
+                target: TuiConversationRestoreTelemetryTarget::Local,
                 request_id: 0,
                 future: None,
             };
@@ -4207,6 +4285,7 @@ fn footer_transient_state_replaces_all_sections() {
             view.exit_confirmation.arm(Instant::now());
             view.conversation_restore_state = ConversationRestoreState::Loading {
                 origin: TuiConversationRestoreOrigin::ConversationList,
+                target: TuiConversationRestoreTelemetryTarget::Local,
                 request_id: 1,
                 future: None,
             };

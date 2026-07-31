@@ -7,6 +7,7 @@ use anyhow::Context as _;
 use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize, de};
 use warp_core::features::FeatureFlag;
+use warp_core::ui::Icon;
 use warp_core::user_preferences::GetUserPreferences;
 use warp_errors::report_error;
 use warp_multi_agent_api as api;
@@ -162,6 +163,32 @@ pub fn should_show_gemini_enterprise_agent_platform_icon_for_model(
         &LLMModelHost::GeminiEnterprise,
         UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled(app),
     )
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ModelIconFlags {
+    pub is_custom_router: bool,
+    pub is_auto: bool,
+    pub is_using_bedrock: bool,
+    pub is_using_gemini_enterprise: bool,
+}
+
+/// The leading icon shown next to a model in the model picker and model menus.
+///
+/// Auto models deliberately get the generic agent glyph rather than a host or
+/// provider logo.
+pub fn model_leading_icon(llm: &LLMInfo, flags: ModelIconFlags) -> Icon {
+    if flags.is_custom_router {
+        Icon::Dataflow
+    } else if flags.is_auto {
+        Icon::Agent
+    } else if flags.is_using_bedrock {
+        Icon::Aws
+    } else if flags.is_using_gemini_enterprise {
+        Icon::GeminiEnterpriseAgentPlatform
+    } else {
+        llm.provider.icon().unwrap_or(Icon::Agent)
+    }
 }
 
 /// Key for cached LLM metadata in user preferences.

@@ -664,7 +664,11 @@ async fn fetch_latest_version(client: &http_client::Client) -> Result<String> {
 
 /// Picks this channel's latest version out of the channel-versions payload.
 fn latest_version_for_channel(versions: &ChannelVersions) -> Result<String> {
-    let channel_version = match ChannelState::channel() {
+    latest_version_for(ChannelState::channel(), versions)
+}
+
+fn latest_version_for(channel: Channel, versions: &ChannelVersions) -> Result<String> {
+    let channel_version = match channel {
         Channel::Dev => &versions.dev,
         Channel::Preview => &versions.preview,
         Channel::Stable => &versions.stable,
@@ -672,7 +676,7 @@ fn latest_version_for_channel(versions: &ChannelVersions) -> Result<String> {
             bail!("no TUI release artifacts exist for the {channel} channel")
         }
     };
-    Ok(channel_version.version_info().version)
+    Ok(channel_version.version_info().tui_version().to_owned())
 }
 
 /// The Warp Agent CLI artifact endpoint for a release channel.
