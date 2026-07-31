@@ -221,6 +221,35 @@ impl TerminalView {
         ctx.notify();
     }
 
+    /// Clears the finished/read-only state a pane accumulates when its shared session ends, so it
+    /// can host a live session again.
+    ///
+    /// A cloud run that fails can have its environment retained for debugging: the run reaches a
+    /// terminal state (which ends the session and leaves the pane read-only with an
+    /// ended-conversation tombstone) while the sandbox and its shared session stay reachable.
+    /// Reattaching to that retained session must produce a writable terminal, not the ended-run
+    /// view. Idempotent: a pane that is already live is left untouched.
+    pub(crate) fn prepare_for_live_session_reattach(&mut self, ctx: &mut ViewContext<Self>) {
+        self.remove_conversation_ended_tombstone(ctx);
+
+        {
+            let mut model = self.model.lock();
+            if model.shared_session_status().is_finished_viewer() {
+                // The join performed by the caller moves this to `ViewPending` and then
+                // `ActiveViewer`; clearing it here just lifts `TerminalModel::is_read_only`.
+                model.set_shared_session_status(SharedSessionStatus::NotShared);
+            }
+        }
+
+        self.input().update(ctx, |input, ctx| {
+            input.editor().update(ctx, |editor, ctx| {
+                editor.set_interaction_state(InteractionState::Editable, ctx);
+            });
+        });
+        self.update_pane_configuration(ctx);
+        ctx.notify();
+    }
+
     fn enable_cloud_followup_input_after_conversation_end(
         &mut self,
         task_id: AmbientAgentTaskId,

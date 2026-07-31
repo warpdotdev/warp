@@ -1133,6 +1133,26 @@ pub struct UpdateMemoryResponse {
     pub version_id: String,
 }
 
+/// Response from `POST /agent/runs/{run_id}/session-keepalive`.
+///
+/// A cloud environment can be configured to outlive a failed run for a bounded window so a
+/// human can keep debugging in it. The window is a sliding idle window: every user query sent
+/// into the retained session pushes `retained_until` forward by the environment's configured
+/// duration. The endpoint is a no-op for a run that is not retained, so the client can call it
+/// unconditionally on query send.
+#[derive(Clone, serde::Deserialize, serde::Serialize, Debug, Default, PartialEq)]
+pub struct RunSessionKeepaliveResponse {
+    /// Whether the run's execution is currently in the server-side `RETAINED` state.
+    #[serde(default)]
+    pub retained: bool,
+    /// Whether this call actually moved the retention deadline forward.
+    #[serde(default)]
+    pub extended: bool,
+    /// The retention deadline after this call, when the run is retained.
+    #[serde(default)]
+    pub retained_until: Option<String>,
+}
+
 #[cfg_attr(test, automock)]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -1445,6 +1465,15 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         task_id: &AmbientAgentTaskId,
     ) -> anyhow::Result<Vec<TaskAttachment>, anyhow::Error>;
+
+    /// Pushes the post-failure retention window of a run's retained session forward by the
+    /// environment's configured duration. Safe (and intended) to call on every user query sent
+    /// into a cloud run's live session: the server returns `retained: false` without side
+    /// effects when the run is not in the retained state.
+    async fn extend_run_session_retention(
+        &self,
+        run_id: &AmbientAgentTaskId,
+    ) -> anyhow::Result<RunSessionKeepaliveResponse, anyhow::Error>;
 
     // --- Orchestrations V2 messaging ---
 
@@ -2815,6 +2844,17 @@ impl AIClient for ServerApi {
                     .unwrap_or_else(|| "application/octet-stream".to_string()),
             })
             .collect())
+    }
+
+    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
+    async fn extend_run_session_retention(
+        &self,
+        run_id: &AmbientAgentTaskId,
+    ) -> anyhow::Result<RunSessionKeepaliveResponse, anyhow::Error> {
+        let response: RunSessionKeepaliveResponse = self
+            .post_public_api(&format!("agent/runs/{run_id}/session-keepalive"), &())
+            .await?;
+        Ok(response)
     }
 
     #[cfg(not(target_family = "wasm"))]

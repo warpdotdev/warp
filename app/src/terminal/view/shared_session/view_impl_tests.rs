@@ -1861,6 +1861,65 @@ fn test_restored_owned_tombstone_hides_input_until_continue() {
     });
 }
 
+/// REMOTE-2208: a cloud run whose environment is retained after a failure keeps a reachable
+/// shared session, but the pane may already have been switched to the ended-run view
+/// (`FinishedViewer` status, ended-conversation tombstone, non-editable input). Reattaching to
+/// the retained session must restore a writable, interactive terminal rather than leaving the
+/// user on a read-only pane with no input box.
+#[test]
+fn test_prepare_for_live_session_reattach_restores_interactive_input() {
+    let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+    let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let terminal = cloud_mode_terminal_for_test(&mut app);
+        let task_id = create_cloud_mode_task_for_user(TEST_USER_UID).task_id;
+
+        terminal.update(&mut app, |view, ctx| {
+            let mut model = view.model.lock();
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
+            model.set_shared_session_status(SharedSessionStatus::FinishedViewer);
+            drop(model);
+
+            view.input().update(ctx, |input, ctx| {
+                input.editor().update(ctx, |editor, ctx| {
+                    editor.set_interaction_state(InteractionState::Selectable, ctx);
+                });
+            });
+            view.insert_conversation_ended_tombstone_with_cta(None, ctx);
+
+            assert!(view.conversation_ended_tombstone_view_id.is_some());
+            {
+                let model = view.model.lock();
+                assert!(model.is_read_only());
+                assert!(!view.is_input_box_visible(&model, ctx));
+            }
+
+            view.prepare_for_live_session_reattach(ctx);
+
+            assert!(
+                view.conversation_ended_tombstone_view_id.is_none(),
+                "the ended-conversation tombstone must be cleared before rejoining"
+            );
+            {
+                let model = view.model.lock();
+                assert!(!model.is_read_only());
+                assert!(view.is_input_box_visible(&model, ctx));
+            }
+            assert_eq!(
+                view.input()
+                    .as_ref(ctx)
+                    .editor()
+                    .as_ref(ctx)
+                    .interaction_state(ctx),
+                InteractionState::Editable
+            );
+        });
+    });
+}
+
 #[test]
 fn test_deep_linked_ambient_continuation_refreshes_when_task_data_arrives() {
     let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);

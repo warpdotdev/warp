@@ -318,7 +318,9 @@ use crate::terminal::view::ambient_agent::{
     HarnessSelector, HarnessSelectorEvent, HostSelector, HostSelectorEvent, NakedHeaderButtonTheme,
 };
 use crate::terminal::view::inline_banner::{PromptSuggestionsEvent, PromptSuggestionsView};
-use crate::terminal::view::{AIQueryRouting, CodeDiffAction, resolve_ai_query_routing};
+use crate::terminal::view::{
+    AIQueryRouting, CodeDiffAction, resolve_ai_query_routing, session_keepalive_run_id,
+};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::user_config::WarpConfig;
@@ -4211,11 +4213,19 @@ impl Input {
                 ctx,
             )
         };
+        // A cloud run whose environment is retained after a failure keeps that environment alive
+        // on a sliding idle window, so refresh the window before forwarding the prompt. Resolved
+        // from the same routing decision that drives the submission itself; a no-op server-side
+        // for a run that is not retained.
+        let keepalive_run_id = session_keepalive_run_id(&ai_query_routing);
         match ai_query_routing {
             AIQueryRouting::Local => false,
             AIQueryRouting::LiveRemoteVm {
                 is_executor: true, ..
             } => {
+                if let Some(run_id) = keepalive_run_id {
+                    Self::extend_retained_session_window(run_id, ctx);
+                }
                 // Returns false for local-action slash commands (e.g. /fork), which should still
                 // run on the viewer's own machine; the caller then proceeds to local submission.
                 self.submit_viewer_ai_query(ctx)
@@ -4284,6 +4294,35 @@ impl Input {
                 true
             }
         }
+    }
+
+    /// Pushes a cloud run's post-failure session-retention window forward, so an environment kept
+    /// alive for debugging is not torn down mid-conversation.
+    ///
+    /// Fire-and-forget: the prompt submission must never block or fail on the keepalive, and the
+    /// endpoint is a no-op for a run that is not retained.
+    fn extend_retained_session_window(
+        run_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        ctx.spawn(
+            async move { ai_client.extend_run_session_retention(&run_id).await },
+            move |_input, result, _ctx| match result {
+                Ok(response) => {
+                    if response.retained {
+                        log::debug!(
+                            "Session keepalive for retained run {run_id}: extended={} retained_until={:?}",
+                            response.extended,
+                            response.retained_until
+                        );
+                    }
+                }
+                Err(error) => {
+                    log::warn!("Failed to extend retained session window for run {run_id}: {error:#}");
+                }
+            },
+        );
     }
 
     fn should_upload_cloud_followup_attachments(pending_attachments: &[PendingAttachment]) -> bool {
