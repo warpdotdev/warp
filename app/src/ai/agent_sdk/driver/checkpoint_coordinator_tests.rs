@@ -297,6 +297,26 @@ fn jittered_interval_zero_jitter_is_a_no_op() {
 // finalize_with_new_attempt / finalize_with_in_flight_attempt.
 // ------------------------------------------------------------------------------------------------
 
+#[test]
+fn finalize_budget_exceeds_the_attempt_floor_for_the_driver_defaults() {
+    // Regression: `AgentDriver::run_snapshot_upload` used to pass `upload_timeout` alone as
+    // the finalize budget, but the floor is `script_timeout + upload_timeout`. The
+    // `remaining > floor` gate was therefore false for *every* possible configuration, so
+    // the final attempt was always skipped -- and since the coordinator owns the whole
+    // end-of-run path, that meant no end-of-run snapshot at all.
+    let script = snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT;
+    let upload = snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT;
+    assert!(
+        finalize_budget(script, upload) > script + upload,
+        "the budget callers derive must exceed the floor `finalize_with_new_attempt` enforces"
+    );
+    // The old, broken pairing, asserted explicitly so nobody reintroduces it.
+    assert!(
+        upload <= script + upload,
+        "passing the upload timeout alone can never clear the floor"
+    );
+}
+
 #[tokio::test]
 async fn finalize_with_new_attempt_below_floor_skips_the_attempt_entirely() {
     let client = FailingUploadTargetsClient::new();
@@ -312,6 +332,7 @@ async fn finalize_with_new_attempt_below_floor_skips_the_attempt_entirely() {
         client.clone(),
         task_id,
         PathBuf::from("/tmp"),
+        None,
         Duration::from_secs(1),
         Duration::from_secs(1),
     )
@@ -322,6 +343,49 @@ async fn finalize_with_new_attempt_below_floor_skips_the_attempt_entirely() {
         "a below-floor budget must skip the attempt without calling the client at all"
     );
     assert!(ack_rx.await.is_ok(), "ack must still be sent");
+}
+
+#[tokio::test]
+async fn finalize_with_the_derived_budget_runs_the_attempt() {
+    // The companion to the unit test above: a budget built by `finalize_budget` from the
+    // same timeouts the coordinator holds must clear the floor and actually commit.
+    let mut server = Server::new_async().await;
+    let _uploads = server
+        .mock("PUT", Matcher::Regex("^/upload/.+$".to_string()))
+        .with_status(200)
+        .create_async()
+        .await;
+
+    let task_id = fresh_task_id();
+    let tempdir = TempDir::new().unwrap();
+    let file_path = tempdir.path().join("note.txt");
+    std::fs::write(&file_path, b"hi").unwrap();
+    let _decl = DeclarationsFixture::new(&task_id, &file_path);
+
+    let script_timeout = Duration::from_millis(10);
+    let upload_timeout = Duration::from_secs(5);
+    let client = RecordingClient::new(server.url());
+    let (ack_tx, ack_rx) = oneshot::channel();
+    let request = FinalizeRequest {
+        deadline: Instant::now() + finalize_budget(script_timeout, upload_timeout),
+        ack: ack_tx,
+    };
+    finalize_with_new_attempt(
+        request,
+        client.clone(),
+        task_id,
+        tempdir.path().to_path_buf(),
+        None,
+        script_timeout,
+        upload_timeout,
+    )
+    .await;
+    assert_eq!(
+        client.commit_calls.load(Ordering::SeqCst),
+        1,
+        "a budget derived from `finalize_budget` must run exactly one final attempt"
+    );
+    assert!(ack_rx.await.is_ok());
 }
 
 #[tokio::test]
@@ -350,6 +414,7 @@ async fn finalize_with_new_attempt_above_floor_starts_and_commits() {
         client.clone(),
         task_id,
         tempdir.path().to_path_buf(),
+        None,
         Duration::from_millis(10),
         Duration::from_secs(5),
     )
@@ -401,6 +466,7 @@ async fn start_attempt_runs_to_completion_even_if_the_receiver_is_dropped() {
         client.clone(),
         task_id,
         tempdir.path().to_path_buf(),
+        None,
         Duration::from_secs(5),
         Duration::from_secs(5),
         &background,
@@ -440,7 +506,13 @@ async fn coordinator_defers_until_safe_boundary_then_commits() {
     // WaitingForEvents), true from the third check onward.
     let boundary_check: BoundaryCheck = Arc::new(move || {
         let calls = boundary_calls_for_closure.clone();
-        Box::pin(async move { calls.fetch_add(1, Ordering::SeqCst) >= 2 })
+        Box::pin(async move {
+            if calls.fetch_add(1, Ordering::SeqCst) >= 2 {
+                Boundary::Safe
+            } else {
+                Boundary::Busy
+            }
+        })
     });
 
     let handle = CheckpointCoordinatorHandle::new_for_test(
@@ -482,7 +554,7 @@ async fn coordinator_returns_to_idle_and_waits_a_full_interval_before_the_next_a
     let _decl = DeclarationsFixture::new(&task_id, &file_path);
 
     let client = RecordingClient::new(server.url());
-    let always_safe: BoundaryCheck = Arc::new(|| Box::pin(async { true }));
+    let always_safe: BoundaryCheck = Arc::new(|| Box::pin(async { Boundary::Safe }));
     let interval = Duration::from_millis(400);
 
     let handle = CheckpointCoordinatorHandle::new_for_test(
@@ -537,7 +609,7 @@ async fn coordinator_finalize_awaits_the_in_flight_attempt_without_a_second_comm
     // A slow commit keeps the periodic attempt "in flight" long enough for finalize() to race
     // in while it's still running.
     let client = RecordingClient::with_commit_delay(server.url(), Duration::from_millis(500));
-    let always_safe: BoundaryCheck = Arc::new(|| Box::pin(async { true }));
+    let always_safe: BoundaryCheck = Arc::new(|| Box::pin(async { Boundary::Safe }));
 
     let handle = CheckpointCoordinatorHandle::new_for_test(
         client.clone(),
@@ -570,13 +642,206 @@ async fn coordinator_finalize_awaits_the_in_flight_attempt_without_a_second_comm
 }
 
 #[tokio::test]
+async fn coordinator_stops_when_the_driver_is_gone() {
+    // Regression: `is_safe_boundary` used to map a dropped `AgentDriver` to "safe", so the
+    // loop kept gathering and uploading the whole workspace every interval forever. Nothing
+    // else ever stops it -- `run_snapshot_upload` returns without finalizing when the
+    // spawner round trip fails, which is the same condition.
+    let client = FailingUploadTargetsClient::new();
+    let task_id = fresh_task_id();
+    let tempdir = TempDir::new().unwrap();
+    let file_path = tempdir.path().join("note.txt");
+    std::fs::write(&file_path, b"hi").unwrap();
+    let _decl = DeclarationsFixture::new(&task_id, &file_path);
+
+    let boundary_calls = Arc::new(AtomicUsize::new(0));
+    let boundary_calls_for_closure = boundary_calls.clone();
+    let driver_gone: BoundaryCheck = Arc::new(move || {
+        let calls = boundary_calls_for_closure.clone();
+        Box::pin(async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Boundary::DriverGone
+        })
+    });
+
+    let handle = CheckpointCoordinatorHandle::new_for_test(
+        client.clone(),
+        task_id,
+        tempdir.path().to_path_buf(),
+        driver_gone,
+        Duration::from_millis(5),
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+        test_background(),
+    );
+
+    wait_for(
+        || boundary_calls.load(Ordering::SeqCst) >= 1,
+        Duration::from_secs(5),
+    )
+    .await;
+    // Well past several intervals: the loop must have returned rather than kept ticking.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        boundary_calls.load(Ordering::SeqCst),
+        1,
+        "a gone driver must stop the loop, not be treated as a safe boundary"
+    );
+    assert_eq!(
+        client.call_count.load(Ordering::SeqCst),
+        0,
+        "no attempt may run once the driver is gone"
+    );
+    drop(handle);
+}
+
+#[tokio::test]
+async fn coordinator_finalize_while_waiting_for_a_safe_boundary_still_runs_an_attempt() {
+    // The `Due` state polls indefinitely while the conversation is busy. A finalize request
+    // arriving in that window must be serviced (with a new attempt, since none is in flight)
+    // rather than waiting for a boundary that may never come.
+    let mut server = Server::new_async().await;
+    let _uploads = server
+        .mock("PUT", Matcher::Regex("^/upload/.+$".to_string()))
+        .with_status(200)
+        .create_async()
+        .await;
+
+    let task_id = fresh_task_id();
+    let tempdir = TempDir::new().unwrap();
+    let file_path = tempdir.path().join("note.txt");
+    std::fs::write(&file_path, b"hi").unwrap();
+    let _decl = DeclarationsFixture::new(&task_id, &file_path);
+
+    let boundary_calls = Arc::new(AtomicUsize::new(0));
+    let boundary_calls_for_closure = boundary_calls.clone();
+    let never_safe: BoundaryCheck = Arc::new(move || {
+        let calls = boundary_calls_for_closure.clone();
+        Box::pin(async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Boundary::Busy
+        })
+    });
+
+    let script_timeout = Duration::from_millis(10);
+    let upload_timeout = Duration::from_secs(5);
+    let client = RecordingClient::new(server.url());
+    let handle = CheckpointCoordinatorHandle::new_for_test(
+        client.clone(),
+        task_id,
+        tempdir.path().to_path_buf(),
+        never_safe,
+        Duration::from_millis(5),
+        script_timeout,
+        upload_timeout,
+        test_background(),
+    );
+
+    // Wait until the coordinator is definitely parked in `Due`.
+    wait_for(
+        || boundary_calls.load(Ordering::SeqCst) >= 1,
+        Duration::from_secs(5),
+    )
+    .await;
+
+    handle
+        .finalize(finalize_budget(script_timeout, upload_timeout))
+        .await;
+
+    assert_eq!(
+        client.commit_calls.load(Ordering::SeqCst),
+        1,
+        "finalize arriving during boundary polling must still run one final attempt"
+    );
+}
+
+#[tokio::test]
+async fn coordinator_stops_running_attempts_after_finalize() {
+    // `finalize` is documented to stop the coordinator. Prove the loop actually returns
+    // instead of continuing to tick in the background after shutdown has moved on.
+    let mut server = Server::new_async().await;
+    let _uploads = server
+        .mock("PUT", Matcher::Regex("^/upload/.+$".to_string()))
+        .with_status(200)
+        .create_async()
+        .await;
+
+    let task_id = fresh_task_id();
+    let tempdir = TempDir::new().unwrap();
+    let file_path = tempdir.path().join("note.txt");
+    std::fs::write(&file_path, b"hi").unwrap();
+    let _decl = DeclarationsFixture::new(&task_id, &file_path);
+
+    let script_timeout = Duration::from_millis(10);
+    let upload_timeout = Duration::from_secs(5);
+    let client = RecordingClient::new(server.url());
+    let always_safe: BoundaryCheck = Arc::new(|| Box::pin(async { Boundary::Safe }));
+    let interval = Duration::from_millis(50);
+
+    let handle = CheckpointCoordinatorHandle::new_for_test(
+        client.clone(),
+        task_id,
+        tempdir.path().to_path_buf(),
+        always_safe,
+        interval,
+        script_timeout,
+        upload_timeout,
+        test_background(),
+    );
+
+    handle
+        .finalize(finalize_budget(script_timeout, upload_timeout))
+        .await;
+    let after_finalize = client.commit_calls.load(Ordering::SeqCst);
+
+    // Many intervals' worth of time; a still-running loop would commit again.
+    tokio::time::sleep(interval * 10).await;
+    assert_eq!(
+        client.commit_calls.load(Ordering::SeqCst),
+        after_finalize,
+        "the coordinator must stop after finalize rather than keep checkpointing"
+    );
+}
+
+#[tokio::test]
+async fn coordinator_failed_attempt_returns_to_idle_and_retries_next_interval() {
+    // Failure is retried by the ordinary periodic timer rather than a distinct backoff, so a
+    // failing attempt must neither wedge the loop nor spin.
+    let client = FailingUploadTargetsClient::new();
+    let task_id = fresh_task_id();
+    let tempdir = TempDir::new().unwrap();
+    let file_path = tempdir.path().join("note.txt");
+    std::fs::write(&file_path, b"hi").unwrap();
+    let _decl = DeclarationsFixture::new(&task_id, &file_path);
+
+    let always_safe: BoundaryCheck = Arc::new(|| Box::pin(async { Boundary::Safe }));
+    let handle = CheckpointCoordinatorHandle::new_for_test(
+        client.clone(),
+        task_id,
+        tempdir.path().to_path_buf(),
+        always_safe,
+        Duration::from_millis(20),
+        Duration::from_millis(10),
+        Duration::from_secs(5),
+        test_background(),
+    );
+
+    wait_for(
+        || client.call_count.load(Ordering::SeqCst) >= 2,
+        Duration::from_secs(10),
+    )
+    .await;
+    drop(handle);
+}
+
+#[tokio::test]
 async fn coordinator_finalize_from_idle_skips_attempt_below_floor() {
     let client = FailingUploadTargetsClient::new();
     let task_id = fresh_task_id();
     let tempdir = TempDir::new().unwrap();
     // No declarations fixture: the client would panic on any upload-targets/commit call, so
     // this also proves no attempt is made.
-    let always_safe: BoundaryCheck = Arc::new(|| Box::pin(async { true }));
+    let always_safe: BoundaryCheck = Arc::new(|| Box::pin(async { Boundary::Safe }));
 
     let handle = CheckpointCoordinatorHandle::new_for_test(
         client.clone(),

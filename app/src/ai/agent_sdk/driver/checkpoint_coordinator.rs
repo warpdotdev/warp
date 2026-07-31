@@ -38,25 +38,67 @@ use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{ModelSpawner, SingletonEntity};
 
 use super::AgentDriver;
-use super::snapshot::{self, CheckpointResult};
+use super::snapshot::{self, CheckpointResult, DeclarationsWriterHandle};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::server::server_api::harness_support::{CheckpointGeneration, HarnessSupportClient};
 
+/// Whether the conversation can tolerate a checkpoint attempt right now.
+///
+/// `DriverGone` is deliberately distinct from `Busy`: a dropped `AgentDriver` used to be
+/// reported as "safe", which left the coordinator gathering and uploading the whole
+/// workspace every interval forever, since nothing else ever stops the loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Boundary {
+    /// Not mid-turn: safe to touch the filesystem and network.
+    Safe,
+    /// Mid-turn or actions in flight; retry after [`SAFE_BOUNDARY_POLL_INTERVAL`].
+    Busy,
+    /// The `AgentDriver` this coordinator serves no longer exists, so there is nothing
+    /// left to checkpoint for and the loop must stop.
+    DriverGone,
+}
+
 /// A safe-boundary predicate, decoupled from `ModelSpawner<AgentDriver>` so
 /// [`coordinator_loop`] can be exercised in isolation by tests. Production code builds
 /// this from [`is_safe_boundary`]; tests supply a directly-controllable closure.
-type BoundaryCheck = Arc<dyn Fn() -> BoxFuture<'static, bool> + Send + Sync>;
+type BoundaryCheck = Arc<dyn Fn() -> BoxFuture<'static, Boundary> + Send + Sync>;
 
-/// Default cadence between the start of one checkpoint attempt and the timer firing
-/// again, absent an override on `AgentDriverOptions`. Deliberately not
-/// `HARNESS_SAVE_INTERVAL` (30s) -- see the spec's "5 minutes plus jitter" cadence.
+/// Default cadence between the end of one checkpoint attempt and the timer firing again,
+/// absent an override on `AgentDriverOptions`. Deliberately not `HARNESS_SAVE_INTERVAL`
+/// (30s) -- see the spec's "5 minutes plus jitter" cadence.
+///
+/// Note this is measured from attempt *completion*, not attempt start: the timer is only
+/// restarted once the `InFlight` state resolves, so back-to-back attempts can never
+/// overlap.
 pub(super) const DEFAULT_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// Upper bound on additive jitter, so agents scheduled at the same time don't all
 /// checkpoint in lockstep.
 const CHECKPOINT_JITTER: Duration = Duration::from_secs(30);
 /// How often the `Due` state re-checks whether the conversation is at a safe boundary.
 const SAFE_BOUNDARY_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// How long `Due` will wait for a safe boundary before checkpointing anyway.
+///
+/// Without a cap, a single long turn (or a conversation parked in a state the predicate
+/// never calls safe) starves the feature entirely -- exactly the long-running case periodic
+/// checkpoints exist for. A slightly-inconsistent checkpoint is strictly better than none,
+/// since the previous committed generation is only replaced on success.
+const MAX_BOUNDARY_DEFERRAL: Duration = Duration::from_secs(10 * 60);
+/// Slack added on top of the per-attempt floor by [`finalize_budget`], and to the
+/// belt-and-braces bound in [`CheckpointCoordinatorHandle::finalize`], so neither the
+/// coordinator's ack round trip nor the outer timeout eats into the attempt's own budget.
+const FINALIZE_ACK_SLACK: Duration = Duration::from_secs(10);
+
+/// The shutdown budget a caller must grant [`CheckpointCoordinatorHandle::finalize`] for a
+/// final attempt to be possible.
+///
+/// Exposed so `AgentDriver` cannot drift out of sync with the floor enforced in
+/// [`finalize_with_new_attempt`]. Passing anything at or below `script_timeout +
+/// upload_timeout` silently skips the final attempt -- and because the coordinator owns the
+/// whole end-of-run path, that means no end-of-run snapshot at all.
+pub(super) fn finalize_budget(script_timeout: Duration, upload_timeout: Duration) -> Duration {
+    script_timeout + upload_timeout + FINALIZE_ACK_SLACK
+}
 
 /// A request to finalize, carrying the deadline by which the coordinator must ack so
 /// shutdown can proceed.
@@ -81,6 +123,7 @@ impl CheckpointCoordinatorHandle {
         client: Arc<dyn HarnessSupportClient>,
         task_id: AmbientAgentTaskId,
         working_dir: PathBuf,
+        declarations_writer: Option<DeclarationsWriterHandle>,
         spawner: ModelSpawner<AgentDriver>,
         interval: Duration,
         script_timeout: Duration,
@@ -95,6 +138,7 @@ impl CheckpointCoordinatorHandle {
             client,
             task_id,
             working_dir,
+            declarations_writer,
             boundary_check,
             interval,
             CHECKPOINT_JITTER,
@@ -124,6 +168,7 @@ impl CheckpointCoordinatorHandle {
             client,
             task_id,
             working_dir,
+            None,
             boundary_check,
             interval,
             Duration::ZERO,
@@ -138,6 +183,7 @@ impl CheckpointCoordinatorHandle {
         client: Arc<dyn HarnessSupportClient>,
         task_id: AmbientAgentTaskId,
         working_dir: PathBuf,
+        declarations_writer: Option<DeclarationsWriterHandle>,
         boundary_check: BoundaryCheck,
         interval: Duration,
         jitter: Duration,
@@ -152,6 +198,7 @@ impl CheckpointCoordinatorHandle {
                 client,
                 task_id,
                 working_dir,
+                declarations_writer,
                 boundary_check,
                 interval,
                 jitter,
@@ -169,6 +216,11 @@ impl CheckpointCoordinatorHandle {
     /// floor), or await an already-in-flight attempt instead -- never both -- then
     /// stop the coordinator. Bounded by `budget` end to end. Safe to call at most
     /// once; safe to never call.
+    ///
+    /// Callers should derive `budget` from [`finalize_budget`] rather than passing a
+    /// per-attempt timeout directly: the floor in [`finalize_with_new_attempt`] is
+    /// `script_timeout + upload_timeout`, so a smaller budget silently skips the final
+    /// attempt.
     pub(super) async fn finalize(&self, budget: Duration) {
         let (ack_tx, ack_rx) = oneshot::channel();
         let request = FinalizeRequest {
@@ -181,8 +233,11 @@ impl CheckpointCoordinatorHandle {
         }
         // The coordinator always acks well within `budget` (either immediately, when
         // below the floor, or after its own internally bounded attempt). This extra
-        // bound is defense-in-depth so a coordinator bug cannot wedge shutdown.
-        let _ = tokio::time::timeout(budget, ack_rx).await;
+        // bound is defense-in-depth so a coordinator bug cannot wedge shutdown -- hence
+        // the added slack: bounding on exactly `budget` would routinely preempt the
+        // attempt the coordinator is legitimately still finishing, instead of only
+        // catching a bug.
+        let _ = tokio::time::timeout(budget + FINALIZE_ACK_SLACK, ack_rx).await;
     }
 }
 
@@ -199,16 +254,25 @@ fn jittered_interval(interval: Duration, jitter: Duration) -> Duration {
     interval + Duration::from_millis(extra)
 }
 
-/// Run one checkpoint attempt to completion: regenerate declarations, then gather,
-/// upload, and commit. Bounded by `upload_timeout`; `script_timeout` separately
-/// bounds only the declarations-script sub-step (matching the legacy pipeline).
+/// Run one checkpoint attempt to completion: drain pending declarations writes,
+/// regenerate declarations, then gather, upload, and commit. Bounded by `upload_timeout`;
+/// `script_timeout` separately bounds only the declarations-script sub-step (matching the
+/// legacy pipeline).
 async fn run_one_attempt(
     client: Arc<dyn HarnessSupportClient>,
     task_id: AmbientAgentTaskId,
     working_dir: PathBuf,
+    declarations_writer: Option<DeclarationsWriterHandle>,
     script_timeout: Duration,
     upload_timeout: Duration,
 ) -> CheckpointResult {
+    // Drain queued driver-side `file` appends before the bash script starts appending its
+    // own `repo` entries to the same append-only JSONL. `AgentDriver::run_snapshot_upload`
+    // does this on the legacy path for exactly this reason; without it a checkpoint can
+    // both miss the agent's most recent edits and race the script on the shared file.
+    if let Some(writer) = &declarations_writer {
+        writer.flush().await;
+    }
     snapshot::run_declarations_script(&working_dir, &task_id, script_timeout).await;
     let path = snapshot::resolve_declarations_path(Some(&task_id));
     match snapshot::run_checkpoint_from_declarations_file(&path, client)
@@ -229,10 +293,12 @@ async fn run_one_attempt(
 /// stops waiting (e.g. because a shutdown budget elapsed) cannot strand the attempt
 /// or cause it to be silently abandoned mid-upload -- it simply keeps running in the
 /// background and, if it succeeds, still commits.
+#[allow(clippy::too_many_arguments)]
 fn start_attempt(
     client: Arc<dyn HarnessSupportClient>,
     task_id: AmbientAgentTaskId,
     working_dir: PathBuf,
+    declarations_writer: Option<DeclarationsWriterHandle>,
     script_timeout: Duration,
     upload_timeout: Duration,
     background: &Background,
@@ -240,8 +306,15 @@ fn start_attempt(
     let (tx, rx) = oneshot::channel();
     background
         .spawn(async move {
-            let result =
-                run_one_attempt(client, task_id, working_dir, script_timeout, upload_timeout).await;
+            let result = run_one_attempt(
+                client,
+                task_id,
+                working_dir,
+                declarations_writer,
+                script_timeout,
+                upload_timeout,
+            )
+            .await;
             let _ = tx.send(result);
         })
         .detach();
@@ -249,50 +322,119 @@ fn start_attempt(
 }
 
 /// Query `AgentDriver` (via its spawner) for whether the conversation is currently at
-/// a safe boundary: either yielded via `wait_for_events`, or simply not mid-turn with
-/// no pending/running actions. Returns `true` (safe) if the driver has no
-/// conversation yet, if its conversation can no longer be found, or if the driver
-/// itself has been dropped -- in each case there is nothing left to interrupt.
-async fn is_safe_boundary(spawner: &ModelSpawner<AgentDriver>) -> bool {
-    spawner
+/// a safe boundary.
+///
+/// [`Boundary::Safe`] when the driver has no conversation yet, when its conversation can no
+/// longer be found, or when the conversation is quiescent -- there is nothing to interrupt.
+/// [`Boundary::DriverGone`] when the driver itself has been dropped, which stops the loop
+/// rather than being conflated with "safe" and checkpointing forever.
+async fn is_safe_boundary(spawner: &ModelSpawner<AgentDriver>) -> Boundary {
+    let result = spawner
         .spawn(|driver, ctx| {
             let Some(conversation_id) = driver.run_conversation_id else {
-                return true;
+                return Boundary::Safe;
             };
             let Some(status) = BlocklistAIHistoryModel::as_ref(ctx)
                 .conversation(&conversation_id)
                 .map(|conversation| conversation.status().clone())
             else {
-                return true;
+                return Boundary::Safe;
             };
-            if status.is_waiting_for_events() {
-                return true;
+            // Quiescent states, checked before the pending-action sweep below.
+            //
+            // `Blocked` in particular *is* backed by a pending action, so letting it fall
+            // through would report `Busy` forever: a run parked on user approval (often for
+            // hours) would poll every couple of seconds and never checkpoint, even though
+            // nothing is mutating the workspace. That is precisely when a checkpoint is
+            // most valuable.
+            if status.is_waiting_for_events() || status.is_blocked() || status.is_done() {
+                return Boundary::Safe;
             }
             if status.is_in_progress() || status.is_transient_error() {
-                return false;
+                return Boundary::Busy;
             }
             let terminal_view = driver
                 .terminal_driver
                 .as_ref(ctx)
                 .terminal_view()
                 .as_ref(ctx);
-            !terminal_view
+            if terminal_view
                 .ai_action_model()
                 .as_ref(ctx)
                 .has_unfinished_actions_for_conversation(conversation_id)
+            {
+                Boundary::Busy
+            } else {
+                Boundary::Safe
+            }
         })
-        .await
-        .unwrap_or(true)
+        .await;
+    result.unwrap_or(Boundary::DriverGone)
+}
+
+/// How the `Due` state resolved.
+enum DueOutcome {
+    /// Proceed to `InFlight`.
+    Safe,
+    /// A finalize request arrived while waiting; the caller owns it.
+    Finalize(FinalizeRequest),
+    /// The coordinator should stop: the driver is gone, or every handle was dropped.
+    Stop,
+}
+
+/// Poll for a safe boundary, staying responsive to finalize throughout.
+///
+/// The boundary check is itself awaited inside `select!` rather than before it: it is a
+/// round trip through `AgentDriver`'s model task queue, and a stalled queue must not be able
+/// to wedge shutdown behind an unbounded await.
+async fn wait_for_safe_boundary(
+    boundary_check: &BoundaryCheck,
+    finalize_rx: &mut mpsc::UnboundedReceiver<FinalizeRequest>,
+) -> DueOutcome {
+    let due_since = Instant::now();
+    loop {
+        // Checked immediately on entry (not only after the first poll interval elapses) so
+        // an already-safe conversation doesn't pay needless latency.
+        let boundary = futures::select! {
+            boundary = boundary_check().fuse() => boundary,
+            request = finalize_rx.recv().fuse() => {
+                return request.map_or(DueOutcome::Stop, DueOutcome::Finalize);
+            }
+        };
+        match boundary {
+            Boundary::Safe => return DueOutcome::Safe,
+            Boundary::DriverGone => {
+                log::info!("AgentDriver is gone; stopping the periodic checkpoint coordinator");
+                return DueOutcome::Stop;
+            }
+            Boundary::Busy => {}
+        }
+        if due_since.elapsed() >= MAX_BOUNDARY_DEFERRAL {
+            log::warn!(
+                "Conversation has not reached a safe boundary in {MAX_BOUNDARY_DEFERRAL:?}; \
+                 checkpointing anyway rather than skipping this cycle entirely"
+            );
+            return DueOutcome::Safe;
+        }
+        futures::select! {
+            _ = Timer::after(SAFE_BOUNDARY_POLL_INTERVAL).fuse() => {}
+            request = finalize_rx.recv().fuse() => {
+                return request.map_or(DueOutcome::Stop, DueOutcome::Finalize);
+            }
+        }
+    }
 }
 
 /// Handle a finalize request received while no attempt is currently in flight: start
 /// exactly one best-effort attempt only if `budget` exceeds the gather/upload floor,
 /// bound it by the remaining budget, then ack.
+#[allow(clippy::too_many_arguments)]
 async fn finalize_with_new_attempt(
     request: FinalizeRequest,
     client: Arc<dyn HarnessSupportClient>,
     task_id: AmbientAgentTaskId,
     working_dir: PathBuf,
+    declarations_writer: Option<DeclarationsWriterHandle>,
     script_timeout: Duration,
     upload_timeout: Duration,
 ) {
@@ -302,12 +444,21 @@ async fn finalize_with_new_attempt(
         log::info!(
             "Starting final checkpoint attempt at shutdown (remaining budget {remaining:?})"
         );
-        let attempt = run_one_attempt(client, task_id, working_dir, script_timeout, upload_timeout);
+        let attempt = run_one_attempt(
+            client,
+            task_id,
+            working_dir,
+            declarations_writer,
+            script_timeout,
+            upload_timeout,
+        );
         if tokio::time::timeout(remaining, attempt).await.is_err() {
             log::warn!("Final checkpoint attempt did not complete within {remaining:?}");
         }
     } else {
-        log::info!(
+        // Callers must size the budget with `finalize_budget`; anything at or below the
+        // floor lands here and produces no end-of-run checkpoint at all.
+        log::warn!(
             "Skipping final checkpoint attempt: remaining shutdown budget {remaining:?} \
              is below the {floor:?} floor"
         );
@@ -352,6 +503,7 @@ async fn coordinator_loop(
     client: Arc<dyn HarnessSupportClient>,
     task_id: AmbientAgentTaskId,
     working_dir: PathBuf,
+    declarations_writer: Option<DeclarationsWriterHandle>,
     boundary_check: BoundaryCheck,
     interval: Duration,
     jitter: Duration,
@@ -371,6 +523,7 @@ async fn coordinator_loop(
                     client.clone(),
                     task_id,
                     working_dir.clone(),
+                    declarations_writer.clone(),
                     script_timeout,
                     upload_timeout,
                 )
@@ -379,29 +532,23 @@ async fn coordinator_loop(
             }
         }
 
-        // --- Due: poll for a safe boundary, staying responsive to finalize. Checked
-        // immediately on entry (not only after the first poll interval elapses) so an
-        // already-safe conversation doesn't pay needless latency.
-        let mut at_boundary = boundary_check().await;
-        while !at_boundary {
-            futures::select! {
-                _ = Timer::after(SAFE_BOUNDARY_POLL_INTERVAL).fuse() => {
-                    at_boundary = boundary_check().await;
-                }
-                request = finalize_rx.recv().fuse() => {
-                    let Some(request) = request else { return };
-                    finalize_with_new_attempt(
-                        request,
-                        client.clone(),
-                        task_id,
-                        working_dir.clone(),
-                        script_timeout,
-                        upload_timeout,
-                    )
-                    .await;
-                    return;
-                }
+        // --- Due: poll for a safe boundary, staying responsive to finalize. ---
+        match wait_for_safe_boundary(&boundary_check, &mut finalize_rx).await {
+            DueOutcome::Safe => {}
+            DueOutcome::Finalize(request) => {
+                finalize_with_new_attempt(
+                    request,
+                    client.clone(),
+                    task_id,
+                    working_dir.clone(),
+                    declarations_writer.clone(),
+                    script_timeout,
+                    upload_timeout,
+                )
+                .await;
+                return;
             }
+            DueOutcome::Stop => return,
         }
 
         // --- InFlight: run exactly one attempt, never overlapping another. ---
@@ -409,6 +556,7 @@ async fn coordinator_loop(
             client.clone(),
             task_id,
             working_dir.clone(),
+            declarations_writer.clone(),
             script_timeout,
             upload_timeout,
             &background,
