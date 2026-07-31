@@ -22,6 +22,7 @@ use nix::sys::termios::{self, InputFlags, SetArg};
 use serde::{Deserialize, Serialize};
 use signal_hook_mio::v1_0::Signals;
 use warp_core::channel::ChannelState;
+use warp_core::cli_agent_protocol::{WARP_CLI_AGENT_PROTOCOL_VERSION_ENV, WARP_CLIENT_VERSION_ENV};
 use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
 use warp_errors::report_if_error;
@@ -340,11 +341,11 @@ fn build_host_shell_command(
         // plugins can do warp-specific version checks without worrying
         // that the version env var might be coming from a different terminal
         // (for ex., in the ssh case).
-        builder.env("WARP_CLIENT_VERSION", version);
+        builder.env(WARP_CLIENT_VERSION_ENV, version);
     } else {
         // Local builds don't have GIT_RELEASE_TAG, so app_version() is None.
         // Use "local" so plugins can still distinguish this from a missing value.
-        builder.env("WARP_CLIENT_VERSION", "local");
+        builder.env(WARP_CLIENT_VERSION_ENV, "local");
     }
 
     // Set the `SHELL` environment variable to match the path of the shell we are using.
@@ -386,7 +387,7 @@ fn build_host_shell_command(
     // so the plugin should fall back to legacy notifications.
     if FeatureFlag::HOANotifications.is_enabled() {
         builder.env(
-            "WARP_CLI_AGENT_PROTOCOL_VERSION",
+            WARP_CLI_AGENT_PROTOCOL_VERSION_ENV,
             current_protocol_version().to_string(),
         );
     }
@@ -872,9 +873,9 @@ fn build_docker_sandbox_command(
     builder.env_remove("DESKTOP_STARTUP_ID");
     if let Some(version) = ChannelState::app_version() {
         builder.env("TERM_PROGRAM_VERSION", version);
-        builder.env("WARP_CLIENT_VERSION", version);
+        builder.env(WARP_CLIENT_VERSION_ENV, version);
     } else {
-        builder.env("WARP_CLIENT_VERSION", "local");
+        builder.env(WARP_CLIENT_VERSION_ENV, "local");
     }
     builder.env("SHELL", docker_starter.logical_shell_path());
     if let Some(window_id) = window_id {
@@ -892,7 +893,7 @@ fn build_docker_sandbox_command(
     builder.env("WARP_IS_LOCAL_SHELL_SESSION", "1");
     if FeatureFlag::HOANotifications.is_enabled() {
         builder.env(
-            "WARP_CLI_AGENT_PROTOCOL_VERSION",
+            WARP_CLI_AGENT_PROTOCOL_VERSION_ENV,
             current_protocol_version().to_string(),
         );
     }

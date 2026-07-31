@@ -10,7 +10,7 @@ use warpui::platform::WindowStyle;
 use warpui::{
     AddWindowOptions, App, SingletonEntity, TuiView as _, ViewHandle, WindowInvalidation,
 };
-use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
+use warpui_core::elements::tui::{Modifier, TuiBuffer, TuiBufferExt, TuiRect};
 use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
 
@@ -98,7 +98,7 @@ fn input_text(app: &App, fixture: &Fixture) -> String {
     })
 }
 
-fn render_session(app: &mut App, fixture: &Fixture) -> Vec<String> {
+fn render_session(app: &mut App, fixture: &Fixture) -> TuiBuffer {
     let mut presenter = TuiPresenter::new();
     app.update(|ctx| {
         let mut invalidation = WindowInvalidation::default();
@@ -117,7 +117,6 @@ fn render_session(app: &mut App, fixture: &Fixture) -> Vec<String> {
         presenter
             .present(ctx, &fixture.view, TuiRect::new(0, 0, 100, 40))
             .buffer
-            .to_lines()
     })
 }
 
@@ -164,8 +163,35 @@ fn no_environment_card_has_top_padding_and_ctrl_c_restores_prompt_and_images() {
                     .is_empty()
             );
         });
-        let lines = render_session(&mut app, &fixture).join("\n");
+        let buffer = render_session(&mut app, &fixture);
+        let rendered_lines = buffer.to_lines();
+        let lines = rendered_lines.join("\n");
+        let normalized_lines = lines.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(lines.contains("Hand off to cloud"), "{lines}");
+        assert!(
+            normalized_lines.contains("The agent will work on this session in the cloud."),
+            "{lines}"
+        );
+        let explanation_row = rendered_lines
+            .iter()
+            .position(|line| line.contains("The agent will work on this session in the cloud."))
+            .expect("handoff explanation renders");
+        let explanation_column = rendered_lines[explanation_row]
+            .find("The agent will work on this session in the cloud.")
+            .expect("handoff explanation column");
+        assert!(
+            buffer[(
+                u16::try_from(explanation_column).unwrap(),
+                u16::try_from(explanation_row).unwrap()
+            )]
+                .modifier
+                .contains(Modifier::BOLD),
+            "handoff explanation is bold"
+        );
+        assert!(
+            rendered_lines[explanation_row + 1].trim().is_empty(),
+            "handoff explanation has a blank row before configuration"
+        );
         assert!(lines.contains("A cloud environment is required"), "{lines}");
         assert!(lines.contains("Enter open environments"), "{lines}");
         assert!(!lines.contains("finish the task"), "{lines}");

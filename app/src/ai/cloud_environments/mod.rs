@@ -11,7 +11,7 @@ pub use cloud_object_models::{
     SourceRepo,
 };
 use cloud_objects::cloud_object::Owner;
-use warpui::{AppContext, SingletonEntity as _};
+use warpui::{AppContext, Entity, SingletonEntity as _, ViewContext};
 
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::generic_string_model::StringModel;
@@ -76,13 +76,11 @@ impl JsonModel for AmbientAgentEnvironment {
     }
 }
 
-/// Resolves the current owner for creating new environments.
-///
-/// If the user is on a team, returns `Owner::Team`. Otherwise, returns
-/// `Owner::User` with the current user's ID. Returns `None` if the user
-/// is not logged in.
-pub fn owner_for_new_environment(ctx: &AppContext) -> Option<Owner> {
-    if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
+pub fn owner_for_new_environment<T: Entity>(ctx: &ViewContext<T>) -> Option<Owner> {
+    if let Some(team_uid) = UserWorkspaces::as_ref(ctx)
+        .team_for_view(ctx)
+        .map(|team| team.uid)
+    {
         Some(Owner::Team { team_uid })
     } else {
         let user_id = AuthStateProvider::as_ref(ctx).get().user_id()?;

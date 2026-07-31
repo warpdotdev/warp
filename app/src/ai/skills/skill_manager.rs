@@ -550,9 +550,9 @@ impl SkillManager {
                 self.handle_skills_deleted(paths);
             }
         }
-        if home_skills_changed {
-            ctx.emit(SkillManagerEvent::HomeSkillsChanged);
-        }
+        ctx.emit(SkillManagerEvent::SkillsChanged {
+            home_skills_changed,
+        });
     }
 
     pub fn handle_skills_added(&mut self, skills: Vec<ParsedSkill>) {

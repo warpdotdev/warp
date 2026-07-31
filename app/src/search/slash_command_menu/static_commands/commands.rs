@@ -45,6 +45,15 @@ pub const ADD_MCP: StaticCommand = StaticCommand {
     auto_enter_ai_mode: false,
     argument: None,
 };
+pub const RESET_STATUSLINE: StaticCommand = StaticCommand {
+    name: "/reset-statusline",
+    description: "Reset the statusline to its default items and ordering",
+    kind: SlashCommandKind::ResetStatusline,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
 pub const STATUSLINE: StaticCommand = StaticCommand {
     name: "/statusline",
     description: "Configure the statusline",
@@ -108,6 +117,16 @@ pub const NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
     auto_enter_ai_mode: false,
     argument: None,
 };
+
+pub const API_KEYS: StaticCommand = StaticCommand {
+    name: "/api-keys",
+    description: "View and manage API keys",
+    kind: SlashCommandKind::ApiKeys,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
 pub const THEME: StaticCommand = StaticCommand {
     name: "/theme",
     description: "Set color theme",
@@ -132,10 +151,10 @@ pub const EXIT: StaticCommand = StaticCommand {
     argument: None,
 };
 
-pub const VERSION: StaticCommand = StaticCommand {
-    name: "/version",
-    description: "Show the Warp version",
-    kind: SlashCommandKind::Version,
+pub const STATUS: StaticCommand = StaticCommand {
+    name: "/status",
+    description: "Show session and account status",
+    kind: SlashCommandKind::Status,
     supported_surfaces: SlashCommandSurfaces::TuiOnly,
     availability: Availability::ALWAYS,
     auto_enter_ai_mode: false,
@@ -484,6 +503,22 @@ pub static NEW: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     argument: Some(Argument::optional().with_execute_on_selection()),
 });
 
+pub const CLEAR: StaticCommand = StaticCommand {
+    name: "/clear",
+    description: "Clear the transcript and start a new conversation (alias for /agent)",
+    kind: SlashCommandKind::Clear,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::NO_LRC_CONTROL
+        .union(Availability::AI_ENABLED)
+        .union(Availability::NOT_CLOUD_AGENT),
+    auto_enter_ai_mode: false,
+    argument: Some(Argument {
+        hint_text: None,
+        is_optional: true,
+        should_execute_on_selection: true,
+    }),
+};
+
 pub static MODEL: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/model",
     description: "Switch the base agent model",
@@ -572,7 +607,7 @@ pub static ORCHESTRATE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand
     name: ORCHESTRATE_NAME,
     description: "Break a task into subtasks and run them in parallel with multiple agents",
     kind: SlashCommandKind::Orchestrate,
-    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
         icon_path: "bundled/svg/oz.svg",
     },
     availability: Availability::LOCAL | Availability::AI_ENABLED,
@@ -794,6 +829,28 @@ pub static EXPORT_TO_FILE: LazyLock<StaticCommand> = LazyLock::new(|| StaticComm
     argument: Some(Argument::optional().with_hint_text("<optional filename>")),
 });
 
+pub const VIM_MODE: StaticCommand = StaticCommand {
+    name: "/vim-mode",
+    description: "Toggle Vim mode",
+    kind: SlashCommandKind::VimMode,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const COPY_DEBUGGING_ID: StaticCommand = StaticCommand {
+    name: "/copy-debugging-id",
+    description: "Copy debugging information for this conversation",
+    kind: SlashCommandKind::CopyDebuggingId,
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
+        icon_path: "bundled/svg/copy.svg",
+    },
+    availability: Availability::ACTIVE_CONVERSATION,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub static COMMAND_REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::new);
 
 /// A unique identifier for a static slash command.
@@ -874,25 +931,30 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         FEEDBACK.clone(),
         INDEX,
         INIT,
+        API_KEYS,
         LOGOUT,
         MCP,
         OPEN_PROJECT_RULES,
         OPEN_MCP_SERVERS,
         OPEN_RULES,
         AGENT.clone(),
+        CLEAR,
         NEW.clone(),
         PLAN.clone(),
         RENAME_CONVERSATION.clone(),
         RENAME_TAB.clone(),
         SET_TAB_COLOR.clone(),
         STATUSLINE,
+        RESET_STATUSLINE,
         NATURAL_LANGUAGE_DETECTION,
         THEME,
+        VIM_MODE,
         USAGE,
         CONVERSATIONS,
         EXPORT_TO_CLIPBOARD,
+        COPY_DEBUGGING_ID,
         MODEL.clone(),
-        VERSION,
+        STATUS,
         VIEW_LOGS,
         VOICE,
     ];

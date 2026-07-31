@@ -104,7 +104,7 @@ impl Body {
         ctx: &mut ViewContext<Self>,
     ) {
         let model = model.lock();
-        let max_session_size = max_session_size(ctx);
+        let max_session_size = max_session_size(ctx.window_id(), ctx);
 
         // TODO: serializing the blocks to compute their sizes is
         // inefficient but it matches how the server checks limits.

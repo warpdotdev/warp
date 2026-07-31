@@ -33,5 +33,6 @@ pub mod sync_merkle_tree;
 pub mod task_attachments;
 pub mod task_git_credentials;
 pub mod task_secrets;
+pub mod tui_onboarding_markers;
 pub mod user_github_info;
 pub mod user_repo_auth_status;

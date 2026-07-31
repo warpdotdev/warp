@@ -1,4 +1,4 @@
-use crate::billing::PricingInfo;
+use crate::billing::{PricingInfo, PurchaseAddOnCreditsPolicy};
 use crate::experiment::Experiment;
 use crate::request_context::RequestContext;
 use crate::schema;
@@ -12,6 +12,15 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
       user {
         profile {
           uid
+        }
+        billingMetadata {
+          tier {
+            purchaseAddOnCreditsPolicy {
+              enabled
+              premiumEnabled
+              pricePremiumBps
+            }
+          }
         }
         workspaces {
           uid
@@ -226,9 +235,26 @@ pub enum PricingInfoResult {
 #[derive(cynic::QueryFragment, Debug)]
 pub struct User {
     pub profile: UserProfile,
+    pub billing_metadata: Option<UserPurchasePolicyBillingMetadata>,
     pub workspaces: Vec<Workspace>,
     pub experiments: Option<Vec<Experiment>>,
     pub discoverable_teams: Vec<DiscoverableTeamData>,
+}
+
+/// Slim selection of the user-level `billingMetadata`: only the add-on
+/// credits purchase policy. This is the teamless-purchase fallback (fresh
+/// free users have no team and their only workspace is the server's
+/// placeholder) — do not widen it into the full `BillingMetadata` selection.
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "BillingMetadata")]
+pub struct UserPurchasePolicyBillingMetadata {
+    pub tier: UserPurchasePolicyTier,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "Tier")]
+pub struct UserPurchasePolicyTier {
+    pub purchase_add_on_credits_policy: Option<PurchaseAddOnCreditsPolicy>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

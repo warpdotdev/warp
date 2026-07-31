@@ -43,6 +43,7 @@ pub struct Window {
     pub agent_management_filters: Option<String>,
     pub left_panel_open: Option<bool>,
     pub vertical_tabs_panel_open: Option<bool>,
+    pub team_uid: Option<String>,
 }
 
 #[derive(Identifiable, Insertable, Queryable)]
@@ -340,6 +341,7 @@ pub struct NewWindow {
     pub agent_management_filters: Option<String>,
     pub left_panel_open: Option<bool>,
     pub vertical_tabs_panel_open: Option<bool>,
+    pub team_uid: Option<String>,
 }
 
 #[derive(Identifiable, Queryable, Associations)]
