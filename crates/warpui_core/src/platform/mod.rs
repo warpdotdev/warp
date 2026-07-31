@@ -194,7 +194,8 @@ pub trait Delegate: 'static {
 
     fn system_theme(&self) -> SystemTheme;
 
-    fn open_url(&self, url: &str);
+    /// Opens a URL in its default system handler and returns whether the launch request succeeded.
+    fn open_url(&self, url: &str) -> bool;
 
     /// Opens an absolute file path with native system API.
     fn open_file_path(&self, path: &Path);

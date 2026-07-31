@@ -100,15 +100,15 @@ pub(super) trait OrchestrationBlockController {
         ctx: &mut AppContext,
     );
 
-    /// Validates and dispatches an accepted request, returning the blocking
-    /// reason when the edited configuration cannot launch.
-    fn accept(
+    /// Returns the blocking reason when the edited configuration cannot launch.
+    fn accept_disabled_reason(
         &self,
-        action_id: &AIAgentActionId,
-        request: RunAgentsRequest,
         state: &OrchestrationConfigState,
-        ctx: &mut AppContext,
-    ) -> Result<(), String>;
+        ctx: &AppContext,
+    ) -> Option<String>;
+
+    /// Dispatches a request that has already passed validation.
+    fn accept(&self, action_id: &AIAgentActionId, request: RunAgentsRequest, ctx: &mut AppContext);
 }
 
 /// Production controller backed by the shared orchestration models.
@@ -189,19 +189,17 @@ impl OrchestrationBlockController for ModelOrchestrationBlockController {
         }
     }
 
-    fn accept(
+    fn accept_disabled_reason(
         &self,
-        action_id: &AIAgentActionId,
-        request: RunAgentsRequest,
         state: &OrchestrationConfigState,
-        ctx: &mut AppContext,
-    ) -> Result<(), String> {
-        if let Some(reason) = accept_disabled_reason_with_auth(state, ctx) {
-            return Err(reason);
-        }
+        ctx: &AppContext,
+    ) -> Option<String> {
+        accept_disabled_reason_with_auth(state, ctx)
+    }
+
+    fn accept(&self, action_id: &AIAgentActionId, request: RunAgentsRequest, ctx: &mut AppContext) {
         self.action_model.update(ctx, |action_model, ctx| {
             action_model.execute_run_agents(action_id, request, ctx);
         });
-        Ok(())
     }
 }

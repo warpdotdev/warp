@@ -125,6 +125,7 @@ impl TeamUpdateManager {
                     joinable_teams: vec![],
                     experiments: None,
                     feature_model_choices: None,
+                    user_purchase_policy: None,
                 },
                 pricing_info: None,
             })
@@ -349,8 +350,10 @@ impl TeamUpdateManager {
 
                 let workspaces = response.metadata.workspaces;
                 let joinable_teams = response.metadata.joinable_teams;
+                let user_purchase_policy = response.metadata.user_purchase_policy;
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                    user_workspaces.set_user_purchase_policy(user_purchase_policy);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams, ctx);
                 });
@@ -388,17 +391,17 @@ impl TeamUpdateManager {
         }
     }
 
-    pub fn rename_team(&mut self, new_name: String, ctx: &mut ModelContext<Self>) {
+    pub fn rename_team(
+        &mut self,
+        new_name: String,
+        team_uid: ServerId,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let team_client = self.team_client.clone();
-        let team_uid = UserWorkspaces::handle(ctx).read(ctx, |user_workspaces, _| {
-            user_workspaces.current_team().map(|team| team.uid)
-        });
-        if let Some(team_uid) = team_uid {
-            let _ = ctx.spawn(
-                async move { team_client.rename_team(new_name, team_uid).await },
-                Self::on_team_renamed,
-            );
-        }
+        let _ = ctx.spawn(
+            async move { team_client.rename_team(new_name, team_uid).await },
+            Self::on_team_renamed,
+        );
     }
 
     fn on_team_renamed(
@@ -468,8 +471,10 @@ impl TeamUpdateManager {
                 let workspaces = user_workspaces_access.workspaces;
                 let joinable_teams = user_workspaces_access.joinable_teams;
                 let experiments = user_workspaces_access.experiments;
+                let user_purchase_policy = user_workspaces_access.user_purchase_policy;
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                    user_workspaces.set_user_purchase_policy(user_purchase_policy);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams.clone(), ctx);
                 });

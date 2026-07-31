@@ -4,27 +4,41 @@
 //! `EventHandler` and `Hoverable`.)
 //!
 //! # Construction
-//! Wrap a child with [`TuiEventHandler::new`] and register handlers with
-//! [`on_key`](TuiEventHandler::on_key), matching against the
+//! Wrap a child with [`TuiEventHandler::new`]. [`on_key`](TuiEventHandler::on_key)
+//! matches against the
 //! [`Keystroke::key`](crate::keymap::Keystroke) string (e.g. `"enter"`,
-//! `"a"`). Layout, render, height, and cursor are transparent — they delegate
-//! to the wrapped child.
+//! `"a"`), while
+//! [`on_modifier_key_changed`](TuiEventHandler::on_modifier_key_changed)
+//! observes physical modifier press/release events. Layout, render, height, and
+//! cursor are transparent — they delegate to the wrapped child.
 //!
 //! # Dispatch policy
 //! On [`dispatch_event`](TuiElement::dispatch_event) the event is offered to the
 //! child first. If the child consumes it, dispatch stops. Otherwise, for a
 //! `KeyDown` event, the first registered binding whose key matches is invoked
 //! (with the event, the [`TuiEventContext`], and the [`AppContext`]) and the
-//! event is reported handled. Events matching no binding are left unhandled so
-//! ancestors can react.
+//! event is reported handled. A registered modifier callback can explicitly
+//! choose whether its event propagates to ancestors. Events matching no handler
+//! are left unhandled so ancestors can react.
 
 use super::{
-    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
-    TuiPaintSurface, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize,
+    TuiConstraint, TuiDispatchEventResult, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
+    TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition,
+    TuiSize,
 };
 use crate::AppContext;
+use crate::event::KeyState;
+use crate::platform::keyboard::KeyCode;
 
 type KeyCallback = Box<dyn for<'a> FnMut(&TuiEvent, &mut TuiEventContext<'a>, &AppContext)>;
+type ModifierKeyChangedCallback = Box<
+    dyn for<'a> FnMut(
+        KeyCode,
+        KeyState,
+        &mut TuiEventContext<'a>,
+        &AppContext,
+    ) -> TuiDispatchEventResult,
+>;
 
 struct KeyBinding {
     key: String,
@@ -34,6 +48,7 @@ struct KeyBinding {
 pub struct TuiEventHandler {
     child: Box<dyn TuiElement>,
     bindings: Vec<KeyBinding>,
+    modifier_key_changed_callback: Option<ModifierKeyChangedCallback>,
 }
 
 impl TuiEventHandler {
@@ -41,6 +56,7 @@ impl TuiEventHandler {
         Self {
             child,
             bindings: Vec::new(),
+            modifier_key_changed_callback: None,
         }
     }
 
@@ -55,6 +71,23 @@ impl TuiEventHandler {
             key: key.into(),
             callback: Box::new(callback),
         });
+        self
+    }
+
+    /// Registers a child-first callback for physical modifier press/release
+    /// events. The callback explicitly chooses whether ancestors may continue
+    /// handling the event.
+    pub fn on_modifier_key_changed(
+        mut self,
+        callback: impl for<'a> FnMut(
+            KeyCode,
+            KeyState,
+            &mut TuiEventContext<'a>,
+            &AppContext,
+        ) -> TuiDispatchEventResult
+        + 'static,
+    ) -> Self {
+        self.modifier_key_changed_callback = Some(Box::new(callback));
         self
     }
 }
@@ -111,6 +144,14 @@ impl TuiElement for TuiEventHandler {
                     return true;
                 }
             }
+        }
+        if let TuiEvent::ModifierKeyChanged { key_code, state } = event
+            && let Some(callback) = &mut self.modifier_key_changed_callback
+        {
+            return match callback(*key_code, *state, event_ctx, app) {
+                TuiDispatchEventResult::PropagateToParent => false,
+                TuiDispatchEventResult::StopPropagation => true,
+            };
         }
 
         false

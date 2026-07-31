@@ -9,15 +9,18 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use chrono::Local;
+use futures::channel::oneshot;
 use parking_lot::FairMutex;
 use warp::settings::{AISettings, PrivacySettings, PrivacySettingsChangedEvent};
 use warp::tui_export::{
     AIConversationId, AISettingsChangedEvent, AttachmentInput, BlocklistAIContextModel,
-    BlocklistAIController, BlocklistAIHistoryModel, CloudEnvironmentCatalog, HandoffCommitOutcome,
-    HandoffEntryPoint, HandoffLaunchAttachments, HandoffPrepareError, HandoffPrepareInput,
-    HandoffRestoration, HandoffSurface, LLMId, LLMPreferences, LLMPreferencesEvent, OptionRow,
-    OptionSnapshot, OptionSourceStatus, PendingCloudLaunch, PendingHandoff, ServerApiProvider,
-    SnapshotUploadTarget, TerminalModel, UserWorkspaces, UserWorkspacesEvent, execute_handoff,
+    BlocklistAIController, BlocklistAIHistoryModel, CloudAgentTelemetryEvent,
+    CloudEnvironmentCatalog, HandoffCommitOutcome, HandoffEntryPoint, HandoffLaunchAttachments,
+    HandoffPrepareError, HandoffPrepareInput, HandoffRestoration, HandoffSurface, LLMId,
+    LLMPreferences, LLMPreferencesEvent, OptionRow, OptionSnapshot, OptionSourceStatus,
+    PendingCloudLaunch, PendingHandoff, ServerApiProvider, SnapshotUploadTarget, TerminalModel,
+    UserWorkspaces, UserWorkspacesEvent, execute_handoff, handoff_dispatch_error,
     oz_model_snapshot, prepare_handoff, suggest_handoff_environment,
 };
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
@@ -57,9 +60,12 @@ pub(crate) enum TuiHandoffPhase {
     },
     Created {
         url: String,
+        completed_at: String,
     },
     Persisted {
         url: String,
+        completed_at: String,
+        continuing_locally: bool,
     },
 }
 
@@ -98,6 +104,7 @@ pub(crate) struct TuiHandoffModel {
     environments: ModelHandle<CloudEnvironmentCatalog>,
     forked_existing_conversation: bool,
     next_operation_id: u64,
+    execution_cancellation: Option<oneshot::Sender<()>>,
     dismissed: bool,
 }
 
@@ -224,6 +231,7 @@ impl TuiHandoffModel {
                 environments,
                 forked_existing_conversation,
                 next_operation_id: 0,
+                execution_cancellation: None,
                 dismissed: false,
             };
             model.refresh_pending_environments(ctx);
@@ -376,7 +384,9 @@ impl TuiHandoffModel {
 
     pub(crate) fn url(&self) -> Option<&str> {
         match &self.phase {
-            TuiHandoffPhase::Created { url } | TuiHandoffPhase::Persisted { url } => Some(url),
+            TuiHandoffPhase::Created { url, .. } | TuiHandoffPhase::Persisted { url, .. } => {
+                Some(url)
+            }
             TuiHandoffPhase::Editable { .. } | TuiHandoffPhase::Committed { .. } => None,
         }
     }
@@ -591,7 +601,9 @@ impl TuiHandoffModel {
         ctx.notify();
 
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let execution = execute_handoff(*pending, ai_client, None, ctx);
+        let (cancel, cancellation) = oneshot::channel();
+        self.execution_cancellation = Some(cancel);
+        let execution = execute_handoff(*pending, ai_client, Some(cancellation), None, ctx);
         ctx.spawn(execution, move |model, outcome, ctx| {
             if !matches!(
                 model.phase,
@@ -602,6 +614,7 @@ impl TuiHandoffModel {
             {
                 return;
             }
+            model.execution_cancellation = None;
             match outcome {
                 HandoffCommitOutcome::Rejected { pending, error } => {
                     model.phase = TuiHandoffPhase::Editable {
@@ -615,6 +628,22 @@ impl TuiHandoffModel {
                     ctx.notify();
                 }
                 HandoffCommitOutcome::Failed(failure) => {
+                    warp::send_telemetry_from_ctx!(
+                        CloudAgentTelemetryEvent::DispatchFailed {
+                            error: handoff_dispatch_error(&failure.issue),
+                        },
+                        ctx
+                    );
+                    if let Some(derived_workspace_had_content) =
+                        failure.derived_workspace_had_content
+                    {
+                        warp::send_telemetry_from_ctx!(
+                            CloudAgentTelemetryEvent::HandoffSnapshotPrepared {
+                                derived_workspace_had_content,
+                            },
+                            ctx
+                        );
+                    }
                     model.dismissed = true;
                     ctx.emit(TuiHandoffModelEvent::Failed {
                         restoration: failure.restoration,
@@ -630,7 +659,20 @@ impl TuiHandoffModel {
                     ctx.notify();
                 }
                 HandoffCommitOutcome::Created(created) => {
-                    model.phase = TuiHandoffPhase::Created { url: created.url };
+                    warp::send_telemetry_from_ctx!(
+                        CloudAgentTelemetryEvent::HandoffSnapshotPrepared {
+                            derived_workspace_had_content: created
+                                .derived_workspace_had_content,
+                        },
+                        ctx
+                    );
+                    model.phase = TuiHandoffPhase::Created {
+                        url: created.url,
+                        completed_at: Local::now()
+                            .naive_local()
+                            .format("%B %-d at %-I:%M%P")
+                            .to_string(),
+                    };
                     ctx.emit(TuiHandoffModelEvent::Changed { focus_block: true });
                     ctx.notify();
                 }
@@ -639,25 +681,36 @@ impl TuiHandoffModel {
     }
 
     pub(crate) fn cancel(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.is_editable() || self.dismissed {
+        if self.dismissed {
             return;
         }
-        let restoration = self
-            .pending_mut()
-            .and_then(PendingHandoff::take_restoration);
+        let restoration = match &mut self.phase {
+            TuiHandoffPhase::Editable { pending, .. } => pending.take_restoration(),
+            TuiHandoffPhase::Committed { .. } => {
+                if let Some(cancellation) = self.execution_cancellation.take() {
+                    let _ = cancellation.send(());
+                }
+                None
+            }
+            TuiHandoffPhase::Created { .. } | TuiHandoffPhase::Persisted { .. } => return,
+        };
         self.dismissed = true;
         ctx.emit(TuiHandoffModelEvent::Cancelled(restoration));
         ctx.notify();
     }
 
     pub(crate) fn continue_locally(&mut self, ctx: &mut ModelContext<Self>) {
-        let TuiHandoffPhase::Created { url } = &self.phase else {
+        let TuiHandoffPhase::Created { url, completed_at } = &self.phase else {
             return;
         };
         if !self.forked_existing_conversation || self.dismissed {
             return;
         }
-        self.phase = TuiHandoffPhase::Persisted { url: url.clone() };
+        self.phase = TuiHandoffPhase::Persisted {
+            url: url.clone(),
+            completed_at: completed_at.clone(),
+            continuing_locally: true,
+        };
         ctx.emit(TuiHandoffModelEvent::ContinueLocally);
         ctx.notify();
     }

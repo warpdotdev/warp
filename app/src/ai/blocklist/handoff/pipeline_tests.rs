@@ -185,7 +185,7 @@ fn execute_revalidates_current_model_before_returning_future() {
         pending.selected_model_id = "custom-router:local:byok".to_owned();
         pending.model_is_cloud_runnable = true;
 
-        let future = app.update(|ctx| execute_handoff(pending, client, None, ctx));
+        let future = app.update(|ctx| execute_handoff(pending, client, None, None, ctx));
         let HandoffCommitOutcome::Rejected { error, .. } = future.await else {
             panic!("current invalid model must reject before external work");
         };
@@ -208,7 +208,7 @@ fn execute_revalidates_current_environment_catalog_before_returning_future() {
         pending.valid_environment_ids.insert(environment_id);
         pending.config.environment_id = Some(environment_id.to_string());
 
-        let future = app.update(|ctx| execute_handoff(pending, client, None, ctx));
+        let future = app.update(|ctx| execute_handoff(pending, client, None, None, ctx));
         let HandoffCommitOutcome::Rejected { error, .. } = future.await else {
             panic!("deleted environment must reject before external work");
         };
@@ -227,7 +227,7 @@ fn execute_revalidates_current_handoff_enablement_before_returning_future() {
         let client: Arc<dyn AIClient> = Arc::new(mock);
         let pending = pending(client.clone(), None, false, "continue");
 
-        let future = app.update(|ctx| execute_handoff(pending, client, None, ctx));
+        let future = app.update(|ctx| execute_handoff(pending, client, None, None, ctx));
         let HandoffCommitOutcome::Rejected { error, .. } = future.await else {
             panic!("disabled handoff must reject before external work");
         };
@@ -815,6 +815,7 @@ async fn fork_materialization_precedes_exactly_one_spawn() {
             "",
         ),
         client,
+        None,
         Some(materialize),
     )
     .await;
@@ -882,6 +883,7 @@ async fn fresh_launch_skips_fork_and_materializes_before_spawn() {
     let outcome = execute_validated_handoff(
         pending(client.clone(), None, false, "new task"),
         client,
+        None,
         Some(materialize),
     )
     .await;
@@ -911,6 +913,7 @@ async fn cancellation_after_materialization_stops_before_spawn() {
     let outcome = execute_validated_handoff(
         pending(client.clone(), None, false, "new task"),
         client,
+        None,
         Some(materialize),
     )
     .await;
@@ -956,6 +959,7 @@ async fn cancellation_during_spawn_cancels_the_created_task() {
     let outcome = execute_validated_handoff(
         pending(client.clone(), None, false, "new task"),
         client,
+        None,
         Some(materialize),
     )
     .await;
@@ -992,11 +996,31 @@ async fn snapshot_failure_degrades_to_spawn_without_token() {
     let mut pending = pending(client.clone(), None, false, "continue");
     pending.source_paths = vec![path];
 
-    let outcome = execute_validated_handoff(pending, client, None).await;
+    let outcome = execute_validated_handoff(pending, client, None, None).await;
     let HandoffCommitOutcome::Created(created) = outcome else {
         panic!("snapshot failure should not fail the handoff");
     };
     assert!(created.snapshot_failed);
     assert!(created.derived_workspace_had_content);
     assert!(created.request.initial_snapshot_token.is_none());
+}
+
+#[tokio::test]
+async fn caller_cancellation_stops_before_spawn() {
+    let mut mock = MockAIClient::new();
+    mock.expect_fork_conversation().times(0);
+    mock.expect_spawn_agent().times(0);
+    let client: Arc<dyn AIClient> = Arc::new(mock);
+    let (cancel, cancellation) = oneshot::channel();
+    cancel.send(()).expect("handoff cancellation receiver");
+
+    let outcome = execute_validated_handoff(
+        pending(client.clone(), None, false, "new task"),
+        client,
+        Some(cancellation),
+        None,
+    )
+    .await;
+
+    assert!(matches!(outcome, HandoffCommitOutcome::Cancelled));
 }

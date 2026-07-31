@@ -80,6 +80,8 @@ impl TeamDeleteDisabledReason {
 pub struct Team {
     pub uid: ServerId,
     pub name: String,
+    /// The team's brand color as a hex string (e.g. "#7c3aed"), if set by the team admin.
+    pub color: Option<String>,
     pub invite_code: Option<WorkspaceInviteCode>,
     pub members: Vec<TeamMember>,
     pub pending_email_invites: Vec<EmailInvite>,
@@ -103,6 +105,7 @@ impl Team {
         Self {
             uid,
             name,
+            color: None,
             invite_code: Default::default(),
             members: members.unwrap_or_default(),
             pending_email_invites: Default::default(),

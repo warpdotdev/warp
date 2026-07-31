@@ -27,6 +27,7 @@ use warp::tui_export::{
 use warp_terminal::model::Point;
 use warp_terminal::model::escape_sequences::{
     BRACKETED_PASTE_END, BRACKETED_PASTE_START, ModeProvider, alt_screen_scroll_to_pty_bytes,
+    maybe_kitty_keyboard_escape_sequence,
 };
 use warp_terminal::model::mouse::{MouseAction, MouseButton, MouseState};
 use warpui_core::AppContext;
@@ -35,6 +36,7 @@ use warpui_core::elements::tui::{
     TuiPaintSurface, TuiPoint, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition,
     TuiScreenRect, TuiSize,
 };
+use warpui_core::event::KeyState;
 
 use crate::terminal_session_view::TuiTerminalSessionAction;
 /// Which terminal mouse reports the active process and user settings allow.
@@ -158,6 +160,22 @@ impl TuiElement for TuiTerminalContentElement {
                 TuiEvent::KeyDown {
                     is_composing: true, ..
                 } => return false,
+                // A process that asked for the Kitty protocol's all-keys mode
+                // wants standalone modifier press/release reports, mirroring the
+                // GUI's block list.
+                TuiEvent::ModifierKeyChanged { key_code, state } => {
+                    let bytes = maybe_kitty_keyboard_escape_sequence(
+                        model.lock().deref(),
+                        key_code,
+                        matches!(state, KeyState::Pressed),
+                    );
+                    if let Some(bytes) = bytes {
+                        event_ctx.dispatch_typed_action(
+                            TuiTerminalSessionAction::ForwardUserPtyBytes(bytes),
+                        );
+                        return true;
+                    }
+                }
                 TuiEvent::ScrollWheel { .. }
                 | TuiEvent::LeftMouseDown { .. }
                 | TuiEvent::LeftMouseUp { .. }
@@ -242,6 +260,7 @@ fn forwarded_pty_input_for_event<'a>(
         TuiEvent::KeyDown {
             is_composing: true, ..
         }
+        | TuiEvent::ModifierKeyChanged { .. }
         | TuiEvent::ScrollWheel { .. }
         | TuiEvent::LeftMouseDown { .. }
         | TuiEvent::LeftMouseUp { .. }

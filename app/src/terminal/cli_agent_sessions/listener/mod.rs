@@ -47,6 +47,7 @@ pub fn is_agent_supported(agent: &CLIAgent) -> bool {
             | CLIAgent::Droid
             | CLIAgent::Pi
             | CLIAgent::OhMyPi
+            | CLIAgent::WarpTui
     )
 }
 
@@ -59,13 +60,15 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         // OSC 777 events natively. Droid can be supported by user-configured
         // hooks or future integrations that emit the same events. We don't ship
         // install flows for these agents here — we just listen.
+        // WarpTui emits OSC 777 events directly (no external plugin needed).
         CLIAgent::Claude
         | CLIAgent::OpenCode
         | CLIAgent::Gemini
         | CLIAgent::Auggie
         | CLIAgent::Droid
         | CLIAgent::Pi
-        | CLIAgent::OhMyPi => Some(Box::new(DefaultSessionListener)),
+        | CLIAgent::OhMyPi
+        | CLIAgent::WarpTui => Some(Box::new(DefaultSessionListener)),
         CLIAgent::Codex => Some(Box::new(CodexSessionHandler)),
         CLIAgent::Hermes
         | CLIAgent::Amp
@@ -74,7 +77,6 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         | CLIAgent::Goose
         | CLIAgent::Vibe
         | CLIAgent::Antigravity
-        | CLIAgent::WarpTui
         | CLIAgent::Unknown => None,
     }
 }

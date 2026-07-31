@@ -4,6 +4,7 @@ use std::rc::Rc;
 use warpui_core::App;
 
 use super::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
+use crate::read_only_menu::TuiReadOnlyMenuKind;
 
 #[test]
 fn replacing_a_visible_mode_emits_close_before_the_new_mode() {
@@ -45,16 +46,25 @@ fn opening_a_menu_does_not_replace_an_active_menu() {
             assert!(!mode.try_open(TuiInputSuggestionsMode::SlashCommands, ctx));
             assert!(!mode.try_open(TuiInputSuggestionsMode::ModelSelector, ctx));
             assert!(!mode.try_open(TuiInputSuggestionsMode::SkillMenu, ctx));
-            assert!(!mode.try_open(TuiInputSuggestionsMode::Shortcuts, ctx));
+            assert!(!mode.try_open(
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts),
+                ctx
+            ));
             assert_eq!(mode.mode(), TuiInputSuggestionsMode::ConversationMenu);
 
             mode.set_mode(TuiInputSuggestionsMode::Closed, ctx);
-            assert!(mode.try_open(TuiInputSuggestionsMode::Shortcuts, ctx));
+            assert!(mode.try_open(
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts),
+                ctx
+            ));
             assert!(!mode.try_open(TuiInputSuggestionsMode::SlashCommands, ctx));
             assert!(!mode.try_open(TuiInputSuggestionsMode::ConversationMenu, ctx));
             assert!(!mode.try_open(TuiInputSuggestionsMode::ModelSelector, ctx));
             assert!(!mode.try_open(TuiInputSuggestionsMode::SkillMenu, ctx));
-            assert_eq!(mode.mode(), TuiInputSuggestionsMode::Shortcuts);
+            assert_eq!(
+                mode.mode(),
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Shortcuts)
+            );
         });
     });
 }

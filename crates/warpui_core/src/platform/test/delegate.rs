@@ -188,8 +188,8 @@ impl platform::Delegate for AppDelegate {
         *self.cursor_shape.lock() = cursor;
     }
 
-    fn open_url(&self, _: &str) {
-        // no-op for tests
+    fn open_url(&self, _: &str) -> bool {
+        true
     }
 
     fn close_ime_async(&self, _window_id: WindowId) {
@@ -303,8 +303,8 @@ impl platform::Delegate for IntegrationTestDelegate {
         *self.cursor_shape.lock() = cursor;
     }
 
-    fn open_url(&self, _: &str) {
-        // no-op for tests
+    fn open_url(&self, _: &str) -> bool {
+        true
     }
 
     fn close_ime_async(&self, _window_id: WindowId) {

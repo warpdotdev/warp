@@ -92,6 +92,94 @@ function relpath() {
   python -c "import os,sys;print(os.path.relpath(*(sys.argv[1:])))" "$@";
 }
 
+# Submit once so a transient polling failure can resume the same notarization
+# instead of uploading a duplicate artifact.
+function notarize_artifact() {
+  local artifact="$1"
+  local auth_args=(
+    --apple-id "$WARP_NOTARIZATION_APPLE_ID"
+    --password "$WARP_NOTARIZATION_PASSWORD"
+    --team-id "$APPLE_TEAM_ID"
+  )
+
+  local submission_output
+  if ! submission_output="$(
+    xcrun notarytool submit "$artifact" "${auth_args[@]}" --no-wait --output-format json
+  )"; then
+    echo "Failed to submit $artifact for notarization."
+    return 1
+  fi
+
+  local submission_id
+  if ! submission_id="$(printf '%s' "$submission_output" | plutil -extract id raw -o - -)"; then
+    echo "Failed to read the notarization submission ID."
+    return 1
+  fi
+  if [[ -z "$submission_id" ]]; then
+    echo "Apple did not return a notarization submission ID."
+    return 1
+  fi
+
+  echo "Notarization submission ID: $submission_id"
+
+  local poll_interval_seconds="${NOTARIZATION_POLL_INTERVAL_SECONDS:-15}"
+  local max_poll_failures="${NOTARIZATION_MAX_POLL_FAILURES:-5}"
+  local initial_retry_delay_seconds="${NOTARIZATION_INITIAL_RETRY_DELAY_SECONDS:-5}"
+  local timeout_seconds="${NOTARIZATION_TIMEOUT_SECONDS:-900}"
+  local retry_delay_seconds="$initial_retry_delay_seconds"
+  local consecutive_poll_failures=0
+  local polling_started_at="$SECONDS"
+
+  while true; do
+    if (( SECONDS - polling_started_at >= timeout_seconds )); then
+      echo "Timed out waiting for notarization submission $submission_id after $timeout_seconds seconds."
+      return 1
+    fi
+    local info_output
+    if info_output="$(
+      xcrun notarytool info "$submission_id" "${auth_args[@]}" --output-format json
+    )"; then
+      consecutive_poll_failures=0
+      retry_delay_seconds="$initial_retry_delay_seconds"
+
+      local status
+      if ! status="$(printf '%s' "$info_output" | plutil -extract status raw -o - -)"; then
+        echo "Failed to read the status of notarization submission $submission_id."
+        return 1
+      fi
+
+      echo "Current notarization status: $status"
+      case "$status" in
+        Accepted)
+          return 0
+          ;;
+        Invalid|Rejected)
+          echo "Notarization submission $submission_id was rejected by Apple."
+          xcrun notarytool log "$submission_id" "${auth_args[@]}" || true
+          return 1
+          ;;
+        "In Progress")
+          sleep "$poll_interval_seconds"
+          ;;
+        *)
+          echo "Unexpected notarization status for submission $submission_id: $status"
+          return 1
+          ;;
+      esac
+    else
+      consecutive_poll_failures=$((consecutive_poll_failures + 1))
+      if (( consecutive_poll_failures >= max_poll_failures )); then
+        echo "Failed to poll notarization submission $submission_id after $consecutive_poll_failures consecutive attempts."
+        return 1
+      fi
+
+      echo "Failed to poll notarization submission $submission_id; retrying in $retry_delay_seconds seconds ($consecutive_poll_failures/$max_poll_failures)."
+      sleep "$retry_delay_seconds"
+      retry_delay_seconds=$((retry_delay_seconds * 2))
+    fi
+  done
+}
+
 # Defaults for command-line flags.
 UNIVERSAL_BINARY=true
 BUILD_BINARY=true
@@ -850,16 +938,11 @@ fi
 
 if [[ $CODESIGN = true ]]; then
   echo "Uploading $NOTARIZATION_ARTIFACT to Apple for notarization..."
-  xcrun notarytool submit "$NOTARIZATION_ARTIFACT" --apple-id "$WARP_NOTARIZATION_APPLE_ID" --password "$WARP_NOTARIZATION_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+  notarize_artifact "$NOTARIZATION_ARTIFACT"
 
   if [[ $STAPLE_TICKET = true ]]; then
     echo "Attempting to staple the notarization ticket to $NOTARIZATION_ARTIFACT..."
     xcrun stapler staple "$NOTARIZATION_ARTIFACT"
-  fi
-
-  if [[ $? != 0 ]]; then
-    echo "Notarization failed; see above output for details."
-    exit 1
   fi
 
   # Verify the notarization results (this is format-dependent)

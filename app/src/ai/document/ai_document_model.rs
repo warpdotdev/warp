@@ -1278,7 +1278,7 @@ impl AIDocumentModel {
         if is_service_account {
             // If the SA doesn't have a team, we'll skip the plan sync in the caller
             UserWorkspaces::as_ref(ctx)
-                .current_team_uid()
+                .sole_team_uid()
                 .map(|team_uid| Owner::Team { team_uid })
         } else {
             UserWorkspaces::as_ref(ctx).personal_drive(ctx)

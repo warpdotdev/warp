@@ -5,7 +5,10 @@ use warpui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Flex, FormattedTextElement,
     HighlightedHyperlink, HyperlinkLens, MainAxisAlignment, MainAxisSize, ParentElement,
 };
-use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+    WeakViewHandle,
+};
 
 use crate::ai::AIRequestUsageModel;
 use crate::ai::blocklist::error_color;
@@ -74,6 +77,7 @@ pub enum PromptAlertState {
 }
 
 pub struct PromptAlertView {
+    view_handle: WeakViewHandle<Self>,
     state: PromptAlertState,
     action_hyperlink: HighlightedHyperlink,
 }
@@ -106,6 +110,7 @@ impl PromptAlertView {
         });
 
         Self {
+            view_handle: ctx.handle(),
             state: Self::determine_state(ctx),
             action_hyperlink: Default::default(),
         }
@@ -228,7 +233,7 @@ impl PromptAlertView {
         app: &AppContext,
     ) {
         let auth_state = AuthStateProvider::as_ref(app).get();
-        let current_team = UserWorkspaces::as_ref(app).current_team();
+        let current_team = UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app);
         let has_admin_permissions = current_team.is_some_and(|team| {
             team.has_admin_permissions(&auth_state.user_email().unwrap_or_default())
         });
@@ -290,7 +295,7 @@ impl PromptAlertView {
             }
             PromptAlertState::RequestLimitReached => {
                 text_fragments.push(FormattedTextFragment::plain_text("  "));
-                if let Some(team) = UserWorkspaces::as_ref(app).current_team() {
+                if let Some(team) = current_team {
                     if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
                         let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
                         let upgrade_text = if !has_admin_permissions {
@@ -369,15 +374,18 @@ impl View for PromptAlertView {
         self.primary_text(&state, &mut text_fragments);
 
         let auth_state = AuthStateProvider::as_ref(app).get();
-        let current_team = UserWorkspaces::as_ref(app).current_team();
-        let has_admin_permissions = auth_state
-            .user_email()
-            .zip(current_team)
-            .is_some_and(|(email, team)| team.has_admin_permissions(&email));
+        let workspaces = UserWorkspaces::as_ref(app);
+        let current_team = workspaces.team_for_view_handle(&self.view_handle, app);
+        // A teamless user can be considered the admin of their non-existent team.
+        let has_admin_permissions = current_team.is_none_or(|team| {
+            auth_state
+                .user_email()
+                .is_some_and(|email| team.has_admin_permissions(&email))
+        });
 
-        let can_purchase_addon_credits = current_team
-            .and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
-            .is_some_and(|policy| policy.enabled);
+        let can_purchase_addon_credits = workspaces
+            .purchase_policy_for_team(current_team)
+            .is_some_and(|policy| policy.allows_purchases());
 
         let suggest_buy_credits = can_purchase_addon_credits
             && has_admin_permissions

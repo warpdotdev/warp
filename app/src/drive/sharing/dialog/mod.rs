@@ -439,6 +439,12 @@ impl SharingDialog {
             .and_then(|id| CloudModel::as_ref(app).get_by_uid(&id.uid()))
     }
 
+    fn window_team_uid(&self, app: &AppContext) -> Option<ServerId> {
+        UserWorkspaces::as_ref(app)
+            .team_for_view_handle(&self.self_handle, app)
+            .map(|team| team.uid)
+    }
+
     /// The name of the targeted object.
     fn targeted_object_name(&self, app: &AppContext) -> String {
         self.target
@@ -509,8 +515,7 @@ impl SharingDialog {
                                 }
                                 // Check if user is on the owning team (for team-owned conversations)
                                 if let Owner::Team { team_uid } = permissions.space
-                                    && UserWorkspaces::as_ref(app).current_team_uid()
-                                        == Some(team_uid)
+                                    && self.window_team_uid(app) == Some(team_uid)
                                 {
                                     return Some(SharingAccessLevel::Full);
                                 }
@@ -555,8 +560,8 @@ impl SharingDialog {
                     }
                     // Team members of owning team have Full access.
                     if let Subject::Team(team_kind) = owner
-                        && UserWorkspaces::as_ref(app)
-                            .current_team_uid()
+                        && self
+                            .window_team_uid(app)
                             .is_some_and(|current| current == team_kind.team_uid())
                     {
                         return SharingAccessLevel::Full;
@@ -573,8 +578,8 @@ impl SharingDialog {
                 if let Some(team_level) = self.team_sharing_state.access_level
                     && let Some(TeamKind::SharedSessionTeam { ref team_uid, .. }) =
                         self.team_sharing_state.team
-                    && UserWorkspaces::as_ref(app)
-                        .current_team_uid()
+                    && self
+                        .window_team_uid(app)
                         .is_some_and(|current| current == *team_uid)
                 {
                     level = level.max(team_level);
@@ -2119,7 +2124,7 @@ impl SharingDialog {
         // to add permissions for.
         let team_kind = if can_edit_access {
             TeamKind::Team {
-                team_uid: UserWorkspaces::as_ref(app).current_team_uid()?,
+                team_uid: self.window_team_uid(app)?,
             }
         } else {
             self.team_sharing_state.team.clone()?
@@ -2957,7 +2962,10 @@ impl TypedActionView for SharingDialog {
                     let Some(view) = handle.upgrade(ctx) else {
                         return;
                     };
-                    let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() else {
+                    let Some(team_uid) = UserWorkspaces::as_ref(ctx)
+                        .team_for_view(ctx)
+                        .map(|team| team.uid)
+                    else {
                         return;
                     };
 

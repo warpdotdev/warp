@@ -7,8 +7,10 @@ fn app_and_tui_accept_api_keys() {
         api_key: Some("app-api-key".to_owned()),
     };
     let tui = LaunchMode::Tui {
-        mount: Box::new(|_| {}),
-        api_key: Some("tui-api-key".to_owned()),
+        entrypoint: TuiEntryPoint::Interactive {
+            mount: Box::new(|_| {}),
+            api_key: Some("tui-api-key".to_owned()),
+        },
     };
 
     assert_eq!(
@@ -24,9 +26,17 @@ fn app_and_tui_accept_api_keys() {
 #[test]
 fn tui_uses_distinct_secure_storage_service_name() {
     let launch_mode = LaunchMode::Tui {
-        mount: Box::new(|_| {}),
-        api_key: None,
+        entrypoint: TuiEntryPoint::Interactive {
+            mount: Box::new(|_| {}),
+            api_key: None,
+        },
     };
+    assert!(matches!(
+        &launch_mode,
+        LaunchMode::Tui {
+            entrypoint: TuiEntryPoint::Interactive { .. }
+        }
+    ));
 
     assert_eq!(
         launch_mode.secure_storage_service_name("dev.warp.Warp-Dev"),
@@ -50,8 +60,10 @@ fn app_keeps_default_secure_storage_service_name() {
 #[test]
 fn launch_modes_select_expected_logging_frontend() {
     let tui = LaunchMode::Tui {
-        mount: Box::new(|_| {}),
-        api_key: None,
+        entrypoint: TuiEntryPoint::Interactive {
+            mount: Box::new(|_| {}),
+            api_key: None,
+        },
     };
     let app = LaunchMode::App {
         args: Default::default(),
