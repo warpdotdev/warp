@@ -8,9 +8,8 @@ use super::{
     ArtifactDownloadResponse, ArtifactType, CONNECTED_SELF_HOSTED_WORKERS_PATH,
     ConnectedSelfHostedWorker, ExecutionLocation, ForkConversationResponse,
     ListConnectedSelfHostedWorkersResponse, ListRunsResponse, ReadAgentMessageResponse,
-    RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
-    TaskListFilter, UserQueryMode, build_fork_conversation_url, build_list_agent_runs_url,
-    build_run_followup_url,
+    RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest, TaskListFilter, UserQueryMode,
+    build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
 };
 use crate::notebooks::NotebookId;
 
@@ -1159,4 +1158,3 @@ fn deserialize_fork_conversation_response() {
         "abcdef01-2345-6789-abcd-ef0123456789"
     );
 }
-

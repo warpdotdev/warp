@@ -1448,7 +1448,6 @@ fn maybe_route_ai_query_to_remote_target_blocks_read_only_viewer() {
     });
 }
 
-
 #[test]
 fn maybe_route_ai_query_to_remote_target_forwards_executor_viewer_prompt() {
     // An executor viewer forwards the prompt to the sharer (SendAgentPrompt) instead of running

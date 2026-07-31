@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime};
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use ai::skills::{ParsedSkill, SKILL_PROVIDER_DEFINITIONS};
 use anyhow::{Context as _, anyhow};
+use chrono::Utc;
 use futures::FutureExt as _;
 use futures::channel::oneshot;
 use futures::future::{self, Either, join_all};
@@ -201,6 +202,17 @@ const LEGACY_OZ_PARENT_STATE_ROOT_ENV: &str = "OZ_PARENT_STATE_ROOT";
 struct IdleTimeoutSender<T: Send + 'static> {
     tx_cell: Arc<Mutex<Option<oneshot::Sender<T>>>>,
     generation: Arc<AtomicUsize>,
+}
+
+// Hand-written so cloning does not require `T: Clone`: both fields are shared handles, so a
+// clone drives the same one-shot completion and the same generation counter.
+impl<T: Send + 'static> Clone for IdleTimeoutSender<T> {
+    fn clone(&self) -> Self {
+        Self {
+            tx_cell: Arc::clone(&self.tx_cell),
+            generation: Arc::clone(&self.generation),
+        }
+    }
 }
 
 impl<T: Send + 'static> IdleTimeoutSender<T> {
@@ -403,6 +415,14 @@ pub struct AgentDriver {
     // the failed run and keep working in its environment.
     idle_on_fail: Option<Duration>,
 
+    // Whether a viewer-input subscription is already refreshing an open debug window. Guards
+    // against stacking a second subscription when a run fails, is resumed, and fails again.
+    debug_window_refresh_installed: bool,
+
+    // When the debug window's deadline was last published to the server, used to throttle
+    // republishing on high-frequency viewer input.
+    last_published_debug_deadline: Option<SystemTime>,
+
     // The conversation ID to continue (if provided).
     restored_conversation_id: Option<AIConversationId>,
 
@@ -454,6 +474,7 @@ pub struct AgentDriver {
     mcp_startup_timeout: Duration,
 }
 
+#[derive(Clone)]
 pub(crate) enum SDKConversationOutputStatus {
     Success,
     Error { error: RenderableAIError },
@@ -815,6 +836,8 @@ impl AgentDriver {
             harness: None,
             idle_on_complete,
             idle_on_fail,
+            debug_window_refresh_installed: false,
+            last_published_debug_deadline: None,
             restored_conversation_id,
             resume_payload,
             cloud_providers,
@@ -861,6 +884,8 @@ impl AgentDriver {
             harness: None,
             idle_on_complete: None,
             idle_on_fail: None,
+            debug_window_refresh_installed: false,
+            last_published_debug_deadline: None,
             restored_conversation_id: None,
             resume_payload: None,
             cloud_providers: Vec::new(),
@@ -932,6 +957,7 @@ impl AgentDriver {
                         .update_agent_task(
                             task_id,
                             Some(AgentTaskState::InProgress),
+                            None,
                             None,
                             None,
                             None,
@@ -1634,6 +1660,7 @@ impl AgentDriver {
                     None,
                     None,
                     Some(TaskStatusUpdate::message(message)),
+                    None,
                 )
                 .await
             {
@@ -2645,25 +2672,13 @@ impl AgentDriver {
 
         Self::report_failure_before_lingering(foreground, stage, error).await;
 
-        // Reuse the run-exit timer so viewer activity can reschedule the deadline through the
-        // same generation-counter mechanism the conversation path uses.
         let (tx, rx) = oneshot::channel::<()>();
-        let idle_timeout = IdleTimeoutSender::new(tx);
-        idle_timeout.end_run_after(window, ());
-
-        let refresh = foreground.spawn(move |me, ctx| {
-            let terminal_driver = me.terminal_driver.clone();
-            ctx.subscribe_to_model(&terminal_driver, move |_, _, event, _| {
-                if matches!(event, TerminalDriverEvent::SharedSessionViewerInput) {
-                    log::debug!(
-                        "Ambient agent idle lifecycle: event=idle_timeout_refreshed trigger=viewer_input"
-                    );
-                    idle_timeout.end_run_after(window, ());
-                }
-            });
+        let armed = foreground.spawn(move |me, ctx| {
+            me.arm_debug_window(IdleTimeoutSender::new(tx), (), window, ctx);
         });
-        if let Err(error) = refresh.await {
-            log::warn!("Could not subscribe to viewer input for the debug window: {error}");
+        if let Err(error) = armed.await {
+            log::warn!("Could not arm the post-failure debug window: {error}");
+            return;
         }
 
         log::info!(
@@ -2672,6 +2687,84 @@ impl AgentDriver {
         let _ = rx.await;
         log::info!(
             "Ambient agent idle lifecycle: event=idle_window_elapsed stage={stage} outcome=setup_failure"
+        );
+    }
+
+    /// Arms a post-failure debug window on `idle_timeout` and keeps it open while a human is
+    /// working in the session.
+    ///
+    /// Both failure paths go through here so they behave identically: a terminal conversation
+    /// error and an environment setup failure each hold the session for `window`, and each
+    /// pushes that deadline out on any viewer input — a command run in the session, raw PTY
+    /// bytes, or an edit to the shared input.
+    ///
+    /// The subscription is installed once per driver. A run that fails, is resumed, and fails
+    /// again re-arms the timer through the existing subscription rather than stacking another.
+    fn arm_debug_window<T: Clone + Send + 'static>(
+        &mut self,
+        idle_timeout: IdleTimeoutSender<T>,
+        value: T,
+        window: Duration,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        idle_timeout.end_run_after(window, value.clone());
+        self.publish_debug_window_deadline(window, ctx);
+
+        if self.debug_window_refresh_installed {
+            return;
+        }
+        self.debug_window_refresh_installed = true;
+
+        let terminal_driver = self.terminal_driver.clone();
+        ctx.subscribe_to_model(&terminal_driver, move |me, _, event, ctx| {
+            if matches!(event, TerminalDriverEvent::SharedSessionViewerInput) {
+                log::debug!(
+                    "Ambient agent idle lifecycle: event=idle_timeout_refreshed trigger=viewer_input"
+                );
+                idle_timeout.end_run_after(window, value.clone());
+                me.publish_debug_window_deadline(window, ctx);
+            }
+        });
+    }
+
+    /// Publishes the debug window's current deadline so the run surfaces show how long the
+    /// session stays reachable.
+    ///
+    /// Throttled, because the window refreshes on every keystroke-level viewer event and the
+    /// displayed deadline does not need that resolution. The value is advisory: the agent
+    /// process owns the real timer, and the last published deadline is the floor of what a
+    /// viewer is actually guaranteed.
+    fn publish_debug_window_deadline(&mut self, window: Duration, ctx: &mut ModelContext<Self>) {
+        const MIN_PUBLISH_INTERVAL: Duration = Duration::from_secs(30);
+
+        let Some(task_id) = self.task_id else {
+            return;
+        };
+        let now = SystemTime::now();
+        if let Some(last) = self.last_published_debug_deadline
+            && now
+                .duration_since(last)
+                .is_ok_and(|elapsed| elapsed < MIN_PUBLISH_INTERVAL)
+        {
+            return;
+        }
+        self.last_published_debug_deadline = Some(now);
+
+        let deadline = Utc::now() + chrono::Duration::from_std(window).unwrap_or_default();
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        ctx.spawn(
+            async move {
+                ai_client
+                    .update_agent_task(task_id, None, None, None, None, Some(deadline))
+                    .await
+            },
+            move |_me, result, _ctx| {
+                if let Err(error) = result {
+                    log::warn!(
+                        "Failed to publish debug window deadline for run {task_id}: {error:#}"
+                    );
+                }
+            },
         );
     }
 
@@ -2700,10 +2793,19 @@ impl AgentDriver {
         // repo), so they are FAILED rather than ERROR.
         let status = TaskStatusUpdate::with_error_code(message, PlatformErrorCode::InvalidRequest);
         if let Err(error) = ai_client
-            .update_agent_task(task_id, Some(AgentTaskState::Failed), None, None, Some(status))
+            .update_agent_task(
+                task_id,
+                Some(AgentTaskState::Failed),
+                None,
+                None,
+                Some(status),
+                None,
+            )
             .await
         {
-            log::warn!("Failed to report {stage} failure for run {task_id} before lingering: {error:#}");
+            log::warn!(
+                "Failed to report {stage} failure for run {task_id} before lingering: {error:#}"
+            );
         }
     }
 
@@ -3543,7 +3645,20 @@ impl AgentDriver {
                                 me.task_id
                             );
                         }
-                        run_exit.complete_with_optional_idle(idle_window, output_status);
+                        match idle_window {
+                            // A failure window is held open by the human working in the session,
+                            // so it goes through the shared arming path that refreshes on viewer
+                            // input. The success window has no such notion.
+                            Some(window)
+                                if matches!(
+                                    output_status,
+                                    SDKConversationOutputStatus::Error { .. }
+                                ) =>
+                            {
+                                me.arm_debug_window(run_exit.clone(), output_status, window, ctx);
+                            }
+                            _ => run_exit.complete_with_optional_idle(idle_window, output_status),
+                        }
                     }
                 }
 
@@ -3848,7 +3963,14 @@ impl AgentDriver {
                         async move {
                             report_if_error!(
                                 server_api
-                                    .update_agent_task(task_id, None, Some(session_id), None, None)
+                                    .update_agent_task(
+                                        task_id,
+                                        None,
+                                        Some(session_id),
+                                        None,
+                                        None,
+                                        None
+                                    )
                                     .await
                                     .context("Error setting ambient agent shared session ID")
                             );
@@ -4141,7 +4263,7 @@ pub(super) async fn report_driver_error(
 ) {
     let (state, status_update) = error_classification::classify_driver_error(err);
     if let Err(e) = server_api
-        .update_agent_task(task_id, Some(state), None, None, Some(status_update))
+        .update_agent_task(task_id, Some(state), None, None, Some(status_update), None)
         .await
     {
         report_error!(
