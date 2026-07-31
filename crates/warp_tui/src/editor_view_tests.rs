@@ -6,17 +6,17 @@ use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, EntityIdMap};
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
-    TuiRect, TuiScreenPosition, TuiSize,
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize, TuiText,
 };
-use warpui_core::keymap::Trigger;
+use warpui_core::keymap::{Keystroke, Trigger};
 use warpui_core::{App, TuiView as _, TypedActionView as _};
 
 use super::{TuiEditorView, TuiEditorViewAction};
 use crate::editor_element::TuiEditorAction;
 use crate::editor_interaction::{
     TuiEditorBehavior, TuiEditorClipboardAction, TuiEditorCommand, TuiEditorInteractionOutcome,
-    apply_editor_action, apply_editor_clipboard_action_for_test,
+    apply_editor_action, apply_editor_clipboard_action_for_test, apply_editor_paste_for_test,
 };
 use crate::test_fixtures::TestHostView;
 
@@ -243,6 +243,145 @@ fn clipboard_actions_copy_and_cut_only_the_selection() {
 }
 
 #[test]
+fn paste_inserts_normalized_clipboard_text_at_the_cursor() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (_, editor) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                TuiEditorView::single_line,
+            )
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_text("ab", ctx);
+            // Single-line editor: only the first pasted line is inserted.
+            let inserted = apply_editor_paste_for_test(
+                &editor.model,
+                || Ok("XY\nZ".to_string()),
+                TuiEditorBehavior::single_line(),
+                ctx,
+            )
+            .expect("paste succeeds");
+            assert!(inserted, "non-empty clipboard text must be inserted");
+            assert_eq!(editor.text(ctx), "abXY");
+        });
+    });
+}
+
+#[test]
+fn paste_of_empty_clipboard_is_a_noop() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (_, editor) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                TuiEditorView::single_line,
+            )
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_text("ab", ctx);
+            let inserted = apply_editor_paste_for_test(
+                &editor.model,
+                || Ok(String::new()),
+                TuiEditorBehavior::single_line(),
+                ctx,
+            )
+            .expect("empty paste succeeds");
+            assert!(!inserted, "an empty clipboard must not modify the buffer");
+            assert_eq!(editor.text(ctx), "ab");
+        });
+    });
+}
+
+#[test]
+fn paste_command_dispatch_yields_a_paste_outcome() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (_, editor) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                TuiEditorView::single_line,
+            )
+        });
+
+        editor.update(&mut app, |editor, ctx| {
+            let outcome = editor.editor_state.apply_command(
+                &editor.model,
+                TuiEditorCommand::Paste,
+                TuiEditorBehavior::single_line(),
+                ctx,
+            );
+            assert_eq!(outcome, TuiEditorInteractionOutcome::Paste);
+        });
+    });
+}
+
+#[test]
+fn select_to_line_commands_extend_the_selection() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (_, editor) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                TuiEditorView::single_line,
+            )
+        });
+        render_lines(&app, &editor);
+
+        // From end-of-line, SelectToLineStart selects the whole line.
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_text("hello", ctx);
+            editor.handle_action(
+                &TuiEditorViewAction::Command(TuiEditorCommand::SelectToLineStart),
+                ctx,
+            );
+        });
+        assert_eq!(
+            editor.read(&app, |editor, ctx| editor
+                .model
+                .as_ref(ctx)
+                .read_selected_text_as_clipboard_content(ctx)
+                .plain_text),
+            "hello"
+        );
+
+        // From start-of-line, SelectToLineEnd selects the whole line.
+        editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(
+                &TuiEditorViewAction::Command(TuiEditorCommand::MoveToLineStart),
+                ctx,
+            );
+            editor.handle_action(
+                &TuiEditorViewAction::Command(TuiEditorCommand::SelectToLineEnd),
+                ctx,
+            );
+        });
+        assert_eq!(
+            editor.read(&app, |editor, ctx| editor
+                .model
+                .as_ref(ctx)
+                .read_selected_text_as_clipboard_content(ctx)
+                .plain_text),
+            "hello"
+        );
+    });
+}
+
+#[test]
 fn cut_without_a_selection_is_a_noop() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -391,7 +530,11 @@ fn keybinding_initializer_registers_line_start_for_input_and_editor() {
                     .collect::<HashSet<_>>()
             })
         };
-        let expected = HashSet::from(["home".to_string(), "ctrl-a".to_string()]);
+        let expected = HashSet::from([
+            "home".to_string(),
+            "ctrl-a".to_string(),
+            "cmd-left".to_string(),
+        ]);
         assert_eq!(triggers_for("tui:input:move_to_line_start"), expected);
         assert_eq!(triggers_for("tui:editor:move_to_line_start"), expected);
         let kill_to_line_end = HashSet::from(["ctrl-k".to_string()]);
@@ -416,16 +559,152 @@ fn keybinding_initializer_registers_line_start_for_input_and_editor() {
                 "alt-enter".to_string(),
             ])
         );
-        let copy = HashSet::from(["ctrl-shift-C".to_string(), "alt-w".to_string()]);
+        let copy = HashSet::from([
+            "ctrl-shift-C".to_string(),
+            "alt-w".to_string(),
+            "cmd-c".to_string(),
+        ]);
         assert_eq!(triggers_for("tui:input:copy"), copy);
         assert_eq!(triggers_for("tui:editor:copy"), copy);
-        let cut = HashSet::from(["ctrl-x".to_string()]);
+        let cut = HashSet::from(["ctrl-x".to_string(), "cmd-x".to_string()]);
         assert_eq!(triggers_for("tui:input:cut"), cut);
         assert_eq!(triggers_for("tui:editor:cut"), cut);
         assert!(app.read(|ctx| ctx.get_binding_by_name("tui:editor:move_up").is_none()));
     });
 }
 
+#[test]
+fn shared_editor_registers_additive_cmd_bindings() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+
+        let triggers_for = |name: &str| {
+            app.read(|ctx| {
+                ctx.get_key_bindings()
+                    .filter(|binding| binding.name == name)
+                    .filter_map(|binding| match binding.trigger {
+                        Trigger::Keystrokes(keys) => keys.first().map(|key| key.normalized()),
+                        Trigger::Empty | Trigger::Standard(_) | Trigger::Custom(_) => None,
+                    })
+                    .collect::<HashSet<_>>()
+            })
+        };
+        let expected = [
+            ("select_all", "cmd-a"),
+            ("copy", "cmd-c"),
+            ("paste", "cmd-v"),
+            ("cut", "cmd-x"),
+            ("undo", "cmd-z"),
+            ("redo", "shift-cmd-Z"),
+            ("move_to_line_start", "cmd-left"),
+            ("move_to_line_end", "cmd-right"),
+            ("select_to_line_start", "shift-cmd-left"),
+            ("select_to_line_end", "shift-cmd-right"),
+            ("kill_to_line_start", "cmd-backspace"),
+        ];
+        for target in ["input", "editor"] {
+            for (name, key) in expected {
+                let triggers = triggers_for(&format!("tui:{target}:{name}"));
+                assert!(
+                    triggers.contains(key),
+                    "{key} must be registered for the TUI {target} editor; found {triggers:?}"
+                );
+            }
+
+            // Existing bindings remain alongside the new cmd chords.
+            assert!(
+                triggers_for(&format!("tui:{target}:copy")).contains("ctrl-shift-C"),
+                "the existing copy binding must remain registered"
+            );
+            assert!(
+                triggers_for(&format!("tui:{target}:undo")).contains("ctrl-z"),
+                "the existing undo binding must remain registered"
+            );
+        }
+    });
+}
+
+#[test]
+fn cmd_bindings_dispatch_expected_editor_commands() {
+    struct CommandRecorder {
+        commands: Vec<TuiEditorCommand>,
+    }
+
+    impl warpui_core::Entity for CommandRecorder {
+        type Event = ();
+    }
+
+    impl warpui_core::TuiView for CommandRecorder {
+        fn ui_name() -> &'static str {
+            TuiEditorView::ui_name()
+        }
+
+        fn render(&self, _app: &warpui_core::AppContext) -> Box<dyn TuiElement> {
+            Box::new(TuiText::new(""))
+        }
+    }
+
+    impl warpui_core::TypedActionView for CommandRecorder {
+        type Action = TuiEditorViewAction;
+
+        fn handle_action(
+            &mut self,
+            action: &Self::Action,
+            _ctx: &mut warpui_core::ViewContext<Self>,
+        ) {
+            if let TuiEditorViewAction::Command(command) = action {
+                self.commands.push(*command);
+            }
+        }
+    }
+
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let (window_id, recorder) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |_| CommandRecorder {
+                    commands: Vec::new(),
+                },
+            )
+        });
+
+        for (key, expected) in [
+            ("cmd-a", TuiEditorCommand::SelectAll),
+            ("cmd-c", TuiEditorCommand::Copy),
+            ("cmd-v", TuiEditorCommand::Paste),
+            ("cmd-x", TuiEditorCommand::Cut),
+            ("cmd-z", TuiEditorCommand::Undo),
+            ("cmd-shift-Z", TuiEditorCommand::Redo),
+        ] {
+            let handled = app
+                .dispatch_keystroke(
+                    window_id,
+                    &[recorder.id()],
+                    &Keystroke::parse(key).expect("valid cmd editor binding"),
+                    false,
+                )
+                .expect("keystroke dispatch succeeds");
+            assert!(handled, "{key} must dispatch an editor command");
+
+            let actual = recorder.read(&app, |recorder, _| {
+                recorder
+                    .commands
+                    .last()
+                    .copied()
+                    .expect("the binding dispatches a command")
+            });
+            assert_eq!(
+                std::mem::discriminant(&actual),
+                std::mem::discriminant(&expected),
+                "{key} dispatched {actual:?}, expected {expected:?}"
+            );
+        }
+    });
+}
 /// `cmd-delete` is not portable terminal input and must not be registered on
 /// either TUI editor surface. `alt-delete` remains a forward-word deletion.
 #[test]

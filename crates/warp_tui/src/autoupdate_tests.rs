@@ -4,6 +4,7 @@ use std::process::Child;
 use std::time::Duration;
 use std::{fs, thread};
 
+use channel_versions::{ChannelVersion, ChannelVersions, VersionInfo};
 use command::blocking::Command;
 use instant::Instant;
 use warp_core::channel::Channel;
@@ -11,7 +12,7 @@ use warp_core::channel::Channel;
 use super::{
     CURRENT_LINK_NAME, InstallLayout, InstallLock, LOCK_FILE_NAME, LOCK_OWNER_FILE_NAME,
     VERSION_LEASES_DIR_NAME, VersionDirState, VersionLease, create_unique_staging_dir_with,
-    download_endpoint, is_complete_version_dir, version_dir_state,
+    download_endpoint, is_complete_version_dir, latest_version_for, version_dir_state,
 };
 #[cfg(unix)]
 use super::{
@@ -147,6 +148,49 @@ fn uses_channel_specific_download_endpoints() {
     );
 }
 
+#[test]
+fn uses_channel_specific_tui_versions() {
+    fn channel_version(version: &str, tui_version: Option<&str>) -> ChannelVersion {
+        let mut version_info = VersionInfo::new(version.to_owned());
+        version_info.tui_version = tui_version.map(ToOwned::to_owned);
+        ChannelVersion::new(version_info)
+    }
+
+    let versions = ChannelVersions {
+        dev: channel_version("dev_app", Some("dev_tui")),
+        preview: channel_version("preview_app", Some("preview_tui")),
+        stable: channel_version("stable_app", Some("stable_tui")),
+        changelogs: None,
+    };
+
+    assert_eq!(
+        latest_version_for(Channel::Dev, &versions).unwrap(),
+        "dev_tui"
+    );
+    assert_eq!(
+        latest_version_for(Channel::Preview, &versions).unwrap(),
+        "preview_tui"
+    );
+    assert_eq!(
+        latest_version_for(Channel::Stable, &versions).unwrap(),
+        "stable_tui"
+    );
+}
+
+#[test]
+fn falls_back_to_app_version_when_tui_version_is_omitted() {
+    let versions = ChannelVersions {
+        dev: ChannelVersion::new(VersionInfo::new("dev_app".to_owned())),
+        preview: ChannelVersion::new(VersionInfo::new("preview_app".to_owned())),
+        stable: ChannelVersion::new(VersionInfo::new("stable_app".to_owned())),
+        changelogs: None,
+    };
+
+    assert_eq!(
+        latest_version_for(Channel::Preview, &versions).unwrap(),
+        "preview_app"
+    );
+}
 #[test]
 fn complete_versions_require_real_binary_and_resources() {
     let root = temp_root("complete");

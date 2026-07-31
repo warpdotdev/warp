@@ -1,16 +1,32 @@
-use onboarding::{OfferVariant, SelectedSettings, UICustomizationSettings};
+use ai::LLMId;
+use onboarding::{
+    AgentOnboardingView, OfferVariant, OnboardingAuthState, OnboardingIntention, SelectedSettings,
+    UICustomizationSettings,
+};
 use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences as _;
-use warpui::{App, SingletonEntity};
+use warpui::elements::Empty;
+use warpui::platform::WindowStyle;
+use warpui::{
+    App, AppContext, Element, Entity, EntityId, SingletonEntity, TypedActionView, View, ViewHandle,
+};
 
 use super::{
-    AccountFirstCompletion, HAS_COMPLETED_ONBOARDING_KEY, RootView, has_completed_local_onboarding,
-    offer_variant_for_account_class, refresh_pending_onboarding_choices,
-    requires_post_onboarding_login,
+    AccountFirstCompletion, AuthOnboardingState, AuthOnboardingTarget,
+    HAS_COMPLETED_ONBOARDING_KEY, NewWorkspaceSource, RootView, WorkspaceArgs,
+    has_completed_local_onboarding, offer_variant_for_account_class,
+    refresh_pending_onboarding_choices, requires_post_onboarding_login,
 };
+use crate::GlobalResourceHandles;
+use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
+use crate::auth::login_slide::{LoginSlideSource, LoginSlideView};
 use crate::server::server_api::ServerApiProvider;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::themes::onboarding_theme_picker_themes;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::FtueAccountClass;
 
 fn initialize_app(app: &mut App) {
@@ -265,5 +281,150 @@ fn test_sync_noop_when_already_onboarded_on_server() {
                 Some(true)
             );
         });
+    });
+}
+
+struct SsoLinkTestHarnessView {
+    login_slide_view: ViewHandle<LoginSlideView>,
+    onboarding_view: ViewHandle<AgentOnboardingView>,
+}
+
+impl Entity for SsoLinkTestHarnessView {
+    type Event = ();
+}
+
+impl View for SsoLinkTestHarnessView {
+    fn ui_name() -> &'static str {
+        "SsoLinkTestHarnessView"
+    }
+
+    fn render(&self, _app: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+impl TypedActionView for SsoLinkTestHarnessView {
+    type Action = ();
+}
+
+/// Regression test: completing browser auth with `needs_sso_link = true` while
+/// a pre-terminal onboarding state was showing (`Onboarding`, `LoginSlide`, or
+/// `PostAuthOnboarding`) used to silently no-op in `show_needs_sso_link_view`,
+/// leaving the UI stuck on the login slide ("Sign in on your browser to
+/// continue") instead of showing the SSO blocker. Each of those states must
+/// convert to `NeedsSsoLink` and preserve its target.
+#[test]
+fn test_show_needs_sso_link_view_blocks_pre_terminal_onboarding_states() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_ctx| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| KeybindingChangedNotifier::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+
+        let (_, harness) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let login_slide_view = ctx.add_typed_action_view(|ctx| {
+                LoginSlideView::new(
+                    true,
+                    false,
+                    "Dark",
+                    false,
+                    OnboardingIntention::AgentDrivenDevelopment,
+                    LoginSlideSource::OnboardingFlow,
+                    ctx,
+                )
+            });
+            let onboarding_view = ctx.add_typed_action_view(|ctx| {
+                AgentOnboardingView::new(
+                    onboarding_theme_picker_themes(),
+                    false,
+                    Vec::new(),
+                    LLMId::from("auto"),
+                    false,
+                    false,
+                    OnboardingAuthState::LoggedOut,
+                    ctx,
+                )
+            });
+            SsoLinkTestHarnessView {
+                login_slide_view,
+                onboarding_view,
+            }
+        });
+
+        let (login_slide_view, onboarding_view) = app.read(|ctx| {
+            let harness = harness.as_ref(ctx);
+            (
+                harness.login_slide_view.clone(),
+                harness.onboarding_view.clone(),
+            )
+        });
+
+        fn workspace_target(app: &mut App) -> (AuthOnboardingTarget, EntityId) {
+            let global_resource_handles = GlobalResourceHandles::mock(app);
+            let marker = global_resource_handles.tips_completed.id();
+            let target = AuthOnboardingTarget::Workspace(Box::new(WorkspaceArgs {
+                global_resource_handles,
+                server_time: None,
+                workspace_setting: NewWorkspaceSource::Empty {
+                    previous_active_window: None,
+                    shell: None,
+                },
+            }));
+            (target, marker)
+        }
+
+        fn assert_becomes_needs_sso_link(
+            mut state: AuthOnboardingState,
+            marker: EntityId,
+            case: &str,
+        ) {
+            state.show_needs_sso_link_view();
+            match state {
+                AuthOnboardingState::NeedsSsoLink(AuthOnboardingTarget::Workspace(args)) => {
+                    assert_eq!(
+                        args.global_resource_handles.tips_completed.id(),
+                        marker,
+                        "{case}: the pre-login target must be preserved"
+                    );
+                }
+                _ => panic!("{case}: expected transition to NeedsSsoLink"),
+            }
+        }
+
+        let (target, marker) = workspace_target(&mut app);
+        assert_becomes_needs_sso_link(
+            AuthOnboardingState::LoginSlide {
+                login_slide_view: login_slide_view.clone(),
+                onboarding_view: onboarding_view.clone(),
+                target,
+            },
+            marker,
+            "LoginSlide",
+        );
+
+        let (target, marker) = workspace_target(&mut app);
+        assert_becomes_needs_sso_link(
+            AuthOnboardingState::Onboarding {
+                onboarding_view: onboarding_view.clone(),
+                target,
+            },
+            marker,
+            "Onboarding",
+        );
+
+        let (target, marker) = workspace_target(&mut app);
+        assert_becomes_needs_sso_link(
+            AuthOnboardingState::PostAuthOnboarding {
+                onboarding_view,
+                target,
+                account_class: FtueAccountClass::FreeStandard,
+                upgrade_started: false,
+            },
+            marker,
+            "PostAuthOnboarding",
+        );
     });
 }

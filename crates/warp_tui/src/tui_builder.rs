@@ -12,6 +12,7 @@ use pathfinder_color::ColorU;
 use warp::tui_export::Appearance;
 use warp_core::ui::color::Opacity;
 use warp_core::ui::color::blend::Blend;
+use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{Fill as ThemeFill, WarpTheme};
 use warpui::SingletonEntity;
 use warpui_core::AppContext;
@@ -19,10 +20,11 @@ use warpui_core::elements::tui::{
     Color, Modifier, TuiElement, TuiEventContext, TuiStyle, tui_collapsible,
 };
 use warpui_core::elements::{Fill as CoreFill, MouseStateHandle};
+use warpui_core::runtime::ProbedRgb;
 
 use crate::orchestrated_agent_identity_styling::{AgentIdentity, agent_identity_palette};
 use crate::tab_bar::TuiTabBarStyles;
-use crate::terminal_background::probed_colors;
+use crate::terminal_background::TuiHostTerminalBackground;
 
 #[derive(Clone, Copy)]
 pub(crate) struct CloudRunMarkStyles {
@@ -40,13 +42,19 @@ pub(crate) struct CloudRunMarkStyles {
 #[derive(Clone, Debug)]
 pub(crate) struct TuiUiBuilder {
     warp_theme: WarpTheme,
+    terminal_background: Option<ProbedRgb>,
 }
 
 impl TuiUiBuilder {
     /// Creates a builder from the current [`Appearance`] theme.
     pub(crate) fn from_app(app: &AppContext) -> Self {
+        let terminal_background = app
+            .has_singleton_model::<TuiHostTerminalBackground>()
+            .then(|| TuiHostTerminalBackground::as_ref(app).terminal_background())
+            .flatten();
         Self {
             warp_theme: Appearance::as_ref(app).theme().clone(),
+            terminal_background,
         }
     }
 
@@ -57,6 +65,13 @@ impl TuiUiBuilder {
     pub(crate) fn primary_text_style(&self) -> TuiStyle {
         TuiStyle::default()
             .fg(self.foreground_text_color(self.warp_theme.details().main_text_opacity))
+    }
+
+    /// Regular-weight `neutral_7` text used for trailing tool-call details.
+    pub(crate) fn neutral_7_text_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::Solid(internal_colors::neutral_7(
+            &self.warp_theme,
+        ))))
     }
 
     /// The theme foreground over the transcript's base background at
@@ -75,6 +90,11 @@ impl TuiUiBuilder {
     pub(crate) fn muted_text_style(&self) -> TuiStyle {
         TuiStyle::default()
             .fg(self.foreground_text_color(self.warp_theme.details().sub_text_opacity))
+    }
+
+    /// Muted italic status text used by model rows backed by a connected API key.
+    pub(crate) fn key_connected_suffix_style(&self) -> TuiStyle {
+        self.muted_text_style().add_modifier(Modifier::ITALIC)
     }
 
     /// Muted and dimmed: de-emphasized status rows (e.g. tool-call stubs).
@@ -239,29 +259,6 @@ impl TuiUiBuilder {
         )))
     }
 
-    /// Themed light-blue accent for the Grok OAuth card and code field.
-    pub(crate) fn grok_oauth_accent_style(&self) -> TuiStyle {
-        TuiStyle::default().fg(cell_color(ThemeFill::from(
-            self.warp_theme.terminal_colors().bright.blue,
-        )))
-    }
-
-    /// Light-blue overlay behind the Grok OAuth card body.
-    pub(crate) fn grok_oauth_surface_background(&self) -> Color {
-        let blue = ThemeFill::from(self.warp_theme.terminal_colors().bright.blue);
-        cell_color(self.base_background().blend(&blue.with_opacity(10)))
-    }
-
-    /// Stronger light-blue overlay behind the Grok OAuth title row.
-    pub(crate) fn grok_oauth_header_background(&self) -> Color {
-        let blue = ThemeFill::from(self.warp_theme.terminal_colors().bright.blue);
-        cell_color(
-            self.base_background()
-                .blend(&blue.with_opacity(10))
-                .blend(&blue.with_opacity(10)),
-        )
-    }
-
     /// Background-independent bold pale-green `!` marker shared by shell-command surfaces.
     pub(crate) fn shell_command_prefix_style(&self) -> TuiStyle {
         self.shell_command_accent_style()
@@ -282,10 +279,10 @@ impl TuiUiBuilder {
 
     /// The background the transcript actually renders over: default cells
     /// stay bg-unset, so it is the terminal's *own* background when the
-    /// startup probe captured it, else the theme background as the closest
+    /// terminal probe captured it, else the theme background as the closest
     /// approximation.
     fn base_background(&self) -> ThemeFill {
-        match probed_colors().bg {
+        match self.terminal_background {
             Some(bg) => ThemeFill::Solid(ColorU::new(bg.r, bg.g, bg.b, u8::MAX)),
             None => self.warp_theme.background(),
         }
@@ -301,6 +298,13 @@ impl TuiUiBuilder {
     /// preserve alpha.
     pub(crate) fn accent_border_style(&self) -> TuiStyle {
         TuiStyle::default().fg(cell_color(self.cyan_overlay_2()))
+    }
+
+    /// Lilac credential-entry accent used by the API-key input states.
+    pub(crate) fn credential_entry_accent_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::from(
+            self.warp_theme.terminal_colors().normal.magenta,
+        )))
     }
 
     /// Fixed themed cyan for voice-input status text. Terminal foreground

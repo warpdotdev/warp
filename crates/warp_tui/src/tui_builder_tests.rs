@@ -4,8 +4,10 @@ use pathfinder_color::ColorU;
 use warp::tui_export::light_theme;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::Fill as CoreFill;
 use warpui_core::elements::tui::{Color, Modifier};
+use warpui_core::runtime::ProbedRgb;
 
 use super::{TuiUiBuilder, rounded_midpoint_color};
 
@@ -14,6 +16,7 @@ fn text_styles_follow_light_theme_foreground() {
     let theme = light_theme();
     let builder = TuiUiBuilder {
         warp_theme: theme.clone(),
+        terminal_background: None,
     };
 
     let details = theme.details();
@@ -37,6 +40,15 @@ fn text_styles_follow_light_theme_foreground() {
     .into();
 
     assert_eq!(builder.primary_text_style().fg, Some(expected_primary));
+    let expected_neutral_7: Color =
+        CoreFill::from(ThemeFill::Solid(internal_colors::neutral_7(&theme))).into();
+    assert_eq!(builder.neutral_7_text_style().fg, Some(expected_neutral_7));
+    assert!(
+        !builder
+            .neutral_7_text_style()
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
     assert_eq!(builder.muted_text_style().fg, Some(expected_muted));
     let read_only_menu_label_style = builder.read_only_menu_label_style();
     assert_eq!(
@@ -82,20 +94,6 @@ fn text_styles_follow_light_theme_foreground() {
         read_only_menu_background
     );
     assert_eq!(builder.shell_command_background(), shell_command_background);
-    let grok_fill = ThemeFill::from(theme.terminal_colors().bright.blue);
-    let grok_accent: Color = CoreFill::from(grok_fill).into();
-    let grok_surface: Color =
-        CoreFill::from(theme.background().blend(&grok_fill.with_opacity(10))).into();
-    let grok_header: Color = CoreFill::from(
-        theme
-            .background()
-            .blend(&grok_fill.with_opacity(10))
-            .blend(&grok_fill.with_opacity(10)),
-    )
-    .into();
-    assert_eq!(builder.grok_oauth_accent_style().fg, Some(grok_accent));
-    assert_eq!(builder.grok_oauth_surface_background(), grok_surface);
-    assert_eq!(builder.grok_oauth_header_background(), grok_header);
     let shell_command_prefix_style = builder.shell_command_prefix_style();
     assert_eq!(
         shell_command_prefix_style.fg,
@@ -137,6 +135,29 @@ fn text_styles_follow_light_theme_foreground() {
 }
 
 #[test]
+fn base_background_uses_terminal_background_snapshot() {
+    let terminal_background = ProbedRgb {
+        r: 240,
+        g: 230,
+        b: 220,
+    };
+    let builder = TuiUiBuilder {
+        warp_theme: light_theme(),
+        terminal_background: Some(terminal_background),
+    };
+
+    assert_eq!(
+        builder.base_background(),
+        ThemeFill::Solid(ColorU::new(
+            terminal_background.r,
+            terminal_background.g,
+            terminal_background.b,
+            u8::MAX,
+        ))
+    );
+}
+
+#[test]
 fn selected_state_suffix_midpoint_matches_figma_dark_palette() {
     assert_eq!(
         rounded_midpoint_color(
@@ -152,6 +173,7 @@ fn voice_input_border_pulses_between_cyan_overlay_2_and_lilac_600() {
     let theme = light_theme();
     let builder = TuiUiBuilder {
         warp_theme: theme.clone(),
+        terminal_background: None,
     };
     let cyan_fill = ThemeFill::from(theme.terminal_colors().normal.cyan);
     let cyan: Color = CoreFill::from(cyan_fill).into();

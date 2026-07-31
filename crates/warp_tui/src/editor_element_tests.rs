@@ -29,6 +29,20 @@ fn model(ctx: &mut AppContext, text: &str) -> ModelHandle<CodeEditorModel> {
 }
 
 #[test]
+fn masked_editor_paints_only_mask_glyphs() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let model = model(ctx, "top-secret");
+            let element = TuiEditorElement::new(&model, ctx).masked();
+            let rendered = render_lines(ctx, element, 20, 1).join("\n");
+            assert_eq!(rendered, "••••••••••");
+            assert!(!rendered.contains("top-secret"));
+        });
+    });
+}
+
+#[test]
 fn selection_span_uses_grapheme_width() {
     App::test((), |mut app| async move {
         app.update(|ctx| {

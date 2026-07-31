@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId, AmbientAgentTaskId,
-    BannerState, BlocklistAIHistoryModel, IsSharedSessionCreator, LocalTtyTerminalManager,
-    PersistenceWriter, ServerConversationToken, TerminalManagerTrait, TerminalSurfaceResult,
-    oz_run_url,
+    BannerState, BlocklistAIHistoryModel, GlobalResourceHandlesProvider, IsSharedSessionCreator,
+    LocalTtyTerminalManager, PersistenceWriter, ServerConversationToken, TerminalManagerTrait,
+    TerminalSurfaceResult, oz_run_url,
 };
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
@@ -154,14 +154,27 @@ impl TuiSessions {
         startup_directory: Option<PathBuf>,
         ctx: &mut AppContext,
     ) -> (TuiSessionId, ViewHandle<TuiTerminalSessionView>) {
-        let (exit_summary, keyboard_enhancement_supported, default_autoexecute_mode) = sessions
-            .read(ctx, |sessions, _| {
-                (
-                    sessions.exit_summary.clone(),
-                    sessions.keyboard_enhancement_supported,
-                    sessions.default_autoexecute_mode,
-                )
-            });
+        let (
+            exit_summary,
+            keyboard_enhancement_supported,
+            default_autoexecute_mode,
+            is_first_session,
+        ) = sessions.read(ctx, |sessions, _| {
+            (
+                sessions.exit_summary.clone(),
+                sessions.keyboard_enhancement_supported,
+                sessions.default_autoexecute_mode,
+                sessions.is_empty(),
+            )
+        });
+        let initial_settings_file_error = is_first_session
+            .then(|| {
+                GlobalResourceHandlesProvider::as_ref(ctx)
+                    .get()
+                    .settings_file_error
+                    .clone()
+            })
+            .flatten();
         // The manager uses this internal model for unsupported-shell state; the
         // TUI does not render a separate banner surface.
         let banner = ctx.add_model(|_| BannerState::default());
@@ -184,6 +197,7 @@ impl TuiSessions {
                         exit_summary,
                         keyboard_enhancement_supported,
                         default_autoexecute_mode,
+                        initial_settings_file_error,
                         ctx,
                     )
                 });

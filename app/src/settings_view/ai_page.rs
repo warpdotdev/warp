@@ -2850,6 +2850,18 @@ impl AISettingsPageView {
             ctx.notify();
         }
     }
+    fn knowledge_widgets() -> Vec<Box<dyn SettingsWidget<View = Self>>> {
+        let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
+            vec![Box::new(RulesWidget::default())];
+        if FeatureFlag::SuggestedRules.is_enabled() {
+            widgets.push(Box::new(SuggestedRulesWidget::default()));
+        }
+        widgets.extend([
+            Box::new(ManageRulesWidget::default()) as Box<dyn SettingsWidget<View = Self>>,
+            Box::new(WarpDriveContextWidget::default()),
+        ]);
+        widgets
+    }
 
     fn build_page(subpage: Option<AISubpage>, ctx: &mut ViewContext<Self>) -> PageType<Self> {
         let ai_settings = AISettings::as_ref(ctx);
@@ -2892,7 +2904,7 @@ impl AISettingsPageView {
                     widgets.push(Box::new(MCPServersWidget::default()));
                 }
                 if FeatureFlag::AIRules.is_enabled() {
-                    widgets.push(Box::new(AIFactWidget::default()));
+                    widgets.extend(Self::knowledge_widgets());
                 }
                 if cfg!(feature = "voice_input")
                     && ai_settings
@@ -2965,7 +2977,7 @@ impl AISettingsPageView {
             }
             Some(AISubpage::Knowledge) => {
                 if FeatureFlag::AIRules.is_enabled() {
-                    widgets.push(Box::new(AIFactWidget::default()));
+                    widgets.extend(Self::knowledge_widgets());
                 }
             }
             Some(AISubpage::ThirdPartyCLIAgents) => {
@@ -2973,9 +2985,10 @@ impl AISettingsPageView {
             }
         }
 
-        // Subpage widgets render their own subheader-sized titles internally,
-        // so we don't pass a page-level title to PageType.
-        let title: Option<&str> = None;
+        // Most subpage widgets render their own subheader-sized titles internally.
+        // Knowledge follows the Account-page convention and renders its title as page chrome,
+        // so filtering its setting widgets never removes the title.
+        let title = (subpage == Some(AISubpage::Knowledge)).then_some("Knowledge");
         PageType::new_uncategorized(widgets, title)
     }
 
@@ -7082,22 +7095,29 @@ impl SettingsWidget for MCPServersWidget {
 }
 
 #[derive(Default)]
-struct AIFactWidget {
+struct RulesWidget {
     rules_toggle: SwitchStateHandle,
     rules_link_index: HighlightedHyperlink,
-    manage_rules_button: MouseStateHandle,
-    rule_suggestions_toggle: SwitchStateHandle,
-    warp_drive_context_toggle: SwitchStateHandle,
 }
 
-impl AIFactWidget {
-    fn render_rules_toggle(
+impl SettingsWidget for RulesWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "fact memory memories rules conventions"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        FeatureFlag::AIRules.is_enabled()
+    }
+
+    fn render(
         &self,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
+        view: &Self::View,
         appearance: &Appearance,
-        app: &warpui::AppContext,
+        app: &AppContext,
     ) -> Box<dyn Element> {
+        let ai_settings = AISettings::as_ref(app);
         let toggle = render_ai_setting_toggle::<MemoryEnabled>(
             "Rules",
             AISettingsPageAction::ToggleRules,
@@ -7142,13 +7162,31 @@ impl AIFactWidget {
             .with_child(description)
             .finish()
     }
+}
 
-    fn render_rule_suggestions_toggle(
+#[derive(Default)]
+struct SuggestedRulesWidget {
+    rule_suggestions_toggle: SwitchStateHandle,
+}
+
+impl SettingsWidget for SuggestedRulesWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "suggested rules suggest save"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        FeatureFlag::AIRules.is_enabled() && FeatureFlag::SuggestedRules.is_enabled()
+    }
+
+    fn render(
         &self,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
-        app: &warpui::AppContext,
+        view: &Self::View,
+        _appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
+        let ai_settings = AISettings::as_ref(app);
         let toggle = render_ai_setting_toggle::<RuleSuggestionsEnabled>(
             "Suggested Rules",
             AISettingsPageAction::ToggleRuleSuggestions,
@@ -7170,13 +7208,63 @@ impl AIFactWidget {
             .with_child(description)
             .finish()
     }
+}
 
-    fn render_warp_drive_context_toggle(
+#[derive(Default)]
+struct ManageRulesWidget {
+    manage_rules_button: MouseStateHandle,
+}
+
+impl SettingsWidget for ManageRulesWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "manage rules rule collection"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        FeatureFlag::AIRules.is_enabled()
+    }
+
+    fn render(
         &self,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
-        app: &warpui::AppContext,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
+        render_full_pane_width_ai_button(
+            "Manage rules",
+            AISettings::as_ref(app).is_any_ai_enabled(app),
+            self.manage_rules_button.clone(),
+            AISettingsPageAction::OpenAIFactCollection,
+            appearance,
+        )
+    }
+}
+
+#[derive(Default)]
+struct WarpDriveContextWidget {
+    warp_drive_context_toggle: SwitchStateHandle,
+}
+
+impl SettingsWidget for WarpDriveContextWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "warp drive agent context contents personal team developer workflows environments notebooks environment variables"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        FeatureFlag::AIRules.is_enabled()
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        _appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ai_settings = AISettings::as_ref(app);
         let toggle = render_ai_setting_toggle::<WarpDriveContextEnabled>(
             "Warp Drive as agent context",
             AISettingsPageAction::ToggleWarpDriveContext,
@@ -7196,57 +7284,6 @@ impl AIFactWidget {
         Flex::column()
             .with_child(toggle)
             .with_child(description)
-            .finish()
-    }
-}
-
-impl SettingsWidget for AIFactWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "agent oz ai a.i. knowledge fact memory memories rules warp drive context workflows notebooks environment variables"
-    }
-
-    fn should_render(&self, _app: &AppContext) -> bool {
-        FeatureFlag::AIRules.is_enabled()
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let ai_settings = AISettings::as_ref(app);
-        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
-
-        let header = build_sub_header(
-            appearance,
-            "Knowledge",
-            Some(styles::header_font_color(is_any_ai_enabled, app)),
-        )
-        .with_margin_bottom(HEADER_PADDING)
-        .finish();
-
-        let button = render_full_pane_width_ai_button(
-            "Manage rules",
-            is_any_ai_enabled,
-            self.manage_rules_button.clone(),
-            AISettingsPageAction::OpenAIFactCollection,
-            appearance,
-        );
-
-        let mut column = Flex::column()
-            .with_child(header)
-            .with_child(self.render_rules_toggle(view, ai_settings, appearance, app));
-
-        if FeatureFlag::SuggestedRules.is_enabled() {
-            column.add_child(self.render_rule_suggestions_toggle(view, ai_settings, app));
-        }
-
-        column
-            .with_child(button)
-            .with_child(self.render_warp_drive_context_toggle(view, ai_settings, app))
             .finish()
     }
 }

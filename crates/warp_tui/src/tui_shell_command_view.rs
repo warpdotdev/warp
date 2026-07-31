@@ -32,7 +32,8 @@ use crate::keybindings::{TUI_BINDING_GROUP, is_tui_owned_binding};
 use crate::terminal_block::TerminalBlockElement;
 use crate::terminal_use::user_controls_running_command;
 use crate::tool_call_labels::{
-    CommandBlockState, ResolvedCommandBlock, tool_call_display_state, tool_call_label,
+    CommandBlockState, ResolvedCommandBlock, styled_tool_call_label_spans, tool_call_display_state,
+    tool_call_label,
 };
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::{TuiCLISubagentView, TuiCLISubagentViewEvent};
@@ -462,10 +463,9 @@ impl TuiView for TuiShellCommandView {
         }
         let collapsed = self.state.is_collapsed() && !self.user_controls_command();
         let label = tool_call_label(&self.action, status.as_ref(), false, Some(&block.details));
-        let header_spans = vec![
-            (format!("{} ", display_state.glyph()), glyph_style),
-            (format!("{label} "), label_style),
-        ];
+        let mut header_spans = vec![(format!("{} ", display_state.glyph()), glyph_style)];
+        header_spans.extend(styled_tool_call_label_spans(&label, &builder));
+        header_spans.push((" ".to_owned(), builder.neutral_7_text_style()));
 
         let terminal_model = self.terminal_model.clone();
         let block_id = block.block_id;
