@@ -584,17 +584,12 @@ struct SnapshotUploadFile {
 enum EntryStatus {
     Uploaded,
     Failed,
-    /// Deliberately dropped from the upload plan to honor [`MAX_SNAPSHOT_FILES_PER_RUN`].
-    /// This is a policy decision rather than a failure, so a checkpoint attempt may still
-    /// commit the kept subset.
+    /// Deliberately dropped to honor [`MAX_SNAPSHOT_FILES_PER_RUN`]. A policy decision, not a
+    /// failure, so a checkpoint attempt may still commit the kept subset.
     Skipped,
-    /// The server returned no presigned target for this blob — a contract violation of
-    /// `upload-snapshot`'s positional alignment (see the length-mismatch warning in
-    /// [`upload_gathered_snapshot`]).
-    ///
-    /// Deliberately distinct from [`EntryStatus::Skipped`]: nothing intentional happened
-    /// here, so a checkpoint attempt that hits this must be withheld rather than committing
-    /// a silently smaller object set over a previously complete selected checkpoint.
+    /// The server returned no presigned target for this blob, violating `upload-snapshot`'s
+    /// positional alignment. Distinct from [`EntryStatus::Skipped`] because nothing
+    /// intentional happened: committing here would silently shrink the object set.
     NoTarget,
     GatherFailed,
     ReadFailed,
@@ -668,69 +663,50 @@ struct SnapshotOutcome {
     manifest_uploaded: bool,
 }
 
-/// Outcome of one checkpoint attempt, as opposed to [`SnapshotOutcome`] which only tracks
-/// per-entry upload results within a single attempt.
-// The whole checkpoint pipeline below (through `run_checkpoint_pipeline`) has no
-// production caller yet -- the periodic checkpoint coordinator that drives it lands
-// in a follow-up, stacked PR. `#[allow(dead_code)]` is temporary and should be
-// removable once that PR is merged on top of this one.
+/// Outcome of one checkpoint attempt, where [`SnapshotOutcome`] only covers per-entry upload
+/// results within that attempt.
+// The checkpoint pipeline below has no production caller until the periodic coordinator
+// lands in a follow-up, stacked PR; the `allow(dead_code)`s go away with it.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub(super) enum CheckpointResult {
-    /// Every required object (blobs plus manifest) for `generation` uploaded successfully
-    /// and the exact-set commit call succeeded; `generation` is now the server's selected
-    /// checkpoint.
+    /// Every required object uploaded and the exact-set commit succeeded, so `generation` is
+    /// now the server's selected checkpoint.
     Committed { generation: CheckpointGeneration },
-    /// There were no usable declarations to checkpoint (declarations file missing, empty,
-    /// or containing no valid entries). No generation was minted and no network calls
-    /// beyond reading local state were made.
+    /// Nothing to checkpoint: the declarations file was missing, empty, or had no valid
+    /// entries. No generation was minted and no network calls were made.
     Skipped,
-    /// A required upload (a non-cap-skipped blob, or the manifest), the upload-target
-    /// allocation, or the commit call itself failed. Any minted generation's objects (if
-    /// uploaded) are left as uncommitted debris in storage; the server's existing marker
-    /// (if any) is untouched.
+    /// A required upload, the upload-target allocation, or the commit failed. Uploaded
+    /// objects are left as uncommitted debris; the server's existing marker is untouched.
     ///
-    /// `generation` is `None` when the attempt never reported one back to the caller. That
-    /// covers both "cut off before a generation was minted" and "cut off by an external
-    /// timeout wrapping the whole attempt" — in the latter case a generation may well have
-    /// been minted and objects uploaded, so `None` must not be read as "nothing landed in
-    /// storage".
+    /// `generation` is `None` whenever the attempt never reported one back, which includes
+    /// being cut off by an external timeout after uploading — so `None` does not mean
+    /// "nothing landed in storage".
     Failed {
         generation: Option<CheckpointGeneration>,
         reason: String,
     },
 }
 
-/// Selects which upload-accounting path the shared gather/upload pipeline uses for a given
-/// attempt. See `SnapshotUploadMode` (`crate::server::server_api::harness_support`) for the
-/// server-side semantics.
+/// Which upload-accounting path the shared gather/upload pipeline uses. See
+/// [`SnapshotUploadMode`] for the server-side semantics.
 enum PipelineMode {
-    /// One-shot end-of-run upload: unprefixed object names, counted against the
-    /// execution's cumulative lifetime attachment quota.
     Legacy,
-    /// Periodic or finalization checkpoint attempt: the server stores each requested file
-    /// as `checkpoint_<generation>__<filename>` and does not charge the cumulative quota.
-    // Not constructed until the coordinator PR (see the allow(dead_code) note above).
+    // Not constructed until the coordinator PR.
     #[allow(dead_code)]
     Checkpoint(CheckpointGeneration),
 }
 
-/// Monotonic disambiguator for [`mint_generation`] so two attempts minted within the same
-/// millisecond (e.g. in tests, or on a very fast retry) never collide.
+/// Disambiguates [`mint_generation`] calls landing in the same millisecond.
 #[allow(dead_code)]
 static GENERATION_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Mint a new checkpoint generation identifier.
+/// Mint a `<millis-since-epoch>-<counter>` generation identifier, which satisfies
+/// [`CheckpointGeneration`]'s format by construction.
 ///
-/// Must be called exactly once per checkpoint *attempt*, and only after that attempt's
-/// payload has been gathered ("frozen") — retrying the same already-gathered payload (e.g.
-/// after a transient upload failure) must reuse the previously minted generation rather than
-/// calling this again; any newly gathered payload always mints a fresh one. Enforcing that
-/// distinction is the caller's responsibility (see the coordinator in
-/// `checkpoint_coordinator.rs`).
-///
-/// Format: `<millis-since-epoch>-<counter>`. This satisfies the server's
-/// `[A-Za-z0-9._-]{1,128}` charset and never contains the reserved `__` separator.
+/// Call this exactly once per attempt, after that attempt's payload has been gathered.
+/// Re-uploading an already-gathered payload must reuse its generation; enforcing that is the
+/// caller's job (see the coordinator).
 #[allow(dead_code)]
 pub(super) fn mint_generation() -> CheckpointGeneration {
     let millis = std::time::SystemTime::now()
@@ -741,20 +717,14 @@ pub(super) fn mint_generation() -> CheckpointGeneration {
     CheckpointGeneration::from_validated(format!("{millis}-{counter}"))
 }
 
-/// Compute the generation-prefixed storage object name for a logical filename (a blob or the
-/// manifest), matching the server's `checkpoint_<generation>__<logical_name>` convention.
+/// Reproduce the server's `checkpoint_<generation>__<logical_name>` storage name for a
+/// logical filename.
 ///
-/// Used only when assembling the exact-set [`CommitSnapshotRequest`] after upload — the
-/// *logical* name (produced by [`unique_filename`]) is what flows through gather, manifest
-/// building, and the upload-targets request; the server itself derives the storage name for
-/// each presigned upload target from that logical filename plus the request's `generation`
-/// field, so no client-side renaming is needed before that point.
+/// Only needed to assemble the exact-set [`CommitSnapshotRequest`]: everything earlier in the
+/// pipeline speaks logical names, and the server derives the storage name for each presigned
+/// target itself.
 #[allow(dead_code)]
 fn storage_name(generation: &CheckpointGeneration, logical: &str) -> String {
-    debug_assert!(
-        !logical.contains("__"),
-        "logical snapshot filename must not contain the reserved `__` separator: {logical}"
-    );
     format!("checkpoint_{}__{logical}", generation.as_str())
 }
 
@@ -1004,14 +974,13 @@ async fn run_pipeline(
     .await
 }
 
-/// Run one checkpoint attempt from the declarations file at `path`: read declarations, gather
-/// the payload, mint a generation for it, upload every blob plus the manifest in checkpoint
-/// mode, and commit the exact set that landed. Never panics; all failure modes are reported
-/// via the returned [`CheckpointResult`] (and, for unexpected failures, `report_error!`).
+/// Run one checkpoint attempt from the declarations file at `path`: gather the payload, mint a
+/// generation, upload it in checkpoint mode, and commit the exact set that landed. Never
+/// panics; every failure mode comes back as a [`CheckpointResult`].
 ///
-/// Unlike [`upload_snapshot_from_declarations_file`], a missing/empty/unusable declarations
-/// file is reported as [`CheckpointResult::Skipped`] rather than `None`, since the coordinator
-/// needs to distinguish "nothing to do" from "tried and failed" to drive its state machine.
+/// Unlike [`upload_snapshot_from_declarations_file`], an unusable declarations file is
+/// [`CheckpointResult::Skipped`] rather than `None`, because the coordinator's state machine
+/// distinguishes "nothing to do" from "tried and failed".
 #[allow(dead_code)]
 pub(super) async fn run_checkpoint_from_declarations_file(
     path: &Path,
@@ -1027,15 +996,13 @@ pub(super) async fn run_checkpoint_from_declarations_file(
         return CheckpointResult::Skipped;
     }
     let gathered = gather_snapshot_entries(declarations).await;
-    // The generation is minted here, once the gathered payload (blob contents, manifest
-    // stubs) is frozen for this attempt — see `mint_generation`'s contract.
+    // Mint only once the payload is frozen — see `mint_generation`'s contract.
     let generation = mint_generation();
     run_checkpoint_pipeline(client, generation, gathered).await
 }
 
-/// Upload and commit an already-gathered payload under `generation`. Split out from
-/// [`run_checkpoint_from_declarations_file`] so a caller retrying the exact same attempt (as
-/// opposed to gathering fresh) can reuse both the payload and the generation.
+/// Upload and commit an already-gathered payload under `generation`. Split out so a caller
+/// re-running the exact same attempt can reuse both the payload and the generation.
 #[allow(dead_code)]
 async fn run_checkpoint_pipeline(
     client: Arc<dyn HarnessSupportClient>,
@@ -1078,10 +1045,9 @@ async fn run_checkpoint_pipeline(
             reason: "manifest failed to upload".to_string(),
         };
     }
-    // `NoTarget` is fatal alongside `Failed`: the server owes us a presigned target for
-    // every requested filename, so a missing one means this attempt would otherwise commit
-    // a silently smaller object set and make it the selected checkpoint, discarding a
-    // previously complete one. Only `Skipped` (the deliberate per-run cap) is tolerated.
+    // Committing while any entry is `NoTarget` would make a silently smaller object set the
+    // selected checkpoint, discarding a previously complete one. Only `Skipped` (the
+    // deliberate per-run cap) is tolerated.
     if outcome
         .entries
         .iter()
@@ -1094,9 +1060,7 @@ async fn run_checkpoint_pipeline(
         };
     }
 
-    // Exact-set commit: the manifest object plus every blob whose own upload actually
-    // succeeded (cap-skipped, gather-failed, and read-failed entries are never included,
-    // matching the server's exact-set contract).
+    // Exact-set commit: the manifest plus every blob that actually uploaded.
     let manifest_object = storage_name(&generation, &manifest_filename);
     let mut objects: Vec<String> = outcome
         .entries
@@ -1111,7 +1075,11 @@ async fn run_checkpoint_pipeline(
         manifest_object,
         objects,
     };
-    match client.commit_snapshot(&commit_request).await {
+    // Every object is already in storage by this point, so a transient failure here would
+    // throw away the whole attempt. Committing the same generation twice is idempotent
+    // server-side, which makes retrying safe.
+    let operation = format!("checkpoint commit '{}'", generation.as_str());
+    match with_bounded_retry(&operation, || client.commit_snapshot(&commit_request)).await {
         Ok(response) => {
             log::info!("Checkpoint committed: generation={}", response.generation);
             CheckpointResult::Committed { generation }
@@ -1417,15 +1385,14 @@ async fn gather_file(
     let path = Path::new(file_path);
     match tokio::fs::read(path).await {
         Ok(content) => {
-            // Sanitize before uniquifying: the basename comes from an agent-created file, and
-            // it ends up inside the `checkpoint_<generation>__<logical_name>` storage name
-            // that the exact-set commit has to reproduce byte for byte.
+            // Sanitize before uniquifying: the basename is agent-controlled and ends up in the
+            // storage name the exact-set commit has to reproduce byte for byte.
             let preferred = sanitize_name_component(
                 &path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| file_path.to_string()),
-                "snapshot_artifact",
+                FALLBACK_SNAPSHOT_FILENAME,
             );
             let filename = unique_filename(&preferred, used_filenames);
             let mime = mime_guess::from_path(path)
@@ -1526,10 +1493,8 @@ fn fold_upload_results(
                     repo_entry.status = "failed";
                     repo_entry.error = entry.error.clone();
                 }
-                // Both surface in the manifest as `skipped` so downstream rehydration
-                // consumers keep seeing a stable status vocabulary; the distinguishing
-                // detail lives in `error` (and in the checkpoint gate, which treats
-                // `NoTarget` as fatal).
+                // Both surface as `skipped` to keep the manifest's status vocabulary stable
+                // for rehydration consumers; the distinguishing detail lives in `error`.
                 EntryStatus::Skipped | EntryStatus::NoTarget => {
                     repo_entry.uploaded = Some(false);
                     repo_entry.status = "skipped";
@@ -1759,18 +1724,25 @@ async fn git_output_string(repo_dir: &Path, args: &[&str]) -> Option<String> {
     if value.is_empty() { None } else { Some(value) }
 }
 
-/// Collapse `value` into the server's `[A-Za-z0-9._-]` charset, squashing runs of `_` so the
-/// result can never contain `__`.
+/// Fallback used wherever a name sanitizes down to nothing usable.
+const FALLBACK_SNAPSHOT_FILENAME: &str = "snapshot_artifact";
+
+/// Prepended to names that would otherwise collide with the server's reserved namespace.
+const RESERVED_NAME_ESCAPE: &str = "snapshot-";
+
+/// Longest logical filename we will mint. The server rejects names over 255 bytes; the
+/// remainder is headroom for the `_<n>` de-duplication suffix [`unique_filename`] may append.
+const MAX_SNAPSHOT_FILENAME_LEN: usize = 240;
+
+/// Reshape `value` into a logical snapshot filename the server will accept, falling back to
+/// `fallback` when nothing usable survives.
 ///
-/// `__` is reserved as the separator in `checkpoint_<generation>__<logical_name>` storage
-/// object names (see [`storage_name`] and [`CheckpointGeneration`]), and the logical name half
-/// is derived from **agent-controlled** input: workspace file basenames and repo directory
-/// names. Leaving it unsanitized lets an agent-created file such as `a__b.txt` (or, worse,
-/// `checkpoint_1700000000000-0__x.txt`) produce an ambiguous storage name, which either fails
-/// the server's existence check at commit time — losing the whole checkpoint — or lands under
-/// a different generation than intended.
-///
-/// Returns `fallback` when nothing usable survives sanitization.
+/// Logical names are agent-controlled and the server rejects the *entire* upload-targets
+/// request if one is malformed, so a single awkward basename would otherwise cost the whole
+/// snapshot. Its rules: `[A-Za-z0-9._-]` only, at most 255 bytes, not `.` or `..`, no leading
+/// `-`, and — on the legacy path — nothing in the reserved `checkpoint_` namespace. Runs of
+/// `_` are squashed on top of that so the `checkpoint_<generation>__<logical_name>` separator
+/// stays unambiguous.
 fn sanitize_name_component(value: &str, fallback: &str) -> String {
     let mut sanitized = String::with_capacity(value.len());
     for c in value.chars() {
@@ -1779,18 +1751,31 @@ fn sanitize_name_component(value: &str, fallback: &str) -> String {
         } else {
             '_'
         };
-        // Squash runs so `__` can never appear in the output.
         if c == '_' && sanitized.ends_with('_') {
             continue;
         }
         sanitized.push(c);
     }
-    let trimmed = sanitized.trim_matches('_');
-    if trimmed.is_empty() {
-        fallback.to_string()
-    } else {
-        trimmed.to_string()
+
+    let trimmed = sanitized
+        .trim_start_matches(['_', '-'])
+        .trim_end_matches('_');
+    let mut name = match trimmed {
+        "" | "." | ".." => fallback.to_string(),
+        other => other.to_string(),
+    };
+    if is_reserved_snapshot_name(&name) {
+        name.insert_str(0, RESERVED_NAME_ESCAPE);
     }
+    // Sanitized names are pure ASCII, so this always lands on a char boundary.
+    name.truncate(MAX_SNAPSHOT_FILENAME_LEN);
+    name
+}
+
+/// Names the server refuses to hand out presigned legacy upload targets for, because they
+/// belong to the checkpoint protocol's own object namespace.
+fn is_reserved_snapshot_name(name: &str) -> bool {
+    name.starts_with("checkpoint_") || name == "latest-checkpoint.json"
 }
 
 fn sanitize_filename_component(value: &str) -> String {
@@ -1801,23 +1786,21 @@ fn unique_filename(preferred: &str, used: &mut HashSet<String>) -> String {
     let preferred = Path::new(preferred)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "snapshot_artifact".to_string());
-    let preferred = if preferred.is_empty() {
-        "snapshot_artifact".to_string()
-    } else {
-        preferred
-    };
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| FALLBACK_SNAPSHOT_FILENAME.to_string());
 
     if used.insert(preferred.clone()) {
         return preferred;
     }
 
     let path = Path::new(&preferred);
+    // Trailing `_` is trimmed so `a_.txt` de-duplicates to `a_2.txt` rather than reintroducing
+    // the reserved `__` separator that sanitization just squashed out.
     let stem = path
         .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
+        .map(|s| s.to_string_lossy().trim_end_matches('_').to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "snapshot_artifact".to_string());
+        .unwrap_or_else(|| FALLBACK_SNAPSHOT_FILENAME.to_string());
     let extension = path.extension().map(|e| e.to_string_lossy().to_string());
 
     for suffix in 2.. {

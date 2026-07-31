@@ -11,6 +11,7 @@ use tokio::runtime::Runtime;
 
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_sdk::retry::MAX_ATTEMPTS;
 use crate::ai::agent_sdk::test_support::build_test_http_client;
 use crate::ai::artifacts::Artifact;
 use crate::server::server_api::harness_support::{
@@ -39,30 +40,24 @@ struct TestClient {
     http: http_client::Client,
     fail_get_targets: bool,
     /// Number of trailing response entries to drop, simulating a server that returns fewer
-    /// targets than the request contained (contract violation). Under the positional
-    /// alignment contract, the trailing files in the request end up with no target and are
-    /// marked [`EntryStatus::NoTarget`] downstream.
+    /// targets than the request contained. Under positional alignment those files end up
+    /// with no target and are marked [`EntryStatus::NoTarget`] downstream.
     drop_trailing_targets: usize,
     /// Restrict `drop_trailing_targets` to the first `get_snapshot_upload_targets` call.
-    ///
-    /// `upload_gathered_snapshot` always appends the manifest last, so truncating *every*
-    /// chunk always costs the manifest its target. Truncating only the first chunk (which
-    /// requires more than [`UPLOAD_BATCH_SIZE`] files, so there are at least two) isolates
-    /// the blob-level `NoTarget` path with the manifest still uploading cleanly.
+    /// The manifest is always the last entry of the last chunk, so truncating every chunk
+    /// would always cost the manifest its target instead of a blob.
     drop_trailing_first_call_only: bool,
-    /// Whether `commit_snapshot` should return an error, simulating a server-side commit
-    /// rejection (e.g. a missing required object).
+    /// Whether `commit_snapshot` should return an error.
     fail_commit: bool,
-    /// Every `get_snapshot_upload_targets` request received, in order, for checkpoint-mode
-    /// assertions (mode/generation used, plain logical filenames).
+    /// Every request received, in order, for wire-shape and exact-set assertions.
     upload_requests: Arc<StdMutex<Vec<SnapshotUploadRequest>>>,
-    /// Every `commit_snapshot` request received, in order, for exact-set assertions.
     commit_requests: Arc<StdMutex<Vec<CommitSnapshotRequest>>>,
 }
 
 impl TestClient {
-    fn new(server_base_url: String) -> Arc<Self> {
-        Arc::new(Self {
+    /// Happy-path client; the `new_*` constructors below flip one failure mode each.
+    fn base(server_base_url: String) -> Self {
+        Self {
             server_base_url,
             http: build_test_http_client(),
             fail_get_targets: false,
@@ -71,32 +66,24 @@ impl TestClient {
             fail_commit: false,
             upload_requests: Arc::new(StdMutex::new(Vec::new())),
             commit_requests: Arc::new(StdMutex::new(Vec::new())),
-        })
+        }
+    }
+
+    fn new(server_base_url: String) -> Arc<Self> {
+        Arc::new(Self::base(server_base_url))
     }
 
     fn new_failing_get_targets(server_base_url: String) -> Arc<Self> {
         Arc::new(Self {
-            server_base_url,
-            http: build_test_http_client(),
             fail_get_targets: true,
-            drop_trailing_targets: 0,
-            drop_trailing_first_call_only: false,
-            fail_commit: false,
-            upload_requests: Arc::new(StdMutex::new(Vec::new())),
-            commit_requests: Arc::new(StdMutex::new(Vec::new())),
+            ..Self::base(server_base_url)
         })
     }
 
     fn new_dropping_trailing(server_base_url: String, drop_trailing: usize) -> Arc<Self> {
         Arc::new(Self {
-            server_base_url,
-            http: build_test_http_client(),
-            fail_get_targets: false,
             drop_trailing_targets: drop_trailing,
-            drop_trailing_first_call_only: false,
-            fail_commit: false,
-            upload_requests: Arc::new(StdMutex::new(Vec::new())),
-            commit_requests: Arc::new(StdMutex::new(Vec::new())),
+            ..Self::base(server_base_url)
         })
     }
 
@@ -107,27 +94,16 @@ impl TestClient {
         drop_trailing: usize,
     ) -> Arc<Self> {
         Arc::new(Self {
-            server_base_url,
-            http: build_test_http_client(),
-            fail_get_targets: false,
             drop_trailing_targets: drop_trailing,
             drop_trailing_first_call_only: true,
-            fail_commit: false,
-            upload_requests: Arc::new(StdMutex::new(Vec::new())),
-            commit_requests: Arc::new(StdMutex::new(Vec::new())),
+            ..Self::base(server_base_url)
         })
     }
 
     fn new_failing_commit(server_base_url: String) -> Arc<Self> {
         Arc::new(Self {
-            server_base_url,
-            http: build_test_http_client(),
-            fail_get_targets: false,
-            drop_trailing_targets: 0,
-            drop_trailing_first_call_only: false,
             fail_commit: true,
-            upload_requests: Arc::new(StdMutex::new(Vec::new())),
-            commit_requests: Arc::new(StdMutex::new(Vec::new())),
+            ..Self::base(server_base_url)
         })
     }
 
@@ -1652,12 +1628,9 @@ fn checkpoint_commits_generation_prefixed_storage_names_while_upload_targets_use
 
 #[test]
 fn checkpoint_withholds_commit_when_a_required_blob_fails() {
-    // A blob upload fails permanently (404 is a non-retryable status). The exact-set contract
-    // requires withholding the commit entirely rather than committing a partial set. The
-    // manifest mock must return success here so this test isolates the blob-failure branch:
-    // without it, an unmocked manifest PUT would also fail against mockito's default
-    // (non-2xx) response for unmatched routes, and this test would pass for the wrong reason
-    // (falling into the "manifest failed to upload" branch instead of the intended one).
+    // 404 is non-retryable. The manifest mock must succeed so this isolates the blob-failure
+    // branch: an unmocked manifest PUT would fail too and the test would pass for the wrong
+    // reason.
     let tempdir = snaptest_tempdir();
     let file_path = tempdir.path().join("bad.txt");
     fs::write(&file_path, b"will-fail").unwrap();
@@ -1699,9 +1672,7 @@ fn checkpoint_withholds_commit_when_a_required_blob_fails() {
 
 #[test]
 fn checkpoint_manifest_upload_failure_withholds_commit() {
-    // The manifest itself fails to upload while the only blob succeeds. Losing the manifest
-    // means there is no rehydration catalogue even if blobs landed, so commit must still be
-    // withheld -- this exercises a distinct branch from the blob-failure test above.
+    // Without the manifest there is no rehydration catalogue, even though the blob landed.
     let tempdir = snaptest_tempdir();
     let file_path = tempdir.path().join("ok.txt");
     fs::write(&file_path, b"fine").unwrap();
@@ -1713,8 +1684,7 @@ fn checkpoint_manifest_upload_failure_withholds_commit() {
         .mock("PUT", upload_path("ok\\.txt"))
         .with_status(200)
         .create();
-    // The upload path retries transient-looking failures with bounded retry before giving
-    // up, so a persistently failing manifest upload is attempted more than once.
+    // A persistent 5xx is retried, so the manifest PUT lands more than once.
     let manifest_mock = server
         .mock("PUT", upload_path("snapshot_state\\.json"))
         .with_status(500)
@@ -1902,23 +1872,21 @@ fn checkpoint_commit_failure_reports_failed_result() {
         matches!(result, CheckpointResult::Failed { .. }),
         "expected Failed, got {result:?}"
     );
+    // Everything is already uploaded by commit time, so a commit failure is worth retrying
+    // before the attempt is abandoned.
     assert_eq!(
         client.commit_requests().len(),
-        1,
-        "commit should still be attempted exactly once"
+        MAX_ATTEMPTS,
+        "commit should exhaust its bounded retries before failing the attempt"
     );
     manifest_mock.assert();
 }
 
 #[test]
 fn checkpoint_withholds_commit_when_the_server_omits_a_blob_upload_target() {
-    // Regression: a short `upload-snapshot` response used to mark the target-less blob
-    // `skipped`, which the checkpoint gate tolerated (it only rejected `failed`). The attempt
-    // then committed a silently smaller object set and made it the selected checkpoint,
-    // discarding a previously complete one. `EntryStatus::NoTarget` must now withhold commit.
-    //
-    // Declare more than UPLOAD_BATCH_SIZE files so the request is chunked and the truncation
-    // lands on a blob rather than on the always-last manifest entry.
+    // Committing here would make a smaller object set the selected checkpoint, discarding a
+    // previously complete one. Declare more than UPLOAD_BATCH_SIZE files so the request is
+    // chunked and the truncation lands on a blob rather than the always-last manifest.
     let tempdir = snaptest_tempdir();
     let decl_dir = snaptest_tempdir();
     let declared_count = UPLOAD_BATCH_SIZE + 5;
@@ -1962,8 +1930,6 @@ fn checkpoint_withholds_commit_when_the_server_omits_a_blob_upload_target() {
 
 #[test]
 fn sanitize_name_component_never_yields_the_reserved_double_underscore() {
-    // The logical filename half of `checkpoint_<generation>__<logical_name>` is derived from
-    // agent-controlled basenames, so it must never reintroduce the reserved separator.
     for raw in [
         "a__b.txt",
         "a  b.txt",
@@ -1972,7 +1938,7 @@ fn sanitize_name_component_never_yields_the_reserved_double_underscore() {
         "___",
         "ünïcödé.txt",
     ] {
-        let sanitized = sanitize_name_component(raw, "snapshot_artifact");
+        let sanitized = sanitize_name_component(raw, FALLBACK_SNAPSHOT_FILENAME);
         assert!(
             !sanitized.contains("__"),
             "sanitized {raw:?} still contains `__`: {sanitized}"
@@ -1989,9 +1955,8 @@ fn sanitize_name_component_never_yields_the_reserved_double_underscore() {
 
 #[test]
 fn checkpoint_storage_names_stay_unambiguous_for_hostile_filenames() {
-    // End-to-end guard for the same invariant: a file whose basename contains `__` must not
-    // produce a storage name with a second `__`, which would make the server's
-    // `checkpoint_<generation>__<logical_name>` split ambiguous.
+    // End-to-end guard: a basename containing `__` must not produce a storage name with a
+    // second `__`, which would make the server's split ambiguous.
     let tempdir = snaptest_tempdir();
     let hostile = tempdir.path().join("checkpoint_1700000000000-0__evil.txt");
     fs::write(&hostile, b"hostile").unwrap();
@@ -2071,4 +2036,178 @@ fn checkpoint_new_gather_mints_a_fresh_generation_each_time() {
         "each fresh gather must mint a new generation"
     );
     manifest_mock.assert();
+}
+
+/// Mirror of the server's logical-name validation. The server rejects the *whole*
+/// upload-targets request when any name fails these, so every name we mint must pass.
+fn assert_server_accepts_logical_name(name: &str) {
+    assert!(!name.is_empty(), "name is empty");
+    assert!(name.len() <= 255, "name exceeds 255 bytes: {name}");
+    assert!(name != "." && name != "..", "name is a directory alias");
+    assert!(!name.starts_with('-'), "name parses as a flag: {name}");
+    assert!(
+        !name.starts_with("checkpoint_") && name != "latest-checkpoint.json",
+        "name collides with the reserved checkpoint namespace: {name}"
+    );
+    assert!(
+        name.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_')),
+        "name leaves the server charset: {name}"
+    );
+}
+
+#[test]
+fn sanitize_name_component_satisfies_the_server_name_contract() {
+    let long_name = format!("{}.txt", "a".repeat(400));
+    for raw in [
+        "-rf.txt",
+        "--force",
+        "-",
+        ".",
+        "..",
+        "checkpoint_1700000000000-0__evil.txt",
+        "latest-checkpoint.json",
+        "a__b.txt",
+        "weird name?!.txt",
+        "___",
+        "ünïcödé.txt",
+        &long_name,
+    ] {
+        let sanitized = sanitize_name_component(raw, FALLBACK_SNAPSHOT_FILENAME);
+        assert_server_accepts_logical_name(&sanitized);
+        assert!(
+            !sanitized.contains("__"),
+            "sanitized {raw:?} contains the reserved separator: {sanitized}"
+        );
+    }
+}
+
+#[test]
+fn unique_filename_keeps_deduplicated_names_within_the_contract() {
+    // `a_.txt` used to de-duplicate to `a__2.txt`, reintroducing the reserved separator that
+    // sanitization had just squashed out.
+    let mut used = HashSet::new();
+    let names: Vec<String> = (0..3)
+        .map(|_| unique_filename(&sanitize_name_component("a_.txt", "repo"), &mut used))
+        .collect();
+    for name in &names {
+        assert_server_accepts_logical_name(name);
+        assert!(
+            !name.contains("__"),
+            "de-duplicated name is ambiguous: {name}"
+        );
+    }
+    assert_eq!(names.len(), used.len(), "names must stay unique: {names:?}");
+}
+
+#[test]
+fn checkpoint_commits_server_valid_names_for_hostile_basenames() {
+    // A single name the server would reject fails the entire upload-targets request, so an
+    // awkward basename must not be able to cost the whole checkpoint.
+    let tempdir = snaptest_tempdir();
+    let decl_dir = snaptest_tempdir();
+    let hostile_names = ["-rf.txt", "latest-checkpoint.json", "spaced name!.txt"];
+    let file_paths: Vec<std::path::PathBuf> = hostile_names
+        .iter()
+        .map(|name| {
+            let path = tempdir.path().join(name);
+            fs::write(&path, b"content").unwrap();
+            path
+        })
+        .collect();
+    let file_refs: Vec<&Path> = file_paths.iter().map(|p| p.as_path()).collect();
+    let declarations_path = write_declarations(decl_dir.path(), &[], &file_refs);
+
+    let mut server = Server::new();
+    let upload_mock = server
+        .mock("PUT", upload_path(r".+"))
+        .with_status(200)
+        .create();
+
+    let client = TestClient::new(server.url());
+    let result = Runtime::new()
+        .unwrap()
+        .block_on(run_checkpoint_from_declarations_file(
+            &declarations_path,
+            client.clone(),
+        ));
+    let CheckpointResult::Committed { generation } = result else {
+        panic!("expected Committed, got {result:?}");
+    };
+
+    for request in client.upload_requests() {
+        for file in &request.files {
+            assert_server_accepts_logical_name(&file.filename);
+        }
+    }
+    let prefix = format!("checkpoint_{}__", generation.as_str());
+    for object in &client.commit_requests()[0].objects {
+        let logical = object
+            .strip_prefix(&prefix)
+            .unwrap_or_else(|| panic!("object {object} is not under the generation prefix"));
+        assert_server_accepts_logical_name(logical);
+    }
+    drop(upload_mock);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Wire format. These pin the JSON the server actually parses; the in-process `TestClient`
+// never exercises serde.
+// ------------------------------------------------------------------------------------------------
+
+fn test_file_info() -> SnapshotFileInfo {
+    SnapshotFileInfo {
+        filename: "note.txt".to_string(),
+        mime_type: "text/plain".to_string(),
+    }
+}
+
+#[test]
+fn legacy_upload_request_omits_the_checkpoint_fields() {
+    // The end-of-run path must keep emitting exactly the pre-checkpoint payload.
+    assert_eq!(
+        serde_json::to_value(SnapshotUploadRequest::legacy(vec![test_file_info()])).unwrap(),
+        serde_json::json!({
+            "files": [{"filename": "note.txt", "mime_type": "text/plain"}],
+        })
+    );
+}
+
+#[test]
+fn checkpoint_upload_request_sends_mode_and_generation() {
+    let request = SnapshotUploadRequest::checkpoint(
+        CheckpointGeneration::new_for_test("1700000000000-0"),
+        vec![test_file_info()],
+    );
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        serde_json::json!({
+            "mode": "checkpoint",
+            "generation": "1700000000000-0",
+            "files": [{"filename": "note.txt", "mime_type": "text/plain"}],
+        })
+    );
+}
+
+#[test]
+fn commit_snapshot_request_matches_the_server_schema() {
+    let request = CommitSnapshotRequest {
+        generation: "1700000000000-0".to_string(),
+        manifest_object: "checkpoint_1700000000000-0__snapshot_state.json".to_string(),
+        objects: vec![
+            "checkpoint_1700000000000-0__note.txt".to_string(),
+            "checkpoint_1700000000000-0__snapshot_state.json".to_string(),
+        ],
+    };
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        serde_json::json!({
+            "generation": "1700000000000-0",
+            "manifest_object": "checkpoint_1700000000000-0__snapshot_state.json",
+            "objects": [
+                "checkpoint_1700000000000-0__note.txt",
+                "checkpoint_1700000000000-0__snapshot_state.json",
+            ],
+        })
+    );
 }

@@ -53,13 +53,10 @@ pub enum UploadFieldValue {
     ContentData,
 }
 
-/// Selects how the server accounts for a `SnapshotUploadRequest`'s uploads.
+/// Selects how the server names and accounts for a [`SnapshotUploadRequest`]'s uploads.
 ///
-/// `Legacy` (the default) uses unprefixed object names and counts uploads against
-/// the execution's cumulative lifetime attachment quota, matching today's one-shot
-/// end-of-run snapshot. `Checkpoint` signs generation-prefixed object names and does
-/// not consume that cumulative quota; the server enforces per-attempt limits instead
-/// when the generation is committed via [`HarnessSupportClient::commit_snapshot`].
+/// `Legacy` uses unprefixed names and charges the execution's cumulative attachment quota.
+/// `Checkpoint` signs generation-prefixed names and is charged per attempt at commit time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SnapshotUploadMode {
@@ -71,13 +68,11 @@ pub enum SnapshotUploadMode {
 /// Request body for upload-snapshot upload targets.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SnapshotUploadRequest {
-    /// Upload accounting mode. Omitted (default) is equivalent to `legacy` on the
-    /// server; see [`SnapshotUploadMode`].
+    /// Omitted when legacy, which the server treats as the default.
     #[serde(skip_serializing_if = "is_default_mode")]
     pub mode: SnapshotUploadMode,
-    /// Required when `mode` is [`SnapshotUploadMode::Checkpoint`]. Identifies the
-    /// checkpoint attempt; every requested file is uploaded by the server as
-    /// `checkpoint_<generation>__<filename>`. Ignored for `legacy` mode.
+    /// Required in checkpoint mode; the server uploads each file as
+    /// `checkpoint_<generation>__<filename>`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation: Option<String>,
     pub files: Vec<SnapshotFileInfo>,
@@ -88,7 +83,6 @@ fn is_default_mode(mode: &SnapshotUploadMode) -> bool {
 }
 
 impl SnapshotUploadRequest {
-    /// Build a legacy-mode request, matching today's one-shot end-of-run upload.
     pub fn legacy(files: Vec<SnapshotFileInfo>) -> Self {
         Self {
             mode: SnapshotUploadMode::Legacy,
@@ -97,7 +91,6 @@ impl SnapshotUploadRequest {
         }
     }
 
-    /// Build a checkpoint-mode request for the given generation.
     pub fn checkpoint(generation: CheckpointGeneration, files: Vec<SnapshotFileInfo>) -> Self {
         Self {
             mode: SnapshotUploadMode::Checkpoint,
@@ -107,33 +100,26 @@ impl SnapshotUploadRequest {
     }
 }
 
-/// A checkpoint generation identifier minted by the client for one checkpoint attempt.
+/// Client-minted identifier for one checkpoint attempt, used to key that attempt's storage
+/// objects as `checkpoint_<generation>__<logical_name>`.
 ///
-/// Must match the server's `[A-Za-z0-9._-]{1,128}` format and must not contain the
-/// reserved `__` separator (validated by
-/// [`crate::ai::agent_sdk::driver::snapshot::mint_generation`], the only production
-/// constructor). Storage object basenames are `checkpoint_<generation>__<logical_name>`;
-/// the generation is a GCS keying detail only and must never leak into agent-visible
-/// paths or restore commands.
+/// A generation is a storage-keying detail and must never leak into agent-visible paths or
+/// restore commands.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 #[serde(transparent)]
 pub struct CheckpointGeneration(String);
 
 impl CheckpointGeneration {
-    /// Wrap an already-validated generation string. Exposed for tests; production
-    /// code should go through `snapshot::mint_generation` instead.
-    ///
-    /// The only caller (`driver::snapshot`'s test module) is itself excluded on
-    /// Windows (snapshot upload is cloud-agent-only and Linux-only), so this must
-    /// be gated the same way or it is dead code under Windows clippy/test builds.
+    /// Test-only escape hatch; production code mints generations via
+    /// `snapshot::mint_generation`. Gated to match `driver::snapshot`'s test module, which
+    /// does not build on Windows.
     #[cfg(all(test, not(windows)))]
     pub(crate) fn new_for_test(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
-    /// True when `value` satisfies the server's `[A-Za-z0-9._-]{1,128}` format and does not
-    /// contain the reserved `__` separator used by
-    /// `checkpoint_<generation>__<logical_name>` storage object names.
+    /// Mirrors the server's `[A-Za-z0-9._-]{1,128}` format check, including the reserved `__`
+    /// separator that would make `checkpoint_<generation>__<logical_name>` ambiguous.
     fn is_valid(value: &str) -> bool {
         !value.is_empty()
             && value.len() <= 128
@@ -143,15 +129,10 @@ impl CheckpointGeneration {
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
     }
 
-    /// Construct from a pre-validated string. Crate-visible so `driver::snapshot` can
-    /// mint generations without duplicating this type.
-    ///
-    /// The debug assertion keeps the type's documented invariant honest: previously nothing
-    /// enforced it, so "validated" was aspirational. `snapshot::mint_generation` is the only
-    /// production caller and provably satisfies it, hence a `debug_assert!` rather than a
-    /// fallible constructor.
-    // Only called by `snapshot::mint_generation`, which is itself unused until the
-    // periodic checkpoint coordinator (a follow-up, stacked PR) lands.
+    /// Construct from a string the caller has already shaped to [`Self::is_valid`].
+    /// `snapshot::mint_generation` is the only production caller and satisfies it by
+    /// construction, so the invariant is a debug assertion rather than a fallible return.
+    // Unused until the periodic checkpoint coordinator (a follow-up, stacked PR) lands.
     #[allow(dead_code)]
     pub(crate) fn from_validated(value: String) -> Self {
         debug_assert!(
@@ -177,12 +158,11 @@ impl std::fmt::Display for CheckpointGeneration {
     }
 }
 
-/// Request body for committing a fully uploaded checkpoint generation. Exact-set: the
-/// server persists `objects` verbatim as the commit marker and later selection returns
-/// exactly that set, never every object sharing the generation prefix. See
-/// `docs/remote-2111-checkpoint-spec.md` (warp-server) for the full protocol.
-// Not constructed until the periodic checkpoint coordinator (a follow-up, stacked PR)
-// starts calling `HarnessSupportClient::commit_snapshot`.
+/// Request body for committing a fully uploaded checkpoint generation.
+///
+/// Exact-set: the server persists `objects` verbatim as the commit marker and selection
+/// later returns exactly that set, not everything sharing the generation prefix.
+// Not constructed until the periodic checkpoint coordinator (a follow-up, stacked PR) lands.
 #[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CommitSnapshotRequest {
@@ -362,13 +342,12 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
         request: &SnapshotUploadRequest,
     ) -> Result<Vec<UploadTarget>>;
 
-    /// Commit a fully uploaded checkpoint generation for the active execution's exact
-    /// object set. Must only be called after every object named in `request.objects`
-    /// (including `request.manifest_object`) has itself uploaded successfully; the
-    /// server verifies existence and per-attempt size limits before this becomes the
-    /// selected checkpoint.
-    // Not called until the periodic checkpoint coordinator (a follow-up, stacked PR)
-    // lands.
+    /// Make a fully uploaded checkpoint generation the selected checkpoint.
+    ///
+    /// Only call this once every object in `request.objects` (including
+    /// `request.manifest_object`) has uploaded successfully; the server verifies existence
+    /// and per-attempt size limits and rejects the whole commit otherwise.
+    // Not called until the periodic checkpoint coordinator (a follow-up, stacked PR) lands.
     #[allow(dead_code)]
     async fn commit_snapshot(
         &self,
