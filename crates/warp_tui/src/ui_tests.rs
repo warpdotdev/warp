@@ -54,10 +54,7 @@ fn waiting_login_renders_copy_feedback() {
             let browser_url =
                 "https://app.warp.dev/device?user_code=ABCD-EFGH&source=warp-agent-cli";
             for (message, tone) in [
-                (
-                    "Login URL copied to clipboard",
-                    TransientHintTone::Success,
-                ),
+                ("Login URL copied to clipboard", TransientHintTone::Success),
                 ("Unable to copy login URL", TransientHintTone::Error),
             ] {
                 let mut presenter = TuiPresenter::new();

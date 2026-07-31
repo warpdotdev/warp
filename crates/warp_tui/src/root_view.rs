@@ -12,9 +12,9 @@ use warpui_core::keymap::macros::*;
 use warpui_core::platform::TerminationMode;
 use warpui_core::{AppContext, Entity, EntityId, TuiView, TypedActionView, ViewContext, keymap};
 
+use crate::clipboard::copy_to_clipboard;
 use crate::keybindings::TUI_BINDING_GROUP;
 use crate::session_registry::{TuiSessionView, TuiSessions};
-use crate::clipboard::copy_to_clipboard;
 use crate::transient_hint::TransientHint;
 use crate::ui::{login_failed, login_waiting, signed_out_welcome, terminal_starting};
 use crate::zero_state_animation::ZeroStateAnimationConfig;
