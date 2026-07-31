@@ -1,6 +1,6 @@
 ---
 name: gui-settings-ui
-description: GUI desktop app only. How to build a Settings page in the Warp client (app/src/settings_view) so its widgets and settings search behave correctly — picking a PageType, deciding whether a heading belongs in the page-title slot or inside a widget, scoping search_terms per widget, and spacing. Use when adding or editing a settings page, a SettingsWidget, or anything that affects settings search.
+description: GUI desktop app only. How to build a Settings page in the Warp client (app/src/settings_view) so its widgets and settings search behave correctly — picking a PageType, deciding whether a heading belongs in the page-title slot or inside a widget, gating a widget, and scoping search_terms per widget. Use when adding or editing a settings page, a SettingsWidget, or anything that affects settings search.
 ---
 
 # gui-settings-ui
@@ -27,7 +27,7 @@ Each widget implements `SettingsWidget` (`settings_page.rs`):
 
 - `search_terms(&self) -> &str` — the terms this widget matches on.
 - `render(..)` — the widget's rows.
-- `should_render(&self, app) -> bool` — defaults to `true`; used for feature-flag / auth / platform gating.
+- `should_render(&self, app) -> bool` — defaults to `true`. This is one of **two** ways to conditionally show a setting, and usually not the right one — see "Two ways to gate a widget" below.
 - `widget_id()` / `static_widget_id()` — default to `std::any::type_name::<Self>()`, used for scroll-to and deeplinks.
 
 **How search filters.** `PageType::update_filter` keeps a widget when
@@ -65,6 +65,36 @@ FilteredPageType::Monolith { widget, title, .. } => {
 `get_filtered` sets that `widget` to `filter.then_some(..)`, so a non-matching query makes it `None` and the page renders empty — **title included**. On a monolith the title slot buys no search protection; the page is all-or-nothing, title and all.
 
 One more thing worth knowing before you go looking for a title stranded over zero rows: you won't find one. `SettingsView::filtered_pages` (`app/src/settings_view/mod.rs`) drops any page whose `MatchData` is falsy from the sidebar and auto-selects the first page that still matches, so a fully non-matching page is never displayed. The state the title slot actually protects is the **partial** match — some widgets survive, some don't — and only widget-list pages can be in it.
+
+## Two ways to gate a widget
+
+There are two mechanisms for conditionally showing a setting, and they are not interchangeable.
+
+**1. An `if` at page-build time — never create the widget.** This is how most gating in `AISettingsPageView::build_page` (`ai_page.rs`) is written:
+
+```rust
+if FeatureFlag::AIRules.is_enabled() {
+    widgets.extend(Self::knowledge_widgets());
+}
+if cfg!(feature = "voice_input")
+    && ai_settings.voice_input_enabled_internal.is_supported_on_current_platform()
+{
+    widgets.push(Box::new(VoiceWidget::default()));
+}
+```
+
+**2. `should_render(&self, app) -> bool` — create the widget and let it opt out per pass.**
+
+**Which one: can the value change while the app is running?**
+
+- **Fixed for the process** — a feature flag, a `cfg!` feature, a platform-support check. → **Use the build-time `if`.** This is the preferred default: the widget never exists, so there is nothing to filter, render, or reason about.
+- **Can change at runtime** — a setting the user toggles, auth state, an availability check that can flip mid-session. → **Use `should_render`.**
+
+The reason is *when each is evaluated*. The build-time `if` runs once, when the page is constructed, and its result is frozen until something rebuilds the page (for AI/Code subpages, only switching subpages does — see below). `should_render` is re-evaluated on every filter and render pass, so it tracks a value that changes while the settings page is open. Gate a runtime-changing value with a build-time `if` and the page goes stale; gate a static flag with `should_render` and you carry a widget around for nothing.
+
+The real `should_render` users are all the runtime kind: `SettingsSyncWidget` (`main_page.rs`) on auth state, `WarpDriveToggleWidget` (`warp_drive_page.rs`) on `WarpDriveSettings::is_warp_drive_available`, and the CLI-agent rich-input widgets (`ai_page.rs`) on the user-toggleable footer setting, via `should_render_cli_agent_rich_input`.
+
+Either mechanism keeps search honest: an uncreated widget isn't in the list, and `update_filter` already skips a widget whose `should_render` is false. What you must never do is hide rows inside `render` while `search_terms` still advertises them — that makes the page match a query and then show nothing for it.
 
 ## The decision that matters: where does the heading live?
 
@@ -150,23 +180,9 @@ Rules of thumb when splitting:
 
 - **One widget ≈ one setting row** (or one tightly-coupled group that always shows and hides together).
 - **Scope `search_terms` to that widget only.** Keep enough shared context that a page-level query still matches (each CLI-agent widget above keeps `"third party cli coding agent"`), then add the terms unique to the row.
-- **Move conditional rendering into `should_render`.** A row that used to be behind an `if is_footer_enabled { … }` inside a mega-render becomes its own widget with `fn should_render(&self, app) -> bool`, so search and rendering agree. Share the predicate through a small free function (`should_render_cli_agent_rich_input(app)`) rather than duplicating the condition.
+- **Give each row the right gating mechanism** (see "Two ways to gate a widget"). A row that used to sit behind an `if … { … }` inside a mega-`render` becomes its own widget: if its condition is a static feature flag or platform check, gate it with an `if` in the page's build function and never create it; if it can change at runtime, give it `should_render`. The CLI-agent rich-input rows are the runtime case — they hang off the user-toggleable footer setting — so they use `should_render` and share the predicate through a small free function (`should_render_cli_agent_rich_input(app)`) rather than duplicating the condition.
 - **Move per-row state with the row.** Each `SwitchStateHandle` / `MouseStateHandle` moves to the widget that owns its control. Never create one inline while rendering (see `gui-ui-guidelines` and the AGENTS.md note on `MouseStateHandle`).
 - **Watch the widget ids.** `widget_id()` is `std::any::type_name::<Self>()`, so splitting a widget changes ids. `settings_widget_deeplink_target` in `app/src/settings_view/mod.rs` maps stable public slugs (`warp://settings?widget=<slug>`) onto them. The CLI-agent split deliberately kept `CLIAgentWidget` as the first widget so `cli_agent_settings_widget_id()` — the target of the `cli_agents` deeplink — stayed valid. If you rename or remove a widget that backs a deeplink, re-point the accessor.
-
-## Spacing: `PAGE_TITLE_MARGIN_BOTTOM` is the only title gap
-
-`render_page_title` already applies `PAGE_TITLE_MARGIN_BOTTOM` (`settings_page.rs`), and `render_page` already wraps the whole page in uniform `PAGE_PADDING`. **A page must not add its own top padding/margin on top of that** — you get a double gap, and every page that tries invents a different constant.
-
-#14524 removed five such offenders, each with a different number:
-
-- Account — `Container::new(account_info).with_margin_top(VERTICAL_MARGIN)` (24px), `main_page.rs`.
-- Billing and Usage — `.with_margin_top(HEADER_PADDING)` (15px), `billing_and_usage_dispatch.rs`.
-- Referrals — `.with_padding_top(PAGE_PADDING)` (28px), `referrals_page.rs`.
-- Shared blocks — a hardcoded `.with_margin_bottom(24.)` under the page title, `show_blocks_view.rs`.
-- Privacy — `.with_padding_top(PAGE_PADDING)` (28px), `privacy_page.rs`.
-
-If the gap looks wrong, change `PAGE_TITLE_MARGIN_BOTTOM` (which is deliberately defined as `HEADER_PADDING`, so title spacing tracks section spacing) — don't patch it per page.
 
 ## Subpages rebuild their `PageType` — reapply the filter
 
@@ -187,7 +203,7 @@ Verification is cheap here; do both.
 2. **Exercise the real search.** Open Settings, go to the page, and check three things:
    - a term matching exactly one row leaves **only** that row,
    - the **page title is still visible** while that filter is active — expect this on an `Uncategorized` / `Categorized` page; a monolith correctly disappears whole instead,
-   - clearing the search restores the full page, with the title spacing unchanged.
+   - clearing the search restores the full page.
 
 ## Anti-patterns
 
@@ -207,17 +223,6 @@ fn search_terms(&self) -> &str { "foo bar baz qux quux corge grault" }
 // Conditional rows hidden inside render() while search_terms still advertises
 // them — the page matches a query and then renders nothing for it.
 fn render(&self, …) { if flag_enabled { /* the only rows */ } }
-// Use a separate widget with should_render() instead.
-
-// Per-page top spacing stacked on top of PAGE_TITLE_MARGIN_BOTTOM + PAGE_PADDING.
-Container::new(content).with_margin_top(24.).finish()
-
-// A non-exhaustive match over subpages when deciding the title — a new subpage
-// silently inherits `None` instead of forcing the single-topic/multi-section call.
-let title = match subpage { Some(Subpage::Knowledge) => Some("Knowledge"), _ => None };
-
-// Assuming the title slot protects a Monolith from filtering the way it does an
-// Uncategorized/Categorized page. It does not — render_page gates a monolith's
-// title on its sole widget surviving, so the title goes with it.
-PageType::new_monolith(widget, Some("Teams"), false)  // still all-or-nothing
+// Gate the widget instead: an `if` at page-build time for a static flag, or
+// should_render() when the condition can change at runtime.
 ```
