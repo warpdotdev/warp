@@ -62,6 +62,7 @@ use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::{MockAIClient, RunSessionKeepaliveResponse};
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::import::model::ImportedConfigModel;
@@ -98,6 +99,7 @@ use crate::terminal::model::session::{BootstrapSessionType, SessionInfo};
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model_events::ModelEvent;
 use crate::terminal::resizable_data::ResizableData;
+use crate::terminal::shared_session::SharedSessionSource;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::terminal::shell::ShellType;
 use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
@@ -1444,6 +1446,85 @@ fn maybe_route_ai_query_to_remote_target_blocks_read_only_viewer() {
         assert!(
             sent.borrow().is_empty(),
             "a read-only viewer must not forward a prompt to the sharer"
+        );
+    });
+}
+
+/// REMOTE-2208: a prompt sent into a live ambient session must refresh the run's post-failure
+/// retention window. This drives the production routing decision for an attached ambient
+/// executor pane and then the production keepalive dispatch, against a recorded AI client, so
+/// the recorded call is in-process proof that submitting into a retained session calls
+/// `extend_run_session_retention` for that exact run.
+#[test]
+fn session_keepalive_is_dispatched_for_an_attached_ambient_executor_pane() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        let task_id: crate::ai::ambient_agents::AmbientAgentTaskId =
+            "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+        terminal.update(&mut app, |view, _| {
+            let mut model = view.model.lock();
+            model.block_list_mut().set_bootstrapped();
+            model
+                .block_list_mut()
+                .active_block_for_test()
+                .set_session_id(SessionId::from(0));
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
+            model.set_shared_session_status(SharedSessionStatus::executor());
+        });
+
+        // The production routing decision for this pane, which is what selects the run to keep
+        // alive.
+        let terminal_view_id = terminal.id();
+        let keepalive_run_id = terminal.read(&app, |view, ctx| {
+            let model = view.model.lock();
+            let routing = resolve_ai_query_routing(terminal_view_id, None, &model, ctx);
+            assert_eq!(
+                routing,
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: true,
+                    ambient_agent_task_id: Some(task_id),
+                }
+            );
+            session_keepalive_run_id(&routing)
+        });
+        assert_eq!(keepalive_run_id, Some(task_id));
+
+        let recorded_run_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut ai_client = MockAIClient::new();
+        ai_client.expect_extend_run_session_retention().returning({
+            let recorded_run_ids = recorded_run_ids.clone();
+            move |run_id| {
+                recorded_run_ids.lock().unwrap().push(*run_id);
+                Ok(RunSessionKeepaliveResponse {
+                    retained: true,
+                    extended: true,
+                    retained_until: Some("2026-01-01T00:00:00Z".to_string()),
+                })
+            }
+        });
+
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let keepalive = input.update(&mut app, |_input, ctx| {
+            Input::extend_retained_session_window(
+                Arc::new(ai_client),
+                keepalive_run_id.expect("an attached ambient executor pane keeps its run alive"),
+                ctx,
+            )
+        });
+        app.update(|ctx| ctx.await_spawned_future(keepalive.future_id()))
+            .await;
+
+        assert_eq!(
+            recorded_run_ids.lock().unwrap().as_slice(),
+            [task_id],
+            "the keepalive must be sent exactly once, for the attached run"
         );
     });
 }

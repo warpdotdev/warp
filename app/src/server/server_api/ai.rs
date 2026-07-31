@@ -856,6 +856,12 @@ pub(crate) fn build_list_agent_runs_url(limit: i32, filter: &TaskListFilter) -> 
 pub(crate) fn build_run_followup_url(run_id: &AmbientAgentTaskId) -> String {
     format!("agent/runs/{run_id}/followups")
 }
+
+/// The run-scoped endpoint that pushes a retained session's post-failure retention window
+/// forward. Served by the warp-server half of REMOTE-2208.
+pub(crate) fn build_run_session_keepalive_url(run_id: &AmbientAgentTaskId) -> String {
+    format!("agent/runs/{run_id}/session-keepalive")
+}
 pub(crate) fn build_fork_conversation_url(conversation_id: &str) -> String {
     format!(
         "agent/conversations/{}/fork",
@@ -2852,7 +2858,7 @@ impl AIClient for ServerApi {
         run_id: &AmbientAgentTaskId,
     ) -> anyhow::Result<RunSessionKeepaliveResponse, anyhow::Error> {
         let response: RunSessionKeepaliveResponse = self
-            .post_public_api(&format!("agent/runs/{run_id}/session-keepalive"), &())
+            .post_public_api(&build_run_session_keepalive_url(run_id), &())
             .await?;
         Ok(response)
     }

@@ -8,8 +8,9 @@ use super::{
     ArtifactDownloadResponse, ArtifactType, CONNECTED_SELF_HOSTED_WORKERS_PATH,
     ConnectedSelfHostedWorker, ExecutionLocation, ForkConversationResponse,
     ListConnectedSelfHostedWorkersResponse, ListRunsResponse, ReadAgentMessageResponse,
-    RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest, TaskListFilter, UserQueryMode,
-    build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
+    RunFollowupRequest, RunSessionKeepaliveResponse, RunSortBy, RunSortOrder, SpawnAgentRequest,
+    TaskListFilter, UserQueryMode, build_fork_conversation_url, build_list_agent_runs_url,
+    build_run_followup_url, build_run_session_keepalive_url,
 };
 use crate::notebooks::NotebookId;
 
@@ -1157,4 +1158,45 @@ fn deserialize_fork_conversation_response() {
         response.forked_conversation_id,
         "abcdef01-2345-6789-abcd-ef0123456789"
     );
+}
+
+/// REMOTE-2208: the retained-session keepalive must target the run-scoped endpoint served by the
+/// warp-server half, so this pins the exact path the client posts to.
+#[test]
+fn build_run_session_keepalive_url_routes_to_run_session_keepalive() {
+    let run_id = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+    assert_eq!(
+        build_run_session_keepalive_url(&run_id),
+        "agent/runs/550e8400-e29b-41d4-a716-446655440000/session-keepalive"
+    );
+}
+
+#[test]
+fn deserialize_run_session_keepalive_response_for_a_retained_run() {
+    let response: RunSessionKeepaliveResponse = serde_json::from_value(serde_json::json!({
+        "retained": true,
+        "extended": true,
+        "retained_until": "2026-01-01T00:00:00Z",
+    }))
+    .unwrap();
+
+    assert_eq!(
+        response,
+        RunSessionKeepaliveResponse {
+            retained: true,
+            extended: true,
+            retained_until: Some("2026-01-01T00:00:00Z".to_string()),
+        }
+    );
+}
+
+/// The endpoint is a documented no-op for a run that is not retained — that is what lets the
+/// client fire the keepalive unconditionally on the live-VM path instead of mirroring server
+/// state — so a response with the retention fields omitted must deserialize, not error.
+#[test]
+fn deserialize_run_session_keepalive_response_for_a_run_that_is_not_retained() {
+    let response: RunSessionKeepaliveResponse =
+        serde_json::from_value(serde_json::json!({ "retained": false })).unwrap();
+
+    assert_eq!(response, RunSessionKeepaliveResponse::default());
 }

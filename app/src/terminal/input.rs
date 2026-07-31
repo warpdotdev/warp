@@ -4224,7 +4224,8 @@ impl Input {
                 is_executor: true, ..
             } => {
                 if let Some(run_id) = keepalive_run_id {
-                    Self::extend_retained_session_window(run_id, ctx);
+                    let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+                    Self::extend_retained_session_window(ai_client, run_id, ctx);
                 }
                 // Returns false for local-action slash commands (e.g. /fork), which should still
                 // run on the viewer's own machine; the caller then proceeds to local submission.
@@ -4300,12 +4301,14 @@ impl Input {
     /// alive for debugging is not torn down mid-conversation.
     ///
     /// Fire-and-forget: the prompt submission must never block or fail on the keepalive, and the
-    /// endpoint is a no-op for a run that is not retained.
+    /// endpoint is a no-op for a run that is not retained. The client is passed in (rather than
+    /// resolved here) so the dispatch can be driven against a recorded client in tests; the
+    /// returned handle lets a caller await or abort the in-flight keepalive.
     fn extend_retained_session_window(
+        ai_client: Arc<dyn AIClient>,
         run_id: crate::ai::ambient_agents::AmbientAgentTaskId,
         ctx: &mut ViewContext<Self>,
-    ) {
-        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+    ) -> SpawnedFutureHandle {
         ctx.spawn(
             async move { ai_client.extend_run_session_retention(&run_id).await },
             move |_input, result, _ctx| match result {
@@ -4322,7 +4325,7 @@ impl Input {
                     log::warn!("Failed to extend retained session window for run {run_id}: {error:#}");
                 }
             },
-        );
+        )
     }
 
     fn should_upload_cloud_followup_attachments(pending_attachments: &[PendingAttachment]) -> bool {

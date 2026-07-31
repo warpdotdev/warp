@@ -1920,6 +1920,62 @@ fn test_prepare_for_live_session_reattach_restores_interactive_input() {
     });
 }
 
+/// REMOTE-2208: the user-visible symptom of the bug was that the tab opened for a retained
+/// failed run accepted no typing. This asserts the behavior itself rather than the flags behind
+/// it: text typed into the pane's input is dropped while it is still in the ended-run state, and
+/// lands in the buffer once the pane has been prepared for the retained-session rejoin.
+#[test]
+fn test_prepare_for_live_session_reattach_accepts_typed_text() {
+    let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+    let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let terminal = cloud_mode_terminal_for_test(&mut app);
+        let task_id = create_cloud_mode_task_for_user(TEST_USER_UID).task_id;
+
+        terminal.update(&mut app, |view, ctx| {
+            let mut model = view.model.lock();
+            model.set_shared_session_source(SharedSessionSource::ambient_agent(Some(
+                task_id.to_string(),
+            )));
+            model.set_shared_session_status(SharedSessionStatus::FinishedViewer);
+            drop(model);
+
+            view.input().update(ctx, |input, ctx| {
+                input.editor().update(ctx, |editor, ctx| {
+                    editor.set_interaction_state(InteractionState::Selectable, ctx);
+                });
+            });
+            view.insert_conversation_ended_tombstone_with_cta(None, ctx);
+
+            // The ended-run pane swallows typing: this is exactly what the reporter saw.
+            view.input().update(ctx, |input, ctx| {
+                input.editor().update(ctx, |editor, ctx| {
+                    editor.insert_selected_text("echo hello-from-retained", ctx);
+                });
+            });
+            assert_eq!(
+                view.input().as_ref(ctx).buffer_text(ctx),
+                "",
+                "an ended-run pane must not accept typed text"
+            );
+
+            view.prepare_for_live_session_reattach(ctx);
+
+            view.input().update(ctx, |input, ctx| {
+                input.editor().update(ctx, |editor, ctx| {
+                    editor.insert_selected_text("echo hello-from-retained", ctx);
+                });
+            });
+            assert_eq!(
+                view.input().as_ref(ctx).buffer_text(ctx),
+                "echo hello-from-retained",
+                "a pane rejoining a retained session must accept typed text"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_deep_linked_ambient_continuation_refreshes_when_task_data_arrives() {
     let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
