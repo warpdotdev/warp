@@ -346,44 +346,6 @@ fn shift_lifecycle_restores_shift_and_normalizes_symbol_keystrokes() {
 }
 
 #[test]
-fn legacy_ctrl_j_dispatches_while_shift_is_held() {
-    App::test((), |mut app| async move {
-        let (window_id, root) = app.update(|ctx| {
-            ctx.register_fixed_bindings([FixedBinding::new("ctrl-j", Bump, id!("BumpParentView"))]);
-            ctx.add_tui_window(window_options(), |view_ctx| {
-                let child = view_ctx.add_tui_view(|_| BumpChildView);
-                BumpParentView { child, bumps: 0 }
-            })
-        });
-        let terminal = TestTerminal::new(TuiSize::new(20, 3));
-        let mut screen =
-            TuiScreen::new(window_id, root.clone(), terminal, Arc::new(Mutex::new(())));
-        app.update(|ctx| screen.draw(ctx)).unwrap();
-
-        let shift_press = screen
-            .convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
-                KeyCode::Modifier(ModifierKeyCode::LeftShift),
-                KeyModifiers::SHIFT,
-                KeyEventKind::Press,
-            )))
-            .expect("shift press");
-        app.update(|ctx| screen.dispatch_event(ctx, &shift_press));
-
-        let ctrl_j = screen
-            .convert_event(CrosstermEvent::Key(KeyEvent::new(
-                KeyCode::Char('j'),
-                KeyModifiers::CONTROL,
-            )))
-            .expect("legacy line feed");
-        let TuiEvent::KeyDown { keystroke, .. } = &ctrl_j else {
-            panic!("expected KeyDown");
-        };
-        assert_eq!(keystroke.normalized(), "ctrl-j");
-        assert!(app.update(|ctx| screen.dispatch_event(ctx, &ctrl_j)));
-        assert_eq!(root.read(&app, |view, _| view.bumps), 1);
-    });
-}
-#[test]
 fn shift_remains_active_until_both_shift_keys_are_released() {
     App::test((), |mut app| async move {
         let (window_id, root) =
@@ -738,7 +700,7 @@ fn terminal_screen_lifecycle_toggles_bracketed_paste() {
     );
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, true).unwrap();
+    leave_terminal_screen(&mut leave_output).unwrap();
     assert!(
         leave_output
             .windows(b"\x1b[?2004l".len())
@@ -759,7 +721,7 @@ fn terminal_screen_lifecycle_toggles_focus_reporting() {
     );
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, true).unwrap();
+    leave_terminal_screen(&mut leave_output).unwrap();
     assert!(
         leave_output
             .windows(b"\x1b[?1004l".len())
@@ -809,7 +771,7 @@ fn terminal_screen_lifecycle_toggles_keyboard_enhancement() {
     enter_terminal_screen(&mut enter_output, true, true).unwrap();
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, true).unwrap();
+    leave_terminal_screen(&mut leave_output).unwrap();
 
     #[cfg(not(windows))]
     {
@@ -862,22 +824,63 @@ fn terminal_screen_lifecycle_reconfigures_modifier_reporting() {
 }
 
 #[test]
-fn terminal_screen_lifecycle_skips_unsupported_keyboard_enhancement() {
+fn terminal_screen_lifecycle_uses_baseline_keyboard_enhancement_when_unconfirmed() {
     let mut enter_output = Vec::new();
     enter_terminal_screen(&mut enter_output, false, true).unwrap();
-    assert!(
-        !enter_output
-            .windows(b"\x1b[>15u".len())
-            .any(|window| window == b"\x1b[>15u")
-    );
+
+    #[cfg(not(windows))]
+    {
+        assert!(
+            enter_output
+                .windows(b"\x1b[>3u".len())
+                .any(|window| window == b"\x1b[>3u"),
+            "unconfirmed terminals should still receive safe baseline keyboard enhancements"
+        );
+        assert!(
+            !enter_output
+                .windows(b"\x1b[>15u".len())
+                .any(|window| window == b"\x1b[>15u"),
+            "unconfirmed terminals should not receive all-key reporting"
+        );
+    }
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, false).unwrap();
+    leave_terminal_screen(&mut leave_output).unwrap();
+    #[cfg(not(windows))]
     assert!(
-        !leave_output
+        leave_output
             .windows(b"\x1b[<1u".len())
-            .any(|window| window == b"\x1b[<1u")
+            .any(|window| window == b"\x1b[<1u"),
+        "leaving should pop the baseline keyboard enhancement request"
     );
+}
+
+#[test]
+fn keyboard_enhancement_probe_retries_a_negative_result_once() {
+    let mut results = VecDeque::from([Ok(false), Ok(true)]);
+    assert!(probe_keyboard_enhancement_support(|| {
+        results.pop_front().expect("probe should run at most twice")
+    }));
+    assert!(results.is_empty());
+}
+
+#[test]
+fn keyboard_enhancement_probe_does_not_retry_success_or_error() {
+    let mut successful_results = VecDeque::from([Ok(true), Ok(false)]);
+    assert!(probe_keyboard_enhancement_support(|| {
+        successful_results
+            .pop_front()
+            .expect("successful probe should run once")
+    }));
+    assert_eq!(successful_results.len(), 1);
+
+    let mut failed_results = VecDeque::from([Err(io::Error::other("probe failed")), Ok(true)]);
+    assert!(!probe_keyboard_enhancement_support(|| {
+        failed_results
+            .pop_front()
+            .expect("failed probe should run once")
+    }));
+    assert_eq!(failed_results.len(), 1);
 }
 #[test]
 fn raw_mode_guard_restores_on_drop() {

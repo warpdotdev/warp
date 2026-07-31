@@ -264,6 +264,17 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
     }
 }
 
+/// Crossterm treats the first primary-device-attributes response it reads as a
+/// definitive negative result. Retry that result once because an older queued
+/// response can precede the keyboard-flags response from the current query.
+fn probe_keyboard_enhancement_support(mut probe: impl FnMut() -> io::Result<bool>) -> bool {
+    match probe() {
+        Ok(true) => true,
+        Ok(false) => matches!(probe(), Ok(true)),
+        Err(_) => false,
+    }
+}
+
 /// A **development/test harness** that drives a single [`TuiView`] window with a
 /// *blocking* loop ([`run_until`](Self::run_until)): it redraws when dirty and
 /// polls the terminal for input. It backs the interactive `tui_*` examples and
@@ -464,7 +475,7 @@ impl TuiTerminalGuard {
     /// when the guard is dropped.
     pub fn enter(report_modifier_key_lifecycle: bool) -> io::Result<Self> {
         let keyboard_enhancement_supported =
-            matches!(terminal::supports_keyboard_enhancement(), Ok(true));
+            probe_keyboard_enhancement_support(terminal::supports_keyboard_enhancement);
         Ok(Self {
             _guard: RawModeGuard::enter(CrosstermModeControl {
                 keyboard_enhancement_supported,
@@ -840,16 +851,13 @@ fn enter_terminal_screen(
         Hide
     )?;
 
-    // Opt into the Kitty keyboard protocol so protocol-aware terminals (Ghostty,
-    // kitty, foot, WezTerm) report modified keys distinctly. This only affects
-    // the TUI's own host terminal — the GUI never enters raw mode / the alt
-    // screen and never runs this. The capability query happens before the input
-    // reader starts because crossterm's query cannot run concurrently with
-    // event polling.
-    if keyboard_enhancement_supported {
-        let flags = keyboard_enhancement_flags(report_modifier_key_lifecycle);
-        let _ = execute!(out, PushKeyboardEnhancementFlags(flags));
-    }
+    // Always request the backwards-compatible baseline so modified keys remain
+    // distinct even if capability detection produced a false negative.
+    // Alternate/all-key reporting is more invasive and remains restricted to
+    // confirmed terminals when modifier lifecycle events are required.
+    let flags =
+        keyboard_enhancement_flags(keyboard_enhancement_supported && report_modifier_key_lifecycle);
+    let _ = execute!(out, PushKeyboardEnhancementFlags(flags));
     Ok(())
 }
 
@@ -878,13 +886,8 @@ fn set_terminal_keyboard_enhancement_flags(
     out.flush()
 }
 
-fn leave_terminal_screen(
-    out: &mut impl Write,
-    keyboard_enhancement_supported: bool,
-) -> io::Result<()> {
-    if keyboard_enhancement_supported {
-        let _ = execute!(out, PopKeyboardEnhancementFlags);
-    }
+fn leave_terminal_screen(out: &mut impl Write) -> io::Result<()> {
+    let _ = execute!(out, PopKeyboardEnhancementFlags);
     execute!(
         out,
         Show,
@@ -904,7 +907,7 @@ impl TerminalModeControl for CrosstermModeControl {
             self.keyboard_enhancement_supported,
             self.report_modifier_key_lifecycle,
         ) {
-            let _ = leave_terminal_screen(&mut out, self.keyboard_enhancement_supported);
+            let _ = leave_terminal_screen(&mut out);
             let _ = terminal::disable_raw_mode();
             return Err(error);
         }
@@ -913,7 +916,7 @@ impl TerminalModeControl for CrosstermModeControl {
 
     fn leave(&mut self) {
         let mut out = stdout();
-        let _ = leave_terminal_screen(&mut out, self.keyboard_enhancement_supported);
+        let _ = leave_terminal_screen(&mut out);
         let _ = terminal::disable_raw_mode();
     }
 }
