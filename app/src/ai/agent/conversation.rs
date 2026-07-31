@@ -104,6 +104,23 @@ pub enum RecordingSpanStatus {
     Active,
     Captured,
 }
+/// The semantic anchor used when navigating within an agent conversation.
+///
+/// Keeping the anchor predicate separate from the navigation entrypoint lets
+/// keybindings continue to use the same actions if navigation later switches
+/// from user queries to another exchange type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AIConversationAnchor {
+    UserQuery,
+}
+
+impl AIConversationAnchor {
+    pub fn matches(self, exchange: &AIAgentExchange) -> bool {
+        match self {
+            Self::UserQuery => exchange.has_user_query(),
+        }
+    }
+}
 
 fn footer_model_token_usage(
     usage_metadata: &stream_finished::ConversationUsageMetadata,
@@ -1517,6 +1534,72 @@ impl AIConversation {
             .root_task()
             .into_iter()
             .flat_map(|task| task.exchanges_reversed())
+    }
+    /// Returns the previous exchange matching `anchor` before `exchange_id`.
+    pub fn previous_anchor(
+        &self,
+        anchor: AIConversationAnchor,
+        exchange_id: AIAgentExchangeId,
+    ) -> Option<&AIAgentExchange> {
+        self.previous_anchor_where(anchor, exchange_id, |_| true)
+    }
+
+    /// Returns the previous exchange matching `anchor` before `exchange_id` that also
+    /// satisfies `predicate`. The predicate lets the caller restrict navigation to
+    /// exchanges that are actually rendered (e.g. have a mounted scrollable block),
+    /// so navigation never targets an unscrollable exchange such as a CLI/docs/
+    /// conversation-search subtask query that has no visible rich-content block.
+    pub fn previous_anchor_where<P>(
+        &self,
+        anchor: AIConversationAnchor,
+        exchange_id: AIAgentExchangeId,
+        predicate: P,
+    ) -> Option<&AIAgentExchange>
+    where
+        P: Fn(&AIAgentExchange) -> bool,
+    {
+        let mut previous = None;
+        for exchange in self.all_exchanges() {
+            if exchange.id == exchange_id {
+                return previous;
+            }
+            if anchor.matches(exchange) && predicate(exchange) {
+                previous = Some(exchange);
+            }
+        }
+        None
+    }
+
+    /// Returns the next exchange matching `anchor` after `exchange_id`.
+    pub fn next_anchor(
+        &self,
+        anchor: AIConversationAnchor,
+        exchange_id: AIAgentExchangeId,
+    ) -> Option<&AIAgentExchange> {
+        self.next_anchor_where(anchor, exchange_id, |_| true)
+    }
+
+    /// Returns the next exchange matching `anchor` after `exchange_id` that also
+    /// satisfies `predicate`. See [`Self::previous_anchor_where`] for why a caller
+    /// may want to restrict candidates to rendered exchanges.
+    pub fn next_anchor_where<P>(
+        &self,
+        anchor: AIConversationAnchor,
+        exchange_id: AIAgentExchangeId,
+        predicate: P,
+    ) -> Option<&AIAgentExchange>
+    where
+        P: Fn(&AIAgentExchange) -> bool,
+    {
+        let mut found_current = false;
+        self.all_exchanges().into_iter().find(|exchange| {
+            if found_current {
+                anchor.matches(exchange) && predicate(exchange)
+            } else {
+                found_current = exchange.id == exchange_id;
+                false
+            }
+        })
     }
 
     #[cfg_attr(target_family = "wasm", allow(unused))]

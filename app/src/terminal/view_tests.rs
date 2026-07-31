@@ -948,6 +948,114 @@ fn jump_to_latest_agent_message_scrolls_without_re_entering_when_already_in_view
     })
 }
 
+/// Verifies that Cmd-Up/Cmd-Down (Ctrl-Up/Ctrl-Down on Linux/Windows) resolve to
+/// the query-anchor navigation actions — not `SelectPriorBlock`/`SelectNextBlock` —
+/// while the active agent view is focused. Regression test for the precedence bug
+/// where the block-selection bindings (which also default to `cmdorctrl-up`/
+/// `cmdorctrl-down` via `SelectBlockAbove`/`SelectBlockBelow`) shadowed the
+/// query-anchor bindings in the agent view.
+#[test]
+fn cmd_up_down_in_active_agent_view_navigate_queries_not_select_blocks() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(ImportedConfigModel::new);
+        // Register keybindings so keystroke dispatch can resolve the bindings.
+        app.update(|ctx| {
+            crate::terminal::init(ctx);
+            crate::editor::init(ctx);
+        });
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        // Append a user query so the conversation has an exchange and the block
+        // list is non-empty (the SelectPriorBlock/SelectNextBlock predicates
+        // require `TerminalView_NonEmptyBlockList`).
+        let (conversation_id, _task_id, _exchange_id, _stream_id) = terminal
+            .update(&mut app, |view, ctx| {
+                append_exchange_and_handle_event(view, agent_jump_user_query("first"), ctx)
+            });
+
+        // Enter the active (fullscreen) agent view for this conversation and focus
+        // the input so the responder chain carries `Input` + `ACTIVE_AGENT_VIEW`.
+        let input_id = terminal.update(&mut app, |view, ctx| {
+            view.enter_agent_view_for_conversation(
+                None,
+                AgentViewEntryOrigin::ConversationSelector,
+                conversation_id,
+                ctx,
+            );
+            // Ensure the agent view is fullscreen so `ACTIVE_AGENT_VIEW` is set.
+            assert!(
+                view.agent_view_controller()
+                    .as_ref(ctx)
+                    .agent_view_state()
+                    .is_fullscreen(),
+                "agent view should be fullscreen after entering"
+            );
+            // Clear any pending scroll target so navigation actions start clean.
+            view.pending_agent_scroll_target = None;
+            // Start with no block selection so a stray SelectPriorBlock would be
+            // observable (it would populate `selected_blocks`).
+            view.clear_selected_blocks(ctx);
+            view.input().id()
+        });
+
+        // Cmd-Up on macOS / Ctrl-Up on Linux & Windows.
+        let up_keystroke = if cfg!(target_os = "macos") {
+            "cmd-up"
+        } else {
+            "ctrl-up"
+        };
+        let up_keystroke = warpui::keymap::Keystroke::parse(up_keystroke).expect("valid keystroke");
+        let up_handled = app
+            .dispatch_keystroke(window_id, &[terminal.id(), input_id], &up_keystroke, false)
+            .expect("dispatch should succeed");
+        assert!(
+            up_handled,
+            "cmd-up should be handled from the active agent view input"
+        );
+        terminal.read(&app, |view, _| {
+            // If the keystroke had resolved to SelectPriorBlock, the empty
+            // selection would have triggered `select_most_recent_blocks(1)` and
+            // populated `selected_blocks`. Resolving to the query-anchor action
+            // leaves the selection untouched (the conversation has only one
+            // exchange, so `previous_anchor` returns `None`).
+            assert!(
+                view.selected_blocks.is_empty(),
+                "cmd-up must navigate queries, not select a block, in the active agent view"
+            );
+        });
+
+        // Cmd-Down on macOS / Ctrl-Down on Linux & Windows.
+        let down_keystroke = if cfg!(target_os = "macos") {
+            "cmd-down"
+        } else {
+            "ctrl-down"
+        };
+        let down_keystroke =
+            warpui::keymap::Keystroke::parse(down_keystroke).expect("valid keystroke");
+        let down_handled = app
+            .dispatch_keystroke(
+                window_id,
+                &[terminal.id(), input_id],
+                &down_keystroke,
+                false,
+            )
+            .expect("dispatch should succeed");
+        assert!(
+            down_handled,
+            "cmd-down should be handled from the active agent view input"
+        );
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.selected_blocks.is_empty(),
+                "cmd-down must navigate queries, not select a block, in the active agent view"
+            );
+        });
+    })
+}
+
 #[test]
 fn restoring_conversation_to_new_pane_transfers_blocks_from_previous_terminal_surface() {
     App::test((), |mut app| async move {

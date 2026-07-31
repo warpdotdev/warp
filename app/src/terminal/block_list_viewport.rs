@@ -1488,7 +1488,7 @@ impl<'a> ViewportState<'a> {
     }
 
     /// Returns the (top, bottom) scroll bounds in lines for the rich content at the given TotalIndex.
-    fn rich_content_scroll_bounds(&self, index: TotalIndex) -> (Lines, Lines) {
+    pub fn rich_content_scroll_bounds(&self, index: TotalIndex) -> (Lines, Lines) {
         let mut cursor = self
             .block_list
             .block_heights()

@@ -6,8 +6,8 @@ use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
-    ConversationUsageTotals, RecordingSpanStatus, RestoreConversationError,
+    AIConversation, AIConversationAnchor, AIConversationAutoexecuteMode, AIConversationId,
+    ConversationStatus, ConversationUsageTotals, RecordingSpanStatus, RestoreConversationError,
     artifact_from_fork_proto, footer_model_token_usage,
 };
 use crate::ai::artifacts::Artifact;
@@ -34,6 +34,113 @@ fn restored_conversation(conversation_data: Option<AgentConversationData>) -> AI
         conversation_data,
     )
     .unwrap()
+}
+
+#[test]
+fn query_anchor_navigation_skips_exchanges_without_user_queries() {
+    let messages = vec![
+        user_query_message("user-0", "request-0", "first"),
+        agent_output_message("agent-0", "request-0"),
+        agent_output_message("agent-between", "request-between"),
+        user_query_message("user-1", "request-1", "second"),
+        agent_output_message("agent-1", "request-1"),
+        user_query_message("user-2", "request-2", "third"),
+        agent_output_message("agent-2", "request-2"),
+    ];
+    let conversation = restored_conversation_with_messages(messages);
+    let exchanges = conversation.all_exchanges();
+    assert_eq!(exchanges.len(), 4);
+    assert!(exchanges[0].has_user_query());
+    assert!(!exchanges[1].has_user_query());
+    assert!(exchanges[2].has_user_query());
+    assert!(exchanges[3].has_user_query());
+
+    let previous = conversation
+        .previous_anchor(AIConversationAnchor::UserQuery, exchanges[2].id)
+        .expect("second query should have a previous query anchor");
+    assert_eq!(previous.id, exchanges[0].id);
+
+    let next = conversation
+        .next_anchor(AIConversationAnchor::UserQuery, exchanges[0].id)
+        .expect("first query should have a next query anchor");
+    assert_eq!(next.id, exchanges[2].id);
+}
+
+#[test]
+fn query_anchor_navigation_returns_none_at_conversation_edges() {
+    let conversation = restored_conversation_with_queries(&["first", "second"]);
+    let exchanges = conversation.all_exchanges();
+
+    assert!(
+        conversation
+            .previous_anchor(AIConversationAnchor::UserQuery, exchanges[0].id)
+            .is_none()
+    );
+    assert!(
+        conversation
+            .next_anchor(AIConversationAnchor::UserQuery, exchanges[1].id)
+            .is_none()
+    );
+}
+
+#[test]
+fn query_anchor_navigation_skips_unrendered_query_exchanges() {
+    // A conversation can contain user queries that never get a rendered
+    // rich-content block — e.g. CLI/docs/conversation-search subtask queries.
+    // The predicate-aware anchor helpers must skip those exchanges and land on
+    // the next query that has a mounted scrollable block, instead of selecting
+    // an unscrollable target.
+    let messages = vec![
+        user_query_message("user-0", "request-0", "first"),
+        agent_output_message("agent-0", "request-0"),
+        user_query_message("user-1", "request-1", "second"),
+        agent_output_message("agent-1", "request-1"),
+        user_query_message("user-2", "request-2", "third"),
+        agent_output_message("agent-2", "request-2"),
+    ];
+    let conversation = restored_conversation_with_messages(messages);
+    let exchanges = conversation.all_exchanges();
+    assert_eq!(exchanges.len(), 3);
+    assert!(exchanges[0].has_user_query());
+    assert!(exchanges[1].has_user_query());
+    assert!(exchanges[2].has_user_query());
+
+    // Simulate the agent view only mounting scrollable blocks for the first and
+    // third exchanges — the second query (a CLI/docs/conversation-search
+    // subtask) has no rendered block.
+    let mounted_exchange_ids: std::collections::HashSet<_> =
+        [exchanges[0].id, exchanges[2].id].into_iter().collect();
+    let is_mounted =
+        |exchange: &crate::ai::agent::AIAgentExchange| mounted_exchange_ids.contains(&exchange.id);
+
+    // Navigating back from the third (rendered) query skips the unrendered
+    // second query and lands on the first rendered one.
+    let previous = conversation
+        .previous_anchor_where(AIConversationAnchor::UserQuery, exchanges[2].id, is_mounted)
+        .expect("should skip the unrendered query and find the previous rendered one");
+    assert_eq!(previous.id, exchanges[0].id);
+
+    // Navigating forward from the first (rendered) query skips the unrendered
+    // second query and lands on the third rendered one.
+    let next = conversation
+        .next_anchor_where(AIConversationAnchor::UserQuery, exchanges[0].id, is_mounted)
+        .expect("should skip the unrendered query and find the next rendered one");
+    assert_eq!(next.id, exchanges[2].id);
+
+    // When only the unrendered query lies ahead, navigation returns None rather
+    // than selecting an unscrollable target.
+    let only_unrendered =
+        |exchange: &crate::ai::agent::AIAgentExchange| exchange.id == exchanges[1].id;
+    assert!(
+        conversation
+            .next_anchor_where(
+                AIConversationAnchor::UserQuery,
+                exchanges[0].id,
+                only_unrendered,
+            )
+            .is_none(),
+        "must not target an exchange with no mounted scrollable block"
+    );
 }
 
 fn restored_conversation_with_root_description(description: &str) -> AIConversation {
