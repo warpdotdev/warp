@@ -1,4 +1,5 @@
 //! Shared fixtures for `warp_tui` unit tests.
+#![cfg_attr(not(test), allow(dead_code))]
 use std::any::Any;
 use std::sync::Arc;
 

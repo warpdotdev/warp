@@ -14,6 +14,9 @@ mod alt_screen_view;
 mod api_keys_menu;
 mod attachment_bar;
 mod autoupdate;
+#[cfg(feature = "test-util")]
+#[doc(hidden)]
+pub mod benchmark_support;
 mod cli_agent_osc_event_publisher;
 mod clipboard;
 mod cloud_run;
@@ -63,7 +66,7 @@ mod terminal_block;
 mod terminal_content_element;
 mod terminal_session_view;
 mod terminal_use;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 mod test_fixtures;
 mod tool_call_labels;
 mod transcript_view;
