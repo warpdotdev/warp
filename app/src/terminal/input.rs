@@ -60,8 +60,9 @@ use vec1::Vec1;
 use vim::vim::{VimHandler, VimMode};
 use warp_cli::agent::Harness;
 use warp_completer::completer::{
-    self, CompleterOptions, CompletionContext, CompletionsFallbackStrategy, Description, Match,
-    MatchStrategy, MatchType, PathSeparators, SuggestionResults,
+    self, CompleterOptions, CompletionContext, CompletionsFallbackStrategy, Description,
+    ExplicitTabCompletion, MatchStrategy, MatchType, PathSeparators, PreparedSuggestion,
+    SuggestionResults,
 };
 use warp_completer::meta::{HasSpan, Spanned};
 use warp_completer::parsers::LiteCommand;
@@ -72,7 +73,6 @@ use warp_core::r#async::debounce;
 use warp_core::context_flag::ContextFlag;
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::user_preferences::GetUserPreferences as _;
 use warp_editor::editor::NavigationKey;
 use warp_errors::{report_error, report_if_error};
 use warp_util::path::ShellFamily;
@@ -214,7 +214,9 @@ use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Space};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
 use crate::code_review::diff_state::DiffMode;
-use crate::completer::SessionContext;
+use crate::completer::{
+    CompletionSourcePolicy, SessionContext, completion_suggestions_with_native_fallback,
+};
 use crate::context_chips::display::{PromptDisplay, PromptDisplayEvent};
 use crate::context_chips::display_chip::{DisplayChipConfig, PromptChipShellCommand};
 use crate::context_chips::prompt_type::PromptType;
@@ -12245,30 +12247,11 @@ impl Input {
         ctx: &mut ViewContext<'_, Input>,
     ) {
         let buffer_text = self.buffer_text(ctx);
-
-        // The 'ForceNativeShellCompletions' user pref can be used to unconditionally
-        // generate and show native shell completion results (i.e. regardless of whether or
-        // not we have completion results via completion specs).
-        let force_native_shell_completions = ctx
-            .private_user_preferences()
-            .read_value("ForceNativeShellCompletions")
-            .ok()
-            .flatten()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(false);
-
-        let use_native_shell_completions = (FeatureFlag::NativeShellCompletions.is_enabled() || force_native_shell_completions)
-            && completion_context
-                .session
-                .shell()
-                .supports_native_shell_completions()
-            // For now, don't use native shell completions for multi-line commands.
-            && !buffer_text.contains('\n');
+        let completion_source_policy =
+            CompletionSourcePolicy::for_session(&completion_context.session, &buffer_text, ctx);
 
         let fallback_strategy = match completions_trigger {
-            CompletionsTrigger::Keybinding | CompletionsTrigger::SlashCommandAutoOpen
-                if !use_native_shell_completions =>
-            {
+            CompletionsTrigger::Keybinding | CompletionsTrigger::SlashCommandAutoOpen => {
                 CompletionsFallbackStrategy::FilePaths
             }
             _ => CompletionsFallbackStrategy::None,
@@ -12299,28 +12282,29 @@ impl Input {
         });
 
         let cursor_position = cursor_position.as_usize();
-        let native_results_fut = if use_native_shell_completions {
-            // If we're using native shell completions, construct a future that
-            // will be resolved with any completions data provided by the shell.
-            let (results_tx, results_rx) = async_channel::unbounded();
-            ctx.dispatch_typed_action(&TerminalAction::RunNativeShellCompletions {
-                buffer_text: buffer_text[0..cursor_position].to_owned(),
-                results_tx,
-            });
-            async move { results_rx.recv().await.ok() }.boxed()
-        } else {
-            // If not, we can immediately say that there are no completion
-            // results from the shell.
-            futures::future::ready(None).boxed()
-        };
+        let native_results_fut =
+            if completion_source_policy.should_request_native_shell_completions() {
+                // If we're using native shell completions, construct a future that
+                // will be resolved with any completions data provided by the shell.
+                let (results_tx, results_rx) = async_channel::unbounded();
+                ctx.dispatch_typed_action(&TerminalAction::RunNativeShellCompletions {
+                    buffer_text: buffer_text[0..cursor_position].to_owned(),
+                    results_tx,
+                });
+                async move { results_rx.recv().await.ok() }.boxed()
+            } else {
+                // If not, we can immediately say that there are no completion
+                // results from the shell.
+                futures::future::ready(None).boxed()
+            };
 
         let completion_session = completion_context.session.clone();
 
         let abort_handle = ctx
             .spawn_abortable(
                 async move {
-                    let suggestions = completer::suggestions(
-                        before_cursor_text.as_str(),
+                    let suggestions = completion_suggestions_with_native_fallback(
+                        &buffer_text,
                         cursor_position,
                         session_env_vars.as_ref(),
                         CompleterOptions {
@@ -12329,35 +12313,11 @@ impl Input {
                             suggest_file_path_completions_only: input_type.is_ai(),
                             parse_quotes_as_literals: input_type.is_ai(),
                         },
+                        completion_source_policy,
+                        native_results_fut,
                         &completion_context,
                     )
                     .await;
-
-                    let suggestions = match suggestions {
-                        Some(s) if !s.suggestions.is_empty() && !force_native_shell_completions => {
-                            Some(s)
-                        }
-                        _ => native_results_fut.await.map(|results| {
-                            let suggestions = results.into_iter().map(Into::into).collect_vec();
-
-                            let token_end = cursor_position;
-                            // Within the section of the buffer from the start
-                            // to the end of this token...
-                            let token_start = buffer_text[0..token_end]
-                                // Find the last whitespace char before the token end.
-                                .rfind(char::is_whitespace)
-                                // If we find one, the token start is the next char.
-                                .map(|pos| pos + 1)
-                                // Otherwise, the start is the beginning of the buffer.
-                                .unwrap_or_default();
-
-                            SuggestionResults {
-                                replacement_span: (token_start, token_end).into(),
-                                suggestions,
-                                match_strategy: MatchStrategy::Fuzzy,
-                            }
-                        }),
-                    };
 
                     (suggestions, completions_trigger, editor_snapshot)
                 },
@@ -12571,130 +12531,113 @@ impl Input {
                 });
             }
             Some(results) => {
-                match (results.single_prefix_suggestion(), completions_trigger) {
-                    (Some(only_prefix_suggestion), CompletionsTrigger::Keybinding) => {
-                        // If there is exactly one prefix suggestion, just insert into the buffer.
+                let query = results.replacement_span.slice(&buffer_text);
+                let buffer_text_original = buffer_text
+                    [0..self.start_byte_index_of_last_selection(ctx).as_usize()]
+                    .to_string();
+                let decision = if completions_trigger == CompletionsTrigger::Keybinding {
+                    results.explicit_tab_completion(query, self.path_separators(ctx).all)
+                } else {
+                    ExplicitTabCompletion::Open {
+                        suggestions: results
+                            .prepare_for_query(query, self.path_separators(ctx).all),
+                        replacement_span: results.replacement_span,
+                    }
+                };
+                let prepared_suggestions: Vec<PreparedSuggestion> = match decision {
+                    ExplicitTabCompletion::NoAction => {
+                        self.suggestions_mode_model.update(ctx, |model, ctx| {
+                            model.set_mode(InputSuggestionsMode::Closed, ctx);
+                        });
+                        ctx.notify();
+                        return;
+                    }
+                    ExplicitTabCompletion::InsertSingle {
+                        suggestion,
+                        replacement_span,
+                    } => {
                         self.insert_completion_result_into_editor(
-                            only_prefix_suggestion.replacement(),
-                            results.replacement_span.start(),
+                            &suggestion.suggestion.replacement,
+                            replacement_span.start(),
                             Executing::No,
                             ctx,
                         );
+                        ctx.notify();
+                        return;
                     }
-                    (_, completions_trigger) => {
-                        let buffer_text_original = buffer_text
-                            [0..self.start_byte_index_of_last_selection(ctx).as_usize()]
-                            .to_string();
+                    ExplicitTabCompletion::InsertCommonPrefixAndOpen {
+                        common_prefix,
+                        suggestions,
+                        replacement_span,
+                    } => {
+                        self.insert_completion_prefix_into_editor(
+                            ctx,
+                            &common_prefix,
+                            replacement_span.start(),
+                        );
+                        suggestions
+                    }
+                    ExplicitTabCompletion::Open { suggestions, .. } => suggestions,
+                };
 
-                        if completions_trigger == CompletionsTrigger::Keybinding
-                            && let Some(common_prefix) = longest_common_prefix(
-                                results
-                                    .suggestions
-                                    .iter()
-                                    .filter(|suggestion| {
-                                        // Ignore fuzzy matches and case-insensitive matches
-                                        // when calculating the longest common prefix, so we
-                                        // are able to insert a common prefix more often.
-                                        matches!(
-                                            suggestion.match_type,
-                                            Match::Prefix {
-                                                is_case_sensitive: true
-                                            } | Match::Exact {
-                                                is_case_sensitive: true
-                                            }
-                                        )
-                                    })
-                                    .map(|suggestion| suggestion.replacement()),
-                            )
-                        {
-                            // Insert the common prefix if it is longer than what the user has
-                            // already typed. This check is necessary because the suggestions
-                            // are case-insensitive, while the common prefix is necessarily
-                            // case-sensitive. That can lead to the common prefix being shorter
-                            // than the input, causing confusing behavior where the input is
-                            // truncated. Also, only fill in the common prefix if the
-                            // replacement itself is a prefix of the common prefix. If there
-                            // are only fuzzy completions, then it's possible this is not the
-                            // case, and we don't want to fill in the common prefix in that
-                            // case.
-                            let replacement_start = results.replacement_span.start();
-                            let current_word = &buffer_text_original[replacement_start
-                                ..self.start_byte_index_of_last_selection(ctx).as_usize()];
-                            if common_prefix.len() > results.replacement_span.distance()
-                                && common_prefix.starts_with(current_word)
-                            {
-                                self.insert_completion_prefix_into_editor(
-                                    ctx,
-                                    common_prefix,
-                                    results.replacement_span.start(),
-                                );
-                            }
-                        }
+                // If not using completions as you type, then
+                // clear any autosuggestions when tab completions are open.
+                // The autosuggestion will be repopulated when the menu is closed.
+                // We don't do this for completions as you type because the user would
+                // otherwise hardly see autosuggestons.
+                if FeatureFlag::RemoveAutosuggestionDuringTabCompletions.is_enabled()
+                    && !self.is_completions_while_typing_turned_on(ctx)
+                {
+                    self.editor.update(ctx, |view, ctx| {
+                        view.clear_autosuggestion(ctx);
+                    });
+                }
 
-                        // If not using completions as you type, then
-                        // clear any autosuggestions when tab completions are open.
-                        // The autosuggestion will be repopulated when the menu is closed.
-                        // We don't do this for completions as you type because the user would
-                        // otherwise hardly see autosuggestons.
-                        if FeatureFlag::RemoveAutosuggestionDuringTabCompletions.is_enabled()
-                            && !self.is_completions_while_typing_turned_on(ctx)
-                        {
-                            self.editor.update(ctx, |view, ctx| {
-                                view.clear_autosuggestion(ctx);
-                            });
-                        }
-
-                        // Decide where to render the tab completion menu.
-                        // If we're rendering it at a specific position, let's make sure
-                        // that position exists in the position cache.
-                        let position = self.tab_completions_menu_position(
-                            &results,
-                            &buffer_text_original,
+                // Decide where to render the tab completion menu.
+                // If we're rendering it at a specific position, let's make sure
+                // that position exists in the position cache.
+                let position =
+                    self.tab_completions_menu_position(&results, &buffer_text_original, ctx);
+                let menu_position = if let Some(position) = position {
+                    self.editor.update(ctx, |editor, ctx| {
+                        editor.cache_buffer_point(
+                            position,
+                            COMPLETIONS_START_OF_REPLACEMENT_SPAN_POSITION_ID,
                             ctx,
                         );
-                        let menu_position = if let Some(position) = position {
-                            self.editor.update(ctx, |editor, ctx| {
-                                editor.cache_buffer_point(
-                                    position,
-                                    COMPLETIONS_START_OF_REPLACEMENT_SPAN_POSITION_ID,
-                                    ctx,
-                                );
-                            });
-                            TabCompletionsMenuPosition::AtStartOfReplacementSpan
-                        } else {
-                            TabCompletionsMenuPosition::AtLastCursor
-                        };
+                    });
+                    TabCompletionsMenuPosition::AtStartOfReplacementSpan
+                } else {
+                    TabCompletionsMenuPosition::AtLastCursor
+                };
 
-                        self.suggestions_mode_model.update(ctx, |m, ctx| {
-                            m.set_mode(
-                                InputSuggestionsMode::CompletionSuggestions {
-                                    replacement_start: results.replacement_span.start(),
-                                    buffer_text_original,
-                                    completion_results: results.clone(),
-                                    trigger: completions_trigger,
-                                    menu_position,
-                                },
-                                ctx,
-                            );
-                        });
+                self.suggestions_mode_model.update(ctx, |model, ctx| {
+                    model.set_mode(
+                        InputSuggestionsMode::CompletionSuggestions {
+                            replacement_start: results.replacement_span.start(),
+                            buffer_text_original,
+                            completion_results: results.clone(),
+                            trigger: completions_trigger,
+                            menu_position,
+                        },
+                        ctx,
+                    );
+                });
 
-                        let preselect_option = if self.is_classic_completions_enabled(ctx) {
-                            TabCompletionsPreselectOption::Unselected
-                        } else {
-                            TabCompletionsPreselectOption::First
-                        };
+                let preselect_option = if self.is_classic_completions_enabled(ctx) {
+                    TabCompletionsPreselectOption::Unselected
+                } else {
+                    TabCompletionsPreselectOption::First
+                };
 
-                        self.input_suggestions
-                            .update(ctx, |input_suggestions, ctx| {
-                                input_suggestions.prefix_search_for_tab_completion(
-                                    results.replacement_span.slice(&buffer_text),
-                                    &results,
-                                    preselect_option,
-                                    ctx,
-                                );
-                            });
-                    }
-                }
+                self.input_suggestions
+                    .update(ctx, |input_suggestions, ctx| {
+                        input_suggestions.set_prepared_tab_completions(
+                            prepared_suggestions,
+                            preselect_option,
+                            ctx,
+                        );
+                    });
             }
         }
         ctx.notify();

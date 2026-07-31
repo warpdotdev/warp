@@ -21,7 +21,7 @@ use warp::tui_export::{
     AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin, BlockPadding,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatus, ConversationUsageTotals,
     Harness, InputTypeAutoDetectionSource, LLMPreferences, LinkedWorkflowData,
-    LongRunningCommandControlState, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate,
+    LongRunningCommandControlState, PtyIntent, PtyIntentEvent, Session, SizeInfo, SizeUpdate,
     SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope, TuiMcpAction,
     TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers, TuiUpArrowHistoryItemKind,
     UserTakeOverReason, WarpConfig, WarpConfigUpdateEvent, export_conversation_markdown,
@@ -862,6 +862,27 @@ fn shell_mode_reserves_tab_even_when_attachments_render() {
     assert!(attachment_focus_available(false, true));
     assert!(!attachment_focus_available(true, true));
     assert!(!attachment_focus_available(false, false));
+}
+#[test]
+fn shell_completion_source_warmup_loads_path_executables() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let session = Arc::new(Session::test());
+
+        view.update(&mut app, |view, ctx| {
+            view.warm_shell_completion_sources(session.clone(), ctx);
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !session.has_loaded_external_commands() && Instant::now() < deadline {
+            Timer::after(Duration::from_millis(10)).await;
+        }
+
+        assert!(session.has_attempted_to_load_external_commands());
+        assert!(session.has_loaded_external_commands());
+        assert!(session.executable_names().any(|command| command == "git"));
+    });
 }
 
 #[test]
@@ -4862,6 +4883,33 @@ fn user_input_event_projects_to_raw_user_bytes() {
         panic!("user input event should map to raw PTY bytes");
     };
     assert_eq!(&*bytes, b"hello\r");
+}
+
+#[test]
+fn native_completion_event_projects_to_pty_request() {
+    let (results_tx, results_rx) = async_channel::unbounded();
+    let event = TuiTerminalSessionEvent::RunNativeShellCompletions {
+        buffer_text: "git che".to_owned(),
+        results_tx,
+    };
+    let Some(PtyIntent::RunNativeShellCompletions {
+        buffer_text,
+        results_tx,
+    }) = event.pty_intent()
+    else {
+        panic!("native completion event should map to a PTY request");
+    };
+
+    assert_eq!(buffer_text, "git che");
+    results_tx
+        .try_send(Vec::new())
+        .expect("projected sender should remain connected");
+    assert!(
+        results_rx
+            .try_recv()
+            .expect("original receiver should receive projected results")
+            .is_empty()
+    );
 }
 #[test]
 fn running_command_attachment_bindings_are_context_scoped() {

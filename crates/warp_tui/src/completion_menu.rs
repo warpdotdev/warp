@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 use string_offset::CharOffset;
-use warp_completer::completer::{EngineFileType, MatchedSuggestion};
+use warp_completer::completer::{EngineFileType, PreparedSuggestion};
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle};
 
 use crate::inline_menu::{
@@ -87,7 +87,7 @@ impl TuiCompletionMenuModel {
 
     pub(crate) fn show(
         &mut self,
-        suggestions: Vec<MatchedSuggestion>,
+        suggestions: Vec<PreparedSuggestion>,
         replacement_range: Range<usize>,
         append_space_at_buffer_end: bool,
         ctx: &mut ModelContext<Self>,
@@ -105,10 +105,10 @@ impl TuiCompletionMenuModel {
                 let append_space = append_space_at_buffer_end
                     && suggestion.suggestion.file_type != Some(EngineFileType::Directory);
                 TuiCompletionRow {
-                    display: suggestion.display().to_owned(),
-                    description: suggestion.description(),
+                    display: suggestion.suggestion.display.to_string(),
+                    description: suggestion.suggestion.description.clone(),
                     acceptance: TuiCompletionAcceptance {
-                        replacement: suggestion.replacement().to_owned(),
+                        replacement: suggestion.suggestion.replacement.to_string(),
                         replacement_range: replacement_range.clone(),
                         append_space,
                     },

@@ -36,7 +36,8 @@ use warp::tui_export::{
     ModelEvent, ParsedSlashCommandInput, PersistenceWriter, PillBarActionKind,
     PillBarInteractionEvent, PillBarPillKind, PillSwitchOutcome, PtyIntent, PtyIntentEvent,
     QueuedQueryEvent, QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource,
-    ServerConversationToken, SessionSettings, Sessions, ShellCommandExecutorEvent, SizeInfo,
+    SessionSettings, Sessions, SessionsEvent, ShellCommandExecutorEvent, ShellCompletion, SizeInfo,
+    ServerConversationToken,
     SizeUpdate, SkillReference, SlashCommandDataSource as _, SlashCommandKind,
     SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest, StaticCommand,
     TelemetryEvent, TerminalColorList, TerminalColors, TerminalModel, TerminalSurface,
@@ -300,6 +301,10 @@ pub(crate) enum TuiTerminalSessionEvent {
     },
     WriteUserInput(Cow<'static, [u8]>),
     Resize(SizeUpdate),
+    RunNativeShellCompletions {
+        buffer_text: String,
+        results_tx: Sender<Vec<ShellCompletion>>,
+    },
     StartAgentConversation {
         request: Box<StartAgentRequest>,
         working_directory: Option<PathBuf>,
@@ -320,6 +325,13 @@ impl PtyIntentEvent for TuiTerminalSessionEvent {
             }),
             Self::WriteUserInput(bytes) => Some(PtyIntent::WriteBytes(bytes.clone())),
             Self::Resize(size_update) => Some(PtyIntent::Resize(*size_update)),
+            Self::RunNativeShellCompletions {
+                buffer_text,
+                results_tx,
+            } => Some(PtyIntent::RunNativeShellCompletions {
+                buffer_text: buffer_text.clone(),
+                results_tx: results_tx.clone(),
+            }),
             Self::StartAgentConversation { .. } | Self::CleanupFailedChildLaunch { .. } => None,
         }
     }
@@ -2061,6 +2073,7 @@ impl TuiTerminalSessionView {
             }
             ModelEvent::AfterBlockCompleted(completed) => {
                 view.emit_block_completed_telemetry(completed, ctx);
+                view.ensure_external_commands_are_warming(ctx);
             }
             ModelEvent::AfterBlockStarted { .. } => {
                 view.refresh_input_focus(ctx);
@@ -2116,6 +2129,26 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         });
+        ctx.subscribe_to_model(&sessions, |view, _, event, ctx| match event {
+            SessionsEvent::SessionBootstrapped(bootstrap_event)
+                if view.active_session.as_ref(ctx).session_id(ctx)
+                    == Some(bootstrap_event.session_id) =>
+            {
+                let Some(session) = view.sessions.as_ref(ctx).get(bootstrap_event.session_id)
+                else {
+                    report_error!(
+                        "Could not find active TUI session after its bootstrap event",
+                        extra: { "session_id" => ?bootstrap_event.session_id }
+                    );
+                    return;
+                };
+                view.abort_shell_completion(ctx);
+                view.warm_shell_completion_sources(session, ctx);
+            }
+            SessionsEvent::SessionBootstrapped(_)
+            | SessionsEvent::SessionInitialized { .. }
+            | SessionsEvent::EnvironmentVariablesUpdated { .. } => {}
+        });
         ctx.subscribe_to_model(&active_session, |view, _, event, ctx| match event {
             ActiveSessionEvent::UpdatedPwd => {
                 view.abort_shell_completion(ctx);
@@ -2158,7 +2191,7 @@ impl TuiTerminalSessionView {
                 });
                 ctx.notify();
             }
-            ActiveSessionEvent::Bootstrapped => view.abort_shell_completion(ctx),
+            ActiveSessionEvent::Bootstrapped => {}
         });
         // The footer's usage entry shows the selected conversation's token/cost
         // totals: re-render when that conversation's usage metadata updates.
@@ -2270,6 +2303,9 @@ impl TuiTerminalSessionView {
         }
         if let Some(error) = initial_settings_file_error {
             view.show_settings_file_error(&error, ctx);
+        }
+        if let Some(session) = view.active_session.as_ref(ctx).session(ctx) {
+            view.warm_shell_completion_sources(session, ctx);
         }
         view
     }

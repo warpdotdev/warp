@@ -1,14 +1,20 @@
 //! Asynchronous shell-command completion coordination for the TUI composer.
 
-use warp::tui_export::{longest_common_prefix, tui_completion_session_context};
+use std::sync::Arc;
+
+use futures::FutureExt as _;
+use warp::tui_export::{
+    CompletionSourcePolicy, Session, completion_suggestions_with_native_fallback,
+    tui_completion_session_context,
+};
 use warp_completer::completer::{
-    CompleterOptions, EngineFileType, Match, SuggestionResults, suggestions,
+    CompleterOptions, EngineFileType, ExplicitTabCompletion, SuggestionResults,
 };
 use warp_core::SessionId;
 use warpui_core::r#async::SpawnedFutureHandle;
 use warpui_core::{AppContext, ViewContext};
 
-use super::TuiTerminalSessionView;
+use super::{TuiTerminalSessionEvent, TuiTerminalSessionView};
 use crate::completion_menu::TuiCompletionAcceptance;
 use crate::inline_menu::active_inline_menu;
 use crate::input::view::TuiCompletionInputSnapshot;
@@ -29,6 +35,40 @@ struct CompletionRequestSnapshot {
 }
 
 impl TuiTerminalSessionView {
+    pub(super) fn warm_shell_completion_sources(
+        &self,
+        session: Arc<Session>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let function_names_session = session.clone();
+        let builtins_session = session.clone();
+
+        ctx.spawn(
+            async move { session.load_external_commands().await },
+            |_, _, _| {},
+        );
+        ctx.background_executor()
+            .spawn(async move { function_names_session.load_all_function_names().await })
+            .detach();
+        ctx.background_executor()
+            .spawn(async move { builtins_session.load_all_builtins().await })
+            .detach();
+    }
+
+    pub(super) fn ensure_external_commands_are_warming(&self, ctx: &mut ViewContext<Self>) {
+        let Some(session) = self.active_session.as_ref(ctx).session(ctx) else {
+            return;
+        };
+        if session.has_attempted_to_load_external_commands() {
+            return;
+        }
+
+        ctx.spawn(
+            async move { session.load_external_commands().await },
+            |_, _, _| {},
+        );
+    }
+
     pub(super) fn request_shell_completion(&mut self, ctx: &mut ViewContext<Self>) {
         if active_inline_menu(
             &self.inline_menus,
@@ -49,6 +89,8 @@ impl TuiTerminalSessionView {
             return;
         };
         let session_id = session.id();
+        let completion_source_policy =
+            CompletionSourcePolicy::for_session(&session, &input.buffer_text, ctx);
         let Some(completion_context) = tui_completion_session_context(
             self.active_session.as_ref(ctx),
             current_working_directory.clone(),
@@ -71,16 +113,27 @@ impl TuiTerminalSessionView {
             current_working_directory,
             generation,
         };
-        let line = request.input.buffer_text[..request.input.cursor_byte_offset].to_owned();
         let cursor_byte_offset = request.input.cursor_byte_offset;
+        let native_results = if completion_source_policy.should_request_native_shell_completions() {
+            let (results_tx, results_rx) = async_channel::unbounded();
+            ctx.emit(TuiTerminalSessionEvent::RunNativeShellCompletions {
+                buffer_text: request.input.buffer_text[..cursor_byte_offset].to_owned(),
+                results_tx,
+            });
+            async move { results_rx.recv().await.ok() }.boxed()
+        } else {
+            futures::future::ready(None).boxed()
+        };
         let completion_session = completion_context.session.clone();
         self.completion_request.future = Some(ctx.spawn_abortable(
             async move {
-                let results = suggestions(
-                    &line,
+                let results = completion_suggestions_with_native_fallback(
+                    &request.input.buffer_text,
                     cursor_byte_offset,
                     session_env_vars.as_ref(),
                     CompleterOptions::default(),
+                    completion_source_policy,
+                    native_results,
                     &completion_context,
                 )
                 .await;
@@ -127,69 +180,67 @@ impl TuiTerminalSessionView {
         let Some(results) = results.filter(|results| !results.suggestions.is_empty()) else {
             return;
         };
-        let replacement_range = results.replacement_span.start()..results.replacement_span.end();
-        let append_space_at_buffer_end =
-            request.input.cursor_byte_offset == request.input.buffer_text.len();
-
-        if let Some(suggestion) = results.single_prefix_suggestion() {
-            let acceptance = TuiCompletionAcceptance {
-                replacement: suggestion.replacement().to_owned(),
-                replacement_range,
-                append_space: append_space_at_buffer_end
-                    && suggestion.suggestion.file_type != Some(EngineFileType::Directory),
-            };
-            self.input_view.update(ctx, |input, ctx| {
-                input.apply_shell_completion(acceptance, ctx)
-            });
+        let Some(query) = request
+            .input
+            .buffer_text
+            .get(results.replacement_span.start()..results.replacement_span.end())
+        else {
             return;
-        }
-
-        let common_prefix = longest_common_prefix(
-            results
-                .suggestions
-                .iter()
-                .filter(|suggestion| {
-                    matches!(
-                        suggestion.match_type,
-                        Match::Prefix {
-                            is_case_sensitive: true
-                        } | Match::Exact {
-                            is_case_sensitive: true
-                        }
-                    )
-                })
-                .map(|suggestion| suggestion.replacement()),
-        )
-        .map(str::to_owned);
-        let menu_input = common_prefix
-            .filter(|prefix| {
-                should_insert_common_prefix(
-                    prefix,
-                    &request.input,
-                    results.replacement_span.start(),
-                    results.replacement_span.distance(),
-                )
-            })
-            .and_then(|prefix| {
+        };
+        let Some(session) = self.active_session.as_ref(ctx).session(ctx) else {
+            return;
+        };
+        let path_separators = session.path_separators();
+        let decision = results.explicit_tab_completion(query, path_separators.all);
+        let (suggestions, replacement_span, menu_input) = match decision {
+            ExplicitTabCompletion::NoAction => return,
+            ExplicitTabCompletion::InsertSingle {
+                suggestion,
+                replacement_span,
+            } => {
                 let acceptance = TuiCompletionAcceptance {
-                    replacement: prefix,
-                    replacement_range: replacement_range.clone(),
+                    replacement: suggestion.suggestion.replacement.to_string(),
+                    replacement_range: replacement_span.start()..replacement_span.end(),
+                    append_space: request.input.cursor_byte_offset
+                        == request.input.buffer_text.len()
+                        && suggestion.suggestion.file_type != Some(EngineFileType::Directory),
+                };
+                self.input_view.update(ctx, |input, ctx| {
+                    input.apply_shell_completion(acceptance, ctx)
+                });
+                return;
+            }
+            ExplicitTabCompletion::InsertCommonPrefixAndOpen {
+                common_prefix,
+                suggestions,
+                replacement_span,
+            } => {
+                let acceptance = TuiCompletionAcceptance {
+                    replacement: common_prefix,
+                    replacement_range: replacement_span.start()..replacement_span.end(),
                     append_space: false,
                 };
                 let did_apply = self.input_view.update(ctx, |input, ctx| {
                     input.apply_shell_completion(acceptance, ctx)
                 });
-                did_apply.then(|| self.input_view.as_ref(ctx).completion_snapshot(ctx))?
-            })
-            .unwrap_or_else(|| request.input.clone());
-        let menu_replacement_range =
-            results.replacement_span.start()..menu_input.cursor_byte_offset;
+                let menu_input = did_apply
+                    .then(|| self.input_view.as_ref(ctx).completion_snapshot(ctx))
+                    .flatten()
+                    .unwrap_or_else(|| request.input.clone());
+                (suggestions, replacement_span, menu_input)
+            }
+            ExplicitTabCompletion::Open {
+                suggestions,
+                replacement_span,
+            } => (suggestions, replacement_span, request.input.clone()),
+        };
+        let menu_replacement_range = replacement_span.start()..menu_input.cursor_byte_offset;
         let append_space_at_buffer_end =
             menu_input.cursor_byte_offset == menu_input.buffer_text.len();
         self.completion_request.menu_snapshot = Some(menu_input);
         self.completion_menu.update(ctx, |menu, ctx| {
             menu.show(
-                results.suggestions,
+                suggestions,
                 menu_replacement_range,
                 append_space_at_buffer_end,
                 ctx,
@@ -239,21 +290,6 @@ fn completion_request_is_current(
         && current_session_id == Some(request.session_id)
         && current_working_directory == Some(request.current_working_directory.as_str())
         && !has_active_inline_menu
-}
-
-fn should_insert_common_prefix(
-    common_prefix: &str,
-    input: &TuiCompletionInputSnapshot,
-    replacement_start: usize,
-    replacement_distance: usize,
-) -> bool {
-    let Some(current_word) = input
-        .buffer_text
-        .get(replacement_start..input.cursor_byte_offset)
-    else {
-        return false;
-    };
-    common_prefix.len() > replacement_distance && common_prefix.starts_with(current_word)
 }
 
 #[cfg(test)]
