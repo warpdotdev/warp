@@ -98,9 +98,11 @@ expandable tree behavior; this change introduces no new visual treatment.
    - Its canonical target is checked against the full canonical ancestry inherited from the outer
      alias. A repeated identity produces one visible, loaded, childless cycle closer. A distinct
      identity extends the ancestry for later lazy expansions.
-   - Retargeting or breaking a nested alias clears only that alias's stale subtree and watches; it
-     does not collapse or replace readable siblings or the containing alias. An in-flight result
-     from the old nested target cannot repopulate it.
+   - A successful retarget of an expanded nested alias keeps that alias expanded and atomically
+     replaces only its visible descendants and watches with those for the new target. A failed
+     retarget follows (9) without leaving stale children. Neither case collapses or replaces
+     readable siblings or the containing alias, and an in-flight result from the old target cannot
+     repopulate it.
    - Renaming or deleting a nested alias root changes or unlinks only that symlink entry. The target
      and its contents are never renamed or recursively deleted. Ordinary directories and existing
      file symlinks encountered below an alias retain their existing behavior.
@@ -113,8 +115,10 @@ expandable tree behavior; this change introduces no new visual treatment.
      retries the read.
    - If one descendant is unreadable, Warp keeps that descendant as an unloaded directory, omits
      its stale children, and continues loading readable siblings.
-   - If the link is retargeted, Warp removes every child from the old target before showing children
-     from the new target. Events from the old target cannot repopulate the alias.
+   - If the link is retargeted and the new target loads successfully, Warp keeps an expanded alias
+     expanded and atomically replaces every child from the old target with the new target's
+     children. If classifying or reading the new target fails, the preceding failure behavior
+     applies. Events from the old target cannot repopulate the alias.
 
 10. Restoring access to an unreadable alias allows a later expansion to repopulate it without
     reopening the workspace. Restoring a broken target requires a link-path filesystem event or a
@@ -139,9 +143,10 @@ expandable tree behavior; this change introduces no new visual treatment.
     watch only when the user expands that child. Collapsing the last view of a directory releases
     that watch, and expanding it again refreshes the directory before presenting it as current.
 
-15. Replacing or retargeting the symbolic link replaces its visible descendants with those of the
-    new target. Events from the old target no longer update the alias after the retarget is
-    observed.
+15. When an expanded symbolic link is replaced or retargeted successfully to a readable directory,
+    it remains expanded and atomically replaces its visible descendants with those of the new
+    target. Failure states follow (9). Events from the old target no longer update the alias after
+    the retarget is observed.
 
 16. Watcher-driven refreshes preserve alias identity: updates remain addressed by the
     workspace-visible path, do not introduce a second canonical-target path beneath the root, and

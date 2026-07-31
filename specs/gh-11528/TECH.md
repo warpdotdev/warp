@@ -81,7 +81,9 @@ discovery lifecycles:
 2. An ordinary shared lazy-parent expansion returns descriptors discovered immediately below the
    newly loaded parent and merges them into the overlay in the same completion callback.
 3. Shared watcher create/remove/retarget deltas add, remove, or replace descriptors and overlay
-   subtrees without waiting for a full repository rebuild.
+   subtrees without waiting for a full repository rebuild. A successful retarget of an expanded
+   alias preserves that expansion state and publishes the new target's descendants in one atomic
+   overlay replacement.
 
 Descriptors contain the lexical path and resolved target. Discovery does not traverse or watch the
 target. If an alias sits below an unloaded shared parent, it becomes visible only after that ordinary
@@ -174,9 +176,13 @@ each target is inside or outside the workspace. An ordinary directory below an a
 lineage and receives its normal lazy cursor; a file symlink keeps the existing file-entry behavior.
 
 A create, remove, or retarget event at a nested alias path increments only that nested alias's
-generation, removes its descendants and leases, and leaves its parent and siblings intact. Alias
-root action dispatch uses the same typed destructive boundary for a nested alias as for a top-level
-one: rename or delete receives the nested lexical symlink path and never the resolved target.
+generation and leaves its parent and siblings intact. On retarget, invalidate the old descendants,
+cursors, and leases; snapshot whether the lexical alias is expanded; and build the new target's
+first level off-overlay. A successful current-generation completion atomically replaces the visible
+descendants, keeps an expanded alias expanded, and acquires the new-target lease. A failed
+classification or load applies section 7 instead. Alias root action dispatch uses the same typed
+destructive boundary for a nested alias as for a top-level one: rename or delete receives the nested
+lexical symlink path and never the resolved target.
 
 Factor a small, side-effect-free symlink primitive for both Project Explorer and project skills. For
 example, `classify_directory_symlink(lexical_path)` can use `symlink_metadata`, follow target
@@ -266,7 +272,7 @@ Classify alias-resolution and read failures before applying the completion resul
 | Root `read_dir` returns `PermissionDenied` after directory classification | Replace stale subtree with the unloaded alias root, including on first expansion | Retain a retry cursor; release the target watch if it cannot be maintained |
 | Other transient root `read_dir` error after directory classification | Replace stale subtree with the unloaded alias root, including on first expansion | Retain a retry cursor; keep only a valid existing expansion lease |
 | Unreadable descendant | Keep that descendant as an unloaded placeholder; continue siblings | Persist a retry cursor for that descendant |
-| Retargeted link | Remove old subtree before installing a new unloaded alias root | Increment generation, release old-target lease, discard stale completions |
+| Successful retarget of an expanded alias to a readable directory | Keep the lexical alias expanded; atomically replace the old descendants with the new target's first-level descendants in one overlay update | Increment generation before loading, discard stale completions, release the old-target lease, and acquire the new-target lease when the swap commits |
 
 The completion future may still resolve with a typed `RepoMetadataError` for logging/tests, but its
 callback first establishes the table's safe visible state and emits a refresh. Error display and
@@ -275,6 +281,10 @@ workspace-relative lexical alias path, alias generation, and error class, and us
 follow the same rule. Tests may inspect typed fields directly but must not format or snapshot an
 external target path. A retry always starts from the retained cursor and revalidates the current
 link target.
+
+Retarget classification and enumeration failures do not use the successful-retarget row. They take
+the matching `NotFound`/non-directory or root `read_dir` failure row above, so stale descendants are
+never retained and retryability remains explicit.
 
 ### 8. Bound target watches to expanded aliases
 
@@ -291,8 +301,10 @@ Initial lazy alias discovery never registers an external-target watch. Add a
   leased aliases for that resolved directory. Deeper updates are observed by the separate lease for
   the expanded descendant that contains them.
 - Collapsing a directory (including any expanded descendants hidden by that collapse),
-  deactivating/dropping its view, removing the repository, breaking the link, or retargeting it
-  releases the corresponding leases. Each external watch is unregistered when its count reaches
+  deactivating/dropping its view, removing the repository, or breaking the link releases the
+  corresponding leases. Retargeting detaches the old-target leases immediately; when the new target
+  loads successfully for an expanded alias, the atomic subtree swap acquires its replacement lease
+  without collapsing the lexical alias. Each external watch is unregistered when its count reaches
   zero.
 - A collapsed overlay may remain cached, but it is treated as stale. Re-expansion revalidates and
   refreshes the alias before presenting it as current and reacquires the lease.
@@ -341,22 +353,26 @@ behavior. Add:
    initially unloaded ordinary shared parent discovered only when that parent loads, and alias
    create/remove/retarget watcher deltas after indexing. Include a directory that is classified and
    added without enumerating its unreadable contents, then restores access and populates on retry.
-   Assert every path adds or removes the same unloaded overlay descriptor without traversing or
-   watching its target.
+   Assert discovery/create/remove paths add or remove the same unloaded overlay descriptor without
+   traversing or watching its target. For an expanded alias retarget, stage the replacement target
+   and atomically swap in its descendants without publishing an unloaded-root intermediate state.
 4. A multi-step completion test that expands `A → B → A` in three separate
    `load_directory_with_completion` calls and asserts the final `A` is loaded and childless. Also
    assert every cursor includes its own `resolved_path` as the last lineage item; cover root
    initialization, a direct self-cycle, two independent aliases to one target, and a nested alias
-   whose target is outside the workspace. Retarget that nested alias during an in-flight load and
-   assert only its subtree is invalidated. Exercise nested alias-root rename/delete against a target
-   sentinel to prove the destructive boundary applies at every depth (PRODUCT 4, 7–8).
+   whose target is outside the workspace. Retarget that expanded nested alias during an in-flight
+   load and assert only its subtree is invalidated, its parent and siblings stay unchanged, the
+   stale completion is discarded, and a successful current-generation completion keeps it expanded
+   with the new target's descendants. Exercise nested alias-root rename/delete against a target
+   sentinel to prove the destructive boundary applies at every depth (PRODUCT 4, 7–8, 15).
 5. Table-driven local-model tests for every failure-matrix row: `NotFound`, broken/non-directory,
    root `read_dir` `PermissionDenied`, other transient root read errors, unreadable descendant with
-   readable sibling, a transient type-probe failure for an already-known alias, and retarget during
-   an in-flight load. Assert initial enumeration failures remain visible and retryable, and stale
-   children/cursors/watches are removed exactly as specified (PRODUCT 9–10, 15, 19). Add a
-   logging/redaction assertion proving a typed external-target error formats only the lexical alias
-   path, generation, and error class.
+   readable sibling, a transient type-probe failure for an already-known alias, a successful
+   readable retarget, and retarget during an in-flight load. Assert a successful retarget preserves
+   the expanded state and atomically swaps descendants and leases, while classification/read
+   failures remain visible and retryable without stale children, cursors, or watches (PRODUCT 9–10,
+   15, 19). Add a logging/redaction assertion proving a typed external-target error formats only the
+   lexical alias path, generation, and error class.
 6. Scope-boundary tests proving an expanded external alias is present in
    `project_explorer_entry` but absent from `get_repo_contents`, repository search/index input,
    agent-context collection, generic standing-query/skill-rule results, `RepoMetadataUpdate`, and
@@ -366,8 +382,9 @@ behavior. Add:
 7. Watch-lease tests proving initial lazy aliases create zero external watches; expanding the alias
    root creates one non-recursive watch; an unexpanded child creates none; expanding the child adds
    its own non-recursive watch; a second alias/view shares matching resolved-directory watches; and
-   collapse, retarget, repository removal, and view teardown release the exact leases. Re-expansion
-   must refresh before display (PRODUCT 14–16).
+   collapse, repository removal, and view teardown release the exact leases. Assert retarget
+   releases the old-target lease, and a successful retarget of an expanded alias acquires the
+   new-target lease without collapsing it. Re-expansion must refresh before display (PRODUCT 14–16).
 8. Project Explorer action tests selecting and opening a descendant and invoking copy, rename, and
    delete paths, asserting every emitted/requested path uses the lexical alias rather than the
    canonical target. Invoke **Attach as context** for an unloaded root, nested directory, and file;
@@ -387,10 +404,10 @@ behavior. Add:
 11. Ignore tests proving workspace rules match lexical paths and a target `.gitignore` applies only
     within that alias projection (PRODUCT 11–12).
 12. File-symlink regression tests and overlay generation tests proving stale async completion cannot
-    overwrite a retargeted alias. Add focused tests for the shared pure symlink classifier, then
-    prove Project Explorer expansion does not call the skills standing-query/update path and skill
-    discovery produces the same results before and after Project Explorer expansion (PRODUCT 15,
-    18).
+    overwrite a retargeted alias or its atomic current-generation replacement subtree. Add focused
+    tests for the shared pure symlink classifier, then prove Project Explorer expansion does not call
+    the skills standing-query/update path and skill discovery produces the same results before and
+    after Project Explorer expansion (PRODUCT 15, 18).
 
 Implementation PR checks:
 
@@ -413,7 +430,8 @@ On macOS, create one workspace-local target and one external target, then captur
 
 1. Before/after Project Explorer screenshots showing each alias expanded under its lexical path.
 2. A short recording that opens a target file through its alias, changes target content while
-   expanded, collapses/re-expands the alias, and retargets the link without stale children.
+   expanded, collapses/re-expands the alias, and retargets the link while it remains expanded and
+   atomically replaces the old children with the new target's children.
 3. A cycle fixture showing repeated `A → B → A` expansion terminates and Warp remains responsive.
 4. An external-target fixture showing root rename and delete affect only the workspace symlink while
    the target directory and a sentinel file remain present and unchanged.
@@ -449,10 +467,13 @@ macOS evidence runs only after integration.
 2. **Lazy loads could forget cycle ancestry.** Persist canonical lineage in every unloaded alias
    cursor and test `A → B → A` across separate completion tasks.
 3. **Stale loads could repopulate a retargeted link.** Tie cursors and completion callbacks to an
-   alias generation and discard mismatches.
+   alias generation, discard mismatches, stage the current-generation replacement off-overlay, and
+   commit one atomic subtree swap that preserves the alias's expanded state. Apply section 7 instead
+   when the replacement target cannot be classified or read.
 4. **External watches could grow without bound.** Acquire them only for expanded aliases, share them
-   by canonical target, and release them on collapse, view/repository teardown, breakage, or
-   retargeting.
+   by canonical target, and release them on collapse, view/repository teardown, or breakage. A
+   retarget releases the old-target leases and acquires replacements only when an expanded alias's
+   new target loads successfully.
 5. **Permission failures could leave stale or misleading children.** Apply the classified failure
    matrix before completing the task and retain retry cursors only where the target may recover.
 6. **Canonicalization could erase visible identity.** Store canonical paths only in cursors/watch
