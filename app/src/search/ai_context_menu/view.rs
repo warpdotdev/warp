@@ -5,7 +5,6 @@ use async_channel::Sender;
 use itertools::Itertools;
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
-use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::elements::{
     AnchorPair, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Dismiss, Empty, Fill, Flex, Hoverable, Icon, MouseStateHandle, OffsetPositioning, OffsetType,
@@ -41,6 +40,7 @@ use crate::search::search_bar::{SearchBar, SearchBarEvent, SearchBarState, Searc
 use crate::settings::InputSettings;
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::ActiveSession;
+use crate::workspace::active_window_working_directory;
 
 const CORNER_RADIUS: f32 = 8.0;
 const DEFAULT_PALETTE_WIDTH: f32 = 320.0;
@@ -260,23 +260,6 @@ impl AIContextMenu {
         self.apply_gates(gates, ctx);
     }
 
-    /// The working directory of the active window's session, which decides
-    /// whether the repo-scoped categories are available.
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn active_working_directory(app: &AppContext) -> Option<LocalOrRemotePath> {
-        app.windows()
-            .state()
-            .active_window
-            .and_then(|window_id| ActiveSession::as_ref(app).working_directory(window_id))
-            .cloned()
-    }
-
-    /// WASM builds have no session working directory to resolve.
-    #[cfg(target_family = "wasm")]
-    pub(crate) fn active_working_directory(_app: &AppContext) -> Option<LocalOrRemotePath> {
-        None
-    }
-
     /// Recompute category-dependent state when repository availability changes.
     fn refresh_categories_state(&mut self, ctx: &mut ViewContext<Self>) {
         self.refresh_categories(ctx);
@@ -287,7 +270,7 @@ impl AIContextMenu {
     /// request, so construction can reuse it before the view is registered.
     fn refresh_categories(&mut self, ctx: &mut ViewContext<Self>) {
         self.core
-            .set_working_directory(Self::active_working_directory(ctx));
+            .set_working_directory(active_window_working_directory(ctx));
         self.core.refresh_categories(ctx);
 
         // One retained hover state per category row the main menu renders.
@@ -574,6 +557,7 @@ impl AIContextMenu {
             code_symbol_cache: Some(self.code_symbol_cache.clone()),
             #[cfg(target_family = "wasm")]
             code_symbol_cache: None,
+            working_directory: self.core.working_directory().cloned(),
         }
     }
 

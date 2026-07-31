@@ -28,7 +28,7 @@ pub use action::{
     AutoCloudHandoffTrigger, CommandSearchOptions, InitContent, RestoreConversationLayout,
     TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget, WorkspaceAction,
 };
-pub use active_session::ActiveSession;
+pub use active_session::{ActiveSession, active_window_working_directory};
 pub use global_actions::{
     ForkAIConversationParams, ForkFromExchange, ForkedConversationDestination,
 };

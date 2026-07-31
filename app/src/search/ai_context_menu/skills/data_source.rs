@@ -7,16 +7,18 @@ use crate::ai::skills::SkillManager;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
-#[cfg(not(target_family = "wasm"))]
-use crate::workspace::ActiveSession;
 
 const MAX_RESULTS: usize = 50;
 
-pub struct SkillsDataSource;
+pub struct SkillsDataSource {
+    /// Directory whose skill providers are offered. Skill discovery walks up from
+    /// here, so it has to be the surface's own working directory.
+    working_directory: Option<LocalOrRemotePath>,
+}
 
 impl SkillsDataSource {
-    pub fn new() -> Self {
-        Self
+    pub fn new(working_directory: Option<LocalOrRemotePath>) -> Self {
+        Self { working_directory }
     }
 }
 
@@ -30,20 +32,8 @@ impl SyncDataSource for SkillsDataSource {
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
         let query_text = &query.text;
 
-        // Resolve the current working directory from the active window's session.
-        #[cfg(not(target_family = "wasm"))]
-        let cwd: Option<LocalOrRemotePath> = app
-            .windows()
-            .state()
-            .active_window
-            .map(|window_id| {
-                let active_session = ActiveSession::as_ref(app);
-                active_session.working_directory(window_id).cloned()
-            })
-            .unwrap_or(None);
-        #[cfg(target_family = "wasm")]
-        let cwd: Option<LocalOrRemotePath> = None;
-        let skills = SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
+        let skills = SkillManager::as_ref(app)
+            .get_skills_for_working_directory(self.working_directory.as_ref(), app);
 
         let mut results: Vec<QueryResult<Self::Action>> = if query_text.is_empty() {
             // Zero state: show all skills with a uniform high score.

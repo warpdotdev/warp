@@ -5,9 +5,23 @@ use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
 use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WindowId};
+use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, WindowId};
 
 use crate::terminal::model::session::Session;
+
+/// The working directory of the active window's session, if there is one.
+///
+/// Search surfaces that are scoped to "wherever the user currently is" resolve
+/// their directory through this. It is inherently GUI-shaped: the headless TUI
+/// has no active window and hosts several sessions per window, so it passes its
+/// own per-session working directory instead.
+pub fn active_window_working_directory(app: &AppContext) -> Option<LocalOrRemotePath> {
+    app.windows()
+        .state()
+        .active_window
+        .and_then(|window_id| ActiveSession::as_ref(app).working_directory(window_id))
+        .cloned()
+}
 
 /// The active terminal session in each window. The active session of a window is the current
 /// session of the most-recently-focused terminal pane of the active tab of the window's workspace.

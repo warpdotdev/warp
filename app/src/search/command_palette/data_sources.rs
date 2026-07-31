@@ -20,6 +20,7 @@ use crate::search::files::model::FileSearchModel;
 use crate::search::mixer::AddAsyncSourceOptions;
 use crate::session_management::SessionSource;
 use crate::settings::AISettings;
+use crate::workspace::active_window_working_directory;
 
 /// Store of all of the [`crate::search::DataSource`]s for the command palette.
 pub struct DataSourceStore {
@@ -121,13 +122,22 @@ impl DataSourceStore {
             }
 
             if FeatureFlag::CommandPaletteFileSearch.is_enabled() && !is_shared_session_viewer {
-                let file_search_model = FileSearchModel::as_ref(ctx);
-                let is_in_git_repo = file_search_model.repo_root_location(ctx).is_some();
+                let working_directory = active_window_working_directory(ctx);
+                let is_in_git_repo = FileSearchModel::as_ref(ctx)
+                    .repo_root_location(working_directory.as_ref(), ctx)
+                    .is_some();
 
                 let files_data_source = if is_in_git_repo {
-                    ctx.add_model(|_| files::data_source::FileDataSource::new())
+                    ctx.add_model(|_| {
+                        files::data_source::FileDataSource::new(working_directory.clone())
+                    })
                 } else {
-                    ctx.add_model(|ctx| files::data_source::FileDataSource::new_current_folder(ctx))
+                    ctx.add_model(|ctx| {
+                        files::data_source::FileDataSource::new_current_folder(
+                            working_directory.clone(),
+                            ctx,
+                        )
+                    })
                 };
                 mixer.add_async_source(
                     files_data_source,

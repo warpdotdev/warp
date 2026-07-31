@@ -42,8 +42,6 @@ use crate::ai::llms::LLMPreferences;
 use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::network::NetworkStatus;
 #[cfg(not(target_family = "wasm"))]
-use crate::search::ai_context_menu::view::AIContextMenu;
-#[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::{AtContextMenuCoreState, AtContextMenuGates};
 #[cfg(not(target_family = "wasm"))]
 use crate::settings::InputSettings;
@@ -176,7 +174,7 @@ impl AtContextMenuDisabledReason {
             is_ai_or_autodetect_mode: input_config.input_type.is_ai() || !input_config.is_locked,
             ..Default::default()
         });
-        menu_state.set_working_directory(AIContextMenu::active_working_directory(ctx));
+        menu_state.set_working_directory(crate::workspace::active_window_working_directory(ctx));
         if menu_state.available_categories(ctx).is_empty() {
             return Some(AtContextMenuDisabledReason::NoObjectsAvailable);
         }

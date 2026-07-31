@@ -6,11 +6,9 @@ use std::sync::Arc;
 use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
 use tempfile::tempdir;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warpui::App;
 use warpui::r#async::block_on;
-use warpui::elements::Empty;
-use warpui::platform::WindowStyle;
-use warpui::windowing::WindowManager;
-use warpui::{App, AppContext, Element, Entity, SingletonEntity, TypedActionView, View};
 
 use crate::search::ai_context_menu::files::data_source::{
     FileSnapshot, file_data_source_for_pwd, fuzzy_match_files,
@@ -21,27 +19,6 @@ use crate::search::files::model::FileSearchModel;
 use crate::search::files::search_item::FileSearchResult;
 use crate::search::item::SearchItem;
 use crate::search::mixer::AsyncDataSource;
-use crate::terminal::model::session::Session;
-use crate::workspace::ActiveSession;
-struct TestView;
-
-impl Entity for TestView {
-    type Event = ();
-}
-
-impl View for TestView {
-    fn ui_name() -> &'static str {
-        "AIContextMenuFilesDataSourceTestView"
-    }
-
-    fn render(&self, _app: &AppContext) -> Box<dyn Element> {
-        Empty::new().finish()
-    }
-}
-
-impl TypedActionView for TestView {
-    type Action = ();
-}
 
 #[test]
 fn test_single_term_query() {
@@ -745,33 +722,18 @@ fn test_fuzzy_match_files_respects_max_results() {
 #[test]
 #[cfg(feature = "local_fs")]
 fn test_file_data_source_for_pwd_holistic_behavior() {
-    App::test((), |mut app| async move {
+    App::test((), |app| async move {
         app.add_singleton_model(|_| DetectedRepositories::default());
         app.add_singleton_model(RepoMetadataModel::new);
         app.add_singleton_model(FileSearchModel::new);
-        app.add_singleton_model(|_| ActiveSession::default());
         let test_dir = tempdir().expect("failed to create temp dir");
         let test_dir_path = test_dir.path().to_path_buf();
         fs::write(test_dir_path.join("needle.rs"), "fn main() {}")
             .expect("failed to write test file");
         fs::write(test_dir_path.join("other.txt"), "other").expect("failed to write test file");
 
-        let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, |_ctx| TestView);
-        WindowManager::handle(&app).update(&mut app, |windowing_state, _ctx| {
-            windowing_state.overwrite_for_test(windowing_state.stage(), Some(window_id));
-        });
-
-        ActiveSession::handle(&app).update(&mut app, |active_session, ctx| {
-            active_session.set_session_for_test(
-                window_id,
-                Arc::new(Session::test()),
-                Some(test_dir_path),
-                None,
-                ctx,
-            );
-        });
-
-        let data_source = app.read(file_data_source_for_pwd);
+        let working_directory = LocalOrRemotePath::Local(test_dir_path);
+        let data_source = app.read(|ctx| file_data_source_for_pwd(Some(&working_directory), ctx));
 
         let broad_query_results = app
             .read(|ctx| {

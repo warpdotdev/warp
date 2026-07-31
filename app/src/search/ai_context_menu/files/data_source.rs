@@ -6,8 +6,7 @@ use std::sync::Arc;
 use futures_lite::future::yield_now;
 use fuzzy_match::FuzzyMatchResult;
 use itertools::Itertools;
-#[cfg(feature = "local_fs")]
-use repo_metadata::repositories::DetectedRepositories;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, SingletonEntity};
 
 use super::search_item::FileSearchItem;
@@ -19,8 +18,6 @@ use crate::search::data_source::{Query, QueryResult};
 use crate::search::files::model::FileSearchModel;
 use crate::search::files::search_item::FileSearchResult;
 use crate::search::mixer::{BoxFuture, DataSourceRunErrorWrapper};
-#[cfg(feature = "local_fs")]
-use crate::workspace::ActiveSession;
 
 const MAX_RESULTS: usize = 200;
 
@@ -34,13 +31,16 @@ pub(crate) struct FileSnapshot {
     pub(crate) last_opened: HashMap<String, instant::Instant>,
 }
 
-/// Builds the repository-backed file search source used by the AI context menu.
+/// Builds the repository-backed file search source used by the AI context menu,
+/// scoped to the repository containing `working_directory`.
+///
 /// For empty queries, snapshots repo contents with git-change status to prioritize modified files,
 /// and for non-empty queries snapshots repo contents only for faster fuzzy matching.
-pub fn file_data_source_for_current_repo()
--> AsyncSnapshotDataSource<FileSnapshot, AIContextMenuSearchableAction> {
+pub fn file_data_source_for_current_repo(
+    working_directory: Option<LocalOrRemotePath>,
+) -> AsyncSnapshotDataSource<FileSnapshot, AIContextMenuSearchableAction> {
     AsyncSnapshotDataSource::new(
-        |query: &Query, app: &AppContext| {
+        move |query: &Query, app: &AppContext| {
             if FileSearchModel::should_skip_overly_broad_query(&query.text) {
                 return FileSnapshot {
                     contents: Arc::new(Vec::new()),
@@ -50,11 +50,12 @@ pub fn file_data_source_for_current_repo()
                 };
             }
 
+            let working_directory = working_directory.as_ref();
             let file_search_model = FileSearchModel::as_ref(app);
-            let last_opened = snapshot_last_opened(app);
+            let last_opened = snapshot_last_opened(working_directory, app);
             if query.text.is_empty() {
                 let (contents, git_changed_files) =
-                    file_search_model.get_repo_contents_with_git_status(app);
+                    file_search_model.get_repo_contents_with_git_status(working_directory, app);
                 FileSnapshot {
                     contents,
                     git_changed_files,
@@ -62,7 +63,8 @@ pub fn file_data_source_for_current_repo()
                     last_opened,
                 }
             } else {
-                let contents = file_search_model.get_repo_contents(&query.text, app);
+                let contents =
+                    file_search_model.get_repo_contents(&query.text, working_directory, app);
                 FileSnapshot {
                     contents,
                     git_changed_files: HashSet::new(),
@@ -75,11 +77,14 @@ pub fn file_data_source_for_current_repo()
     )
 }
 
+/// Builds the non-recursive file search source for `working_directory` itself,
+/// used when the directory is not inside a repository.
 pub fn file_data_source_for_pwd(
+    working_directory: Option<&LocalOrRemotePath>,
     app: &AppContext,
 ) -> AsyncSnapshotDataSource<FileSnapshot, AIContextMenuSearchableAction> {
     let file_search_model = FileSearchModel::as_ref(app);
-    let mut cached_contents = file_search_model.get_folder_contents(app);
+    let mut cached_contents = file_search_model.get_folder_contents(working_directory, app);
     // Reverse sort to put what you'd expect at the top for zero-state
     cached_contents.sort_by(|a, b| b.path.cmp(&a.path));
     let cached_contents = Arc::new(cached_contents);
@@ -106,16 +111,14 @@ pub fn file_data_source_for_pwd(
     )
 }
 
-/// Captures last-opened timestamps from `OpenedFilesModel` for the active
-/// repo at snapshot time. Returns an empty map when no repo is active.
+/// Captures last-opened timestamps from `OpenedFilesModel` for the repository
+/// containing `working_directory`. Returns an empty map when there is no repo.
 #[cfg(feature = "local_fs")]
-fn snapshot_last_opened(app: &AppContext) -> HashMap<String, instant::Instant> {
-    let repo_root = app
-        .windows()
-        .state()
-        .active_window
-        .and_then(|window_id| ActiveSession::as_ref(app).working_directory(window_id))
-        .and_then(|working_dir| DetectedRepositories::as_ref(app).get_root_for_path(working_dir));
+fn snapshot_last_opened(
+    working_directory: Option<&LocalOrRemotePath>,
+    app: &AppContext,
+) -> HashMap<String, instant::Instant> {
+    let repo_root = FileSearchModel::as_ref(app).repo_root_location(working_directory, app);
 
     let Some(repo_root) = repo_root else {
         return HashMap::new();
@@ -134,7 +137,10 @@ fn snapshot_last_opened(app: &AppContext) -> HashMap<String, instant::Instant> {
 
 /// File-open recency is unavailable without a local filesystem.
 #[cfg(not(feature = "local_fs"))]
-fn snapshot_last_opened(_app: &AppContext) -> HashMap<String, instant::Instant> {
+fn snapshot_last_opened(
+    _working_directory: Option<&LocalOrRemotePath>,
+    _app: &AppContext,
+) -> HashMap<String, instant::Instant> {
     HashMap::new()
 }
 

@@ -2,6 +2,7 @@ use std::collections::HashSet;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
 
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{ModelContext, ModelHandle};
 
 use super::code::data_source::CodeSymbolCache;
@@ -26,6 +27,10 @@ pub struct AtContextMenuSourceContext {
     /// do not offer code symbols, and in WASM builds where the cache has no
     /// outline to read.
     pub code_symbol_cache: Option<ModelHandle<CodeSymbolCache>>,
+    /// Directory the file and skill sources are scoped to. The GUI resolves this
+    /// from the active window's session; the TUI passes its own session's
+    /// directory, since it has no active window.
+    pub working_directory: Option<LocalOrRemotePath>,
 }
 
 /// The query shape the `@` menu runs. Sources are selected by installation
@@ -51,17 +56,18 @@ pub fn install_sources_for_category(
     match category {
         #[cfg(not(target_family = "wasm"))]
         AIContextMenuCategory::CurrentFolderFiles => {
-            mixer.add_async_source(
-                super::files::data_source::file_data_source_for_pwd(ctx),
-                [QueryFilter::Files],
-                local_search_options(),
+            let source = super::files::data_source::file_data_source_for_pwd(
+                source_context.working_directory.as_ref(),
                 ctx,
             );
+            mixer.add_async_source(source, [QueryFilter::Files], local_search_options(), ctx);
         }
         #[cfg(not(target_family = "wasm"))]
         AIContextMenuCategory::RepoFiles => {
             mixer.add_async_source(
-                super::files::data_source::file_data_source_for_current_repo(),
+                super::files::data_source::file_data_source_for_current_repo(
+                    source_context.working_directory.clone(),
+                ),
                 [QueryFilter::Files],
                 local_search_options(),
                 ctx,
@@ -119,7 +125,10 @@ pub fn install_sources_for_category(
         }
         #[cfg(not(target_family = "wasm"))]
         AIContextMenuCategory::Skills => {
-            let source = ctx.add_model(|_| super::skills::data_source::SkillsDataSource::new());
+            let working_directory = source_context.working_directory.clone();
+            let source = ctx.add_model(|_| {
+                super::skills::data_source::SkillsDataSource::new(working_directory)
+            });
             mixer.add_sync_source(source, [QueryFilter::Skills]);
         }
         AIContextMenuCategory::Conversations => {

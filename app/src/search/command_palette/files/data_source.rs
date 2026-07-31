@@ -9,6 +9,7 @@ use futures_lite::FutureExt;
 use fuzzy_match::FuzzyMatchResult;
 use instant::Instant;
 use itertools::Itertools;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::CleanPathResult;
 use warpui::{AppContext, Entity, SingletonEntity};
 
@@ -31,6 +32,9 @@ enum FileRanking {
 
 pub struct FileDataSource {
     mode: FileDataSourceMode,
+    /// Directory the search is scoped to, resolved by the caller rather than read
+    /// from window state.
+    working_directory: Option<LocalOrRemotePath>,
 }
 
 enum FileDataSourceMode {
@@ -43,22 +47,27 @@ enum FileDataSourceMode {
 }
 
 impl FileDataSource {
-    pub fn new() -> Self {
+    pub fn new(working_directory: Option<LocalOrRemotePath>) -> Self {
         // Default to repo search to preserve existing call sites
         Self {
             mode: FileDataSourceMode::Repo,
+            working_directory,
         }
     }
 
     /// Create a data source that searches only within the current folder.
     /// This will read folder contents once at creation and reuse them for subsequent queries.
-    pub fn new_current_folder(app: &AppContext) -> Self {
+    pub fn new_current_folder(
+        working_directory: Option<LocalOrRemotePath>,
+        app: &AppContext,
+    ) -> Self {
         let file_search_model = FileSearchModel::as_ref(app);
-        let contents = file_search_model.get_folder_contents(app);
+        let contents = file_search_model.get_folder_contents(working_directory.as_ref(), app);
         Self {
             mode: FileDataSourceMode::CurrentFolder {
                 cached_contents: contents,
             },
+            working_directory,
         }
     }
 }
@@ -101,7 +110,8 @@ impl FileDataSource {
         match &self.mode {
             FileDataSourceMode::Repo => {
                 let file_search_model = FileSearchModel::as_ref(app);
-                file_search_model.get_repo_contents_with_git_status(app)
+                file_search_model
+                    .get_repo_contents_with_git_status(self.working_directory.as_ref(), app)
             }
             FileDataSourceMode::CurrentFolder { cached_contents } => {
                 (Arc::new(cached_contents.clone()), HashSet::new())
@@ -113,7 +123,11 @@ impl FileDataSource {
         match &self.mode {
             FileDataSourceMode::Repo => {
                 let file_search_model = FileSearchModel::as_ref(app);
-                file_search_model.get_repo_file_contents(query, app)
+                file_search_model.get_repo_file_contents(
+                    query,
+                    self.working_directory.as_ref(),
+                    app,
+                )
             }
             FileDataSourceMode::CurrentFolder { cached_contents } => {
                 Arc::new(cached_contents.clone())
@@ -135,7 +149,7 @@ impl FileDataSource {
 
         let opened_files = OpenedFilesModel::as_ref(app);
 
-        let repo_root = file_search_model.repo_root_location(app);
+        let repo_root = file_search_model.repo_root_location(self.working_directory.as_ref(), app);
         let opened_files = repo_root
             .and_then(|repo_root| opened_files.opened_files_for_repo(&repo_root))
             .cloned();
@@ -208,8 +222,9 @@ impl FileDataSource {
         let opened_files = OpenedFilesModel::as_ref(app);
 
         #[cfg(feature = "local_fs")]
-        let repo_root = file_search_model.repo_root(app);
-        let repo_root_location = file_search_model.repo_root_location(app);
+        let repo_root = file_search_model.repo_root(self.working_directory.as_ref(), app);
+        let repo_root_location =
+            file_search_model.repo_root_location(self.working_directory.as_ref(), app);
 
         // For the "Create file" fallback, use the expanded (but not repo-root-stripped)
         // path so that absolute paths work correctly with Path::join.
@@ -217,13 +232,11 @@ impl FileDataSource {
 
         // Get the current directory for the "Create file" option and for path stripping.
         #[cfg(feature = "local_fs")]
-        let current_directory = {
-            use crate::workspace::ActiveSession;
-            let active_window_id = app.windows().state().active_window;
-            active_window_id
-                .and_then(|window_id| ActiveSession::as_ref(app).path_if_local(window_id))
-                .map(|path| path.to_string_lossy().to_string())
-        };
+        let current_directory = self
+            .working_directory
+            .as_ref()
+            .and_then(|working_directory| working_directory.to_local_path())
+            .map(|path| path.to_string_lossy().to_string());
         #[cfg(not(feature = "local_fs"))]
         let current_directory: Option<String> = None;
 

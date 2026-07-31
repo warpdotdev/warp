@@ -44,6 +44,7 @@ fn any_file_result(results: &[QueryResult<CommandPaletteItemAction>]) -> bool {
 fn current_folder_source(cached_contents: Vec<FileSearchResult>) -> FileDataSource {
     FileDataSource {
         mode: FileDataSourceMode::CurrentFolder { cached_contents },
+        working_directory: None,
     }
 }
 #[test]
