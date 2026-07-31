@@ -1698,6 +1698,34 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           SIGN_TOOL_CMD: ${{ steps.setup_signing.outputs.sign_tool_cmd }}
+      - name: Add TUI installer to GitHub release assets
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
+          files: ${{ steps.bundle_tui.outputs.installer_path }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        with:
+          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+
+      - name: Upload TUI installer to Google Cloud Storage
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        with:
+          path: ${{ steps.bundle_tui.outputs.installer_path }}
+          destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/windows/x86_64
+          headers: |-
+            cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
+
+      - name: Verify TUI installer in Google Cloud Storage
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        run: |
+          curl.exe --fail --silent --show-error --head \
+            "https://releases.warp.dev/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/tui/windows/x86_64/WarpAgentCLIDevSetup.exe"
+        shell: bash
 
       - name: Upload Windows TUI installer
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -1937,6 +1965,7 @@ jobs:
       - prepare_release
       - release_macos_tui
       - release_linux_tui
+      - release_windows_tui
     if: ${{ always() }}
     steps:
       - name: Verify TUI release artifacts
@@ -1946,13 +1975,15 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
           MACOS_TUI_RESULT: ${{ needs.release_macos_tui.result }}
           LINUX_TUI_RESULT: ${{ needs.release_linux_tui.result }}
+          WINDOWS_TUI_RESULT: ${{ needs.release_windows_tui.result }}
         run: |
           if [[ "$SHOULD_PUBLISH" != "true" || ( "$CHANNEL" != "dev" && "$CHANNEL" != "preview" ) ]]; then
             exit 0
           fi
-
-          if [[ "$MACOS_TUI_RESULT" != "success" || "$LINUX_TUI_RESULT" != "success" ]]; then
-            echo "::error::TUI release artifacts were not published successfully (macOS: $MACOS_TUI_RESULT, Linux: $LINUX_TUI_RESULT)"
+          if [[ "$MACOS_TUI_RESULT" != "success" ||
+                "$LINUX_TUI_RESULT" != "success" ||
+                ( "$CHANNEL" == "dev" && "$WINDOWS_TUI_RESULT" != "success" ) ]]; then
+            echo "::error::TUI release artifacts were not published successfully (macOS: $MACOS_TUI_RESULT, Linux: $LINUX_TUI_RESULT, Windows: $WINDOWS_TUI_RESULT)"
             exit 1
           fi
 

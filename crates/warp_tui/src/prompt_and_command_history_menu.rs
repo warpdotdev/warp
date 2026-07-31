@@ -307,18 +307,21 @@ impl TuiPromptAndCommandHistoryMenuModel {
         })
     }
 
-    /// Re-reads the typed query from the input when the buffer changes from real
-    /// typing, ignoring the editor echo of our own preview writes.
+    /// Closes the history palette when the user makes a real edit while it is
+    /// open, preserving the edited buffer and the currently-visible input type.
+    ///
+    /// Preview writes from Up/Down navigation are ignored via the `preview_text`
+    /// check — only a buffer change that differs from the active preview triggers
+    /// dismissal.
     fn on_content_changed(&mut self, ctx: &mut ModelContext<Self>) {
         let current = input_text(&self.input_editor, ctx);
         if self.preview_text.as_deref() == Some(current.as_str()) {
             return;
         }
-        self.preview_text = None;
-        if let TuiPromptAndCommandHistoryMenuState::Open { query, .. } = &mut self.state {
-            *query = current;
-        }
-        self.refresh_rows(ctx);
+        // A real edit while the menu is open closes the palette without
+        // restoring the original buffer or original input type. The user's
+        // edited text and whichever input type was visible stay as-is.
+        self.close(ctx);
     }
 
     fn on_command_history_initialized(

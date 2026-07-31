@@ -9,7 +9,7 @@ use warp::tui_export::{
     AIConversationAutoexecuteMode, ActiveSession, Appearance, BlocklistAIActionModel,
     BlocklistAIHistoryModel, ConversationSelection, ConversationSelectionHandle,
     GetRelevantFilesController, ModelEventDispatcher, Sessions, TerminalManagerTrait,
-    TerminalModel, TerminalSurfaceInit, TranscriptScope,
+    TerminalModel, TerminalSurfaceInit, TranscriptScope, TuiOnboardingMarkers,
 };
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warp_core::semantic_selection::SemanticSelection;
@@ -99,6 +99,9 @@ pub(crate) fn add_test_action_model_and_events(
     ModelHandle<BlocklistAIActionModel>,
     ModelHandle<ModelEventDispatcher>,
 ) {
+    if !app.read(|ctx| ctx.has_singleton_model::<TuiOnboardingMarkers>()) {
+        app.add_singleton_model(|_| TuiOnboardingMarkers::new_ready_for_test(false, false));
+    }
     if !app.read(|ctx| ctx.has_singleton_model::<Appearance>()) {
         app.add_singleton_model(|_| Appearance::mock());
     }
