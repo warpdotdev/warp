@@ -1,4 +1,5 @@
 pub mod clangd;
+pub mod dart;
 pub mod go;
 pub mod pyright;
 pub mod rust;
