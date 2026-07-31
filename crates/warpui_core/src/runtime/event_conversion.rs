@@ -186,7 +186,8 @@ impl ShiftKeyTracker {
             }
             KeyCode::Char(character)
                 if (self.left_pressed || self.right_pressed)
-                    && !event.modifiers.contains(KeyModifiers::SHIFT) =>
+                    && !event.modifiers.contains(KeyModifiers::SHIFT)
+                    && !is_legacy_line_feed(event) =>
             {
                 event.modifiers.insert(KeyModifiers::SHIFT);
                 if character.is_alphabetic() {
@@ -215,6 +216,13 @@ impl ShiftKeyTracker {
         self.left_pressed = false;
         self.right_pressed = false;
     }
+}
+
+/// Raw LF is indistinguishable from Ctrl+J in terminal input. Some terminals
+/// use it for Shift+Enter even while enhanced modifier reporting is active, so
+/// preserving it as Ctrl+J keeps the standard newline fallback usable.
+fn is_legacy_line_feed(event: &KeyEvent) -> bool {
+    event.code == KeyCode::Char('j') && event.modifiers == KeyModifiers::CONTROL
 }
 
 fn update_pressed(pressed: &mut bool, kind: KeyEventKind) {

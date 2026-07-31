@@ -346,6 +346,44 @@ fn shift_lifecycle_restores_shift_and_normalizes_symbol_keystrokes() {
 }
 
 #[test]
+fn legacy_ctrl_j_dispatches_while_shift_is_held() {
+    App::test((), |mut app| async move {
+        let (window_id, root) = app.update(|ctx| {
+            ctx.register_fixed_bindings([FixedBinding::new("ctrl-j", Bump, id!("BumpParentView"))]);
+            ctx.add_tui_window(window_options(), |view_ctx| {
+                let child = view_ctx.add_tui_view(|_| BumpChildView);
+                BumpParentView { child, bumps: 0 }
+            })
+        });
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut screen =
+            TuiScreen::new(window_id, root.clone(), terminal, Arc::new(Mutex::new(())));
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+
+        let shift_press = screen
+            .convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Modifier(ModifierKeyCode::LeftShift),
+                KeyModifiers::SHIFT,
+                KeyEventKind::Press,
+            )))
+            .expect("shift press");
+        app.update(|ctx| screen.dispatch_event(ctx, &shift_press));
+
+        let ctrl_j = screen
+            .convert_event(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Char('j'),
+                KeyModifiers::CONTROL,
+            )))
+            .expect("legacy line feed");
+        let TuiEvent::KeyDown { keystroke, .. } = &ctrl_j else {
+            panic!("expected KeyDown");
+        };
+        assert_eq!(keystroke.normalized(), "ctrl-j");
+        assert!(app.update(|ctx| screen.dispatch_event(ctx, &ctrl_j)));
+        assert_eq!(root.read(&app, |view, _| view.bumps), 1);
+    });
+}
+#[test]
 fn shift_remains_active_until_both_shift_keys_are_released() {
     App::test((), |mut app| async move {
         let (window_id, root) =
