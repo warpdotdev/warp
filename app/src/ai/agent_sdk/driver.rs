@@ -930,6 +930,10 @@ impl AgentDriver {
                     client,
                     id,
                     working_dir.clone(),
+                    // Shared with the history subscription so every attempt can drain
+                    // queued `file` appends before the declarations script runs, exactly
+                    // as `run_snapshot_upload` does on the legacy path.
+                    snapshot_file_writer.clone(),
                     ctx.spawner(),
                     checkpoint_interval
                         .unwrap_or(checkpoint_coordinator::DEFAULT_CHECKPOINT_INTERVAL),
@@ -4342,12 +4346,22 @@ impl AgentDriver {
         }
 
         // When the periodic checkpoint coordinator is active, it owns the entire
-        // end-of-run path: `finalize` regenerates declarations, runs one last
-        // best-effort attempt bounded by `upload_timeout`, and commits it as the
+        // end-of-run path: `finalize` drains the declarations writer, regenerates
+        // declarations, runs one last best-effort attempt, and commits it as the
         // selected checkpoint. This replaces the legacy one-shot upload below so
         // there is exactly one end-of-run snapshot path, not two.
+        //
+        // The budget must come from `finalize_budget`, not from `upload_timeout` alone:
+        // the coordinator's floor is `script_timeout + upload_timeout`, so a smaller
+        // budget silently skips the final attempt — and since this path `return`s past
+        // the legacy upload below, that would mean no end-of-run snapshot at all.
         if let Some(coordinator) = checkpoint_coordinator {
-            coordinator.finalize(upload_timeout).await;
+            coordinator
+                .finalize(checkpoint_coordinator::finalize_budget(
+                    script_timeout,
+                    upload_timeout,
+                ))
+                .await;
             return;
         }
 

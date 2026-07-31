@@ -349,7 +349,6 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
     /// Only call this once every file in `request.files` (including the manifest) has
     /// uploaded successfully; the server resolves each name to its object, verifies existence
     /// and per-attempt size limits, and rejects the whole commit otherwise.
-    #[allow(dead_code)]
     async fn commit_snapshot(
         &self,
         request: &CommitSnapshotRequest,

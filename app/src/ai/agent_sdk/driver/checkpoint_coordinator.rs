@@ -16,8 +16,6 @@
 //! This trades a small amount of latency (up to [`SAFE_BOUNDARY_POLL_INTERVAL`]) for
 //! avoiding new push-subscription wiring through the UI model graph.
 
-#![expect(dead_code)]
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
