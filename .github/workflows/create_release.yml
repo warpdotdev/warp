@@ -1625,11 +1625,17 @@ jobs:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
 
   release_windows_tui:
-    name: Build Release (Windows TUI x64)
+    name: Build Release (Windows TUI ${{ matrix.arch }})
     runs-on: windows-latest-large
     needs: prepare_release
     if: ${{ inputs.build_windows != false && inputs.channel == 'dev' }}
     timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - x64
+          - arm64
     env:
       TRUSTED_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
       TRUSTED_SIGNING_ACCOUNT: warpdotdev
@@ -1640,11 +1646,15 @@ jobs:
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: windows
-          cache_key: tui-x64
+          cache_key: tui-${{ matrix.arch }}
           is_self_hosted: false
           ref: ${{ needs.prepare_release.outputs.release_branch }}
           install_release_deps: true
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+      - name: Add arm64 target
+        if: ${{ matrix.arch == 'arm64' }}
+        run: rustup target add aarch64-pc-windows-msvc
+        shell: bash
 
       - name: Get channel configuration
         id: get-config
@@ -1654,12 +1664,13 @@ jobs:
           channel: ${{ inputs.channel }}
 
       - name: Test Windows TUI installer
+        if: ${{ matrix.arch == 'x64' }}
         run: ./script/windows/test_tui_installer.ps1
         shell: pwsh
 
       - name: Build Warp Agent CLI
         id: build_tui
-        run: script/bundle --artifact tui --channel "$CHANNEL" --skip_build_installer --arch x64
+        run: script/bundle --artifact tui --channel "$CHANNEL" --skip_build_installer --arch ${{ matrix.arch }}
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
@@ -1675,7 +1686,7 @@ jobs:
           trusted-signing-account-name: ${{ env.TRUSTED_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ env.TRUSTED_SIGNING_CERT_PROFILE }}
           files: ${{ steps.build_tui.outputs.binary_path }}
-          files-folder: ${{ github.workspace }}\app\assets\windows\x64
+          files-folder: ${{ github.workspace }}\app\assets\windows\${{ matrix.arch }}
           files-folder-filter: dll,exe
           files-folder-recurse: true
           files-folder-depth: 2
@@ -1689,7 +1700,7 @@ jobs:
 
       - name: Bundle signed Warp Agent CLI installer
         id: bundle_tui
-        run: script/bundle --artifact tui --channel "$CHANNEL" --skip_build_binary --require_signatures --arch x64
+        run: script/bundle --artifact tui --channel "$CHANNEL" --skip_build_binary --require_signatures --arch ${{ matrix.arch }}
         shell: bash
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
@@ -1699,7 +1710,7 @@ jobs:
       - name: Upload Windows TUI installer
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: release-windows-tui-x64-${{ steps.get-config.outputs.channel }}
+          name: release-windows-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: |
             ${{ steps.bundle_tui.outputs.installer_path }}
             ${{ steps.bundle_tui.outputs.pdb_file_path }}
