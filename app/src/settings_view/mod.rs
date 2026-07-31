@@ -186,6 +186,33 @@ fn plan_header_presentation(
     }
 }
 
+/// Saved-position id for the settings search input.
+pub const SEARCH_EDITOR_POSITION_ID: &str = "settings_search_editor";
+
+/// Saved-position id for a top-level sidebar row.
+///
+/// Nav-row position ids are derived from the [`SettingsSection`] variant
+/// rather than its display label so that changing user-facing copy does not
+/// break the integration tests that click these rows.
+///
+/// Nav rows cache their position for a single frame, so a row's presence in
+/// the position cache means it was painted in the most recent frame. That is
+/// what lets integration tests assert sidebar visibility against what was
+/// actually drawn instead of re-deriving the filter rules.
+pub fn nav_page_position_id(section: SettingsSection) -> String {
+    format!("settings_nav_page:{section:?}")
+}
+
+/// Saved-position id for a collapsible umbrella header row.
+pub fn nav_umbrella_position_id(label: &str) -> String {
+    format!("settings_nav_umbrella:{label}")
+}
+
+/// Saved-position id for a subpage row nested under an umbrella.
+pub fn nav_subpage_position_id(section: SettingsSection) -> String {
+    format!("settings_nav_subpage:{section:?}")
+}
+
 pub(super) fn editor_text_colors(appearance: &Appearance) -> TextColors {
     let theme = appearance.theme();
     TextColors {
@@ -2433,36 +2460,41 @@ impl SettingsView {
     }
 
     fn render_search_editor(&self, appearance: &Appearance) -> Box<dyn Element> {
-        Container::new(
-            Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(
-                    Container::new(
-                        ConstrainedBox::new(
-                            icons::Icon::SearchSmall
-                                .to_warpui_icon(appearance.theme().active_ui_text_color())
-                                .finish(),
+        SavePosition::new(
+            Container::new(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_child(
+                        Container::new(
+                            ConstrainedBox::new(
+                                icons::Icon::SearchSmall
+                                    .to_warpui_icon(appearance.theme().active_ui_text_color())
+                                    .finish(),
+                            )
+                            .with_width(16.)
+                            .with_height(16.)
+                            .finish(),
                         )
-                        .with_width(16.)
-                        .with_height(16.)
+                        .with_uniform_margin(4.)
+                        .with_margin_right(12.)
                         .finish(),
                     )
-                    .with_uniform_margin(4.)
-                    .with_margin_right(12.)
-                    .finish(),
-                )
-                .with_child(
-                    Shrinkable::new(
-                        1.,
-                        Clipped::new(ChildView::new(&self.search_editor).finish()).finish(),
+                    .with_child(
+                        Shrinkable::new(
+                            1.,
+                            Clipped::new(ChildView::new(&self.search_editor).finish()).finish(),
+                        )
+                        .finish(),
                     )
                     .finish(),
-                )
-                .finish(),
+            )
+            .with_margin_left(16.)
+            .with_margin_right(16.)
+            .with_margin_bottom(8.)
+            .finish(),
+            SEARCH_EDITOR_POSITION_ID,
         )
-        .with_margin_left(16.)
-        .with_margin_right(16.)
-        .with_margin_bottom(8.)
+        .for_single_frame()
         .finish()
     }
 
@@ -2497,6 +2529,22 @@ impl SettingsView {
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
         .with_background(internal_colors::fg_overlay_1(appearance.theme()))
         .finish()
+    }
+}
+
+#[cfg(feature = "integration_tests")]
+impl SettingsView {
+    pub fn is_umbrella_expanded(&self, label: &str) -> Option<bool> {
+        self.nav_items.iter().find_map(|nav_item| match nav_item {
+            SettingsNavItem::Umbrella(umbrella) if umbrella.label == label => {
+                Some(umbrella.expanded)
+            }
+            SettingsNavItem::Umbrella(_) | SettingsNavItem::Page(_) => None,
+        })
+    }
+
+    pub fn search_query(&self, app: &AppContext) -> String {
+        self.search_editor.as_ref(app).buffer_text(app)
     }
 }
 
@@ -2545,13 +2593,18 @@ impl View for SettingsView {
                     {
                         let page_active = section == self.current_settings_page;
                         buttons.add_child(
-                            page.render_page_button(appearance, *match_data, page_active)
-                                .on_click(move |ctx, _, _| {
-                                    ctx.dispatch_typed_action(SettingsAction::SelectAndRefresh(
-                                        section,
-                                    ));
-                                })
-                                .finish(),
+                            SavePosition::new(
+                                page.render_page_button(appearance, *match_data, page_active)
+                                    .on_click(move |ctx, _, _| {
+                                        ctx.dispatch_typed_action(
+                                            SettingsAction::SelectAndRefresh(section),
+                                        );
+                                    })
+                                    .finish(),
+                                &nav_page_position_id(section),
+                            )
+                            .for_single_frame()
+                            .finish(),
                         );
                     }
                 }
@@ -2577,14 +2630,19 @@ impl View for SettingsView {
                     // Hoverable so hover styling + pointing-hand cursor apply
                     // across the full clickable area, not just the text.
                     buttons.add_child(
-                        umbrella
-                            .render_umbrella_row(appearance)
-                            .on_click(move |ctx, _, _| {
-                                ctx.dispatch_typed_action(SettingsAction::ToggleUmbrella(
-                                    nav_index,
-                                ));
-                            })
-                            .finish(),
+                        SavePosition::new(
+                            umbrella
+                                .render_umbrella_row(appearance)
+                                .on_click(move |ctx, _, _| {
+                                    ctx.dispatch_typed_action(SettingsAction::ToggleUmbrella(
+                                        nav_index,
+                                    ));
+                                })
+                                .finish(),
+                            &nav_umbrella_position_id(umbrella.label),
+                        )
+                        .for_single_frame()
+                        .finish(),
                     );
                     // Render subpage items when expanded.
                     if umbrella.expanded {
@@ -2613,13 +2671,20 @@ impl View for SettingsView {
                                 .render_subpage_button(sub_idx, appearance, match_data, is_active)
                             {
                                 buttons.add_child(
-                                    hoverable
-                                        .on_click(move |ctx, _, _| {
-                                            ctx.dispatch_typed_action(
-                                                SettingsAction::SelectAndRefresh(subpage_section),
-                                            );
-                                        })
-                                        .finish(),
+                                    SavePosition::new(
+                                        hoverable
+                                            .on_click(move |ctx, _, _| {
+                                                ctx.dispatch_typed_action(
+                                                    SettingsAction::SelectAndRefresh(
+                                                        subpage_section,
+                                                    ),
+                                                );
+                                            })
+                                            .finish(),
+                                        &nav_subpage_position_id(subpage_section),
+                                    )
+                                    .for_single_frame()
+                                    .finish(),
                                 );
                             }
                         }

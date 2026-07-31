@@ -415,6 +415,17 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_settings_error_banner_on_reload_with_invalid_toml);
     register_test!(test_settings_error_banner_on_reload_with_invalid_value);
 
+    // Settings sidebar navigation and search
+    register_test!(test_settings_mouse_navigation_through_umbrella);
+    register_test!(test_settings_keyboard_navigation_down_into_collapsed_umbrella);
+    register_test!(test_settings_keyboard_navigation_up_into_collapsed_umbrella);
+    register_test!(test_settings_keyboard_navigation_after_manual_collapse);
+    register_test!(test_settings_search_filters_top_level_pages);
+    register_test!(test_settings_search_filters_subpages);
+    register_test!(test_settings_search_clear_restores_umbrella_state);
+    register_test!(test_settings_search_preserved_on_sidebar_click);
+    register_test!(test_settings_agent_mcp_servers_renders_standalone_page);
+
     register_test!(test_middle_click_paste);
 
     register_test!(test_copy_selection_within_ai_block);

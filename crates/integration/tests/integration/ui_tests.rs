@@ -277,6 +277,21 @@ integration_tests! {
     test_settings_error_banner_on_reload_with_invalid_toml,
     test_settings_error_banner_on_reload_with_invalid_value,
 
+    // Settings sidebar navigation and search.
+    test_settings_mouse_navigation_through_umbrella,
+    test_settings_keyboard_navigation_down_into_collapsed_umbrella,
+    test_settings_keyboard_navigation_up_into_collapsed_umbrella,
+    test_settings_keyboard_navigation_after_manual_collapse,
+    test_settings_search_filters_top_level_pages,
+    test_settings_search_filters_subpages,
+    test_settings_search_clear_restores_umbrella_state,
+    test_settings_search_preserved_on_sidebar_click,
+    // The command palette entry for MCP servers dispatches the internal
+    // backing key rather than the sidebar subpage, so no row highlights.
+    // Un-ignore once the settings page model is unified.
+    #[ignore = "Blocked on unifying the settings page model"]
+    test_settings_agent_mcp_servers_renders_standalone_page,
+
     test_copy_selection_within_ai_block,
     #[ignore = "Affected by agent_view feature flag UI changes"]
     test_selection_first_to_last_through_ai_simple,
