@@ -127,7 +127,8 @@ use crate::ai::agent::conversation::{
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 // Re-export ambient agent types for backwards compatibility
 pub use crate::ai::ambient_agents::{
-    AgentConfigSnapshot, AgentSource, AmbientAgentTask, AmbientAgentTaskState, TaskStatusMessage,
+    AgentConfigSnapshot, AgentSource, AmbientAgentTask, AmbientAgentTaskState, ExecutionLocation,
+    TaskStatusMessage,
     task::{AttachmentInput, TaskAttachment},
 };
 use crate::ai::artifacts::Artifact;
@@ -706,22 +707,6 @@ pub struct TaskListFilter {
     pub sort_by: Option<RunSortBy>,
     pub sort_order: Option<RunSortOrder>,
     pub cursor: Option<String>,
-}
-
-/// Execution location filter values accepted by the public API.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExecutionLocation {
-    Local,
-    Remote,
-}
-
-impl ExecutionLocation {
-    pub fn as_query_param(&self) -> &'static str {
-        match self {
-            ExecutionLocation::Local => "LOCAL",
-            ExecutionLocation::Remote => "REMOTE",
-        }
-    }
 }
 
 /// Artifact type filter values accepted by the public API.

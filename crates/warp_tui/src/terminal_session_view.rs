@@ -146,6 +146,7 @@ use crate::warping_indicator::{render_response_summary, render_warping_indicator
 use crate::zero_state::TuiZeroStateView;
 use crate::zero_state_animation::{
     ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent, ZeroStateAnimationLoadFailure,
+    ZeroStateInteractionHandle,
 };
 mod completions;
 
@@ -722,6 +723,7 @@ pub(crate) struct TuiTerminalSessionView {
     /// rather than exit the TUI. The footer shows [`CTRL_C_KILL_CHILD_HINT`]
     /// while armed, and a second ctrl-c within the window kills the child.
     child_kill_armed_conversation: Option<AIConversationId>,
+    zero_state_interaction: ZeroStateInteractionHandle,
     zero_state_view: ViewHandle<TuiZeroStateView>,
 }
 
@@ -2121,8 +2123,14 @@ impl TuiTerminalSessionView {
             |_, _| {},
         );
         ctx.spawn_stream_local(terminal_resize_rx, Self::handle_terminal_resize, |_, _| {});
-        let zero_state_view =
-            ctx.add_tui_view(|ctx| TuiZeroStateView::new(active_session.clone(), ctx));
+        let zero_state_interaction = ZeroStateInteractionHandle::default();
+        let zero_state_view = {
+            let interaction = zero_state_interaction.clone();
+            let zero_state_active_session = active_session.clone();
+            ctx.add_tui_view(move |ctx| {
+                TuiZeroStateView::new(zero_state_active_session, interaction, ctx)
+            })
+        };
         let mut view = Self {
             transcript,
             input_view,
@@ -2181,6 +2189,7 @@ impl TuiTerminalSessionView {
             orchestration_tab_bar,
             orchestration_tabs_focused: false,
             child_kill_armed_conversation: None,
+            zero_state_interaction,
             zero_state_view,
         };
         if let Some(failure) = initial_zero_state_load_failure {
@@ -4936,6 +4945,7 @@ impl TuiTerminalSessionView {
         let blocker_active = state.has_blocking_interaction();
 
         if state.is_alt_screen() {
+            self.zero_state_interaction.set_visible(false);
             let terminal_content = TuiTerminalContentElement::new(
                 self.terminal_resize_tx.clone(),
                 AltScreenElement::new(self.terminal_model.clone()).finish(),
@@ -5011,6 +5021,7 @@ impl TuiTerminalSessionView {
         // swaps the transcript back in.
         let mut content = TuiFlex::column();
         let transcript_is_empty = self.transcript.as_ref(ctx).is_empty();
+        self.zero_state_interaction.set_visible(transcript_is_empty);
         if transcript_is_empty {
             content = content.flex_child(TuiChildView::new(&self.zero_state_view).finish());
         } else {

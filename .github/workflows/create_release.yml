@@ -1694,6 +1694,9 @@ jobs:
         env:
           CHANNEL: ${{ steps.get-config.outputs.channel }}
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           SIGN_TOOL_CMD: ${{ steps.setup_signing.outputs.sign_tool_cmd }}
 
       - name: Upload Windows TUI installer

@@ -14,7 +14,8 @@ use crate::transient_hint::TransientHintTone;
 use crate::tui_builder::TuiUiBuilder;
 use crate::warping_indicator::render_spinner;
 use crate::zero_state_animation::{
-    WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationElement, ZeroStateStarfieldElement,
+    WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationElement,
+    ZeroStateInteractionHandle, ZeroStateStarfieldElement,
 };
 
 const AUTH_COPY_COLS: u16 = 48;
@@ -358,6 +359,7 @@ fn auth_layout(
     let animation = ZeroStateAnimationElement::new(
         clock,
         animation_config,
+        ZeroStateInteractionHandle::non_interactive(),
         WarpLogoStyles {
             front: builder.accent_text_style(),
             back: builder.primary_text_style(),
