@@ -14,8 +14,8 @@ use warp::tui_export::{BlockHeight, BlockHeightItem, BlockHeightSummary, BlockId
 use warpui::{EntityId, ViewHandle};
 use warpui_core::AppContext;
 use warpui_core::elements::tui::{
-    TuiChildView, TuiElement, TuiLayoutContext, TuiRowResize, TuiSelectionSpan, TuiViewportContent,
-    TuiViewportWindow, TuiViewportedElement, TuiVisibleViewportItem,
+    TuiChildView, TuiConstraint, TuiElement, TuiLayoutContext, TuiRowResize, TuiSelectionSpan,
+    TuiSize, TuiViewportContent, TuiViewportWindow, TuiViewportedElement, TuiVisibleViewportItem,
 };
 
 use super::agent_block::TuiAIBlock;
@@ -64,6 +64,7 @@ pub(super) struct TuiBlockListViewportSource {
     cli_subagent_blocks: CLISubagentBlockRegistry,
     handoff_blocks: HandoffBlockRegistry,
     height_changes: RefCell<Vec<TuiRowResize>>,
+    deferred_streaming_heights: RefCell<HashSet<EntityId>>,
 }
 
 impl TuiBlockListViewportSource {
@@ -79,6 +80,7 @@ impl TuiBlockListViewportSource {
             cli_subagent_blocks: Rc::new(RefCell::new(HashMap::new())),
             handoff_blocks: Rc::new(RefCell::new(HashMap::new())),
             height_changes: RefCell::new(Vec::new()),
+            deferred_streaming_heights: RefCell::new(HashSet::new()),
         }
     }
     pub(super) fn new_with_rich_content(
@@ -93,6 +95,7 @@ impl TuiBlockListViewportSource {
             cli_subagent_blocks,
             handoff_blocks,
             height_changes: RefCell::new(Vec::new()),
+            deferred_streaming_heights: RefCell::new(HashSet::new()),
         }
     }
 
@@ -103,10 +106,11 @@ impl TuiBlockListViewportSource {
     ///
     /// A non-dirty band block is re-measured only when its cached height cannot
     /// be trusted: its last measurement was at a different width (reflow), it
-    /// has never been measured (no recorded width), or it is still streaming
-    /// (its height can grow without a per-update invalidation — e.g. an
-    /// expanded, still-running shell command). At a stable width with no
-    /// dynamic height, nothing extra is measured and the cached
+    /// has never been measured (no recorded width), or it contains dynamic
+    /// child content such as an expanded, still-running shell command. Agent
+    /// output updates explicitly dirty their block, so animation-only repaints
+    /// do not need to measure the entire streaming response again. At a stable
+    /// width with no dynamic height, the cached
     /// `last_laid_out_height` is reused. Off-band blocks keep their cached
     /// height until they scroll into the band.
     fn agent_heights_to_measure(
@@ -117,16 +121,41 @@ impl TuiBlockListViewportSource {
     ) -> HashSet<EntityId> {
         let mut model = self.model.lock();
         let mut view_ids = model.block_list_mut().take_dirty_rich_content_items();
+        view_ids.extend(self.deferred_streaming_heights.borrow_mut().drain());
 
         let agent_blocks = self.agent_blocks.borrow();
         let cli_subagent_blocks = self.cli_subagent_blocks.borrow();
         let handoff_blocks = self.handoff_blocks.borrow();
-        let block_list = model.block_list();
         let band_top = window.scroll_top.saturating_sub(OVERHANG_ROWS);
         let band_bottom = window
             .scroll_top
             .saturating_add(usize::from(window.viewport_height))
             .saturating_add(OVERHANG_ROWS);
+        // A streaming tail below a fixed viewport cannot affect the visible
+        // rows or their absolute top anchor. Consume this update's dirty bit
+        // without measuring it, but retain the signal in this source so an
+        // end-clamped or later approaching query can measure it. The final
+        // non-streaming update is never deferred, so completed height remains
+        // exact.
+        let deferred_streaming = view_ids
+            .iter()
+            .filter(|view_id| {
+                model
+                    .block_list()
+                    .rich_content_row_range(**view_id)
+                    .is_some_and(|rows| rows.start >= band_bottom)
+                    && agent_blocks
+                        .get(view_id)
+                        .is_some_and(|view| view.as_ref(app).is_streaming(app))
+            })
+            .copied()
+            .collect::<HashSet<_>>();
+        for view_id in &deferred_streaming {
+            view_ids.remove(view_id);
+        }
+        *self.deferred_streaming_heights.borrow_mut() = deferred_streaming;
+
+        let block_list = model.block_list();
         let mut cursor = block_list
             .block_heights()
             .cursor::<BlockHeight, BlockHeightSummary>();
@@ -180,19 +209,56 @@ impl TuiBlockListViewportSource {
         view_ids
             .into_iter()
             .filter_map(|view_id| {
-                let height = if let Some(view) = agent_blocks.get(&view_id) {
-                    let view = view.as_ref(app);
-                    let height = view.desired_height(width, ctx, app);
+                let height = if let Some(view_handle) = agent_blocks.get(&view_id) {
+                    let view = view_handle.as_ref(app);
+                    let height = if ctx.rendered_views.contains_key(&view_id) {
+                        usize::from(
+                            TuiChildView::new(view_handle)
+                                .layout(
+                                    TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
+                                    ctx,
+                                    app,
+                                )
+                                .height,
+                        )
+                    } else {
+                        view.desired_height(width, ctx, app)
+                    };
                     view.record_height_measurement(width);
                     height
-                } else if let Some(view) = cli_subagent_blocks.get(&view_id) {
-                    let view = view.as_ref(app);
-                    let height = view.desired_height(width, ctx, app);
+                } else if let Some(view_handle) = cli_subagent_blocks.get(&view_id) {
+                    let view = view_handle.as_ref(app);
+                    let height = if ctx.rendered_views.contains_key(&view_id) {
+                        usize::from(
+                            TuiChildView::new(view_handle)
+                                .layout(
+                                    TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
+                                    ctx,
+                                    app,
+                                )
+                                .height,
+                        )
+                    } else {
+                        view.desired_height(width, ctx, app)
+                    };
                     view.record_height_measurement(width);
                     height
                 } else {
-                    let view = handoff_blocks.get(&view_id)?.as_ref(app);
-                    let height = view.desired_height(width, ctx, app);
+                    let view_handle = handoff_blocks.get(&view_id)?;
+                    let view = view_handle.as_ref(app);
+                    let height = if ctx.rendered_views.contains_key(&view_id) {
+                        usize::from(
+                            TuiChildView::new(view_handle)
+                                .layout(
+                                    TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
+                                    ctx,
+                                    app,
+                                )
+                                .height,
+                        )
+                    } else {
+                        view.desired_height(width, ctx, app)
+                    };
                     view.record_height_measurement(width);
                     height
                 };

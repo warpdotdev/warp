@@ -363,24 +363,79 @@ fn tui_transcript_scroll_reuses_cached_heights_at_stable_width() {
 }
 
 #[test]
-fn tui_agent_streaming_block_remeasured_at_stable_width() {
+fn tui_agent_streaming_block_reuses_height_until_output_is_dirty() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        // A streaming block's height can grow without a per-update
-        // invalidation, so it must be re-measured at a stable width.
         let (source, model, agent_block) = streaming_agent_block_source(&mut app);
 
         request_top_window(&app, &source, 10);
         source.take_selection_row_resizes();
-
-        // Seed a wrong height at the same width without dirtying; the streaming
-        // block is still re-measured, correcting it.
+        // Animation-only frames reuse the cached height. Output updates mark
+        // the rich block dirty through `LayoutInvalidated`, which is the
+        // signal that its streaming text may have changed height.
         seed_clean_height(&app, &model, &agent_block, 1234.0, 80);
+        request_top_window(&app, &source, 10);
+        assert_eq!(rich_content_height(&model, agent_block.id()), Some(1234.0));
+
+        model
+            .lock()
+            .block_list_mut()
+            .mark_rich_content_dirty(agent_block.id());
         request_top_window(&app, &source, 10);
         assert_ne!(rich_content_height(&model, agent_block.id()), Some(1234.0));
     });
 }
 
+#[test]
+fn tui_agent_offscreen_dirty_streaming_height_is_deferred_until_band() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, model, agent_block) = seeded_agent_block_source_impl(&mut app, 30, 7.0, true);
+        model
+            .lock()
+            .block_list_mut()
+            .mark_rich_content_dirty(agent_block.id());
+
+        request_top_window(&app, &source, 1);
+
+        assert_eq!(rich_content_height(&model, agent_block.id()), Some(7.0));
+        assert!(
+            model
+                .lock()
+                .block_list_mut()
+                .take_dirty_rich_content_items()
+                .is_empty()
+        );
+        // The deferred signal survives for the end-clamped/approaching query
+        // in the same retained source even though the canonical dirty set was
+        // consumed by the first stale-window query.
+
+        app.read(|app| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            source.visible_items(
+                TuiViewportWindow {
+                    scroll_top: 30,
+                    viewport_height: 10,
+                },
+                80,
+                &mut ctx,
+                app,
+            );
+        });
+
+        assert_ne!(rich_content_height(&model, agent_block.id()), Some(7.0));
+        assert!(
+            model
+                .lock()
+                .block_list_mut()
+                .take_dirty_rich_content_items()
+                .is_empty()
+        );
+    });
+}
 #[test]
 fn completed_markdown_output_update_refreshes_cached_scroll_extent() {
     App::test((), |mut app| async move {
