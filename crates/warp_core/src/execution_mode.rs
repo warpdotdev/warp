@@ -24,7 +24,7 @@ impl ExecutionMode {
     pub fn client_id(&self) -> &'static str {
         match self {
             ExecutionMode::App => "warp-app",
-            ExecutionMode::Tui => "warp-tui",
+            ExecutionMode::Tui => "warp-agent-cli",
             ExecutionMode::Sdk => "warp-cli",
             ExecutionMode::RemoteServerDaemon => "warp-remote-server-daemon",
         }
@@ -142,3 +142,7 @@ impl SingletonEntity for AppExecutionMode {}
 pub fn current_client_id() -> Option<&'static str> {
     GLOBAL_EXECUTION_MODE.get().map(|mode| mode.client_id())
 }
+
+#[cfg(test)]
+#[path = "execution_mode_tests.rs"]
+mod tests;

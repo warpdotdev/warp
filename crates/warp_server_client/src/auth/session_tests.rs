@@ -6,7 +6,7 @@ use warp_server_auth::auth_state::AuthState;
 use warp_server_auth::credentials::{AuthToken, Credentials, LoginToken};
 use warp_server_auth::user::FirebaseAuthTokens;
 
-use super::AuthSession;
+use super::{AuthSession, device_oauth_client_id};
 
 fn session_with_state(
     auth_state: Arc<AuthState>,
@@ -64,4 +64,15 @@ fn api_key_exchange_defers_owner_type_until_user_properties_are_fetched() {
             owner_type: None
         } if key == "api-key"
     ));
+}
+
+#[test]
+fn device_oauth_client_distinguishes_warp_agent_cli_from_sdk_callers() {
+    assert_eq!(
+        device_oauth_client_id(Some("warp-agent-cli")),
+        "warp-agent-cli"
+    );
+    assert_eq!(device_oauth_client_id(Some("warp-cli")), "warp-cli");
+    assert_eq!(device_oauth_client_id(Some("warp-app")), "warp-cli");
+    assert_eq!(device_oauth_client_id(None), "warp-cli");
 }
