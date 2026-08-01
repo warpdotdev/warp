@@ -3860,6 +3860,36 @@ impl Workspace {
     ) {
         let start_index = self.tabs.len();
 
+        // Create the groups first so the per-tab assignments below have
+        // something to point at. Ids are minted here rather than restored:
+        // a launch config can be opened repeatedly, and into a workspace that
+        // already holds groups, so reusing saved ids would collide.
+        let group_ids: Vec<TabGroupId> = if FeatureFlag::GroupedTabs.is_enabled() {
+            window
+                .tab_groups
+                .iter()
+                .map(|group_template| {
+                    let group = TabGroup {
+                        id: TabGroupId::new(),
+                        name: group_template.name.clone(),
+                        color: group_template
+                            .color
+                            .map_or(SelectedTabColor::Unset, SelectedTabColor::Color),
+                        collapsed: group_template.collapsed,
+                        draggable_state: Default::default(),
+                        // Mirrors the session-restore path: only honor pinned
+                        // state while the Pinned Tabs feature is enabled.
+                        pinned: FeatureFlag::PinnedTabs.is_enabled() && group_template.pinned,
+                    };
+                    let id = group.id;
+                    self.tab_groups.insert(id, group);
+                    id
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         window
             .tabs
             .iter()
@@ -3874,6 +3904,11 @@ impl Workspace {
                 self.tabs[start_index + tab_index].selected_color = tab_template
                     .color
                     .map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+                // An out-of-range index (hand-edited YAML) leaves the tab
+                // ungrouped rather than failing the whole window.
+                self.tabs[start_index + tab_index].group_id = tab_template
+                    .group
+                    .and_then(|group_index| group_ids.get(group_index).copied());
             });
 
         if !window.tabs.is_empty() {

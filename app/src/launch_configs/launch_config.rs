@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::app_state::{
-    AppState, LeafContents, PaneNodeSnapshot, SplitDirection as StateSplitDirection, TabSnapshot,
-    WindowSnapshot,
+    AppState, LeafContents, PaneNodeSnapshot, SplitDirection as StateSplitDirection,
+    TabGroupSnapshot, TabSnapshot, WindowSnapshot,
 };
 use crate::themes::theme::AnsiColorIdentifier;
 
@@ -39,6 +39,37 @@ pub struct WindowTemplate {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub active_tab_index: Option<usize>,
     pub tabs: Vec<TabTemplate>,
+    /// Tab groups in this window, in tab-bar order. A tab joins one by
+    /// index through [`TabTemplate::group`]; runtime `TabGroupId`s are not
+    /// serialized because they are regenerated on every restore.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tab_groups: Vec<TabGroupTemplate>,
+}
+
+/// A tab group as stored in a launch config.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct TabGroupTemplate {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub color: Option<AnsiColorIdentifier>,
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub collapsed: bool,
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub pinned: bool,
+}
+
+impl From<&TabGroupSnapshot> for TabGroupTemplate {
+    fn from(snapshot: &TabGroupSnapshot) -> Self {
+        Self {
+            name: snapshot.name.clone(),
+            // Groups have no default-directory color to fall back to, so the
+            // manual selection is the whole story here.
+            color: snapshot.color.resolve(None),
+            collapsed: snapshot.collapsed,
+            pinned: snapshot.pinned,
+        }
+    }
 }
 
 impl From<WindowSnapshot> for WindowTemplate {
@@ -46,12 +77,16 @@ impl From<WindowSnapshot> for WindowTemplate {
         let mut active_tab_index = None;
         let mut num_valid_tabs = 0;
 
-        let tabs = snapshot
+        // A tab can fail to convert, so group membership has to be carried on
+        // the tab's own `group_id` rather than inferred from its position --
+        // the surviving tabs are renumbered below and the two indices diverge.
+        let tabs_with_groups = snapshot
             .tabs
             .into_iter()
             .enumerate()
             .filter_map(|(i, tab)| {
-                let tab = tab.try_into().ok()?;
+                let group_id = tab.group_id;
+                let tab: TabTemplate = tab.try_into().ok()?;
 
                 if i == snapshot.active_tab_index {
                     active_tab_index = Some(num_valid_tabs);
@@ -59,15 +94,41 @@ impl From<WindowSnapshot> for WindowTemplate {
 
                 num_valid_tabs += 1;
 
-                Some(tab)
+                Some((tab, group_id))
+            })
+            .collect::<Vec<_>>();
+
+        // Keep only groups that still have a member, so a config never
+        // restores an empty group the user cannot see or remove.
+        let tab_groups = snapshot
+            .tab_groups
+            .iter()
+            .filter(|group| {
+                tabs_with_groups
+                    .iter()
+                    .any(|(_, group_id)| *group_id == Some(group.id))
+            })
+            .collect::<Vec<_>>();
+
+        let tabs = tabs_with_groups
+            .into_iter()
+            .map(|(mut tab, group_id)| {
+                tab.group = group_id
+                    .and_then(|group_id| tab_groups.iter().position(|group| group.id == group_id));
+                tab
             })
             .collect::<Vec<TabTemplate>>();
 
         Self {
             active_tab_index,
             tabs,
+            tab_groups: tab_groups.into_iter().map(TabGroupTemplate::from).collect(),
         }
     }
+}
+
+fn is_false(val: &bool) -> bool {
+    !*val
 }
 
 fn is_falsey(val: &Option<bool>) -> bool {
@@ -187,6 +248,9 @@ pub struct TabTemplate {
     pub commands: Vec<CommandTemplate>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub color: Option<AnsiColorIdentifier>,
+    /// Index into [`WindowTemplate::tab_groups`], when this tab is grouped.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub group: Option<usize>,
 }
 
 impl TabTemplate {
@@ -238,6 +302,9 @@ impl TryFrom<TabSnapshot> for TabTemplate {
             layout: snapshot.root.try_into()?,
             commands: Vec::new(),
             color,
+            // Resolved by `From<WindowSnapshot>`, which is the only place
+            // that knows the window's surviving group list.
+            group: None,
         })
     }
 }
@@ -277,9 +344,11 @@ pub fn make_mock_single_window_launch_config() -> LaunchConfig {
         name: "Mocked Config".to_string(),
         active_window_index: Some(0),
         windows: vec![WindowTemplate {
+            tab_groups: vec![],
             active_tab_index: Some(0),
             tabs: vec![
                 TabTemplate {
+                    group: None,
                     title: Some("First Tab".to_string()),
                     layout: PaneTemplateType::PaneTemplate {
                         is_focused: Some(true),
@@ -292,6 +361,7 @@ pub fn make_mock_single_window_launch_config() -> LaunchConfig {
                     color: None,
                 },
                 TabTemplate {
+                    group: None,
                     title: Some("Second Tab".to_string()),
                     layout: PaneTemplateType::PaneTemplate {
                         is_focused: Some(true),
