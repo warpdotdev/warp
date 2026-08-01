@@ -21,6 +21,11 @@ fn app_and_tui_accept_api_keys() {
         api_key_from_launch_mode(&tui).as_deref(),
         Some("tui-api-key")
     );
+    assert!(pending_tui_api_key_from_launch_mode(&app).is_none());
+    assert_eq!(
+        pending_tui_api_key_from_launch_mode(&tui).as_deref(),
+        Some("tui-api-key")
+    );
 }
 
 #[test]

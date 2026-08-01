@@ -1321,25 +1321,39 @@ pub struct UpdateQuakeModeEventArg {
     active_window_id: Option<WindowId>,
 }
 
-fn refresh_user_after_iap_access(ctx: &mut AppContext) {
+enum StartupUserAuthentication {
+    RefreshUser,
+    ApiKey(String),
+}
+
+impl StartupUserAuthentication {
+    fn start(self, ctx: &mut AppContext) {
+        AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| match self {
+            Self::RefreshUser => auth_manager.refresh_user(ctx),
+            Self::ApiKey(api_key) => auth_manager.authenticate_api_key(api_key, ctx),
+        });
+    }
+}
+
+fn authenticate_user_after_iap_access(
+    authentication: StartupUserAuthentication,
+    ctx: &mut AppContext,
+) {
     let iap_manager = IapManager::handle(ctx);
     if !iap_manager.as_ref(ctx).is_enabled() || iap_manager.as_ref(ctx).has_valid_token() {
-        AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
-            auth_manager.refresh_user(ctx);
-        });
+        authentication.start(ctx);
         return;
     }
 
-    let mut refresh_started = false;
+    let mut pending_authentication = Some(authentication);
     ctx.subscribe_to_model(&iap_manager, move |iap_manager, event, ctx| match event {
         IapManagerEvent::StateChanged => {
-            if refresh_started || !iap_manager.as_ref(ctx).has_valid_token() {
+            if !iap_manager.as_ref(ctx).has_valid_token() {
                 return;
             }
-            refresh_started = true;
-            AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
-                auth_manager.refresh_user(ctx);
-            });
+            if let Some(authentication) = pending_authentication.take() {
+                authentication.start(ctx);
+            }
         }
         IapManagerEvent::AccessUnavailable => {
             report_error!("Staging IAP access unavailable before startup user refresh");
@@ -1368,6 +1382,21 @@ fn api_key_from_launch_mode(launch_mode: &LaunchMode) -> Option<String> {
     }
 }
 
+fn pending_tui_api_key_from_launch_mode(launch_mode: &LaunchMode) -> Option<String> {
+    match launch_mode {
+        LaunchMode::Tui {
+            entrypoint: TuiEntryPoint::Interactive { api_key, .. },
+        } => api_key.clone(),
+        LaunchMode::App { .. }
+        | LaunchMode::CommandLine { .. }
+        | LaunchMode::Test { .. }
+        | LaunchMode::RemoteServerProxy
+        | LaunchMode::RemoteServerDaemon { .. }
+        | LaunchMode::Tui {
+            entrypoint: TuiEntryPoint::CliCommand { .. },
+        } => None,
+    }
+}
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
 pub(crate) fn initialize_app(
     launch_mode: &LaunchMode,
@@ -1421,10 +1450,14 @@ pub(crate) fn initialize_app(
         ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());
     }
 
-    // Extract API key from command line options, if applicable.
-    let api_key = api_key_from_launch_mode(launch_mode);
-
-    let auth_state = Arc::new(AuthState::initialize(ctx, api_key));
+    // Interactive TUI API keys remain outside shared auth state until the server accepts them.
+    // Other launch modes retain their existing eager credential initialization semantics.
+    let pending_tui_api_key = pending_tui_api_key_from_launch_mode(launch_mode);
+    let auth_state = Arc::new(if pending_tui_api_key.is_some() {
+        AuthState::initialize_for_pending_api_key(ctx)
+    } else {
+        AuthState::initialize(ctx, api_key_from_launch_mode(launch_mode))
+    });
     timer.mark_interval_end("AUTH_MANAGER_SET_USER");
 
     let agent_source = determine_agent_source(launch_mode);
@@ -2304,10 +2337,16 @@ pub(crate) fn initialize_app(
     });
 
     // CLI commands establish IAP access and refresh auth in their dispatch path so they can
-    // surface failures synchronously. Interactive clients wait for IAP here before refreshing
-    // their persisted user, since the refresh itself calls the IAP-gated warp-server.
-    if user_is_logged_in && !matches!(launch_mode, LaunchMode::CommandLine { .. }) {
-        refresh_user_after_iap_access(ctx);
+    // surface failures synchronously. Interactive clients wait for IAP here before authenticating
+    // their startup user, since the request itself calls the IAP-gated warp-server.
+    let startup_authentication = pending_tui_api_key
+        .map(StartupUserAuthentication::ApiKey)
+        .or_else(|| {
+            (user_is_logged_in && !matches!(launch_mode, LaunchMode::CommandLine { .. }))
+                .then_some(StartupUserAuthentication::RefreshUser)
+        });
+    if let Some(authentication) = startup_authentication {
+        authenticate_user_after_iap_access(authentication, ctx);
     }
 
     // Add a singleton model that holds the current prompt configuration.

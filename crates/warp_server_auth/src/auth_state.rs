@@ -176,6 +176,30 @@ impl AuthState {
         state
     }
 
+    /// Creates auth state for an interactive client that still needs to validate
+    /// its startup API key.
+    ///
+    /// The pending key intentionally remains outside [`AuthState`] so it cannot
+    /// authorize unrelated requests or make [`Self::is_logged_in`] true before
+    /// the user fetch succeeds. Persisted user state is also skipped because an
+    /// explicitly supplied API key takes precedence over secure storage.
+    pub fn initialize_for_pending_api_key(ctx: &AppContext) -> Self {
+        let state = Self::new(ctx);
+
+        if Self::should_use_test_user() {
+            state.set_user(Some(User::test()));
+            #[cfg(any(
+                test,
+                feature = "integration_tests",
+                feature = "skip_login",
+                feature = "test-util"
+            ))]
+            state.set_credentials(Some(Self::test_credentials()));
+        }
+
+        state
+    }
+
     fn should_use_test_user() -> bool {
         cfg!(any(test, feature = "skip_login", feature = "test-util"))
             || ChannelState::channel() == Channel::Integration
