@@ -285,6 +285,7 @@ impl TuiMcpInstallFlowModel {
                                 request.variables.len()
                             )),
                             state_suffix: None,
+                            promotional_suffix: None,
                             is_selectable: true,
                             style: TuiInlineMenuRowStyle::Default,
                         })

@@ -9,10 +9,11 @@ use chrono::NaiveDate;
 use instant::Instant;
 use tempfile::TempDir;
 use warp::appearance::Appearance;
+#[cfg(feature = "voice_input")]
+use warp::settings::TuiVoiceSettings;
 use warp::settings::{
     AISettings, SettingsFileError, TuiStatuslineConfig, TuiStatuslineItem, TuiTheme,
-    TuiThemeSettings, TuiUsageDisplayMode, TuiVoiceInputHoldKey, TuiVoiceSettings,
-    TuiZeroStateObject,
+    TuiThemeSettings, TuiUsageDisplayMode, TuiVoiceInputHoldKey, TuiZeroStateObject,
 };
 use warp::terminal::model::ansi::{Handler, InputBufferValue, Mode};
 use warp::tui_export::{
@@ -43,7 +44,9 @@ use warpui_core::elements::tui::{
     TuiPoint, TuiRect, TuiScene, TuiScreenPosition, TuiSize, TuiStyle, TuiText,
     TuiViewportPosition,
 };
-use warpui_core::event::{KeyState, ModifiersState};
+#[cfg(feature = "voice_input")]
+use warpui_core::event::KeyState;
+use warpui_core::event::ModifiersState;
 use warpui_core::keymap::{Context, DescriptionContext, Keystroke, Trigger};
 use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::presenter::tui::TuiPresenter;
@@ -67,13 +70,16 @@ use super::{
     LOADING_CONVERSATION_HINT, LOG_BUNDLE_FAILED_HINT, RUNNING_COMMAND_DETACH_HINT,
     SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG,
     SESSION_CAN_ATTACH_AGENT_TO_RUNNING_COMMAND_FLAG,
-    SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG, SESSION_COMPOSER_SHORTCUTS_ACTIVE_FLAG,
-    SHELL_MODE_HINT, STATUSLINE_RESET_HINT, TuiConversationRestoreOrigin, TuiTerminalSessionAction,
-    TuiTerminalSessionEvent, TuiTerminalSessionView, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
-    attachment_focus_available, cost_command_unavailable_hint, export_file_success_message,
-    log_bundle_success_message, mcp_primary_action_hint, raw_prompt_if_not_blank,
-    render_mcp_install_footer, render_mcp_menu_footer, voice_argument_is_empty,
-    voice_command_argument,
+    SESSION_CAN_DETACH_AGENT_FROM_RUNNING_COMMAND_FLAG, SHELL_MODE_HINT, STATUSLINE_RESET_HINT,
+    TuiConversationRestoreOrigin, TuiTerminalSessionAction, TuiTerminalSessionEvent,
+    TuiTerminalSessionView, attachment_focus_available, cost_command_unavailable_hint,
+    export_file_success_message, log_bundle_success_message, mcp_primary_action_hint,
+    raw_prompt_if_not_blank, render_mcp_install_footer, render_mcp_menu_footer,
+};
+#[cfg(feature = "voice_input")]
+use super::{
+    SESSION_COMPOSER_SHORTCUTS_ACTIVE_FLAG, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
+    voice_argument_is_empty, voice_command_argument,
 };
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
@@ -106,6 +112,7 @@ use crate::transcript_view::TRANSCRIPT_BLOCK_SPACING;
 use crate::transient_hint::TransientHintTone;
 use crate::tui_builder::TuiUiBuilder;
 use crate::usage::UsageToggle;
+#[cfg(feature = "voice_input")]
 use crate::voice_input::{TuiVoiceInputState, requires_modifier_key_reporting};
 use crate::zero_state_animation::{
     ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent, ZeroStateAnimationLoadFailure,
@@ -484,6 +491,7 @@ fn footer_supports_arbitrary_order_and_figma_group_dividers() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn footer_uses_pipes_between_figma_groups_and_preserves_within_group_separators() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
@@ -907,6 +915,7 @@ fn nld_reset_only_unlocks_after_agent_control_and_not_on_user_edit() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_accepts_exact_and_whitespace_only_arguments() {
     assert_eq!(voice_command_argument("/voice"), Some(""));
     assert_eq!(voice_command_argument("/voice   "), Some("   "));
@@ -919,6 +928,7 @@ fn voice_accepts_exact_and_whitespace_only_arguments() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_slash_command_rejects_arguments_before_prompt_fallback() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -1253,6 +1263,7 @@ fn startup_settings_parse_failure_renders_as_an_error_footer_hint() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn listening_voice_input_animates_the_input_border() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -2181,7 +2192,8 @@ fn response_summary_visibility_is_independent_from_the_footer_usage_mode() {
 
         let totals = ConversationUsageTotals {
             credits_spent: 2.5,
-            cost_in_cents: 3.2,
+            cost_in_cents: Some(3.2),
+            has_usage: true,
         };
 
         assert_eq!(
@@ -3862,7 +3874,7 @@ fn zero_state_renders_with_only_zero_height_bootstrap_blocks() {
 }
 
 #[test]
-fn first_zero_state_is_provisional_and_reconciles_without_replacing_the_session() {
+fn first_zero_state_stays_hidden_while_markers_load_and_reconciles_without_replacing_session() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         app.update(|ctx| {
@@ -3874,18 +3886,19 @@ fn first_zero_state_is_provisional_and_reconciles_without_replacing_the_session(
 
         app.read(|ctx| {
             assert!(
-                view.as_ref(ctx)
+                !view
+                    .as_ref(ctx)
                     .session_state
                     .as_ref(ctx)
                     .show_first_zero_state()
             );
         });
         let lines = render_session(&mut app, &view, 100, 24);
-        assert!(lines.iter().any(|line| line.contains("Welcome to Warp")));
+        assert!(lines.iter().any(|line| line.contains("Warp Agent CLI")));
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("What’s different about Warp"))
+                .all(|line| !line.contains("What’s different about Warp"))
         );
         assert!(lines.iter().all(|line| !line.contains("████")));
 
@@ -3912,7 +3925,7 @@ fn first_zero_state_is_provisional_and_reconciles_without_replacing_the_session(
 }
 
 #[test]
-fn dismissed_provisional_zero_state_stays_hidden_but_consumes_ready_marker() {
+fn dismissed_pending_zero_state_stays_hidden_but_consumes_ready_marker() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         app.update(|ctx| {
@@ -3924,7 +3937,7 @@ fn dismissed_provisional_zero_state_stays_hidden_but_consumes_ready_marker() {
 
         view.update(&mut app, |view, ctx| {
             view.session_state.update(ctx, |state, ctx| {
-                state.set_show_first_zero_state(false, ctx);
+                state.dismiss_first_zero_state(ctx);
             });
         });
         app.update(|ctx| {
@@ -3965,7 +3978,7 @@ fn background_session_does_not_receive_first_run_onboarding() {
 
         app.read(|ctx| {
             assert!(
-                onboarding_view
+                !onboarding_view
                     .as_ref(ctx)
                     .session_state
                     .as_ref(ctx)
@@ -4000,11 +4013,18 @@ fn background_session_does_not_receive_first_run_onboarding() {
                     .show_first_zero_state()
             );
         });
+        let lines = render_session(&mut app, &onboarding_view, 100, 24);
+        assert!(lines.iter().any(|line| line.contains("Welcome to Warp")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("What’s different about Warp"))
+        );
     });
 }
 
 #[test]
-fn account_transition_restores_provisional_zero_state_on_existing_session() {
+fn account_transition_hides_first_zero_state_while_markers_reload() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, session_id) = add_first_run_onboarding_test_session(&mut app, &fixture, true);
@@ -4025,7 +4045,8 @@ fn account_transition_restores_provisional_zero_state_on_existing_session() {
         });
         app.read(|ctx| {
             assert!(
-                view.as_ref(ctx)
+                !view
+                    .as_ref(ctx)
                     .session_state
                     .as_ref(ctx)
                     .show_first_zero_state()
@@ -4123,6 +4144,7 @@ fn set_enabled_statusline_items(app: &mut App, items: Vec<TuiStatuslineItem>) {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn footer_falls_back_to_replacing_voice_hints_when_voice_item_is_disabled() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -4175,6 +4197,7 @@ fn footer_falls_back_to_replacing_voice_hints_when_voice_item_is_disabled() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn configured_voice_item_renders_idle_listening_and_transcribing_states() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -4241,6 +4264,7 @@ fn configured_voice_item_renders_idle_listening_and_transcribing_states() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_click_is_interactive_only_within_the_segment_bounds() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -4303,6 +4327,7 @@ fn voice_click_is_interactive_only_within_the_segment_bounds() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_toggle_stops_listening_and_ignores_transcribing() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -4491,7 +4516,8 @@ fn footer_renders_agent_sections_left_aligned() {
                 TuiUsageDisplayMode::default(),
                 ConversationUsageTotals {
                     credits_spent: 2.5,
-                    cost_in_cents: 0.0,
+                    cost_in_cents: Some(0.0),
+                    has_usage: true,
                 },
                 ctx,
                 |_, _| {},
@@ -4531,6 +4557,86 @@ fn footer_renders_agent_sections_left_aligned() {
                 "the first segment starts at the left edge (no flex-spacer padding)"
             );
             assert!(!line.contains('←'), "the conversations callout is absent");
+        });
+    });
+}
+
+/// The footer's usage entry is gated on `has_usage`: a freshly started
+/// conversation that has not reported any usage yet must not surface totals.
+#[test]
+fn footer_usage_entry_is_hidden_until_the_conversation_reports_usage() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.conversation_selection.update(ctx, |selection, ctx| {
+                selection
+                    .try_start_new_conversation(AgentViewEntryOrigin::Tui, ctx)
+                    .expect("test conversation should start");
+            });
+        });
+
+        view.read(&app, |view, ctx| {
+            assert!(
+                view.conversation_selection
+                    .as_ref(ctx)
+                    .selected_conversation(ctx)
+                    .is_some(),
+                "a conversation must be selected for the gate to be meaningful"
+            );
+            assert!(
+                view.selected_conversation_usage_totals(ctx).is_none(),
+                "a conversation without usage must not surface footer totals"
+            );
+        });
+    });
+}
+
+/// A conversation with usage but an unknown historical cost (legacy restore)
+/// still renders the usage entry — `Cost unavailable` in cost mode, never
+/// `$0.00` — even when credits happen to be zero.
+#[test]
+fn footer_usage_entry_shows_unknown_cost_even_with_zero_credits() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let builder = TuiUiBuilder::from_app(ctx);
+            let usage = UsageToggle::default().render_entry(
+                TuiUsageDisplayMode::Cost,
+                ConversationUsageTotals {
+                    credits_spent: 0.0,
+                    cost_in_cents: None,
+                    has_usage: true,
+                },
+                ctx,
+                |_, _| {},
+            );
+            let row = render_status_footer_row(
+                FooterSegments {
+                    ordered: vec![
+                        FooterSegment::Model(
+                            TuiText::new("TestModel")
+                                .with_style(builder.primary_text_style())
+                                .truncate()
+                                .finish(),
+                        ),
+                        FooterSegment::CreditUsage(usage),
+                    ],
+                },
+                &builder,
+            )
+            .finish();
+            let line = render_element(row, ctx, 80).to_lines().join("\n");
+
+            assert!(
+                line.contains("Cost unavailable"),
+                "unknown historical cost renders the stable fallback text, got: {line}"
+            );
+            assert!(
+                !line.contains("$0.00"),
+                "unknown cost must never render as $0.00, got: {line}"
+            );
         });
     });
 }
@@ -4892,6 +4998,7 @@ fn voice_hold_keys_preserve_left_and_right_modifiers() {
     }
 }
 
+#[cfg(feature = "voice_input")]
 fn voice_key_event(key: KeyCode, state: KeyState) -> TuiEvent {
     TuiEvent::ModifierKeyChanged {
         key_code: key,
@@ -4899,6 +5006,7 @@ fn voice_key_event(key: KeyCode, state: KeyState) -> TuiEvent {
     }
 }
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_hold_handler_matches_only_the_configured_side() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -4946,6 +5054,7 @@ fn voice_hold_handler_matches_only_the_configured_side() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_hold_handler_keeps_release_after_composer_loses_input() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
@@ -4995,6 +5104,23 @@ fn voice_hold_handler_keeps_release_after_composer_loses_input() {
         ));
     });
 }
+
+#[test]
+#[cfg(not(feature = "voice_input"))]
+fn voice_controls_stay_disabled_without_voice_input_support() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        app.update(crate::keybindings::init);
+        app.read(|ctx| {
+            assert!(
+                ctx.editable_bindings()
+                    .all(|binding| binding.name != "tui:session:start_voice_input")
+            );
+            assert!(!view.as_ref(ctx).voice_statusline_is_available(false, ctx));
+        });
+    });
+}
 #[test]
 fn blocked_terminal_use_action_acceptance_uses_ctrl_enter_without_rebinding_submit() {
     App::test((), |mut app| async move {
@@ -5030,6 +5156,7 @@ fn blocked_terminal_use_action_acceptance_uses_ctrl_enter_without_rebinding_subm
     });
 }
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_input_uses_ctrl_s_only_when_composer_shortcuts_are_active() {
     App::test((), |mut app| async move {
         app.update(crate::keybindings::init);
@@ -6312,38 +6439,55 @@ fn killing_child_does_not_exit_tui_parent_session_remains_alive() {
 }
 
 #[test]
-fn status_email_fallback_chain_covers_username_and_signed_in_arms() {
+fn status_email_fallback_chain_requires_a_validated_identity() {
     // Arm 1: non-empty email wins regardless of username.
     assert_eq!(
         super::resolve_status_email(
             Some("user@example.com".to_owned()),
             Some("display_name".to_owned()),
+            Some("user-123".to_owned()),
             true,
         ),
         "user@example.com"
     );
     // Arm 2a: empty email falls back to a non-empty username.
     assert_eq!(
-        super::resolve_status_email(Some(String::new()), Some("display_name".to_owned()), true,),
+        super::resolve_status_email(
+            Some(String::new()),
+            Some("display_name".to_owned()),
+            Some("user-123".to_owned()),
+            true,
+        ),
         "display_name"
     );
     // Arm 2b: None email falls back to a non-empty username.
     assert_eq!(
-        super::resolve_status_email(None, Some("display_name".to_owned()), true),
+        super::resolve_status_email(
+            None,
+            Some("display_name".to_owned()),
+            Some("user-123".to_owned()),
+            true,
+        ),
         "display_name"
     );
-    // Arm 3: both email and username absent/empty but logged in → "Signed in".
+    // Arm 3: user ID is the final validated identity fallback.
     assert_eq!(
-        super::resolve_status_email(None, None, true),
-        super::STATUS_SIGNED_IN
+        super::resolve_status_email(None, None, Some("user-123".to_owned()), true),
+        "user-123"
     );
+    // Arm 4: a missing identity never degrades to bare "Signed in".
     assert_eq!(
-        super::resolve_status_email(Some(String::new()), Some(String::new()), true,),
-        super::STATUS_SIGNED_IN
+        super::resolve_status_email(Some(String::new()), Some(String::new()), None, true),
+        super::STATUS_NOT_SIGNED_IN
     );
-    // Arm 4: fully logged out → "Not signed in".
+    // Arm 5: an identity is ignored unless auth has been validated.
     assert_eq!(
-        super::resolve_status_email(None, None, false),
+        super::resolve_status_email(
+            Some("user@example.com".to_owned()),
+            Some("display_name".to_owned()),
+            Some("user-123".to_owned()),
+            false,
+        ),
         super::STATUS_NOT_SIGNED_IN
     );
 }

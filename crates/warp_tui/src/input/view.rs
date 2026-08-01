@@ -34,11 +34,14 @@ use warp::tui_export::{
 use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity as _;
 use warpui_core::elements::MouseStateHandle;
+#[cfg(feature = "voice_input")]
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiText};
+#[cfg(feature = "voice_input")]
 use warpui_core::event::KeyState;
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding, FixedBinding, Keystroke};
+#[cfg(feature = "voice_input")]
 use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::text::{byte_offset_for_char_offset, count_chars_up_to_byte};
 use warpui_core::{
@@ -64,6 +67,7 @@ use crate::mcp_install_flow::TuiMcpInstallFlowAction;
 use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::terminal_session_view::state::TuiTerminalSessionStateModel;
 use crate::tui_builder::TuiUiBuilder;
+#[cfg(feature = "voice_input")]
 use crate::voice_input::{
     TuiVoiceInputEvent, TuiVoiceInputModel, TuiVoiceInputState, VoiceInputStartSource,
 };
@@ -248,6 +252,7 @@ pub struct TuiInputView {
     /// Consults the owner live before an inline-menu Enter can accept an item.
     can_accept_inline_menu: Rc<dyn Fn(&AppContext) -> bool>,
     /// TUI voice state used for Escape routing and shell-gutter suppression.
+    #[cfg(feature = "voice_input")]
     voice_input: ModelHandle<TuiVoiceInputModel>,
     /// Vim model (shared FSA + event dispatch layer). Always present but only
     /// active when `AppEditorSettings::vim_mode_enabled()` returns `true`.
@@ -332,6 +337,7 @@ impl TuiInputView {
         session_state: ModelHandle<TuiTerminalSessionStateModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
+        #[cfg(feature = "voice_input")]
         let voice_input = ctx.add_model(|ctx| TuiVoiceInputModel::new(input_mode.clone(), ctx));
         let vim_model = ctx.add_model(|_| VimModel::new());
         // Subscribe to vim events: VimSubscriber blanket impl (TuiInputView: VimHandler)
@@ -346,15 +352,18 @@ impl TuiInputView {
         // on the config (shell-mode gutter/border), so every event re-renders.
         ctx.subscribe_to_model(&input_mode, |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&suggestions_mode, |_, _, _, ctx| ctx.notify());
-        // Only the voice lifecycle state reaches this view's render (the
-        // suppressed shell gutter and the Escape keymap flag). Transcribed text
-        // arrives through `insert_text`, and failure or cancellation notices
-        // render in the session footer, so neither repaints the input.
-        ctx.subscribe_to_model(&voice_input, |_, _, event, ctx| {
-            if matches!(event, TuiVoiceInputEvent::StateChanged(_)) {
-                ctx.notify();
-            }
-        });
+        #[cfg(feature = "voice_input")]
+        {
+            // Only the voice lifecycle state reaches this view's render (the
+            // suppressed shell gutter and the Escape keymap flag). Transcribed text
+            // arrives through `insert_text`, and failure or cancellation notices
+            // render in the session footer, so neither repaints the input.
+            ctx.subscribe_to_model(&voice_input, |_, _, event, ctx| {
+                if matches!(event, TuiVoiceInputEvent::StateChanged(_)) {
+                    ctx.notify();
+                }
+            });
+        }
 
         Self {
             model,
@@ -368,6 +377,7 @@ impl TuiInputView {
             session_state,
             keyboard_enhancement_supported: false,
             can_accept_inline_menu: Rc::new(|_| true),
+            #[cfg(feature = "voice_input")]
             voice_input,
             vim_model,
             yank_buffer: String::new(),
@@ -397,6 +407,7 @@ impl TuiInputView {
             .resolve(ctx)
             .is_ok_and(|state| state.plan_available())
     }
+
     /// Whether vim mode is enabled in settings.
     ///
     /// Returns `false` when [`AppEditorSettings`] has not been registered in
@@ -432,28 +443,32 @@ impl TuiInputView {
         input_mode_policy::is_shell_mode(self.input_mode.as_ref(ctx))
     }
 
+    #[cfg(feature = "voice_input")]
     pub(crate) fn voice_is_active(&self, ctx: &AppContext) -> bool {
         self.voice_input.as_ref(ctx).is_active()
     }
-
+    #[cfg(feature = "voice_input")]
     pub(crate) fn voice_input_model(&self) -> &ModelHandle<TuiVoiceInputModel> {
         &self.voice_input
     }
-
+    #[cfg(feature = "voice_input")]
     pub(crate) fn voice_state(&self, ctx: &AppContext) -> TuiVoiceInputState {
         self.voice_input.as_ref(ctx).state()
     }
 
+    #[cfg(feature = "voice_input")]
     pub(crate) fn voice_animation_clock(&self, ctx: &AppContext) -> AnimationClock {
         self.voice_input.as_ref(ctx).animation_clock()
     }
 
     /// The physical modifier holding the current recording open, set only while
     /// a hold-to-talk press started it.
+    #[cfg(feature = "voice_input")]
     pub(crate) fn voice_hold_key(&self, ctx: &AppContext) -> Option<KeyCode> {
         self.voice_input.as_ref(ctx).hold_key()
     }
 
+    #[cfg(feature = "voice_input")]
     pub(crate) fn start_voice_input(
         &mut self,
         available: bool,
@@ -465,16 +480,19 @@ impl TuiInputView {
         })
     }
 
+    #[cfg(feature = "voice_input")]
     pub(crate) fn stop_voice_input(&mut self, ctx: &mut ViewContext<Self>) {
         self.voice_input
             .update(ctx, |voice_input, ctx| voice_input.stop(ctx));
     }
 
+    #[cfg(feature = "voice_input")]
     pub(crate) fn stop_active_voice_hold(&mut self, ctx: &mut ViewContext<Self>) {
         self.voice_input
             .update(ctx, |voice_input, ctx| voice_input.stop_hold(ctx));
     }
 
+    #[cfg(feature = "voice_input")]
     pub(crate) fn handle_voice_hold_key(
         &mut self,
         key: KeyCode,
@@ -512,6 +530,7 @@ impl TuiInputView {
     }
 
     /// Inserts normalized text at the current cursor without submitting it.
+    #[cfg(feature = "voice_input")]
     pub(crate) fn insert_text(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
         let text = self.editor_behavior.normalize_text(text);
         if !text.is_empty() {
@@ -651,6 +670,7 @@ impl TuiView for TuiInputView {
         let inline_menu_owns_input = self
             .active_inline_menu_input_ownership(ctx)
             .inline_menu_owns_input();
+        #[cfg(feature = "voice_input")]
         if self.voice_is_active(ctx) && !inline_menu_owns_input {
             return self.render_input(ctx);
         }
@@ -693,7 +713,16 @@ impl TuiView for TuiInputView {
             input_handles_escape: self.active_inline_menu(ctx).is_some()
                 || suggestions_mode.read_only_menu().is_some()
                 || self.is_shell_mode(ctx)
-                || self.voice_is_active(ctx)
+                || {
+                    #[cfg(feature = "voice_input")]
+                    {
+                        self.voice_is_active(ctx)
+                    }
+                    #[cfg(not(feature = "voice_input"))]
+                    {
+                        false
+                    }
+                }
                 || (vim_mode_enabled
                     && (!matches!(vim_state.mode, VimMode::Normal)
                         || !vim_state.showcmd.is_empty())),
@@ -833,7 +862,11 @@ impl TypedActionView for TuiInputView {
                 self.close_read_only_menu(ctx);
                 // In vim normal/visual/replace mode, Enter still submits so the
                 // prompt behaves like a command line (same as bash/zsh vi-mode).
-                if !self.handle_voice_submit(ctx) {
+                #[cfg(feature = "voice_input")]
+                if self.handle_voice_submit(ctx) {
+                    return;
+                }
+                {
                     self.submit(ctx);
                 }
                 TuiEditorInteractionOutcome::FollowCursor
@@ -1292,6 +1325,7 @@ impl TuiInputView {
         ctx.emit(TuiInputViewEvent::Submitted(text));
     }
 
+    #[cfg(feature = "voice_input")]
     fn handle_voice_submit(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         match self.voice_input.as_ref(ctx).state() {
             TuiVoiceInputState::Listening => {
@@ -1406,18 +1440,21 @@ impl TuiInputView {
             return true;
         }
 
-        match self.voice_input.as_ref(ctx).state() {
-            TuiVoiceInputState::Listening => {
-                self.voice_input
-                    .update(ctx, |voice_input, ctx| voice_input.stop(ctx));
-                return true;
+        #[cfg(feature = "voice_input")]
+        {
+            match self.voice_input.as_ref(ctx).state() {
+                TuiVoiceInputState::Listening => {
+                    self.voice_input
+                        .update(ctx, |voice_input, ctx| voice_input.stop(ctx));
+                    return true;
+                }
+                TuiVoiceInputState::Transcribing => {
+                    self.voice_input
+                        .update(ctx, |voice_input, ctx| voice_input.cancel(ctx));
+                    return true;
+                }
+                TuiVoiceInputState::Idle => {}
             }
-            TuiVoiceInputState::Transcribing => {
-                self.voice_input
-                    .update(ctx, |voice_input, ctx| voice_input.cancel(ctx));
-                return true;
-            }
-            TuiVoiceInputState::Idle => {}
         }
 
         // In vim mode, Escape transitions between modes (Insert→Normal,

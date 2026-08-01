@@ -47,6 +47,12 @@ enum TuiTerminalSessionStateSource {
         orchestration_tabs_available: Rc<dyn Fn(&AppContext) -> bool>,
     },
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TuiFirstZeroStateState {
+    Pending,
+    Visible,
+    Dismissed,
+}
 
 /// Persistent session-owned model that resolves a live state snapshot.
 ///
@@ -56,7 +62,7 @@ enum TuiTerminalSessionStateSource {
 /// presentation components one shared state source.
 pub(crate) struct TuiTerminalSessionStateModel {
     source: TuiTerminalSessionStateSource,
-    show_first_zero_state: bool,
+    first_zero_state: TuiFirstZeroStateState,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,14 +103,14 @@ impl Entity for TuiTerminalSessionStateModel {
 }
 
 impl TuiTerminalSessionStateModel {
-    pub(crate) fn new(
+    pub(super) fn new(
         terminal_model: &Arc<FairMutex<TerminalModel>>,
         cli_subagent_controller: &ModelHandle<CLISubagentController>,
         transcript: &ViewHandle<TuiTranscriptView>,
         input_mode: &ModelHandle<BlocklistAIInputModel>,
         suggestions_mode: &ModelHandle<TuiInputSuggestionsModeModel>,
         orchestration_tab_bar: &ViewHandle<TuiTabBarView>,
-        show_first_zero_state: bool,
+        first_zero_state: TuiFirstZeroStateState,
     ) -> Self {
         Self {
             source: TuiTerminalSessionStateSource::Session {
@@ -115,17 +121,36 @@ impl TuiTerminalSessionStateModel {
                 suggestions_mode: suggestions_mode.downgrade(),
                 orchestration_tab_bar: orchestration_tab_bar.downgrade(),
             },
-            show_first_zero_state,
+            first_zero_state,
         }
     }
 
     pub(crate) fn show_first_zero_state(&self) -> bool {
-        self.show_first_zero_state
+        self.first_zero_state == TuiFirstZeroStateState::Visible
     }
 
-    pub(crate) fn set_show_first_zero_state(&mut self, show: bool, ctx: &mut ModelContext<Self>) {
-        if self.show_first_zero_state != show {
-            self.show_first_zero_state = show;
+    pub(crate) fn set_first_zero_state_pending(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.first_zero_state != TuiFirstZeroStateState::Pending {
+            self.first_zero_state = TuiFirstZeroStateState::Pending;
+            ctx.notify();
+        }
+    }
+
+    pub(crate) fn resolve_first_zero_state(&mut self, show: bool, ctx: &mut ModelContext<Self>) {
+        if self.first_zero_state != TuiFirstZeroStateState::Pending {
+            return;
+        }
+        self.first_zero_state = if show {
+            TuiFirstZeroStateState::Visible
+        } else {
+            TuiFirstZeroStateState::Dismissed
+        };
+        ctx.notify();
+    }
+
+    pub(crate) fn dismiss_first_zero_state(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.first_zero_state != TuiFirstZeroStateState::Dismissed {
+            self.first_zero_state = TuiFirstZeroStateState::Dismissed;
             ctx.notify();
         }
     }
@@ -141,7 +166,7 @@ impl TuiTerminalSessionStateModel {
                 suggestions_mode: suggestions_mode.downgrade(),
                 orchestration_tabs_available: Rc::new(orchestration_tabs_available),
             },
-            show_first_zero_state: false,
+            first_zero_state: TuiFirstZeroStateState::Dismissed,
         }
     }
 

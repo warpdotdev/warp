@@ -6,11 +6,13 @@ use warpui::{App, SingletonEntity};
 
 use super::{
     TuiAuthBrowserFlow, TuiLoginEvent, TuiLoginModel, TuiLoginPhase, handle_auth_manager_event,
-    set_logged_out_phase, set_login_phase, start_tui_device_login,
-    tui_verification_url_with_return, validated_tui_focus_url,
+    has_validated_identity, initial_login_phase, set_logged_out_phase, set_login_phase,
+    start_tui_device_login, tui_verification_url_with_return, validated_tui_focus_url,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
+use crate::auth::auth_state::AuthState;
+use crate::auth::credentials::Credentials;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::auth::UserAuthenticationError;
 fn login_model(phase: TuiLoginPhase) -> TuiLoginModel {
@@ -18,6 +20,43 @@ fn login_model(phase: TuiLoginPhase) -> TuiLoginModel {
         phase,
         browser_flow: TuiAuthBrowserFlow::DirectDeviceAuthorization,
     }
+}
+
+#[test]
+fn credential_only_auth_stays_on_signed_out_welcome() {
+    let auth_state = AuthState::new_logged_out_for_test();
+    auth_state.set_credentials(Some(Credentials::ApiKey {
+        key: "wk-api-test".to_owned(),
+        owner_type: None,
+    }));
+
+    assert!(!has_validated_identity(&auth_state));
+    assert!(matches!(
+        initial_login_phase(&auth_state),
+        TuiLoginPhase::SignedOutWelcome
+    ));
+}
+
+#[test]
+fn credentials_with_user_identity_start_logged_in() {
+    let auth_state = AuthState::new_for_test();
+
+    assert!(has_validated_identity(&auth_state));
+    assert!(matches!(
+        initial_login_phase(&auth_state),
+        TuiLoginPhase::LoggedIn
+    ));
+}
+
+#[test]
+fn missing_credentials_and_identity_start_signed_out() {
+    let auth_state = AuthState::new_logged_out_for_test();
+
+    assert!(!has_validated_identity(&auth_state));
+    assert!(matches!(
+        initial_login_phase(&auth_state),
+        TuiLoginPhase::SignedOutWelcome
+    ));
 }
 
 #[test]
@@ -295,6 +334,29 @@ fn renders_device_code_request_timeout_without_id_token_prefix() {
                 TuiLoginPhase::Failed { message }
                     if message == "Timed out requesting a sign-in link after 2 attempts"
                         && !message.contains("ID token")
+            ));
+        });
+    });
+}
+
+#[test]
+fn credential_validation_failure_stays_on_auth_flow() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| TuiLoginModel::signed_out_for_test());
+
+        app.update(|ctx| {
+            handle_auth_manager_event(
+                &AuthManagerEvent::AuthFailed(UserAuthenticationError::Unexpected(
+                    anyhow::anyhow!("API key rejected"),
+                )),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            assert!(matches!(
+                TuiLoginModel::as_ref(ctx).phase(),
+                TuiLoginPhase::Failed { message } if message.contains("API key rejected")
             ));
         });
     });

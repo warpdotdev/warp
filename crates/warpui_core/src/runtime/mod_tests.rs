@@ -28,6 +28,71 @@ struct TextElement {
     origin: Option<TuiScreenPoint>,
 }
 
+#[test]
+fn blocking_runtime_suspends_and_resumes_repaint_deadlines_with_focus() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| RepaintingView));
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut runtime = TuiRuntime::with_terminal(&app, window_id, root, terminal);
+
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(runtime.pending_repaint.is_some());
+
+        runtime
+            .screen
+            .terminal
+            .events
+            .push_back(CrosstermEvent::FocusLost);
+        runtime.poll_and_dispatch(&mut app, Duration::ZERO).unwrap();
+        assert!(!runtime.focused);
+        assert!(runtime.pending_repaint.is_none());
+
+        runtime.dirty.set(true);
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(
+            runtime.pending_repaint.is_none(),
+            "ordinary invalidations may draw while blurred but must not restart animation"
+        );
+
+        runtime
+            .screen
+            .terminal
+            .events
+            .push_back(CrosstermEvent::FocusGained);
+        runtime.poll_and_dispatch(&mut app, Duration::ZERO).unwrap();
+        assert!(runtime.focused);
+        assert!(runtime.dirty.get());
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(runtime.pending_repaint.is_some());
+    });
+}
+
+#[test]
+fn invalidation_driver_does_not_schedule_repaints_while_unfocused() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| RepaintingView));
+        let screen = Rc::new(RefCell::new(TuiScreen::new(
+            window_id,
+            root,
+            TestTerminal::new(TuiSize::new(20, 3)),
+            Arc::new(Mutex::new(())),
+        )));
+        let timer = Rc::new(RefCell::new(None));
+        let focused = Rc::new(Cell::new(true));
+
+        app.update(|ctx| draw_and_schedule_repaint(&screen, &timer, &focused, ctx))
+            .unwrap();
+        assert!(timer.borrow().is_some());
+
+        focused.set(false);
+        app.update(|ctx| draw_and_schedule_repaint(&screen, &timer, &focused, ctx))
+            .unwrap();
+        assert!(timer.borrow().is_none());
+    });
+}
+
 impl TuiElement for TextElement {
     fn layout(
         &mut self,
@@ -89,6 +154,59 @@ impl TuiView for TextView {
 }
 
 impl TypedActionView for TextView {
+    type Action = ();
+}
+
+struct RepaintingElement {
+    size: Option<TuiSize>,
+}
+
+impl TuiElement for RepaintingElement {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        let size = constraint.clamp(TuiSize::new(1, 1));
+        self.size = Some(size);
+        size
+    }
+
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        if let Some(cell) = surface.cell_mut(origin) {
+            cell.set_char('*');
+        }
+        ctx.repaint_after(Duration::from_secs(1));
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+}
+
+struct RepaintingView;
+
+impl Entity for RepaintingView {
+    type Event = ();
+}
+
+impl TuiView for RepaintingView {
+    fn ui_name() -> &'static str {
+        "RepaintingView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
+        Box::new(RepaintingElement { size: None })
+    }
+}
+
+impl TypedActionView for RepaintingView {
     type Action = ();
 }
 

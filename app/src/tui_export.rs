@@ -137,7 +137,8 @@ pub use crate::ai::harness_availability::{
     HarnessAvailabilityModel, HarnessModelInfo,
 };
 pub use crate::ai::llms::{
-    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, should_show_key_icon_for_model,
+    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, should_show_bedrock_icon_for_model,
+    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
 };
 pub use crate::ai::orchestration::{
     AuthSecretSelection, CloudAgentStartupAuthFlow, CloudAgentStartupBlocker,

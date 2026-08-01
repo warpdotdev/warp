@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn app_and_tui_accept_api_keys() {
+fn app_and_tui_use_distinct_api_key_initialization_policies() {
     let app = LaunchMode::App {
         args: Default::default(),
         api_key: Some("app-api-key".to_owned()),
@@ -13,14 +13,10 @@ fn app_and_tui_accept_api_keys() {
         },
     };
 
-    assert_eq!(
-        api_key_from_launch_mode(&app).as_deref(),
-        Some("app-api-key")
-    );
-    assert_eq!(
-        api_key_from_launch_mode(&tui).as_deref(),
-        Some("tui-api-key")
-    );
+    assert_eq!(app.api_key().as_deref(), Some("app-api-key"));
+    assert_eq!(tui.api_key().as_deref(), Some("tui-api-key"));
+    assert!(app.should_initialize_api_key_eagerly());
+    assert!(!tui.should_initialize_api_key_eagerly());
 }
 
 #[test]

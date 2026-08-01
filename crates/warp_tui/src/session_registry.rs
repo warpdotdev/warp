@@ -130,6 +130,7 @@ pub(crate) enum TuiSessionsEvent {
 pub(crate) struct TuiSessions {
     /// TUI-specific process driver. Its handle restores terminal mode on
     /// drop, so the app-lifetime session singleton must retain it.
+    #[cfg_attr(not(feature = "voice_input"), allow(dead_code))]
     driver: Option<TuiDriverHandle>,
     keyboard_enhancement_supported: bool,
     exit_summary: TuiExitSummaryHandle,
@@ -602,6 +603,7 @@ impl TuiSessions {
         }
     }
 
+    #[cfg(feature = "voice_input")]
     pub(crate) fn set_modifier_key_lifecycle_enabled(
         &mut self,
         enabled: bool,

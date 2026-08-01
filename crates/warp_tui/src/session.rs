@@ -13,7 +13,9 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use clap::error::ErrorKind;
 use inquire::{InquireError, Password, PasswordDisplayMode};
-use warp::settings::{TuiThemeSettings, TuiVoiceSettings, TuiVoiceSettingsChangedEvent};
+use warp::settings::TuiThemeSettings;
+#[cfg(feature = "voice_input")]
+use warp::settings::{TuiVoiceSettings, TuiVoiceSettingsChangedEvent};
 use warp::tui_export::{AIConversationAutoexecuteMode, Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::channel::ChannelState;
@@ -34,6 +36,7 @@ use crate::terminal_background::TuiHostTerminalBackground;
 use crate::terminal_session_view::{
     TuiConversationRestoreOrigin, TuiConversationRestoreTarget, tui_resume_shell_command,
 };
+#[cfg(feature = "voice_input")]
 use crate::voice_input::requires_modifier_key_reporting;
 
 /// Version string printed by `--version`. Release builds get `GIT_RELEASE_TAG`;
@@ -250,18 +253,24 @@ fn init(
         },
         |_| RootTuiView::new(),
     );
+    #[cfg(feature = "voice_input")]
+    let modifier_key_lifecycle_enabled = requires_modifier_key_reporting(ctx);
+    #[cfg(not(feature = "voice_input"))]
+    let modifier_key_lifecycle_enabled = false;
     match spawn_tui_driver(
         ctx,
         window_id,
         root.clone(),
-        requires_modifier_key_reporting(ctx),
+        modifier_key_lifecycle_enabled,
         Some(probe),
     ) {
         Ok(driver) => {
             let sessions = ctx.add_singleton_model(|_| {
                 TuiSessions::new(driver, exit_summary, resume_token, default_autoexecute_mode)
             });
+            #[cfg(feature = "voice_input")]
             let sessions_for_voice_settings = sessions.clone();
+            #[cfg(feature = "voice_input")]
             ctx.subscribe_to_model(&TuiVoiceSettings::handle(ctx), move |_, event, ctx| {
                 let TuiVoiceSettingsChangedEvent::TuiVoiceInputHoldKeySetting { .. } = event;
                 let enabled = requires_modifier_key_reporting(ctx);

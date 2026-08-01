@@ -29,18 +29,50 @@ use super::config::{
 };
 use super::{
     ActivePress, BUILT_IN_LOGO_CELL_ASPECT_RATIO, FLICK_RELEASE_VELOCITY_GAIN, LogoCell, LogoGlyph,
-    LogoSurface, MAX_INTERACTIVE_RADIANS_PER_SECOND, MIN_ANIMATION_COLS, MIN_ANIMATION_ROWS,
-    MOMENTUM_SETTLE_DURATION, REPAINT_INTERVAL, WarpLogoStyles, ZeroStateAnimationElement,
-    ZeroStateInteractionHandle, configured_idle_velocity, face_linger_angle, fitted_logo_size,
-    glyph_for_tangent, idle_angle, is_ghost_stipple_cell, logo_frame_at, object_frame_at,
-    object_frame_at_angle, object_frame_at_with_background, rotation_angle, star_count_for_size,
-    starfield_emitter_x, warp_logo_contains,
+    LogoProjector, LogoSurface, MAX_INTERACTIVE_RADIANS_PER_SECOND, MIN_ANIMATION_COLS,
+    MIN_ANIMATION_ROWS, MOMENTUM_SETTLE_DURATION, REPAINT_INTERVAL, WarpLogoStyles,
+    ZeroStateAnimationElement, ZeroStateInteractionHandle, configured_idle_velocity,
+    face_linger_angle, fitted_logo_size, glyph_for_tangent, idle_angle, is_ghost_stipple_cell,
+    logo_frame_at, object_frame_at, object_frame_at_angle, object_frame_at_angle_with_background,
+    object_frame_at_with_background, rotation_angle, star_count_for_size, starfield_emitter_x,
+    warp_logo_contains,
 };
 
 const PANEL_SIZE: TuiSize = TuiSize::new(52, 20);
 const DIAMOND_ART: &str = "   #\n  ###\n #####\n  ###\n   #\n";
 const ROCKET_ART: &str = "    #\n   ###\n  ####\n #####\n   ###\n  #  #\n";
 const WARP_W_ART: &str = "#       #\n#       #\n#   #   #\n#  # #  #\n ##   ##\n";
+
+#[test]
+fn idle_animation_uses_a_fifteen_frame_per_second_cadence() {
+    assert_eq!(REPAINT_INTERVAL, Duration::from_millis(66));
+}
+
+#[test]
+fn retained_projector_matches_reference_across_resizes_and_shape_changes() {
+    let mut projector = LogoProjector::default();
+    let configs = [
+        ZeroStateAnimationConfig::default(),
+        custom_config(ROCKET_ART, 4.0, 0.18),
+    ];
+    for config in &configs {
+        for size in [PANEL_SIZE, TuiSize::new(32, 12), TuiSize::new(52, 30)] {
+            for elapsed in [
+                Duration::ZERO,
+                Duration::from_millis(850),
+                Duration::from_secs(2),
+            ] {
+                let angle = idle_angle(elapsed, configured_idle_velocity(config));
+                let retained = projector
+                    .project(elapsed, size, config, angle, true)
+                    .cloned();
+                let reference =
+                    object_frame_at_angle_with_background(elapsed, size, config, angle, true);
+                assert_eq!(retained, reference);
+            }
+        }
+    }
+}
 
 fn custom_config(
     art: &str,
