@@ -1356,7 +1356,7 @@ fn authenticate_user_after_iap_access(
             }
         }
         IapManagerEvent::AccessUnavailable => {
-            report_error!("Staging IAP access unavailable before startup user refresh");
+            report_error!("Staging IAP access unavailable before startup user authentication");
         }
         IapManagerEvent::RefreshFailed {
             message: _,
