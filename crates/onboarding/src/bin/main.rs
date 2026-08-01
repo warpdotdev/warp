@@ -220,8 +220,7 @@ impl OnboardingMainView {
                 log::info!("demo: purchase of {credits} credits requested");
                 if let OnboardingMainState::Onboarding(view) = &self.state {
                     view.update(ctx, |view, ctx| {
-                        // No server, so the demo starts from a zero balance.
-                        view.on_credit_purchase_checkout_opened(0, ctx);
+                        view.on_credit_purchase_checkout_opened(ctx);
                     });
                 }
             }

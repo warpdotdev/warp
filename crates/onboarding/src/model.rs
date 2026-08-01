@@ -221,14 +221,8 @@ pub enum CreditPurchaseState {
     Idle,
     /// The purchase mutation is in flight.
     Purchasing,
-    /// Checkout was opened in the browser; waiting for the credits to arrive.
-    ///
-    /// Carries the purchased-credit balance observed just before checkout
-    /// opened. Completion is judged against this baseline rather than against
-    /// "does the user have any AI available", which is also true for base plan
-    /// requests, BYOK, overages and auto-reload — a user who already had AI
-    /// availability and then cancels checkout must not be advanced.
-    AwaitingCheckout { credits_before: i32 },
+    /// Checkout was opened in the browser; waiting for credits to be available.
+    AwaitingCheckout,
     /// The purchase failed. The user stays on the slide and can retry.
     Failed,
 }
@@ -239,13 +233,8 @@ impl CreditPurchaseState {
     pub fn is_in_flight(self) -> bool {
         matches!(
             self,
-            CreditPurchaseState::Purchasing | CreditPurchaseState::AwaitingCheckout { .. }
+            CreditPurchaseState::Purchasing | CreditPurchaseState::AwaitingCheckout
         )
-    }
-
-    /// Whether the purchase is waiting on browser checkout to deliver credits.
-    pub fn is_awaiting_checkout(self) -> bool {
-        matches!(self, CreditPurchaseState::AwaitingCheckout { .. })
     }
 }
 
@@ -565,36 +554,32 @@ impl OnboardingStateModel {
     }
 
     /// The purchase needs browser checkout (no saved payment method).
-    /// Onboarding stays on this slide until the credits actually land.
-    ///
-    /// `credits_before` is the purchased-credit balance as of now, which
-    /// [`Self::on_credit_balance_observed`] later compares against.
-    pub(crate) fn on_credit_checkout_opened(
-        &mut self,
-        credits_before: i32,
-        ctx: &mut ModelContext<Self>,
-    ) {
+    /// Onboarding stays on this slide until credits are available.
+    pub(crate) fn on_credit_checkout_opened(&mut self, ctx: &mut ModelContext<Self>) {
         if self.credit_purchase_state != CreditPurchaseState::Purchasing {
             return;
         }
-        self.credit_purchase_state = CreditPurchaseState::AwaitingCheckout { credits_before };
+        self.credit_purchase_state = CreditPurchaseState::AwaitingCheckout;
         ctx.notify();
     }
 
     /// Reports the purchased-credit balance seen on a refresh while checkout is
-    /// pending. The purchase completes only when that balance has actually
-    /// grown, so a canceled checkout — or credits the user already had before
-    /// starting one — never advances onboarding.
+    /// pending. The purchase completes as soon as the user *has* purchasable
+    /// credits.
+    ///
+    /// The bar is deliberately "non-zero", not "grew": the overwhelmingly
+    /// common case is a brand-new account with no credits, where cancelling
+    /// checkout must leave the user here — but someone who already holds
+    /// credits and lands on this slide is fine to continue. The balance must
+    /// still be the add-on/purchased one rather than general AI availability,
+    /// which would also count base free-plan requests and BYOK and so would
+    /// advance a brand-new user who cancelled.
     pub(crate) fn on_credit_balance_observed(
         &mut self,
         credits_now: i32,
         ctx: &mut ModelContext<Self>,
     ) {
-        let CreditPurchaseState::AwaitingCheckout { credits_before } = self.credit_purchase_state
-        else {
-            return;
-        };
-        if credits_now <= credits_before {
+        if self.credit_purchase_state != CreditPurchaseState::AwaitingCheckout || credits_now <= 0 {
             return;
         }
         self.on_credit_purchase_completed(ctx);

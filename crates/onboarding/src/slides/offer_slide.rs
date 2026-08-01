@@ -1,3 +1,4 @@
+use pathfinder_color::ColorU;
 use ui_components::{Component as _, Options as _, button};
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
@@ -67,13 +68,20 @@ impl OfferVariant {
         }
     }
 
-    pub(crate) fn primary_description(self) -> &'static str {
+    /// `shows_credit_packs` is the same condition that decides whether the
+    /// buy-credits card renders (see [`OfferSlide::shows_credit_packs`]) — the
+    /// add-on savings line only makes sense next to the packs it refers to, so
+    /// without them the card keeps its original copy.
+    pub(crate) fn primary_description(self, shows_credit_packs: bool) -> &'static str {
         match self {
             OfferVariant::HeadStart => {
                 "Get more monthly usage, expanded cloud agent access, and collaboration features."
             }
-            OfferVariant::ChooseHowToStart => {
+            OfferVariant::ChooseHowToStart if shows_credit_packs => {
                 "Warp Agent works locally or in the cloud with frontier and OSS models. Get monthly credits at the best value, and save 20% on add-on credits with any Build plan."
+            }
+            OfferVariant::ChooseHowToStart => {
+                "Warp Agent works locally or in the cloud with frontier and OSS models. Proactively fix terminal errors, implement changes, and ship verified code."
             }
         }
     }
@@ -361,10 +369,11 @@ impl OfferSlide {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let selected_choice = self.effective_choice(variant, app);
+        let shows_credit_packs = self.shows_credit_packs(variant, app);
         let primary = Self::render_option_card(
             appearance,
             variant.primary_label(),
-            variant.primary_description(),
+            variant.primary_description(shows_credit_packs),
             selected_choice == OfferChoice::Primary,
             Some("Recommended"),
             self.primary_mouse_state.clone(),
@@ -387,7 +396,7 @@ impl OfferSlide {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(Container::new(primary).with_margin_bottom(12.).finish());
 
-        if self.shows_credit_packs(variant, app) {
+        if shows_credit_packs {
             let buy_credits = Self::render_option_card(
                 appearance,
                 variant.credits_label(),
@@ -508,35 +517,44 @@ impl OfferSlide {
             .build()
             .finish();
 
-        let mut tile = Flex::column()
+        // Every tile renders a badge slot so all four are the same height. The
+        // smallest pack has no volume discount, so its slot lays out the same
+        // text fully transparent: that reserves exactly the right line box
+        // without a fixed-height constant and without drawing a "Save 0%" that
+        // would read as a real discount.
+        let green = theme.ansi_fg_green();
+        let has_savings = pack.savings_percent > 0;
+        let badge_percent = if has_savings { pack.savings_percent } else { 0 };
+        let mut badge = Container::new(
+            appearance
+                .ui_builder()
+                .paragraph(format!("Save {badge_percent}%"))
+                .with_style(UiComponentStyles {
+                    font_size: Some(11.),
+                    font_color: Some(if has_savings {
+                        green
+                    } else {
+                        ColorU::transparent_black()
+                    }),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
+        )
+        .with_horizontal_padding(6.)
+        .with_vertical_padding(1.)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(9.)));
+        if has_savings {
+            badge = badge.with_background(Fill::Solid(green).with_opacity(10));
+        }
+
+        let tile = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(credits_row)
-            .with_child(Container::new(price).with_margin_top(4.).finish());
-
-        if pack.savings_percent > 0 {
-            let green = theme.ansi_fg_green();
-            let badge = Container::new(
-                appearance
-                    .ui_builder()
-                    .paragraph(format!("Save {}%", pack.savings_percent))
-                    .with_style(UiComponentStyles {
-                        font_size: Some(11.),
-                        font_color: Some(green),
-                        ..Default::default()
-                    })
-                    .build()
-                    .finish(),
-            )
-            .with_horizontal_padding(6.)
-            .with_vertical_padding(1.)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(9.)))
-            .with_background(Fill::Solid(green).with_opacity(10))
+            .with_child(Container::new(price).with_margin_top(4.).finish())
+            .with_child(Container::new(badge.finish()).with_margin_top(6.).finish())
             .finish();
-            tile = tile.with_child(Container::new(badge).with_margin_top(6.).finish());
-        }
-
-        let tile = tile.finish();
         let background = selected.then(|| internal_colors::accent_overlay_1(theme));
 
         Hoverable::new(mouse_state, move |_| {
@@ -557,36 +575,32 @@ impl OfferSlide {
         .finish()
     }
 
-    /// Inline status for an in-flight or failed credit purchase. `None` while
-    /// idle, so the layout is unchanged for everyone who never buys a pack.
+    /// Inline status for a *failed* credit purchase only. The in-flight states
+    /// deliberately render nothing: the "Waiting for checkout\u{2026}" button label
+    /// already says everything the user needs, so a second running commentary
+    /// under the cards would be noise. A rejection is not transient — without
+    /// this line the purchase would fail silently.
     fn render_purchase_status(
         &self,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let theme = appearance.theme();
-        let (message, color) = match self.credit_purchase_state(app) {
-            CreditPurchaseState::Idle => return None,
-            CreditPurchaseState::Purchasing => (
-                "Starting your purchase\u{2026}",
-                internal_colors::text_sub(theme, theme.background().into_solid()),
-            ),
-            CreditPurchaseState::AwaitingCheckout { .. } => (
-                "Finish your purchase in the browser. We'll continue as soon as your credits arrive \u{2014} or choose \"Set up AI later\" to skip.",
-                internal_colors::text_sub(theme, theme.background().into_solid()),
-            ),
-            CreditPurchaseState::Failed => (
-                "We couldn't start that purchase. Try again, or choose \"Set up AI later\" to continue.",
-                theme.ansi_fg_red(),
-            ),
-        };
+        match self.credit_purchase_state(app) {
+            CreditPurchaseState::Idle
+            | CreditPurchaseState::Purchasing
+            | CreditPurchaseState::AwaitingCheckout => return None,
+            CreditPurchaseState::Failed => {}
+        }
         Some(
             appearance
                 .ui_builder()
-                .paragraph(message)
+                .paragraph(
+                    "We couldn't start that purchase. Try again, or choose \"Set up AI later\" to continue.",
+                )
                 .with_style(UiComponentStyles {
                     font_size: Some(13.),
-                    font_color: Some(color),
+                    font_color: Some(theme.ansi_fg_red()),
                     ..Default::default()
                 })
                 .build()

@@ -83,7 +83,7 @@ fn head_start_copy_and_telemetry_names_match_spec() {
     );
     assert_eq!(variant.primary_label(), "Unlock the full AI experience");
     assert_eq!(
-        variant.primary_description(),
+        variant.primary_description(false),
         "Get more monthly usage, expanded cloud agent access, and collaboration features."
     );
     assert_eq!(variant.secondary_label(), "Start with included AI");
@@ -112,7 +112,7 @@ fn choose_how_to_start_copy_and_telemetry_names_match_spec() {
     assert_eq!(variant.subtitle(), None);
     assert_eq!(variant.primary_label(), "Subscribe to a Warp plan");
     assert_eq!(
-        variant.primary_description(),
+        variant.primary_description(true),
         "Warp Agent works locally or in the cloud with frontier and OSS models. Get monthly credits at the best value, and save 20% on add-on credits with any Build plan."
     );
     assert_eq!(variant.secondary_label(), "Set up AI later");
@@ -136,11 +136,30 @@ fn choose_how_to_start_copy_and_telemetry_names_match_spec() {
 /// web copy), never as a surcharge on the free plan.
 #[test]
 fn subscribe_copy_frames_add_on_credits_as_a_saving() {
-    let description = OfferVariant::ChooseHowToStart.primary_description();
+    let description = OfferVariant::ChooseHowToStart.primary_description(true);
 
     assert!(description.contains("save 20% on add-on credits"));
     assert!(!description.to_lowercase().contains("surcharge"));
     assert!(!description.to_lowercase().contains("premium"));
+}
+
+/// The add-on savings line only makes sense beside the packs it refers to, so
+/// without them the card falls back to its original copy.
+#[test]
+fn subscribe_copy_drops_the_add_on_line_when_no_packs_are_shown() {
+    let without_packs = OfferVariant::ChooseHowToStart.primary_description(false);
+
+    assert_eq!(
+        without_packs,
+        "Warp Agent works locally or in the cloud with frontier and OSS models. Proactively fix terminal errors, implement changes, and ship verified code."
+    );
+    assert!(!without_packs.contains("add-on credits"));
+
+    // The head-start offer never shows packs and is unaffected either way.
+    assert_eq!(
+        OfferVariant::HeadStart.primary_description(true),
+        OfferVariant::HeadStart.primary_description(false)
+    );
 }
 
 /// The head-start offer already includes AI usage, so it keeps two options.
@@ -292,14 +311,15 @@ fn get_warping_buys_credits_when_the_credit_option_is_selected() {
         });
 
         // A second Get Warping while the purchase is in flight is a no-op.
-        onboarding_state.update(&mut app, |model, ctx| {
-            model.on_credit_checkout_opened(0, ctx)
-        });
+        onboarding_state.update(&mut app, |model, ctx| model.on_credit_checkout_opened(ctx));
         slide.update(&mut app, |slide, ctx| {
             slide.handle_action(&OfferSlideAction::GetWarping, ctx)
         });
         onboarding_state.read(&app, |model, _| {
-            assert!(model.credit_purchase_state().is_awaiting_checkout());
+            assert_eq!(
+                model.credit_purchase_state(),
+                CreditPurchaseState::AwaitingCheckout
+            );
         });
     });
 }
@@ -320,7 +340,7 @@ fn set_up_later_still_works_while_checkout_is_pending() {
             model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
             model.set_credit_pack_options(credit_packs(4), ctx);
             model.request_credit_purchase(ctx);
-            model.on_credit_checkout_opened(0, ctx);
+            model.on_credit_checkout_opened(ctx);
         });
 
         let events = Rc::new(RefCell::new(Vec::new()));

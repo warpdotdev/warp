@@ -159,11 +159,12 @@ fn current_credit_pack_options(ctx: &AppContext) -> Vec<CreditPackOption> {
     onboarding_credit_pack_options(options, policy.effective_premium_bps())
 }
 
-/// The credits a purchase would add to: the non-expired bonus grants scoped to
-/// the user and to their current workspace. Purchased add-on credits are
-/// granted as bonus credits, so a rise here is attributable to the purchase —
-/// unlike "has any AI remaining", which is also true for base plan requests,
-/// BYOK credentials, overages and auto-reload.
+/// The credits a purchase lands in: the non-expired bonus grants scoped to the
+/// user and to their current workspace. Purchased add-on credits are granted as
+/// bonus credits, so this is the balance that says whether the user has
+/// purchasable AI credits — unlike "has any AI remaining", which is also true
+/// for base plan requests, BYOK credentials, overages and auto-reload, and so
+/// would advance a brand-new free user who cancelled checkout.
 fn purchased_credit_balance(ctx: &AppContext) -> i32 {
     let usage = AIRequestUsageModel::as_ref(ctx);
     usage.total_user_interactive_bonus_credits_remaining()
@@ -193,9 +194,8 @@ fn handle_onboarding_credit_purchase_event(
         }
         UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { checkout_url } => {
             let checkout_url = checkout_url.clone();
-            let credits_before = purchased_credit_balance(ctx);
             onboarding_view.update(ctx, |onboarding_view, ctx| {
-                onboarding_view.on_credit_purchase_checkout_opened(credits_before, ctx);
+                onboarding_view.on_credit_purchase_checkout_opened(ctx);
             });
             ctx.open_url(&checkout_url);
         }
@@ -2291,9 +2291,9 @@ impl RootView {
                 if !matches!(event, AIRequestUsageModelEvent::RequestUsageUpdated) {
                     return;
                 }
-                // The view completes the purchase only if this balance grew
-                // since checkout opened, so a canceled checkout can't advance
-                // a user who already had credits.
+                // The view completes the purchase only if this balance is
+                // non-zero, so a brand-new user who cancels checkout stays on
+                // the slide.
                 let credits_now = purchased_credit_balance(ctx);
                 onboarding_view_for_usage.update(ctx, |onboarding_view, ctx| {
                     onboarding_view.on_purchased_credit_balance_observed(credits_now, ctx);

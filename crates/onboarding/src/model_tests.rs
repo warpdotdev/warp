@@ -167,13 +167,14 @@ fn abandoned_checkout_leaves_the_purchase_in_flight() {
             CreditPurchaseState::Purchasing
         );
 
-        model.update(&mut app, |model, ctx| {
-            model.on_credit_checkout_opened(0, ctx)
-        });
-        assert!(purchase_state(&app, &model).is_awaiting_checkout());
+        model.update(&mut app, |model, ctx| model.on_credit_checkout_opened(ctx));
+        assert_eq!(
+            purchase_state(&app, &model),
+            CreditPurchaseState::AwaitingCheckout
+        );
         assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
 
-        // Only observing the granted credits clears the in-flight purchase.
+        // Only observing available credits clears the in-flight purchase.
         model.update(&mut app, |model, ctx| {
             model.on_credit_balance_observed(400, ctx)
         });
@@ -181,38 +182,56 @@ fn abandoned_checkout_leaves_the_purchase_in_flight() {
     });
 }
 
-/// Regression test for REV-1886: the advance must be gated on the *purchased*
-/// credits arriving, not on the user merely having some AI available. A user
-/// who already holds credits (or BYOK, overages, auto-reload — anything that
-/// makes "has any AI remaining" true) and then cancels checkout must stay put.
+/// Regression test for REV-1886: the advance is gated on the user having
+/// *purchased* credits, not on general AI availability. The case that matters
+/// is the common one — a brand-new account with no credits — where cancelling
+/// checkout must leave the user on the slide even though base free-plan
+/// requests or BYOK would make "has any AI remaining" true.
 #[test]
-fn canceled_checkout_does_not_advance_a_user_who_already_had_credits() {
+fn canceled_checkout_does_not_advance_a_user_with_no_credits() {
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
         model.update(&mut app, |model, ctx| {
             model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
             model.set_credit_pack_options(credit_packs(), ctx);
             model.request_credit_purchase(ctx);
-            // The user already had 250 credits when checkout opened.
-            model.on_credit_checkout_opened(250, ctx);
+            model.on_credit_checkout_opened(ctx);
         });
 
-        // Refreshes while checkout is open report the same pre-existing
-        // balance, and spending some of it must not look like a purchase.
-        for observed in [250, 250, 120] {
+        // Every refresh while checkout is open still reports no credits.
+        for _ in 0..3 {
             model.update(&mut app, |model, ctx| {
-                model.on_credit_balance_observed(observed, ctx)
+                model.on_credit_balance_observed(0, ctx)
             });
-            assert!(
-                purchase_state(&app, &model).is_awaiting_checkout(),
-                "balance of {observed} must not complete the purchase"
+            assert_eq!(
+                purchase_state(&app, &model),
+                CreditPurchaseState::AwaitingCheckout,
+                "a zero balance must not complete the purchase"
             );
             assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
         }
 
-        // Only credits landing on top of the baseline completes it.
+        // Credits arriving completes it.
         model.update(&mut app, |model, ctx| {
-            model.on_credit_balance_observed(650, ctx)
+            model.on_credit_balance_observed(400, ctx)
+        });
+        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
+    });
+}
+
+/// Someone who already holds credits and lands on this slide is fine to
+/// continue — the bar is "has credits", not "balance grew".
+#[test]
+fn a_user_who_already_has_credits_can_continue() {
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        model.update(&mut app, |model, ctx| {
+            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
+            model.set_credit_pack_options(credit_packs(), ctx);
+            model.request_credit_purchase(ctx);
+            model.on_credit_checkout_opened(ctx);
+            // Same balance they had before checkout opened.
+            model.on_credit_balance_observed(250, ctx);
         });
         assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
     });
@@ -288,13 +307,16 @@ fn a_purchase_cannot_start_without_packs_or_while_one_is_in_flight() {
         model.update(&mut app, |model, ctx| {
             model.set_credit_pack_options(credit_packs(), ctx);
             model.request_credit_purchase(ctx);
-            model.on_credit_checkout_opened(0, ctx);
+            model.on_credit_checkout_opened(ctx);
             // A second request must not restart checkout...
             model.request_credit_purchase(ctx);
             // ...and the pack being paid for must not change underneath it.
             model.select_credit_pack(1, ctx);
         });
-        assert!(purchase_state(&app, &model).is_awaiting_checkout());
+        assert_eq!(
+            purchase_state(&app, &model),
+            CreditPurchaseState::AwaitingCheckout
+        );
         model.read(&app, |model, _| {
             assert_eq!(model.selected_credit_pack_index(), 0);
         });
@@ -310,7 +332,7 @@ fn purchase_callbacks_are_inert_when_no_purchase_is_in_flight() {
         model.update(&mut app, |model, ctx| {
             model.set_credit_pack_options(credit_packs(), ctx);
             model.on_credit_purchase_completed(ctx);
-            model.on_credit_checkout_opened(0, ctx);
+            model.on_credit_checkout_opened(ctx);
             model.on_credit_purchase_failed(ctx);
         });
         assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
