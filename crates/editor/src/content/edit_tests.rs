@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::ColorScheme;
 use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui_core::fonts::{Properties, Style, Weight};
 use warpui_core::image_cache::ImageType;
@@ -297,7 +299,7 @@ fn test_layout_mermaid_block_uses_loaded_svg_aspect_ratio() {
     App::test((), |app| async move {
         let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
         let content = "graph TD\nA[Start] --> B[Finish]\n";
-        let asset_source = mermaid_asset_source(content);
+        let asset_source = mermaid_asset_source(content, ColorScheme::LightOnDark);
 
         let mermaid_load = app.read(|ctx| {
             let asset_cache = AssetCache::as_ref(ctx);
@@ -335,7 +337,13 @@ fn test_layout_mermaid_block_uses_loaded_svg_aspect_ratio() {
                 content_length: CharOffset::from(content.chars().count()),
             };
             let spacing = TEST_STYLES.block_spacings.from_block_style(&block_style);
-            let mermaid_diagram = mermaid_diagram_layout(content, &text_layout, spacing, ctx);
+            let mermaid_diagram = mermaid_diagram_layout(
+                content,
+                &text_layout,
+                spacing,
+                ColorScheme::LightOnDark,
+                ctx,
+            );
 
             let (item, _has_trailing_newline) = layout_mermaid_diagram_block(
                 block,
@@ -404,8 +412,13 @@ fn test_unloaded_mermaid_diagram_uses_stable_full_width_placeholder_height() {
                 code_block_type: CodeBlockType::Mermaid,
             };
             let spacing = TEST_STYLES.block_spacings.from_block_style(&block_style);
-            let (_asset_source, config) =
-                mermaid_diagram_layout(contents, &text_layout, spacing, ctx);
+            let (_asset_source, config) = mermaid_diagram_layout(
+                contents,
+                &text_layout,
+                spacing,
+                ColorScheme::LightOnDark,
+                ctx,
+            );
             let expected_width = 800. - spacing.x_axis_offset().as_f32();
             let expected_height = TEST_STYLES.base_line_height().as_f32() * 10.;
 
@@ -486,6 +499,7 @@ fn test_empty_mermaid_block_lays_out_as_code_block() {
 fn test_non_parseable_mermaid_block_lays_out_as_code_block() {
     App::test((), |app| async move {
         let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        app.add_singleton_model(|_| Appearance::mock());
         app.read(|ctx| {
             let layout_cache = LayoutCache::new();
             let text_layout = TextLayout::new(
@@ -524,8 +538,9 @@ fn test_non_parseable_mermaid_block_lays_out_as_code_block() {
 fn test_invalid_mermaid_block_stays_as_code_block_after_load_fails() {
     App::test((), |app| async move {
         let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        app.add_singleton_model(|_| Appearance::mock());
         let contents = "echo hi\n";
-        let asset_source = mermaid_asset_source(contents);
+        let asset_source = mermaid_asset_source(contents, ColorScheme::LightOnDark);
 
         // Drive the asset load to completion (it should fail, since `echo hi` isn't
         // valid Mermaid).
@@ -586,8 +601,9 @@ fn test_invalid_mermaid_block_stays_as_code_block_after_load_fails() {
 fn test_valid_mermaid_block_lays_out_as_diagram_after_load() {
     App::test((), |app| async move {
         let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        app.add_singleton_model(|_| Appearance::mock());
         let contents = "graph TD\nA[Start] --> B[Finish]\n";
-        let asset_source = mermaid_asset_source(contents);
+        let asset_source = mermaid_asset_source(contents, ColorScheme::LightOnDark);
 
         // Drive the async Mermaid render to completion.
         let pending = app.read(|ctx| {

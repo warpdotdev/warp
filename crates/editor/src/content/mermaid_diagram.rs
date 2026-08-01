@@ -2,6 +2,8 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use bytes::Bytes;
+use mermaid_to_svg::{MermaidTheme, parse_mermaid_frontmatter};
+use warp_core::ui::theme::ColorScheme;
 use warpui_core::assets::asset_cache::{
     AssetCache, AssetSource, AssetState, AsyncAssetId, AsyncAssetType,
 };
@@ -19,10 +21,12 @@ struct MermaidDiagramAsset;
 
 impl AsyncAssetType for MermaidDiagramAsset {}
 
-pub fn mermaid_asset_source(source: &str) -> AssetSource {
+pub fn mermaid_asset_source(source: &str, color_scheme: ColorScheme) -> AssetSource {
     let source = source.to_string();
+    let theme = mermaid_theme(&source, color_scheme);
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
+    theme.hash(&mut hasher);
     let id = format!("configured:{:x}", hasher.finish());
     let fetch_source = source.clone();
 
@@ -30,8 +34,9 @@ pub fn mermaid_asset_source(source: &str) -> AssetSource {
         id: AsyncAssetId::new::<MermaidDiagramAsset>(id),
         fetch: Arc::new(move || {
             let source = fetch_source.clone();
+            let theme = theme.clone();
             Box::pin(async move {
-                mermaid_to_svg::render_mermaid_to_svg(&source, None)
+                mermaid_to_svg::render_mermaid_to_svg(&source, Some(&theme))
                     .map(|svg| Bytes::from(svg.into_bytes()))
                     .map_err(Into::into)
             })
@@ -43,12 +48,24 @@ pub fn mermaid_diagram_layout(
     source: &str,
     layout: &TextLayout,
     spacing: BlockSpacing,
+    color_scheme: ColorScheme,
     app: &AppContext,
 ) -> (AssetSource, ImageBlockConfig) {
-    let asset_source = mermaid_asset_source(source);
+    let asset_source = mermaid_asset_source(source, color_scheme);
     let config = mermaid_diagram_config(&asset_source, layout, spacing, app);
 
     (asset_source, config)
+}
+
+fn mermaid_theme(source: &str, color_scheme: ColorScheme) -> MermaidTheme {
+    if let Some(configured_theme) = parse_mermaid_frontmatter(source).config.to_mermaid_theme() {
+        return configured_theme;
+    }
+
+    match color_scheme {
+        ColorScheme::LightOnDark => MermaidTheme::dark(),
+        ColorScheme::DarkOnLight => MermaidTheme::light(),
+    }
 }
 
 fn mermaid_diagram_config(

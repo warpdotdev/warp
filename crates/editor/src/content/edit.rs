@@ -14,6 +14,7 @@ use string_offset::{ByteOffset, CharOffset};
 use urlocator::{UrlLocation, UrlLocator};
 use vec1::Vec1;
 use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warp_errors::report_error;
 use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
@@ -782,7 +783,8 @@ impl LayoutTask {
                         };
                     }
 
-                    let asset_source = mermaid_asset_source(&source);
+                    let color_scheme = Appearance::as_ref(app).theme().inferred_color_scheme();
+                    let asset_source = mermaid_asset_source(&source, color_scheme);
                     let asset_cache = AssetCache::as_ref(app);
                     match asset_cache.load_asset::<ImageType>(asset_source.clone()) {
                         AssetState::Loaded { .. } => {
@@ -791,7 +793,7 @@ impl LayoutTask {
                                 .block_spacings
                                 .from_block_style(&text_block.style);
                             let (asset_source, config) =
-                                mermaid_diagram_layout(&source, layout, spacing, app);
+                                mermaid_diagram_layout(&source, layout, spacing, color_scheme, app);
                             Self::MermaidDiagram {
                                 text_block,
                                 asset_source,
@@ -806,8 +808,13 @@ impl LayoutTask {
                                     .rich_text_styles()
                                     .block_spacings
                                     .from_block_style(&text_block.style);
-                                let (asset_source, config) =
-                                    mermaid_diagram_layout(&source, layout, spacing, app);
+                                let (asset_source, config) = mermaid_diagram_layout(
+                                    &source,
+                                    layout,
+                                    spacing,
+                                    color_scheme,
+                                    app,
+                                );
                                 Self::MermaidDiagram {
                                     text_block,
                                     asset_source,
@@ -828,8 +835,13 @@ impl LayoutTask {
                                     .rich_text_styles()
                                     .block_spacings
                                     .from_block_style(&text_block.style);
-                                let (asset_source, config) =
-                                    mermaid_diagram_layout(&source, layout, spacing, app);
+                                let (asset_source, config) = mermaid_diagram_layout(
+                                    &source,
+                                    layout,
+                                    spacing,
+                                    color_scheme,
+                                    app,
+                                );
                                 Self::MermaidDiagram {
                                     text_block,
                                     asset_source,
