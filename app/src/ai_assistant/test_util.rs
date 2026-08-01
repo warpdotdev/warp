@@ -36,5 +36,6 @@ pub fn default_assistant_transcript_part(
         is_error: false,
         formatted_message: formatted_transcript_message,
         copy_all_tooltip_and_button_mouse_handles: None,
+        pin_tooltip_and_button_mouse_handles: None,
     }
 }

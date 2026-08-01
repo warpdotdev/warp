@@ -9,6 +9,8 @@ use crate::ai_assistant::test_util::{
 };
 use crate::ai_assistant::utils::{CodeBlockIndex, TranscriptPart, TranscriptPartSubType};
 use crate::appearance;
+use crate::auth::AuthStateProvider;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -44,6 +46,8 @@ lazy_static::lazy_static! {
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
     appearance::register(app);
+    app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(UserWorkspaces::default_mock);
 }
 
