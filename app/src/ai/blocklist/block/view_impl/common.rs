@@ -2193,7 +2193,7 @@ fn render_mermaid_diagram_section<A: Action>(
         app,
     );
     let mermaid_canvas = Container::new(mermaid_block)
-        .with_background(theme.foreground())
+        .with_background(theme.background())
         .with_uniform_padding(MERMAID_CANVAS_PADDING)
         .finish();
 
