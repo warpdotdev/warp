@@ -176,14 +176,15 @@ impl AuthState {
         state
     }
 
-    /// Creates auth state for an interactive client that still needs to validate
-    /// its startup API key.
+    /// Creates auth state for a client that must validate an explicit credential
+    /// before making it available to shared authenticated clients.
     ///
-    /// The pending key intentionally remains outside [`AuthState`] so it cannot
-    /// authorize unrelated requests or make [`Self::is_logged_in`] true before
-    /// the user fetch succeeds. Persisted user state is also skipped because an
-    /// explicitly supplied API key takes precedence over secure storage.
-    pub fn initialize_for_pending_api_key(ctx: &AppContext) -> Self {
+    /// Unlike [`Self::initialize`], this installs neither the supplied credential
+    /// nor persisted identity. The credential remains outside [`AuthState`] until
+    /// its user fetch succeeds, so failed validation leaves the client fully
+    /// logged out. Persisted state is skipped because an explicit credential
+    /// takes precedence over secure storage.
+    pub fn initialize_for_credential_validation(ctx: &AppContext) -> Self {
         let state = Self::new(ctx);
 
         if Self::should_use_test_user() {

@@ -451,6 +451,42 @@ impl LaunchMode {
         }
     }
 
+    fn api_key(&self) -> Option<String> {
+        match self {
+            LaunchMode::CommandLine { global_options, .. } => global_options.api_key.clone(),
+            LaunchMode::App { api_key, .. }
+            | LaunchMode::Tui {
+                entrypoint: TuiEntryPoint::Interactive { api_key, .. },
+            } => api_key.clone(),
+            LaunchMode::Test { .. }
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::RemoteServerDaemon { .. }
+            | LaunchMode::Tui {
+                entrypoint: TuiEntryPoint::CliCommand { .. },
+            } => None,
+        }
+    }
+
+    /// Returns whether a startup API key should be installed before its user is fetched.
+    ///
+    /// The interactive TUI defers the key so its UI cannot treat credential presence as a
+    /// validated identity. Other launch modes retain their existing initialization behavior.
+    fn should_initialize_api_key_eagerly(&self) -> bool {
+        match self {
+            LaunchMode::Tui {
+                entrypoint: TuiEntryPoint::Interactive { .. },
+            } => false,
+            LaunchMode::App { .. }
+            | LaunchMode::CommandLine { .. }
+            | LaunchMode::Test { .. }
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::RemoteServerDaemon { .. }
+            | LaunchMode::Tui {
+                entrypoint: TuiEntryPoint::CliCommand { .. },
+            } => true,
+        }
+    }
+
     /// Returns `true` if this process is running an integration test.
     fn is_integration_test(&self) -> bool {
         match self {
@@ -1366,37 +1402,6 @@ fn authenticate_user_after_iap_access(
     iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
 }
 
-fn api_key_from_launch_mode(launch_mode: &LaunchMode) -> Option<String> {
-    match launch_mode {
-        LaunchMode::CommandLine { global_options, .. } => global_options.api_key.clone(),
-        LaunchMode::App { api_key, .. }
-        | LaunchMode::Tui {
-            entrypoint: TuiEntryPoint::Interactive { api_key, .. },
-        } => api_key.clone(),
-        LaunchMode::Test { .. }
-        | LaunchMode::RemoteServerProxy
-        | LaunchMode::RemoteServerDaemon { .. }
-        | LaunchMode::Tui {
-            entrypoint: TuiEntryPoint::CliCommand { .. },
-        } => None,
-    }
-}
-
-fn pending_tui_api_key_from_launch_mode(launch_mode: &LaunchMode) -> Option<String> {
-    match launch_mode {
-        LaunchMode::Tui {
-            entrypoint: TuiEntryPoint::Interactive { api_key, .. },
-        } => api_key.clone(),
-        LaunchMode::App { .. }
-        | LaunchMode::CommandLine { .. }
-        | LaunchMode::Test { .. }
-        | LaunchMode::RemoteServerProxy
-        | LaunchMode::RemoteServerDaemon { .. }
-        | LaunchMode::Tui {
-            entrypoint: TuiEntryPoint::CliCommand { .. },
-        } => None,
-    }
-}
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
 pub(crate) fn initialize_app(
     launch_mode: &LaunchMode,
@@ -1450,13 +1455,15 @@ pub(crate) fn initialize_app(
         ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());
     }
 
-    // Interactive TUI API keys remain outside shared auth state until the server accepts them.
-    // Other launch modes retain their existing eager credential initialization semantics.
-    let pending_tui_api_key = pending_tui_api_key_from_launch_mode(launch_mode);
-    let auth_state = Arc::new(if pending_tui_api_key.is_some() {
-        AuthState::initialize_for_pending_api_key(ctx)
+    let (api_key, pending_api_key) = if launch_mode.should_initialize_api_key_eagerly() {
+        (launch_mode.api_key(), None)
     } else {
-        AuthState::initialize(ctx, api_key_from_launch_mode(launch_mode))
+        (None, launch_mode.api_key())
+    };
+    let auth_state = Arc::new(if pending_api_key.is_some() {
+        AuthState::initialize_for_credential_validation(ctx)
+    } else {
+        AuthState::initialize(ctx, api_key)
     });
     timer.mark_interval_end("AUTH_MANAGER_SET_USER");
 
@@ -2339,7 +2346,7 @@ pub(crate) fn initialize_app(
     // CLI commands establish IAP access and refresh auth in their dispatch path so they can
     // surface failures synchronously. Interactive clients wait for IAP here before authenticating
     // their startup user, since the request itself calls the IAP-gated warp-server.
-    let startup_authentication = pending_tui_api_key
+    let startup_authentication = pending_api_key
         .map(StartupUserAuthentication::ApiKey)
         .or_else(|| {
             (user_is_logged_in && !matches!(launch_mode, LaunchMode::CommandLine { .. }))

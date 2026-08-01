@@ -1,8 +1,8 @@
-use anyhow::anyhow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use anyhow::anyhow;
 use warpui::{App, SingletonEntity};
 
 use super::{AuthManager, AuthManagerEvent, request_device_code_with_timeout};
