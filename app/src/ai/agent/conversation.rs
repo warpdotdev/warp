@@ -764,6 +764,18 @@ impl AIConversation {
         &self.conversation_usage_metadata.context_window_segments
     }
 
+    /// Total absolute token count currently used in the context window,
+    /// computed by summing all segment token counts. Returns None when
+    /// the server did not emit segments.
+    pub fn context_window_tokens(&self) -> Option<u32> {
+        let segments = self.context_window_segments();
+        if segments.is_empty() {
+            None
+        } else {
+            Some(segments.iter().map(|s| s.token_count).sum())
+        }
+    }
+
     /// Total credits spent in the conversation, including both LLM inference
     /// and platform credits.
     pub fn credits_spent(&self) -> f32 {

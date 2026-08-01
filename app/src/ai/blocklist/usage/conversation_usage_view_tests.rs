@@ -39,6 +39,8 @@ fn placeholder_usage_info() -> ConversationUsageInfo {
         tool_calls: 0,
         models: Vec::new(),
         context_window_usage: 0.0,
+        context_window_tokens: None,
+        context_window_limit: None,
         context_window_segments: Vec::new(),
         files_changed: 0,
         lines_added: 0,

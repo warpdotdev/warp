@@ -320,6 +320,14 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             context_window_segments,
             ..
         } = (&gql.usage_metadata).into();
+
+        // Compute absolute context window tokens from segments when available.
+        let context_window_tokens = if context_window_segments.is_empty() {
+            None
+        } else {
+            Some(context_window_segments.iter().map(|s| s.token_count).sum())
+        };
+
         ConversationUsageInfo {
             credits_spent,
             platform_credits_spent,
@@ -327,6 +335,8 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             tool_calls: tool.total_tool_calls(),
             models,
             context_window_usage,
+            context_window_tokens,
+            context_window_limit: None,
             context_window_segments,
             files_changed: tool.apply_file_diff_stats.files_changed,
             lines_added: tool.apply_file_diff_stats.lines_added,

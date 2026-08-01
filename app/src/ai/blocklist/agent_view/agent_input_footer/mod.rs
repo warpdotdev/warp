@@ -2059,17 +2059,57 @@ impl AgentInputFooter {
             let icon = icon_for_context_window_usage(usage);
             let remaining_pct = ((1.0 - usage) * 100.0).round() as i32;
 
+            // Build tooltip with absolute token count when available.
+            // Examples: "41% context remaining (112k / 1M)", "41% context remaining"
+            let token_info = conversation.context_window_tokens().map(|tokens| {
+                let limit = AIExecutionProfilesModel::as_ref(ctx)
+                    .active_profile()
+                    .context_window_limit_for_request(ctx);
+                let tokens_str = if tokens < 1_000 {
+                    tokens.to_string()
+                } else if tokens < 1_000_000 {
+                    let k = tokens as f64 / 1_000.0;
+                    if k.fract() == 0.0 {
+                        format!("{}k", k as u64)
+                    } else {
+                        format!("{:.1}k", k)
+                    }
+                } else {
+                    let m = tokens as f64 / 1_000_000.0;
+                    if m.fract() == 0.0 {
+                        format!("{}M", m as u64)
+                    } else {
+                        format!("{:.1}M", m)
+                    }
+                };
+                if let Some(limit) = limit {
+                    let limit_str = if limit < 1_000_000 {
+                        format!("{}k", limit / 1_000)
+                    } else {
+                        format!("{}M", limit / 1_000_000)
+                    };
+                    format!("{tokens_str} / {limit_str}")
+                } else {
+                    tokens_str
+                }
+            });
+
+            let context_remaining_text = if let Some(token_info) = token_info {
+                format!("{remaining_pct}% context remaining ({token_info})")
+            } else {
+                format!("{remaining_pct}% context remaining")
+            };
+
             let expiry = conversation.latest_exchange().and_then(|exchange| {
                 let output = exchange.output_status.output()?;
                 output.get().model_info.as_ref()?.prompt_cache_expires_at
             });
             let is_cache_expired = FeatureFlag::PromptCacheExpiryWarning.is_enabled()
                 && expiry.is_some_and(|expiry| expiry <= Local::now());
-            let context_remaining_tooltip = format!("{remaining_pct}% context remaining");
             let tooltip = if is_cache_expired {
-                format!("{context_remaining_tooltip} · prompt cache expired")
+                format!("{context_remaining_text} · prompt cache expired")
             } else {
-                context_remaining_tooltip
+                context_remaining_text
             };
 
             self.prompt_cache_expired = is_cache_expired;
