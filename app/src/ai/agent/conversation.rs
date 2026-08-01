@@ -346,6 +346,10 @@ pub struct AIConversation {
     /// these conversations — the remote worker's own client handles status
     /// reporting.
     is_remote_child: bool,
+    /// True when this is an owned cloud parent hosted by a remote driver and
+    /// observed locally. Unlike `is_viewing_shared_session`, this marker is
+    /// durable so the local observer cursor and hierarchy can be restored.
+    is_durable_observer_parent: bool,
 
     /// The last event sequence number observed from the v2 orchestration
     /// event log. Used on restore to resume event delivery without
@@ -411,6 +415,7 @@ impl AIConversation {
             orchestration_harness_type: None,
             parent_conversation_id: None,
             is_remote_child: false,
+            is_durable_observer_parent: false,
             last_event_sequence: None,
             orchestration_configs: HashMap::new(),
             pinned: false,
@@ -545,6 +550,7 @@ impl AIConversation {
             orchestration_harness_type,
             parent_conversation_id,
             is_remote_child,
+            is_durable_observer_parent,
             run_id,
             autoexecute_override,
             last_event_sequence,
@@ -596,6 +602,7 @@ impl AIConversation {
                 data.orchestration_harness_type,
                 parent_conversation_id,
                 data.is_remote_child,
+                data.is_durable_observer_parent,
                 data.run_id,
                 autoexecute_override,
                 data.last_event_sequence,
@@ -613,6 +620,7 @@ impl AIConversation {
                 None,
                 None,
                 false,
+                false,
                 None,
                 AIConversationAutoexecuteMode::default(),
                 None,
@@ -622,7 +630,7 @@ impl AIConversation {
 
         Ok(Self {
             id,
-            is_viewing_shared_session: false,
+            is_viewing_shared_session: is_durable_observer_parent,
             is_cli_agent_transcript: false,
             task_store,
             status,
@@ -653,6 +661,7 @@ impl AIConversation {
             orchestration_harness_type,
             parent_conversation_id,
             is_remote_child,
+            is_durable_observer_parent,
             last_event_sequence,
             orchestration_configs: HashMap::new(),
             pinned,
@@ -681,6 +690,14 @@ impl AIConversation {
 
     pub fn set_is_viewing_shared_session(&mut self, is_viewing_shared_session: bool) {
         self.is_viewing_shared_session = is_viewing_shared_session;
+    }
+
+    pub fn is_durable_observer_parent(&self) -> bool {
+        self.is_durable_observer_parent
+    }
+
+    pub fn set_is_durable_observer_parent(&mut self, durable: bool) {
+        self.is_durable_observer_parent = durable;
     }
 
     pub fn is_cli_agent_transcript(&self) -> bool {
@@ -3477,8 +3494,10 @@ impl AIConversation {
         &mut self,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        // We should not persist non-local conversations (e.g. shared sessions).
-        if self.is_viewing_shared_session {
+        // Passive shared-session views remain ephemeral. Owned cloud parents
+        // are the narrow exception: their local observer cursor and child
+        // hierarchy must survive restart.
+        if self.is_viewing_shared_session && !self.is_durable_observer_parent {
             return;
         }
 
@@ -3546,6 +3565,7 @@ impl AIConversation {
                 orchestration_harness_type: self.orchestration_harness_type.clone(),
                 parent_conversation_id: self.parent_conversation_id.map(|id| id.to_string()),
                 is_remote_child: self.is_remote_child,
+                is_durable_observer_parent: self.is_durable_observer_parent,
                 // Legacy field; retained for backward-compatible
                 // deserialization but no longer written. The optimistic-root
                 // case is now handled by `Task::source_for_persistence`

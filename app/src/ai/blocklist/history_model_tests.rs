@@ -71,6 +71,41 @@ fn create_persisted_query(
 }
 
 #[test]
+fn test_durable_observer_parent_marker_is_written_before_shutdown() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let terminal_view_id = EntityId::new();
+        let task_id: AmbientAgentTaskId = "11111111-1111-1111-1111-111111111111".parse().unwrap();
+        let conversation_id = history_model.update(&mut app, |history, ctx| {
+            let conversation_id =
+                history.start_new_conversation(terminal_view_id, false, true, false, ctx);
+            history.mark_conversation_as_durable_observer_parent(conversation_id, task_id, ctx);
+            conversation_id
+        });
+
+        let ModelEvent::UpdateMultiAgentConversation {
+            conversation_id: persisted_id,
+            conversation_data,
+            ..
+        } = receiver.recv_timeout(Duration::from_secs(1)).unwrap()
+        else {
+            panic!("expected durable Observer persistence event");
+        };
+        assert_eq!(persisted_id, conversation_id.to_string());
+        assert!(conversation_data.is_durable_observer_parent);
+        assert_eq!(conversation_data.run_id, Some(task_id.to_string()));
+    });
+}
+
+#[test]
 fn ensure_remote_child_conversation_creates_one_named_run_mapping() {
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);
@@ -127,6 +162,109 @@ fn ensure_remote_child_conversation_creates_one_named_run_mapping() {
             assert!(child.is_remote_child());
             assert!(!child.is_viewing_shared_session());
             assert_eq!(child.orchestration_harness(), Some(Harness::Codex));
+        });
+    });
+}
+
+#[test]
+fn historical_durable_observer_parent_restores_cursor_and_child_hierarchy() {
+    App::test((), |mut app| async move {
+        let parent_id = AIConversationId::new();
+        let child_id = AIConversationId::new();
+        let parent_run_id = "33333333-3333-3333-3333-333333333333";
+        let child_run_id = "44444444-4444-4444-4444-444444444444";
+        let now = Utc::now().naive_utc();
+        let rows = vec![
+            persisted_agent_conversation(
+                parent_id,
+                AgentConversationData {
+                    server_conversation_token: Some("parent-token".to_string()),
+                    conversation_usage_metadata: None,
+                    reverted_action_ids: None,
+                    forked_from_server_conversation_token: None,
+                    artifacts_json: None,
+                    parent_agent_id: None,
+                    agent_name: None,
+                    orchestration_harness_type: None,
+                    parent_conversation_id: None,
+                    is_remote_child: false,
+                    is_durable_observer_parent: true,
+                    root_task_is_optimistic: None,
+                    run_id: Some(parent_run_id.to_string()),
+                    autoexecute_override: None,
+                    last_event_sequence: Some(41),
+                    pinned: false,
+                },
+                now,
+                Some("Observe remote parent"),
+            ),
+            persisted_agent_conversation(
+                child_id,
+                AgentConversationData {
+                    server_conversation_token: Some("child-token".to_string()),
+                    conversation_usage_metadata: None,
+                    reverted_action_ids: None,
+                    forked_from_server_conversation_token: None,
+                    artifacts_json: None,
+                    parent_agent_id: Some(parent_run_id.to_string()),
+                    agent_name: Some("Remote child".to_string()),
+                    orchestration_harness_type: Some(Harness::Claude.config_name().to_string()),
+                    parent_conversation_id: Some(parent_id.to_string()),
+                    is_remote_child: true,
+                    is_durable_observer_parent: false,
+                    root_task_is_optimistic: None,
+                    run_id: Some(child_run_id.to_string()),
+                    autoexecute_override: None,
+                    last_event_sequence: None,
+                    pinned: false,
+                },
+                now - chrono::Duration::seconds(1),
+                Some("Remote child"),
+            ),
+        ];
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &rows));
+
+        history_model.read(&app, |history, _| {
+            let parent = history
+                .conversation(&parent_id)
+                .expect("parent eagerly hydrated");
+            assert!(parent.is_durable_observer_parent());
+            assert!(parent.is_viewing_shared_session());
+            assert_eq!(parent.last_event_sequence(), Some(41));
+            assert_eq!(
+                history.conversation_id_for_agent_id(parent_run_id),
+                Some(parent_id)
+            );
+            assert_eq!(history.child_conversation_ids_of(&parent_id), &[child_id]);
+            assert_eq!(
+                history.conversation_id_for_agent_id(child_run_id),
+                Some(child_id)
+            );
+        });
+
+        let restored_surface = EntityId::new();
+        history_model.update(&mut app, |history, ctx| {
+            assert_eq!(
+                history.restore_durable_observer_parent_for_task(
+                    parent_run_id.parse().unwrap(),
+                    restored_surface,
+                    ctx,
+                ),
+                Some(parent_id)
+            );
+        });
+        history_model.read(&app, |history, _| {
+            assert_eq!(
+                history.active_conversation_id(restored_surface),
+                Some(parent_id)
+            );
+            assert_eq!(
+                history
+                    .conversation(&parent_id)
+                    .and_then(AIConversation::last_event_sequence),
+                Some(41)
+            );
         });
     });
 }
@@ -701,6 +839,7 @@ fn test_initialize_historical_conversations_resolves_parent_agent_id_children_vi
                     orchestration_harness_type: None,
                     parent_conversation_id: None,
                     is_remote_child: true,
+                    is_durable_observer_parent: false,
                     root_task_is_optimistic: None,
                     run_id: None,
                     autoexecute_override: None,
@@ -723,6 +862,7 @@ fn test_initialize_historical_conversations_resolves_parent_agent_id_children_vi
                     orchestration_harness_type: None,
                     parent_conversation_id: None,
                     is_remote_child: false,
+                    is_durable_observer_parent: false,
                     root_task_is_optimistic: None,
                     run_id: Some(parent_run_id.clone()),
                     autoexecute_override: None,
@@ -773,6 +913,7 @@ fn test_initialize_historical_conversations_uses_root_task_description_title() {
                     orchestration_harness_type: None,
                     parent_conversation_id: None,
                     is_remote_child: false,
+                    is_durable_observer_parent: false,
                     root_task_is_optimistic: None,
                     run_id: None,
                     autoexecute_override: None,
@@ -939,6 +1080,7 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
                     orchestration_harness_type: None,
                     parent_conversation_id: Some(parent_id.to_string()),
                     is_remote_child: false,
+                    is_durable_observer_parent: false,
                     root_task_is_optimistic: None,
                     run_id: Some(child_run_id.clone()),
                     autoexecute_override: None,
@@ -962,6 +1104,7 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
                     orchestration_harness_type: None,
                     parent_conversation_id: None,
                     is_remote_child: false,
+                    is_durable_observer_parent: false,
                     root_task_is_optimistic: None,
                     run_id: Some(parent_run_id.clone()),
                     autoexecute_override: None,
@@ -3336,6 +3479,7 @@ fn test_find_by_token_after_insert_forked_conversation_from_tasks() {
             orchestration_harness_type: None,
             parent_conversation_id: None,
             is_remote_child: false,
+            is_durable_observer_parent: false,
             root_task_is_optimistic: None,
             run_id: None,
             autoexecute_override: None,
@@ -3534,6 +3678,7 @@ fn test_fork_then_bind_handoff_token_resolves_to_forked_conversation() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                is_durable_observer_parent: false,
                 root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,
@@ -3622,6 +3767,7 @@ fn test_fork_then_bind_handoff_token_persists_to_restored_conversation() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                is_durable_observer_parent: false,
                 root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,
@@ -3735,6 +3881,7 @@ fn test_fork_then_bind_handoff_token_updates_cached_metadata_and_emits_refresh_e
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                is_durable_observer_parent: false,
                 root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,
@@ -3864,6 +4011,7 @@ fn test_fork_conversation_preserves_task_ids_when_requested() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                is_durable_observer_parent: false,
                 root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,
@@ -4015,6 +4163,7 @@ fn test_fork_conversation_title_override_replaces_prefix() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                is_durable_observer_parent: false,
                 root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,
@@ -4108,6 +4257,7 @@ fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_
                 orchestration_harness_type: None,
                 parent_conversation_id: Some(parent_id.to_string()),
                 is_remote_child: true,
+                is_durable_observer_parent: false,
                 root_task_is_optimistic: Some(true),
                 run_id: Some(placeholder_task_id_str.clone()),
                 autoexecute_override: None,
@@ -4154,6 +4304,7 @@ fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                is_durable_observer_parent: false,
                 root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,
@@ -4910,6 +5061,7 @@ fn straddle_rewind_followup_requests_are_clean_and_durable() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                is_durable_observer_parent: false,
                 root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,

@@ -544,6 +544,32 @@ impl BlocklistAIHistoryModel {
                     }
                 }
 
+                // Durable Observer parents are hidden shared-session vehicles,
+                // not navigation rows. Hydrate them eagerly so ambient-pane
+                // restore can attach the exact local conversation (and its
+                // cursor) before response replay and OVM registration.
+                if conversation_data
+                    .as_ref()
+                    .is_some_and(|data| data.is_durable_observer_parent)
+                {
+                    let observer_parent = if agent_conversation.tasks.is_empty() {
+                        self.load_conversation_from_db(&conversation_id)
+                    } else {
+                        convert_persisted_conversation_to_ai_conversation_with_metadata(
+                            agent_conversation.clone(),
+                        )
+                    };
+                    if let Some(observer_parent) = observer_parent {
+                        self.conversations_by_id
+                            .insert(conversation_id, observer_parent);
+                    } else {
+                        log::warn!(
+                            "Failed to eagerly hydrate durable Observer parent {conversation_id}"
+                        );
+                    }
+                    return None;
+                }
+
                 Some(HistoricalConversationRow {
                     agent_conversation,
                     conversation_id,

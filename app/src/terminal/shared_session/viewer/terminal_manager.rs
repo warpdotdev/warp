@@ -873,6 +873,21 @@ impl TerminalManager {
                     .orchestrator_task_id()
                     .and_then(|s| s.parse().ok());
 
+                // Ambient-pane app state restores the exact task id. Reattach
+                // any durable local Observer conversation before constructing
+                // the OVM or receiving response replay so its hierarchy and
+                // local-only cursor remain authoritative on this client.
+                if let Some(task_id) = ambient_task_id {
+                    let terminal_view_id = view.id();
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        history.restore_durable_observer_parent_for_task(
+                            task_id,
+                            terminal_view_id,
+                            ctx,
+                        );
+                    });
+                }
+
                 // Mark terminal view as a shared ambient agent session view.
                 if matches!(&source.source_type, SessionSourceType::AmbientAgent { .. }) {
                     let terminal_view_id = view.id();

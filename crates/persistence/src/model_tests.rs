@@ -26,6 +26,37 @@ fn parentless_task(id: &str, message_count: usize) -> api::Task {
     }
 }
 
+#[test]
+fn agent_conversation_data_roundtrips_durable_observer_parent_marker() {
+    let data = AgentConversationData {
+        server_conversation_token: None,
+        conversation_usage_metadata: None,
+        reverted_action_ids: None,
+        forked_from_server_conversation_token: None,
+        artifacts_json: None,
+        parent_agent_id: None,
+        agent_name: None,
+        orchestration_harness_type: None,
+        parent_conversation_id: None,
+        is_remote_child: false,
+        is_durable_observer_parent: true,
+        root_task_is_optimistic: None,
+        run_id: Some("11111111-1111-1111-1111-111111111111".to_string()),
+        autoexecute_override: None,
+        last_event_sequence: Some(37),
+        pinned: false,
+    };
+    let json = serde_json::to_string(&data).expect("serialize");
+    let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
+    assert!(roundtripped.is_durable_observer_parent);
+    assert_eq!(roundtripped.last_event_sequence, Some(37));
+
+    let legacy: AgentConversationData =
+        serde_json::from_str(r#"{"server_conversation_token":null}"#)
+            .expect("legacy rows must deserialize");
+    assert!(!legacy.is_durable_observer_parent);
+}
+
 fn child_task(id: &str, parent_id: &str) -> api::Task {
     api::Task {
         id: id.to_string(),
@@ -235,6 +266,7 @@ fn agent_conversation_data_roundtrips_last_event_sequence() {
         orchestration_harness_type: Some("claude".to_string()),
         parent_conversation_id: None,
         is_remote_child: false,
+        is_durable_observer_parent: false,
         root_task_is_optimistic: None,
         run_id: None,
         autoexecute_override: None,
@@ -272,6 +304,7 @@ fn agent_conversation_data_roundtrips_remote_child_marker() {
         orchestration_harness_type: None,
         parent_conversation_id: None,
         is_remote_child: true,
+        is_durable_observer_parent: false,
         root_task_is_optimistic: None,
         run_id: None,
         autoexecute_override: None,
@@ -296,6 +329,7 @@ fn agent_conversation_data_roundtrips_optimistic_root_marker() {
         orchestration_harness_type: None,
         parent_conversation_id: None,
         is_remote_child: false,
+        is_durable_observer_parent: false,
         root_task_is_optimistic: Some(true),
         run_id: None,
         autoexecute_override: None,
@@ -332,6 +366,7 @@ fn agent_conversation_data_skips_serializing_none_last_event_sequence() {
         orchestration_harness_type: None,
         parent_conversation_id: None,
         is_remote_child: false,
+        is_durable_observer_parent: false,
         root_task_is_optimistic: None,
         run_id: None,
         autoexecute_override: None,
@@ -358,6 +393,7 @@ fn agent_conversation_data_roundtrips_pinned() {
         orchestration_harness_type: None,
         parent_conversation_id: None,
         is_remote_child: false,
+        is_durable_observer_parent: false,
         root_task_is_optimistic: None,
         run_id: None,
         autoexecute_override: None,
@@ -382,6 +418,7 @@ fn agent_conversation_data_skips_serializing_unpinned() {
         orchestration_harness_type: None,
         parent_conversation_id: None,
         is_remote_child: false,
+        is_durable_observer_parent: false,
         root_task_is_optimistic: None,
         run_id: None,
         autoexecute_override: None,

@@ -611,6 +611,48 @@ impl BlocklistAIHistoryModel {
         conversation_id
     }
 
+    /// Marks an owned remote-driver parent as a durable local Observer.
+    /// Passive shared links never call this path.
+    pub fn mark_conversation_as_durable_observer_parent(
+        &mut self,
+        conversation_id: AIConversationId,
+        task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+            return;
+        };
+        if conversation.parent_conversation_id().is_some() {
+            return;
+        }
+        conversation.set_is_durable_observer_parent(true);
+        conversation.set_task_id(task_id);
+        if let Some(key) = agent_id_key(conversation) {
+            self.agent_id_to_conversation_id
+                .insert(key, conversation_id);
+        }
+        self.persist_conversation_state(conversation_id, ctx);
+    }
+
+    /// Attaches an eagerly hydrated durable Observer parent to the restored
+    /// ambient pane before shared-session replay begins.
+    pub fn restore_durable_observer_parent_for_task(
+        &mut self,
+        task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        terminal_surface_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<AIConversationId> {
+        let conversation_id = self.conversation_id_for_agent_id(&task_id.to_string())?;
+        let mut conversation = self.conversation(&conversation_id)?.clone();
+        if !conversation.is_durable_observer_parent() {
+            return None;
+        }
+        conversation.set_is_viewing_shared_session(true);
+        self.restore_conversations(terminal_surface_id, vec![conversation], ctx);
+        self.set_active_conversation_id(conversation_id, terminal_surface_id, ctx);
+        Some(conversation_id)
+    }
+
     /// Sets the parent conversation ID on a child conversation and updates
     /// the `children_by_parent` index.  All parent-child relationships should
     /// be established through this method so the index stays in sync.
@@ -1672,6 +1714,7 @@ impl BlocklistAIHistoryModel {
             orchestration_harness_type: None,
             parent_conversation_id: None,
             is_remote_child: false,
+            is_durable_observer_parent: false,
             root_task_is_optimistic: None,
             run_id: None,
             autoexecute_override: Some(source_conversation.autoexecute_override().into()),
@@ -1850,6 +1893,7 @@ impl BlocklistAIHistoryModel {
             orchestration_harness_type: None,
             parent_conversation_id: None,
             is_remote_child: false,
+            is_durable_observer_parent: false,
             root_task_is_optimistic: None,
             run_id: None,
             autoexecute_override: Some(conversation.autoexecute_override().into()),
@@ -2899,6 +2943,7 @@ fn merged_remote_child_placeholder_conversation_data(
             .parent_conversation_id()
             .map(|id| id.to_string()),
         is_remote_child: placeholder.is_remote_child(),
+        is_durable_observer_parent: false,
         pinned: placeholder.is_pinned(),
 
         // Reset on merge.

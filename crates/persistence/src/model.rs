@@ -1194,6 +1194,12 @@ pub struct AgentConversationData {
     /// agent executing on a remote worker.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_remote_child: bool,
+    /// True for an owned cloud parent whose execution is hosted remotely and
+    /// observed through a local shared-session pane. This narrowly permits
+    /// persisting/restoring the observer cursor and hierarchy without making
+    /// arbitrary shared-session conversations durable.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_durable_observer_parent: bool,
     /// Legacy marker that previously recorded whether the root task was still
     /// optimistic when this conversation was persisted. Retained on the struct
     /// for backward-compatible deserialization of rows written by older builds;

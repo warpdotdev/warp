@@ -9,6 +9,7 @@ use crate::ai::agent_conversations_model::{
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::features::FeatureFlag;
 use crate::pane_group::{PaneGroup, PaneId, TerminalPane, TerminalViewResources};
 use crate::terminal::TerminalView;
 use crate::workspace::WorkspaceAction;
@@ -134,8 +135,31 @@ impl PaneGroup {
                             .insert(task_id, pane_id);
                     }
                 },
-                Some(WorkspaceAction::RestoreOrNavigateToConversation { .. }) => {
-                    self.replace_pane_with_new_cloud_conversation(pane_id, ctx);
+                Some(WorkspaceAction::RestoreOrNavigateToConversation {
+                    conversation_id, ..
+                }) => {
+                    let unified_stack = FeatureFlag::OrchestrationUnifiedStack.is_enabled();
+                    let existing_conversation =
+                        BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id);
+                    let durable_marker = existing_conversation
+                        .is_some_and(|conversation| conversation.is_durable_observer_parent());
+                    let durable_parent = if unified_stack && durable_marker {
+                        existing_conversation.cloned()
+                    } else {
+                        None
+                    };
+                    if let Some(conversation) = durable_parent {
+                        self.replace_loading_pane_with_restored_ambient_cloud_mode_pane(
+                            pane_id,
+                            crate::ai::blocklist::history_model::CloudConversationData::Oz(
+                                Box::new(conversation),
+                            ),
+                            task_id,
+                            ctx,
+                        );
+                    } else {
+                        self.replace_pane_with_new_cloud_conversation(pane_id, ctx);
+                    }
                 }
                 _ => {
                     self.replace_pane_with_new_cloud_conversation(pane_id, ctx);

@@ -20,7 +20,7 @@ use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::ambient_agents::{
-    AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
+    AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState, TaskOwnership,
 };
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
@@ -198,6 +198,25 @@ impl OrchestrationViewerModel {
                 self.terminal_view_id,
             );
             return;
+        }
+
+        if FeatureFlag::OrchestrationUnifiedStack.is_enabled()
+            && AgentConversationsModel::as_ref(ctx)
+                .get_task_data(&self.parent_task_id)
+                .is_some_and(|task| {
+                    matches!(
+                        task.ownership_for_current_principal(ctx),
+                        TaskOwnership::Owned
+                    )
+                })
+        {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.mark_conversation_as_durable_observer_parent(
+                    parent_conversation_id,
+                    self.parent_task_id,
+                    ctx,
+                );
+            });
         }
 
         let parent_task_id = self.parent_task_id;

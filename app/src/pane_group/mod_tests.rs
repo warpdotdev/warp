@@ -111,6 +111,198 @@ fn initialize_app(app: &mut App) {
     initialize_app_with_history(app, Vec::new());
 }
 
+#[test]
+fn running_durable_observer_snapshot_selects_shared_session_reattach() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    App::test((), |mut app| async move {
+        let parent_task_id = new_ambient_agent_task_id();
+        let parent_conversation_id = AIConversationId::new();
+        initialize_app_with_history(
+            &mut app,
+            vec![persisted_durable_observer_parent(
+                parent_conversation_id,
+                parent_task_id,
+            )],
+        );
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            model.insert_task_for_test(attachable_ambient_agent_task(parent_task_id));
+        });
+
+        let pane_group = mock_pane_group(
+            &mut app,
+            MockOptions {
+                layout: PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
+                    is_focused: true,
+                    custom_vertical_tabs_title: None,
+                    contents: LeafContents::AmbientAgent(AmbientAgentPaneSnapshot {
+                        uuid: Uuid::new_v4().as_bytes().to_vec(),
+                        task_id: Some(parent_task_id),
+                    }),
+                }))),
+                ..Default::default()
+            },
+        );
+
+        pane_group.read(&app, |panes, ctx| {
+            assert!(
+                panes
+                    .pending_ambient_agent_conversation_restorations
+                    .is_empty(),
+                "an attachable parent selects shared-session restore immediately",
+            );
+            let view = panes
+                .active_session_view(ctx)
+                .expect("running Observer restore has a terminal view");
+            let view = view.as_ref(ctx);
+            assert!(view.ambient_agent_view_model().is_some());
+            assert!(
+                !view.has_agent_view_zero_state_for_test(),
+                "running Observer restore must not enter fresh compose",
+            );
+            assert!(matches!(
+                view.model.lock().shared_session_status(),
+                SharedSessionStatus::ViewPending
+            ));
+            let parent = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&parent_conversation_id)
+                .expect("durable parent stays eagerly hydrated for JoinedSuccessfully");
+            assert_eq!(parent.exchange_count(), 1);
+            assert_eq!(parent.last_event_sequence(), Some(41));
+        });
+    });
+}
+
+#[test]
+fn terminal_durable_observer_snapshot_restores_existing_parent_and_children() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+    let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+    let _setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+    let _handoff = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let parent_task_id = new_ambient_agent_task_id();
+        let child_task_id = new_ambient_agent_task_id();
+        let parent_conversation_id = AIConversationId::new();
+        let child_conversation_id = AIConversationId::new();
+        initialize_app_with_history(
+            &mut app,
+            vec![
+                persisted_durable_observer_parent(parent_conversation_id, parent_task_id),
+                persisted_remote_child_conversation(
+                    child_conversation_id,
+                    Some(parent_conversation_id),
+                    Some(parent_task_id.to_string()),
+                    child_task_id,
+                ),
+            ],
+        );
+
+        let layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::AmbientAgent(AmbientAgentPaneSnapshot {
+                uuid: Uuid::new_v4().as_bytes().to_vec(),
+                task_id: Some(parent_task_id),
+            }),
+        })));
+        let pane_group = mock_pane_group(
+            &mut app,
+            MockOptions {
+                layout,
+                ..Default::default()
+            },
+        );
+
+        pane_group.read(&app, |panes, ctx| {
+            assert!(
+                panes
+                    .pending_ambient_agent_conversation_restorations
+                    .contains_key(&parent_task_id),
+                "the app-state pane must wait for task data",
+            );
+            let parent = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&parent_conversation_id)
+                .expect("durable parent is eagerly hydrated before pane restore");
+            assert!(parent.is_durable_observer_parent());
+            assert_eq!(parent.last_event_sequence(), Some(41));
+            assert_eq!(parent.exchange_count(), 1);
+            assert_eq!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .child_conversation_ids_of(&parent_conversation_id),
+                &[child_conversation_id],
+            );
+        });
+
+        let mut task = ambient_agent_task_for_current_user(parent_task_id);
+        task.conversation_id = Some("observer-parent-token".to_string());
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            model.insert_task_for_test(task);
+        });
+        let action = pane_group.read(&app, |_panes, ctx| {
+            AgentConversationsModel::resolve_open_action(
+                AgentConversationNavigationSubject::Entry(AgentConversationEntryId::AmbientRun(
+                    parent_task_id,
+                )),
+                None,
+                ctx,
+            )
+        });
+        assert!(matches!(
+            action,
+            Some(WorkspaceAction::RestoreOrNavigateToConversation {
+                conversation_id,
+                ..
+            }) if conversation_id == parent_conversation_id
+        ));
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.process_pending_ambient_restorations(ctx);
+        });
+        for _ in 0..3 {
+            futures_lite::future::yield_now().await;
+        }
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.process_pending_ambient_restorations(ctx);
+        });
+
+        pane_group.read(&app, |panes, ctx| {
+            let view = panes
+                .active_session_view(ctx)
+                .expect("restored observer pane has an active terminal view");
+            let view = view.as_ref(ctx);
+            assert_eq!(
+                view.active_conversation_id(ctx),
+                Some(parent_conversation_id),
+                "app-state restoration must install the existing parent conversation",
+            );
+            assert!(
+                !view.has_agent_view_zero_state_for_test(),
+                "existing Observer parent must not expose New cloud agent compose",
+            );
+            let ambient = view
+                .ambient_agent_view_model()
+                .expect("restored Observer parent uses the ambient presentation")
+                .as_ref(ctx);
+            assert_eq!(ambient.task_id(), Some(parent_task_id));
+            assert_eq!(
+                panes
+                    .child_agent_panes
+                    .keys()
+                    .filter(|id| **id == child_conversation_id)
+                    .count(),
+                1,
+                "the restored child hierarchy is materialized once",
+            );
+            assert_eq!(
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&parent_conversation_id)
+                    .and_then(AIConversation::last_event_sequence),
+                Some(41),
+            );
+        });
+    });
+}
 
 fn initialize_app_with_history(app: &mut App, conversations: Vec<AgentConversation>) {
     initialize_settings_for_tests(app);
@@ -222,6 +414,61 @@ fn initialize_app_with_history(app: &mut App, conversations: Vec<AgentConversati
     app.add_singleton_model(|_| GitHubAuthNotifier::new());
     app.add_singleton_model(AgentConversationsModel::new);
     app.add_singleton_model(remote_server::manager::RemoteServerManager::new);
+}
+
+fn persisted_durable_observer_parent(
+    conversation_id: AIConversationId,
+    task_id: AmbientAgentTaskId,
+) -> AgentConversation {
+    let root_task_id = Uuid::new_v4().to_string();
+    AgentConversation {
+        conversation: AgentConversationRecord {
+            id: 0,
+            conversation_id: conversation_id.to_string(),
+            conversation_data: serde_json::to_string(&AgentConversationData {
+                server_conversation_token: Some("observer-parent-token".to_string()),
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                is_durable_observer_parent: true,
+                root_task_is_optimistic: None,
+                run_id: Some(task_id.to_string()),
+                autoexecute_override: None,
+                last_event_sequence: Some(41),
+                pinned: false,
+            })
+            .expect("conversation data should serialize"),
+            last_modified_at: Utc::now().naive_utc(),
+            summary: None,
+        },
+        tasks: vec![warp_multi_agent_api::Task {
+            id: root_task_id.clone(),
+            messages: vec![warp_multi_agent_api::Message {
+                fetched_memories: vec![],
+                id: Uuid::new_v4().to_string(),
+                task_id: root_task_id,
+                server_message_data: String::new(),
+                citations: vec![],
+                message: Some(warp_multi_agent_api::message::Message::AgentOutput(
+                    warp_multi_agent_api::message::AgentOutput {
+                        text: "Restored observer output".to_string(),
+                    },
+                )),
+                request_id: "observer-request".to_string(),
+                timestamp: None,
+            }],
+            dependencies: None,
+            description: "Observer parent".to_string(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+    }
 }
 
 struct MockOptions {
@@ -408,6 +655,7 @@ fn persisted_remote_child_conversation(
                 orchestration_harness_type: None,
                 parent_conversation_id: parent_conversation_id.map(|id| id.to_string()),
                 is_remote_child: true,
+                is_durable_observer_parent: false,
                 root_task_is_optimistic: None,
                 run_id: Some(task_id.to_string()),
                 autoexecute_override: None,
