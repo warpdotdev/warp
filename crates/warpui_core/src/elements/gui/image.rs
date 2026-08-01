@@ -171,6 +171,14 @@ impl Image {
         self
     }
 
+    /// Computes elapsed time in milliseconds since animation started.
+    /// If `started_at` was not set, uses the provided `now` time as the reference point
+    /// (meaning elapsed time would be 0, showing only the first frame).
+    fn compute_elapsed_time_ms(&self, now: Instant) -> u128 {
+        let started_at = self.started_at.unwrap_or_else(|| now);
+        now.duration_since(started_at).as_millis()
+    }
+
     pub fn before_load(mut self, element: Box<dyn Element>) -> Self {
         self.before_load_element = Some(element);
         self
@@ -329,8 +337,7 @@ impl Image {
     ) {
         // If self.started_at is not provided, we set it to current time
         // so only the first frame is shown.
-        let started_at = self.started_at.unwrap_or_else(Instant::now);
-        let elapsed_time = started_at.elapsed().as_millis();
+        let elapsed_time = self.compute_elapsed_time_ms(Instant::now());
         // After about ~50 days, casting `elapsed_time` to a u32 will
         // silently overflow. The gif may jump and start playing from a
         // different frame.
