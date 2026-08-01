@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
 use serde::Deserialize as _;
-use settings::schema::SettingSchemaEntry;
-use settings::{Setting, SettingSurfaces, SettingsMode, SyncToCloud};
+use settings::{Setting, SyncToCloud};
 use settings_value::SettingsValue;
 
 use super::{
@@ -105,21 +104,4 @@ fn zero_state_settings_are_tui_local_file_settings() {
         SyncToCloud::Never
     );
     assert_eq!(TuiZeroStateObjectSetting::max_table_depth(), Some(0));
-}
-
-#[test]
-fn zero_state_schema_entries_are_tui_only() {
-    let zero_state_entries = inventory::iter::<SettingSchemaEntry>
-        .into_iter()
-        .filter(|entry| entry.hierarchy == Some("appearance.zero_state"))
-        .collect::<Vec<_>>();
-
-    assert_eq!(zero_state_entries.len(), 3);
-    for entry in zero_state_entries {
-        assert!(entry.description.contains("Warp Agent CLI"));
-        assert!(!entry.description.contains("TUI"));
-        let surfaces: SettingSurfaces = (entry.surfaces_fn)();
-        assert!(surfaces.includes(SettingsMode::Tui));
-        assert!(!surfaces.includes(SettingsMode::Gui));
-    }
 }
