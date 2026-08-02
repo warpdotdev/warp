@@ -2996,6 +2996,49 @@ fn bootstrap_renders_starting_shell_above_input() {
     });
 }
 
+#[test]
+fn zero_state_position_stays_stable_across_shell_bootstrap() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        let ready_lines = render_session(&mut app, &view, 80, 40);
+        assert!(
+            ready_lines
+                .iter()
+                .all(|line| line.trim() != "Starting shell..."),
+            "ready state must not render the bootstrap hint:\n{}",
+            ready_lines.join("\n")
+        );
+
+        view.update(&mut app, |view, _| {
+            view.terminal_model.lock().block_list_mut().reinit_shell();
+        });
+        let bootstrap_lines = render_session(&mut app, &view, 80, 40);
+        assert!(
+            bootstrap_lines
+                .iter()
+                .any(|line| line.trim() == "Starting shell..."),
+            "bootstrap state must render the starting-shell hint:\n{}",
+            bootstrap_lines.join("\n")
+        );
+
+        let title_row = |lines: &[String]| {
+            lines
+                .iter()
+                .position(|line| line.contains("Warp Agent CLI"))
+                .unwrap_or_else(|| panic!("zero-state title should render:\n{}", lines.join("\n")))
+        };
+        assert_eq!(
+            title_row(&bootstrap_lines),
+            title_row(&ready_lines),
+            "zero state must not shift when the bootstrap hint disappears\nbootstrap:\n{}\nready:\n{}",
+            bootstrap_lines.join("\n"),
+            ready_lines.join("\n")
+        );
+    });
+}
+
 /// The input child's rendered element is cached by the presenter, and
 /// transcript emptiness can flip without any input-owned event (a terminal
 /// block landing via the PTY wakeup path only invalidates the session view).

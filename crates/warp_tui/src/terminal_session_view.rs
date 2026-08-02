@@ -192,6 +192,9 @@ const RUNNING_COMMAND_DETACH_HINT: &str = "ctrl-c to return to command";
 /// Replaces the exit hint when viewing a child agent conversation.
 pub(crate) const CTRL_C_KILL_CHILD_HINT: &str = "ctrl-c again to kill child agent";
 const STARTING_SHELL_HINT: &str = "Starting shell...";
+/// The hint row plus its top padding. The zero state accounts for this temporary
+/// chrome so its centered position already matches the post-bootstrap layout.
+const STARTING_SHELL_CHROME_ROWS: u16 = 2;
 const SETTINGS_PARSE_FAILED_HINT: &str = "Settings failed to load: invalid syntax.";
 const SETTINGS_INVALID_VALUES_HINT: &str = "Settings failed to load: invalid values.";
 
@@ -5145,6 +5148,8 @@ impl TuiTerminalSessionView {
         let builder = TuiUiBuilder::from_app(ctx);
         let orchestration_tabs_available = state.orchestration_available();
         let blocker_active = state.has_blocking_interaction();
+        let show_starting_shell_hint =
+            !blocker_active && matches!(input_target, TuiInputTarget::Disabled);
 
         if state.is_alt_screen() {
             self.zero_state_interaction.set_visible(false);
@@ -5224,10 +5229,20 @@ impl TuiTerminalSessionView {
         let mut content = TuiFlex::column();
         let transcript_is_empty = self.transcript.as_ref(ctx).is_empty();
         self.zero_state_interaction.set_visible(transcript_is_empty);
-        if transcript_is_empty && self.session_state.as_ref(ctx).show_first_zero_state() {
-            content = content.flex_child(self.zero_state_view.as_ref(ctx).render_first_run(ctx));
-        } else if transcript_is_empty {
-            content = content.flex_child(TuiChildView::new(&self.zero_state_view).finish());
+        if transcript_is_empty {
+            let zero_state = if self.session_state.as_ref(ctx).show_first_zero_state() {
+                self.zero_state_view.as_ref(ctx).render_first_run(ctx)
+            } else {
+                TuiChildView::new(&self.zero_state_view).finish()
+            };
+            let zero_state = if show_starting_shell_hint {
+                TuiContainer::new(zero_state)
+                    .with_padding_top(STARTING_SHELL_CHROME_ROWS)
+                    .finish()
+            } else {
+                zero_state
+            };
+            content = content.flex_child(zero_state);
         } else {
             content = content.flex_child(TuiChildView::new(&self.transcript).finish());
         }
@@ -5239,7 +5254,7 @@ impl TuiTerminalSessionView {
         // fresh each pass — no stored suppression flag — and the hidden
         // input model is never written to, so its draft/cursor/selection/
         // scroll survive untouched.
-        if !blocker_active && matches!(input_target, TuiInputTarget::Disabled) {
+        if show_starting_shell_hint {
             content = content.child(
                 TuiContainer::new(
                     TuiText::new(STARTING_SHELL_HINT)
