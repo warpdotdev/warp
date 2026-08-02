@@ -150,6 +150,39 @@ fn test_cli_sdk_mode_prevents_autoupdate_polling() {
     });
 }
 
+/// The CLI runs under `ExecutionMode::Sdk`, which must never autoupdate. The
+/// autoupdate machinery mutates the installed macOS app bundle, and the
+/// bundled `oz` / `oz-<channel>` wrapper executes the GUI binary from inside
+/// that very bundle. See APP-2946.
+#[test]
+fn test_sdk_mode_cannot_autoupdate() {
+    App::test((), |app| async move {
+        let execution_mode =
+            app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::Sdk, false, ctx));
+
+        app.read_model(&execution_mode, |execution_mode, _| {
+            assert!(
+                !execution_mode.can_autoupdate(),
+                "SDK (CLI) mode must never autoupdate"
+            );
+        });
+    });
+}
+
+/// Counterpart to `test_sdk_mode_cannot_autoupdate`: the desktop app is the
+/// launch mode that owns the installed bundle, so it keeps autoupdating.
+#[test]
+fn test_app_mode_can_autoupdate() {
+    App::test((), |app| async move {
+        let execution_mode =
+            app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, false, ctx));
+
+        app.read_model(&execution_mode, |execution_mode, _| {
+            assert!(execution_mode.can_autoupdate());
+        });
+    });
+}
+
 /// Some user interactions like focusing/activating the app may trigger an update check
 /// if the daily check hasn't been performed today. The daily check runs regardless of
 /// login state so the server can track retention for anonymous users.

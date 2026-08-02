@@ -600,6 +600,47 @@ impl LaunchMode {
         !self.is_headless()
     }
 
+    /// Whether macOS should treat this process as a background-only
+    /// application — no Dock tile, no Dock bounce, never activated.
+    ///
+    /// The bundled CLI wrapper (`Contents/Resources/bin/oz`, `oz-<channel>`)
+    /// `exec`s the GUI executable inside `Warp.app`, so Launch Services binds
+    /// the CLI process to the *GUI* bundle (`LSBackgroundOnly=false`, plus an
+    /// `NSDockTilePlugIn`) and shows a Dock tile that bounces for the whole
+    /// life of the command. Every headless launch mode wants the same
+    /// treatment the standalone CLI artifact gets from its own
+    /// `LSBackgroundOnly` `Info.plist`, so apply it at runtime instead.
+    ///
+    /// See APP-2946.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn should_run_as_background_process(&self) -> bool {
+        self.is_headless()
+    }
+
+    /// Whether startup should configure the macOS Dock icon, Dock menu, and
+    /// menu bar. Headless launches have no Dock presence at all (see
+    /// [`Self::should_run_as_background_process`]), so they must not perform
+    /// any Dock-visible setup.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn should_configure_dock_and_menus(&self) -> bool {
+        !self.is_headless()
+    }
+
+    /// Whether startup may clean up the executable left behind by a previous
+    /// autoupdate ([`autoupdate::remove_old_executable`]).
+    ///
+    /// On macOS that cleanup deletes `Contents/MacOS/old` *inside the
+    /// installed app bundle*, so it is GUI-app maintenance. Running it from a
+    /// headless launch — most importantly the bundled CLI, which shares the
+    /// GUI bundle — mutates a bundle the process does not own and, with a
+    /// pending update staged, is one of the paths that makes macOS treat the
+    /// CLI process as a launching GUI app. This mirrors the
+    /// `AppExecutionMode::can_autoupdate()` gate already applied to autoupdate
+    /// polling.
+    fn should_clean_up_old_executable(&self) -> bool {
+        !self.is_headless()
+    }
+
     /// Returns `true` if this process can build and sync codebase indices.
     fn supports_indexing(&self) -> bool {
         match self {
@@ -1046,6 +1087,17 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     }
     timer.mark_interval_end("LOG_FILE_SETUP_COMPLETE");
 
+    // Claim a background-only process type before anything can touch AppKit or
+    // Launch Services, so a headless launch of the bundled GUI executable
+    // (most notably the `oz` / `oz-<channel>` CLI wrapper) never acquires a
+    // Dock tile. See `platform::mac::mark_process_as_background_only`.
+    #[cfg(target_os = "macos")]
+    if launch_mode.should_run_as_background_process()
+        && let Err(e) = platform::mac::mark_process_as_background_only()
+    {
+        log::warn!("Failed to mark process as background-only: {e:#}");
+    }
+
     #[cfg(windows)]
     platform::windows::check_redirection_guard();
 
@@ -1217,7 +1269,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     }
 
     #[cfg(target_os = "macos")]
-    {
+    if launch_mode.should_configure_dock_and_menus() {
         use warpui::AssetProvider as _;
         use warpui::platform::mac::AppExt;
 
@@ -1746,7 +1798,11 @@ pub(crate) fn initialize_app(
 
     ctx.set_default_binding_validator(is_binding_cross_platform);
 
-    if FeatureFlag::Autoupdate.is_enabled() {
+    // The cleanup below mutates the installed app bundle, so it is restricted
+    // to launch modes that own it. A headless launch — in particular the
+    // bundled CLI, which runs the GUI executable from inside `Warp.app` —
+    // must leave the bundle alone.
+    if FeatureFlag::Autoupdate.is_enabled() && launch_mode.should_clean_up_old_executable() {
         // Attempt to clean up any old executable, whether or not we were
         // explicitly launched as part of the auto-update process.  We may have
         // failed to remove the executable on a previous launch of the app and
