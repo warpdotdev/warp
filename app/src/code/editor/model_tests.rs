@@ -1084,6 +1084,42 @@ fn test_hidden_lines_window_is_symmetric_around_changes() {
     })
 }
 
+#[test]
+fn test_fold_nearest_bracket_block_and_unfold() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let text = "fn main() {\n    let x = 1;\n}\n";
+        let editor = mock_model(&mut app, text, ContentVersion::new());
+        layout_model(&mut app, &editor).await;
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.cursor_at(CharOffset::from(18), ctx);
+            editor.fold(ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.content.as_ref(ctx).text().as_str(), text);
+            let buffer = editor.content.as_ref(ctx);
+            assert_eq!(
+                editor
+                    .hidden_ranges(ctx)
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec![
+                    buffer.line_start(ContentLineCount::from(2))
+                        ..buffer.line_start(ContentLineCount::from(3))
+                ]
+            );
+        });
+
+        editor.update(&mut app, |editor, ctx| editor.unfold(ctx));
+        editor.read(&app, |editor, ctx| {
+            assert!(editor.hidden_ranges(ctx).is_empty());
+        });
+    });
+}
+
 /// The TUI diff pipeline: `new_tui` + seed + `apply_diffs` +
 /// `hide_lines_outside_of_active_diff` + `expand_diffs` must land removed-line
 /// ghosts in `CharCellState` and hidden line ranges in the render state, even

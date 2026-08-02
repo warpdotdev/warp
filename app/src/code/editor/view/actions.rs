@@ -488,6 +488,39 @@ pub fn init(app: &mut AppContext) {
     // Editable text-manipulation bindings
     app.register_editable_bindings([
         EditableBinding::new(
+            "code_editor:fold",
+            "Fold bracket block",
+            CodeEditorViewAction::Fold,
+        )
+        .with_context_predicate(text_entry.clone())
+        .with_key_binding("alt-cmdorctrl-["),
+        EditableBinding::new(
+            "code_editor:unfold",
+            "Unfold bracket block",
+            CodeEditorViewAction::Unfold,
+        )
+        .with_context_predicate(text_entry.clone())
+        .with_key_binding("alt-cmdorctrl-]"),
+        EditableBinding::new(
+            "code_editor:fold_selected_ranges",
+            "Fold selected ranges",
+            CodeEditorViewAction::FoldSelectedRanges,
+        )
+        .with_context_predicate(text_entry.clone())
+        .with_key_binding("alt-cmdorctrl-f"),
+        EditableBinding::new(
+            "code_editor:fold_all",
+            "Fold all created folds",
+            CodeEditorViewAction::FoldAll,
+        )
+        .with_context_predicate(text_entry.clone()),
+        EditableBinding::new(
+            "code_editor:unfold_all",
+            "Unfold all",
+            CodeEditorViewAction::UnfoldAll,
+        )
+        .with_context_predicate(text_entry.clone()),
+        EditableBinding::new(
             "editor_view:backspace",
             "Remove the previous character",
             CodeEditorViewAction::Backspace,
@@ -624,6 +657,11 @@ pub enum CodeEditorViewAction {
     Backspace,
     VimBackspace,
     ToggleComment,
+    Fold,
+    Unfold,
+    FoldSelectedRanges,
+    FoldAll,
+    UnfoldAll,
     ScrollVertical(Pixels),
     ScrollHorizontal(Pixels),
     ScrollHalfPageDown,
@@ -767,6 +805,11 @@ impl CodeEditorViewAction {
             | Self::ScrollHorizontal(_)
             | Self::ScrollHalfPageDown
             | Self::ScrollHalfPageUp
+            | Self::Fold
+            | Self::Unfold
+            | Self::FoldSelectedRanges
+            | Self::FoldAll
+            | Self::UnfoldAll
             | Self::SelectUp
             | Self::SelectDown
             | Self::SelectLeft
@@ -871,6 +914,13 @@ impl TypedActionView for CodeEditorView {
                     }
                 }
             }
+            Fold => self.model.update(ctx, |model, ctx| model.fold(ctx)),
+            Unfold => self.model.update(ctx, |model, ctx| model.unfold(ctx)),
+            FoldSelectedRanges => self
+                .model
+                .update(ctx, |model, ctx| model.fold_selected_ranges(ctx)),
+            FoldAll => self.model.update(ctx, |model, ctx| model.fold_all(ctx)),
+            UnfoldAll => self.model.update(ctx, |model, ctx| model.unfold_all(ctx)),
             ScrollVertical(delta) => self.model.update(ctx, |model, ctx| {
                 model.render_state().update(ctx, |render_state, ctx| {
                     render_state.scroll(*delta, ctx);
