@@ -64,7 +64,7 @@ fn launch_intent_url_classification() {
 
     let intents = [
         format!("{scheme}://tab_config/my_tab"),
-        format!("{scheme}://tab_config/my_tab.toml?new_window=true"),
+        format!("{scheme}://tab_config/my_tab.toml"),
         format!("{scheme}://action/new_window?path=~"),
         format!("{scheme}://action/new_cloud_agent_conversation?source=web_home"),
     ];

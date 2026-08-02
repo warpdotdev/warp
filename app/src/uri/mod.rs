@@ -786,9 +786,8 @@ fn find_matching_config_name<'a>(
 /// - `<name>` is matched case-insensitively against each tab config's file
 ///   stem, so both `warp://tab_config/my_tab` and
 ///   `warp://tab_config/my_tab.toml` work.
-/// - When `?new_window=true` (or no Warp window is open) the tab config opens
-///   in a brand-new window. Otherwise it opens as a new tab in the active
-///   window.
+/// - When no Warp window is open the tab config opens in a brand-new window.
+///   Otherwise it opens as a new tab in the active window.
 fn handle_tab_config_uri(primary_window_id: Option<WindowId>, url: &Url, ctx: &mut AppContext) {
     let Some(desired) = get_launch_config_path(url.path()) else {
         log::warn!("couldn't turn tab config link '{}' into name", url.path());
@@ -801,15 +800,8 @@ fn handle_tab_config_uri(primary_window_id: Option<WindowId>, url: &Url, ctx: &m
         return;
     };
 
-    let force_new_window = url
-        .query_pairs()
-        .any(|(k, v)| k == "new_window" && matches!(v.as_ref(), "1" | "true"));
-
-    let target_window_id = if force_new_window {
-        None
-    } else {
-        primary_window_id.filter(|id| WorkspaceRegistry::as_ref(ctx).get(*id, ctx).is_some())
-    };
+    let target_window_id =
+        primary_window_id.filter(|id| WorkspaceRegistry::as_ref(ctx).get(*id, ctx).is_some());
 
     match target_window_id {
         Some(window_id) => {
