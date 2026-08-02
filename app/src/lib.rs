@@ -2928,11 +2928,6 @@ fn on_close_window_cancelled(
     }
 }
 
-/// A startup URL that already carries a full "open this" intent (a fresh
-/// window from the Windows jump list, a Tab Config deeplink, or a cloud
-/// agent web-home launch). When any is present, session restore is skipped —
-/// otherwise restore reopens prior windows and the URL then opens another
-/// window/tab on top, yielding duplicates.
 fn is_launch_intent_url(url: &Url) -> bool {
     if url.scheme() != ChannelState::url_scheme() {
         return false;
@@ -2947,6 +2942,33 @@ fn is_launch_intent_url(url: &Url) -> bool {
         }
         Some("tab_config") => true,
         _ => false,
+    }
+}
+
+/// Opens windows from launch args. A launch-intent URL drives window creation
+/// itself, so restore is skipped when it opens one; a stale deeplink falls
+/// back to the persisted session.
+fn open_from_launch_args(ctx: &mut warpui::AppContext, urls: &[Url], app_state: Option<AppState>) {
+    let has_launch_intent = urls.iter().any(is_launch_intent_url);
+
+    if has_launch_intent {
+        for url in urls.iter() {
+            uri::handle_incoming_uri(url, ctx);
+        }
+        if ctx.window_ids().count() > 0 {
+            return;
+        }
+    }
+
+    ctx.dispatch_global_action(
+        "root_view:open_from_restored",
+        &OpenFromRestoredArg { app_state },
+    );
+
+    if !has_launch_intent {
+        for url in urls.iter() {
+            uri::handle_incoming_uri(url, ctx);
+        }
     }
 }
 
@@ -2971,20 +2993,9 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
         // before reaching launch().
         LaunchMode::Tui { .. } => unreachable!("LaunchMode::Tui is handled before launch()"),
         LaunchMode::App { .. } | LaunchMode::Test { .. } => {
-            let should_skip_restore = launch_mode.args().urls.iter().any(is_launch_intent_url);
-            let app_state = if should_skip_restore { None } else { app_state };
-            // Attempt to restore windows from the persisted application state.
-            let arg = OpenFromRestoredArg { app_state };
-            ctx.dispatch_global_action("root_view:open_from_restored", &arg);
+            let args = launch_mode.args();
+            open_from_launch_args(ctx, &args.urls, app_state);
 
-            // Process any URLs that were provided on the command line (which may be
-            // file:// URLs or ones using our custom URL scheme).
-            for url in launch_mode.args().urls.iter() {
-                uri::handle_incoming_uri(url, ctx);
-            }
-
-            // If, after session restoration and command-line argument handling, we
-            // haven't opened any windows, open a new window.
             if ctx.window_ids().count() == 0 {
                 ctx.dispatch_global_action("root_view:open_new", &());
             }
