@@ -206,6 +206,8 @@ fn make_shell_link(
         let title_value: PROPVARIANT = title.into();
         if let Err(err) = store.SetValue(&PKEY_Title, &title_value) {
             log::warn!("Failed to set jump list title: {err:?}");
+        } else if let Err(err) = store.Commit() {
+            log::warn!("Failed to commit jump list title: {err:?}");
         }
 
         Some(link)
