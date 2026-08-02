@@ -8,6 +8,7 @@ use crate::ai::credit_availability::AICreditSource;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::workspaces::workspace::{ByoApiKeyPolicy, Workspace, WorkspaceUid};
 
 fn initialize_app(app: &mut App) {
@@ -18,6 +19,7 @@ fn initialize_app_with_workspaces(app: &mut App, workspaces: Vec<Workspace>) {
     app.add_singleton_model(|_| NetworkStatus::new());
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
     app.add_singleton_model(|ctx| {
         UserWorkspaces::mock(
             Arc::new(MockTeamClient::new()),
