@@ -1,5 +1,10 @@
+use warp::appearance::Appearance;
 use warp::settings::TuiUsageDisplayMode;
 use warp::tui_export::ConversationUsageTotals;
+use warp_core::features::FeatureFlag;
+use warpui_core::App;
+use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
+use warpui_core::presenter::tui::TuiPresenter;
 
 use super::*;
 
@@ -56,4 +61,57 @@ fn cost_mode_explicitly_marks_unknown_historical_cost() {
         ),
         "Cost unavailable"
     );
+}
+
+/// The credits⇄dollars toggle is gated behind `TuiCostTransparency`: with the
+/// flag off (prod/stable) the footer renders a static credits total and never
+/// exposes the dollar cost even when the persisted mode is `Cost`; with the
+/// flag on (dogfood/staging + local/dev) the entry follows the persisted mode.
+#[test]
+fn footer_usage_entry_gates_the_cost_toggle_behind_the_feature_flag() {
+    App::test((), |mut app| async move {
+        // `render_entry` resolves theme styles via `TuiUiBuilder`, which reads
+        // the `Appearance` singleton.
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+        });
+        let toggle = UsageToggle::default();
+        let usage = totals(2.5, 3.2);
+
+        // Flag OFF: static credits; the persisted `Cost` mode is ignored so the
+        // dollar cost is never surfaced.
+        app.read(|ctx| {
+            let _guard = FeatureFlag::TuiCostTransparency.override_enabled(false);
+            let entry = toggle.render_entry(TuiUsageDisplayMode::Cost, usage, ctx, |_, _| {});
+            let line = TuiPresenter::new()
+                .present_element(entry, TuiRect::new(0, 0, 20, 1), ctx)
+                .buffer
+                .to_lines()
+                .join("");
+            assert!(
+                line.contains("2.5 credits"),
+                "flag off must show static credits, got: {line:?}"
+            );
+            assert!(
+                !line.contains("$0.03"),
+                "flag off must not expose the dollar cost, got: {line:?}"
+            );
+        });
+
+        // Flag ON: the entry follows the persisted display mode, exposing the
+        // dollar cost the toggle switches to.
+        app.read(|ctx| {
+            let _guard = FeatureFlag::TuiCostTransparency.override_enabled(true);
+            let entry = toggle.render_entry(TuiUsageDisplayMode::Cost, usage, ctx, |_, _| {});
+            let line = TuiPresenter::new()
+                .present_element(entry, TuiRect::new(0, 0, 20, 1), ctx)
+                .buffer
+                .to_lines()
+                .join("");
+            assert!(
+                line.contains("$0.03"),
+                "flag on must follow the persisted cost mode, got: {line:?}"
+            );
+        });
+    });
 }
