@@ -376,14 +376,50 @@ fn commit_after_finalization_is_noop() {
             .is_some()
     );
     // The recording is finalized while the action is in flight; the pending
-    // group leaves with the claimed recording.
+    // group is settled into the claimed recording's committed actions.
     let FinalizationClaim::Claimed { recording, .. } =
         controller.claim_finalization_by_id("recording")
     else {
         panic!("active recording should be claimed");
     };
+    assert_eq!(recording.actions.len(), 1);
     // A late commit lands on a controller that is now Finalizing, so it commits
     // nothing rather than recording on the wrong (finalized) recording.
     controller.commit_action_group(owner, Duration::from_millis(500), Vec::new());
-    assert!(recording.actions.is_empty());
+    assert_eq!(recording.actions.len(), 1);
+}
+
+#[test]
+fn detects_playwright_cli_commands() {
+    assert!(is_playwright_cli_command(
+        "playwright-cli open --headed https://example.com"
+    ));
+    assert!(is_playwright_cli_command(
+        "PLAYWRIGHT_MCP_SANDBOX=0 playwright-cli open https://example.com"
+    ));
+    assert!(is_playwright_cli_command(
+        "/usr/local/bin/playwright-cli attach"
+    ));
+    assert!(!is_playwright_cli_command("npm install playwright-cli"));
+    assert!(!is_playwright_cli_command("echo playwright-cli"));
+    assert!(!is_playwright_cli_command("cargo build"));
+}
+
+#[test]
+fn finalization_commits_open_pending_group() {
+    let owner = AIConversationId::new();
+    let mut controller = active_controller("recording", owner);
+
+    // A long-running command's group can still be pending when the recording
+    // is stopped; finalization must keep its window rather than drop it.
+    controller.begin_action_group(owner, vec![]);
+
+    let FinalizationClaim::Claimed { recording, .. } =
+        controller.claim_finalization_by_id("recording")
+    else {
+        panic!("active recording should be claimed");
+    };
+    assert!(recording.pending_group.is_none());
+    assert_eq!(recording.actions.len(), 1);
+    assert!(recording.actions[0].finish_offset >= recording.actions[0].offset);
 }

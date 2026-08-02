@@ -5,13 +5,16 @@
 //! Composition and layout stay with the views and the element library; the
 //! builder only owns styles.
 
+#[cfg(feature = "voice_input")]
 use std::f32::consts::TAU;
+#[cfg(feature = "voice_input")]
 use std::time::Duration;
 
 use pathfinder_color::ColorU;
 use warp::tui_export::Appearance;
 use warp_core::ui::color::Opacity;
 use warp_core::ui::color::blend::Blend;
+use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{Fill as ThemeFill, WarpTheme};
 use warpui::SingletonEntity;
 use warpui_core::AppContext;
@@ -66,6 +69,13 @@ impl TuiUiBuilder {
             .fg(self.foreground_text_color(self.warp_theme.details().main_text_opacity))
     }
 
+    /// Regular-weight `neutral_7` text used for trailing tool-call details.
+    pub(crate) fn neutral_7_text_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::Solid(internal_colors::neutral_7(
+            &self.warp_theme,
+        ))))
+    }
+
     /// The theme foreground over the transcript's base background at
     /// `opacity` percent. Pre-blended to a solid because terminal cells drop
     /// the alpha channel that the GUI's text tokens rely on.
@@ -82,6 +92,16 @@ impl TuiUiBuilder {
     pub(crate) fn muted_text_style(&self) -> TuiStyle {
         TuiStyle::default()
             .fg(self.foreground_text_color(self.warp_theme.details().sub_text_opacity))
+    }
+
+    /// Muted italic status text used by model rows backed by a connected API key.
+    pub(crate) fn key_connected_suffix_style(&self) -> TuiStyle {
+        self.muted_text_style().add_modifier(Modifier::ITALIC)
+    }
+
+    /// Green italic promotional text used by model discount labels.
+    pub(crate) fn promotional_suffix_style(&self) -> TuiStyle {
+        self.success_glyph_style().add_modifier(Modifier::ITALIC)
     }
 
     /// Muted and dimmed: de-emphasized status rows (e.g. tool-call stubs).
@@ -209,6 +229,12 @@ impl TuiUiBuilder {
             .add_modifier(Modifier::BOLD)
     }
 
+    /// Bold green italic promotional text over an inline-menu selection.
+    pub(crate) fn selection_promotional_suffix_style(&self) -> TuiStyle {
+        self.slash_command_selection_state_suffix_style()
+            .add_modifier(Modifier::ITALIC)
+    }
+
     /// Bold accent prompt marker over the submitted-input background.
     pub(crate) fn input_prefix_style(&self) -> TuiStyle {
         self.accent_text_style()
@@ -297,12 +323,14 @@ impl TuiUiBuilder {
     /// Fixed themed cyan for voice-input status text. Terminal foreground
     /// colors cannot preserve the alpha from `cyan_overlay_2`, so use the
     /// corresponding opaque color instead of pre-blending it into gray.
+    #[cfg(feature = "voice_input")]
     pub(crate) fn voice_input_status_style(&self) -> TuiStyle {
         self.accent_text_style()
     }
 
     /// Smoothly pulsing border between the themed equivalents of
     /// `cyan_overlay_2` and `Lilac-600`.
+    #[cfg(feature = "voice_input")]
     pub(crate) fn voice_input_border_style(&self, elapsed: Duration) -> TuiStyle {
         const PERIOD: Duration = Duration::from_secs(2);
 

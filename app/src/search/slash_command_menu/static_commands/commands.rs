@@ -329,9 +329,9 @@ pub static FORK: LazyLock<StaticCommand> = LazyLock::new(|| {
     let hint_text = "<optional prompt to send in forked conversation>";
     StaticCommand {
         name: "/fork",
-        description: "Fork the current conversation in a new pane or a new tab",
+        description: "Fork the current conversation",
         kind: SlashCommandKind::Fork,
-        supported_surfaces: SlashCommandSurfaces::GuiOnly {
+        supported_surfaces: SlashCommandSurfaces::GuiAndTui {
             icon_path: "bundled/svg/arrow-split.svg",
         },
         availability: Availability::AGENT_VIEW

@@ -196,6 +196,7 @@ fn rows_snapshot(
                 prefix: None,
                 description: None,
                 state_suffix: None,
+                promotional_suffix: None,
                 is_selectable: true,
                 style: TuiInlineMenuRowStyle::Default,
             })
@@ -332,6 +333,7 @@ fn conversation_like_snapshot_reuses_header_tabs_rows_and_selection() {
                 prefix: None,
                 description: Some("2 minutes ago".to_owned()),
                 state_suffix: None,
+                promotional_suffix: None,
                 is_selectable: true,
                 style: TuiInlineMenuRowStyle::Default,
             },
@@ -340,6 +342,7 @@ fn conversation_like_snapshot_reuses_header_tabs_rows_and_selection() {
                 prefix: None,
                 description: None,
                 state_suffix: None,
+                promotional_suffix: None,
                 is_selectable: false,
                 style: TuiInlineMenuRowStyle::Default,
             },
@@ -353,9 +356,54 @@ fn conversation_like_snapshot_reuses_header_tabs_rows_and_selection() {
     let rendered = lines.join("\n");
     assert!(rendered.contains("Conversations"));
     assert!(rendered.contains("[All]  Pinned"));
-    assert!(!rendered.chars().any(|glyph| "┌┐└┘─│".contains(glyph)));
+    assert!(!rendered.chars().any(|glyph| "┌┐└┘─│▏▕▁▔".contains(glyph)));
     assert!(rendered.contains("Current project  2 minutes ago"));
     assert!(rendered.contains("Archived"));
+}
+
+#[test]
+fn default_row_state_suffix_is_muted_and_italic() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            let snapshot = TuiInlineMenuSnapshot {
+                header: None,
+                rows: vec![TuiInlineMenuRow {
+                    title: "GPT 5".to_owned(),
+                    prefix: None,
+                    description: None,
+                    state_suffix: Some("(key connected)".to_owned()),
+                    promotional_suffix: None,
+                    is_selectable: true,
+                    style: TuiInlineMenuRowStyle::Default,
+                }],
+                selected_index: Some(0),
+                scroll_offset: 0,
+                scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+                max_visible_rows: 8,
+                status: None,
+            };
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_inline_menu(&snapshot, &builder),
+                TuiRect::new(0, 0, 50, 1),
+                ctx,
+            );
+            let line = frame.buffer.to_lines().remove(0);
+            let suffix_column = line.find("(key connected)").expect("suffix should render");
+            let suffix_cell = &frame.buffer[(u16::try_from(suffix_column).unwrap(), 0)];
+
+            assert_eq!(
+                suffix_cell.fg,
+                builder
+                    .muted_text_style()
+                    .fg
+                    .expect("muted text should have a foreground")
+            );
+            assert!(suffix_cell.modifier.contains(Modifier::ITALIC));
+        });
+    });
 }
 
 #[test]
@@ -381,6 +429,7 @@ fn conversation_like_snapshot_keeps_selection_visible_within_production_height()
                     prefix: None,
                     description: None,
                     state_suffix: None,
+                    promotional_suffix: None,
                     is_selectable: true,
                     style: TuiInlineMenuRowStyle::Default,
                 })
@@ -418,6 +467,7 @@ fn slash_command_rows_match_figma_layout_and_colors() {
                         prefix: None,
                         description: Some("Start a new agent conversation".to_owned()),
                         state_suffix: Some("(currently on)".to_owned()),
+                        promotional_suffix: None,
                         is_selectable: true,
                         style: TuiInlineMenuRowStyle::InlineMenuItem,
                     },
@@ -426,6 +476,7 @@ fn slash_command_rows_match_figma_layout_and_colors() {
                         prefix: None,
                         description: Some("Create a plan".to_owned()),
                         state_suffix: Some("(currently off)".to_owned()),
+                        promotional_suffix: None,
                         is_selectable: true,
                         style: TuiInlineMenuRowStyle::InlineMenuItem,
                     },
@@ -451,7 +502,7 @@ fn slash_command_rows_match_figma_layout_and_colors() {
             assert!(
                 !lines
                     .iter()
-                    .any(|line| line.chars().any(|glyph| "┌┐└┘─│".contains(glyph)))
+                    .any(|line| line.chars().any(|glyph| "┌┐└┘─│▏▕▁▔".contains(glyph)))
             );
             assert_eq!(
                 frame.buffer[(0, 0)].bg,
@@ -517,6 +568,7 @@ fn long_slash_command_titles_are_ellipsized_before_the_description() {
             prefix: None,
             description: Some("Walk users through PR review comments".to_owned()),
             state_suffix: None,
+            promotional_suffix: None,
             is_selectable: true,
             style: TuiInlineMenuRowStyle::InlineMenuItem,
         }],
@@ -540,6 +592,7 @@ fn wide_slash_command_rows_expand_to_show_long_titles() {
                 prefix: None,
                 description: Some("Walk users through PR review comments".to_owned()),
                 state_suffix: None,
+                promotional_suffix: None,
                 is_selectable: true,
                 style: TuiInlineMenuRowStyle::InlineMenuItem,
             }],
@@ -570,6 +623,7 @@ fn boundary_width_preserves_useful_title_and_description_columns() {
                 prefix: None,
                 description: Some("Start a new agent conversation".to_owned()),
                 state_suffix: None,
+                promotional_suffix: None,
                 is_selectable: true,
                 style: TuiInlineMenuRowStyle::InlineMenuItem,
             }],
@@ -596,6 +650,7 @@ fn narrow_slash_command_rows_use_the_full_width_for_titles() {
                 prefix: None,
                 description: Some("Description hidden at narrow widths".to_owned()),
                 state_suffix: None,
+                promotional_suffix: None,
                 is_selectable: true,
                 style: TuiInlineMenuRowStyle::InlineMenuItem,
             }],

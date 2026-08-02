@@ -54,13 +54,13 @@ function Invoke-Installer {
 
     $arguments = @('/SP-', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
     if ($Uninstall) {
-        $arguments += "/WARP_BIN_DIR=`"$BinDir`""
+        $arguments += "/warp_bin_dir=`"$BinDir`""
     } else {
         $arguments += @(
             '/CURRENTUSER',
             "/DIR=`"$InstallDir`"",
-            "/WARP_BIN_DIR=`"$BinDir`"",
-            '/SKIP_PATH_UPDATE=1'
+            "/warp_bin_dir=`"$BinDir`"",
+            '/skip_path_update=1'
         )
     }
     $process = Start-Process -FilePath $Installer -ArgumentList $arguments -Wait -PassThru

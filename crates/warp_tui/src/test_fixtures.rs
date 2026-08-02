@@ -1,13 +1,15 @@
 //! Shared fixtures for `warp_tui` unit tests.
+#![cfg_attr(not(test), allow(dead_code))]
 use std::any::Any;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
+use warp::settings::SettingsFileError;
 use warp::tui_export::{
     AIConversationAutoexecuteMode, ActiveSession, Appearance, BlocklistAIActionModel,
     BlocklistAIHistoryModel, ConversationSelection, ConversationSelectionHandle,
     GetRelevantFilesController, ModelEventDispatcher, Sessions, TerminalManagerTrait,
-    TerminalModel, TerminalSurfaceInit, TranscriptScope,
+    TerminalModel, TerminalSurfaceInit, TranscriptScope, TuiOnboardingMarkers,
 };
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warp_core::semantic_selection::SemanticSelection;
@@ -97,8 +99,14 @@ pub(crate) fn add_test_action_model_and_events(
     ModelHandle<BlocklistAIActionModel>,
     ModelHandle<ModelEventDispatcher>,
 ) {
+    if !app.read(|ctx| ctx.has_singleton_model::<TuiOnboardingMarkers>()) {
+        app.add_singleton_model(|_| TuiOnboardingMarkers::new_ready_for_test(false, false));
+    }
     if !app.read(|ctx| ctx.has_singleton_model::<Appearance>()) {
         app.add_singleton_model(|_| Appearance::mock());
+    }
+    if !app.read(|ctx| ctx.has_singleton_model::<warp_core::telemetry::TelemetryContextModel>()) {
+        app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
     }
     add_test_semantic_selection(app);
     // Read as a singleton by the action model's executors.
@@ -137,6 +145,39 @@ pub(crate) fn add_test_terminal_session(
     ViewHandle<TuiTerminalSessionView>,
     ModelHandle<Box<dyn TerminalManagerTrait>>,
 ) {
+    add_test_terminal_session_with_options(app, window_id, false, None)
+}
+
+pub(crate) fn add_test_terminal_session_with_first_run_onboarding(
+    app: &mut App,
+    window_id: WindowId,
+) -> (
+    ViewHandle<TuiTerminalSessionView>,
+    ModelHandle<Box<dyn TerminalManagerTrait>>,
+) {
+    add_test_terminal_session_with_options(app, window_id, true, None)
+}
+
+pub(crate) fn add_test_terminal_session_with_settings_file_error(
+    app: &mut App,
+    window_id: WindowId,
+    initial_settings_file_error: Option<SettingsFileError>,
+) -> (
+    ViewHandle<TuiTerminalSessionView>,
+    ModelHandle<Box<dyn TerminalManagerTrait>>,
+) {
+    add_test_terminal_session_with_options(app, window_id, false, initial_settings_file_error)
+}
+
+fn add_test_terminal_session_with_options(
+    app: &mut App,
+    window_id: WindowId,
+    handles_first_run_onboarding: bool,
+    initial_settings_file_error: Option<SettingsFileError>,
+) -> (
+    ViewHandle<TuiTerminalSessionView>,
+    ModelHandle<Box<dyn TerminalManagerTrait>>,
+) {
     app.update(|ctx| {
         if !ctx.has_singleton_model::<ZeroStateAnimationConfig>() {
             ctx.add_singleton_model(|_| ZeroStateAnimationConfig::default());
@@ -149,6 +190,8 @@ pub(crate) fn add_test_terminal_session(
                 TuiExitSummaryHandle::default(),
                 false,
                 AIConversationAutoexecuteMode::RespectUserSettings,
+                handles_first_run_onboarding,
+                initial_settings_file_error,
                 ctx,
             )
         });

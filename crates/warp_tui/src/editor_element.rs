@@ -890,7 +890,9 @@ impl TuiElement for TuiEditorElement {
                     handler(TuiEditorAction::PasteText(text.clone()), event_ctx);
                     return true;
                 }
-                TuiEvent::ModifierKeyChanged { .. }
+                TuiEvent::FocusGained
+                | TuiEvent::FocusLost
+                | TuiEvent::ModifierKeyChanged { .. }
                 | TuiEvent::ScrollWheel { .. }
                 | TuiEvent::LeftMouseDown { .. }
                 | TuiEvent::LeftMouseUp { .. }

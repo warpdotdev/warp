@@ -8,9 +8,9 @@ use warp::tui_export::{
     AIAgentText, AIAgentTextSection, AIAgentTodo, AIBlockModel, AIBlockOutputStatus,
     AIConversation, AIConversationId, AIRequestType, Appearance, BlockHeightItem,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatus, ConversationStatusUpdate,
-    LLMId, MessageId, OutputStatusUpdateCallback, ReceivedMessageDisplay, RichContentItem,
-    RichContentType, ServerOutputId, Shared, TerminalModel, TodoOperation, UserQueryMode,
-    register_tui_session_view_test_singletons,
+    LLMId, MessageId, OutputStatusUpdateCallback, ReceivedMessageDisplay, RenderableAIError,
+    RichContentItem, RichContentType, ServerOutputId, Shared, TerminalModel, TodoOperation,
+    UserQueryMode, register_tui_session_view_test_singletons,
 };
 use warpui::event::ModifiersState;
 use warpui::platform::WindowStyle;
@@ -73,6 +73,64 @@ fn transcript_view_renders_terminal_blocks_from_canonical_order() {
 }
 
 #[test]
+fn out_of_credits_shortcut_tracks_the_latest_agent_block() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        let model_for_view = terminal_model.clone();
+        let (action_model, model_events) = add_test_action_model_and_events(&mut app);
+        let (_, transcript) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |ctx| {
+                    TuiTranscriptView::new(
+                        EntityId::new(),
+                        model_for_view,
+                        action_model,
+                        &model_events,
+                        ctx,
+                    )
+                },
+            )
+        });
+
+        transcript.update(&mut app, |view, ctx| {
+            append_test_agent_block(
+                view,
+                AIConversationId::new(),
+                AIAgentExchangeId::new(),
+                AIBlockOutputStatus::Failed {
+                    partial_output: None,
+                    error: RenderableAIError::QuotaLimit {
+                        user_display_message: Some("Out of credits.".to_owned()),
+                    },
+                },
+                ctx,
+            );
+        });
+        assert!(transcript.read(&app, |view, ctx| {
+            view.latest_agent_block_is_out_of_credits(ctx)
+        }));
+
+        transcript.update(&mut app, |view, ctx| {
+            append_test_agent_block(
+                view,
+                AIConversationId::new(),
+                AIAgentExchangeId::new(),
+                AIBlockOutputStatus::Pending,
+                ctx,
+            );
+        });
+        assert!(!transcript.read(&app, |view, ctx| {
+            view.latest_agent_block_is_out_of_credits(ctx)
+        }));
+    });
+}
+
+#[test]
 fn agent_block_lookup_uses_canonical_transcript_order() {
     App::test((), |mut app| async move {
         let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
@@ -123,6 +181,78 @@ fn agent_block_lookup_uses_canonical_transcript_order() {
                 vec![first, second]
             );
         });
+    });
+}
+
+#[test]
+fn transcript_notice_preserves_the_fork_boundary_before_a_follow_up_exchange() {
+    App::test((), |mut app| async move {
+        let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        let model_for_view = terminal_model.clone();
+        let (action_model, model_events) = add_test_action_model_and_events(&mut app);
+        let (_, transcript) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |ctx| {
+                    TuiTranscriptView::new(
+                        EntityId::new(),
+                        model_for_view,
+                        action_model,
+                        &model_events,
+                        ctx,
+                    )
+                },
+            )
+        });
+        let (copied_exchange_id, notice_id, follow_up_exchange_id) =
+            transcript.update(&mut app, |view, ctx| {
+                let copied_exchange_id = append_test_agent_block_with_inputs(
+                    view,
+                    AIConversationId::new(),
+                    AIAgentExchangeId::new(),
+                    vec![query_input("copied history")],
+                    AIBlockOutputStatus::Pending,
+                    ctx,
+                );
+                view.append_notice("resume the original conversation".to_owned(), ctx);
+                let notice_id = *view
+                    .notices
+                    .borrow()
+                    .keys()
+                    .next()
+                    .expect("notice should be registered");
+                let follow_up_exchange_id = append_test_agent_block_with_inputs(
+                    view,
+                    AIConversationId::new(),
+                    AIAgentExchangeId::new(),
+                    vec![query_input("follow-up prompt")],
+                    AIBlockOutputStatus::Pending,
+                    ctx,
+                );
+                (copied_exchange_id, notice_id, follow_up_exchange_id)
+            });
+
+        let rich_content_ids = terminal_model
+            .lock()
+            .block_list()
+            .block_heights()
+            .cursor::<(), ()>()
+            .filter_map(|item| match item {
+                BlockHeightItem::RichContent(item) => Some(item.view_id),
+                BlockHeightItem::Block(_)
+                | BlockHeightItem::Gap(_)
+                | BlockHeightItem::RestoredBlockSeparator { .. }
+                | BlockHeightItem::InlineBanner { .. }
+                | BlockHeightItem::SubshellSeparator { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rich_content_ids,
+            vec![copied_exchange_id, notice_id, follow_up_exchange_id]
+        );
     });
 }
 
@@ -812,8 +942,7 @@ fn insert_test_agent_block(
         let terminal_model = view.model.clone();
         let agent_block = ctx.add_typed_action_tui_view(|ctx| {
             TuiAIBlock::new(
-                conversation_id,
-                exchange_id,
+                (conversation_id, exchange_id),
                 Rc::new(FakeAgentBlockModel {
                     inputs,
                     status: AIBlockOutputStatus::Pending,
@@ -821,6 +950,7 @@ fn insert_test_agent_block(
                 action_model,
                 &model_events,
                 terminal_model,
+                false,
                 ctx,
             )
         });
@@ -1000,12 +1130,12 @@ fn append_test_agent_block_with_inputs(
     let terminal_model = view.model.clone();
     let agent_block = ctx.add_tui_view(|ctx| {
         TuiAIBlock::new(
-            conversation_id,
-            exchange_id,
+            (conversation_id, exchange_id),
             Rc::new(FakeAgentBlockModel { inputs, status }),
             action_model,
             &model_events,
             terminal_model,
+            false,
             ctx,
         )
     });

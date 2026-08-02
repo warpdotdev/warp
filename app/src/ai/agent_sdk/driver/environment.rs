@@ -34,6 +34,11 @@ pub enum PrepareEnvironmentError {
     InvalidRuntimeState,
     #[error("Failed to clone {repo_name}")]
     CloneRepo { repo_name: String },
+    #[error("Failed to check out {checkout_ref} in {repo_name}")]
+    CheckoutFailed {
+        repo_name: String,
+        checkout_ref: String,
+    },
     #[error("Failed to run setup command: {command}")]
     SetupCommand { command: String },
     #[error("Failed to change directory into {repo_name}")]
@@ -334,12 +339,20 @@ clone_repo() {
   repo_name="$1"
   repo_url="$2"
   target="$3"
+  checkout_ref="$4"
   if [ -d "$target" ]; then
     printf '%s\n' "Repository directory $target already exists, skipping clone..."
-    return 0
+  else
+    printf '%s\n' "Cloning repository $repo_name..."
+    git clone --filter=tree:0 "$repo_url" "$target" || return 1
   fi
-  printf '%s\n' "Cloning repository $repo_name..."
-  git clone --filter=tree:0 "$repo_url" "$target"
+  # Pin after clone or reuse: a reused directory may still be on an old ref.
+  if [ -n "$checkout_ref" ]; then
+    printf '%s\n' "Checking out $checkout_ref in $repo_name..."
+    # Fetch leaves the object in FETCH_HEAD; check that out detached so we
+    # never prefer a stale local branch with the same name.
+    git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
+  fi
 }
 "#,
     );
@@ -351,10 +364,14 @@ clone_repo() {
         let escaped_repo_name = shell_escape_single_quotes(&repo_name, ShellType::Bash);
         let escaped_repo_url = shell_escape_single_quotes(&repo_url, ShellType::Bash);
         let escaped_target = shell_escape_single_quotes(&repo.repo, ShellType::Bash);
+        let escaped_checkout_ref = shell_escape_single_quotes(
+            repo.checkout_ref.as_deref().unwrap_or_default(),
+            ShellType::Bash,
+        );
         let log_var = format!("log_file_{index}");
         script.push_str(&format!(
             "{log_var}=\"$tmp_dir/repo-{index}.log\"\n\
-             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' >\"${log_var}\" 2>&1 &\n"
+             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_checkout_ref}' >\"${log_var}\" 2>&1 &\n"
         ));
         script.push_str("pids=\"$pids $!\"\n");
         log_outputs.push_str(&format!(
@@ -490,7 +507,68 @@ pub(super) async fn clone_repo(
         );
     }
 
+    // Pin after clone or reuse when a ref was requested. A reused directory may
+    // still be on an old default-branch tip, and a fresh partial clone only
+    // fetched the default branch — fetch the ref, then detach to FETCH_HEAD.
+    // When checkout_ref is unset, leave an existing directory untouched.
+    if let Some(command) = checkout_command_for(repo, working_dir, shell_type) {
+        let checkout_ref = repo.checkout_ref.as_deref().unwrap_or_default();
+        safe_info!(
+            safe: ("Checking out pinned ref for repository"),
+            full: ("Checking out {checkout_ref} for {repo_name}")
+        );
+        let exit_code = execute_command(command, spawner).await?;
+        checkout_result(&repo_name, checkout_ref, exit_code)?;
+
+        safe_info!(
+            safe: ("Successfully checked out pinned ref"),
+            full: ("Successfully checked out {checkout_ref} for {repo_name}")
+        );
+    }
+
     Ok(())
+}
+
+/// Build the `git fetch` + `git checkout` command that pins `repo`'s clone at
+/// its `checkout_ref`, or `None` when the repo has no ref to pin.
+///
+/// A partial clone (`--filter=tree:0`) only fetches the default branch, so an
+/// arbitrary ref (commit SHA, branch, or tag) may not be present yet: fetch it
+/// first, then check out the resulting `FETCH_HEAD` detached. Checking out the
+/// original ref name can prefer a stale local branch or fail when the object
+/// only landed in `FETCH_HEAD`. Detached HEAD is expected and fine — trials
+/// never merge.
+fn checkout_command_for(
+    repo: &SourceRepo,
+    working_dir: &Path,
+    shell_type: ShellType,
+) -> Option<String> {
+    let checkout_ref = repo.checkout_ref.as_deref()?;
+    let repo_dir = working_dir.join(&repo.repo);
+    let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
+    let escaped_ref = shell_escape_single_quotes(checkout_ref, shell_type);
+    Some(format!(
+        "git -C '{escaped_dir}' fetch --filter=tree:0 origin '{escaped_ref}' && \
+         git -C '{escaped_dir}' checkout --detach FETCH_HEAD"
+    ))
+}
+
+/// Map a checkout command's exit code onto the environment-prep result,
+/// surfacing a non-zero exit (fetch or checkout failing) as `CheckoutFailed`
+/// rather than silently leaving the clone on the default branch.
+fn checkout_result(
+    repo_name: &str,
+    checkout_ref: &str,
+    exit_code: ExitCode,
+) -> Result<(), PrepareEnvironmentError> {
+    if exit_code == 0.into() {
+        Ok(())
+    } else {
+        Err(PrepareEnvironmentError::CheckoutFailed {
+            repo_name: repo_name.to_string(),
+            checkout_ref: checkout_ref.to_string(),
+        })
+    }
 }
 
 /// Register a cloned source repository with `DetectedRepositories` so that the

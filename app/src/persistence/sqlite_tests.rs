@@ -20,6 +20,7 @@ use crate::app_state::{
     AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
     TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
 };
+use crate::auth::UserUid;
 use crate::cloud_object::{CloudObjectPermissions, Owner};
 use crate::code::editor_management::CodeSource;
 use crate::notebooks::{CloudNotebook, CloudNotebookModel};
@@ -34,6 +35,7 @@ use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::model::session::SessionId;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::tab_group::TabGroupId;
+use crate::workspaces::user_profiles::UserProfileWithUID;
 
 #[test]
 fn app_scope_database_path_matches_app_database_path() {
@@ -203,6 +205,17 @@ fn tui_database_in_tui_subdirectory_round_trips_data() {
         .expect("insert command event should send");
     writer
         .sender
+        .send(ModelEvent::UpsertUserProfiles {
+            profiles: vec![UserProfileWithUID {
+                firebase_uid: UserUid::new("creator-uid"),
+                display_name: Some("MCP Creator".to_owned()),
+                email: "creator@example.com".to_owned(),
+                photo_url: String::new(),
+            }],
+        })
+        .expect("user profile event should send");
+    writer
+        .sender
         .send(ModelEvent::Terminate)
         .expect("terminate event should send");
     writer.handle.join().expect("writer should terminate");
@@ -213,9 +226,15 @@ fn tui_database_in_tui_subdirectory_round_trips_data() {
         .expect("persisted data should load");
     // The TUI data scope skips GUI session restoration...
     assert!(restored.app_state.is_none());
-    // ...but restores command history and shared data like codebase index metadata.
+    // ...but restores command history and shared data like creator profiles and
+    // codebase index metadata.
     assert_eq!(restored.command_history.len(), 1);
     assert_eq!(restored.command_history[0].command, "ls");
+    assert_eq!(restored.user_profiles.len(), 1);
+    assert_eq!(
+        restored.user_profiles[0].display_name.as_deref(),
+        Some("MCP Creator")
+    );
     assert_eq!(restored.codebase_indices.len(), 1);
     assert_eq!(restored.codebase_indices[0].path, metadata.path);
 }

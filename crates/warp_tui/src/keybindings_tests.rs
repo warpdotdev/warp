@@ -89,15 +89,28 @@ fn input_cut_binding_yields_ctrl_x_to_contextual_menu_clear() {
                 .editable_bindings()
                 .filter(|binding| binding.name == "tui:input:cut")
                 .collect::<Vec<_>>();
-            assert_eq!(cut_bindings.len(), 1);
+            assert_eq!(cut_bindings.len(), 2);
+            let binding_for = |key: &str| {
+                cut_bindings.iter().find(|binding| {
+                    matches!(
+                        binding.trigger,
+                        Trigger::Keystrokes(keys)
+                            if keys.first().is_some_and(|keystroke| keystroke.normalized() == key)
+                    )
+                })
+            };
+            let ctrl_x = binding_for("ctrl-x").expect("ctrl-x cut binding must be registered");
+            let cmd_x = binding_for("cmd-x").expect("cmd-x cut binding must be registered");
 
             let mut plain_input = Context::default();
             plain_input.set.insert(TuiInputView::ui_name());
-            assert!(cut_bindings[0].in_context(&plain_input));
+            assert!(ctrl_x.in_context(&plain_input));
+            assert!(cmd_x.in_context(&plain_input));
 
             let mut menu_clear = plain_input;
             menu_clear.set.insert(INLINE_MENU_CAN_CLEAR_SELECTED_FLAG);
-            assert!(!cut_bindings[0].in_context(&menu_clear));
+            assert!(!ctrl_x.in_context(&menu_clear));
+            assert!(cmd_x.in_context(&menu_clear));
         });
     });
 }
