@@ -124,7 +124,10 @@ impl PromptAlertView {
         }
 
         let request_usage_model = AIRequestUsageModel::as_ref(app);
-        let has_requests_remaining = request_usage_model.has_requests_remaining();
+        // Anonymous soft/hard gates are based on the base-plan request quota,
+        // not overall AI availability (bonus grants / BYO / etc.).
+        let has_base_plan_requests_remaining =
+            request_usage_model.has_base_plan_requests_remaining();
         let auth_state = AuthStateProvider::as_ref(app).get();
 
         // Next, if the user is anonymous, we check if they have reached a certain percentage of requests used.
@@ -135,7 +138,7 @@ impl PromptAlertView {
             let percentage_used = request_usage_model.request_percentage_used();
 
             if percentage_used >= ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PERCENTAGE {
-                if has_requests_remaining {
+                if has_base_plan_requests_remaining {
                     return PromptAlertState::AnonymousUserRequestLimitSoftGate;
                 } else {
                     return PromptAlertState::AnonymousUserRequestLimitHardGate;

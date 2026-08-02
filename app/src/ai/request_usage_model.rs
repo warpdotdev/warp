@@ -15,7 +15,7 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::credit_availability::{AICreditAvailability, AICreditDenialReason};
+use crate::ai::credit_availability::{AICreditAvailability, AICreditDenialReason, AICreditSource};
 use crate::auth::AuthStateProvider;
 use crate::pricing::PricingInfoModel;
 use crate::server::server_api::ai::AIClient;
@@ -503,12 +503,14 @@ impl AIRequestUsageModel {
         }
     }
 
-    /// Returns `true` if the user has at least one request remaining before hitting the AI request
-    /// limit.
+    /// Returns `true` if the user still has unused **base-plan** AI request quota
+    /// (the monthly/weekly plan limit).
     ///
-    /// WARNING: This method doesn't account for add-on credits. Consider if you want
-    /// [`Self::has_any_ai_remaining`] instead.
-    pub fn has_requests_remaining(&self) -> bool {
+    /// This deliberately ignores add-on credits, bonus grants, overages,
+    /// auto-reload, and BYO credentials. It is **not** an AI-availability check —
+    /// use [`Self::has_any_ai_remaining`] when deciding whether the user can start
+    /// an interactive AI request.
+    pub(crate) fn has_base_plan_requests_remaining(&self) -> bool {
         self.requests_remaining() > 0
     }
 
@@ -578,7 +580,7 @@ impl AIRequestUsageModel {
     fn has_any_ai_remaining_from_local_state(&self, ctx: &AppContext) -> bool {
         let current_workspace = UserWorkspaces::as_ref(ctx).current_workspace();
 
-        let has_base_plan_ai_requests = self.has_requests_remaining();
+        let has_base_plan_ai_requests = self.has_base_plan_requests_remaining();
 
         let user_bonus_credits = self.total_user_interactive_bonus_credits_remaining() > 0;
         let workspace_bonus_credits = current_workspace
@@ -739,6 +741,12 @@ impl AIRequestUsageModel {
 
     /// Computes the current banner state based on live conditions.
     /// This is called on-demand and always returns fresh state.
+    ///
+    /// Once a server-authoritative availability decision is known, the banner
+    /// hides whenever interactive AI is permitted (including `OutOfCredits`
+    /// refined by a usable local BYO path). Ambient-only credit sources are an
+    /// intentional exception: they fund cloud/ambient agents, not interactive
+    /// usage, so they must not suppress this banner.
     pub fn compute_buy_addon_credits_banner_display_state(
         &self,
         ctx: &AppContext,
@@ -752,6 +760,10 @@ impl AIRequestUsageModel {
         let policy_allows_purchasing = user_workspaces
             .purchase_policy()
             .is_some_and(|policy| policy.allows_purchases());
+
+        if !policy_allows_purchasing {
+            return BuyCreditsBannerDisplayState::Hidden;
+        }
 
         // TODO: we might want to suggest credits purchase if request_remain/bonus credits is below certain threshold
         // something to consider after launch
@@ -769,10 +781,20 @@ impl AIRequestUsageModel {
                     current_workspace.is_some_and(|workspace| workspace.uid == uid)
                 }
             });
-        if !policy_allows_purchasing
-            || self.has_requests_remaining()
-            || has_non_ambient_bonus_credits
-        {
+
+        if let Some(availability) = self.server_availability.latest {
+            let only_ambient_server_source = availability.available
+                && matches!(
+                    availability.credit_source,
+                    Some(AICreditSource::AmbientBonusGrant)
+                );
+            // Hide when interactive AI is permitted, except ambient-only sources
+            // which do not fund interactive requests.
+            if self.has_any_ai_remaining(ctx) && !only_ambient_server_source {
+                return BuyCreditsBannerDisplayState::Hidden;
+            }
+        } else if self.has_base_plan_requests_remaining() || has_non_ambient_bonus_credits {
+            // Legacy pre-fetch path: local base quota / non-ambient bonus only.
             return BuyCreditsBannerDisplayState::Hidden;
         }
 
