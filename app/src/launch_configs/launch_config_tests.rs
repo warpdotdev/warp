@@ -1,15 +1,15 @@
 use std::path::PathBuf;
 
-use super::{CommandTemplate, LaunchConfig, PaneMode, PaneTemplateType};
+use super::{CommandTemplate, LaunchConfig, PaneMode, PaneTemplateType, TabTemplate};
 use crate::app_state::{
     AppState, BranchSnapshot, LeafContents, LeafSnapshot, NotebookPaneSnapshot, PaneFlex,
     PaneNodeSnapshot, SplitDirection, TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot,
     WindowSnapshot,
 };
-use crate::themes::theme::AnsiColorIdentifier;
-use crate::workspace::tab_group::TabGroupId;
 use crate::drive::OpenWarpDriveObjectSettings;
 use crate::tab::SelectedTabColor;
+use crate::themes::theme::AnsiColorIdentifier;
+use crate::workspace::tab_group::TabGroupId;
 
 fn single_tab_snapshot(root: PaneNodeSnapshot) -> AppState {
     AppState {
@@ -674,4 +674,77 @@ fn test_config_from_snapshot_omits_tab_groups_when_there_are_none() {
     let yaml = serde_yaml::to_string(&config).expect("serializes");
     assert!(!yaml.contains("tab_groups"), "got:\n{yaml}");
     assert!(!yaml.contains("group:"), "got:\n{yaml}");
+}
+
+fn tab_in_group(group: Option<usize>) -> TabTemplate {
+    TabTemplate {
+        title: None,
+        layout: PaneTemplateType::PaneTemplate {
+            cwd: PathBuf::from("/tmp"),
+            commands: vec![],
+            is_focused: None,
+            pane_mode: PaneMode::Terminal,
+            shell: None,
+        },
+        commands: vec![],
+        color: None,
+        group,
+    }
+}
+
+#[test]
+fn test_resolve_group_memberships_keeps_contiguous_runs_intact() {
+    let tabs = vec![
+        tab_in_group(Some(0)),
+        tab_in_group(Some(0)),
+        tab_in_group(None),
+        tab_in_group(Some(1)),
+    ];
+
+    assert_eq!(
+        super::resolve_group_memberships(&tabs, 2),
+        vec![Some(0), Some(0), None, Some(1)]
+    );
+}
+
+#[test]
+fn test_resolve_group_memberships_ungroups_a_split_run() {
+    // The tab bar renders each contiguous run as its own container, so
+    // honoring the second run would draw two containers with one group id.
+    let tabs = vec![
+        tab_in_group(Some(0)),
+        tab_in_group(None),
+        tab_in_group(Some(0)),
+    ];
+
+    assert_eq!(
+        super::resolve_group_memberships(&tabs, 1),
+        vec![Some(0), None, None],
+        "the group's second run must not reopen it"
+    );
+}
+
+#[test]
+fn test_resolve_group_memberships_ungroups_a_run_split_by_another_group() {
+    let tabs = vec![
+        tab_in_group(Some(0)),
+        tab_in_group(Some(1)),
+        tab_in_group(Some(0)),
+    ];
+
+    assert_eq!(
+        super::resolve_group_memberships(&tabs, 2),
+        vec![Some(0), Some(1), None]
+    );
+}
+
+#[test]
+fn test_resolve_group_memberships_drops_out_of_range_indices() {
+    // Hand-edited YAML pointing past the end of `tab_groups`.
+    let tabs = vec![tab_in_group(Some(7)), tab_in_group(Some(0))];
+
+    assert_eq!(
+        super::resolve_group_memberships(&tabs, 1),
+        vec![None, Some(0)]
+    );
 }

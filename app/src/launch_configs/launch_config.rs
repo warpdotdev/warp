@@ -131,6 +131,42 @@ fn is_false(val: &bool) -> bool {
     !*val
 }
 
+/// Resolves each tab's group index for restore, keeping every group to a
+/// single contiguous run.
+///
+/// The tab bar collapses each *contiguous* run of same-group tabs into one
+/// group container (`Workspace::tab_bar_slots`), so interleaved membership --
+/// group 0, an ungrouped tab, group 0 again -- would render as two containers
+/// sharing one id, which no other code path can produce. Configs written by
+/// `From<WindowSnapshot>` are always contiguous because a live window is, so
+/// this only bites on hand-edited YAML.
+///
+/// The first run of each group wins and later stragglers come back ungrouped.
+/// Reordering the tabs would also restore the invariant, but silently moving
+/// tabs the config explicitly ordered is the more surprising of the two.
+/// Out-of-range indices are dropped the same way.
+pub fn resolve_group_memberships(tabs: &[TabTemplate], group_count: usize) -> Vec<Option<usize>> {
+    let mut closed: Vec<bool> = vec![false; group_count];
+    let mut previous: Option<usize> = None;
+
+    tabs.iter()
+        .map(|tab| {
+            let group = tab
+                .group
+                .filter(|index| *index < group_count)
+                .filter(|index| !closed[*index]);
+
+            if previous != group
+                && let Some(previous) = previous
+            {
+                closed[previous] = true;
+            }
+            previous = group;
+            group
+        })
+        .collect()
+}
+
 fn is_falsey(val: &Option<bool>) -> bool {
     val.is_none_or(|v| !v)
 }

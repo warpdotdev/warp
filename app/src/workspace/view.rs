@@ -3890,6 +3890,15 @@ impl Workspace {
             Vec::new()
         };
 
+        // `tab_bar_slots` turns every *contiguous* run of same-group tabs into
+        // one group container, so interleaved membership would render as two
+        // containers sharing one id. `resolve_group_memberships` collapses that
+        // to the first run of each group; see its docs for why.
+        let memberships = crate::launch_configs::launch_config::resolve_group_memberships(
+            &window.tabs,
+            group_ids.len(),
+        );
+
         window
             .tabs
             .iter()
@@ -3904,10 +3913,7 @@ impl Workspace {
                 self.tabs[start_index + tab_index].selected_color = tab_template
                     .color
                     .map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
-                // An out-of-range index (hand-edited YAML) leaves the tab
-                // ungrouped rather than failing the whole window.
-                self.tabs[start_index + tab_index].group_id = tab_template
-                    .group
+                self.tabs[start_index + tab_index].group_id = memberships[tab_index]
                     .and_then(|group_index| group_ids.get(group_index).copied());
             });
 
