@@ -4052,7 +4052,7 @@ impl Workspace {
             NewWorkspaceSource::NotebookFromFilePath { file_path } => {
                 self.add_tab_for_file_notebook(file_path, ctx);
             }
-            NewWorkspaceSource::TabConfig { tab_config } => {
+            NewWorkspaceSource::TabConfig { tab_config, .. } => {
                 if tab_config.params.is_empty() {
                     // The config becomes the window's sole tab.
                     self.open_tab_config(tab_config, ctx);

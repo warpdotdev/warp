@@ -818,9 +818,13 @@ fn handle_tab_config_uri(primary_window_id: Option<WindowId>, url: &Url, ctx: &m
         }
         None => {
             // No existing window: open a new one whose first tab is the config,
-            // rather than a homepage tab plus the config as a second tab.
+            // rather than a homepage tab plus the config as a second tab. Carry
+            // the active window along so the new window inherits its team context.
             open_new_with_workspace_source(
-                NewWorkspaceSource::TabConfig { tab_config: config },
+                NewWorkspaceSource::TabConfig {
+                    tab_config: config,
+                    previous_active_window: primary_window_id,
+                },
                 ctx,
             );
         }

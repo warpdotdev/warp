@@ -1571,6 +1571,7 @@ pub enum NewWorkspaceSource {
     /// `tab_config` deeplink cold-starts Warp (no existing window to open into).
     TabConfig {
         tab_config: crate::tab_configs::TabConfig,
+        previous_active_window: Option<WindowId>,
     },
     NotebookById {
         id: SyncId,
@@ -1639,6 +1640,10 @@ impl NewWorkspaceSource {
                 previous_active_window,
                 ..
             } => *previous_active_window,
+            Self::TabConfig {
+                previous_active_window,
+                ..
+            } => *previous_active_window,
             Self::TransferredTab {
                 source_window_id, ..
             } => Some(*source_window_id),
@@ -1650,8 +1655,7 @@ impl NewWorkspaceSource {
             | Self::NotebookById { .. }
             | Self::WorkflowById { .. }
             | Self::AgentSession { .. }
-            | Self::AmbientAgent
-            | Self::TabConfig { .. } => None,
+            | Self::AmbientAgent => None,
             Self::TeamSwitched { team_uid } => return Some(*team_uid),
             Self::Restored {
                 window_snapshot, ..
