@@ -11,6 +11,7 @@ use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::restored_conversations::RestoredAgentConversations;
+use crate::features::FeatureFlag;
 use crate::pane_group::{
     AmbientAgentViewModelHandleExt, PaneGroup, PaneId, TerminalPane, TerminalViewResources,
 };
@@ -174,82 +175,44 @@ impl PaneGroup {
         ctx: &mut ViewContext<Self>,
     ) {
         let child_id = child_conversation.id();
+        let flag_on = FeatureFlag::OrchestrationUnifiedStack.is_enabled();
 
-        // Viewer-side child clicked before `OrchestrationViewerModel`
-        // surfaced a `session_id`: render a loading placeholder; the real
-        // pane gets swapped in by `ensure_shared_session_viewer_child_pane`.
-        if child_conversation.is_viewing_shared_session() {
-            let resources = TerminalViewResources {
-                tips_completed: self.tips_completed.clone(),
-                server_api: self.server_api.clone(),
-                model_event_sender: self.model_event_sender.clone(),
-            };
-            let view_size = Self::estimated_view_bounds(ctx).size();
-            let (loading_view, loading_manager) = Self::create_loading_terminal_manager_and_view(
-                resources,
-                view_size,
-                ctx.window_id(),
-                ctx,
-            );
-            let pane_data = TerminalPane::new(
-                Uuid::new_v4().as_bytes().to_vec(),
-                loading_manager,
-                loading_view.clone(),
-                self.model_event_sender.clone(),
-                ctx,
-            );
-            let new_pane_id = pane_data.terminal_pane_id();
-            if self
-                .attach_child_pane_off_tree(Box::new(pane_data), ctx)
-                .is_none()
+        if flag_on {
+            // Viewer and owner children share one task-driven dispatch; only
+            // local in-process children fall through to the branch below.
+            if child_conversation.is_viewing_shared_session()
+                || child_conversation.is_remote_child()
             {
-                report_error!(
-                    "create_hidden_child_agent_pane: failed to attach loading placeholder for \
-                     viewer-side child",
-                    extra: { "child_id" => ?child_id }
-                );
+                self.materialize_child_pane(child_conversation, ctx);
                 return;
             }
-
-            // Restore the conversation and enter agent view so the pill bar
-            // renders (its gate requires `is_fullscreen()`). The output area
-            // stays a loading spinner because the loading view's
-            // `ConversationTranscriptViewerStatus::Loading` short-circuits
-            // the block list render in `TerminalView::render`.
-            loading_view.update(ctx, |terminal_view, ctx| {
-                terminal_view.restore_conversation_after_view_creation(
-                    RestoredAIConversation::new(child_conversation),
-                    true,
-                    RestoreConversationEntryBehavior::PreserveAgentViewState,
-                    ctx,
-                );
-                terminal_view.enter_agent_view(
-                    None,
-                    Some(child_id),
+        } else {
+            // Viewer and owner children take separate dispatches.
+            if child_conversation.is_viewing_shared_session() {
+                let _ = self.create_child_loading_placeholder(
+                    child_conversation,
                     AgentViewEntryOrigin::SharedSessionSelection,
                     ctx,
                 );
-            });
-
-            self.child_agent_panes.insert(child_id, new_pane_id.into());
-            return;
-        }
-
-        if child_conversation.is_remote_child() {
-            let Some(task_id) = child_conversation.task_id() else {
-                log::warn!(
-                    "Cannot restore remote child conversation {child_id:?} without a task ID"
+                return;
+            }
+            if child_conversation.is_remote_child() {
+                let Some(task_id) = child_conversation.task_id() else {
+                    log::warn!(
+                        "Cannot restore remote child conversation {child_id:?} without a task ID"
+                    );
+                    return;
+                };
+                self.hydrate_task_backed_hidden_child_pane(
+                    child_conversation,
+                    parent_pane_id,
+                    task_id,
+                    ctx,
                 );
                 return;
-            };
-            self.hydrate_task_backed_hidden_child_pane(
-                child_conversation,
-                parent_pane_id,
-                task_id,
-                ctx,
-            );
-            return;
+            }
         }
+
         let child_task_context =
             child_conversation
                 .task_id()
@@ -302,13 +265,15 @@ impl PaneGroup {
         }
     }
 
+    // =========================================================================
+    // flag-OFF path (OrchestrationUnifiedStack disabled)
+    // =========================================================================
+
     /// Materializes a hidden shared-session viewer pane for a viewer-
-    /// discovered child agent. Triggered by
-    /// `Event::EnsureSharedSessionViewerChildPane`, which
-    /// `OrchestrationViewerModel` emits on the parent's view the first
-    /// time it observes a `session_id` for a child. The new pane gets its
-    /// own `BlocklistAIController` and viewer-side `Network` so child
-    /// traffic doesn't cross the parent's single-stream state.
+    /// discovered child agent when `OrchestrationUnifiedStack` is disabled.
+    /// Triggered by `Event::EnsureSharedSessionViewerChildPane`, which
+    /// `OrchestrationViewerModel` emits on the parent's view the first time
+    /// it observes a `session_id` for a child.
     pub(in crate::pane_group) fn ensure_shared_session_viewer_child_pane(
         &mut self,
         child_conversation_id: AIConversationId,

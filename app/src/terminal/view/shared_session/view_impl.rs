@@ -185,23 +185,18 @@ impl TerminalView {
         ctx: &AppContext,
     ) -> Option<AmbientAgentTaskId> {
         let task_id = self.ambient_agent_task_id_for_details_panel(ctx)?;
-        self.is_current_user_creator_of_ambient_task(task_id, ctx)
-            .then_some(task_id)
-    }
-
-    fn is_current_user_creator_of_ambient_task(
-        &self,
-        task_id: AmbientAgentTaskId,
-        ctx: &AppContext,
-    ) -> bool {
-        let Some(current_user_uid) = self.auth_state.user_id().map(|uid| uid.as_string()) else {
-            return false;
-        };
 
         AgentConversationsModel::as_ref(ctx)
             .get_task_data(&task_id)
-            .and_then(|task| task.creator.map(|creator| creator.uid))
-            .is_some_and(|creator_uid| creator_uid == current_user_uid)
+            .is_some_and(|task| {
+                let Some(current_user_uid) = self.auth_state.user_id().map(|uid| uid.as_string())
+                else {
+                    return false;
+                };
+                task.creator
+                    .is_some_and(|creator| creator.uid == current_user_uid)
+            })
+            .then_some(task_id)
     }
 
     pub(in crate::terminal::view) fn enable_cloud_followup_input(
@@ -263,6 +258,16 @@ impl TerminalView {
         }
 
         self.enable_cloud_followup_input(task_id, ctx);
+    }
+
+    /// Enables the established continuation input after pane hydration has
+    /// already resolved explicit conversation Edit access.
+    pub(crate) fn enable_completed_cloud_continuation(
+        &mut self,
+        task_id: AmbientAgentTaskId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.enable_cloud_followup_input_after_conversation_end(task_id, ctx);
     }
 
     pub(super) fn handle_viewer_role_change_menu_event(

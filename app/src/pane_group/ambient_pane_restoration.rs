@@ -134,6 +134,9 @@ impl PaneGroup {
                             .insert(task_id, pane_id);
                     }
                 },
+                Some(WorkspaceAction::RestoreOrNavigateToConversation { .. }) => {
+                    self.replace_pane_with_new_cloud_conversation(pane_id, ctx);
+                }
                 _ => {
                     self.replace_pane_with_new_cloud_conversation(pane_id, ctx);
                 }

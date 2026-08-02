@@ -40,6 +40,7 @@ use crate::ai::llms::LLMPreferences;
 use crate::ai::orchestration::{RemoteChildLaunchConfig, prepare_remote_child_launch};
 use crate::app_state::{AmbientAgentPaneSnapshot, LeafContents, TerminalPaneSnapshot};
 use crate::code::buffer_location::LocalOrRemotePath;
+use crate::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
 use crate::pane_group::CodeSource;
 use crate::pane_group::Event::OpenConversationHistory;
@@ -1336,6 +1337,31 @@ fn handle_terminal_view_event(
                     );
                 }
             }
+            Event::EnsureUnifiedViewerChildPane {
+                conversation_id,
+                task,
+            } => {
+                if FeatureFlag::OrchestrationUnifiedStack.is_enabled() {
+                    group.materialize_viewer_child_pane_from_task(
+                        *conversation_id,
+                        task.as_ref().clone(),
+                        ctx,
+                    );
+                }
+            }
+            Event::OrchestrationChildSharedSessionJoinFailed {
+                conversation_id,
+                session_id,
+            } => {
+                if FeatureFlag::OrchestrationUnifiedStack.is_enabled() {
+                    group.recover_viewer_child_join_failure(
+                        pane_id,
+                        *conversation_id,
+                        *session_id,
+                        ctx,
+                    );
+                }
+            }
             Event::HideAIDocumentPanes => {
                 group.close_all_ai_document_panes(ctx);
             }
@@ -1424,7 +1450,9 @@ fn handle_terminal_view_event(
                 // joinable `session_id`. Materializes a dedicated hidden
                 // shared-session viewer pane for the child so subsequent pill
                 // clicks land on a populated agent view rather than an empty
-                // cloud-mode shell.
+                // cloud-mode shell. Only reached while
+                // `OrchestrationUnifiedStack` is disabled; the unified stack
+                // emits `EnsureUnifiedViewerChildPane` instead.
                 group.ensure_shared_session_viewer_child_pane(*conversation_id, *session_id, ctx);
             }
             Event::OpenChildAgentInNewTab { conversation_id } => {

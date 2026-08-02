@@ -22,6 +22,7 @@ use super::orchestration_events::{
 };
 use crate::ai::agent::conversation::{AIAgentHarness, AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentExchangeId, AIAgentOutputMessageType, ReceivedMessageInput};
+use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::agent_events::{
     AgentEventConsumer, AgentEventConsumerControlFlow, AgentEventDriverConfig, AgentEventFilter,
     AgentMessageEventMetadata, MessageHydrator, ServerApiAgentEventSource, run_agent_event_driver,
@@ -219,7 +220,7 @@ struct ConversationStreamState {
     /// Consecutive `get_ambient_agent_task` failure count for the
     /// post-restore retry loop; resets on success.
     restore_fetch_failures: usize,
-    /// Owner-side child tracker for this orchestrator family. `None` until
+    /// Primary-mode child tracker for this orchestrator family. `None` until
     /// the family drain creates one on the first batch it handles.
     tracker: Option<OrchestrationChildTracker>,
 }
@@ -261,7 +262,7 @@ struct OrchestratorStreamState {
     /// cursor, so a replay does not generate spurious `ChildSpawned` events
     /// for already-known children.
     seeded: bool,
-    /// Viewer-mode child tracker for this orchestrator family. `None` until
+    /// Observer-mode child tracker for this orchestrator family. `None` until
     /// the family drain creates one on the first batch it handles.
     tracker: Option<OrchestrationChildTracker>,
 }
@@ -563,20 +564,15 @@ impl OrchestrationEventStreamer {
             match classify_family_event(&event, self_run_id) {
                 FamilyEvent::ParentSelf(event) => parent_self_events.push(event),
                 FamilyEvent::ChildStarted { child_run_id } => {
-                    log::debug!(
-                        "[orch-drain] ChildStarted child_run_id={child_run_id} \
-                         parent={cursor_conversation_id:?} mode={mode:?}"
-                    );
                     // Create a local placeholder so the pill bar reflects the new
                     // child immediately, without waiting for the tracker's async
                     // metadata fetch to resolve.
-                    if mode == FamilyDrainMode::Primary {
-                        self.ensure_remote_child_placeholder(
-                            cursor_conversation_id,
-                            child_run_id.clone(),
-                            ctx,
-                        );
-                    }
+                    self.ensure_remote_child_placeholder(
+                        cursor_conversation_id,
+                        child_run_id.clone(),
+                        mode,
+                        ctx,
+                    );
                     tracker.observe_child(
                         &child_run_id,
                         ChildSignal::Started,
@@ -588,31 +584,33 @@ impl OrchestrationEventStreamer {
                     child_run_id,
                     session_uuid,
                 } => {
-                    log::debug!(
-                        "[orch-drain] ChildSessionLinked child_run_id={child_run_id} \
-                         parent={cursor_conversation_id:?}"
-                    );
                     tracker.observe_child(
                         &child_run_id,
-                        ChildSignal::SessionLinked { session_uuid },
+                        ChildSignal::SessionLinked {
+                            session_uuid: session_uuid.clone(),
+                        },
                         &self.killed_run_ids,
                         ctx,
                     );
+                    // Update the AgentConversationsModel task cache with the
+                    // linked session so the next pill click's
+                    // decide_child_pane_materialization gets AttachLive instead
+                    // of Pending (stale Queued/Inactive from the initial fetch).
+                    if let Ok(task_id) = child_run_id.parse::<AmbientAgentTaskId>() {
+                        AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.update_task_as_running_with_session(&task_id, session_uuid, ctx);
+                        });
+                    }
                 }
                 FamilyEvent::ChildLifecycle { child_run_id, kind } => {
-                    log::debug!(
-                        "[orch-drain] ChildLifecycle child_run_id={child_run_id} \
-                         parent={cursor_conversation_id:?} mode={mode:?}"
-                    );
                     // Backstop: if this lifecycle arrives before (or instead of)
                     // `child_agent_started`, ensure a placeholder still exists.
-                    if mode == FamilyDrainMode::Primary {
-                        self.ensure_remote_child_placeholder(
-                            cursor_conversation_id,
-                            child_run_id.clone(),
-                            ctx,
-                        );
-                    }
+                    self.ensure_remote_child_placeholder(
+                        cursor_conversation_id,
+                        child_run_id.clone(),
+                        mode,
+                        ctx,
+                    );
                     if mode == FamilyDrainMode::Primary {
                         child_lifecycle_for_batch.push(event);
                     }
@@ -622,6 +620,28 @@ impl OrchestrationEventStreamer {
                         &self.killed_run_ids,
                         ctx,
                     );
+                    // On terminal lifecycle events, evict the stale cached task
+                    // (typically showing Queued from the initial discovery fetch)
+                    // and re-fetch it so the next pill click's
+                    // decide_child_pane_materialization returns LoadTranscript
+                    // instead of Pending. InProgress events are left alone
+                    // since session-linked handles the running case above.
+                    // Idle is deprecated in the proto (Succeeded supersedes it)
+                    // but can still arrive from older server builds.
+                    #[allow(deprecated)]
+                    let is_terminal = matches!(
+                        kind,
+                        api::LifecycleEventType::Succeeded
+                            | api::LifecycleEventType::Idle
+                            | api::LifecycleEventType::Failed
+                            | api::LifecycleEventType::Errored
+                            | api::LifecycleEventType::Cancelled
+                    );
+                    if is_terminal && let Ok(task_id) = child_run_id.parse::<AmbientAgentTaskId>() {
+                        AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.evict_and_refetch_task(&task_id, ctx);
+                        });
+                    }
                 }
                 FamilyEvent::Opaque => {}
             }
@@ -654,7 +674,7 @@ impl OrchestrationEventStreamer {
         tracker
     }
 
-    // ---- Remote-child placeholder creation (owner path) ------------------
+    // ---- Remote-child placeholder creation (family path) -----------------
 
     /// Creates a local `is_remote_child` placeholder for an out-of-band
     /// (cloud) child announced by a `child_agent_started` event on the owner's
@@ -669,6 +689,7 @@ impl OrchestrationEventStreamer {
         &mut self,
         parent_conversation_id: AIConversationId,
         child_run_id: String,
+        mode: FamilyDrainMode,
         ctx: &mut ModelContext<Self>,
     ) {
         if BlocklistAIHistoryModel::as_ref(ctx)
@@ -678,9 +699,11 @@ impl OrchestrationEventStreamer {
             // Already represented locally; nothing to do.
             return;
         }
-        // Don't create placeholders on behalf of passive views — the actual
-        // owning process (in another window/machine) handles those.
-        if self.is_remote_run_view(parent_conversation_id, ctx) {
+        // A Primary passive view must not impersonate the owning process.
+        // Observer is the explicit exception: its local placeholder and cursor
+        // are the representation consumed by the viewer hierarchy.
+        if mode == FamilyDrainMode::Primary && self.is_remote_run_view(parent_conversation_id, ctx)
+        {
             return;
         }
         let Ok(task_id) = child_run_id.parse::<AmbientAgentTaskId>() else {
@@ -690,10 +713,6 @@ impl OrchestrationEventStreamer {
             );
             return;
         };
-        log::info!(
-            "[orch-drain] fetching metadata for out-of-band child \
-             child_run_id={child_run_id} parent={parent_conversation_id:?}"
-        );
         let ai_client = self.ai_client.clone();
         ctx.spawn(
             async move { ai_client.get_ambient_agent_task(&task_id).await },
@@ -701,6 +720,7 @@ impl OrchestrationEventStreamer {
                 me.finish_remote_child_placeholder(
                     parent_conversation_id,
                     child_run_id,
+                    mode,
                     result,
                     ctx,
                 );
@@ -716,6 +736,7 @@ impl OrchestrationEventStreamer {
         &mut self,
         parent_conversation_id: AIConversationId,
         child_run_id: String,
+        _mode: FamilyDrainMode,
         result: anyhow::Result<crate::ai::ambient_agents::task::AmbientAgentTask>,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -723,9 +744,9 @@ impl OrchestrationEventStreamer {
             Ok(task) => task,
             Err(err) => {
                 log::warn!(
-                    "[orch-drain] finish_remote_child_placeholder: failed to fetch \
-                     metadata for child_run_id={child_run_id}: {err:#}; \
-                     no owner-side placeholder created"
+                    "finish placeholder fetch-error \
+                     parent_conversation_id={parent_conversation_id:?} \
+                     child_run_id={child_run_id} error={err:#}"
                 );
                 return;
             }
@@ -757,26 +778,16 @@ impl OrchestrationEventStreamer {
              child_run_id={child_run_id} name={name:?} parent={parent_conversation_id:?}"
         );
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-            let child_conversation_id = history.start_new_child_conversation(
+            history.ensure_remote_child_conversation(
                 terminal_surface_id,
-                name,
                 parent_conversation_id,
+                child_run_id.clone(),
+                task_id,
+                name,
+                fallback_title,
                 harness,
                 ctx,
-            );
-            history.mark_conversation_as_remote_child(child_conversation_id, ctx);
-            if !fallback_title.is_empty()
-                && let Some(conversation) = history.conversation_mut(&child_conversation_id)
-            {
-                conversation.set_fallback_display_title(fallback_title);
-            }
-            history.assign_run_id_for_conversation(
-                child_conversation_id,
-                child_run_id,
-                Some(task_id),
-                terminal_surface_id,
-                ctx,
-            );
+            )
         });
     }
 

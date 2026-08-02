@@ -579,6 +579,49 @@ impl BlocklistAIHistoryModel {
         conversation_id
     }
 
+    /// Returns the existing run-id mapping for a remote child, creating one
+    /// from the supplied task metadata if none exists yet. Idempotent: racing
+    /// `ChildStarted`, lifecycle, and viewer metadata callbacks all converge
+    /// on the same entry.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ensure_remote_child_conversation(
+        &mut self,
+        terminal_surface_id: EntityId,
+        parent_conversation_id: AIConversationId,
+        run_id: String,
+        task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        name: String,
+        fallback_title: String,
+        orchestration_harness: Option<Harness>,
+        ctx: &mut ModelContext<Self>,
+    ) -> AIConversationId {
+        if let Some(conversation_id) = self.conversation_id_for_agent_id(&run_id) {
+            return conversation_id;
+        }
+
+        let conversation_id = self.start_new_child_conversation(
+            terminal_surface_id,
+            name,
+            parent_conversation_id,
+            orchestration_harness,
+            ctx,
+        );
+        self.mark_conversation_as_remote_child(conversation_id, ctx);
+        if !fallback_title.is_empty()
+            && let Some(conversation) = self.conversation_mut(&conversation_id)
+        {
+            conversation.set_fallback_display_title(fallback_title);
+        }
+        self.assign_run_id_for_conversation(
+            conversation_id,
+            run_id,
+            Some(task_id),
+            terminal_surface_id,
+            ctx,
+        );
+        conversation_id
+    }
+
     /// Sets the parent conversation ID on a child conversation and updates
     /// the `children_by_parent` index.  All parent-child relationships should
     /// be established through this method so the index stays in sync.

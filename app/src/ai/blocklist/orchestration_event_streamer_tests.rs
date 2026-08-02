@@ -46,6 +46,126 @@ fn sse_backoff_escalates_then_caps() {
 }
 
 #[test]
+fn restored_observer_registration_hydrates_local_cursor() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let parent_task_id = make_parent_task_id_for_test(0xc8);
+        let mut parent = AIConversation::new(true, false);
+        parent.set_task_id(parent_task_id);
+        parent.set_last_event_sequence(27);
+        let parent_id = parent.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |history, ctx| {
+            history.restore_conversations(terminal_view_id, vec![parent], ctx);
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        streamer.update(&mut app, |streamer, ctx| {
+            streamer.register_viewer_mode_consumer(
+                parent_task_id,
+                parent_id,
+                warpui::EntityId::new(),
+                ctx,
+            );
+        });
+
+        streamer.read(&app, |streamer, _| {
+            let entry = streamer
+                .viewer_mode_orchestrators
+                .get(&parent_task_id)
+                .expect("Observer must re-register");
+            assert_eq!(entry.event_cursor, 27);
+            assert!(
+                entry.tracker.is_none(),
+                "tracker is initialized lazily by the family drain"
+            );
+        });
+    });
+}
+
+#[test]
+fn observer_placeholder_completion_creates_one_named_history_mapping() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(16);
+        let mut resources = GlobalResourceHandles::mock(&mut app);
+        resources.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(resources));
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let parent_task_id = make_parent_task_id_for_test(0xd1);
+        let child_task_id = make_parent_task_id_for_test(0xd2);
+        let parent = {
+            let mut parent = AIConversation::new(true, false);
+            parent.set_task_id(parent_task_id);
+            parent
+        };
+        let parent_id = parent.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |history, ctx| {
+            history.restore_conversations(terminal_view_id, vec![parent], ctx);
+            history.set_active_conversation_id(parent_id, terminal_view_id, ctx);
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        let mut child_task = make_ambient_task_with_task_id(child_task_id, Some(9));
+        child_task.parent_run_id = Some(parent_task_id.to_string());
+        child_task.title = "Research observer mapping".to_string();
+
+        streamer.update(&mut app, |streamer, ctx| {
+            let mut tracker = OrchestrationChildTracker::new(parent_task_id);
+            tracker.observe_child(
+                &child_task_id.to_string(),
+                ChildSignal::Started,
+                &HashSet::new(),
+                ctx,
+            );
+            streamer
+                .viewer_mode_orchestrators
+                .entry(parent_task_id)
+                .or_default()
+                .tracker = Some(tracker);
+            streamer.finish_remote_child_placeholder(
+                parent_id,
+                child_task_id.to_string(),
+                FamilyDrainMode::Observer,
+                Ok(child_task.clone()),
+                ctx,
+            );
+            streamer.finish_remote_child_placeholder(
+                parent_id,
+                child_task_id.to_string(),
+                FamilyDrainMode::Observer,
+                Ok(child_task.clone()),
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history, _| {
+            let child_id = history
+                .conversation_id_for_agent_id(&child_task_id.to_string())
+                .expect("Observer child run id must resolve for attribution");
+            assert_eq!(history.child_conversation_ids_of(&parent_id), &[child_id]);
+            let child = history.conversation(&child_id).unwrap();
+            assert_eq!(child.agent_name(), Some("Research observer mapping"));
+            assert_eq!(child.parent_conversation_id(), Some(parent_id));
+            assert!(child.is_remote_child());
+            assert!(!child.is_viewing_shared_session());
+        });
+    });
+}
+
+#[test]
 fn sse_backoff_zero_failures_uses_first_step() {
     // Defensive: 0 failures should still return a valid backoff.
     assert_eq!(
@@ -2276,7 +2396,7 @@ fn restored_child_without_children_opens_self_run_id_stream() {
     });
 }
 
-// ---- wait_for_events parent registration (QUALITY-919) -------------------
+// ---- wait_for_events parent registration --------------------------------
 
 /// Builds a streamer wired to a mock `AIClient` whose `get_ambient_agent_task`
 /// must never be called. Used by the synchronous short-circuit tests to assert
@@ -2297,7 +2417,7 @@ fn streamer_with_no_fetch_expected(
 fn wait_registration_root_with_children_opens_ancestor_include_self_stream() {
     // The completion of the wait-time parent fetch installs server-recorded
     // children, advances the cursor, and opens the parent-family ancestor
-    // stream — exactly the not-parent -> parent transition QUALITY-919 adds.
+    // stream, completing the not-parent -> parent transition.
     App::test((), |mut app| async move {
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
