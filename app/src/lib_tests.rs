@@ -86,133 +86,23 @@ fn launch_modes_select_expected_logging_frontend() {
     );
 }
 
-/// Builds a `LaunchMode::CommandLine` equivalent to running the bundled
-/// `oz` / `oz-<channel>` wrapper for a headless command.
-fn cli_launch_mode() -> LaunchMode {
-    LaunchMode::CommandLine {
+/// Characterization test — this behavior predates APP-2946 and this test also
+/// passes on `master`. It pins the two facts the Dock fix is built on, so a
+/// future change that reclassifies the CLI has to do so deliberately:
+/// `is_headless()` is what `startup_steps` keys every Dock/app-bundle guard
+/// off, and `ExecutionMode::Sdk` is what keeps autoupdate work off the CLI.
+/// The behavior-level coverage for the fix itself lives in
+/// `startup_steps_tests.rs`.
+#[test]
+fn command_line_launch_mode_is_headless_and_runs_as_the_sdk() {
+    let cli = LaunchMode::CommandLine {
         command: CliCommand::Whoami,
         global_options: Default::default(),
         debug: false,
         is_sandboxed: false,
         computer_use_override: None,
-    }
-}
-
-fn tui_launch_mode() -> LaunchMode {
-    LaunchMode::Tui {
-        entrypoint: TuiEntryPoint::Interactive {
-            mount: Box::new(|_| {}),
-            api_key: None,
-        },
-    }
-}
-
-/// The bundled CLI wrapper `exec`s the GUI executable from inside `Warp.app`,
-/// so the CLI process must opt out of the GUI bundle's dockable identity or
-/// macOS shows a Warp Dock tile that bounces for the whole command (APP-2946).
-#[test]
-fn headless_launch_modes_run_as_background_processes() {
-    for launch_mode in [
-        cli_launch_mode(),
-        tui_launch_mode(),
-        LaunchMode::RemoteServerProxy,
-        LaunchMode::RemoteServerDaemon {
-            identity_key: "test".to_owned(),
-        },
-    ] {
-        assert!(
-            launch_mode.is_headless(),
-            "{} should be headless",
-            launch_mode.as_str_for_tracing()
-        );
-        assert!(
-            launch_mode.should_run_as_background_process(),
-            "{} must be marked background-only so macOS gives it no Dock tile",
-            launch_mode.as_str_for_tracing()
-        );
-    }
-}
-
-/// The GUI app keeps its Dock presence; only headless launches are suppressed.
-#[test]
-fn gui_launch_modes_keep_their_dock_presence() {
-    for launch_mode in [
-        LaunchMode::App {
-            args: Default::default(),
-            api_key: None,
-        },
-        LaunchMode::Test {
-            driver: Box::new(None),
-            is_integration_test: false,
-        },
-    ] {
-        assert!(!launch_mode.is_headless());
-        assert!(
-            !launch_mode.should_run_as_background_process(),
-            "{} must keep the regular foreground process type",
-            launch_mode.as_str_for_tracing()
-        );
-        assert!(
-            launch_mode.should_configure_dock_and_menus(),
-            "{} must still configure its Dock icon, Dock menu, and menu bar",
-            launch_mode.as_str_for_tracing()
-        );
-    }
-}
-
-/// Headless startup must not perform any Dock-visible setup (Dock icon, Dock
-/// menu, menu bar).
-#[test]
-fn headless_launch_modes_skip_dock_and_menu_setup() {
-    for launch_mode in [
-        cli_launch_mode(),
-        tui_launch_mode(),
-        LaunchMode::RemoteServerProxy,
-        LaunchMode::RemoteServerDaemon {
-            identity_key: "test".to_owned(),
-        },
-    ] {
-        assert!(
-            !launch_mode.should_configure_dock_and_menus(),
-            "{} must not perform Dock-visible setup",
-            launch_mode.as_str_for_tracing()
-        );
-    }
-}
-
-/// `autoupdate::remove_old_executable` deletes `Contents/MacOS/old` inside the
-/// installed app bundle. The bundled CLI shares that bundle with the GUI app,
-/// so it must never mutate it (APP-2946).
-#[test]
-fn headless_launch_modes_do_not_mutate_the_app_bundle() {
-    for launch_mode in [
-        cli_launch_mode(),
-        tui_launch_mode(),
-        LaunchMode::RemoteServerProxy,
-        LaunchMode::RemoteServerDaemon {
-            identity_key: "test".to_owned(),
-        },
-    ] {
-        assert!(
-            !launch_mode.should_clean_up_old_executable(),
-            "{} must not remove the old executable from the app bundle",
-            launch_mode.as_str_for_tracing()
-        );
-    }
-
-    let app = LaunchMode::App {
-        args: Default::default(),
-        api_key: None,
     };
-    assert!(
-        app.should_clean_up_old_executable(),
-        "the GUI app still cleans up after its own autoupdate relaunch"
-    );
-}
 
-/// The CLI runs under the SDK execution mode, which cannot autoupdate — the
-/// gate that keeps autoupdate work (polling and bundle mutation) off the CLI.
-#[test]
-fn command_line_launch_mode_maps_to_sdk_execution_mode() {
-    assert_eq!(cli_launch_mode().execution_mode(), ExecutionMode::Sdk);
+    assert!(cli.is_headless());
+    assert_eq!(cli.execution_mode(), ExecutionMode::Sdk);
 }

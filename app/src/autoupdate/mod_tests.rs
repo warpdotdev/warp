@@ -150,10 +150,13 @@ fn test_cli_sdk_mode_prevents_autoupdate_polling() {
     });
 }
 
-/// The CLI runs under `ExecutionMode::Sdk`, which must never autoupdate. The
-/// autoupdate machinery mutates the installed macOS app bundle, and the
-/// bundled `oz` / `oz-<channel>` wrapper executes the GUI binary from inside
-/// that very bundle. See APP-2946.
+/// Characterization test — `can_autoupdate()` already rejected `Sdk` before
+/// APP-2946, so this also passes on `master`. It is kept because the Dock fix
+/// leans on this gate: the CLI runs under `ExecutionMode::Sdk`, and the
+/// autoupdate machinery mutates the installed macOS app bundle that the
+/// bundled `oz` / `oz-<channel>` wrapper executes the GUI binary from. Pinning
+/// it means a future change that lets SDK mode autoupdate has to be
+/// deliberate.
 #[test]
 fn test_sdk_mode_cannot_autoupdate() {
     App::test((), |app| async move {
@@ -169,7 +172,8 @@ fn test_sdk_mode_cannot_autoupdate() {
     });
 }
 
-/// Counterpart to `test_sdk_mode_cannot_autoupdate`: the desktop app is the
+/// Counterpart to `test_sdk_mode_cannot_autoupdate`, and likewise a
+/// characterization test that passes on `master`: the desktop app is the
 /// launch mode that owns the installed bundle, so it keeps autoupdating.
 #[test]
 fn test_app_mode_can_autoupdate() {
