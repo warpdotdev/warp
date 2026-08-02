@@ -1,3 +1,5 @@
+use std::sync::{OnceLock, mpsc};
+
 use warpui::{AddSingletonModel, Entity, ModelContext, SingletonEntity};
 use windows::Win32::Storage::EnhancedStorage::PKEY_Title;
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
@@ -251,11 +253,27 @@ fn clear_jump_list() {
     }
 }
 
-// A dedicated thread (rather than tokio::task::spawn_blocking) ensures COM is
-// first init on this thread as apartment-threaded; a reused blocking-pool
-// thread that a prior caller init'd as multi-threaded would reject STA init.
+// A dedicated thread (not spawn_blocking) ensures COM is first init'd on this
+// thread as apartment-threaded.
 fn spawn_refresh(entries: Vec<JumpEntry>, new_window: String) {
-    let _handle = std::thread::spawn(move || refresh_jump_list(&entries, &new_window));
+    static TX: OnceLock<mpsc::Sender<(Vec<JumpEntry>, String)>> = OnceLock::new();
+    let tx = TX.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<(Vec<JumpEntry>, String)>();
+        let _ = std::thread::Builder::new()
+            .name("jump-list-refresh".to_owned())
+            .spawn(move || refresh_worker(rx));
+        tx
+    });
+    let _ = tx.send((entries, new_window));
+}
+
+fn refresh_worker(rx: mpsc::Receiver<(Vec<JumpEntry>, String)>) {
+    for mut refresh in rx.iter() {
+        while let Ok(latest) = rx.try_recv() {
+            refresh = latest;
+        }
+        refresh_jump_list(&refresh.0, &refresh.1);
+    }
 }
 
 pub struct JumpListManager;
