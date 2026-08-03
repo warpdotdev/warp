@@ -2369,6 +2369,18 @@ impl LocalDiffStateModel {
                 // no baseline so no editor is constructed for them.
                 repo_path.join(file_path).is_file().then(String::new)
             }
+            GitFileStatus::Renamed { old_path } => {
+                // The file only exists under its new path in the working tree;
+                // at HEAD it still lives at the old path. Mirror the
+                // merge-base path (see `file_diff_for_path`) and read the
+                // baseline content from `old_path`.
+                log::debug!(
+                    "[GIT OPERATION] local.rs get_file_content_at_head git show HEAD:{old_path}"
+                );
+                run_git_command(repo_path, &["show", &format!("HEAD:{old_path}")])
+                    .await
+                    .ok()
+            }
             _ => {
                 log::debug!(
                     "[GIT OPERATION] local.rs get_file_content_at_head git show HEAD:{file_path}"
