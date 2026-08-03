@@ -23,7 +23,6 @@ pub async fn run_git_command_with_env(
     path_env: Option<&str>,
 ) -> Result<String> {
     use command::Stdio;
-    use command::r#async::Command;
 
     log::debug!(
         "[GIT OPERATION] git.rs run_git_command git {}",
