@@ -353,7 +353,11 @@ impl OrchestrationPillBar {
             BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
             | BlocklistAIHistoryEvent::AppendedExchange { .. }
             | BlocklistAIHistoryEvent::SetActiveConversation { .. }
-            | BlocklistAIHistoryEvent::StartedNewConversation { .. } => {
+            | BlocklistAIHistoryEvent::StartedNewConversation { .. }
+            // Fires when a remote child conversation is linked to a run id,
+            // which is the reliable signal that children_by_parent has been
+            // updated after a task-driven restore seed.
+            | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. } => {
                 this.ensure_mouse_states(ctx);
                 ctx.notify();
             }
