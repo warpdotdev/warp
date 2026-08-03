@@ -210,12 +210,8 @@ that:
    prior row and `initialize_historical_conversations` has nothing to index.
    For an Oz session link opened on web, seeding from `task.children` is the
    *only* mechanism that can populate the pill bar.
-2. **The first restart after this change ships.** Runs that completed before
-   Fix 1 landed have no persisted parent row, so that restore still mints a
-   fresh parent id while the persisted children still carry the pre-fix
-   `parent_conversation_id`.
 
-Both cases are solved by rebuilding the parent→child relationship from server
+This case is solved by rebuilding the parent→child relationship from server
 data (`AmbientAgentTask.children`, task.rs:190 — the `Vec<String>` of direct
 child `run_id`s added in M2) instead of from local DB state.
 
@@ -353,60 +349,14 @@ duplicating the derivation.
 
 ### Parent-link reconciliation
 
-In the steady state — Fix 1 in effect since the run was created — the restored
-parent keeps the same `AIConversationId` across restarts, so a persisted
-child's `parent_conversation_id` already equals `parent_conversation_id` and
-no reconciliation happens.
+No reconciliation step is needed. Fix 1 and Fix 2 ship together before any
+users have run an orchestration session under `OrchestrationUnifiedStack`.
+Every run will have had Fix 1 active since it was created, so the parent
+always keeps the same `AIConversationId` across restarts and the persisted
+children's `parent_conversation_id` already matches.
 
-The transition case does need it. When the run completed *before* Fix 1
-shipped, the parent was never persisted, so this restore mints a new id while
-the persisted child rows still point at the old one.
-`initialize_historical_conversations` indexes on the persisted value first
-(`resolved_parent_conversation_id_from_persisted_data` prefers
-`parent_conversation_id` and only falls back to `parent_agent_id`,
-history_model.rs:487), and `ensure_remote_child_conversation` short-circuits on
-the existing run-id mapping without re-indexing. Without an explicit re-point,
-the children stay filed under the dead id and the pill bar stays empty.
-
-So after obtaining `child_id`, re-point when it disagrees:
-
-```rust
-let needs_repoint = BlocklistAIHistoryModel::as_ref(ctx)
-    .conversation(&child_id)
-    .and_then(|child| {
-        BlocklistAIHistoryModel::as_ref(ctx)
-            .resolved_parent_conversation_id_for_conversation(child)
-    })
-    != Some(parent_conversation_id);
-if needs_repoint {
-    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-        history.repoint_child_parent_conversation(child_id, parent_conversation_id, ctx);
-    });
-}
-```
-
-`set_parent_for_conversation` (history_model.rs:617) does not persist, and
-`persist_conversation_state` is private, so add a thin public wrapper next to
-it in `app/src/ai/blocklist/history_model.rs`:
-
-```rust
-/// Re-points a child conversation at `parent_id`, updating the
-/// `children_by_parent` index and persisting the change. Used when a
-/// restored parent's local id differs from the one the child recorded.
-pub fn repoint_child_parent_conversation(
-    &mut self,
-    child_id: AIConversationId,
-    parent_id: AIConversationId,
-    ctx: &mut ModelContext<Self>,
-) {
-    self.set_parent_for_conversation(child_id, parent_id);
-    self.persist_conversation_state(child_id, ctx);
-}
-```
-
-The stale `children_by_parent[OLD_ID]` entry is left in place: nothing renders
-it (no conversation or pane exists for `OLD_ID`), and the index is rebuilt
-from the corrected rows on the next launch.
+`ensure_remote_child_conversation` (history_model.rs:576) is idempotent: if
+the child already exists under the correct parent the call is a no-op.
 
 ### Completion and pane materialization
 
@@ -455,12 +405,9 @@ With the parent conversation persisted (Fix 1):
 
 Independently, seeding from `task.children` (Fix 2) fires on the same restore
 and converges on the same `children_by_parent` state from server data. That
-makes the pill bar work in the two cases where step 1 cannot succeed:
+makes the pill bar work in the case where steps 1–3 cannot succeed:
 
 - The **web client**, which has no SQLite at all, so steps 1–3 are unavailable.
-- The **first restore after this change ships**, where no persisted parent row
-  exists yet and the persisted children still reference the pre-fix parent id
-  (re-pointed by the reconciliation step above).
 
 The two fixes are order-independent and idempotent: whichever populates the
 index first, the other one's work collapses to a no-op.
@@ -473,7 +420,6 @@ index first, the other one's work collapses to a no-op.
 | `app/src/pane_group/ambient_pane_restoration.rs` | Fix 1 companion: extract `restore_pane_with_transcript`; add the `RestoreOrNavigateToConversation` arm so an owned, now-persisted cloud run still restores its transcript instead of an empty pane |
 | `app/src/pane_group/mod.rs` | Fix 2: return `Option<AIConversationId>` from `load_data_into_restored_ambient_cloud_mode_view`; call the seeding entry point from both call sites; add the `pending_parent_child_seeds` field and drain it from `handle_pending_ambient_restoration_event` |
 | `app/src/pane_group/child_agent/restoration.rs` | Fix 2: add `seed_child_conversations_from_task` and `process_pending_parent_child_seeds` |
-| `app/src/ai/blocklist/history_model.rs` | Fix 2: add `repoint_child_parent_conversation` |
 | `app/src/ai/blocklist/orchestration_event_streamer.rs` | Fix 2: widen `agent_task_harness` to `pub(crate)` for reuse |
 
 No server changes are required: `AmbientAgentTask.children` is already
@@ -497,18 +443,14 @@ populated by `GET /agent/runs/{run_id}` and already consumed by
    and the children are shown. This exercises Fix 2 in isolation, since the
    web build has no SQLite (`local_fs` is off for wasm) and therefore no
    stable-parent-id path.
-8. Test the transition case: take a run that completed *before* this change
-   (its parent has no persisted row) and restart. Verify the pills appear on
-   that first restore — this exercises the `task.children` seed plus the
-   parent-link reconciliation.
-9. Test the live-session path: start a cloud agent, restart before it
+8. Test the live-session path: start a cloud agent, restart before it
    finishes. Verify the pane rejoins the live session and pills appear
    (this path was already working; confirm no regression).
-10. Verify no duplicate pills: a run whose children are both persisted locally
+9. Verify no duplicate pills: a run whose children are both persisted locally
     and reported in `task.children` must render exactly one pill per child.
-11. Disable `OrchestrationUnifiedStack`: restart after a completed run —
+10. Disable `OrchestrationUnifiedStack`: restart after a completed run —
     verify the old behavior (no pills) is unchanged.
-12. Run `./script/presubmit` — must pass cleanly.
+11. Run `./script/presubmit` — must pass cleanly.
 
 ## Sequencing
 
