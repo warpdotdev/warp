@@ -1,6 +1,8 @@
+use pathfinder_geometry::vector::vec2f;
 use settings_page::{FilteredPageType, MatchData, PageType, SettingsWidget, search_terms_match};
 use warpui::elements::Empty;
-use warpui::{App, AppContext, Element, Entity, View};
+use warpui::platform::WindowStyle;
+use warpui::{App, AppContext, Element, Entity, Presenter, View, WindowInvalidation};
 
 use super::*;
 use crate::appearance::Appearance;
@@ -1224,6 +1226,108 @@ fn empty_query_after_reapply_shows_all_widgets() {
                 visible_widget_count(&rebuilt),
                 5,
                 "an empty query restores every widget on the subpage"
+            );
+        });
+    });
+}
+
+// ── render_model_chips wrapping (APP-5107) ──────────────────────────────────
+// Custom inference endpoints with many added models previously overflowed
+// horizontally because render_model_chips laid the chips out in a
+// non-wrapping Flex::row. These tests render the chips inside a narrow, fixed
+// -width container (mirroring the Shrinkable-constrained column the real
+// settings page renders them in) and assert the chips wrap onto multiple
+// rows and never paint past the container's right edge.
+
+/// Root view that renders `render_model_chips` inside a fixed-width
+/// `ConstrainedBox`, mirroring the narrow column the real custom-endpoints
+/// list and remove-confirmation dialog constrain the chip row to.
+struct ModelChipsTestView {
+    labels: Vec<String>,
+    width: f32,
+}
+
+impl Entity for ModelChipsTestView {
+    type Event = ();
+}
+
+impl View for ModelChipsTestView {
+    fn ui_name() -> &'static str {
+        "ModelChipsTestView"
+    }
+
+    fn render(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let text_color = appearance.theme().active_ui_text_color();
+        ConstrainedBox::new(render_model_chips(
+            self.labels.clone(),
+            appearance,
+            text_color,
+        ))
+        .with_width(self.width)
+        .finish()
+    }
+}
+
+impl TypedActionView for ModelChipsTestView {
+    type Action = ();
+}
+
+/// Regression test for APP-5107: with enough custom models added to a single
+/// endpoint, the chip row must wrap onto multiple lines and stay within the
+/// container's width instead of overflowing horizontally past it. Before the
+/// fix (a non-wrapping `Flex::row`), every chip is laid out on a single row
+/// and the row's painted bounds extend far past `width`.
+#[test]
+fn model_chips_wrap_within_container_width_instead_of_overflowing() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.add_singleton_model(|_| Appearance::mock());
+
+        let width = 260.;
+        let labels: Vec<String> = (0..40).map(|i| format!("custom-model-{i:02}")).collect();
+
+        let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, move |_| {
+            ModelChipsTestView { labels, width }
+        });
+        let root_view_id = app
+            .root_view_id(window_id)
+            .expect("window should have a root view");
+
+        let mut presenter = Presenter::new(window_id);
+        let invalidation = WindowInvalidation {
+            updated: [root_view_id].into_iter().collect(),
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            let scene = presenter.build_scene(vec2f(800., 2000.), 1., None, ctx);
+
+            let bounds: Vec<_> = scene
+                .layers()
+                .flat_map(|layer| layer.rects.iter())
+                .map(|rect| rect.bounds)
+                .collect();
+            assert!(
+                !bounds.is_empty(),
+                "expected chip border rects to be painted"
+            );
+
+            let max_right_edge = bounds.iter().map(|b| b.max_x()).fold(0.0_f32, f32::max);
+            assert!(
+                max_right_edge <= width + 1.0,
+                "model chips should wrap within the {width}px container instead of \
+                 overflowing horizontally, but a chip's right edge reached {max_right_edge}"
+            );
+
+            let distinct_rows = bounds
+                .iter()
+                .map(|b| b.origin_y().round() as i32)
+                .collect::<std::collections::BTreeSet<_>>();
+            assert!(
+                distinct_rows.len() > 1,
+                "expected many custom model chips to wrap onto multiple rows, got rows: {distinct_rows:?}"
             );
         });
     });
