@@ -105,10 +105,10 @@ fn first_zero_state_matches_welcome_design_copy() {
             "Welcome to Warp",
             "What’s different about Warp",
             "✶ State of the art coding agents",
+            "✶ Frontier and open-weight models",
             "✶ Fully customizable model routers",
-            "✶ Orchestrate fleets of agents",
-            "✶ Work with shell commands like in a native",
-            "terminal",
+            "✶ Orchestration for fleets of agents",
+            "✶ Better shell command support",
         ] {
             assert!(
                 rendered.contains(expected),
@@ -120,6 +120,8 @@ fn first_zero_state_matches_welcome_design_copy() {
             "/modify-settings",
             "/orchestrate",
             "Run full-screen terminal apps",
+            "Orchestrate fleets of agents",
+            "Work with shell commands like in a native terminal",
         ] {
             assert!(
                 !rendered.contains(unexpected),

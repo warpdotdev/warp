@@ -704,9 +704,10 @@ fn render_first_run_top_section(
     );
     for (command, description) in [
         (None, "State of the art coding agents"),
+        (None, "Frontier and open-weight models"),
         (None, "Fully customizable model routers"),
-        (None, "Orchestrate fleets of agents"),
-        (None, "Work with shell commands like in a native terminal"),
+        (None, "Orchestration for fleets of agents"),
+        (None, "Better shell command support"),
     ] {
         column = column.child(render_first_run_capability(command, description, builder));
     }
