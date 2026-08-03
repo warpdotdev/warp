@@ -1,28 +1,37 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
+use futures::executor::block_on;
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use tempfile::TempDir;
 use warp_cli::agent::Harness;
+use warp_cli::mcp::MCPSpec;
 use warp_cli::skill::SkillSpec;
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
+use warp_graphql::mutations::create_managed_mcp_client_config::{
+    CreateManagedMcpClientConfigOutput, ManagedMcpTransportKind,
+};
+use warp_graphql::response_context::ResponseContext;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    build_secret_env_vars, AgentDriver, IdleTimeoutSender,
+    AgentDriver, AgentDriverError, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
     OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    build_secret_env_vars,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -31,9 +40,11 @@ use crate::ai::agent::{
 };
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::cloud_environments::GithubRepo;
+use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
+use crate::ai::mcp::JSONTransportType;
 use crate::ai::mcp::parsing::normalize_mcp_json;
 use crate::ai::skills::SkillManager;
+use crate::server::server_api::managed_mcp::MockManagedMcpClient;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 #[test]
@@ -125,6 +136,332 @@ fn test_normalize_sse_server_with_headers() {
     );
 }
 
+fn managed_client_config_output(mcp_config_json: &str) -> CreateManagedMcpClientConfigOutput {
+    CreateManagedMcpClientConfigOutput {
+        transport_kind: ManagedMcpTransportKind::Command,
+        mcp_config_json: mcp_config_json.to_string(),
+        proxy_url: None,
+        proxy_token: None,
+        authorization_header_name: None,
+        authorization_header_value: None,
+        expires_at: None,
+        response_context: ResponseContext {
+            server_version: None,
+        },
+    }
+}
+
+fn raw_secret(value: &str) -> ManagedSecretValue {
+    ManagedSecretValue::RawValue {
+        value: value.to_string(),
+    }
+}
+
+fn render_installations(
+    installations: Vec<crate::ai::mcp::TemplatableMCPServerInstallation>,
+    secrets: HashMap<String, ManagedSecretValue>,
+) -> HashMap<String, crate::ai::mcp::JSONMCPServer> {
+    AgentDriver::mcp_installations_to_json(installations, &secrets).unwrap()
+}
+
+#[test]
+fn managed_resolver_local_uuid_does_not_call_managed_client() {
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let mock = MockManagedMcpClient::new();
+    let local_installed_uuids = HashSet::from([uuid]);
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Uuid(uuid)],
+        &local_installed_uuids,
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert_eq!(resolved.local_uuids, vec![uuid]);
+    assert!(resolved.ephemeral_installations.is_empty());
+}
+
+#[test]
+fn managed_resolver_non_local_uuid_calls_managed_client() {
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let config_json =
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#;
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(move |requested_uid| {
+            assert_eq!(requested_uid, uuid.to_string());
+            Ok(managed_client_config_output(config_json))
+        });
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Uuid(uuid)],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert!(resolved.local_uuids.is_empty());
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+}
+
+#[test]
+fn well_known_spec_resolves_via_managed_client() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let config_json = r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/integration-proxy/linear","headers":{"Authorization":"Bearer tok"}}}}"#;
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(move |requested_uid| {
+            assert_eq!(requested_uid, "linear");
+            Ok(managed_client_config_output(config_json))
+        });
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::WellKnown("linear".to_string())],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert!(resolved.local_uuids.is_empty());
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+}
+
+#[test]
+fn well_known_resolution_failure_skips_server() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(|_| Err(anyhow::anyhow!("Linear is not connected for this team")));
+
+    // Well-known references are server-injected and best-effort: a failure must
+    // skip the server, not fail run setup.
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::WellKnown("linear".to_string())],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert!(resolved.local_uuids.is_empty());
+    assert!(resolved.ephemeral_installations.is_empty());
+}
+
+#[test]
+fn well_known_resolution_failure_does_not_drop_other_specs() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let config_json =
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#;
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(2)
+        .returning(move |requested_uid| {
+            if requested_uid == "linear" {
+                Err(anyhow::anyhow!("Linear is not connected for this team"))
+            } else {
+                assert_eq!(requested_uid, uuid.to_string());
+                Ok(managed_client_config_output(config_json))
+            }
+        });
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[
+            MCPSpec::WellKnown("linear".to_string()),
+            MCPSpec::Uuid(uuid),
+        ],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+}
+
+#[test]
+fn well_known_spec_is_skipped_when_flag_disabled() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(false);
+    // The managed client must not be called for well-known specs when the
+    // feature is disabled (e.g. a persisted config from a dogfood build).
+    let mock = MockManagedMcpClient::new();
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::WellKnown("linear".to_string())],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert!(resolved.local_uuids.is_empty());
+    assert!(resolved.ephemeral_installations.is_empty());
+}
+
+#[test]
+fn managed_command_config_env_placeholder_uses_local_secret() {
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(
+        installations,
+        HashMap::from([("API_TOKEN".to_string(), raw_secret("real"))]),
+    );
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::CLIServer { env, .. } => {
+            assert_eq!(env.get("API_TOKEN").map(String::as_str), Some("real"));
+        }
+        other => panic!("expected CLI server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_command_config_arg_placeholder_uses_local_secret() {
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(
+        installations,
+        HashMap::from([("API_TOKEN".to_string(), raw_secret("real"))]),
+    );
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::CLIServer { args, .. } => {
+            assert_eq!(args, &vec!["--token=real".to_string()]);
+        }
+        other => panic!("expected CLI server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_command_config_preserves_literal_env_when_synthesizing_arg_placeholder() {
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"],"env":{"LOG_LEVEL":"info"}}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(
+        installations,
+        HashMap::from([("API_TOKEN".to_string(), raw_secret("real"))]),
+    );
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::CLIServer { args, env, .. } => {
+            assert_eq!(args, &vec!["--token=real".to_string()]);
+            assert_eq!(env.get("LOG_LEVEL").map(String::as_str), Some("info"));
+        }
+        other => panic!("expected CLI server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_url_config_preserves_proxy_url_and_header() {
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(installations, HashMap::new());
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::SSEServer { url, headers } => {
+            assert_eq!(url, "https://proxy.example/mcp");
+            assert_eq!(
+                headers.get("Authorization").map(String::as_str),
+                Some("Bearer proxy-token")
+            );
+        }
+        other => panic!("expected SSE server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_url_config_preserves_header_despite_colliding_local_secret() {
+    // A server-rendered proxy header must not be overwritten by a local secret that
+    // happens to share the header's key name (`apply_secrets` implicit key-name match).
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"url":"https://proxy.example/mcp","headers":{"Authorization":"Bearer proxy-token"}}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(
+        installations,
+        HashMap::from([("Authorization".to_string(), raw_secret("local-secret"))]),
+    );
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::SSEServer { url, headers } => {
+            assert_eq!(url, "https://proxy.example/mcp");
+            assert_eq!(
+                headers.get("Authorization").map(String::as_str),
+                Some("Bearer proxy-token")
+            );
+        }
+        other => panic!("expected SSE server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_command_config_preserves_literal_env_despite_colliding_local_secret() {
+    // A literal env value rendered by the server must survive even when a local secret
+    // shares the env key name.
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"LOG_LEVEL":"info"}}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(
+        installations,
+        HashMap::from([("LOG_LEVEL".to_string(), raw_secret("debug"))]),
+    );
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::CLIServer { env, .. } => {
+            assert_eq!(env.get("LOG_LEVEL").map(String::as_str), Some("info"));
+        }
+        other => panic!("expected CLI server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_command_config_missing_secret_leaves_placeholder() {
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
+    )
+    .unwrap();
+    let rendered = render_installations(installations, HashMap::new());
+
+    match &rendered["GitHub MCP"].transport_type {
+        JSONTransportType::CLIServer { args, .. } => {
+            assert_eq!(args, &vec!["--token={{API_TOKEN}}".to_string()]);
+        }
+        other => panic!("expected CLI server, got {other:?}"),
+    }
+}
+
+#[test]
+fn managed_resolution_failure_includes_uid_and_message() {
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(|_| Err(anyhow::anyhow!("not active")));
+
+    let err = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Uuid(uuid)],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap_err();
+
+    match err {
+        AgentDriverError::ManagedMcpResolutionFailed { uid, message } => {
+            assert_eq!(uid, uuid);
+            assert!(message.contains("not active"));
+        }
+        other => panic!("expected managed MCP resolution failure, got {other:?}"),
+    }
+}
+
 // ── IdleTimeoutSender tests ──────────────────────────────────────────────────────
 
 #[test]
@@ -194,6 +531,53 @@ fn idle_timeout_sender_later_send_after_supersedes_earlier() {
 }
 
 #[test]
+fn idle_timeout_sender_complete_with_optional_idle_none_sends_immediately() {
+    // `complete_with_optional_idle(None, value)` routes to `end_run_now` and
+    // delivers `value` synchronously.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(None, 7);
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_optional_idle_some_defers_then_delivers() {
+    // `complete_with_optional_idle(Some(d), value)` routes to `end_run_after`
+    // and defers delivery by `d`.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(Some(Duration::from_millis(50)), 7);
+
+    // Not delivered yet.
+    assert_eq!(rx.try_recv().unwrap(), None);
+
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_timer() {
+    // Cross-path cancellation: the Stage 2c skip-initial-turn driver path
+    // schedules a deferred `Success` via `complete_with_optional_idle(Some(_), _)`
+    // *before* the history subscription is wired up; a later
+    // `AppendedExchange` in that subscription closure invalidates the timer
+    // via `cancel_idle_timeout()`. The shared `Arc<AtomicUsize>` generation
+    // counter is what makes that work across the two logical code paths.
+    // This test exercises the same sequence in isolation: schedule via the
+    // helper, then cancel via the unrelated `cancel_idle_timeout` entry point,
+    // and verify the value is never delivered.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(Some(Duration::from_millis(50)), 7);
+    idle_timeout.cancel_idle_timeout();
+
+    std::thread::sleep(Duration::from_millis(100));
+    // Sender was never consumed by the cancelled timer, so the channel is
+    // still open but empty.
+    assert_eq!(rx.try_recv().unwrap(), None);
+}
+
+#[test]
 fn task_env_vars_include_parent_run_id_when_present() {
     let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
     let env_vars = task_env_vars(Some(&task_id), Some("parent-run-123"), Harness::Claude);
@@ -221,9 +605,11 @@ fn task_env_vars_include_parent_run_id_when_present() {
         )),
         Some(&OsString::from("1"))
     );
-    assert!(env_vars
-        .get(&OsString::from(OZ_CLI_ENV))
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        env_vars
+            .get(&OsString::from(OZ_CLI_ENV))
+            .is_some_and(|value| !value.is_empty())
+    );
 
     let server_root_url = ChannelState::server_root_url().into_owned();
     if overrides_allowed && !server_root_url.is_empty() {
@@ -252,8 +638,10 @@ fn task_env_vars_include_parent_run_id_when_present() {
                 Some(&OsString::from(url.into_owned()))
             ),
             _ => {
-                assert!(!env_vars
-                    .contains_key(&OsString::from(SESSION_SHARING_SERVER_URL_OVERRIDE_ENV)))
+                assert!(
+                    !env_vars
+                        .contains_key(&OsString::from(SESSION_SHARING_SERVER_URL_OVERRIDE_ENV))
+                )
             }
         }
     } else {
@@ -310,12 +698,16 @@ fn task_env_vars_enable_external_parent_listener_for_claude_runs_without_parent_
 #[serial_test::serial]
 fn task_env_vars_propagate_message_listener_state_root_with_legacy_alias() {
     let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440003".parse().unwrap();
-    std::env::set_var(
-        OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
-        "/tmp/message-listener-root",
-    );
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe {
+        std::env::set_var(
+            OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+            "/tmp/message-listener-root",
+        )
+    };
     let env_vars = task_env_vars(Some(&task_id), None, Harness::Claude);
-    std::env::remove_var(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV) };
 
     assert_eq!(
         env_vars.get(&OsString::from(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV)),
@@ -408,7 +800,8 @@ fn json_format_input_omits_filepath_and_description_for_proto_upload_result() {
 #[test]
 #[serial_test::serial]
 fn raw_value_only_writes_under_secret_name() {
-    std::env::remove_var("MY_SECRET");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("MY_SECRET") };
     let secrets = HashMap::from([(
         "MY_SECRET".to_string(),
         ManagedSecretValue::raw_value("s3cret"),
@@ -424,7 +817,8 @@ fn raw_value_only_writes_under_secret_name() {
 #[test]
 #[serial_test::serial]
 fn anthropic_api_key_writes_anthropic_env_var() {
-    std::env::remove_var("ANTHROPIC_API_KEY");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
     let secrets = HashMap::from([(
         "my-custom-name".to_string(),
         ManagedSecretValue::anthropic_api_key("sk-ant-test-key"),
@@ -439,7 +833,8 @@ fn anthropic_api_key_writes_anthropic_env_var() {
 #[test]
 #[serial_test::serial]
 fn typed_secret_overrides_raw_value_with_same_env_name() {
-    std::env::remove_var("ANTHROPIC_API_KEY");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
     let typed_key = "sk-ant-typed-key-abcdef";
     let raw_key = "sk-ant-raw-key-ghijkl";
     let secrets = HashMap::from([
@@ -466,9 +861,12 @@ fn typed_secret_overrides_raw_value_with_same_env_name() {
 #[test]
 #[serial_test::serial]
 fn bedrock_api_key_writes_all_bedrock_env_vars() {
-    std::env::remove_var("AWS_BEARER_TOKEN_BEDROCK");
-    std::env::remove_var("CLAUDE_CODE_USE_BEDROCK");
-    std::env::remove_var("AWS_REGION");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_BEARER_TOKEN_BEDROCK") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CODE_USE_BEDROCK") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_REGION") };
     let secrets = HashMap::from([
         (
             "bedrock-secret".to_string(),
@@ -498,11 +896,16 @@ fn bedrock_api_key_writes_all_bedrock_env_vars() {
 #[test]
 #[serial_test::serial]
 fn bedrock_access_key_writes_all_aws_env_vars() {
-    std::env::remove_var("AWS_ACCESS_KEY_ID");
-    std::env::remove_var("AWS_SECRET_ACCESS_KEY");
-    std::env::remove_var("AWS_SESSION_TOKEN");
-    std::env::remove_var("CLAUDE_CODE_USE_BEDROCK");
-    std::env::remove_var("AWS_REGION");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_ACCESS_KEY_ID") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_SECRET_ACCESS_KEY") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_SESSION_TOKEN") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CODE_USE_BEDROCK") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_REGION") };
     let secrets = HashMap::from([(
         "bedrock-access".to_string(),
         ManagedSecretValue::anthropic_bedrock_access_key(
@@ -538,7 +941,8 @@ fn bedrock_access_key_writes_all_aws_env_vars() {
 #[test]
 #[serial_test::serial]
 fn raw_value_skipped_when_process_env_already_set() {
-    std::env::set_var("WORKER_TOKEN", "injected-value");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("WORKER_TOKEN", "injected-value") };
     let secrets = HashMap::from([(
         "WORKER_TOKEN".to_string(),
         ManagedSecretValue::raw_value("managed-value"),
@@ -547,13 +951,15 @@ fn raw_value_skipped_when_process_env_already_set() {
     // The worker-injected env var wins; env_vars should NOT contain it
     // because the child inherits the process env directly.
     assert!(!env_vars.contains_key(&OsString::from("WORKER_TOKEN")));
-    std::env::remove_var("WORKER_TOKEN");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("WORKER_TOKEN") };
 }
 
 #[test]
 #[serial_test::serial]
 fn worker_injected_env_wins_over_typed_secret() {
-    std::env::set_var("ANTHROPIC_API_KEY", "worker-key");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("ANTHROPIC_API_KEY", "worker-key") };
     let secrets = HashMap::from([(
         "my-auth".to_string(),
         ManagedSecretValue::anthropic_api_key("managed-key"),
@@ -562,7 +968,8 @@ fn worker_injected_env_wins_over_typed_secret() {
     // The typed secret should be skipped entirely; the child inherits
     // ANTHROPIC_API_KEY from the process env.
     assert!(!env_vars.contains_key(&OsString::from("ANTHROPIC_API_KEY")));
-    std::env::remove_var("ANTHROPIC_API_KEY");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
 }
 
 #[test]
@@ -570,9 +977,12 @@ fn worker_injected_env_wins_over_typed_secret() {
 fn worker_injected_env_skips_entire_bedrock_secret() {
     // Only AWS_REGION is worker-injected; the entire Bedrock secret should
     // be atomically skipped — no partial insertion.
-    std::env::set_var("AWS_REGION", "us-east-1");
-    std::env::remove_var("AWS_BEARER_TOKEN_BEDROCK");
-    std::env::remove_var("CLAUDE_CODE_USE_BEDROCK");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("AWS_REGION", "us-east-1") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_BEARER_TOKEN_BEDROCK") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CODE_USE_BEDROCK") };
     let secrets = HashMap::from([(
         "bedrock-secret".to_string(),
         ManagedSecretValue::anthropic_bedrock_api_key("token-456", "eu-central-1"),
@@ -584,7 +994,8 @@ fn worker_injected_env_skips_entire_bedrock_secret() {
     );
     assert!(!env_vars.contains_key(&OsString::from("CLAUDE_CODE_USE_BEDROCK")));
     assert!(!env_vars.contains_key(&OsString::from("AWS_REGION")));
-    std::env::remove_var("AWS_REGION");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_REGION") };
 }
 
 // ── Skill-loading integration test ───────────────────────────────────────────
@@ -635,12 +1046,10 @@ fn split_loading_env_loads_all_global_loads_subset() {
                     if let RepoMetadataEvent::RepositoryUpdated {
                         id: RepositoryIdentifier::Local(path),
                     } = event
+                        && *path == env_repo_for_event
+                        && let Some(tx) = tx_cell.borrow_mut().take()
                     {
-                        if *path == env_repo_for_event {
-                            if let Some(tx) = tx_cell.borrow_mut().take() {
-                                let _ = tx.send(());
-                            }
-                        }
+                        let _ = tx.send(());
                     }
                 },
             );
@@ -660,7 +1069,11 @@ fn split_loading_env_loads_all_global_loads_subset() {
 
         // Run both loading methods through the driver's ModelSpawner.
         let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
-        let env_repos = vec![GithubRepo::new("org".to_string(), "env-repo".to_string())];
+        let env_repos = vec![SourceRepo::new(
+            CodeForge::GitHub,
+            "org".to_string(),
+            "env-repo".to_string(),
+        )];
         let global_repos = vec![GithubRepo::new(
             "org".to_string(),
             "global-repo".to_string(),
@@ -754,12 +1167,10 @@ fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
                     if let RepoMetadataEvent::RepositoryUpdated {
                         id: RepositoryIdentifier::Local(path),
                     } = event
+                        && *path == shared_repo_for_event
+                        && let Some(tx) = tx_cell.borrow_mut().take()
                     {
-                        if *path == shared_repo_for_event {
-                            if let Some(tx) = tx_cell.borrow_mut().take() {
-                                let _ = tx.send(());
-                            }
-                        }
+                        let _ = tx.send(());
                     }
                 },
             );
@@ -779,7 +1190,8 @@ fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
         // The same repo is listed in both env repos and global repos.
         // The global spec targets only "deploy".
         let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
-        let env_repos = vec![GithubRepo::new(
+        let env_repos = vec![SourceRepo::new(
+            CodeForge::GitHub,
             "org".to_string(),
             "shared-repo".to_string(),
         )];
@@ -848,8 +1260,10 @@ fn write_skill_file(repo: &Path, name: &str) {
 fn openai_api_key_exports_only_api_key_not_base_url() {
     // The OpenAI typed secret should only export OPENAI_API_KEY as an env var.
     // base_url is piped through the structured secret to the harness instead.
-    std::env::remove_var("OPENAI_API_KEY");
-    std::env::remove_var("OPENAI_BASE_URL");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("OPENAI_API_KEY") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("OPENAI_BASE_URL") };
     let secrets = HashMap::from([(
         "openai-key".to_string(),
         ManagedSecretValue::openai_api_key(

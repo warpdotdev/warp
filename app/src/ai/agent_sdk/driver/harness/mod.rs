@@ -26,14 +26,14 @@ use super::{
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
-use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONMCPServer;
-use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
 use crate::server::server_api::ServerApi;
+use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSessionsModel};
 use crate::terminal::model::block::{BlockId, SerializedBlock};
-use crate::terminal::CLIAgent;
 use crate::util::path::resolve_executable;
 
 pub(crate) mod claude_code;
@@ -154,6 +154,14 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
     /// machinery used by the find feature.
     fn runtime_error_patterns(&self) -> &'static [&'static str] {
         &[]
+    }
+
+    /// Whether this harness must verify its Oz platform plugin before launch.
+    /// Codex opts into this because its unattended launch command bypasses hook
+    /// trust globally, so we should fail setup instead of running without the
+    /// Warp-installed orchestration hooks at the required version.
+    fn requires_verified_platform_plugin(&self) -> bool {
+        false
     }
 
     /// Fetch the harness-specific resume payload for an existing conversation.

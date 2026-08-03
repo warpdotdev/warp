@@ -4,7 +4,7 @@ use std::mem;
 use std::ops::RangeInclusive;
 
 use sum_tree::SeekBias;
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 use warp_core::semantic_selection::SemanticSelection;
 use warp_terminal::model::grid::CellType;
 use warpui::text::{IsRect, SelectionType};
@@ -14,16 +14,16 @@ use warpui::{AppContext, EntityId, ViewAsRef as _};
 use super::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, RichContentItem,
 };
-use crate::ai::blocklist::block::PendingUserQueryBlock;
 use crate::ai::blocklist::AIBlock;
+use crate::ai::blocklist::block::PendingUserQueryBlock;
 use crate::env_vars::env_var_collection_block::EnvVarCollectionBlock;
+use crate::terminal::GridType;
 use crate::terminal::event::Event as TerminalEvent;
 use crate::terminal::model::block::BlockSection;
 use crate::terminal::model::index::{Direction, Point, Side};
 use crate::terminal::model::selection::{ExpandedSelectionRange, Selection, SelectionDirection};
 use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
 use crate::terminal::warpify::success_block::WarpifySuccessBlock;
-use crate::terminal::GridType;
 
 /// A selection that can span multiple blocks (and thus grids). Here row is the number of lines from
 /// the top of all blocks.
@@ -397,6 +397,9 @@ impl BlockList {
         selection_type: SelectionType,
         side: Side,
     ) {
+        // A new point-based selection supersedes any rich content (AI) block
+        // selection (single-selection semantics).
+        self.rich_content_selections.clear();
         let mut selection = BlockListSelection::new(point, selection_type, side);
         if let Some(smart_select_override) = &self.smart_select_override {
             let (override_start, override_end) = smart_select_override.unfold_range();
@@ -862,8 +865,49 @@ impl BlockList {
 
     pub fn clear_selection(&mut self) {
         self.selection = None;
+        self.rich_content_selections.clear();
         self.event_proxy
             .send_terminal_event(TerminalEvent::TextSelectionChanged);
+    }
+
+    /// Records that the given rich content (AI) block view currently has an
+    /// active text selection. Rich content blocks manage their own selection
+    /// state, so the block list can't derive this from its point-based
+    /// [`selection`](Self::selection); tracking it explicitly lets copy/insert
+    /// paths find the selected text via
+    /// [`rich_content_blocks_in_selection`](Self::rich_content_blocks_in_selection).
+    pub fn set_rich_content_selection(&mut self, view_id: EntityId) {
+        if self.selection.is_some() {
+            // A point-based selection is active. If it already spans this rich
+            // content block (e.g. a selection dragged from a command block
+            // *through* this AI block), that point selection remains the source
+            // of truth and already accounts for the AI block's text via its row
+            // range — don't override it, or we'd drop the command-block portion.
+            if self.rich_content_blocks_in_selection().contains(&view_id) {
+                return;
+            }
+            // Otherwise the point selection doesn't involve this block (e.g. a
+            // stale command-block selection elsewhere); a fresh rich content
+            // selection supersedes it (single-selection semantics).
+            self.selection = None;
+        }
+        self.rich_content_selections = vec![view_id];
+        self.event_proxy
+            .send_terminal_event(TerminalEvent::TextSelectionChanged);
+    }
+
+    /// Clears the tracked text selection for the given rich content (AI) block
+    /// view, if present.
+    pub fn clear_rich_content_selection(&mut self, view_id: EntityId) {
+        if let Some(position) = self
+            .rich_content_selections
+            .iter()
+            .position(|id| *id == view_id)
+        {
+            self.rich_content_selections.remove(position);
+            self.event_proxy
+                .send_terminal_event(TerminalEvent::TextSelectionChanged);
+        }
     }
 
     pub fn set_smart_select_override(
@@ -907,7 +951,7 @@ impl BlockList {
                 selection_start_cursor.seek(&BlockHeight::from(top_row), SeekBias::Right);
 
                 // Loop over each block, adding their contents to the output.
-                let agent_view_state = self.agent_view_state();
+                let transcript_scope = self.transcript_scope();
                 while bottom_row >= selection_start_cursor.start().height {
                     let Some(item) = selection_start_cursor.item() else {
                         // We reached the end of the block list.
@@ -919,7 +963,7 @@ impl BlockList {
                             let block_index = selection_start_cursor.start().block_count.into();
                             if let Some(command_block) = self.block_at(block_index) {
                                 // Don't copy hidden or empty blocks.
-                                if command_block.is_empty(agent_view_state) {
+                                if command_block.is_empty(transcript_scope) {
                                     selection_start_cursor.next();
                                     continue;
                                 }
@@ -953,16 +997,13 @@ impl BlockList {
                                 selected_texts.push(selected_text);
                             }
 
-                            if let Some(active_window_id) = app.windows().active_window() {
-                                if let Some(ssh_block) = app
+                            if let Some(active_window_id) = app.windows().active_window()
+                                && let Some(ssh_block) = app
                                     .view_with_id::<WarpifySuccessBlock>(active_window_id, *view_id)
-                                {
-                                    let warpify_success_block = app.view(&ssh_block);
-                                    if let Some(selected_text) =
-                                        warpify_success_block.selected_text()
-                                    {
-                                        selected_texts.push(selected_text);
-                                    }
+                            {
+                                let warpify_success_block = app.view(&ssh_block);
+                                if let Some(selected_text) = warpify_success_block.selected_text() {
+                                    selected_texts.push(selected_text);
                                 }
                             }
                         }
@@ -1161,43 +1202,43 @@ impl BlockList {
             if start > end {
                 mem::swap(&mut start, &mut end);
             }
-            if start.in_same_block_and_grid(&active_block_location) {
-                if let Some(selection) = self.selection.as_mut() {
-                    // If the start of the selection is at the first row of the grid, clamp the
-                    // selection to the first point in the grid so that that a previous grid
-                    // (which wasn't previously selected) is not selected.
-                    if start.get().row == 0 {
-                        selection.start_anchor().point.column = 0;
-                    } else {
-                        selection.start_anchor().point.row = max(
-                            selection.start_anchor().point.row - 1.into_lines(),
-                            Lines::zero(),
-                        );
-                    }
+            if start.in_same_block_and_grid(&active_block_location)
+                && let Some(selection) = self.selection.as_mut()
+            {
+                // If the start of the selection is at the first row of the grid, clamp the
+                // selection to the first point in the grid so that that a previous grid
+                // (which wasn't previously selected) is not selected.
+                if start.get().row == 0 {
+                    selection.start_anchor().point.column = 0;
+                } else {
+                    selection.start_anchor().point.row = max(
+                        selection.start_anchor().point.row - 1.into_lines(),
+                        Lines::zero(),
+                    );
                 }
             }
 
-            if end.in_same_block_and_grid(&active_block_location) {
-                if let Some(mut selection) = self.selection.take() {
-                    selection.end_anchor().point.row = max(
-                        selection.end_anchor().point.row - 1.into_lines(),
-                        Lines::zero(),
-                    );
+            if end.in_same_block_and_grid(&active_block_location)
+                && let Some(mut selection) = self.selection.take()
+            {
+                selection.end_anchor().point.row = max(
+                    selection.end_anchor().point.row - 1.into_lines(),
+                    Lines::zero(),
+                );
 
-                    // If the selection is at the first row in the grid, clear the selection if
-                    // the start was already truncated by linefeed (since the selection contents
-                    // have been truncated away entirely). If the start was not truncated by
-                    // linefeed already, this means the start is in a prior block, so the set
-                    // the end of the selection to be at the last column of the previous block
-                    // grid.
-                    if end.get().row == 0 {
-                        if !start.in_same_block_and_grid(&end) {
-                            selection.end_anchor().point.column = self.size.columns() - 1;
-                            self.set_selection(selection);
-                        }
-                    } else {
+                // If the selection is at the first row in the grid, clear the selection if
+                // the start was already truncated by linefeed (since the selection contents
+                // have been truncated away entirely). If the start was not truncated by
+                // linefeed already, this means the start is in a prior block, so the set
+                // the end of the selection to be at the last column of the previous block
+                // grid.
+                if end.get().row == 0 {
+                    if !start.in_same_block_and_grid(&end) {
+                        selection.end_anchor().point.column = self.size.columns() - 1;
                         self.set_selection(selection);
                     }
+                } else {
+                    self.set_selection(selection);
                 }
             }
         }
@@ -1213,7 +1254,11 @@ impl BlockList {
     /// text selection.
     fn rich_content_blocks_in_selection(&self) -> Vec<EntityId> {
         let Some(original_selection) = self.selection.as_ref() else {
-            return vec![];
+            // Without a point-based selection, a selection may still be active
+            // inside a rich content (AI) block, which manages its own selection
+            // state. Fall back to the explicitly tracked rich content blocks so
+            // their selected text can still be copied.
+            return self.rich_content_selections.clone();
         };
         let mut top_row = original_selection.head.point.row;
         let mut bottom_row = original_selection.tail.point.row;
@@ -1290,15 +1335,13 @@ impl BlockList {
                         selection.set_smart_select_side(Direction::Left);
                     }
                     if let Some(smart_select_override) = &block_list_selection.smart_select_override
+                        && start_grid_point.in_same_block_and_grid(smart_select_override.start())
+                        && start_grid_point.in_same_block_and_grid(smart_select_override.end())
                     {
-                        if start_grid_point.in_same_block_and_grid(smart_select_override.start())
-                            && start_grid_point.in_same_block_and_grid(smart_select_override.end())
-                        {
-                            selection.set_smart_select_override(
-                                *smart_select_override.start().get()
-                                    ..=*smart_select_override.end().get(),
-                            );
-                        }
+                        selection.set_smart_select_override(
+                            *smart_select_override.start().get()
+                                ..=*smart_select_override.end().get(),
+                        );
                     }
                     selection.update(*end_grid_point.get(), end.side);
 
@@ -1327,15 +1370,13 @@ impl BlockList {
 
                         if let Some(smart_select_override) =
                             &block_list_selection.smart_select_override
-                        {
-                            if start_grid_point
+                            && start_grid_point
                                 .in_same_block_and_grid(smart_select_override.start())
-                            {
-                                selection.set_smart_select_override(
-                                    *smart_select_override.start().get()
-                                        ..=*smart_select_override.end().get(),
-                                );
-                            }
+                        {
+                            selection.set_smart_select_override(
+                                *smart_select_override.start().get()
+                                    ..=*smart_select_override.end().get(),
+                            );
                         }
 
                         let grid = self.grid_at_location(&start_grid_point);
@@ -1369,13 +1410,12 @@ impl BlockList {
 
                         if let Some(smart_select_override) =
                             &block_list_selection.smart_select_override
+                            && end_grid_point.in_same_block_and_grid(smart_select_override.end())
                         {
-                            if end_grid_point.in_same_block_and_grid(smart_select_override.end()) {
-                                selection.set_smart_select_override(
-                                    *smart_select_override.start().get()
-                                        ..=*smart_select_override.end().get(),
-                                );
-                            }
+                            selection.set_smart_select_override(
+                                *smart_select_override.start().get()
+                                    ..=*smart_select_override.end().get(),
+                            );
                         }
 
                         let grid = self.grid_at_location(&end_grid_point);

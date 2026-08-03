@@ -1,16 +1,17 @@
 [package]
 name = "jsonrpc"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish.workspace = true
 license.workspace = true
 
 [dependencies]
-anyhow = { workspace = true }
-async-channel = { workspace = true }
-async-trait = { workspace = true }
-futures = { workspace = true }
-log = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-warpui = { workspace = true }
+warp_errors.workspace = true
+anyhow.workspace = true
+async-channel.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+warpui_core.workspace = true

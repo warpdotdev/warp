@@ -9,9 +9,9 @@ use std::sync::LazyLock;
 
 use windows::Wdk::Foundation::OBJECT_ATTRIBUTES;
 use windows::Wdk::Storage::FileSystem::{
-    NtCreateFile, FILE_CREATE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_PIPE_BYTE_STREAM_MODE,
+    FILE_CREATE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_PIPE_BYTE_STREAM_MODE,
     FILE_PIPE_BYTE_STREAM_TYPE, FILE_PIPE_QUEUE_OPERATION, FILE_SYNCHRONOUS_IO_NONALERT,
-    NTCREATEFILE_CREATE_OPTIONS,
+    NTCREATEFILE_CREATE_OPTIONS, NtCreateFile,
 };
 use windows::Win32::Foundation::{
     GENERIC_READ, GENERIC_WRITE, HANDLE, NTSTATUS, OBJ_CASE_INSENSITIVE, UNICODE_STRING,
@@ -19,8 +19,8 @@ use windows::Win32::Foundation::{
 use windows::Win32::Storage::FileSystem::{
     FILE_ACCESS_RIGHTS, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, SYNCHRONIZE,
 };
-use windows::Win32::System::WindowsProgramming::RtlInitUnicodeString;
 use windows::Win32::System::IO::IO_STATUS_BLOCK;
+use windows::Win32::System::WindowsProgramming::RtlInitUnicodeString;
 
 use crate::terminal::local_tty::windows::ShareableHandle;
 
@@ -153,7 +153,7 @@ mod ffi {
     use super::*;
 
     #[link(name = "ntdll.dll", kind = "raw-dylib", modifiers = "+verbatim")]
-    extern "system" {
+    unsafe extern "system" {
         pub fn NtCreateNamedPipeFile(
             FileHandle: *mut HANDLE,
             DesiredAccess: u32,

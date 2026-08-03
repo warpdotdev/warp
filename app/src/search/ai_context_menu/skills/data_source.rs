@@ -31,20 +31,18 @@ impl SyncDataSource for SkillsDataSource {
         let query_text = &query.text;
 
         // Resolve the current working directory from the active window's session.
-        let cwd: Option<LocalOrRemotePath> = {
-            #[cfg(not(target_family = "wasm"))]
-            {
-                app.windows().state().active_window.and_then(|window_id| {
-                    ActiveSession::as_ref(app)
-                        .working_directory(window_id)
-                        .cloned()
-                })
-            }
-            #[cfg(target_family = "wasm")]
-            {
-                None
-            }
-        };
+        #[cfg(not(target_family = "wasm"))]
+        let cwd: Option<LocalOrRemotePath> = app
+            .windows()
+            .state()
+            .active_window
+            .map(|window_id| {
+                let active_session = ActiveSession::as_ref(app);
+                active_session.working_directory(window_id).cloned()
+            })
+            .unwrap_or(None);
+        #[cfg(target_family = "wasm")]
+        let cwd: Option<LocalOrRemotePath> = None;
         let skills = SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
 
         let mut results: Vec<QueryResult<Self::Action>> = if query_text.is_empty() {

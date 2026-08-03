@@ -1,12 +1,12 @@
 //! Onboarding-specific AI types and conversions.
 
 use ai::LLMId;
-use onboarding::slides::OnboardingModelInfo;
 use onboarding::OnboardingAuthState;
+use onboarding::slides::OnboardingModelInfo;
 use warp_core::ui::icons::Icon;
 use warpui::{AppContext, SingletonEntity};
 
-use super::llms::{DisableReason, LLMInfo, LLMPreferences};
+use super::llms::{LLMInfo, LLMPreferences};
 use crate::auth::AuthStateProvider;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -15,8 +15,7 @@ impl From<&LLMInfo> for OnboardingModelInfo {
         Self {
             id: llm.id.clone(),
             title: llm.display_name.clone(),
-            icon: llm.provider.icon().unwrap_or(Icon::Oz),
-            requires_upgrade: matches!(llm.disable_reason, Some(DisableReason::RequiresUpgrade)),
+            icon: llm.provider.icon().unwrap_or(Icon::Agent),
             is_default: false,
         }
     }
@@ -26,7 +25,7 @@ pub fn build_onboarding_models(
     prefs: &LLMPreferences,
     app: &AppContext,
 ) -> (Vec<OnboardingModelInfo>, LLMId) {
-    let default_id = prefs.get_default_base_model().id.clone();
+    let default_id = prefs.get_default_base_model(app).id.clone();
     let models: Vec<OnboardingModelInfo> = prefs
         .get_base_llm_choices_for_agent_mode(app)
         .map(|llm| {

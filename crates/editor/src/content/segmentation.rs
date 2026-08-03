@@ -4,9 +4,9 @@
 
 use anyhow::anyhow;
 use string_offset::CharOffset;
-use warpui::text::TextBuffer;
-use warpui::text::point::Point;
-use warpui::text::word_boundaries::WordBoundariesPolicy;
+use warpui_core::text::TextBuffer;
+use warpui_core::text::point::Point;
+use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 
 use super::buffer::{Buffer, ToBufferCharOffset, ToBufferPoint};
 use super::cursor::BufferCursor;

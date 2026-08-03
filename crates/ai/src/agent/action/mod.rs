@@ -1,4 +1,5 @@
 mod convert;
+mod review_comments;
 
 use std::fmt::Display;
 use std::ops::Range;
@@ -6,6 +7,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use itertools::Itertools as _;
+pub use review_comments::{
+    ReviewCommentThread, ReviewCommentThreadItem, format_review_comment_thread,
+    group_review_comment_threads,
+};
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumDiscriminants;
 use uuid::Uuid;
@@ -18,9 +23,10 @@ use crate::agent::action_result::{
     InsertReviewCommentsResult, ReadDocumentsResult, ReadFilesResult, ReadMCPResourceResult,
     ReadShellCommandOutputResult, ReadSkillResult, RequestCommandOutputResult,
     RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult, SearchCodebaseResult,
-    SendMessageToAgentResult, StartAgentResult, StartAgentVersion, SuggestNewConversationResult,
-    SuggestPromptResult, TransferShellCommandControlToUserResult, UploadArtifactResult,
-    UseComputerResult, WriteToLongRunningShellCommandResult,
+    SendMessageToAgentResult, StartRecordingResult, StopRecordingResult,
+    SuggestNewConversationResult, SuggestPromptResult, TransferShellCommandControlToUserResult,
+    UploadArtifactResult, UseComputerResult, WaitForEventsResult,
+    WriteToLongRunningShellCommandResult,
 };
 use crate::agent::{AIAgentCitation, FileLocations};
 use crate::diff_validation::ParsedDiff;
@@ -136,19 +142,40 @@ pub enum AIAgentActionType {
 
     RequestComputerUse(RequestComputerUseRequest),
 
+    /// AI requested to start recording a video of the computer-use session.
+    /// Capture configuration (frame rate, limits, speed) is server-owned and
+    /// arrives on the tool call; the client applies it. `frame_rate` of 0 means
+    /// unset. `summary` is a short agent-authored title shown in badges.
+    /// `description` is an optional longer description shown in detail views.
+    /// `playback_speed_multiplier` is the integer speed factor from the proto
+    /// (e.g. 4 = 4×). `None` or a value ≤ 1 means real-time (use client default).
+    StartRecording {
+        frame_rate: u32,
+        max_duration: Option<Duration>,
+        max_size_bytes: Option<u64>,
+        summary: Option<String>,
+        description: Option<String>,
+        playback_speed_multiplier: Option<u32>,
+        /// The surface to record. `None` records the whole screen; a `Window`
+        /// target records just that window via native ffmpeg `x11grab
+        /// -window_id` on the foreground-visible window. Applied by the client
+        /// only when background computer use is enabled.
+        window: Option<computer_use::Target>,
+    },
+
+    /// AI requested to stop an in-progress recording. When `should_persist` is
+    /// false the recording is discarded instead of uploaded; an unset proto
+    /// field defaults to `true` (persist).
+    StopRecording {
+        recording_id: String,
+        should_persist: bool,
+    },
+
     // AI requested to read a skill.
     ReadSkill(ReadSkillRequest),
 
     FetchConversation {
         conversation_id: String,
-    },
-
-    StartAgent {
-        version: StartAgentVersion,
-        name: String,
-        prompt: String,
-        execution_mode: StartAgentExecutionMode,
-        lifecycle_subscription: Option<Vec<LifecycleEventType>>,
     },
 
     SendMessageToAgent {
@@ -172,6 +199,17 @@ pub enum AIAgentActionType {
     /// `base_prompt + "\n\n" + agent_run_configs[i].prompt` (or just
     /// `base_prompt` when the per-agent `prompt` is empty).
     RunAgents(RunAgentsRequest),
+
+    /// Synthesized from a server-emitted Message::ToolCall::WaitForEvents;
+    /// dispatched by WaitForEventsExecutor.
+    WaitForEvents {
+        /// tool_call_id of the unresolved WaitForEvents call; used to
+        /// match inbound resume signals.
+        tool_call_id: String,
+        /// 0 means "unset" (prost flat-scalar convention); the executor
+        /// falls back to a default.
+        idle_timeout_seconds: i32,
+    },
 }
 
 /// Run-wide + per-agent configuration for a `RunAgents` tool call.
@@ -202,6 +240,11 @@ pub enum RunAgentsExecutionMode {
         environment_id: String,
         worker_host: String,
         computer_use_enabled: bool,
+        /// Runner UID selecting the children's compute config (docker
+        /// image, instance shape, setup commands). Empty means "no
+        /// override" — fall back to the environment's default runner then
+        /// system defaults.
+        runner_id: String,
     },
 }
 
@@ -216,6 +259,15 @@ pub struct RunAgentsAgentRunConfig {
     pub name: String,
     pub prompt: String,
     pub title: String,
+    /// Optional UID of the named agent (service account) this child run
+    /// should execute as. Empty means the child runs as the caller. Only
+    /// meaningful for factory agents dispatching sibling factory agents;
+    /// requires remote execution and is enforced server-side at dispatch.
+    pub agent_identity_uid: String,
+    /// Optional model override for this specific child agent. When non-empty,
+    /// overrides the batch-level `model_id` for this child only. When empty,
+    /// the child inherits the batch-level model.
+    pub model_id: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -243,39 +295,16 @@ pub enum StartAgentExecutionMode {
         /// `None` means no client-side secret was selected — the remote
         /// environment falls back to its own ambient credentials.
         auth_secret_name: Option<String>,
+        /// Runner UID selecting the child's compute config. Empty means
+        /// "no override" — resolved at dispatch via the environment's
+        /// default runner then system defaults.
+        runner_id: String,
+        /// UID of the named agent (service account) the remote child run
+        /// should execute as. `None` means the child runs as the caller.
+        agent_identity_uid: Option<String>,
     },
 }
 
-impl StartAgentExecutionMode {
-    /// Constructs a local execution mode using the legacy v1 default harness.
-    pub fn local_with_defaults() -> Self {
-        Self::Local {
-            harness_type: None,
-            model_id: None,
-        }
-    }
-    /// Constructs a local execution mode for a specific third-party harness.
-    pub fn local_harness(harness_type: String) -> Self {
-        Self::Local {
-            harness_type: Some(harness_type),
-            model_id: None,
-        }
-    }
-    /// Constructs a remote execution mode using the legacy v1 defaults for
-    /// fields that were added later in StartAgentV2.
-    pub fn remote_with_defaults(environment_id: String) -> Self {
-        Self::Remote {
-            environment_id,
-            skill_references: Vec::new(),
-            model_id: String::new(),
-            computer_use_enabled: false,
-            worker_host: String::new(),
-            harness_type: String::new(),
-            title: String::new(),
-            auth_secret_name: None,
-        }
-    }
-}
 impl AIAgentActionType {
     pub fn is_request_command_output(&self) -> bool {
         matches!(self, Self::RequestCommandOutput { .. })
@@ -361,14 +390,15 @@ impl AIAgentActionType {
             Self::RequestComputerUse(_) => {
                 AIAgentActionResultType::RequestComputerUse(RequestComputerUseResult::Cancelled)
             }
+            Self::StartRecording { .. } => {
+                AIAgentActionResultType::StartRecording(StartRecordingResult::Cancelled)
+            }
+            Self::StopRecording { .. } => {
+                AIAgentActionResultType::StopRecording(StopRecordingResult::Cancelled)
+            }
             Self::ReadSkill(_) => AIAgentActionResultType::ReadSkill(ReadSkillResult::Cancelled),
             Self::FetchConversation { .. } => {
                 AIAgentActionResultType::FetchConversation(FetchConversationResult::Cancelled)
-            }
-            Self::StartAgent { version, .. } => {
-                AIAgentActionResultType::StartAgent(StartAgentResult::Cancelled {
-                    version: *version,
-                })
             }
             Self::SendMessageToAgent { .. } => {
                 AIAgentActionResultType::SendMessageToAgent(SendMessageToAgentResult::Cancelled)
@@ -382,6 +412,9 @@ impl AIAgentActionType {
                 AIAgentActionResultType::AskUserQuestion(AskUserQuestionResult::Cancelled)
             }
             Self::RunAgents(_) => AIAgentActionResultType::RunAgents(RunAgentsResult::Cancelled),
+            Self::WaitForEvents { .. } => {
+                AIAgentActionResultType::WaitForEvents(WaitForEventsResult::Cancelled)
+            }
         }
     }
 
@@ -417,9 +450,10 @@ impl AIAgentActionType {
                 format!("Insert {} code review comments", comments.len())
             }
             Self::RequestComputerUse(_) => "Request computer use".to_string(),
+            Self::StartRecording { .. } => "Start recording".to_string(),
+            Self::StopRecording { .. } => "Stop recording".to_string(),
             Self::ReadSkill(_) => "Read skill".to_string(),
             Self::FetchConversation { .. } => "Fetch conversation".to_string(),
-            Self::StartAgent { name, .. } => format!("Start agent: {name}"),
             Self::SendMessageToAgent { subject, .. } => format!("Send message: {subject}"),
             Self::TransferShellCommandControlToUser { .. } => {
                 "Transfer shell command control to user".to_string()
@@ -430,6 +464,7 @@ impl AIAgentActionType {
             Self::RunAgents(req) => {
                 format!("Orchestrate {} agent(s)", req.agent_run_configs.len())
             }
+            Self::WaitForEvents { .. } => "Wait for events".to_string(),
         }
     }
 }
@@ -578,14 +613,23 @@ impl Display for AIAgentActionType {
             AIAgentActionType::RequestComputerUse(req) => {
                 write!(f, "RequestComputerUse: {}", req.task_summary)
             }
+            AIAgentActionType::StartRecording { .. } => {
+                write!(f, "StartRecording")
+            }
+            AIAgentActionType::StopRecording {
+                recording_id,
+                should_persist,
+            } => {
+                write!(
+                    f,
+                    "StopRecording: {recording_id} (persist: {should_persist})"
+                )
+            }
             AIAgentActionType::ReadSkill(req) => {
                 write!(f, "ReadSkill: {}", req.skill)
             }
             AIAgentActionType::FetchConversation { conversation_id } => {
                 write!(f, "FetchConversation: {conversation_id}")
-            }
-            AIAgentActionType::StartAgent { name, .. } => {
-                write!(f, "StartAgent: {name}")
             }
             AIAgentActionType::SendMessageToAgent {
                 addresses, subject, ..
@@ -610,6 +654,15 @@ impl Display for AIAgentActionType {
                     .collect::<Vec<_>>()
                     .join(", ");
                 write!(f, "Orchestrate: summary='{}' agents=[{names}]", req.summary,)
+            }
+            AIAgentActionType::WaitForEvents {
+                tool_call_id,
+                idle_timeout_seconds,
+            } => {
+                write!(
+                    f,
+                    "WaitForEvents: tool_call_id={tool_call_id} idle_timeout_seconds={idle_timeout_seconds}"
+                )
             }
         }
     }
@@ -742,7 +795,8 @@ pub struct CreateDocumentsRequest {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct UseComputerRequest {
     pub action_summary: String,
-    pub actions: Vec<computer_use::Action>,
+    /// Each action carries the surface (screen or a specific window) it targets.
+    pub actions: Vec<computer_use::TargetedAction>,
     /// If set, a screenshot will be captured after the actions are executed.
     pub screenshot_params: Option<computer_use::ScreenshotParams>,
 }

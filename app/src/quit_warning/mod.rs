@@ -2,16 +2,22 @@ use std::fmt::Write;
 
 use itertools::Itertools;
 use settings::ToggleableSetting as _;
+use warp_errors::report_if_error;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback, ModalButton};
-use warpui::{AppContext, EntityId, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
+use warpui::{
+    AppContext, EntityId, SingletonEntity, ViewContext, ViewHandle, WeakViewHandle, WindowId,
+};
 
 use crate::code::editor_management::{CodeEditorStatus, CodeEditorSummary};
+use crate::code::view::CodeView;
+use crate::code_review::code_review_view::CodeReviewView;
 use crate::pane_group::{CodePane, PaneGroup, PaneId, TerminalPane};
 use crate::server::telemetry::CloseTarget;
 use crate::session_management::{RunningSessionSummary, SessionNavigationData};
+use crate::settings::CodeSettings;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::workspace::Workspace;
-use crate::{report_if_error, send_telemetry_from_app_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_app_ctx};
 
 /// Scope of what's being quit/closed.
 #[derive(Clone)]
@@ -77,7 +83,7 @@ impl QuitScope<'_> {
                 .map(|pane| pane.session_navigation_data(*pane_group_id, *window_id, ctx))
                 .into_iter()
                 .collect_vec(),
-            Self::Tabs(ref tabs) => {
+            Self::Tabs(tabs) => {
                 // We can't use SessionNavigationData::all_sessions here, as the caller is likely
                 // updating the tab's Workspace. This temporarily removes it from the app context,
                 // so it's not visible to all_sessions.
@@ -112,7 +118,7 @@ impl QuitScope<'_> {
                 .map(|code_pane| code_pane.editor_status(ctx))
                 .into_iter()
                 .collect(),
-            Self::Tabs(ref tabs) => tabs
+            Self::Tabs(tabs) => tabs
                 .iter()
                 .filter_map(|tab| tab.upgrade(ctx))
                 .flat_map(|pane_group| CodeEditorStatus::editors_in_tab(&pane_group, ctx))
@@ -131,7 +137,7 @@ impl QuitScope<'_> {
             Self::Pane { .. } => {
                 vec![] // There cannot be a code review view in a pane.
             }
-            Self::Tabs(ref tabs) => {
+            Self::Tabs(tabs) => {
                 let window_ids: Vec<_> = tabs
                     .iter()
                     .filter_map(|tab| tab.upgrade(ctx))
@@ -156,6 +162,82 @@ impl QuitScope<'_> {
         }
     }
 
+    /// All code editor views (code panes) in this scope, as handles for saving.
+    fn code_view_handles(&self, ctx: &AppContext) -> Vec<ViewHandle<CodeView>> {
+        match self {
+            Self::Pane {
+                pane_group,
+                pane_id,
+                ..
+            } => pane_group
+                .code_pane_by_id(*pane_id)
+                .map(|code_pane| code_pane.file_view(ctx))
+                .into_iter()
+                .collect(),
+            Self::Tabs(tabs) => tabs
+                .iter()
+                .filter_map(|tab| tab.upgrade(ctx))
+                .flat_map(|pane_group| {
+                    pane_group
+                        .as_ref(ctx)
+                        .code_panes(ctx)
+                        .map(|(_, editor)| editor)
+                        .collect_vec()
+                })
+                .collect(),
+            Self::Window(window_id) => ctx
+                .views_of_type::<CodeView>(*window_id)
+                .into_iter()
+                .flatten()
+                .collect(),
+            Self::App => ctx
+                .window_ids()
+                .flat_map(|window_id| {
+                    ctx.views_of_type::<CodeView>(window_id)
+                        .into_iter()
+                        .flatten()
+                })
+                .collect(),
+            Self::EditorTab { .. } => Vec::new(),
+        }
+    }
+
+    /// All code review views in this scope, as handles for saving.
+    fn code_review_view_handles(&self, ctx: &AppContext) -> Vec<ViewHandle<CodeReviewView>> {
+        match self {
+            Self::Pane { .. } | Self::EditorTab { .. } => Vec::new(),
+            Self::Tabs(tabs) => {
+                let window_ids: Vec<_> = tabs
+                    .iter()
+                    .filter_map(|tab| tab.upgrade(ctx))
+                    .map(|pane_group| pane_group.window_id(ctx))
+                    .unique()
+                    .collect();
+                window_ids
+                    .into_iter()
+                    .flat_map(|window_id| {
+                        ctx.views_of_type::<CodeReviewView>(window_id)
+                            .into_iter()
+                            .flatten()
+                    })
+                    .collect()
+            }
+            Self::Window(window_id) => ctx
+                .views_of_type::<CodeReviewView>(*window_id)
+                .into_iter()
+                .flatten()
+                .collect(),
+            Self::App => ctx
+                .window_ids()
+                .flat_map(|window_id| {
+                    ctx.views_of_type::<CodeReviewView>(window_id)
+                        .into_iter()
+                        .flatten()
+                })
+                .collect(),
+        }
+    }
+
     /// Count of shared sessions in this scope.
     fn shared_sessions(&self, ctx: &AppContext) -> usize {
         match self {
@@ -168,7 +250,7 @@ impl QuitScope<'_> {
                 .filter(|view| view.as_ref(ctx).is_sharing_session())
                 .into_iter()
                 .count(),
-            Self::Tabs(ref tabs) => tabs
+            Self::Tabs(tabs) => tabs
                 .iter()
                 .filter_map(|tab| tab.upgrade(ctx))
                 .map(|tab| tab.as_ref(ctx).number_of_shared_sessions(ctx))
@@ -273,6 +355,34 @@ impl<'a> UnsavedStateSummary<'a> {
             && (self.total_long_running_commands > 0
                 || self.shared_sessions > 0
                 || self.unsaved_code_changes)
+    }
+
+    /// Auto-save-aware variant of [`Self::should_display_warning`].
+    ///
+    /// When the auto-save setting is off, this behaves exactly like
+    /// `should_display_warning` (no side effects). When auto-save is on, it
+    /// flushes all saveable unsaved code editors in scope (silently, so no
+    /// "File saved." toast) and returns whether a warning is still warranted for
+    /// things auto-save can't handle: running processes, shared sessions, or
+    /// unsaved changes with no backing file (e.g. untitled buffers).
+    pub fn save_unsaved_code_and_should_warn(&self, ctx: &mut AppContext) -> bool {
+        if !*CodeSettings::as_ref(ctx).auto_save {
+            return self.should_display_warning(ctx);
+        }
+
+        let mut unsaveable_changes_remain = false;
+        for code_view in self.scope.code_view_handles(ctx) {
+            unsaveable_changes_remain |=
+                code_view.update(ctx, |view, ctx| view.auto_save_all_unsaved_tabs(ctx));
+        }
+        for review_view in self.scope.code_review_view_handles(ctx) {
+            review_view.update(ctx, |view, ctx| view.auto_save_all_unsaved_files(ctx));
+        }
+
+        *GeneralSettings::as_ref(ctx).show_warning_before_quitting
+            && (self.total_long_running_commands > 0
+                || self.shared_sessions > 0
+                || unsaveable_changes_remain)
     }
 
     pub fn running_sessions(&self) -> RunningSessionSummary<'_> {
@@ -411,15 +521,15 @@ impl<'a> QuitWarningDialog<'a> {
             buttons.push(ModalButton::for_app("Don't Save".to_string(), callback));
         }
 
-        if let Some(callback) = on_show_processes {
-            if state.total_long_running_commands > 0 {
-                buttons.push(ModalButton::for_app(
-                    "Show running processes".to_string(),
-                    move |app| {
-                        callback(app);
-                    },
-                ))
-            }
+        if let Some(callback) = on_show_processes
+            && state.total_long_running_commands > 0
+        {
+            buttons.push(ModalButton::for_app(
+                "Show running processes".to_string(),
+                move |app| {
+                    callback(app);
+                },
+            ))
         }
 
         if let Some(callback) = on_cancel {
@@ -490,19 +600,17 @@ impl<'a> QuitWarningDialog<'a> {
 }
 
 fn pluralize<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
-    if count > 1 {
-        plural
-    } else {
-        singular
-    }
+    if count > 1 { plural } else { singular }
 }
 
 /// Callback to disable the quit warning modal.
 fn on_disable_warning_modal(ctx: &mut AppContext) {
     GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
-        report_if_error!(general_settings
-            .show_warning_before_quitting
-            .toggle_and_save_value(ctx));
+        report_if_error!(
+            general_settings
+                .show_warning_before_quitting
+                .toggle_and_save_value(ctx)
+        );
     });
     send_telemetry_from_app_ctx!(TelemetryEvent::QuitModalDisabled, ctx);
 }

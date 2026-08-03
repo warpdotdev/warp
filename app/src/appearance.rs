@@ -7,7 +7,7 @@ mod macos_app_icon {
     pub use objc2::rc::autoreleasepool;
     pub use objc2::{AnyThread, MainThreadMarker};
     pub use objc2_app_kit::{NSApplication, NSImage, NSWorkspace, NSWorkspaceIconCreationOptions};
-    pub use objc2_foundation::{ns_string, NSBundle, NSString};
+    pub use objc2_foundation::{NSBundle, NSString, ns_string};
     pub use warp_core::channel::{Channel, ChannelState};
 
     pub use crate::settings::app_icon::{AppIcon, AppIconSettings, AppIconSettingsChangedEvent};
@@ -17,12 +17,12 @@ use anyhow::anyhow;
 use macos_app_icon::*;
 pub use warp_core::ui::appearance::{Appearance, AppearanceEvent};
 
+use crate::ASSETS;
 use crate::settings::{
-    active_theme_kind, FontSettings, FontSettingsChangedEvent, MonospaceFontSize, Settings,
-    ThemeSettings,
+    FontSettings, FontSettingsChangedEvent, MonospaceFontSize, Settings, ThemeSettings,
+    active_theme_kind,
 };
 use crate::themes::theme::{ThemeKind, WarpTheme};
-use crate::ASSETS;
 
 /// Manages the state of the app-wide Appearance settings, it is responsible
 /// for 1) listening to settings changes and update the underlying Appearance
@@ -39,25 +39,27 @@ pub struct AppearanceManager {
 
 impl AppearanceManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&ThemeSettings::handle(ctx), move |me, _event, ctx| {
+        ctx.subscribe_to_model(&ThemeSettings::handle(ctx), move |me, _, _event, ctx| {
             me.refresh_theme_state(ctx);
         });
 
         #[cfg(target_os = "macos")]
         {
-            ctx.subscribe_to_model(
-                &AppIconSettings::handle(ctx),
-                move |me, event, ctx| match event {
+            ctx.subscribe_to_model(&AppIconSettings::handle(ctx), move |me, _, event, ctx| {
+                match event {
                     AppIconSettingsChangedEvent::AppIconState { .. } => {
                         me.set_app_icon(ctx);
                     }
-                },
-            );
+                    AppIconSettingsChangedEvent::ShowDockIconState { .. } => {
+                        me.apply_dock_icon_visibility(ctx);
+                    }
+                }
+            });
         }
 
         ctx.subscribe_to_model(
             &FontSettings::handle(ctx),
-            move |_, event, ctx| match event {
+            move |_, _, event, ctx| match event {
                 FontSettingsChangedEvent::MonospaceFontName { .. } => {
                     let (font_name, match_fonts) = {
                         let settings = FontSettings::as_ref(ctx);
@@ -153,6 +155,11 @@ impl AppearanceManager {
     #[cfg(target_os = "macos")]
     pub fn app_icon_at_startup(&self) -> AppIcon {
         self.app_icon_at_startup
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn apply_dock_icon_visibility(&self, app: &AppContext) {
+        app.set_dock_icon_visible(*AppIconSettings::as_ref(app).show_dock_icon.value());
     }
 
     pub fn clear_transient_theme(&mut self, ctx: &mut ModelContext<Self>) {

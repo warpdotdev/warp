@@ -72,6 +72,7 @@ pub enum LlmModelHost {
     AwsBedrock,
     CustomEndpoint,
     DirectApi,
+    GeminiEnterprise,
     #[cynic(fallback)]
     Other(String),
 }

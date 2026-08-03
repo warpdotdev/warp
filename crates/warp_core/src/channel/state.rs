@@ -6,12 +6,12 @@ use parking_lot::Mutex;
 use url::{Origin, ParseError, Url};
 
 use super::Channel;
+use crate::AppId;
 use crate::channel::config::{
     ChannelConfig, IapConfig, McpOAuthProviderConfig, OzConfig, RudderStackDestination,
     WarpServerConfig,
 };
 use crate::features::FeatureFlag;
-use crate::AppId;
 
 lazy_static! {
     static ref CHANNEL_STATE: Mutex<ChannelState> = Mutex::new(ChannelState::init());
@@ -19,8 +19,8 @@ lazy_static! {
 
 #[cfg(feature = "test-util")]
 lazy_static! {
-    static ref MOCK_SERVER: mockito::ServerGuard = mockito::Server::new();
-    static ref MOCK_SERVER_URL: String = MOCK_SERVER.url();
+    static ref MOCK_SERVER: Mutex<mockito::ServerGuard> = Mutex::new(mockito::Server::new());
+    static ref MOCK_SERVER_URL: String = MOCK_SERVER.lock().url();
     static ref APP_VERSION: Mutex<Option<&'static str>> = Mutex::new(None);
 }
 
@@ -52,6 +52,13 @@ impl ChannelState {
                 mcp_static_config: None,
             },
         }
+    }
+
+    /// Returns the server used by test-only URL routing so downstream tests can install mocks.
+    #[cfg(feature = "test-util")]
+    pub fn mock_server() -> parking_lot::MutexGuard<'static, mockito::ServerGuard> {
+        lazy_static::initialize(&MOCK_SERVER_URL);
+        MOCK_SERVER.lock()
     }
 
     pub fn new(channel: Channel, mut config: ChannelConfig) -> Self {

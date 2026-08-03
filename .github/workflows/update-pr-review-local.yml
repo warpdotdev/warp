@@ -11,6 +11,7 @@ on:
         type: string
 jobs:
   update_pr_review:
+    if: github.repository_owner == 'warpdotdev'
     permissions:
       contents: write
       pull-requests: write

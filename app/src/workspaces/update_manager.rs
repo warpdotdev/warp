@@ -1,11 +1,14 @@
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 
 use anyhow::{Context, Result};
 use futures::channel::oneshot::{self, Receiver};
 use futures::stream::AbortHandle;
+use warp_errors::{report_error, report_if_error};
 use warpui::r#async::Timer;
-use warpui::{duration_with_jitter, Entity, ModelContext, RequestState, SingletonEntity};
+use warpui::{
+    Entity, ModelContext, ModelHandle, RequestState, SingletonEntity, duration_with_jitter,
+};
 
 use super::team_tester::{TeamTesterStatus, TeamTesterStatusEvent};
 use super::user_workspaces::{
@@ -13,6 +16,7 @@ use super::user_workspaces::{
 };
 use super::workspace::WorkspaceUid;
 use crate::ai::llms::LLMPreferences;
+use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::CloudObjectEventEntrypoint;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
@@ -23,9 +27,8 @@ use crate::server::ids::ServerId;
 use crate::server::retry_strategies::{
     OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL, PERIODIC_POLL_RETRY_STRATEGY,
 };
-use crate::server::server_api::team::TeamClient;
 use crate::server::server_api::ServerApiProvider;
-use crate::{report_error, report_if_error};
+use crate::server::server_api::team::TeamClient;
 
 pub enum TeamUpdateManagerEvent {
     LeaveSuccess,
@@ -78,6 +81,7 @@ impl TeamUpdateManager {
 
     fn handle_network_status_changed(
         &mut self,
+        _: ModelHandle<NetworkStatus>,
         network_status: &NetworkStatusEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -95,6 +99,7 @@ impl TeamUpdateManager {
 
     fn handle_team_tester_status_changed(
         &mut self,
+        _: ModelHandle<TeamTesterStatus>,
         event: &TeamTesterStatusEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -121,6 +126,8 @@ impl TeamUpdateManager {
                     joinable_teams: vec![],
                     experiments: None,
                     feature_model_choices: None,
+                    ai_credit_availability: None,
+                    user_purchase_policy: None,
                 },
                 pricing_info: None,
             })
@@ -167,10 +174,8 @@ impl TeamUpdateManager {
                 // Only signal once there are no more retries left.
                 let is_final = !request_state.has_pending_retries();
                 update_manager.handle_workspace_metadata_with_request_state(request_state, ctx);
-                if is_final {
-                    if let Some(sender) = tx.take() {
-                        let _ = sender.send(());
-                    }
+                if is_final && let Some(sender) = tx.take() {
+                    let _ = sender.send(());
                 }
             },
         );
@@ -254,9 +259,11 @@ impl TeamUpdateManager {
         let model_event_sender = self.model_event_sender.clone();
         if let Some(model_event_sender) = &model_event_sender {
             for event in events {
-                report_if_error!(model_event_sender
-                    .send(event)
-                    .context("Unable to save teams metadata to sqlite"));
+                report_if_error!(
+                    model_event_sender
+                        .send(event)
+                        .context("Unable to save teams metadata to sqlite")
+                );
             }
         }
     }
@@ -343,10 +350,18 @@ impl TeamUpdateManager {
                     });
                 }
 
+                if let Some(availability) = response.metadata.ai_credit_availability {
+                    AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
+                        usage_model.apply_server_availability(Ok(availability), ctx);
+                    });
+                }
+
                 let workspaces = response.metadata.workspaces;
                 let joinable_teams = response.metadata.joinable_teams;
+                let user_purchase_policy = response.metadata.user_purchase_policy;
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                    user_workspaces.set_user_purchase_policy(user_purchase_policy);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams, ctx);
                 });
@@ -354,11 +369,11 @@ impl TeamUpdateManager {
                 // Check if the current workspace is still in the list of workspaces.
                 // If it's not, then set the current workspace to the first workspace in the list.
                 if let Some(current_workspace) = UserWorkspaces::as_ref(ctx).current_workspace() {
-                    if !workspaces.iter().any(|w| w.uid == current_workspace.uid) {
-                        if let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
-                            self.set_current_workspace_uid(workspace_uid, ctx);
-                        };
-                    }
+                    if !workspaces.iter().any(|w| w.uid == current_workspace.uid)
+                        && let Some(workspace_uid) = workspaces.first().map(|w| w.uid)
+                    {
+                        self.set_current_workspace_uid(workspace_uid, ctx);
+                    };
                 } else if let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
                     self.set_current_workspace_uid(workspace_uid, ctx);
                 }
@@ -384,17 +399,17 @@ impl TeamUpdateManager {
         }
     }
 
-    pub fn rename_team(&mut self, new_name: String, ctx: &mut ModelContext<Self>) {
+    pub fn rename_team(
+        &mut self,
+        new_name: String,
+        team_uid: ServerId,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let team_client = self.team_client.clone();
-        let team_uid = UserWorkspaces::handle(ctx).read(ctx, |user_workspaces, _| {
-            user_workspaces.current_team().map(|team| team.uid)
-        });
-        if let Some(team_uid) = team_uid {
-            let _ = ctx.spawn(
-                async move { team_client.rename_team(new_name, team_uid).await },
-                Self::on_team_renamed,
-            );
-        }
+        let _ = ctx.spawn(
+            async move { team_client.rename_team(new_name, team_uid).await },
+            Self::on_team_renamed,
+        );
     }
 
     fn on_team_renamed(
@@ -447,7 +462,9 @@ impl TeamUpdateManager {
                 );
             }
             RequestState::RequestFailed(err) => {
-                log::info!("get_workspaces_metadata_for_user: request failed with error {err:#}. Retries exhausted.");
+                log::info!(
+                    "get_workspaces_metadata_for_user: request failed with error {err:#}. Retries exhausted."
+                );
             }
         }
     }
@@ -462,8 +479,16 @@ impl TeamUpdateManager {
                 let workspaces = user_workspaces_access.workspaces;
                 let joinable_teams = user_workspaces_access.joinable_teams;
                 let experiments = user_workspaces_access.experiments;
+                let user_purchase_policy = user_workspaces_access.user_purchase_policy;
+
+                if let Some(availability) = user_workspaces_access.ai_credit_availability {
+                    AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
+                        usage_model.apply_server_availability(Ok(availability), ctx);
+                    });
+                }
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                    user_workspaces.set_user_purchase_policy(user_purchase_policy);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams.clone(), ctx);
                 });
@@ -471,11 +496,11 @@ impl TeamUpdateManager {
                 // Check if the current workspace is still in the list of workspaces.
                 // If it's not, then set the current workspace to the first workspace in the list.
                 if let Some(current_workspace) = UserWorkspaces::as_ref(ctx).current_workspace() {
-                    if !workspaces.iter().any(|w| w.uid == current_workspace.uid) {
-                        if let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
-                            self.set_current_workspace_uid(workspace_uid, ctx);
-                        };
-                    }
+                    if !workspaces.iter().any(|w| w.uid == current_workspace.uid)
+                        && let Some(workspace_uid) = workspaces.first().map(|w| w.uid)
+                    {
+                        self.set_current_workspace_uid(workspace_uid, ctx);
+                    };
                 } else if let Some(workspace_uid) = workspaces.first().map(|w| w.uid) {
                     self.set_current_workspace_uid(workspace_uid, ctx);
                 }

@@ -10,13 +10,13 @@ use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::appearance::Appearance;
 use crate::settings::{InputModeSettings, InputSettings};
 use crate::terminal::block_list_viewport::InputMode;
+use crate::terminal::input::inline_menu::InlineMenuType;
 use crate::terminal::input::inline_menu::message_bar::INLINE_MENU_BORDER_WIDTH;
 use crate::terminal::input::inline_menu::styles::{CONTENT_BORDER_WIDTH, CONTENT_VERTICAL_PADDING};
 use crate::terminal::input::inline_menu::view::QUERY_RESULT_RENDERER_STYLES;
-use crate::terminal::input::inline_menu::InlineMenuType;
 use crate::terminal::input::message_bar::common::standard_message_bar_height;
 use crate::terminal::input::suggestions_mode_model::InputSuggestionsModeModel;
-use crate::terminal::{element_size_at_last_frame, SizeInfo};
+use crate::terminal::{SizeInfo, element_size_at_last_frame};
 
 const DEFAULT_VISIBLE_RESULT_COUNT: f32 = 9.;
 const MIN_VISIBLE_RESULT_COUNT: f32 = 3.;
@@ -65,7 +65,7 @@ impl InlineMenuPositioner {
             .inline_menu_custom_content_heights
             .value()
             .clone();
-        ctx.subscribe_to_model(suggestions_mode_model, |me, _, ctx| {
+        ctx.subscribe_to_model(suggestions_mode_model, |me, _, _, ctx| {
             let suggestions_mode_model = me.suggestions_mode_model.as_ref(ctx);
             if suggestions_mode_model.is_inline_menu_open() {
                 if me.agent_view_controller.as_ref(ctx).is_active() {

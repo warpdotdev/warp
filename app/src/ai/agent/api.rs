@@ -10,26 +10,26 @@ use std::sync::Arc;
 pub use ai::agent::convert::ConvertToAPITypeError;
 use ai::api_keys::ApiKeyManager;
 pub use convert_from::{
-    user_inputs_from_messages, ConversionParams, ConvertAPIMessageToClientOutputMessage,
-    MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError,
+    ConversionParams, ConvertAPIMessageToClientOutputMessage, MaybeAIAgentOutputMessage,
+    MessageToAIAgentOutputMessageError, user_inputs_from_messages,
 };
 use futures_lite::Stream;
 pub use r#impl::generate_multi_agent_output;
+use mcp::TemplatableMCPServerInfo;
 use serde::Serialize;
-use warp_core::channel::ChannelState;
+use warp_core::channel::{Channel, ChannelState};
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences;
 use warpui::{AppContext, EntityId, SingletonEntity as _};
 
-use super::{AIAgentInput, MCPContext, MCPServer, RequestMetadata, Suggestions};
+use super::{AIAgentInput, MCPContext, MCPServer, RequestMetadata, ServerOutputId, Suggestions};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::{BlocklistAIPermissions, RequestInput, SessionContext};
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::AIExecutionProfileAppExt;
-use crate::ai::llms::LLMId;
-use crate::ai::mcp::templatable_manager::TemplatableMCPServerInfo;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::server::server_api::AIApiError;
 use crate::settings::AISettings;
@@ -58,6 +58,31 @@ impl ServerConversationToken {
         )
     }
 
+    pub fn debugging_payload(&self, request_id: Option<&ServerOutputId>) -> String {
+        self.debugging_payload_for_channel(request_id, ChannelState::channel())
+    }
+
+    fn debugging_payload_for_channel(
+        &self,
+        request_id: Option<&ServerOutputId>,
+        channel: Channel,
+    ) -> String {
+        if channel.is_dogfood() {
+            match request_id {
+                Some(request_id) => format!("{}?request={request_id}", self.debug_link()),
+                None => self.debug_link(),
+            }
+        } else {
+            match request_id {
+                Some(request_id) => format!(
+                    "{{\"request_id\":\"{request_id}\",\"conversation_id\":\"{}\"}}",
+                    self.as_str()
+                ),
+                None => format!("{{\"conversation_id\":\"{}\"}}", self.as_str()),
+            }
+        }
+    }
+
     pub fn conversation_link(&self) -> String {
         format!(
             "{}/conversation/{}",
@@ -67,6 +92,9 @@ impl ServerConversationToken {
     }
 }
 
+#[cfg(test)]
+#[path = "api_tests.rs"]
+mod tests;
 impl From<ServerConversationToken> for String {
     fn from(value: ServerConversationToken) -> Self {
         value.0
@@ -117,6 +145,10 @@ pub struct RequestParams {
     /// User-provided custom model providers (BYOK endpoints).
     pub custom_model_providers:
         Option<warp_multi_agent_api::request::settings::CustomModelProviders>,
+    /// User-defined custom model routers referenced by the current selection. Mirrors
+    /// `custom_model_providers`: the selected model's `config_key` indexes into this
+    /// registry. `None` when no custom router is selected.
+    pub custom_model_routers: Option<warp_multi_agent_api::request::settings::CustomModelRouters>,
     pub allow_use_of_warp_credits: bool,
     pub autonomy_level: warp_multi_agent_api::AutonomyLevel,
     pub isolation_level: warp_multi_agent_api::IsolationLevel,
@@ -154,6 +186,44 @@ pub struct ConversationData {
 }
 
 impl RequestParams {
+    #[cfg(test)]
+    pub fn new_for_test() -> Self {
+        Self {
+            input: vec![],
+            conversation_token: None,
+            forked_from_conversation_token: None,
+            ambient_agent_task_id: None,
+            tasks: vec![],
+            existing_suggestions: None,
+            metadata: None,
+            session_context: SessionContext::new_for_test(),
+            model: LLMId::from("test-model"),
+            coding_model: LLMId::from("test-model"),
+            cli_agent_model: LLMId::from("test-model"),
+            computer_use_model: LLMId::from("test-model"),
+            is_memory_enabled: false,
+            warp_drive_context_enabled: false,
+            context_window_limit: None,
+            mcp_context: None,
+            planning_enabled: false,
+            should_redact_secrets: false,
+            api_keys: None,
+            custom_model_providers: None,
+            custom_model_routers: None,
+            allow_use_of_warp_credits: false,
+            autonomy_level: Default::default(),
+            isolation_level: Default::default(),
+            web_search_enabled: false,
+            computer_use_enabled: false,
+            ask_user_question_enabled: false,
+            research_agent_enabled: false,
+            orchestration_enabled: false,
+            supported_tools_override: None,
+            parent_agent_id: None,
+            agent_name: None,
+        }
+    }
+
     pub fn new(
         terminal_view_id: Option<EntityId>,
         session_context: SessionContext,
@@ -193,6 +263,9 @@ impl RequestParams {
                     .get_active_cli_spawned_servers()
                     .values(),
             );
+
+            // Include built-in Warp-hosted servers (e.g. the Factory MCP).
+            active_servers.extend(templatable_manager.get_active_builtin_servers().values());
 
             let servers: Vec<MCPServer> = active_servers
                 .into_iter()
@@ -237,17 +310,24 @@ impl RequestParams {
         let user_workspaces = UserWorkspaces::as_ref(app);
         let api_key_manager = ApiKeyManager::as_ref(app);
         let is_byo_enabled = user_workspaces.is_byo_api_key_enabled(app);
+        #[cfg(not(target_family = "wasm"))]
+        let geap_binding = crate::ai::geap_credentials::current_geap_policy(app).mint_binding();
+        #[cfg(target_family = "wasm")]
+        let geap_binding: Option<::ai::api_keys::GeapMintBinding> = None;
         let api_keys = api_key_manager.api_keys_for_request(
             is_byo_enabled,
             user_workspaces.is_aws_bedrock_credentials_enabled(app),
+            geap_binding,
         );
         let is_custom_inference_enabled = user_workspaces.is_custom_inference_enabled(app);
-        let custom_model_providers = FeatureFlag::CustomInferenceEndpoints
-            .is_enabled()
-            .then(|| {
-                api_key_manager.custom_model_providers_for_request(is_custom_inference_enabled)
-            })
-            .flatten();
+        let custom_model_providers =
+            api_key_manager.custom_model_providers_for_request(is_custom_inference_enabled);
+        let custom_model_routers = FeatureFlag::CustomModelRouters.is_enabled().then(|| {
+            LLMPreferences::as_ref(app).custom_model_routers_for_request(
+                &request_input.model_id,
+                &request_input.coding_model_id,
+            )
+        });
         let allow_use_of_warp_credits = *AISettings::as_ref(app).can_use_warp_credits_for_fallback;
 
         let app_execution_mode = AppExecutionMode::as_ref(app);
@@ -298,19 +378,10 @@ impl RequestParams {
         // server-side, drop the override; otherwise clamp it to the model's
         // current `[min, max]` range. This closes the window between an
         // in-flight model metadata refresh and the next request.
-        let context_window_limit = {
-            let profile_data = AIExecutionProfilesModel::as_ref(app)
-                .active_profile(terminal_view_id, app)
-                .data()
-                .clone();
-            profile_data
-                .configurable_context_window(app)
-                .and_then(|cw| {
-                    profile_data
-                        .context_window_limit
-                        .map(|v| v.clamp(cw.min, cw.max))
-                })
-        };
+        let context_window_limit = AIExecutionProfilesModel::as_ref(app)
+            .active_profile(terminal_view_id, app)
+            .data()
+            .context_window_limit_for_request(app);
 
         Self {
             input: request_input.all_inputs().cloned().collect(),
@@ -333,6 +404,7 @@ impl RequestParams {
             should_redact_secrets,
             api_keys,
             custom_model_providers,
+            custom_model_routers,
             allow_use_of_warp_credits,
             autonomy_level,
             isolation_level,

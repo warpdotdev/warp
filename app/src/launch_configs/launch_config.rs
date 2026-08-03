@@ -153,10 +153,10 @@ impl TryFrom<PaneNodeSnapshot> for PaneTemplateType {
                 | LeafContents::Settings(_)
                 | LeafContents::AIFact(_)
                 | LeafContents::CodeReview(_)
+                | LeafContents::CustomRouterEditor
                 | LeafContents::ExecutionProfileEditor
                 | LeafContents::GetStarted
                 | LeafContents::NetworkLog
-                | LeafContents::Welcome { .. }
                 | LeafContents::AIDocument(_)
                 | LeafContents::EnvironmentManagement(_)
                 | LeafContents::AmbientAgent(_) => {
@@ -183,8 +183,49 @@ pub struct TabTemplate {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub title: Option<String>,
     pub layout: PaneTemplateType,
+    #[serde(skip_serializing, default)]
+    pub commands: Vec<CommandTemplate>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub color: Option<AnsiColorIdentifier>,
+}
+
+impl TabTemplate {
+    pub fn layout_with_tab_commands(&self) -> PaneTemplateType {
+        let mut layout = self.layout.clone();
+        if !self.commands.is_empty() {
+            layout.add_commands_to_startup_pane(self.commands.clone());
+        }
+        layout
+    }
+}
+
+impl PaneTemplateType {
+    fn add_commands_to_startup_pane(&mut self, tab_commands: Vec<CommandTemplate>) -> bool {
+        match self {
+            PaneTemplateType::PaneTemplate { commands, .. } => {
+                commands.extend(tab_commands);
+                true
+            }
+            PaneTemplateType::PaneBranchTemplate { panes, .. } => {
+                if let Some(focused_pane) = panes.iter_mut().find(|pane| pane.is_focused_pane()) {
+                    focused_pane.add_commands_to_startup_pane(tab_commands)
+                } else if let Some(first_pane) = panes.first_mut() {
+                    first_pane.add_commands_to_startup_pane(tab_commands)
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    fn is_focused_pane(&self) -> bool {
+        match self {
+            PaneTemplateType::PaneTemplate { is_focused, .. } => is_focused.unwrap_or_default(),
+            PaneTemplateType::PaneBranchTemplate { panes, .. } => {
+                panes.iter().any(Self::is_focused_pane)
+            }
+        }
+    }
 }
 
 impl TryFrom<TabSnapshot> for TabTemplate {
@@ -195,6 +236,7 @@ impl TryFrom<TabSnapshot> for TabTemplate {
         Ok(Self {
             title: snapshot.custom_title,
             layout: snapshot.root.try_into()?,
+            commands: Vec::new(),
             color,
         })
     }
@@ -246,6 +288,7 @@ pub fn make_mock_single_window_launch_config() -> LaunchConfig {
                         pane_mode: PaneMode::Terminal,
                         shell: None,
                     },
+                    commands: Vec::new(),
                     color: None,
                 },
                 TabTemplate {
@@ -257,6 +300,7 @@ pub fn make_mock_single_window_launch_config() -> LaunchConfig {
                         pane_mode: PaneMode::Terminal,
                         shell: None,
                     },
+                    commands: Vec::new(),
                     color: None,
                 },
             ],

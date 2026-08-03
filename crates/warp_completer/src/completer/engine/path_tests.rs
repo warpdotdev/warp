@@ -97,7 +97,7 @@ pub fn test_sorted_paths_relative_to() {
     ]);
 
     assert_eq!(
-        warpui::r#async::block_on(sorted_paths_relative_to(
+        warpui_core::r#async::block_on(sorted_paths_relative_to(
             &ParsedToken::empty(),
             MatchStrategy::CaseInsensitive,
             &ctx
@@ -134,7 +134,7 @@ pub fn test_sorted_paths_relative_to() {
     );
 
     assert_eq!(
-        warpui::r#async::block_on(sorted_paths_relative_to(
+        warpui_core::r#async::block_on(sorted_paths_relative_to(
             &ParsedToken::new("sr"),
             MatchStrategy::CaseInsensitive,
             &ctx
@@ -142,18 +142,20 @@ pub fn test_sorted_paths_relative_to() {
         .into_iter()
         .map(|matched_suggestion| matched_suggestion.suggestion)
         .collect_vec(),
-        vec![Suggestion::with_same_display_and_replacement(
-            "src/",
-            Some("Directory".into()),
-            SuggestionType::Argument,
-            Priority::default(),
-        )
-        .with_icon_override(IconType::Folder)
-        .with_file_type(EngineFileType::Directory)]
+        vec![
+            Suggestion::with_same_display_and_replacement(
+                "src/",
+                Some("Directory".into()),
+                SuggestionType::Argument,
+                Priority::default(),
+            )
+            .with_icon_override(IconType::Folder)
+            .with_file_type(EngineFileType::Directory)
+        ]
     );
 
     assert_eq!(
-        warpui::r#async::block_on(sorted_paths_relative_to(
+        warpui_core::r#async::block_on(sorted_paths_relative_to(
             &ParsedToken::new("."),
             MatchStrategy::CaseInsensitive,
             &ctx
@@ -200,7 +202,7 @@ pub fn test_sorted_directories_relative_to() {
     ]);
 
     assert_eq!(
-        warpui::r#async::block_on(sorted_directories_relative_to(
+        warpui_core::r#async::block_on(sorted_directories_relative_to(
             &ParsedToken::empty(),
             MatchStrategy::CaseInsensitive,
             &ctx
@@ -229,7 +231,7 @@ pub fn test_sorted_directories_relative_to() {
     );
 
     assert_eq!(
-        warpui::r#async::block_on(sorted_directories_relative_to(
+        warpui_core::r#async::block_on(sorted_directories_relative_to(
             &ParsedToken::new("s"),
             MatchStrategy::CaseInsensitive,
             &ctx
@@ -237,14 +239,16 @@ pub fn test_sorted_directories_relative_to() {
         .into_iter()
         .map(|matched_suggestion| matched_suggestion.suggestion)
         .collect_vec(),
-        vec![Suggestion::with_same_display_and_replacement(
-            "src/",
-            Some("Directory".into()),
-            SuggestionType::Argument,
-            Priority::default(),
-        )
-        .with_icon_override(IconType::Folder)
-        .with_file_type(EngineFileType::Directory)]
+        vec![
+            Suggestion::with_same_display_and_replacement(
+                "src/",
+                Some("Directory".into()),
+                SuggestionType::Argument,
+                Priority::default(),
+            )
+            .with_icon_override(IconType::Folder)
+            .with_file_type(EngineFileType::Directory)
+        ]
     );
 }
 
@@ -263,7 +267,7 @@ pub fn test_sorted_paths_case_insensitive_ordering() {
         file_entry("cherry.txt"),
     ]);
 
-    let suggestions: Vec<String> = warpui::r#async::block_on(sorted_paths_relative_to(
+    let suggestions: Vec<String> = warpui_core::r#async::block_on(sorted_paths_relative_to(
         &ParsedToken::empty(),
         MatchStrategy::CaseInsensitive,
         &ctx,
@@ -291,7 +295,7 @@ pub fn test_path_completions_with_special_characters_relative_to_cwd() {
     let ctx = mock_path_completion_ctx_special_characters();
 
     assert_eq!(
-        warpui::r#async::block_on(sorted_directories_relative_to(
+        warpui_core::r#async::block_on(sorted_directories_relative_to(
             &ParsedToken::empty(),
             MatchStrategy::CaseInsensitive,
             &ctx
@@ -336,7 +340,7 @@ pub fn test_path_completions_with_special_characters_relative_to_cwd() {
 pub fn test_path_completions_with_special_character_case_insensitive() {
     let ctx = mock_path_completion_ctx_special_characters();
     assert_eq!(
-        warpui::r#async::block_on(sorted_directories_relative_to(
+        warpui_core::r#async::block_on(sorted_directories_relative_to(
             &ParsedToken::new("~"),
             MatchStrategy::CaseInsensitive,
             &ctx
@@ -373,7 +377,7 @@ pub fn test_path_completions_with_special_characters_fuzzy() {
     let ctx = mock_path_completion_ctx_special_characters();
 
     assert_eq!(
-        warpui::r#async::block_on(sorted_directories_relative_to(
+        warpui_core::r#async::block_on(sorted_directories_relative_to(
             &ParsedToken::new("~"),
             MatchStrategy::Fuzzy,
             &ctx
@@ -426,7 +430,7 @@ pub fn test_path_completions_tilde_expansion() {
     let ctx = mock_path_completion_ctx_special_characters_home_dir();
 
     assert_eq!(
-        warpui::r#async::block_on(sorted_directories_relative_to(
+        warpui_core::r#async::block_on(sorted_directories_relative_to(
             &ParsedToken::new("~/"),
             MatchStrategy::Fuzzy,
             &ctx
@@ -434,15 +438,17 @@ pub fn test_path_completions_tilde_expansion() {
         .into_iter()
         .map(|matched_suggestion| matched_suggestion.suggestion)
         .collect_vec(),
-        vec![Suggestion::new(
-            "~ testdir/",
-            r"~/\~\ testdir/",
-            Some("Directory".into()),
-            SuggestionType::Argument,
-            Priority::default(),
-        )
-        .with_icon_override(IconType::Folder)
-        .with_file_type(EngineFileType::Directory),]
+        vec![
+            Suggestion::new(
+                "~ testdir/",
+                r"~/\~\ testdir/",
+                Some("Directory".into()),
+                SuggestionType::Argument,
+                Priority::default(),
+            )
+            .with_icon_override(IconType::Folder)
+            .with_file_type(EngineFileType::Directory),
+        ]
     );
 }
 
@@ -452,7 +458,7 @@ pub fn test_path_completions_home_env_var_special_characters() {
     let ctx = mock_path_completion_ctx_special_characters_home_dir();
 
     assert_eq!(
-        warpui::r#async::block_on(sorted_directories_relative_to(
+        warpui_core::r#async::block_on(sorted_directories_relative_to(
             &ParsedToken::new("$HOME/"),
             MatchStrategy::Fuzzy,
             &ctx
@@ -460,15 +466,17 @@ pub fn test_path_completions_home_env_var_special_characters() {
         .into_iter()
         .map(|matched_suggestion| matched_suggestion.suggestion)
         .collect_vec(),
-        vec![Suggestion::new(
-            "~ testdir/",
-            r"$HOME/\~\ testdir/",
-            Some("Directory".into()),
-            SuggestionType::Argument,
-            Priority::default(),
-        )
-        .with_icon_override(IconType::Folder)
-        .with_file_type(EngineFileType::Directory),]
+        vec![
+            Suggestion::new(
+                "~ testdir/",
+                r"$HOME/\~\ testdir/",
+                Some("Directory".into()),
+                SuggestionType::Argument,
+                Priority::default(),
+            )
+            .with_icon_override(IconType::Folder)
+            .with_file_type(EngineFileType::Directory),
+        ]
     );
 }
 
@@ -478,12 +486,12 @@ pub fn test_sorted_cd_directories_no_cdpath_matches_existing_behavior() {
     let ctx = MockPathCompletionContext::default()
         .with_entries_in_pwd([dir_entry("local-only"), dir_entry("shared")]);
 
-    let from_cd = warpui::r#async::block_on(sorted_cd_directories(
+    let from_cd = warpui_core::r#async::block_on(sorted_cd_directories(
         &ParsedToken::empty(),
         MatchStrategy::CaseInsensitive,
         &ctx,
     ));
-    let from_default = warpui::r#async::block_on(sorted_directories_relative_to(
+    let from_default = warpui_core::r#async::block_on(sorted_directories_relative_to(
         &ParsedToken::empty(),
         MatchStrategy::CaseInsensitive,
         &ctx,
@@ -506,7 +514,7 @@ pub fn test_sorted_cd_directories_includes_cdpath_entries() {
         )
         .with_cdpath("/srv/projects".to_owned());
 
-    let displays: Vec<String> = warpui::r#async::block_on(sorted_cd_directories(
+    let displays: Vec<String> = warpui_core::r#async::block_on(sorted_cd_directories(
         &ParsedToken::empty(),
         MatchStrategy::CaseInsensitive,
         &ctx,
@@ -533,7 +541,7 @@ pub fn test_sorted_cd_directories_ignores_cdpath_for_absolute_token() {
         .with_entries(TypedPathBuf::from("/abs"), [dir_entry("absdir")])
         .with_cdpath("/srv/projects".to_owned());
 
-    let displays: Vec<String> = warpui::r#async::block_on(sorted_cd_directories(
+    let displays: Vec<String> = warpui_core::r#async::block_on(sorted_cd_directories(
         &ParsedToken::new("/abs/"),
         MatchStrategy::CaseInsensitive,
         &ctx,
@@ -555,7 +563,7 @@ pub fn test_sorted_cd_directories_skips_dot_entry_in_cdpath() {
         .with_entries_in_pwd([dir_entry("local-only")])
         .with_cdpath(".".to_owned());
 
-    let displays: Vec<String> = warpui::r#async::block_on(sorted_cd_directories(
+    let displays: Vec<String> = warpui_core::r#async::block_on(sorted_cd_directories(
         &ParsedToken::empty(),
         MatchStrategy::CaseInsensitive,
         &ctx,
@@ -578,7 +586,7 @@ pub fn test_sorted_cd_directories_resolves_relative_cdpath_against_pwd() {
         )
         .with_cdpath("src".to_owned());
 
-    let displays: Vec<String> = warpui::r#async::block_on(sorted_cd_directories(
+    let displays: Vec<String> = warpui_core::r#async::block_on(sorted_cd_directories(
         &ParsedToken::empty(),
         MatchStrategy::CaseInsensitive,
         &ctx,
@@ -601,7 +609,7 @@ pub fn test_sorted_cd_directories_resolves_parent_relative_cdpath() {
         )
         .with_cdpath("..".to_owned());
 
-    let displays: Vec<String> = warpui::r#async::block_on(sorted_cd_directories(
+    let displays: Vec<String> = warpui_core::r#async::block_on(sorted_cd_directories(
         &ParsedToken::empty(),
         MatchStrategy::CaseInsensitive,
         &ctx,
@@ -625,7 +633,7 @@ pub fn test_sorted_cd_directories_expands_tilde_in_cdpath() {
         )
         .with_cdpath("~/code".to_owned());
 
-    let displays: Vec<String> = warpui::r#async::block_on(sorted_cd_directories(
+    let displays: Vec<String> = warpui_core::r#async::block_on(sorted_cd_directories(
         &ParsedToken::empty(),
         MatchStrategy::CaseInsensitive,
         &ctx,
@@ -649,7 +657,7 @@ pub fn test_sorted_cd_directories_pwd_at_dot_position_is_first() {
         )
         .with_cdpath(":/srv/projects".to_owned());
 
-    let displays: Vec<String> = warpui::r#async::block_on(sorted_cd_directories(
+    let displays: Vec<String> = warpui_core::r#async::block_on(sorted_cd_directories(
         &ParsedToken::empty(),
         MatchStrategy::CaseInsensitive,
         &ctx,
@@ -670,7 +678,7 @@ pub fn test_sorted_cd_directories_pwd_at_dot_in_middle() {
         .with_entries(TypedPathBuf::from("/srv/b"), [dir_entry("from-b")])
         .with_cdpath("/srv/a:.:/srv/b".to_owned());
 
-    let displays: Vec<String> = warpui::r#async::block_on(sorted_cd_directories(
+    let displays: Vec<String> = warpui_core::r#async::block_on(sorted_cd_directories(
         &ParsedToken::empty(),
         MatchStrategy::CaseInsensitive,
         &ctx,

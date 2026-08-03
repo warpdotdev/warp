@@ -1,7 +1,7 @@
 use settings::Setting;
 use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable, MainAxisSize, MouseStateHandle,
     ParentElement, Shrinkable, Text,
@@ -18,15 +18,15 @@ use warpui::{
 use super::super::{AmbientAgentViewModelEvent, Status};
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
-use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::agent_view::{render_block_container, AgentViewEntryOrigin};
+use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
+use crate::ai::blocklist::agent_view::{AgentViewEntryOrigin, render_block_container};
 use crate::pane_group::pane::{PaneConfiguration, PaneConfigurationEvent, PaneStack};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::terminal::{BlockListSettings, TerminalManager, TerminalView};
 use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::blended_colors;
-use crate::ui_components::icon_with_status::{render_icon_with_status, IconWithStatusVariant};
+use crate::ui_components::icon_with_status::{IconWithStatusVariant, render_icon_with_status};
 const DEFAULT_CLOUD_AGENT_TITLE: &str = "New cloud agent";
 
 #[derive(Default)]
@@ -50,14 +50,17 @@ impl AmbientAgentEntryBlock {
         pane_stack: WeakModelHandle<PaneStack<TerminalView>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        if let Some(view_model) = terminal_view
+        match terminal_view
             .as_ref(ctx)
             .ambient_agent_view_model()
             .cloned()
         {
-            ctx.subscribe_to_model(&view_model, Self::handle_ambient_agent_view_model_event);
-        } else {
-            log::warn!("AmbientAgentEntryBlock created without an ambient agent view model");
+            Some(view_model) => {
+                ctx.subscribe_to_model(&view_model, Self::handle_ambient_agent_view_model_event);
+            }
+            _ => {
+                log::warn!("AmbientAgentEntryBlock created without an ambient agent view model");
+            }
         }
 
         let pane_configuration = terminal_view.as_ref(ctx).pane_configuration().clone();

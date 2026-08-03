@@ -340,7 +340,7 @@ impl QueryFilter {
                 if !FeatureFlag::AgentMode.is_enabled() {
                     Some(Icon::AiAssistant.into())
                 } else {
-                    Some(Icon::Oz.into())
+                    Some(Icon::Stars.into())
                 }
             }
             QueryFilter::Actions => None,
@@ -462,11 +462,6 @@ impl<T: Action + Clone> QueryResult<T> {
 
     pub fn detail_data(&self) -> Option<crate::item::SearchItemDetail> {
         self.item.detail_data()
-    }
-
-    /// Returns an optional deduplication key for this item from the [`SearchItem`].
-    pub fn dedup_key(&self) -> Option<String> {
-        self.item.dedup_key()
     }
 
     /// Returns whether this item is a static separator,

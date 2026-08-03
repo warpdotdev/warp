@@ -1,8 +1,10 @@
-use ai::skills::{ParsedSkill, SkillProvider, SkillReference};
+use ai::skills::{ParsedSkill, SkillPathOrigin, SkillProvider, SkillReference};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use crate::ai::skills::{SkillDescriptor, SkillPathQuery};
+use crate::ai::skills::{
+    ActiveSkillLookupError, SkillDescriptor, SkillManagerEvent, SkillPathQuery,
+};
 
 pub struct SkillManager {}
 
@@ -14,6 +16,15 @@ impl SkillManager {
     pub fn get_skills_for_working_directory(
         &self,
         _working_directory: Option<&LocalOrRemotePath>,
+        _ctx: &AppContext,
+    ) -> Vec<SkillDescriptor> {
+        vec![]
+    }
+
+    pub fn get_skills_for_working_directory_with_origin(
+        &self,
+        _working_directory: Option<&LocalOrRemotePath>,
+        _path_origin: &SkillPathOrigin,
         _ctx: &AppContext,
     ) -> Vec<SkillDescriptor> {
         vec![]
@@ -43,8 +54,19 @@ impl SkillManager {
     ) -> Option<&ParsedSkill> {
         None
     }
+    pub fn active_skill_by_reference_with_origin(
+        &self,
+        reference: &SkillReference,
+        path_origin: &SkillPathOrigin,
+        _ctx: &AppContext,
+    ) -> Result<&ParsedSkill, ActiveSkillLookupError> {
+        Err(ActiveSkillLookupError::for_reference(
+            reference,
+            path_origin,
+        ))
+    }
 
-    pub fn active_bundled_skill(&self, _id: &str, _ctx: &AppContext) -> Option<&ParsedSkill> {
+    pub fn active_local_bundled_skill(&self, _id: &str, _ctx: &AppContext) -> Option<&ParsedSkill> {
         None
     }
 
@@ -66,7 +88,7 @@ impl SkillManager {
 }
 
 impl Entity for SkillManager {
-    type Event = ();
+    type Event = SkillManagerEvent;
 }
 
 impl SingletonEntity for SkillManager {}

@@ -3,10 +3,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use cocoa::appkit::{NSApp, NSRequestUserAttentionType};
-use cocoa::base::{id, nil, BOOL, NO, YES};
-use cocoa::foundation::NSUInteger;
-use objc::{class, msg_send, sel, sel_impl};
+use cocoa::base::{BOOL, NO, YES, id, nil};
+use objc2::{MainThreadMarker, msg_send};
+use objc2_app_kit::{NSApplication, NSCursor, NSRequestUserAttentionType};
+use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
+use objc2_foundation::NSUInteger;
 use warpui_core::accessibility::AccessibilityContent;
 use warpui_core::clipboard::InMemoryClipboard;
 use warpui_core::keymap::Keystroke;
@@ -18,15 +19,15 @@ use warpui_core::platform::{
     Cursor, FilePickerCallback, FilePickerConfiguration, MicrophoneAccessState,
     SendNotificationErrorCallback, TerminationMode,
 };
-use warpui_core::{platform, ApplicationBundleInfo, WindowId};
+use warpui_core::{ApplicationBundleInfo, WindowId, platform};
 
 use super::app::create_native_platform_modal;
-use super::keycode::{modifier_code, Keycode};
+use super::keycode::{Keycode, modifier_code};
 use super::utils::nsstring_as_str;
-use super::{app, make_nsstring, Clipboard, Window};
+use super::{Clipboard, Window, app, make_nsstring};
 
 // Functions implemented in objC files.
-extern "C" {
+unsafe extern "C" {
     // Requests permissions to send desktop notifications.
     fn requestNotificationPermissions(on_completion_callback: *const c_void);
     // Sends a desktop notification.
@@ -78,8 +79,8 @@ impl platform::Delegate for IntegrationTestDelegate {
         self.app_delegate.set_cursor_shape(cursor)
     }
 
-    fn open_url(&self, _: &str) {
-        // no-op
+    fn open_url(&self, _: &str) -> bool {
+        true
     }
 
     fn open_file_path(&self, _: &Path) {
@@ -197,29 +198,27 @@ impl platform::Delegate for AppDelegate {
     /// Sets the cursor shape
     /// See https://developer.apple.com/documentation/appkit/nscursor?language=objc
     fn set_cursor_shape(&self, cursor: Cursor) {
-        unsafe {
-            let cursor: id = match cursor {
-                Cursor::Arrow => msg_send![class!(NSCursor), arrowCursor],
-                Cursor::IBeam => msg_send![class!(NSCursor), IBeamCursor],
-                Cursor::Crosshair => msg_send![class!(NSCursor), crosshairCursor],
-                Cursor::OpenHand => msg_send![class!(NSCursor), openHandCursor],
-                Cursor::NotAllowed => msg_send![class!(NSCursor), operationNotAllowedCursor],
-                Cursor::PointingHand => msg_send![class!(NSCursor), pointingHandCursor],
-                Cursor::ResizeLeftRight => msg_send![class!(NSCursor), resizeLeftRightCursor],
-                Cursor::ResizeUpDown => msg_send![class!(NSCursor), resizeUpDownCursor],
-                Cursor::ClosedHand => msg_send![class!(NSCursor), closedHandCursor],
-                Cursor::DragCopy => msg_send![class!(NSCursor), dragCopyCursor],
-            };
-            let () = msg_send![cursor, set];
-        }
+        let cursor = match cursor {
+            Cursor::Arrow => NSCursor::arrowCursor(),
+            Cursor::IBeam => NSCursor::IBeamCursor(),
+            Cursor::Crosshair => NSCursor::crosshairCursor(),
+            Cursor::OpenHand => NSCursor::openHandCursor(),
+            Cursor::NotAllowed => NSCursor::operationNotAllowedCursor(),
+            Cursor::PointingHand => NSCursor::pointingHandCursor(),
+            Cursor::ResizeLeftRight => NSCursor::resizeLeftRightCursor(),
+            Cursor::ResizeUpDown => NSCursor::resizeUpDownCursor(),
+            Cursor::ClosedHand => NSCursor::closedHandCursor(),
+            Cursor::DragCopy => NSCursor::dragCopyCursor(),
+        };
+        cursor.set();
     }
 
     #[cfg(feature = "test-util")]
     fn get_cursor_shape(&self) -> Cursor {
         unimplemented!("only implemented in tests")
     }
-    fn open_url(&self, url: &str) {
-        Window::open_url(url);
+    fn open_url(&self, url: &str) -> bool {
+        Window::open_url(url)
     }
 
     fn open_file_path(&self, path: &Path) {
@@ -281,12 +280,14 @@ impl platform::Delegate for AppDelegate {
     fn open_character_palette(&self) {
         // Open the character palette in a async task on the main thread to
         // ensure we don't double-borrow the app.
-        dispatch::Queue::main().exec_async(move || unsafe {
+        dispatch::Queue::main().exec_async(move || {
             // See https://developer.apple.com/documentation/appkit/nsapplication/1428455-orderfrontcharacterpalette.
             // If the `sender` argument is nil, the palette is shown relative to the
             // first responder's cursor location. In our case, that will be the Warp
             // host view, with a location set via the `active_cursor_position` API.
-            let () = msg_send![NSApp(), orderFrontCharacterPalette: nil];
+            // SAFETY: the closure runs on the main dispatch queue.
+            let mtm = unsafe { MainThreadMarker::new_unchecked() };
+            NSApplication::sharedApplication(mtm).orderFrontCharacterPalette(None);
         });
     }
 
@@ -303,12 +304,10 @@ impl platform::Delegate for AppDelegate {
     }
 
     fn request_user_attention(&self, _window_id: WindowId) {
-        unsafe {
-            let () = msg_send![
-                NSApp(),
-                requestUserAttention: NSRequestUserAttentionType::NSInformationalRequest
-            ];
-        }
+        // SAFETY: delegate methods run on the main thread.
+        let mtm = unsafe { MainThreadMarker::new_unchecked() };
+        let _ = NSApplication::sharedApplication(mtm)
+            .requestUserAttention(NSRequestUserAttentionType::InformationalRequest);
     }
 
     fn request_desktop_notification_permissions(
@@ -372,8 +371,14 @@ impl platform::Delegate for AppDelegate {
 
     fn show_native_platform_modal(&self, id: ModalId, modal: AlertDialog) {
         let alert = create_native_platform_modal(modal);
+        // `ModalId` is `#[repr(transparent)]` over `usize`, matching the
+        // `showModal:modalId:` selector's `NSUInteger` parameter.
+        // SAFETY: `ModalId` and `NSUInteger` share the same representation.
+        let modal_id: NSUInteger = unsafe { std::mem::transmute(id) };
+        // SAFETY: `showModal:modalId:` is a custom warp NSApplication selector.
         unsafe {
-            let _: () = msg_send![app::get_warp_app(), showModal: alert modalId: id];
+            let app = &*app::get_warp_app().cast::<NSApplication>();
+            let _: () = msg_send![app, showModal: &*alert, modalId: modal_id];
         }
     }
 
@@ -393,20 +398,38 @@ impl platform::Delegate for AppDelegate {
         }
     }
 
+    fn set_dock_icon_visible(&self, visible: bool) {
+        dispatch::Queue::main().exec_async(move || {
+            // SAFETY: the closure runs on the main dispatch queue.
+            let mtm = unsafe { MainThreadMarker::new_unchecked() };
+            let app = NSApplication::sharedApplication(mtm);
+            let app_delegate = app.delegate().expect("the warp app always has a delegate");
+            let value: BOOL = if visible { YES } else { NO };
+            // `setDockIconVisible:` is a custom warp app-delegate selector.
+            // SAFETY: messaging the app delegate on the main thread.
+            let _: BOOL = unsafe { msg_send![&*app_delegate, setDockIconVisible: value] };
+        });
+    }
+
     fn terminate_app(&self, termination_mode: TerminationMode) {
         // Execute `[NSApp terminate]` asynchronously on the main thread to
         // ensure we don't accidentally run into any double-borrow errors.
-        dispatch::Queue::main().exec_async(move || unsafe {
+        dispatch::Queue::main().exec_async(move || {
+            // SAFETY: the closure runs on the main dispatch queue.
+            let mtm = unsafe { MainThreadMarker::new_unchecked() };
+            let app = NSApplication::sharedApplication(mtm);
             match termination_mode {
                 // ContentTransferred windows have already moved their content to another
                 // window (e.g. during tab drag), so they can close immediately without
                 // prompting the user for confirmation.
                 TerminationMode::ForceTerminate | TerminationMode::ContentTransferred => {
-                    let _: () = msg_send![NSApp(), setForceTermination];
+                    // `setForceTermination` is a custom warp NSApplication selector.
+                    // SAFETY: messaging the shared application.
+                    let _: () = unsafe { msg_send![&*app, setForceTermination] };
                 }
                 TerminationMode::Cancellable => {}
             }
-            let _: () = msg_send![NSApp(), terminate: nil];
+            app.terminate(None);
         });
     }
 
@@ -415,29 +438,25 @@ impl platform::Delegate for AppDelegate {
     }
 
     fn microphone_access_state(&self) -> MicrophoneAccessState {
-        unsafe {
-            let cls = class!(AVCaptureDevice);
-            // "soun" is not a typo, it's the correct constant name.
-            let media_type_audio = make_nsstring("soun");
+        // SAFETY: this is a global static variable, but simply reading it should be safe.
+        let media_type = unsafe { AVMediaTypeAudio };
+        let Some(media_type) = media_type else {
+            return MicrophoneAccessState::NotDetermined;
+        };
 
-            // AVAuthorizationStatus constants:
-            // 0 = AVAuthorizationStatusNotDetermined - User has not yet made a choice
-            // 1 = AVAuthorizationStatusRestricted - Restricted by system settings/parental controls
-            // 2 = AVAuthorizationStatusDenied - User explicitly denied access
-            // 3 = AVAuthorizationStatusAuthorized - User granted access
-            let status: i32 = msg_send![cls, authorizationStatusForMediaType: media_type_audio];
-            match status {
-                0 => MicrophoneAccessState::NotDetermined,
-                1 => MicrophoneAccessState::Restricted,
-                2 => MicrophoneAccessState::Denied,
-                3 => MicrophoneAccessState::Authorized,
-                _ => MicrophoneAccessState::NotDetermined, // fallback
-            }
+        // SAFETY: this can raise an exception if you pass an invalid media type, but we're only
+        // ever passing AVMediaTypeAudio here.
+        let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
+        match status {
+            AVAuthorizationStatus::Restricted => MicrophoneAccessState::Restricted,
+            AVAuthorizationStatus::Denied => MicrophoneAccessState::Denied,
+            AVAuthorizationStatus::Authorized => MicrophoneAccessState::Authorized,
+            _ => MicrophoneAccessState::NotDetermined, // fallback
         }
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// # Safety
 /// This function is marked unsafe because it retrieves the pointer to the callback
 /// function that we sent down to the Objective-C code.
@@ -446,15 +465,17 @@ pub unsafe extern "C-unwind" fn warp_on_request_notification_permissions_complet
     result_msg: id,
     callback: *mut c_void,
 ) {
-    let outcome =
-        super::notification::request_permissions_outcome_from_native(result_type, result_msg);
-    if let Ok(outcome) = outcome {
-        let callback = Box::from_raw(callback as *mut RequestNotificationPermissionsCallback);
-        callback(outcome);
+    unsafe {
+        let outcome =
+            super::notification::request_permissions_outcome_from_native(result_type, result_msg);
+        if let Ok(outcome) = outcome {
+            let callback = Box::from_raw(callback as *mut RequestNotificationPermissionsCallback);
+            callback(outcome);
+        }
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 /// # Safety
 /// This function is marked unsafe because it retrieves the pointer to the callback
 /// function that we sent down to the Objective-C code.
@@ -463,17 +484,18 @@ pub unsafe extern "C-unwind" fn warp_on_notification_send_error(
     error_msg: id,
     callback: *mut c_void,
 ) {
-    let notification_error = super::notification::send_error_from_native(error_type, error_msg);
-    if let Ok(notification_error) = notification_error {
-        let callback = Box::from_raw(callback as *mut NotificationSendErrorCallback);
-        callback(notification_error);
+    unsafe {
+        let notification_error = super::notification::send_error_from_native(error_type, error_msg);
+        if let Ok(notification_error) = notification_error {
+            let callback = Box::from_raw(callback as *mut NotificationSendErrorCallback);
+            callback(notification_error);
+        }
     }
 }
 
 impl platform::DispatchDelegate for DispatchDelegate {
     fn is_main_thread(&self) -> bool {
-        let is_main_thread: BOOL = unsafe { msg_send![class!(NSThread), isMainThread] };
-        is_main_thread == YES
+        MainThreadMarker::new().is_some()
     }
 
     fn run_on_main_thread(&self, task: async_task::Runnable) {

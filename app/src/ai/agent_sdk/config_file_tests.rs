@@ -4,6 +4,7 @@ use std::io::Write as _;
 
 use serde_json::json;
 use warp_cli::mcp::MCPSpec;
+use warp_core::features::FeatureFlag;
 
 use crate::ai::ambient_agents::AgentConfigSnapshot;
 
@@ -96,6 +97,7 @@ fn merge_precedence_cli_over_file_and_merges_mcp() {
     let cli = AgentConfigSnapshot {
         name: Some("cli-name".to_string()),
         environment_id: None,
+        runner_id: None,
         model_id: Some("cli-model".to_string()),
         base_prompt: None,
         mcp_servers: Some(serde_json::Map::from_iter([(
@@ -108,6 +110,7 @@ fn merge_precedence_cli_over_file_and_merges_mcp() {
         computer_use_enabled: None,
         harness: None,
         harness_auth_secrets: None,
+        additional_source_repos: None,
     };
 
     let merged = super::merge_with_precedence(Some(&loaded), cli);
@@ -151,6 +154,63 @@ fn mcp_servers_map_converts_to_runtime_specs() {
 
     assert!(specs.iter().any(|s| matches!(s, MCPSpec::Uuid(_))));
     assert!(specs.iter().any(|s| matches!(s, MCPSpec::Json(_))));
+}
+
+#[test]
+fn well_known_warp_id_converts_to_well_known_spec() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let contents = json!({
+        "mcp_servers": {
+            "linear": { "warp_id": "linear" }
+        }
+    })
+    .to_string();
+
+    let file = write_temp(".json", &contents);
+    let loaded = super::load_config_file(file.path()).unwrap();
+
+    let map = loaded.file.mcp_servers.as_ref().unwrap();
+    let specs = super::mcp_specs_from_mcp_servers(map).unwrap();
+
+    assert_eq!(specs.len(), 1);
+    assert!(
+        matches!(&specs[0], MCPSpec::WellKnown(id) if id == "linear"),
+        "well-known warp_id must become MCPSpec::WellKnown, got {specs:?}"
+    );
+}
+
+#[test]
+fn any_non_uuid_warp_id_becomes_well_known_spec() {
+    // The server owns the set of recognized ids: the client forwards any
+    // non-UUID warp_id for resolution instead of rejecting it, so new ids can
+    // be introduced server-side without a client change.
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let map = serde_json::Map::from_iter([(
+        "future".to_string(),
+        json!({ "warp_id": "some-future-integration" }),
+    )]);
+
+    let specs = super::mcp_specs_from_mcp_servers(&map).unwrap();
+    assert_eq!(specs.len(), 1);
+    assert!(matches!(&specs[0], MCPSpec::WellKnown(id) if id == "some-future-integration"));
+}
+
+#[test]
+fn empty_warp_id_is_rejected() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let map = serde_json::Map::from_iter([("bogus".to_string(), json!({ "warp_id": "" }))]);
+
+    let err = super::mcp_specs_from_mcp_servers(&map).unwrap_err();
+    assert!(format!("{err:#}").contains("must be non-empty"));
+}
+
+#[test]
+fn non_uuid_warp_id_is_rejected_when_flag_disabled() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(false);
+    let map = serde_json::Map::from_iter([("linear".to_string(), json!({ "warp_id": "linear" }))]);
+
+    let err = super::mcp_specs_from_mcp_servers(&map).unwrap_err();
+    assert!(format!("{err:#}").contains("must be a UUID"));
 }
 
 #[test]

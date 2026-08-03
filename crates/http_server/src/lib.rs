@@ -2,7 +2,8 @@ use std::net::SocketAddr;
 
 use tower_http::trace::TraceLayer;
 use warp_core::channel::{Channel, ChannelState};
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warp_errors::report_error;
+use warpui_core::{Entity, ModelContext, SingletonEntity};
 
 // Spells "Warp" - should hopefully not conflict with other ports.
 // Does not conflict with known ports on https://en.wikipedia.org/wiki/List_of_TCP_and_UDP_port_numbers
@@ -51,13 +52,13 @@ impl HttpServer {
             let listener = match tokio::net::TcpListener::bind(addr).await {
                 Ok(listener) => listener,
                 Err(err) => {
-                    log::error!("Failed to bind local HTTP server to {addr}: {err}");
+                    log::error!("Failed to bind local HTTP server on {addr}: {err:#}");
                     return;
                 }
             };
 
             if let Err(err) = axum::serve(listener, root.layer(TraceLayer::new_for_http())).await {
-                log::error!("Local HTTP server exited with error: {err}");
+                report_error!("Local HTTP server exited with error", extra: { "error" => %err });
             }
         });
 

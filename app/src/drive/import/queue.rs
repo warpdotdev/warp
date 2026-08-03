@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::nodes::{self, FileId};
@@ -74,7 +75,7 @@ impl FileCompletionCounter {
                     *counter == 0
                 }
                 None => {
-                    log::error!("File completion counter should exist but it doesn't");
+                    report_error!("File completion counter should exist but it doesn't");
                     false
                 }
             };
@@ -102,7 +103,7 @@ pub(super) struct ImportQueue {
 impl ImportQueue {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let update_manager = UpdateManager::handle(ctx);
-        ctx.subscribe_to_model(&update_manager, |me, event, ctx| {
+        ctx.subscribe_to_model(&update_manager, |me, _, event, ctx| {
             me.handle_update_manager_event(event, ctx);
         });
 

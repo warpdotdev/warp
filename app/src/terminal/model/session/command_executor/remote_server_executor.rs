@@ -2,14 +2,14 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
-use warp_core::command::ExitCode;
 use warp_core::SessionId;
+use warp_core::command::ExitCode;
 
 use crate::remote_server::client::RemoteServerClient;
-use crate::remote_server::proto::{run_command_response, RunCommandErrorCode};
+use crate::remote_server::proto::{RunCommandErrorCode, run_command_response};
 use crate::terminal::model::session::command_executor::{CommandExecutor, ExecuteCommandOptions};
 use crate::terminal::shell::Shell;
 

@@ -5,8 +5,8 @@ use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
 
 use super::{
-    skill_reference_from_api_skill_ref, skill_reference_from_read_skill_ref, SkillConversionError,
-    SkillPathOrigin,
+    SkillConversionError, SkillPathOrigin, skill_reference_from_api_skill_ref,
+    skill_reference_from_read_skill_ref,
 };
 use crate::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope};
 
@@ -142,6 +142,82 @@ fn skill_ref_with_unavailable_origin_preserves_bundled_skills() {
         Some(SkillReference::BundledSkillId(
             "review-comments".to_string()
         ))
+    );
+}
+
+#[test]
+fn local_origin_normalizes_double_leading_slash() {
+    let result = SkillPathOrigin::Local
+        .location_for_path("//workspace/common-skills/.agents/skills/deploy/SKILL.md")
+        .expect("double-slash path should be accepted");
+
+    let LocalOrRemotePath::Local(path) = result else {
+        panic!("expected a local path");
+    };
+    assert_eq!(
+        path.to_str().unwrap(),
+        "/workspace/common-skills/.agents/skills/deploy/SKILL.md"
+    );
+}
+
+#[test]
+fn local_origin_normalizes_multiple_slashes() {
+    let result = SkillPathOrigin::Local
+        .location_for_path("///workspace///skills///SKILL.md")
+        .expect("multi-slash path should be accepted");
+
+    let LocalOrRemotePath::Local(path) = result else {
+        panic!("expected a local path");
+    };
+    assert_eq!(path.to_str().unwrap(), "/workspace/skills/SKILL.md");
+}
+
+#[test]
+fn local_origin_preserves_normal_absolute_path() {
+    let result = SkillPathOrigin::Local
+        .location_for_path("/workspace/.agents/skills/deploy/SKILL.md")
+        .expect("normal path should be accepted");
+
+    let LocalOrRemotePath::Local(path) = result else {
+        panic!("expected a local path");
+    };
+    assert_eq!(
+        path.to_str().unwrap(),
+        "/workspace/.agents/skills/deploy/SKILL.md"
+    );
+}
+
+#[test]
+fn restored_display_origin_normalizes_double_leading_slash() {
+    let result = SkillPathOrigin::RestoredDisplayOnly
+        .location_for_path("//repo/.agents/skills/deploy/SKILL.md")
+        .expect("double-slash path should be accepted");
+
+    let LocalOrRemotePath::Local(path) = result else {
+        panic!("expected a local path");
+    };
+    assert_eq!(
+        path.to_str().unwrap(),
+        "/repo/.agents/skills/deploy/SKILL.md"
+    );
+}
+
+#[test]
+fn read_skill_ref_with_local_origin_normalizes_double_slash() {
+    let skill_reference = skill_reference_from_read_skill_ref(
+        api::message::tool_call::read_skill::SkillReference::SkillPath(
+            "//workspace/.agents/skills/deploy/SKILL.md".to_string(),
+        ),
+        &SkillPathOrigin::Local,
+    )
+    .expect("double-slash read_skill path should convert");
+
+    let SkillReference::Path(LocalOrRemotePath::Local(path)) = skill_reference else {
+        panic!("expected a local skill path");
+    };
+    assert_eq!(
+        path.to_str().unwrap(),
+        "/workspace/.agents/skills/deploy/SKILL.md"
     );
 }
 

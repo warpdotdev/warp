@@ -92,6 +92,121 @@ function relpath() {
   python -c "import os,sys;print(os.path.relpath(*(sys.argv[1:])))" "$@";
 }
 
+# Retry timestamped signing because Apple's timestamp service can fail
+# transiently. All call sites use force signing so retries are idempotent.
+function codesign_with_retry() {
+  local max_attempts="${CODESIGN_MAX_ATTEMPTS:-4}"
+  local initial_retry_delay_seconds="${CODESIGN_INITIAL_RETRY_DELAY_SECONDS:-5}"
+  local retry_delay_seconds="$initial_retry_delay_seconds"
+  local attempt
+  local status
+
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if codesign "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+
+    if (( attempt == max_attempts )); then
+      echo "Codesigning failed after $attempt attempts."
+      return "$status"
+    fi
+
+    echo "Codesigning failed; retrying in $retry_delay_seconds seconds ($attempt/$max_attempts)."
+    sleep "$retry_delay_seconds"
+    retry_delay_seconds=$((retry_delay_seconds * 2))
+  done
+}
+
+# Submit once so a transient polling failure can resume the same notarization
+# instead of uploading a duplicate artifact.
+function notarize_artifact() {
+  local artifact="$1"
+  local auth_args=(
+    --apple-id "$WARP_NOTARIZATION_APPLE_ID"
+    --password "$WARP_NOTARIZATION_PASSWORD"
+    --team-id "$APPLE_TEAM_ID"
+  )
+
+  local submission_output
+  if ! submission_output="$(
+    xcrun notarytool submit "$artifact" "${auth_args[@]}" --no-wait --output-format json
+  )"; then
+    echo "Failed to submit $artifact for notarization."
+    return 1
+  fi
+
+  local submission_id
+  if ! submission_id="$(printf '%s' "$submission_output" | plutil -extract id raw -o - -)"; then
+    echo "Failed to read the notarization submission ID."
+    return 1
+  fi
+  if [[ -z "$submission_id" ]]; then
+    echo "Apple did not return a notarization submission ID."
+    return 1
+  fi
+
+  echo "Notarization submission ID: $submission_id"
+
+  local poll_interval_seconds="${NOTARIZATION_POLL_INTERVAL_SECONDS:-15}"
+  local max_poll_failures="${NOTARIZATION_MAX_POLL_FAILURES:-5}"
+  local initial_retry_delay_seconds="${NOTARIZATION_INITIAL_RETRY_DELAY_SECONDS:-5}"
+  local timeout_seconds="${NOTARIZATION_TIMEOUT_SECONDS:-900}"
+  local retry_delay_seconds="$initial_retry_delay_seconds"
+  local consecutive_poll_failures=0
+  local polling_started_at="$SECONDS"
+
+  while true; do
+    if (( SECONDS - polling_started_at >= timeout_seconds )); then
+      echo "Timed out waiting for notarization submission $submission_id after $timeout_seconds seconds."
+      return 1
+    fi
+    local info_output
+    if info_output="$(
+      xcrun notarytool info "$submission_id" "${auth_args[@]}" --output-format json
+    )"; then
+      consecutive_poll_failures=0
+      retry_delay_seconds="$initial_retry_delay_seconds"
+
+      local status
+      if ! status="$(printf '%s' "$info_output" | plutil -extract status raw -o - -)"; then
+        echo "Failed to read the status of notarization submission $submission_id."
+        return 1
+      fi
+
+      echo "Current notarization status: $status"
+      case "$status" in
+        Accepted)
+          return 0
+          ;;
+        Invalid|Rejected)
+          echo "Notarization submission $submission_id was rejected by Apple."
+          xcrun notarytool log "$submission_id" "${auth_args[@]}" || true
+          return 1
+          ;;
+        "In Progress")
+          sleep "$poll_interval_seconds"
+          ;;
+        *)
+          echo "Unexpected notarization status for submission $submission_id: $status"
+          return 1
+          ;;
+      esac
+    else
+      consecutive_poll_failures=$((consecutive_poll_failures + 1))
+      if (( consecutive_poll_failures >= max_poll_failures )); then
+        echo "Failed to poll notarization submission $submission_id after $consecutive_poll_failures consecutive attempts."
+        return 1
+      fi
+
+      echo "Failed to poll notarization submission $submission_id; retrying in $retry_delay_seconds seconds ($consecutive_poll_failures/$max_poll_failures)."
+      sleep "$retry_delay_seconds"
+      retry_delay_seconds=$((retry_delay_seconds * 2))
+    fi
+  done
+}
+
 # Defaults for command-line flags.
 UNIVERSAL_BINARY=true
 BUILD_BINARY=true
@@ -223,8 +338,8 @@ while (( "$#" )); do
       ;;
     --artifact)
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
-        if [[ "$2" != "app" && "$2" != "cli" ]]; then
-          echo "Error: --artifact must be either 'app' or 'cli', got '$2'" >&2
+        if [[ "$2" != "app" && "$2" != "cli" && "$2" != "warpctrl" && "$2" != "tui" ]]; then
+          echo "Error: --artifact must be 'app', 'cli', 'warpctrl', or 'tui', got '$2'" >&2
           exit 1
         fi
         ARTIFACT="$2"
@@ -250,13 +365,17 @@ elif [[ $RELEASE_CHANNEL = "local" || $RELEASE_CHANNEL = "dev" ]]; then
   # For dev bundles, we want to enable debug assertions to
   # catch violations that would otherwise silently pass in
   # a normal release build (e.g. in stable).
-  if [[ "$ARTIFACT" == "cli" ]]; then
+  if [[ "$ARTIFACT" == "tui" ]]; then
+    CARGO_PROFILE="release-tui-debug-assertions"
+  elif [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
     CARGO_PROFILE="release-cli-debug_assertions"
   else
     CARGO_PROFILE="release-lto-debug_assertions"
   fi
 else
-  if [[ "$ARTIFACT" == "cli" ]]; then
+  if [[ "$ARTIFACT" == "tui" ]]; then
+    CARGO_PROFILE="release-tui"
+  elif [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
     CARGO_PROFILE="release-cli"
   else
     CARGO_PROFILE="release-lto"
@@ -286,6 +405,8 @@ elif [[ $RELEASE_CHANNEL = "dev" ]]; then
     FEATURES="$FEATURES,agent_mode_debug"
     # Enable heap usage tracking & profiling using jemalloc through pprof.
     FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
+    # Enable the Warp Control CLI wrapper for local scripting/automation.
+    FEATURES="$FEATURES,warp_control_cli"
     # For dev builds, use different versions of our bundled frameworks (e.g.:
     # Sentry).  This needs to be exported so it can be referenced by
     # app/build.rs later, while running `cargo bundle`.
@@ -347,17 +468,31 @@ else
 fi
 
 # Set artifact-specific configuration.
-if [[ "$ARTIFACT" == cli ]]; then
+if [[ "$ARTIFACT" == cli || "$ARTIFACT" == warpctrl ]]; then
   UNIVERSAL_BINARY=false
   OPEN_AFTER_BUNDLE=false
   FEATURES="$FEATURES,standalone"
-elif [[ "$ARTIFACT" == app ]]; then
-  FEATURES="$FEATURES,gui"
-  if [[ "$RELEASE_CHANNEL" == "local" || "$RELEASE_CHANNEL" == "dev" || "$RELEASE_CHANNEL" == "preview" ]]; then
-    FEATURES="$FEATURES,nld_classifier_v2,nld_heuristic_v2"
-  else
-    FEATURES="$FEATURES,nld_classifier_v1,nld_heuristic_v1"
+elif [[ "$ARTIFACT" == tui ]]; then
+  # The TUI is a separate console crate (`warp_tui`) with its own per-channel
+  # bins and a minimal feature set, so it does NOT reuse the app's accumulated
+  # FEATURES. It is inherently headless (via `warp`'s `tui` feature). It needs
+  # `release_bundle` to embed the channel config, plus `standalone` so
+  # `bundled_resources_dir()` resolves the sibling `resources/` dir next to the
+  # binary (the TUI is not shipped inside a `.app` bundle).
+  UNIVERSAL_BINARY=false
+  OPEN_AFTER_BUNDLE=false
+  case "$RELEASE_CHANNEL" in
+    local) WARP_BIN="warp-tui" ;;
+    oss) WARP_BIN="warp-tui-oss" ;;
+    *) WARP_BIN="warp-tui-$RELEASE_CHANNEL" ;;
+  esac
+  WARP_TUI_FEATURES="release_bundle,standalone,voice_input"
+  if [[ "$RELEASE_CHANNEL" != "oss" ]]; then
+    WARP_TUI_FEATURES="$WARP_TUI_FEATURES,crash_reporting"
   fi
+elif [[ "$ARTIFACT" == app ]]; then
+  # All channels ship the v3 classifier and v2 heuristic.
+  FEATURES="$FEATURES,gui,nld_classifier_v3,nld_heuristic_v2"
 fi
 
 # If we're building a universal bundle for the app artifact, make sure the additional target is available.
@@ -369,9 +504,13 @@ fi
 # then exit.  We use this script to invoke `cargo check` to ensure that we are
 # using the same feature flags and profile that we would be using in production.
 if [[ "$CHECK_ONLY" == "true" ]]; then
-  cargo check --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
-  if [[ $UNIVERSAL_BINARY = true && "$ARTIFACT" != "cli" ]]; then
-    cargo check --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --target "$ADDITIONAL_TARGET" --features "$FEATURES"
+  if [[ "$ARTIFACT" == "tui" ]]; then
+    cargo check -p warp_tui --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --target "$DEFAULT_TARGET" --features "$WARP_TUI_FEATURES"
+  else
+    cargo check --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
+    if [[ $UNIVERSAL_BINARY = true && "$ARTIFACT" != "cli" && "$ARTIFACT" != "warpctrl" ]]; then
+      cargo check --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --target "$ADDITIONAL_TARGET" --features "$FEATURES"
+    fi
   fi
   exit 0
 fi
@@ -558,10 +697,26 @@ EOF
   # Make the script executable
   chmod +x "$CLI_SCRIPT_PATH"
 
+  if [[ ",$FEATURES," =~ ",warp_control_cli," ]]; then
+    # Each value must match `Channel::warpctrl_command_name` in the Rust source.
+    if [[ $RELEASE_CHANNEL = "stable" ]]; then
+      WARPCTRL_COMMAND_NAME="warpctrl"
+    elif [[ $RELEASE_CHANNEL = "oss" ]]; then
+      WARPCTRL_COMMAND_NAME="warpctrl-oss"
+    else
+      WARPCTRL_COMMAND_NAME="warpctrl-$RELEASE_CHANNEL"
+    fi
+    WARPCTRL_SCRIPT_PATH="$BUNDLED_RESOURCES_DIR/bin/$WARPCTRL_COMMAND_NAME"
+    echo "Creating warpctrl wrapper script at $WARPCTRL_SCRIPT_PATH..."
+    "$WORKSPACE_ROOT_DIR/script/macos/create_warpctrl_wrapper" \
+      "$WARPCTRL_SCRIPT_PATH" \
+      "../../MacOS/$WARP_BIN"
+  fi
+
   # Store the built artifact locations for GitHub Actions outputs.
   BINARY_PATH="target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN"
   DMG_PATH="$OUT_DIR/$FINAL_DMG_NAME"
-elif [[ "$ARTIFACT" == "cli" ]]; then
+elif [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
   if [[ $BUILD_BINARY == true ]]; then
     # Create Info.plist before building the app, since it's embedded at build time.
     # Apple's codesigning tools will detect Info.plist files in the same directory as an executable.
@@ -588,6 +743,18 @@ elif [[ "$ARTIFACT" == "cli" ]]; then
   echo "Copying binary into $OUT_DIR/$WARP_BIN"
   cp "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN" "$OUT_DIR/$WARP_BIN"
 
+  if [[ "$ARTIFACT" == "warpctrl" ]]; then
+    if [[ ! ",$FEATURES," =~ ",warp_control_cli," ]]; then
+      echo "warpctrl artifact requires the warp_control_cli feature" >&2
+      exit 1
+    fi
+    WARPCTRL_SCRIPT_PATH="$OUT_DIR/warpctrl"
+    echo "Creating warpctrl wrapper script at $WARPCTRL_SCRIPT_PATH"
+    "$WORKSPACE_ROOT_DIR/script/macos/create_warpctrl_wrapper" \
+      "$WARPCTRL_SCRIPT_PATH" \
+      "$WARP_BIN"
+  fi
+
   if [[ -n "$TARGET_ARCH" && -e "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM" ]]; then
     echo "Copying .dSYM into $OUT_DIR/$WARP_BIN.dSYM"
     cp -HR "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM" "$OUT_DIR/"
@@ -599,6 +766,34 @@ elif [[ "$ARTIFACT" == "cli" ]]; then
 
 
   # Set the primary binary path to output.
+  if [[ "$ARTIFACT" == "warpctrl" ]]; then
+    BINARY_PATH="$OUT_DIR/warpctrl"
+  else
+    BINARY_PATH="$OUT_DIR/$WARP_BIN"
+  fi
+elif [[ "$ARTIFACT" == "tui" ]]; then
+  if [[ $BUILD_BINARY == true ]]; then
+    echo "Building $WARP_BIN ($DEFAULT_TARGET) for channel $RELEASE_CHANNEL with profile $CARGO_PROFILE"
+    cargo build -p warp_tui --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --target "$DEFAULT_TARGET" --features "$WARP_TUI_FEATURES"
+  else
+    echo "Skipping binary build due to --skip-build flag"
+  fi
+
+  echo "Copying binary into $OUT_DIR/$WARP_BIN"
+  cp "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN" "$OUT_DIR/$WARP_BIN"
+
+  if [[ -n "$TARGET_ARCH" && -e "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM" ]]; then
+    echo "Copying .dSYM into $OUT_DIR/$WARP_BIN.dSYM"
+    cp -HR "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM" "$OUT_DIR/"
+  fi
+
+  # Ship bundled skills + settings schema next to the binary. The standalone TUI
+  # resolves this `resources/` dir relative to its own executable at runtime.
+  # Fonts are compiled into the binary, so they are intentionally absent here.
+  echo "Preparing TUI resources directory"
+  BUNDLED_RESOURCES_DIR="$OUT_DIR/resources"
+  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
+
   BINARY_PATH="$OUT_DIR/$WARP_BIN"
 else
   echo "Unsupported artifact: $ARTIFACT" >&2
@@ -666,7 +861,7 @@ if [[ $SELFSIGN = true ]]; then
   if [[ "$ARTIFACT" == app ]]; then
     echo "Self-signing $BUNDLE_DIR/$WARP_APP_NAME.app with ${SIGNING_CERT}..."
     codesign --force --deep --options runtime --sign "$SIGNING_CERT" "$BUNDLE_DIR/$WARP_APP_NAME.app" --entitlements script/Debug-Entitlements.plist
-  elif [[ "$ARTIFACT" == cli ]]; then
+  elif [[ "$ARTIFACT" == cli || "$ARTIFACT" == warpctrl || "$ARTIFACT" == tui ]]; then
     echo "Self-signing $OUT_DIR/$WARP_BIN with ${SIGNING_CERT}..."
     codesign --force --options runtime --sign "$SIGNING_CERT" "$OUT_DIR/$WARP_BIN" --entitlements script/Debug-Entitlements.plist
   fi
@@ -674,10 +869,10 @@ elif [[ $CODESIGN = true ]]; then
   if [[ "$ARTIFACT" == app ]]; then
     echo "Codesigning $BUNDLE_DIR/$WARP_APP_NAME.app..."
     # Use --deep so we sign bundled frameworks as well
-    codesign --deep -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$BUNDLE_DIR/$WARP_APP_NAME.app" --entitlements script/Entitlements.plist
-  elif [[ "$ARTIFACT" == cli ]]; then
+    codesign_with_retry --deep -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$BUNDLE_DIR/$WARP_APP_NAME.app" --entitlements script/Entitlements.plist
+  elif [[ "$ARTIFACT" == cli || "$ARTIFACT" == warpctrl || "$ARTIFACT" == tui ]]; then
     echo "Codesigning $OUT_DIR/$WARP_BIN..."
-    codesign -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$OUT_DIR/$WARP_BIN" --entitlements script/Entitlements.plist
+    codesign_with_retry -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$OUT_DIR/$WARP_BIN" --entitlements script/Entitlements.plist
 
     # Create the .zip for notarization in a separate location - otherwise, Apple's codesigning
     # tools decide that it's a sealed resource that belongs to the binary and needs to also be signed.
@@ -749,7 +944,7 @@ if [[ "$ARTIFACT" = app ]]; then
     create_warp_dmg "$DMG_DIR"
 
     echo "Codesigning $DMG_DIR/$DMG_NAME..."
-    codesign -s "$APPLE_TEAM_ID" --timestamp "$DMG_DIR/$DMG_NAME"
+    codesign_with_retry -f -s "$APPLE_TEAM_ID" --timestamp "$DMG_DIR/$DMG_NAME"
 
     NOTARIZATION_ARTIFACT="$DMG_DIR/$DMG_NAME"
     STAPLE_TICKET=true
@@ -770,23 +965,18 @@ fi
 
 if [[ $CODESIGN = true ]]; then
   echo "Uploading $NOTARIZATION_ARTIFACT to Apple for notarization..."
-  xcrun notarytool submit "$NOTARIZATION_ARTIFACT" --apple-id "$WARP_NOTARIZATION_APPLE_ID" --password "$WARP_NOTARIZATION_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+  notarize_artifact "$NOTARIZATION_ARTIFACT"
 
   if [[ $STAPLE_TICKET = true ]]; then
     echo "Attempting to staple the notarization ticket to $NOTARIZATION_ARTIFACT..."
     xcrun stapler staple "$NOTARIZATION_ARTIFACT"
   fi
 
-  if [[ $? != 0 ]]; then
-    echo "Notarization failed; see above output for details."
-    exit 1
-  fi
-
   # Verify the notarization results (this is format-dependent)
   echo "Verifying notarization ticket..."
   if [[ "$ARTIFACT" = app ]]; then
     xcrun stapler validate "$DMG_DIR/$DMG_NAME"
-  elif [[ "$ARTIFACT" = cli ]]; then
+  elif [[ "$ARTIFACT" = cli || "$ARTIFACT" = warpctrl || "$ARTIFACT" = tui ]]; then
     spctl -a -t open --context context:primary-signature -vv "$OUT_DIR/$WARP_BIN"
   fi
 fi

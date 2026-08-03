@@ -17,7 +17,7 @@ use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{AIAgentTodo, MessageId};
 use crate::ai::blocklist::block::{AIBlockAction, TodoListElementState};
 use crate::ai::blocklist::inline_action::inline_action_header::{
-    ExpandedConfig, HeaderConfig, InteractionMode, INLINE_ACTION_HORIZONTAL_PADDING,
+    ExpandedConfig, HeaderConfig, INLINE_ACTION_HORIZONTAL_PADDING, InteractionMode,
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::{cancelled_icon, icon_size};
 use crate::appearance::Appearance;

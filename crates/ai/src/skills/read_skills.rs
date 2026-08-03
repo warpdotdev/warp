@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use super::parse_skill::{parse_skill, ParsedSkill};
+use super::parse_skill::{ParsedSkill, parse_skill};
 
 /// Read all skills from a directory containing skill subdirectories
 ///

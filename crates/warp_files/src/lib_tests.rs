@@ -1,6 +1,6 @@
-use async_channel::{unbounded, Receiver};
-use warpui::r#async::block_on;
-use warpui::{App, ModelHandle};
+use async_channel::{Receiver, unbounded};
+use warpui_core::r#async::block_on;
+use warpui_core::{App, ModelHandle};
 
 // lib_tests.rs
 use super::*;
@@ -106,10 +106,10 @@ fn test_save_uninitialized_file() {
                 ContentVersion::new(),
                 ctx,
             );
-            assert!(result.is_err());
-
-            let e = result.unwrap_err();
-            assert!(matches!(e, FileSaveError::NoFilePath(file_id) if file_id == id));
+            assert!(
+                matches!(result, Err(FileSaveError::NoFilePath(file_id)) if file_id == id),
+                "expected NoFilePath error"
+            );
         });
     });
 }

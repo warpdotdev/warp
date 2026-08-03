@@ -5,7 +5,7 @@ pub(crate) mod plugin_manager;
 
 use std::collections::{HashMap, HashSet};
 
-use event::{CLIAgentEvent, CLIAgentEventType};
+use event::{CLIAgentEvent, CLIAgentEventSource, CLIAgentEventType};
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::listener::CLIAgentSessionListener;
@@ -17,7 +17,13 @@ use crate::ai::blocklist::InputConfig;
 pub enum CLIAgentSessionStatus {
     InProgress,
     Success,
-    Blocked { message: Option<String> },
+    Failed {
+        error_type: Option<String>,
+        message: Option<String>,
+    },
+    Blocked {
+        message: Option<String>,
+    },
 }
 
 impl CLIAgentSessionStatus {
@@ -26,6 +32,7 @@ impl CLIAgentSessionStatus {
         match self {
             CLIAgentSessionStatus::InProgress => ConversationStatus::InProgress,
             CLIAgentSessionStatus::Success => ConversationStatus::Success,
+            CLIAgentSessionStatus::Failed { .. } => ConversationStatus::Error,
             CLIAgentSessionStatus::Blocked { message } => ConversationStatus::Blocked {
                 blocked_action: message.clone().unwrap_or_default(),
             },
@@ -122,12 +129,12 @@ pub struct CLIAgentSession {
     pub input_state: CLIAgentInputState,
     /// Whether status-driven auto-toggle is enabled for this session.
     pub should_auto_toggle_input: bool,
-    /// Plugin-backed event listener, if the CLI agent plugin is installed.
-    /// `None` for sessions created by command detection alone.
+    /// Event listener for plugin-backed sessions or Codex OSC9 fallback.
+    /// `None` for non-Codex sessions created by command detection alone.
     /// Dropping this handle cleans up the listener's PTY event subscription.
     pub listener: Option<ModelHandle<CLIAgentSessionListener>>,
-    /// The plugin version reported by the `SessionStart` event.
-    /// `None` if the plugin predates version reporting or hasn't connected yet.
+    /// The plugin version reported by structured plugin events.
+    /// `None` if the plugin predates version reporting or Codex is using OSC9 fallback.
     pub plugin_version: Option<String>,
     /// `None` when the session is local.
     /// `Some("user@hostname")` when running over SSH (warpified or legacy).
@@ -140,6 +147,10 @@ pub struct CLIAgentSession {
     /// the first word of the command (the binary/alias the user typed).
     /// Used to customize plugin instructions and force manual install mode.
     pub custom_command_prefix: Option<String>,
+    /// Set once the session has received any structured OSC 777 (rich)
+    /// notification. Codex's OSC 9 fallback never sets it, so this is the
+    /// single source of truth for whether the session is plugin-backed.
+    pub received_rich_notification: bool,
 }
 
 impl CLIAgentSession {
@@ -147,11 +158,22 @@ impl CLIAgentSession {
         self.remote_host.is_some()
     }
 
+    /// Whether the session surfaces trustworthy fine-grained status
+    /// (in-progress / blocked / success). True only after receiving a rich OSC
+    /// 777 notification. Codex's OSC 9 fallback emits only opaque `Stop`
+    /// notifications and never sets `received_rich_notification`, so it does
+    /// not qualify. Synthetic listener registration also does not qualify until
+    /// an actual rich notification arrives.
+    pub fn supports_rich_status(&self) -> bool {
+        self.received_rich_notification
+    }
+
     /// Clears state populated by `PermissionRequest`. Called whenever the
-    /// session leaves the permission flow (the user replied, a new prompt
-    /// is submitted, or the session ends successfully) so the permission
-    /// summary doesn't leak into later UI surfaces — most visibly the tab
-    /// title, which can fall back to `summary` when `query` is unset.
+    /// session leaves the permission flow (the user replied, a blocking tool
+    /// completed, a new prompt is submitted, or the session ends successfully)
+    /// so the permission summary doesn't leak into later UI surfaces — most
+    /// visibly the tab title, which can fall back to `summary` when `query`
+    /// is unset.
     fn clear_permission_scoped_state(&mut self) {
         self.session_context.summary = None;
         self.session_context.tool_name = None;
@@ -182,6 +204,7 @@ impl CLIAgentSession {
                 if !matches!(self.status, CLIAgentSessionStatus::Blocked { .. }) {
                     return None;
                 }
+                self.clear_permission_scoped_state();
                 CLIAgentSessionStatus::InProgress
             }
             CLIAgentEventType::Stop => {
@@ -189,6 +212,15 @@ impl CLIAgentSession {
                 self.session_context.response = event.payload.response.clone();
                 self.clear_permission_scoped_state();
                 CLIAgentSessionStatus::Success
+            }
+            CLIAgentEventType::StopFailure => {
+                self.session_context.query = event.payload.query.clone();
+                self.session_context.response = event.payload.response.clone();
+                self.clear_permission_scoped_state();
+                CLIAgentSessionStatus::Failed {
+                    error_type: event.payload.error_type.clone(),
+                    message: event.payload.response.clone(),
+                }
             }
             CLIAgentEventType::PermissionRequest => {
                 self.session_context.summary = event.payload.summary.clone();
@@ -377,6 +409,7 @@ impl CLIAgentSessionsModel {
                 remote_host,
                 draft_text: None,
                 custom_command_prefix: None,
+                received_rich_notification: false,
             },
             ctx,
         );
@@ -392,6 +425,8 @@ impl CLIAgentSessionsModel {
     }
 
     /// Updates the session's status and context from a parsed CLI agent event.
+    /// Rich plugin events latch `received_rich_notification` so rich-status
+    /// surfaces stay consistent even if the first event was not SessionStart.
     pub fn update_from_event(
         &mut self,
         terminal_view_id: EntityId,
@@ -401,6 +436,10 @@ impl CLIAgentSessionsModel {
         let Some(session) = self.sessions.get_mut(&terminal_view_id) else {
             return;
         };
+
+        if event.source == CLIAgentEventSource::RichPlugin {
+            session.received_rich_notification = true;
+        }
 
         let event_type = &event.event;
         if let Some(new_status) = session.apply_event(event) {

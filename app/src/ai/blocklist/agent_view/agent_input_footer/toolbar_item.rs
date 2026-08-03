@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use warpui::SingletonEntity;
 
 use super::editor::AgentToolbarEditorMode;
-use crate::context_chips::{agent_footer_available_chips, available_chips, ContextChipKind};
+use crate::context_chips::{ContextChipKind, agent_footer_available_chips, available_chips};
 use crate::features::FeatureFlag;
 use crate::settings::AISettings;
 use crate::terminal::shared_session::SharedSessionStatus;
@@ -134,11 +134,11 @@ impl AgentToolbarItemKind {
     pub fn icon(&self) -> Option<Icon> {
         match self {
             Self::ContextChip(kind) => kind.udi_icon(),
-            Self::ModelSelector => Some(Icon::Oz),
+            Self::ModelSelector => Some(Icon::Agent),
             Self::NLDToggle => Some(Icon::NLD),
             Self::VoiceInput => Some(Icon::Microphone),
             Self::FileAttach => Some(Icon::Plus),
-            Self::ContextWindowUsage => Some(Icon::ConversationContext0),
+            Self::ContextWindowUsage => Some(Icon::ContextRemaining100),
             Self::FileExplorer => Some(Icon::FileCopy),
             Self::RichInput => Some(Icon::TextInput),
             Self::ShareSession => Some(Icon::Phone01),
@@ -154,7 +154,9 @@ impl AgentToolbarItemKind {
     /// Only items relevant to composing a cloud run are shown.
     pub(super) fn is_available_during_handoff_compose(&self) -> bool {
         match self {
-            Self::ContextChip(ContextChipKind::ShellGitBranch) => true,
+            Self::ContextChip(
+                ContextChipKind::ShellGitBranch | ContextChipKind::GitBranchStatus,
+            ) => true,
             Self::ModelSelector | Self::VoiceInput | Self::FileAttach => true,
             Self::ContextChip(_)
             | Self::NLDToggle

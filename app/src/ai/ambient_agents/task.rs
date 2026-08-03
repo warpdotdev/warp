@@ -9,13 +9,13 @@ use iso8601_duration::Duration as Iso8601Duration;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::SessionId;
 use url::Url;
-use warp_core::report_error;
 use warp_core::ui::theme::WarpTheme;
+use warp_errors::report_error;
 use warpui::color::ColorU;
 use warpui::{SingletonEntity, View, ViewContext};
 
 use super::AmbientAgentTaskId;
-use crate::ai::artifacts::{deserialize_artifacts, Artifact};
+use crate::ai::artifacts::{Artifact, deserialize_artifacts};
 use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::icons::Icon;
 use crate::view_components::DismissibleToast;
@@ -47,6 +47,7 @@ pub enum AgentSource {
     Interactive,
     WebApp,
     GitHubAction,
+    GitHubWebhook,
     CloudMode,
 }
 
@@ -63,6 +64,7 @@ impl AgentSource {
             AgentSource::Interactive => "LOCAL",
             AgentSource::WebApp => "WEB_APP",
             AgentSource::GitHubAction => "GITHUB_ACTION",
+            AgentSource::GitHubWebhook => "GITHUB_WEBHOOK",
             AgentSource::CloudMode => "CLOUD_MODE",
         }
     }
@@ -77,13 +79,14 @@ impl AgentSource {
             AgentSource::Interactive | AgentSource::CloudMode => "Warp App",
             AgentSource::WebApp => "Oz Web",
             AgentSource::GitHubAction => "GitHub Action",
+            AgentSource::GitHubWebhook => "GitHub",
         }
     }
 
     /// Returns true when tasks from this source must not accept user-triggered cloud follow-ups.
     pub fn blocks_cloud_followups(&self) -> bool {
         match self {
-            AgentSource::GitHubAction => true,
+            AgentSource::GitHubAction | AgentSource::GitHubWebhook => true,
             AgentSource::Linear
             | AgentSource::AgentWebhook
             | AgentSource::Slack
@@ -107,7 +110,25 @@ impl AgentSource {
             AgentSource::Cli
             | AgentSource::ScheduledAgent
             | AgentSource::AgentWebhook
-            | AgentSource::GitHubAction => false,
+            | AgentSource::GitHubAction
+            | AgentSource::GitHubWebhook => false,
+        }
+    }
+}
+
+/// Where the server executed an agent run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum ExecutionLocation {
+    Local,
+    Remote,
+}
+
+impl ExecutionLocation {
+    pub(crate) fn as_query_param(self) -> &'static str {
+        match self {
+            ExecutionLocation::Local => "LOCAL",
+            ExecutionLocation::Remote => "REMOTE",
         }
     }
 }
@@ -129,6 +150,7 @@ where
             "SCHEDULED_AGENT" => Some(AgentSource::ScheduledAgent),
             "WEB_APP" => Some(AgentSource::WebApp),
             "GITHUB_ACTION" => Some(AgentSource::GitHubAction),
+            "GITHUB_WEBHOOK" => Some(AgentSource::GitHubWebhook),
             "CLOUD_MODE" => Some(AgentSource::CloudMode),
             _ => {
                 report_error!(anyhow!("Unknown AmbientAgentSource: {}", s));
@@ -155,6 +177,8 @@ pub struct AmbientAgentTask {
     pub status_message: Option<TaskStatusMessage>,
     #[serde(default, deserialize_with = "deserialize_ambient_agent_source")]
     pub source: Option<AgentSource>,
+    #[serde(default)]
+    pub execution_location: Option<ExecutionLocation>,
     pub session_id: Option<String>,
     pub session_link: Option<String>,
     pub creator: Option<TaskPrincipalInfo>,
@@ -534,7 +558,7 @@ pub fn cancel_task_with_toast<V: View>(task_id: AmbientAgentTaskId, ctx: &mut Vi
             let message = match result {
                 Ok(()) => "Task cancelled".to_string(),
                 Err(e) => {
-                    log::error!("Failed to cancel task: {e}");
+                    report_error!(&e);
                     format!("Failed to cancel task: {e}")
                 }
             };
@@ -553,7 +577,7 @@ pub fn cancel_task_silently<V: View>(task_id: AmbientAgentTaskId, ctx: &mut View
         async move { ai_client.cancel_ambient_agent_task(&task_id).await },
         move |_view, result, _| {
             if let Err(e) = result {
-                log::error!("Failed to cancel task: {e}");
+                report_error!(e.context("Failed to cancel task"));
             }
         },
     );

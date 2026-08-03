@@ -1,9 +1,9 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use itertools::Itertools;
 use string_offset::{ByteOffset, CharCounter, CharOffset};
 
 use self::point::Point;
-use self::word_boundaries::WordBoundaries;
+use self::word_boundaries::{WordBoundaries, WordBoundariesPolicy};
 use crate::event::ModifiersState;
 
 pub mod header;
@@ -12,6 +12,12 @@ pub mod word_boundaries;
 pub mod words;
 
 pub use header::BlockHeaderSize;
+/// A row/column position in rendered character-cell content.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TuiGridPoint {
+    pub row: usize,
+    pub col: u16,
+}
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub enum SelectionType {
@@ -187,6 +193,59 @@ pub trait TextBuffer {
             self,
         ))
     }
+
+    /// Returns the target [`Point`] for expanding a semantic (double-click) selection from
+    /// `position` in the given `direction`, respecting the word-boundary `policy`.
+    fn semantic_expansion_target<T: BufferIndex>(
+        &self,
+        position: T,
+        direction: SelectionDirection,
+        policy: &WordBoundariesPolicy,
+    ) -> Result<Point> {
+        let offset = position.to_char_offset(self)?;
+
+        let target = match direction {
+            SelectionDirection::Forward => {
+                let mut chars = self.chars_at(offset)?;
+                let mut end = offset;
+                // Include the character under the cursor (if any).
+                if chars.next().is_some() {
+                    end += 1;
+                    // Extend through the following word only if the very next character is part
+                    // of a word; a boundary char here stops us (no trailing whitespace, no
+                    // crossing into the next word past a separator run).
+                    if chars.next().is_some_and(|c| !policy.is_word_boundary(c)) {
+                        end += 1;
+                        for c in chars {
+                            if policy.is_word_boundary(c) {
+                                break;
+                            }
+                            end += 1;
+                        }
+                    }
+                }
+                end
+            }
+            SelectionDirection::Backward => {
+                let mut chars = self.chars_rev_at(offset)?;
+                let mut start = offset;
+                // Extend left through a preceding word only if the character immediately before
+                // the cursor is part of a word.
+                if chars.next().is_some_and(|c| !policy.is_word_boundary(c)) {
+                    start -= 1;
+                    for c in chars {
+                        if policy.is_word_boundary(c) {
+                            break;
+                        }
+                        start -= 1;
+                    }
+                }
+                start
+            }
+        };
+
+        self.to_point(target)
+    }
 }
 
 /// A type which can index into a text buffer.
@@ -299,6 +358,14 @@ pub fn char_slice(s: &str, start: usize, end: usize) -> Option<&str> {
     s.get(start_index..end_index)
 }
 
+pub fn byte_offset_for_char_offset(text: &str, char_offset: CharOffset) -> Option<ByteOffset> {
+    if char_offset.as_usize() == text.chars().count() {
+        return Some(ByteOffset::from(text.len()));
+    }
+    text.char_indices()
+        .nth(char_offset.as_usize())
+        .map(|(byte_offset, _)| ByteOffset::from(byte_offset))
+}
 pub fn count_chars_up_to_byte(text: &str, byte_offset: ByteOffset) -> Option<CharOffset> {
     if byte_offset.as_usize() == text.len() {
         return Some(CharOffset::from(text.chars().count()));

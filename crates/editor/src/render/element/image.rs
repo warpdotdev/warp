@@ -1,6 +1,6 @@
-use warpui::elements::{CacheOption, Image};
-use warpui::geometry::vector::vec2f;
-use warpui::{Element, SizeConstraint};
+use warpui_core::elements::{CacheOption, Image};
+use warpui_core::geometry::vector::vec2f;
+use warpui_core::{Element, SizeConstraint};
 
 use super::{RenderContext, RenderableBlock};
 use crate::extract_block;
@@ -33,8 +33,8 @@ impl RenderableBlock for RenderableImage {
     fn layout(
         &mut self,
         model: &RenderState,
-        ctx: &mut warpui::LayoutContext,
-        app: &warpui::AppContext,
+        ctx: &mut warpui_core::LayoutContext,
+        app: &warpui_core::AppContext,
     ) {
         let content = model.content();
         let (asset_source, config) = extract_block!(
@@ -54,7 +54,12 @@ impl RenderableBlock for RenderableImage {
         self.image_element = Some(Box::new(image));
     }
 
-    fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, app: &warpui::AppContext) {
+    fn paint(
+        &mut self,
+        model: &RenderState,
+        ctx: &mut RenderContext,
+        app: &warpui_core::AppContext,
+    ) {
         let content = model.content();
         let positioned_image = extract_block!(
             self.viewport_item,
@@ -77,7 +82,7 @@ impl RenderableBlock for RenderableImage {
         }
 
         if selected {
-            let rect_bounds = warpui::geometry::rect::RectF::new(screen_position, size);
+            let rect_bounds = warpui_core::geometry::rect::RectF::new(screen_position, size);
             ctx.paint
                 .scene
                 .draw_rect_with_hit_recording(rect_bounds)

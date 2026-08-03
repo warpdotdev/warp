@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use itertools::Itertools;
 use string_offset::CharOffset;
-use warpui::text::TextBuffer;
+use warpui_core::text::TextBuffer;
 
 use crate::vim::{BracketChar, BracketEnd, BracketType};
 use crate::vim_find_matching_bracket;
@@ -54,15 +54,14 @@ where
 
     // Finally, if we're doing a command that preserves leading padding, e.g. `c`, check if we need
     // to remove that from the range.
-    if preserve_leading_padding {
-        if let Some((i, _)) = buffer
+    if preserve_leading_padding
+        && let Some((i, _)) = buffer
             .chars_at(block_start)
             .ok()?
             .take_while(|c| c.is_whitespace())
             .find_position(|c| *c == '\n')
-        {
-            block_start += i + 1;
-        }
+    {
+        block_start += i + 1;
     }
 
     Some(block_start..block_end)

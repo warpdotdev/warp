@@ -1,6 +1,6 @@
 # Frequently Asked Questions
 
-This FAQ covers the questions we hear most often about contributing to the Warp client, working with agents in this repository, and how this repo fits into Warp the product. For the full contribution flow, see [CONTRIBUTING.md](CONTRIBUTING.md). For engineering details — build setup, code style, testing — see [WARP.md](WARP.md).
+This FAQ covers the questions we hear most often about contributing to the Warp client, working with agents in this repository, and how this repo fits into Warp the product. For the full contribution flow, see [CONTRIBUTING.md](CONTRIBUTING.md). For engineering details — build setup, code style, testing — see [AGENTS.md](AGENTS.md).
 
 ## Contributing
 
@@ -34,7 +34,7 @@ cargo run            # build and run Warp
 ./script/presubmit   # fmt, clippy, and tests
 ```
 
-macOS, Linux, and Windows are all supported. Platform-specific setup is handled by `./script/bootstrap`. See [WARP.md](WARP.md) for the full engineering guide.
+macOS, Linux, and Windows are all supported. Platform-specific setup is handled by `./script/bootstrap`. See [AGENTS.md](AGENTS.md) for the full engineering guide.
 
 ### Will my PR be reviewed by a human or by an agent?
 
@@ -58,7 +58,7 @@ Contributors with several merged PRs may be invited to become collaborators. The
 
 ### Can I use my own coding agent to contribute?
 
-Yes. Use whatever you like — Warp's built-in agent, Claude Code, Codex, Gemini CLI, Cursor, others, or no agent at all. The repo ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`WARP.md`](WARP.md)) that any harness supporting these formats can pick up.
+Yes. Use whatever you like — Warp's built-in agent, Claude Code, Codex, Gemini CLI, Cursor, others, or no agent at all. The repo ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`AGENTS.md`](AGENTS.md)) that any harness supporting these formats can pick up.
 
 ### Can I use Codex or Claude models with my existing subscriptions in Warp, or submit a PR to add that?
 

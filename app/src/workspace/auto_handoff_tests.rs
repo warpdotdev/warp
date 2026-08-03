@@ -8,12 +8,27 @@ fn eligibility() -> AutoCloudHandoffEligibility {
         is_viewing_shared_session: false,
         can_handoff_to_cloud: true,
         already_attempted: false,
+        has_local_orchestrated_children: false,
+        active_model_not_cloud_runnable: false,
     }
 }
 
 #[test]
 fn eligible_running_synced_conversation_is_not_skipped() {
     assert_eq!(eligibility().skip_reason(), None);
+}
+
+#[test]
+fn auto_handoff_skips_orchestrator_with_local_children() {
+    let eligibility = AutoCloudHandoffEligibility {
+        has_local_orchestrated_children: true,
+        ..eligibility()
+    };
+
+    assert_eq!(
+        eligibility.skip_reason(),
+        Some(AutoCloudHandoffSkipReason::OrchestratorWithLocalChildren)
+    );
 }
 
 #[test]
@@ -91,5 +106,18 @@ fn auto_handoff_skips_conversations_that_cannot_handoff_to_cloud() {
     assert_eq!(
         eligibility.skip_reason(),
         Some(AutoCloudHandoffSkipReason::CloudHandoffUnavailable)
+    );
+}
+
+#[test]
+fn auto_handoff_skips_non_cloud_runnable_models() {
+    let eligibility = AutoCloudHandoffEligibility {
+        active_model_not_cloud_runnable: true,
+        ..eligibility()
+    };
+
+    assert_eq!(
+        eligibility.skip_reason(),
+        Some(AutoCloudHandoffSkipReason::ModelNotCloudRunnable)
     );
 }

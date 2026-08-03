@@ -1,15 +1,15 @@
 use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
+use warp_server_client::base_client::CLOUD_AGENT_ID_HEADER;
 
-use super::super::auth::CLOUD_AGENT_ID_HEADER;
 use super::super::ServerApi;
 use super::{
-    build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
     AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
-    ArtifactDownloadResponse, ArtifactType, ConnectedSelfHostedWorker, ExecutionLocation,
-    ForkConversationResponse, ListConnectedSelfHostedWorkersResponse, ListRunsResponse,
-    ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
-    TaskListFilter, UserQueryMode, CONNECTED_SELF_HOSTED_WORKERS_PATH,
+    ArtifactDownloadResponse, ArtifactType, CONNECTED_SELF_HOSTED_WORKERS_PATH,
+    ConnectedSelfHostedWorker, ExecutionLocation, ForkConversationResponse,
+    ListConnectedSelfHostedWorkersResponse, ListRunsResponse, ReadAgentMessageResponse,
+    RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest, TaskListFilter, UserQueryMode,
+    build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
 };
 use crate::notebooks::NotebookId;
 
@@ -30,7 +30,10 @@ fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
 
     assert_eq!(
         cloud_agent_headers,
-        vec![(CLOUD_AGENT_ID_HEADER, task_scoped_id.to_string())]
+        vec![(
+            CLOUD_AGENT_ID_HEADER.to_string(),
+            task_scoped_id.to_string()
+        )]
     );
 }
 

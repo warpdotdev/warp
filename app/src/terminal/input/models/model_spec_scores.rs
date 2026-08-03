@@ -1,14 +1,11 @@
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, Expanded, Flex, Hoverable,
-    Icon as WarpUiIcon, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
-    ParentAnchor, ParentElement as _, ParentOffsetBounds, Percentage, Radius, Rect, Stack, Text,
+    Border, ConstrainedBox, Container, CornerRadius, Expanded, Flex, MainAxisAlignment,
+    MainAxisSize, ParentElement as _, Percentage, Radius, Rect, Stack, Text,
 };
 use warpui::prelude::{Align, CrossAxisAlignment};
 use warpui::text_layout::ClipConfig;
-use warpui::ui_components::components::UiComponent;
 use warpui::{AppContext, Element, SingletonEntity as _};
 
 use crate::ai::llms::LLMSpec;
@@ -24,19 +21,17 @@ pub const MODEL_SPECS_DESCRIPTION: &str = "Warp's benchmarks for how well a mode
 pub const REASONING_LEVEL_TITLE: &str = "Reasoning level";
 pub const REASONING_LEVEL_DESCRIPTION: &str = "Increased reasoning levels consume more credits and have higher latency, but higher performance for complicated tasks.";
 
+pub const CUSTOM_MODEL_ROUTER_TITLE: &str = "Custom Model Router";
+pub const CUSTOM_MODEL_ROUTER_DESCRIPTION: &str = "Routes each request to a concrete model based on your routing rules, rather than using a single fixed model.";
+
 pub enum CostRow {
     Bar {
         value: Option<f32>,
     },
     BilledToProvider {
         label: &'static str,
-        tooltip: Option<CostRowTooltip>,
         manage_button: Box<dyn Element>,
     },
-}
-pub struct CostRowTooltip {
-    pub text: &'static str,
-    pub mouse_state: MouseStateHandle,
 }
 
 pub struct ModelSpecScoresLayout {
@@ -54,7 +49,6 @@ pub fn render_model_spec_scores(
         ScoreRowKind::Bar {
             value: spec.as_ref().map(|spec| spec.quality),
         },
-        None,
         layout.bg_bar_color,
         app,
     )];
@@ -64,7 +58,6 @@ pub fn render_model_spec_scores(
         ScoreRowKind::Bar {
             value: spec.as_ref().map(|spec| spec.speed),
         },
-        None,
         layout.bg_bar_color,
         app,
     ));
@@ -74,14 +67,12 @@ pub fn render_model_spec_scores(
             rows.push(render_score_row(
                 "Cost",
                 ScoreRowKind::Bar { value },
-                None,
                 layout.bg_bar_color,
                 app,
             ));
         }
         CostRow::BilledToProvider {
             label,
-            tooltip,
             manage_button,
         } => {
             rows.push(render_score_row(
@@ -90,7 +81,6 @@ pub fn render_model_spec_scores(
                     label,
                     manage_button,
                 },
-                tooltip,
                 layout.bg_bar_color,
                 app,
             ));
@@ -116,7 +106,6 @@ enum ScoreRowKind {
 fn render_score_row(
     name: &str,
     kind: ScoreRowKind,
-    label_tooltip: Option<CostRowTooltip>,
     bg_bar_color: ColorU,
     app: &AppContext,
 ) -> Box<dyn Element> {
@@ -131,7 +120,7 @@ fn render_score_row(
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
     ) * 8.;
-    let label = ConstrainedBox::new(render_row_label(name, label_tooltip, appearance, app))
+    let label = ConstrainedBox::new(render_row_label(name, appearance, app))
         .with_width(label_width)
         .finish();
 
@@ -210,7 +199,7 @@ fn render_score_row(
                 .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(render_provider_label(label, appearance))
-                .with_child(manage_button)
+                .with_child(Container::new(manage_button).with_margin_left(8.).finish())
                 .finish(),
         )
         .finish(),
@@ -224,13 +213,8 @@ fn render_score_row(
         .finish()
 }
 
-fn render_row_label(
-    label: &str,
-    tooltip: Option<CostRowTooltip>,
-    appearance: &Appearance,
-    app: &AppContext,
-) -> Box<dyn Element> {
-    let label = Text::new(
+fn render_row_label(label: &str, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+    Text::new(
         label.to_string(),
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
@@ -242,21 +226,7 @@ fn render_row_label(
         )
         .into_solid(),
     )
-    .finish();
-
-    let Some(tooltip) = tooltip else {
-        return label;
-    };
-
-    Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(label)
-        .with_child(
-            Container::new(render_info_tooltip(tooltip, appearance))
-                .with_margin_left(4.)
-                .finish(),
-        )
-        .finish()
+    .finish()
 }
 
 fn render_provider_label(label: &'static str, appearance: &Appearance) -> Box<dyn Element> {
@@ -265,37 +235,6 @@ fn render_provider_label(label: &'static str, appearance: &Appearance) -> Box<dy
             .with_color(appearance.theme().disabled_ui_text_color().into())
             .finish(),
     )
-    .finish()
-}
-
-fn render_info_tooltip(tooltip: CostRowTooltip, appearance: &Appearance) -> Box<dyn Element> {
-    let icon_color = appearance.theme().disabled_ui_text_color();
-    let ui_builder = appearance.ui_builder();
-    let tooltip_text = tooltip.text.to_string();
-    Hoverable::new(tooltip.mouse_state, move |state| {
-        let info_icon = Container::new(
-            ConstrainedBox::new(WarpUiIcon::new("bundled/svg/info.svg", icon_color).finish())
-                .with_width(13.)
-                .with_height(13.)
-                .finish(),
-        )
-        .finish();
-
-        let mut stack = Stack::new().with_child(info_icon);
-        if state.is_hovered() {
-            let tooltip = ui_builder.tool_tip(tooltip_text.clone()).build();
-            stack.add_positioned_child(
-                tooltip.finish(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., -3.),
-                    ParentOffsetBounds::Unbounded,
-                    ParentAnchor::TopMiddle,
-                    ChildAnchor::BottomMiddle,
-                ),
-            );
-        }
-        stack.finish()
-    })
     .finish()
 }
 

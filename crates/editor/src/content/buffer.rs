@@ -23,11 +23,11 @@ use vec1::{Vec1, vec1};
 use warp_core::platform::SessionPlatform;
 use warp_core::safe_error;
 use warp_util::content_version::ContentVersion;
-use warpui::elements::ListIndentLevel;
-use warpui::fonts::Weight;
-use warpui::text::point::Point;
-use warpui::text::{TextBuffer, char_slice};
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
+use warpui_core::elements::ListIndentLevel;
+use warpui_core::fonts::Weight;
+use warpui_core::text::point::Point;
+use warpui_core::text::{TextBuffer, char_slice};
+use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
 
 use super::anchor::{Anchor, AnchorSide, Anchors};
 use super::cursor::BufferCursor;
@@ -62,6 +62,7 @@ use crate::render::model::{
 pub enum ContentFormat {
     Markdown,
     PlainText,
+    Ipynb,
 }
 
 /// Configuration struct that holds all the fields needed to reset the entire editor.
@@ -88,6 +89,15 @@ impl<'a> InitialBufferState<'a> {
         Self {
             text,
             format: ContentFormat::Markdown,
+            version: ContentVersion::new(),
+        }
+    }
+
+    /// Create a new InitialBufferState with Jupyter notebook (`.ipynb`) format
+    pub fn ipynb(text: &'a str) -> Self {
+        Self {
+            text,
+            format: ContentFormat::Ipynb,
             version: ContentVersion::new(),
         }
     }
@@ -535,6 +545,10 @@ impl BufferSnapshot {
     pub fn bytes(&self) -> Bytes<'_> {
         Bytes::from_sum_tree(&self.content, ByteOffset::from(0), self.byte_len)
     }
+
+    pub fn byte_len(&self) -> usize {
+        self.byte_len.as_usize()
+    }
 }
 
 /// Model for storing the content of an editor.
@@ -859,6 +873,31 @@ impl Buffer {
         )
     }
 
+    /// Construct a [`Buffer`] from the JSON contents of a `.ipynb` (Jupyter)
+    /// notebook, converting it directly into formatted text.
+    ///
+    /// Returns an [`ipynb_parser::IpynbError`] if the input is not a parseable
+    /// nbformat v4 notebook, so callers can decide how to present invalid
+    /// notebooks (e.g. routing to a raw text editor) rather than rendering a
+    /// blank or misleading view.
+    pub(crate) fn from_ipynb(
+        ipynb: &str,
+        embedded_item_conversion: Option<EmbeddedItemConversion>,
+        tab_indentation: TabIndentation,
+        selection_model: ModelHandle<BufferSelectionModel>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<Self, ipynb_parser::IpynbError> {
+        let gfm_tables = warp_core::features::FeatureFlag::MarkdownTables.is_enabled();
+        let formatted_text = ipynb_parser::ipynb_to_formatted_text(ipynb, gfm_tables)?;
+        Ok(Self::from_formatted_text(
+            formatted_text,
+            embedded_item_conversion,
+            tab_indentation,
+            selection_model,
+            ctx,
+        ))
+    }
+
     fn replace(
         &mut self,
         state: InitialBufferState,
@@ -908,6 +947,28 @@ impl Buffer {
                 selection_model.clone(),
                 ctx,
             ),
+            ContentFormat::Ipynb => match Buffer::from_ipynb(
+                state.text,
+                callback,
+                indentation,
+                selection_model.clone(),
+                ctx,
+            ) {
+                Ok(buffer) => buffer,
+                Err(e) => {
+                    safe_error! {
+                        safe: ("Failed to render Jupyter notebook; showing raw contents"),
+                        full: ("Failed to render Jupyter notebook: {e}")
+                    }
+                    Buffer::from_formatted_text(
+                        ipynb_parser::raw_fallback_formatted_text(state.text),
+                        callback,
+                        Box::new(|_, _| IndentBehavior::Ignore),
+                        selection_model.clone(),
+                        ctx,
+                    )
+                }
+            },
         };
 
         // Infer line ending from the new content and restore session_platform.
@@ -1168,7 +1229,7 @@ impl Buffer {
         if line_text.trim().is_empty() {
             line_start
         } else {
-            self.indented_line_start(offset).unwrap_or(line_start)
+            LineIndentation::from_line_start(self, line_start).first_character()
         }
     }
 

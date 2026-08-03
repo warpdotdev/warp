@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+from urllib.parse import urlparse
 
 from trim_diff_hunk import trim_diff_hunk, line_in_hunk, last_reachable_line
 
@@ -32,6 +33,22 @@ def run_command(args, error_msg="Command failed"):
         print(f"{error_msg}: {result.stderr.strip()}", file=sys.stderr)
         sys.exit(1)
     return result.stdout
+
+
+def base_repo_from_url(url):
+    """Return ``(owner, repo)`` for the base repository from a PR URL.
+
+    PR review/issue comments live on the **base** repository (the repo that
+    owns the PR), not the head/fork repo. For a PR opened from a fork the two
+    differ, so addressing the head repo 404s. A PR's ``url`` always points at
+    the base repo (e.g. ``https://github.com/OWNER/REPO/pull/123``), so parse
+    owner/repo from it to resolve correctly for both same-repo and fork PRs.
+    """
+    parts = urlparse(url).path.strip("/").split("/")
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        print(f"Could not parse owner/repo from PR URL: {url!r}", file=sys.stderr)
+        sys.exit(1)
+    return parts[0], parts[1]
 
 
 def run_gh_api(endpoint):
@@ -145,15 +162,16 @@ def main():
         run_command(
             [
                 "gh", "pr", "view",
-                "--json", "number,headRepository,headRepositoryOwner,baseRefName",
+                "--json", "number,url,baseRefName",
             ],
             "Failed to get PR info (is there an open PR on this branch?)",
         )
     )
     number = pr["number"]
-    owner = pr["headRepositoryOwner"]["login"]
-    repo = pr["headRepository"]["name"]
     base = pr["baseRefName"]
+    # Comments live on the base repo, which the PR URL points at — this is
+    # correct even when the PR was opened from a fork.
+    owner, repo = base_repo_from_url(pr["url"])
 
     api = f"/repos/{owner}/{repo}"
 

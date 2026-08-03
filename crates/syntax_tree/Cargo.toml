@@ -1,7 +1,7 @@
 [package]
 name = "syntax_tree"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["Warp Team <dev@warp.dev>"]
 publish.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ license.workspace = true
 [dependencies]
 rangemap.workspace = true
 arborium.workspace = true
-warpui.workspace = true
+warpui_core.workspace = true
 warp_editor.workspace = true
 languages.workspace = true
 futures.workspace = true

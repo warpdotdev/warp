@@ -10,7 +10,11 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from fetch_github_review_comments import _resolve_comment_line, _resolve_line
+from fetch_github_review_comments import (
+    _resolve_comment_line,
+    _resolve_line,
+    base_repo_from_url,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +200,30 @@ class TestResolveCommentLine(unittest.TestCase):
         assert side == "RIGHT"
         # Should fall back to last reachable new-file line in the hunk body.
         assert end_line == 3071
+
+
+# ---------------------------------------------------------------------------
+# base_repo_from_url
+# ---------------------------------------------------------------------------
+
+class TestBaseRepoFromUrl(unittest.TestCase):
+    def test_same_repo_pr(self):
+        url = "https://github.com/warpdotdev/warp/pull/1"
+        assert base_repo_from_url(url) == ("warpdotdev", "warp")
+
+    def test_fork_pr_resolves_to_base_repo(self):
+        """Regression: a PR opened from a fork must resolve to the base repo.
+
+        The PR URL always points at the base repo (warpdotdev/warp), so even
+        though the head/fork is th1nkful/warp, comments are fetched from the
+        base repo instead of 404ing against the fork.
+        """
+        url = "https://github.com/warpdotdev/warp/pull/9850"
+        assert base_repo_from_url(url) == ("warpdotdev", "warp")
+
+    def test_enterprise_host(self):
+        url = "https://ghe.example.com/acme/widgets/pull/42"
+        assert base_repo_from_url(url) == ("acme", "widgets")
 
 
 if __name__ == "__main__":

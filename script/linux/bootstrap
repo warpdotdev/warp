@@ -16,7 +16,7 @@ warp_sudo apt update -y
 
 # Make sure we're authenticated with the gcloud CLI, otherwise SSH integration
 # tests won't work.
-if [[ -z "$(gcloud auth print-identity-token)" ]]; then
+if [[ "${WARP_SKIP_GCLOUD_AUTH:-0}" != "1" ]] && [[ -z "$(gcloud auth print-identity-token)" ]]; then
     echo "gcloud CLI authentication missing.  Press enter to continue..."
     read var
     gcloud auth login

@@ -4,9 +4,9 @@ use crate::schema;
 
 /// A GraphQL query to fetch git credentials for a specific task.
 ///
-/// This query is used by Agent Mode tasks to retrieve a fresh GitHub token that the
-/// driver uses to configure git and the gh CLI, and to refresh those credentials
-/// periodically so long-running agents retain GitHub access for their full duration.
+/// This query is used by Agent Mode tasks to retrieve fresh provider credentials that
+/// the driver uses to configure git and supported provider CLIs, and to refresh those
+/// credentials periodically so long-running agents retain repository access.
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "RootQuery", variables = "TaskGitCredentialsVariables")]
 pub struct TaskGitCredentials {

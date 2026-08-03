@@ -5,14 +5,14 @@ use std::path::PathBuf;
 
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
-use warpui::assets::asset_cache::AssetSource;
-use warpui::color::ColorU;
-use warpui::geometry::vector::vec2f;
+use warpui_core::assets::asset_cache::AssetSource;
+use warpui_core::color::ColorU;
+use warpui_core::geometry::vector::vec2f;
 
 use self::color::CustomDetails;
 use super::color::blend::Blend;
-use super::color::contrast::{pick_best_foreground_color, MinimumAllowedContrast};
-use super::color::{coloru_with_opacity, hex_color, mid_coloru, ContrastingColor, Opacity, OPAQUE};
+use super::color::contrast::{MinimumAllowedContrast, pick_best_foreground_color};
+use super::color::{ContrastingColor, OPAQUE, Opacity, coloru_with_opacity, hex_color, mid_coloru};
 use crate::paths::themes_dir;
 // Import relative_luminance from contrast module for brightness calculation
 use crate::ui::color::contrast::relative_luminance;
@@ -38,7 +38,7 @@ impl Serialize for Image {
     where
         S: serde::Serializer,
     {
-        let AssetSource::LocalFile { path } = self.source.clone() else {
+        let AssetSource::LocalFile { path, .. } = self.source.clone() else {
             return Err(serde::ser::Error::custom(
                 "image path was serialized but it's not a local file",
             ));
@@ -75,6 +75,7 @@ impl<'de> Deserialize<'de> for Image {
         Ok(Image {
             source: AssetSource::LocalFile {
                 path: path.to_str().unwrap_or_default().to_owned(),
+                content_version: None,
             },
             opacity: value.opacity,
         })
@@ -435,17 +436,17 @@ impl ContrastingColor for Fill {
     }
 }
 
-impl From<Fill> for warpui::elements::Fill {
+impl From<Fill> for warpui_core::elements::Fill {
     fn from(theme: Fill) -> Self {
         match theme {
-            Fill::Solid(c) => warpui::elements::Fill::Solid(c),
-            Fill::HorizontalGradient(g) => warpui::elements::Fill::Gradient {
+            Fill::Solid(c) => warpui_core::elements::Fill::Solid(c),
+            Fill::HorizontalGradient(g) => warpui_core::elements::Fill::Gradient {
                 start: vec2f(0.0, 0.0),
                 end: vec2f(1.0, 0.0),
                 start_color: g.left,
                 end_color: g.right,
             },
-            Fill::VerticalGradient(g) => warpui::elements::Fill::Gradient {
+            Fill::VerticalGradient(g) => warpui_core::elements::Fill::Gradient {
                 start: vec2f(0.0, 0.0),
                 end: vec2f(0.0, 1.0),
                 start_color: g.top,

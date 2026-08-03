@@ -202,9 +202,11 @@ fn test_remove_entry() {
 
     snapshot.remove_entry(Path::new("/project/src/main.rs"));
     assert_eq!(snapshot.len(), 2);
-    assert!(snapshot
-        .entry_for_path(Path::new("/project/src/main.rs"))
-        .is_none());
+    assert!(
+        snapshot
+            .entry_for_path(Path::new("/project/src/main.rs"))
+            .is_none()
+    );
     assert!(snapshot.entry_for_path(Path::new("/project/src")).is_some());
 }
 
@@ -290,9 +292,11 @@ fn test_single_entry() {
     snapshot.insert_entry(FileEntry::file(Path::new("/only_file.txt"), false));
 
     assert_eq!(snapshot.len(), 1);
-    assert!(snapshot
-        .entry_for_path(Path::new("/only_file.txt"))
-        .is_some());
+    assert!(
+        snapshot
+            .entry_for_path(Path::new("/only_file.txt"))
+            .is_some()
+    );
 }
 
 #[test]
@@ -321,9 +325,11 @@ fn test_handle_added_in_loaded_directory() {
     // Add a file to a loaded directory
     let result = snapshot.handle_added(Path::new("/project/src/new_file.rs"), false, false);
     assert!(result);
-    assert!(snapshot
-        .entry_for_path(Path::new("/project/src/new_file.rs"))
-        .is_some());
+    assert!(
+        snapshot
+            .entry_for_path(Path::new("/project/src/new_file.rs"))
+            .is_some()
+    );
 }
 
 #[test]
@@ -339,9 +345,11 @@ fn test_handle_added_in_unloaded_directory() {
     // Try to add a file to an unloaded directory - should fail
     let result = snapshot.handle_added(Path::new("/project/collapsed/file.rs"), false, false);
     assert!(!result);
-    assert!(snapshot
-        .entry_for_path(Path::new("/project/collapsed/file.rs"))
-        .is_none());
+    assert!(
+        snapshot
+            .entry_for_path(Path::new("/project/collapsed/file.rs"))
+            .is_none()
+    );
 }
 
 #[test]
@@ -350,9 +358,11 @@ fn test_handle_removed() {
 
     let result = snapshot.handle_removed(Path::new("/project/file.txt"));
     assert!(result);
-    assert!(snapshot
-        .entry_for_path(Path::new("/project/file.txt"))
-        .is_none());
+    assert!(
+        snapshot
+            .entry_for_path(Path::new("/project/file.txt"))
+            .is_none()
+    );
 }
 
 #[test]
@@ -405,12 +415,16 @@ fn test_handle_renamed() {
         false,
     );
     assert!(result);
-    assert!(snapshot
-        .entry_for_path(Path::new("/project/old_name.txt"))
-        .is_none());
-    assert!(snapshot
-        .entry_for_path(Path::new("/project/new_name.txt"))
-        .is_some());
+    assert!(
+        snapshot
+            .entry_for_path(Path::new("/project/old_name.txt"))
+            .is_none()
+    );
+    assert!(
+        snapshot
+            .entry_for_path(Path::new("/project/new_name.txt"))
+            .is_some()
+    );
 }
 
 #[test]

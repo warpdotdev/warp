@@ -17,7 +17,6 @@ use warp_graphql::queries::get_blocks_for_user::{
     Block as GqlBlock, GetBlocksForUser, GetBlocksForUserVariables,
 };
 
-use super::auth::AuthClient;
 use super::ServerApi;
 use crate::ai::generate_block_title::api::{GenerateBlockTitleRequest, GenerateBlockTitleResponse};
 use crate::server::block::{Block, DisplaySetting};
@@ -144,7 +143,7 @@ impl BlockClient for ServerApi {
         request: GenerateBlockTitleRequest,
     ) -> Result<GenerateBlockTitleResponse, anyhow::Error> {
         let auth_token = self.get_or_refresh_access_token().await?;
-        let request_builder = self.client.post(format!(
+        let request_builder = self.base_client.http_client().post(format!(
             "{}/ai/generate_block_title",
             ChannelState::server_root_url()
         ));

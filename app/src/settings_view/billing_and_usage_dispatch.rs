@@ -3,15 +3,15 @@
 
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
-use warpui::elements::{ChildView, Container};
+use warpui::elements::ChildView;
 use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext, ViewHandle};
 
+use super::SettingsSection;
 use super::billing_and_usage_page::{BillingAndUsagePageEvent, BillingAndUsagePageView};
 use super::billing_and_usage_page_v2::BillingAndUsagePageV2View;
 use super::settings_page::{
-    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, HEADER_PADDING,
+    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
 };
-use super::SettingsSection;
 use crate::auth::{AuthManager, AuthStateProvider};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
@@ -80,56 +80,8 @@ impl BillingAndUsageDispatchView {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::workspaces::workspace::{BillingMetadata, CustomerType};
-
-    fn workspace_with_customer_type(customer_type: CustomerType) -> Workspace {
-        Workspace {
-            uid: "workspace_uid123456789".to_string().into(),
-            name: "test".to_string(),
-            stripe_customer_id: None,
-            teams: vec![],
-            billing_metadata: BillingMetadata {
-                customer_type,
-                ..Default::default()
-            },
-            bonus_grants_purchased_this_month: Default::default(),
-            billing_cycle_usage: None,
-            has_billing_history: false,
-            settings: Default::default(),
-            invite_code: None,
-            invite_link_domain_restrictions: vec![],
-            pending_email_invites: vec![],
-            is_eligible_for_discovery: false,
-            members: vec![],
-            total_requests_used_since_last_refresh: 0,
-        }
-    }
-
-    #[test]
-    fn uses_v2_when_user_has_no_workspace() {
-        assert!(BillingAndUsageDispatchView::workspace_uses_v2(None));
-    }
-
-    #[test]
-    fn uses_v2_for_free_workspace() {
-        let workspace = workspace_with_customer_type(CustomerType::Free);
-
-        assert!(BillingAndUsageDispatchView::workspace_uses_v2(Some(
-            &workspace
-        )));
-    }
-
-    #[test]
-    fn does_not_use_v2_for_legacy_paid_workspace() {
-        let workspace = workspace_with_customer_type(CustomerType::Prosumer);
-
-        assert!(!BillingAndUsageDispatchView::workspace_uses_v2(Some(
-            &workspace
-        )));
-    }
-}
+#[path = "billing_and_usage_dispatch_tests.rs"]
+mod tests;
 
 impl Entity for BillingAndUsageDispatchView {
     type Event = BillingAndUsagePageEvent;
@@ -203,13 +155,10 @@ impl SettingsWidget for BillingAndUsageWidget {
         _appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let inner = if view.use_v2(app) {
+        if view.use_v2(app) {
             ChildView::new(&view.v2).finish()
         } else {
             ChildView::new(&view.v1).finish()
-        };
-        Container::new(inner)
-            .with_margin_top(HEADER_PADDING)
-            .finish()
+        }
     }
 }

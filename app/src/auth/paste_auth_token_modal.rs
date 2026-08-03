@@ -7,7 +7,8 @@
 //! `EditorView` for the text input, which the onboarding crate doesn't
 //! depend on.
 use pathfinder_color::ColorU;
-use ui_components::{button, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button};
+use warp_core::safe_error;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::actions::StandardAction;
 use warpui::elements::{
@@ -152,6 +153,7 @@ impl PasteAuthTokenModalView {
                     }
                     UserAuthenticationError::DeniedAccessToken(_)
                     | UserAuthenticationError::UserAccountDisabled(_)
+                    | UserAuthenticationError::DeviceCodeRequestTimedOut { .. }
                     | UserAuthenticationError::Unexpected(_) => {
                         LoginFailureReason::FailedUserAuthentication
                     }
@@ -199,7 +201,10 @@ impl PasteAuthTokenModalView {
                 });
             }
             Err(error) => {
-                log::error!("Failed to parse pasted auth URL: {error:#}");
+                safe_error!(
+                    safe: ("Failed to parse pasted auth URL"),
+                    full: ("Failed to parse pasted auth URL: {error:#}")
+                );
                 self.last_failure_reason =
                     Some(LoginFailureReason::InvalidRedirectUrl { was_pasted: true });
                 self.set_editor_enabled(true, ctx);

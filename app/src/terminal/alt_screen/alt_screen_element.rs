@@ -17,12 +17,12 @@ use warpui::platform::keyboard::KeyCode;
 use warpui::text::SelectionType;
 use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
 use warpui::{
-    end_trace, record_trace_event, start_trace, AfterLayoutContext, AppContext, ClipBounds,
-    Element, EntityId, Event, EventContext, LayoutContext, ModelHandle, PaintContext,
-    SizeConstraint,
+    AfterLayoutContext, AppContext, ClipBounds, Element, EntityId, Event, EventContext,
+    LayoutContext, ModelHandle, PaintContext, SizeConstraint, end_trace, record_trace_event,
+    start_trace,
 };
 
-use super::{should_intercept_mouse, should_intercept_scroll};
+use super::should_intercept_mouse;
 use crate::appearance::Appearance;
 use crate::pane_group::SplitPaneState;
 use crate::settings::EnforceMinimumContrast;
@@ -30,8 +30,9 @@ use crate::terminal::blockgrid_renderer::GridRenderParams;
 use crate::terminal::find::TerminalFindModel;
 use crate::terminal::grid_renderer::CellGlyphCache;
 use crate::terminal::meta_shortcuts::handle_keystroke_despite_composing;
+use crate::terminal::model::SecretHandle;
 use crate::terminal::model::escape_sequences::{
-    maybe_kitty_keyboard_escape_sequence, KeystrokeWithDetails, ToEscapeSequence,
+    KeystrokeWithDetails, ToEscapeSequence, maybe_kitty_keyboard_escape_sequence,
 };
 use crate::terminal::model::grid::grid_handler::{Link, TermMode};
 use crate::terminal::model::grid::{Dimensions, RespectDisplayedOutput};
@@ -39,15 +40,14 @@ use crate::terminal::model::index::Point;
 use crate::terminal::model::mouse::{MouseAction, MouseButton, MouseState};
 use crate::terminal::model::selection::{SelectAction, SelectionPoint};
 use crate::terminal::model::terminal_model::WithinModel;
-use crate::terminal::model::SecretHandle;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::shared_session::presence_manager::{
-    text_selection_color, PresenceManager, MUTED_PARTICIPANT_COLOR,
+    MUTED_PARTICIPANT_COLOR, PresenceManager, text_selection_color,
 };
 use crate::terminal::view::{
     ActiveSessionState, TerminalAction, TerminalEditor, TerminalViewRenderContext,
 };
-use crate::terminal::{grid_renderer, heights_approx_eq, SizeInfo, TerminalModel};
+use crate::terminal::{SizeInfo, TerminalModel, grid_renderer, heights_approx_eq};
 
 const CLI_SUBAGENT_HORIZONTAL_MARGIN: f32 = 8.;
 const CLI_SUBAGENT_VERTICAL_MARGIN: f32 = 8.;
@@ -445,7 +445,6 @@ impl AltScreenElement {
         delta: Vector2F,
         precise: bool,
         ctx: &mut EventContext,
-        app: &AppContext,
     ) -> bool {
         let cell_height = self.grid_render_params.size_info.cell_height_px;
         let delta = if precise {
@@ -472,20 +471,8 @@ impl AltScreenElement {
             .alt_screen_mut()
             .accumulate_lines_to_scroll(delta);
 
-        if should_intercept_scroll(&self.model.lock(), app) {
-            ctx.dispatch_typed_action(TerminalAction::AltScroll { delta });
-        } else {
-            let point = self.coord_to_point(local_position);
-
-            ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
-                MouseState::new(
-                    MouseButton::Wheel,
-                    MouseAction::Scrolled { delta },
-                    Default::default(),
-                )
-                .set_point(point),
-            ));
-        }
+        let point = self.coord_to_point(local_position);
+        ctx.dispatch_typed_action(TerminalAction::AltScroll { delta, point });
         true
     }
 
@@ -615,13 +602,13 @@ impl AltScreenElement {
         state: &KeyState,
         ctx: &mut EventContext,
     ) -> bool {
-        if let Some(voice_input_toggle_key_code) = self.voice_input_toggle_key_code {
-            if *key_code == voice_input_toggle_key_code {
-                ctx.dispatch_typed_action(TerminalAction::ToggleCLIAgentVoiceInput(
-                    voice_input::VoiceInputToggledFrom::Key { state: *state },
-                ));
-                return true;
-            }
+        if let Some(voice_input_toggle_key_code) = self.voice_input_toggle_key_code
+            && *key_code == voice_input_toggle_key_code
+        {
+            ctx.dispatch_typed_action(TerminalAction::ToggleCLIAgentVoiceInput(
+                voice_input::VoiceInputToggledFrom::Key { state: *state },
+            ));
+            return true;
         }
         false
     }
@@ -676,10 +663,10 @@ impl Element for AltScreenElement {
         self.scroll_top = self.scroll_top.min(self.max_scroll_top.unwrap());
 
         // We want to make sure to call after_layout on each of the elements that were actually laid out.
-        if let Some(cli_subagent_view) = &mut self.cli_subagent_view {
-            if cli_subagent_view.size().is_some() {
-                cli_subagent_view.after_layout(ctx, app);
-            }
+        if let Some(cli_subagent_view) = &mut self.cli_subagent_view
+            && cli_subagent_view.size().is_some()
+        {
+            cli_subagent_view.after_layout(ctx, app);
         }
     }
 
@@ -833,10 +820,10 @@ impl Element for AltScreenElement {
         ctx: &mut EventContext,
         app: &AppContext,
     ) -> bool {
-        if let Some(cli_subagent_view) = &mut self.cli_subagent_view {
-            if cli_subagent_view.dispatch_event(event, ctx, app) {
-                return true;
-            }
+        if let Some(cli_subagent_view) = &mut self.cli_subagent_view
+            && cli_subagent_view.dispatch_event(event, ctx, app)
+        {
+            return true;
         }
 
         let bounds = self
@@ -883,7 +870,7 @@ impl Element for AltScreenElement {
                 delta,
                 precise,
                 modifiers: ModifiersState { ctrl: false, .. },
-            } if in_bounds => self.on_scroll(to_local(*position), *delta, *precise, ctx, app),
+            } if in_bounds => self.on_scroll(to_local(*position), *delta, *precise, ctx),
             Event::LeftMouseDown {
                 position,
                 click_count,

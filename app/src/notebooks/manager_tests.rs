@@ -6,12 +6,12 @@ use warpui::{AddSingletonModel, App, EntityId, ModelHandle, ViewContext, ViewHan
 
 use super::NotebookManager;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
+use crate::cloud_object::Owner;
 use crate::cloud_object::model::actions::ObjectActions;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
-use crate::cloud_object::Owner;
 use crate::network::NetworkStatus;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::notebook::NotebookView;

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -10,11 +10,12 @@ use chrono::{DateTime, Utc};
 use futures::stream::AbortHandle;
 use ignore::gitignore::Gitignore;
 use instant::Instant;
-#[cfg(feature = "local_fs")]
-use repo_metadata::entry::IgnoredPathStrategy;
 use repo_metadata::Repository;
+#[cfg(feature = "local_fs")]
+use repo_metadata::entry::{BudgetExceededBehavior, IgnoredPathStrategy};
 use warp_core::safe_error;
-use warpui::{Entity, ModelContext, ModelHandle};
+use warp_errors::report_error;
+use warpui_core::{Entity, ModelContext, ModelHandle};
 
 use super::fragment_metadata::{
     FragmentMetadata, LeafToFragmentMetadata, LeafToFragmentMetadataUpdates,
@@ -26,7 +27,7 @@ use super::manager::{
 use super::merkle_tree::{MerkleTree, SerializedCodebaseIndex};
 #[cfg(feature = "local_fs")]
 use super::search_shaping::build_fragments_from_file_contents;
-use super::search_shaping::{fragments_to_context_locations, ReadFragmentResult};
+use super::search_shaping::{ReadFragmentResult, fragments_to_context_locations};
 use super::store_client::StoreClient;
 use super::sync_client::{FlushFragmentResult, SyncOperationError};
 use super::{
@@ -51,8 +52,8 @@ cfg_if::cfg_if! {
         };
         use warp_core::send_telemetry_from_ctx;
         use warp_core::interval_timer::IntervalTimer;
-        use warpui::r#async::Timer;
-        use warpui::SingletonEntity;
+        use warpui_core::r#async::Timer;
+        use warpui_core::SingletonEntity;
         use warp_core::sync_queue::SyncQueue;
         use sha2::Digest;
     }
@@ -827,7 +828,7 @@ impl CodebaseIndex {
                             ctx,
                         ),
                         Err(e) => {
-                            log::error!("Failed to build tree {e}");
+                            report_error!(&e);
                             send_telemetry_from_ctx!(
                                 AITelemetryEvent::BuildTreeFailed {
                                     error: e.to_string(),
@@ -936,6 +937,9 @@ impl CodebaseIndex {
         // First traverse the repo path to retrieve all files we want to parse.
         let mut files = Vec::new();
         let mut remaining_file_quotas = max_num_files_limit;
+        // Codebase embedding must not operate on a partial tree: the file limit
+        // is an intentional cost cap, so exceeding it fails the build rather
+        // than silently indexing a breadth-first subset of the repository.
         let entry = Entry::build_tree(
             &repo_path,
             &mut files,
@@ -944,7 +948,9 @@ impl CodebaseIndex {
             MAX_DEPTH,
             0,
             &IgnoredPathStrategy::Exclude, // override_ignore_for_files
-        )?;
+            BudgetExceededBehavior::FailFast,
+        )
+        .await?;
 
         Ok(BuildFileTreeResult {
             file_tree: entry,
@@ -1085,17 +1091,16 @@ impl CodebaseIndex {
                     Ok(flush_result) => {
                         let mut cache_population_error = None;
                         // Populate cache if needed.
-                        if should_populate_cache {
-                            if let Err(e) = store_client
+                        if should_populate_cache
+                            && let Err(e) = store_client
                                 .populate_merkle_tree_cache(
                                     updated_config.embedding_config,
                                     tree.root_node().hash(),
                                     repo_metadata.clone(),
                                 )
                                 .await
-                            {
-                                cache_population_error = Some(e);
-                            }
+                        {
+                            cache_population_error = Some(e);
                         }
                         SyncOperationResult::Success {
                             flushed_node_count: total_nodes_to_sync,
@@ -1504,9 +1509,9 @@ impl CodebaseIndex {
     ) {
         match relevant_fragments_result {
             Err(err) => {
-                log::error!(
-                    "Failed to retrieve relevant fragment on root {:?}",
-                    self.last_server_synced_root_node()
+                report_error!(
+                    "Failed to retrieve relevant fragment",
+                    extra: { "root" => ?self.last_server_synced_root_node() }
                 );
                 ctx.emit(CodebaseIndexEvent::RetrievalRequestFailed {
                     retrieval_id,
@@ -1887,16 +1892,15 @@ impl CodebaseIndex {
                             },
                             ctx
                         );
-                        log::error!(
-                            "Failed to diff filesystem with tree from snapshot: {err:?}"
-                        );
+                        report_error!(anyhow::anyhow!("{err:?}")
+                            .context("Failed to diff filesystem with tree from snapshot"));
                         me.update_tree_sync_state(
                             TreeSourceSyncState::InitializeTreeFailure(err),
                             ctx,
                         );
                     }
                     Err(SnapshotLoadError::ParseFailed(e)) => {
-                        log::error!("Failed to parse snapshot: {e:?}");
+                        report_error!(e.context("Failed to parse snapshot"));
                         me.update_tree_sync_state(
                             TreeSourceSyncState::InitializeTreeFailure(
                                 Error::SnapshotParsingFailed,

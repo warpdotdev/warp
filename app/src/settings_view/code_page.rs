@@ -2,11 +2,11 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use ai::index::full_source_code_embedding::SyncProgress;
 use ai::index::full_source_code_embedding::manager::{
     CodebaseIndexFinishedStatus, CodebaseIndexManager, CodebaseIndexManagerEvent,
     CodebaseIndexStatus, CodebaseIndexingError,
 };
-use ai::index::full_source_code_embedding::SyncProgress;
 use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
 use ai::workspace::WorkspaceMetadata;
 use lsp::supported_servers::LSPServerType;
@@ -15,9 +15,9 @@ use pathfinder_color::ColorU;
 #[cfg(not(target_family = "wasm"))]
 use remote_server::codebase_index_proto::{RemoteCodebaseIndexState, RemoteCodebaseIndexStatus};
 use warp_core::features::FeatureFlag;
-use warp_core::report_if_error;
 use warp_core::settings::ToggleableSetting as _;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill as ThemeFill};
+use warp_errors::report_if_error;
 use warp_util::path::user_friendly_path;
 #[cfg(not(target_family = "wasm"))]
 use warp_util::remote_path::RemotePath;
@@ -33,20 +33,19 @@ use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
 use warpui::{
-    id, Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle, id,
 };
 
 #[cfg(feature = "local_fs")]
 use super::features::external_editor::ExternalEditorView;
 use super::settings_page::{
-    build_sub_header, render_body_item, render_separator, Category, MatchData, PageType,
-    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, HEADER_PADDING,
-    TOGGLE_BUTTON_RIGHT_PADDING,
+    Category, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    TOGGLE_BUTTON_RIGHT_PADDING, render_body_item, render_separator,
 };
 use super::{
-    flags, LocalOnlyIconState, SettingsAction, SettingsSection, ToggleSettingActionPair,
-    ToggleState,
+    LocalOnlyIconState, SettingsAction, SettingsSection, ToggleSettingActionPair, ToggleState,
+    flags,
 };
 use crate::ai::persisted_workspace::{
     EnablementState, LspRepoStatus, PersistedWorkspace, PersistedWorkspaceEvent,
@@ -63,14 +62,14 @@ use crate::terminal::general_settings::GeneralSettings;
 use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use crate::view_components::DismissibleToast;
-use crate::workspace::tab_settings::TabSettings;
+use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use crate::workspace::ToastStack;
+use crate::workspace::tab_settings::TabSettings;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::AdminEnablementSetting;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 const MAIN_SECTION_MARGIN: f32 = 12.;
 const SUB_SECTION_MARGIN: f32 = 8.;
@@ -128,43 +127,8 @@ fn remote_codebase_index_limit_reached(status: &RemoteCodebaseIndexStatus) -> bo
 }
 
 #[cfg(all(test, not(target_family = "wasm")))]
-mod tests {
-    use remote_server::codebase_index_proto::{
-        RemoteCodebaseIndexState, RemoteCodebaseIndexStatus,
-    };
-
-    use super::remote_codebase_index_limit_reached;
-
-    fn remote_status_with_failure(failure_message: Option<&str>) -> RemoteCodebaseIndexStatus {
-        RemoteCodebaseIndexStatus {
-            repo_path: "/workspaces/repo".to_string(),
-            state: RemoteCodebaseIndexState::Unavailable,
-            last_updated_epoch_millis: Some(1),
-            progress_completed: None,
-            progress_total: None,
-            failure_message: failure_message.map(ToOwned::to_owned),
-            root_hash: None,
-        }
-    }
-
-    #[test]
-    fn remote_index_limit_failure_is_detected_from_status_message() {
-        let status = remote_status_with_failure(Some(
-            "Cannot index remote codebase because the maximum number of codebase indexes has been reached.",
-        ));
-
-        assert!(remote_codebase_index_limit_reached(&status));
-    }
-
-    #[test]
-    fn other_unavailable_failures_are_not_index_limit_failures() {
-        let status = remote_status_with_failure(Some(
-            "Cannot index remote codebase because indexing did not start.",
-        ));
-
-        assert!(!remote_codebase_index_limit_reached(&status));
-    }
-}
+#[path = "code_page_tests.rs"]
+mod tests;
 
 #[derive(Clone, Default)]
 struct LspServerRowMouseStates {
@@ -406,6 +370,9 @@ impl CodeSettingsPageView {
                 Box::new(CodeReviewDiffStatsToggleWidget::default()),
                 Box::new(ProjectExplorerToggleWidget::default()),
                 Box::new(GlobalSearchToggleWidget::default()),
+                Box::new(ShowHiddenFilesToggleWidget::default()),
+                Box::new(FormatOnSaveToggleWidget::default()),
+                Box::new(AutoSaveToggleWidget::default()),
             ]);
             let categories = vec![
                 Category::new("Codebase Indexing", codebase_indexing_widgets),
@@ -465,10 +432,7 @@ impl CodeSettingsPageView {
                             ctx.dispatch_typed_action(CodeSettingsPageAction::ManualAddDirectory);
                         })
                 });
-                let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
-                    vec![Box::new(CodeSubpageHeaderWidget {
-                        title: subpage.title(),
-                    })];
+                let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = Vec::new();
                 match subpage {
                     CodeSubpage::Indexing => {
                         widgets.push(Box::new(CodebaseIndexingCategorizedWidget {
@@ -489,12 +453,13 @@ impl CodeSettingsPageView {
                             Box::new(CodeReviewDiffStatsToggleWidget::default()),
                             Box::new(ProjectExplorerToggleWidget::default()),
                             Box::new(GlobalSearchToggleWidget::default()),
+                            Box::new(ShowHiddenFilesToggleWidget::default()),
+                            Box::new(FormatOnSaveToggleWidget::default()),
+                            Box::new(AutoSaveToggleWidget::default()),
                         ]);
                     }
                 }
-                // Subpage widgets render their own subheader-sized titles,
-                // so we don't pass a page-level title.
-                self.page = PageType::new_uncategorized(widgets, None);
+                self.page = PageType::new_uncategorized(widgets, Some(subpage.title()));
             } else {
                 // None: rebuild the full categorized page (all widgets).
                 self.page = Self::build_full_page(ctx);
@@ -538,6 +503,9 @@ impl CodeSettingsPageView {
                 Box::new(CodeReviewDiffStatsToggleWidget::default()),
                 Box::new(ProjectExplorerToggleWidget::default()),
                 Box::new(GlobalSearchToggleWidget::default()),
+                Box::new(ShowHiddenFilesToggleWidget::default()),
+                Box::new(FormatOnSaveToggleWidget::default()),
+                Box::new(AutoSaveToggleWidget::default()),
             ]);
             let categories = vec![
                 Category::new("Codebase Indexing", codebase_indexing_widgets),
@@ -657,6 +625,9 @@ pub enum CodeSettingsPageAction {
     ToggleAutoOpenCodeReviewPane,
     ToggleProjectExplorer,
     ToggleGlobalSearch,
+    ToggleShowHiddenFiles,
+    ToggleFormatOnSave,
+    ToggleAutoSave,
     /// Install (if needed) and enable a suggested LSP server.
     InstallAndEnableLspServer {
         workspace_path: PathBuf,
@@ -839,9 +810,11 @@ impl TypedActionView for CodeSettingsPageView {
             }
             CodeSettingsPageAction::ToggleShowCodeReviewDiffStats => {
                 TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .show_code_review_diff_stats
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .show_code_review_diff_stats
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -857,11 +830,31 @@ impl TypedActionView for CodeSettingsPageView {
                 });
                 ctx.notify();
             }
+            CodeSettingsPageAction::ToggleShowHiddenFiles => {
+                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.show_hidden_files.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            CodeSettingsPageAction::ToggleFormatOnSave => {
+                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.format_on_save.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            CodeSettingsPageAction::ToggleAutoSave => {
+                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.auto_save.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
             CodeSettingsPageAction::ToggleAutoOpenCodeReviewPane => {
                 GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .auto_open_code_review_pane_on_first_agent_change
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .auto_open_code_review_pane_on_first_agent_change
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 send_telemetry_from_ctx!(
                     TelemetryEvent::FeaturesPageAction {
@@ -1010,6 +1003,14 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                     )),
                     context,
                     flags::SHOW_GLOBAL_SEARCH,
+                ),
+                ToggleSettingActionPair::new(
+                    "show hidden files in project explorer",
+                    builder(SettingsAction::Code(
+                        CodeSettingsPageAction::ToggleShowHiddenFiles,
+                    )),
+                    context,
+                    flags::SHOW_HIDDEN_FILES,
                 ),
             ],
             app,
@@ -1958,79 +1959,75 @@ impl CodePageWidget {
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(4.);
-        if let Some(refresh_action) = presentation.refresh_action {
-            if let Some(action_target) = action_target.clone() {
-                buttons_row.add_child(
-                    icon_button(appearance, Icon::Refresh, false, manual_resync_mouse_state)
-                        .with_active_styles(UiComponentStyles {
-                            background: Some(theme.surface_1().into()),
-                            ..Default::default()
-                        })
-                        .build()
-                        .on_click(move |ctx, _, _| match (&action_target, &refresh_action) {
-                            (
-                                LocalOrRemotePath::Local(codebase_path),
-                                IndexingRefreshAction::Resync,
-                            ) => {
-                                ctx.dispatch_typed_action(CodeSettingsPageAction::ManualResync(
-                                    codebase_path.clone(),
-                                ));
-                            }
-                            (LocalOrRemotePath::Local(_), IndexingRefreshAction::RequestRemote) => {
-                            }
-                            #[cfg(not(target_family = "wasm"))]
-                            (
-                                LocalOrRemotePath::Remote(remote_path),
-                                IndexingRefreshAction::Resync,
-                            ) => {
-                                ctx.dispatch_typed_action(
-                                    CodeSettingsPageAction::ManualResyncRemote(remote_path.clone()),
-                                );
-                            }
-                            #[cfg(not(target_family = "wasm"))]
-                            (
-                                LocalOrRemotePath::Remote(remote_path),
-                                IndexingRefreshAction::RequestRemote,
-                            ) => {
-                                ctx.dispatch_typed_action(
-                                    CodeSettingsPageAction::RequestRemoteIndex(remote_path.clone()),
-                                );
-                            }
-                            #[cfg(target_family = "wasm")]
-                            (LocalOrRemotePath::Remote(_), _) => {}
-                        })
-                        .finish(),
-                );
-            }
+        if let Some(refresh_action) = presentation.refresh_action
+            && let Some(action_target) = action_target.clone()
+        {
+            buttons_row.add_child(
+                icon_button(appearance, Icon::Refresh, false, manual_resync_mouse_state)
+                    .with_active_styles(UiComponentStyles {
+                        background: Some(theme.surface_1().into()),
+                        ..Default::default()
+                    })
+                    .build()
+                    .on_click(move |ctx, _, _| match (&action_target, &refresh_action) {
+                        (
+                            LocalOrRemotePath::Local(codebase_path),
+                            IndexingRefreshAction::Resync,
+                        ) => {
+                            ctx.dispatch_typed_action(CodeSettingsPageAction::ManualResync(
+                                codebase_path.clone(),
+                            ));
+                        }
+                        (LocalOrRemotePath::Local(_), IndexingRefreshAction::RequestRemote) => {}
+                        #[cfg(not(target_family = "wasm"))]
+                        (LocalOrRemotePath::Remote(remote_path), IndexingRefreshAction::Resync) => {
+                            ctx.dispatch_typed_action(CodeSettingsPageAction::ManualResyncRemote(
+                                remote_path.clone(),
+                            ));
+                        }
+                        #[cfg(not(target_family = "wasm"))]
+                        (
+                            LocalOrRemotePath::Remote(remote_path),
+                            IndexingRefreshAction::RequestRemote,
+                        ) => {
+                            ctx.dispatch_typed_action(CodeSettingsPageAction::RequestRemoteIndex(
+                                remote_path.clone(),
+                            ));
+                        }
+                        #[cfg(target_family = "wasm")]
+                        (LocalOrRemotePath::Remote(_), _) => {}
+                    })
+                    .finish(),
+            );
         }
 
-        if presentation.show_delete {
-            if let Some(action_target) = action_target {
-                buttons_row.add_child(
-                    icon_button(appearance, Icon::Trash, false, delete_mouse_state)
-                        .with_active_styles(UiComponentStyles {
-                            background: Some(theme.surface_1().into()),
-                            ..Default::default()
-                        })
-                        .build()
-                        .on_click(move |ctx, _, _| match &action_target {
-                            LocalOrRemotePath::Local(codebase_path) => {
-                                ctx.dispatch_typed_action(CodeSettingsPageAction::DeleteIndex(
-                                    codebase_path.clone(),
-                                ));
-                            }
-                            #[cfg(not(target_family = "wasm"))]
-                            LocalOrRemotePath::Remote(remote_path) => {
-                                ctx.dispatch_typed_action(
-                                    CodeSettingsPageAction::DeleteRemoteIndex(remote_path.clone()),
-                                );
-                            }
-                            #[cfg(target_family = "wasm")]
-                            LocalOrRemotePath::Remote(_) => {}
-                        })
-                        .finish(),
-                );
-            }
+        if presentation.show_delete
+            && let Some(action_target) = action_target
+        {
+            buttons_row.add_child(
+                icon_button(appearance, Icon::Trash, false, delete_mouse_state)
+                    .with_active_styles(UiComponentStyles {
+                        background: Some(theme.surface_1().into()),
+                        ..Default::default()
+                    })
+                    .build()
+                    .on_click(move |ctx, _, _| match &action_target {
+                        LocalOrRemotePath::Local(codebase_path) => {
+                            ctx.dispatch_typed_action(CodeSettingsPageAction::DeleteIndex(
+                                codebase_path.clone(),
+                            ));
+                        }
+                        #[cfg(not(target_family = "wasm"))]
+                        LocalOrRemotePath::Remote(remote_path) => {
+                            ctx.dispatch_typed_action(CodeSettingsPageAction::DeleteRemoteIndex(
+                                remote_path.clone(),
+                            ));
+                        }
+                        #[cfg(target_family = "wasm")]
+                        LocalOrRemotePath::Remote(_) => {}
+                    })
+                    .finish(),
+            );
         }
 
         (label_row.finish(), buttons_row.finish())
@@ -2341,31 +2338,29 @@ impl CodePageWidget {
             .with_spacing(8.)
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
 
-        if is_failed {
-            if let Some(server_handle) = server_model.cloned() {
-                let server_for_action = server_handle.clone();
-                let restart_button = ui_builder
-                    .button(ButtonVariant::Secondary, mouse_states.restart)
-                    .with_style(UiComponentStyles {
-                        font_size: Some(12.),
-                        ..Default::default()
-                    })
-                    .with_hovered_styles(UiComponentStyles {
-                        background: Some(theme.surface_3().into()),
-                        ..Default::default()
-                    })
-                    .with_text_label("Restart server".to_owned())
-                    .build()
-                    .with_cursor(Cursor::PointingHand)
-                    .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(CodeSettingsPageAction::RestartLspServer {
-                            server: server_for_action.clone(),
-                        });
-                    })
-                    .finish();
+        if is_failed && let Some(server_handle) = server_model.cloned() {
+            let server_for_action = server_handle.clone();
+            let restart_button = ui_builder
+                .button(ButtonVariant::Secondary, mouse_states.restart)
+                .with_style(UiComponentStyles {
+                    font_size: Some(12.),
+                    ..Default::default()
+                })
+                .with_hovered_styles(UiComponentStyles {
+                    background: Some(theme.surface_3().into()),
+                    ..Default::default()
+                })
+                .with_text_label("Restart server".to_owned())
+                .build()
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(CodeSettingsPageAction::RestartLspServer {
+                        server: server_for_action.clone(),
+                    });
+                })
+                .finish();
 
-                right_content.add_child(restart_button);
-            }
+            right_content.add_child(restart_button);
         }
 
         // Show "View logs" when the server has been started (Available, Starting/Busy, or Failed)
@@ -2462,30 +2457,6 @@ impl CodePageWidget {
             }
             None => (theme.disabled_ui_text_color().into_solid(), "Not running"),
         }
-    }
-}
-
-/// A simple widget that renders a subheader title for a Code subpage.
-struct CodeSubpageHeaderWidget {
-    title: &'static str,
-}
-
-impl SettingsWidget for CodeSubpageHeaderWidget {
-    type View = CodeSettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        self.title
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        _app: &AppContext,
-    ) -> Box<dyn Element> {
-        build_sub_header(appearance, self.title, None)
-            .with_padding_bottom(HEADER_PADDING)
-            .finish()
     }
 }
 
@@ -2878,6 +2849,134 @@ impl SettingsWidget for GlobalSearchToggleWidget {
                 })
                 .finish(),
             Some("Adds global file search to the left side tools panel.".into()),
+        )
+    }
+}
+
+#[derive(Default)]
+struct ShowHiddenFilesToggleWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for ShowHiddenFilesToggleWidget {
+    type View = CodeSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "show hidden files dotfiles project explorer file tree"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let code_settings = CodeSettings::as_ref(app);
+
+        render_body_item::<CodeSettingsPageAction>(
+            "Show hidden files in project explorer".into(),
+            None,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*code_settings.show_hidden_files)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleShowHiddenFiles);
+                })
+                .finish(),
+            Some(
+                "Show dotfiles and hidden files (starting with .) in the project explorer.".into(),
+            ),
+        )
+    }
+}
+
+#[derive(Default)]
+struct FormatOnSaveToggleWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for FormatOnSaveToggleWidget {
+    type View = CodeSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "format on save lsp language server formatting reformat editor"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let code_settings = CodeSettings::as_ref(app);
+
+        render_body_item::<CodeSettingsPageAction>(
+            "Format on save (requires an active language server)".into(),
+            None,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*code_settings.format_on_save)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleFormatOnSave);
+                })
+                .finish(),
+            Some(
+                "Only applies when a language server is active for the file. Automatically formats the file with the language server on save; other LSP features (hover, go-to-definition, references, diagnostics) are unaffected."
+                    .into(),
+            ),
+        )
+    }
+}
+
+#[derive(Default)]
+struct AutoSaveToggleWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for AutoSaveToggleWidget {
+    type View = CodeSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "auto save autosave automatically save editor files on type focus"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let code_settings = CodeSettings::as_ref(app);
+
+        render_body_item::<CodeSettingsPageAction>(
+            "Auto save".into(),
+            None,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*code_settings.auto_save)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(CodeSettingsPageAction::ToggleAutoSave);
+                })
+                .finish(),
+            Some(
+                "Automatically saves changes in the Warp text editor as you type and when the editor loses focus."
+                    .into(),
+            ),
         )
     }
 }

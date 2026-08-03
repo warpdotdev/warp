@@ -4,9 +4,9 @@ use itertools::{Either, Itertools};
 use line_ending::LineEnding;
 use string_offset::{ByteOffset, CharOffset};
 use vec1::{Vec1, vec1};
-use warpui::clipboard::ClipboardContent;
-use warpui::elements::ListIndentLevel;
-use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle};
+use warpui_core::clipboard::ClipboardContent;
+use warpui_core::elements::ListIndentLevel;
+use warpui_core::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle};
 
 use crate::content::anchor::Anchor;
 use crate::content::buffer::{
@@ -157,6 +157,31 @@ pub trait CoreEditorModel: Entity {
                     EditOrigin::SystemEdit,
                     ShouldAutoscroll::VerticalOnly,
                     self.buffer_selection_model().clone(),
+                    ctx,
+                );
+            },
+            ctx,
+        );
+        self.validate(ctx);
+    }
+
+    fn replace_first_n_characters(
+        &mut self,
+        n: CharOffset,
+        text: &str,
+        ctx: &mut ModelContext<Self::T>,
+    ) {
+        let selection_model = self.buffer_selection_model().clone();
+        self.update_content(
+            |mut content, ctx| {
+                let start = CharOffset::from(1);
+                let end = std::cmp::min(start + n.as_usize(), content.buffer().max_charoffset());
+                content.apply_edit(
+                    BufferEditAction::InsertAtCharOffsetRanges {
+                        edits: &vec1![(text.to_owned(), start..end)],
+                    },
+                    EditOrigin::UserInitiated,
+                    selection_model,
                     ctx,
                 );
             },
@@ -898,6 +923,24 @@ pub trait RichTextEditorModel: CoreEditorModel {
 
     fn reset_with_markdown(&mut self, markdown: &str, ctx: &mut ModelContext<Self::T>) {
         let state = InitialBufferState::markdown(markdown);
+
+        self.update_content(
+            |mut content, ctx| {
+                content.buffer().reset_undo_stack();
+                content.apply_edit(
+                    BufferEditAction::ReplaceWith(state),
+                    EditOrigin::SystemEdit,
+                    self.buffer_selection_model().clone(),
+                    ctx,
+                );
+            },
+            ctx,
+        );
+        self.validate(ctx);
+    }
+
+    fn reset_with_ipynb(&mut self, ipynb: &str, ctx: &mut ModelContext<Self::T>) {
+        let state = InitialBufferState::ipynb(ipynb);
 
         self.update_content(
             |mut content, ctx| {

@@ -58,6 +58,42 @@ fn test_possible_file_paths_in_word() {
 }
 
 #[test]
+fn test_detect_urls_stops_at_fullwidth_punctuation() {
+    assert_eq!(detect_urls("go https://example.com，next"), vec![3..22]);
+    assert_eq!(detect_urls("go https://example.com。"), vec![3..22]);
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_detect_file_paths_stops_at_fullwidth_punctuation() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("warp-rich-content.md");
+    std::fs::write(&file, "# Hello\n").unwrap();
+
+    let text = "see warp-rich-content.md， and warp-rich-content.md。";
+    let detected_paths = detect_file_paths(dir.path().to_str().unwrap(), text, None);
+
+    let link_ranges = detected_paths.keys().cloned().collect_vec();
+    assert!(link_ranges.contains(&(4..24)));
+    assert!(link_ranges.contains(&(30..50)));
+    assert!(!link_ranges.contains(&(4..25)));
+    assert!(!link_ranges.contains(&(30..51)));
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_detect_file_paths_keeps_fullwidth_punctuation_when_it_is_the_filename() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("warp-rich-content.md，");
+    std::fs::write(&file, "# Hello\n").unwrap();
+
+    let text = "see warp-rich-content.md，";
+    let detected_paths = detect_file_paths(dir.path().to_str().unwrap(), text, None);
+
+    assert!(detected_paths.contains_key(&(4..25)));
+}
+
+#[test]
 fn test_possible_file_paths_in_word_multibyte() {
     let word = "/path/音楽/テストファイル.txt:16:ḧeĹḹo";
     let possible_paths = possible_file_paths_in_word(word).collect_vec();
@@ -148,9 +184,11 @@ fn test_possible_file_paths_in_word_accepts_token_at_word_length_cap() {
 #[test]
 fn test_possible_file_paths_in_word_skips_token_with_too_many_separators() {
     let too_many_separators = ":".repeat(MAX_SEPARATORS_PER_WORD + 1);
-    assert!(possible_file_paths_in_word(&too_many_separators)
-        .next()
-        .is_none());
+    assert!(
+        possible_file_paths_in_word(&too_many_separators)
+            .next()
+            .is_none()
+    );
 }
 
 #[test]
@@ -165,4 +203,42 @@ fn test_possible_file_paths_in_word_accepts_token_at_separator_count_cap() {
         at_cap.push('a');
     }
     assert!(possible_file_paths_in_word(&at_cap).next().is_some());
+}
+
+/// Regression guard for link tooltips not appearing in multi-block Agent Mode conversations.
+///
+/// The bug: every AI block anchored its link tooltip overlay to a single shared, global
+/// save-position id. With 2+ rich-content blocks in a conversation, those anchors collided, so
+/// the overlay could not position itself on the clicked link and no tooltip appeared. The fix
+/// gives each block a per-view-unique anchor id (`tooltip_position_id`), so distinct blocks must
+/// resolve to distinct anchor ids.
+#[test]
+fn link_tooltip_anchor_ids_are_unique_per_block() {
+    // Two AI blocks each set their own per-view anchor id (as `show_link_tooltip` does using the
+    // block's view id).
+    let mut block_a = DetectedLinksState::default();
+    let mut block_b = DetectedLinksState::default();
+    block_a.tooltip_position_id = format!("{RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID}_1");
+    block_b.tooltip_position_id = format!("{RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID}_2");
+
+    assert_ne!(
+        block_a.resolved_tooltip_position_id(),
+        block_b.resolved_tooltip_position_id(),
+        "distinct AI blocks must resolve to distinct link tooltip anchor ids so their tooltip \
+         overlays don't collide in a multi-block conversation"
+    );
+    assert_eq!(
+        block_a.resolved_tooltip_position_id(),
+        block_a.tooltip_position_id,
+        "a block with an assigned anchor id must resolve to exactly that id"
+    );
+
+    // A block that has never opened a tooltip falls back to the shared constant. This is harmless
+    // because registration of the anchor only happens alongside an open tooltip, which always
+    // assigns a per-view id first.
+    let unset = DetectedLinksState::default();
+    assert_eq!(
+        unset.resolved_tooltip_position_id(),
+        RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID
+    );
 }

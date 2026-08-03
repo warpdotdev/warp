@@ -14,18 +14,18 @@ use super::image_map::StoredImageMetadata;
 use super::kitty::{KittyAction, KittyResponse};
 use super::secrets::RespectObfuscatedSecrets;
 use super::selection::ScrollDelta;
+use crate::terminal::SizeInfo;
 use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::GridStorage;
 use crate::terminal::model::ansi::{
     self, Attr, CharsetIndex, ClearMode, CursorShape, CursorStyle, LineClearMode, Mode,
     PrecmdValue, PreexecValue, StandardCharset, TabulationClearMode,
 };
-use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks, RegexIter};
 use crate::terminal::model::grid::Dimensions;
+use crate::terminal::model::grid::grid_handler::{GridHandler, PerformResetGridChecks, RegexIter};
 use crate::terminal::model::index::{Point, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
 use crate::terminal::model::secrets::ObfuscateSecrets;
-use crate::terminal::model::GridStorage;
-use crate::terminal::SizeInfo;
 
 #[derive(Clone)]
 pub struct BlockGrid {
@@ -209,6 +209,15 @@ impl BlockGrid {
         )))
     }
 
+    /// Returns the visible cursor position in displayed-grid coordinates as
+    /// `(column, row)`. A cursor hidden below trimmed content is omitted.
+    pub fn visible_cursor_display_position(&self) -> Option<(usize, usize)> {
+        match self.cursor_display_point()? {
+            CursorDisplayPoint::Visible(point) => Some((point.col, point.row)),
+            CursorDisplayPoint::HiddenCache(_) => None,
+        }
+    }
+
     /// Determine whether the block is currently empty
     ///
     /// Note: Depending on the state of the block, it can be _currently_ empty even when it has
@@ -247,8 +256,11 @@ impl BlockGrid {
     /// grid-finish time (precmd or preexec), leaving the grid contentless. If the grid_cursor
     /// is not at (0,0), we can assume the grid contains content that will persist through finish.
     pub fn should_show_as_empty_when_finished(&self) -> bool {
-        self.finished_len() == 0
-            || !self.has_visible_chars()
+        // Non-moving Kitty placements can render an image while leaving the cursor at the origin.
+        let has_visible_images = self.grid_handler().has_visible_images();
+
+        (self.finished_len() == 0 && !has_visible_images)
+            || !self.has_visible_content()
             || self.contains_only_input_buffer_sequence()
     }
 
@@ -321,6 +333,10 @@ impl BlockGrid {
         } else {
             self.grid_handler().has_visible_chars()
         }
+    }
+
+    pub(super) fn has_visible_content(&self) -> bool {
+        self.has_visible_chars() || self.grid_handler().has_visible_images()
     }
 
     fn calculate_if_grid_contains_only_input_buffer_sequence(&self) -> bool {
@@ -689,7 +705,7 @@ impl BlockGrid {
         self.grid_handler.reset_received_osc();
     }
 
-    fn ansi_handler(&mut self) -> &mut impl ansi::Handler {
+    fn ansi_handler(&mut self) -> &mut (impl ansi::Handler + use<>) {
         self.grid_handler.ansi_handler()
     }
 
@@ -719,6 +735,10 @@ impl ansi::Handler for BlockGrid {
 
     fn input(&mut self, c: char) {
         self.ansi_handler().input(c);
+    }
+
+    fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
+        self.ansi_handler().set_hyperlink(hyperlink);
     }
 
     fn goto(&mut self, row: VisibleRow, col: usize) {
@@ -945,7 +965,7 @@ impl ansi::Handler for BlockGrid {
         self.ansi_handler().text_area_size_chars(writer);
     }
 
-    fn precmd(&mut self, _: PrecmdValue) {
+    fn precmd_with_completion_metadata(&mut self, _: PrecmdValue) {
         unreachable!("Handled at block layer");
     }
 

@@ -25,9 +25,9 @@ use crate::cloud_object::{
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::codebase_index_model::RemoteCodebaseIndexModel;
+use crate::terminal::TerminalView;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::active_session::ActiveSession;
-use crate::terminal::TerminalView;
 
 lazy_static! {
     // Regex to match <block:[block_id]> patterns
@@ -52,7 +52,12 @@ pub(super) fn input_context_for_request(
     additional_context: Vec<AIAgentContext>,
     app: &AppContext,
 ) -> Arc<[AIAgentContext]> {
-    let mut context = context_model.pending_context(app, is_user_query);
+    let current_working_directory_location = active_session.current_working_directory_location(app);
+    let mut context = context_model.pending_context(
+        app,
+        is_user_query,
+        current_working_directory_location.as_ref(),
+    );
 
     context.push(AIAgentContext::CurrentTime {
         current_time: Local::now(),
@@ -74,10 +79,10 @@ pub(super) fn input_context_for_request(
     }
 
     if FeatureFlag::ListSkills.is_enabled() {
+        let path_origin = SessionContext::from_session(active_session, app).skill_path_origin();
         let skills = list_skills_if_changed(
-            active_session
-                .current_working_directory_location(app)
-                .as_ref(),
+            current_working_directory_location.as_ref(),
+            &path_origin,
             conversation_id,
             app,
         );
@@ -243,43 +248,19 @@ pub(super) fn parse_context_attachments(
         }
     }
 
-    // Add pending file attachments as FilePathReference.
-    // Duplicate basenames get a (1), (2), ... suffix to avoid collisions,
-    // matching the pattern in build_file_attachment_map.
-    for file in context_model.pending_files().iter() {
-        let attachment = AIAgentAttachment::FilePathReference {
-            file_id: uuid::Uuid::new_v4().to_string(),
-            file_name: file.file_name.clone(),
-            file_path: file.file_path.to_string_lossy().to_string(),
-        };
-        let mut key = file.file_name.clone();
-        if referenced_attachments.contains_key(&key) {
-            let mut suffix = 1;
-            loop {
-                key = format!("{} ({suffix})", file.file_name);
-                if !referenced_attachments.contains_key(&key) {
-                    break;
-                }
-                suffix += 1;
-            }
-        }
-        referenced_attachments.insert(key, attachment);
-    }
-
     // Add pending AI document as attachment if present
-    if let Some(document_id) = context_model.pending_document_id() {
-        if let Some(content) = AIDocumentModel::as_ref(ctx).get_document_content(&document_id, ctx)
-        {
-            let document_id_str = document_id.to_string();
-            let attachment = AIAgentAttachment::DocumentContent {
-                document_id: document_id_str.clone(),
-                content,
-                source: DocumentContentAttachmentSource::PlanEdited,
-                line_range: None,
-            };
-            // Use the document ID as the reference key
-            referenced_attachments.insert(document_id_str, attachment);
-        }
+    if let Some(document_id) = context_model.pending_document_id()
+        && let Some(content) = AIDocumentModel::as_ref(ctx).get_document_content(&document_id, ctx)
+    {
+        let document_id_str = document_id.to_string();
+        let attachment = AIAgentAttachment::DocumentContent {
+            document_id: document_id_str.clone(),
+            content,
+            source: DocumentContentAttachmentSource::PlanEdited,
+            line_range: None,
+        };
+        // Use the document ID as the reference key
+        referenced_attachments.insert(document_id_str, attachment);
     }
 
     referenced_attachments

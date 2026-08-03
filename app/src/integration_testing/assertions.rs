@@ -1,5 +1,5 @@
 use warpui::integration::TestStep;
-use warpui::{async_assert, async_assert_eq, SingletonEntity};
+use warpui::{SingletonEntity, async_assert, async_assert_eq};
 
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectEventEntrypoint, CloudObjectLocation, Space};
@@ -50,6 +50,7 @@ pub fn join_a_workspace() -> TestStep {
                 let teams: Vec<Team> = vec![Team {
                     uid: "team_uid12345678912345".try_into().expect("ID is valid"),
                     name: "My Team".to_string(),
+                    color: None,
                     invite_code: Default::default(),
                     members: Default::default(),
                     pending_email_invites: Default::default(),

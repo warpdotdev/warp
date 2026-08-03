@@ -14,14 +14,14 @@ use super::manager::{
 };
 use crate::ai::blocklist::SessionContext;
 use crate::ai::codebase_auto_indexing::{
-    auto_index_candidate_roots, should_auto_index_codebase, should_use_codebase_indexing,
-    CodebaseAutoIndexingSurface,
+    CodebaseAutoIndexingSurface, auto_index_candidate_roots, should_auto_index_codebase,
+    should_use_codebase_indexing,
 };
 use crate::server::telemetry::{
     RemoteCodebaseAutoIndexTrigger, RemoteCodebaseIndexStatusTelemetrySource,
 };
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 #[derive(Clone, Debug)]
 pub struct RemoteCodebaseSearchContext {
@@ -149,12 +149,12 @@ impl RemoteCodebaseIndexStatusTelemetryUpdate {
 impl RemoteCodebaseIndexModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let manager = RemoteServerManager::handle(ctx);
-        ctx.subscribe_to_model(&manager, |me, event, ctx| {
+        ctx.subscribe_to_model(&manager, |me, _, event, ctx| {
             me.handle_remote_server_manager_event(event, ctx);
         });
 
         let user_workspaces = UserWorkspaces::handle(ctx);
-        ctx.subscribe_to_model(&user_workspaces, |me, event, ctx| {
+        ctx.subscribe_to_model(&user_workspaces, |me, _, event, ctx| {
             if let UserWorkspacesEvent::CodebaseContextEnablementChanged = event {
                 me.handle_codebase_context_enablement_changed(ctx);
             }
@@ -451,6 +451,7 @@ impl RemoteCodebaseIndexModel {
             RemoteServerManagerEvent::SessionConnecting { .. }
             | RemoteServerManagerEvent::SessionConnectionFailed { .. }
             | RemoteServerManagerEvent::HostConnected { .. }
+            | RemoteServerManagerEvent::RemoteAgentContextSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
             | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
@@ -459,7 +460,15 @@ impl RemoteCodebaseIndexModel {
             | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
             | RemoteServerManagerEvent::DiffStateMetadataUpdateReceived { .. }
             | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. }
+            | RemoteServerManagerEvent::GitStatusPushReceived { .. }
+            | RemoteServerManagerEvent::GitHubPrInfoPushReceived { .. }
+            | RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived { .. }
             | RemoteServerManagerEvent::GetBranchesResponse { .. }
+            | RemoteServerManagerEvent::CommitChainResponse { .. }
+            | RemoteServerManagerEvent::GitPushResponse { .. }
+            | RemoteServerManagerEvent::CreatePrResponse { .. }
+            | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
+            | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. }
             | RemoteServerManagerEvent::SetupStateChanged { .. }
             | RemoteServerManagerEvent::BinaryCheckComplete { .. }
             | RemoteServerManagerEvent::BinaryInstallComplete { .. }
@@ -787,12 +796,12 @@ impl RemoteCodebaseIndexModel {
             // rather than re-indexing the nested directory.
             return Some(remote_path);
         }
-        if let Some(remote_path) = self.active_repos_by_host.get(host_id) {
-            if self.status_for_repo(remote_path).is_some() {
-                // Remote branch: only implicit searches (no `codebase_path`) fall back to the
-                // active repo recorded by daemon navigation events.
-                return Some(remote_path.clone());
-            }
+        if let Some(remote_path) = self.active_repos_by_host.get(host_id)
+            && self.status_for_repo(remote_path).is_some()
+        {
+            // Remote branch: only implicit searches (no `codebase_path`) fall back to the
+            // active repo recorded by daemon navigation events.
+            return Some(remote_path.clone());
         }
 
         if let Some(remote_path) = self.last_git_repo_for_context(

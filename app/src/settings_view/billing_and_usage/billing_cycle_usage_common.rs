@@ -5,13 +5,13 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use thousands::Separable;
 use warp_core::ui::appearance::Appearance;
+use warpui::Element;
 use warpui::elements::{
     Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow, Empty,
     Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable,
     Text,
 };
 use warpui::fonts::{Properties, Weight};
-use warpui::Element;
 
 use crate::settings_view::billing_and_usage_page_v2::{
     AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
@@ -195,6 +195,32 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
         })
         .cloned()
         .collect()
+}
+
+/// Cost-type buckets to surface in the usage legend, in display order.
+///
+/// Mirrors the buckets the stacked bars actually render: legacy buckets are
+/// dropped (see [`filter_legacy_buckets`]) and a cost type only counts when it
+/// has real usage (`credits_used > 0`), exactly like [`aggregate_segments`],
+/// which retains only segments with `credits > 0`. Without the usage check a
+/// zero-credit entry (e.g. an untouched base-limit row) would list "Base" in
+/// the legend even though it contributed nothing to the chart.
+pub fn legend_cost_types(entries: &[BillingCycleUsageEntry]) -> Vec<AiCreditsUsageAndCostType> {
+    let filtered = filter_legacy_buckets(entries);
+    [
+        AiCreditsUsageAndCostType::BaseLimit,
+        AiCreditsUsageAndCostType::BonusGrant,
+        AiCreditsUsageAndCostType::Payg,
+        AiCreditsUsageAndCostType::AmbientBonusGrant,
+        AiCreditsUsageAndCostType::Aggregate,
+    ]
+    .into_iter()
+    .filter(|cost_type| {
+        filtered
+            .iter()
+            .any(|e| e.cost_type == *cost_type && e.credits_used > 0)
+    })
+    .collect()
 }
 
 /// "Is there any data in `entries` that's not my own?"

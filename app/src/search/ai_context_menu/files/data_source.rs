@@ -37,8 +37,8 @@ pub(crate) struct FileSnapshot {
 /// Builds the repository-backed file search source used by the AI context menu.
 /// For empty queries, snapshots repo contents with git-change status to prioritize modified files,
 /// and for non-empty queries snapshots repo contents only for faster fuzzy matching.
-pub fn file_data_source_for_current_repo(
-) -> AsyncSnapshotDataSource<FileSnapshot, AIContextMenuSearchableAction> {
+pub fn file_data_source_for_current_repo()
+-> AsyncSnapshotDataSource<FileSnapshot, AIContextMenuSearchableAction> {
     AsyncSnapshotDataSource::new(
         |query: &Query, app: &AppContext| {
             if FileSearchModel::should_skip_overly_broad_query(&query.text) {
@@ -62,7 +62,7 @@ pub fn file_data_source_for_current_repo(
                     last_opened,
                 }
             } else {
-                let contents = file_search_model.get_repo_contents(app);
+                let contents = file_search_model.get_repo_contents(&query.text, app);
                 FileSnapshot {
                     contents,
                     git_changed_files: HashSet::new(),

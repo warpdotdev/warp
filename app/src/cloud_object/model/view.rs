@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use chrono::{Duration, Utc};
 use warp_graphql::scalars::time::ServerTimestamp;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::persistence::{CloudModel, CloudModelEvent};
 use crate::auth::{AuthStateProvider, UserUid};
@@ -195,10 +195,9 @@ impl CloudViewModel {
                 // by forcing edit access if they created the object.
                 if let (Some(creator_uid), Some(user_uid)) =
                     (object.metadata().creator_uid.clone(), user_uid)
+                    && creator_uid == user_uid.as_string()
                 {
-                    if creator_uid == user_uid.as_string() {
-                        access_level = access_level.max(SharingAccessLevel::Edit);
-                    }
+                    access_level = access_level.max(SharingAccessLevel::Edit);
                 }
 
                 access_level
@@ -292,10 +291,10 @@ impl CloudViewModel {
                     let folder_timestamp = folder.metadata().revision.clone().map(Into::into);
                     let timestamp = max_child_timestamp.max(folder_timestamp);
 
-                    if let Some(timestamp) = timestamp {
-                        if let Ok(mut cache) = self.folder_timestamp_cache.try_borrow_mut() {
-                            cache.insert(folder.id, timestamp);
-                        }
+                    if let Some(timestamp) = timestamp
+                        && let Ok(mut cache) = self.folder_timestamp_cache.try_borrow_mut()
+                    {
+                        cache.insert(folder.id, timestamp);
                     }
 
                     timestamp
@@ -303,7 +302,12 @@ impl CloudViewModel {
         }
     }
 
-    fn handle_cloud_model_event(&mut self, event: &CloudModelEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_cloud_model_event(
+        &mut self,
+        _: ModelHandle<CloudModel>,
+        event: &CloudModelEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match event {
             CloudModelEvent::ObjectUpdated { type_and_id, .. }
             | CloudModelEvent::ObjectTrashed { type_and_id, .. }
@@ -349,21 +353,23 @@ impl CloudViewModel {
                 }
             }
             CloudModelEvent::ObjectDeleted { folder_id, .. } => {
-                if let Some(folder_id) = folder_id {
-                    if self.invalidate_folder_timestamps(folder_id, CloudModel::as_ref(ctx)) {
-                        ctx.emit(CloudViewModelEvent::SortTimestampsChanged);
-                    }
+                if let Some(folder_id) = folder_id
+                    && self.invalidate_folder_timestamps(folder_id, CloudModel::as_ref(ctx))
+                {
+                    ctx.emit(CloudViewModelEvent::SortTimestampsChanged);
                 }
             }
             CloudModelEvent::NotebookEditorChangedFromServer { .. }
             | CloudModelEvent::ObjectForceExpanded { .. }
             | CloudModelEvent::ObjectSynced { .. }
-            | CloudModelEvent::InitialLoadCompleted => (),
+            | CloudModelEvent::InitialLoadCompleted
+            | CloudModelEvent::EnvironmentLastTaskRunTimestampsUpdated => (),
         }
     }
 
     fn handle_update_manager_event(
         &mut self,
+        _: ModelHandle<UpdateManager>,
         event: &UpdateManagerEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -380,11 +386,11 @@ impl CloudViewModel {
             // If a folder was created, remove the cache entry tied to its client ID.
             // TODO @ianhodge: Update the way we do this check once we remove the generic
             let server_id = &result.server_id.expect("Expect server id on success");
-            if cloud_model.get_folder_by_uid(&server_id.uid()).is_some() {
-                if let Some(client_id) = result.client_id {
-                    let sync_id = SyncId::ClientId(client_id);
-                    self.folder_timestamp_cache.borrow_mut().remove(&sync_id);
-                }
+            if cloud_model.get_folder_by_uid(&server_id.uid()).is_some()
+                && let Some(client_id) = result.client_id
+            {
+                let sync_id = SyncId::ClientId(client_id);
+                self.folder_timestamp_cache.borrow_mut().remove(&sync_id);
             }
 
             // For any new object, we need to recalculate its ancestors' timestamp with their
@@ -392,10 +398,9 @@ impl CloudViewModel {
             if let Some(parent_id) = cloud_model
                 .get_by_uid(&server_id.uid())
                 .and_then(|object| object.metadata().folder_id)
+                && self.invalidate_folder_timestamps(&parent_id, cloud_model)
             {
-                if self.invalidate_folder_timestamps(&parent_id, cloud_model) {
-                    ctx.emit(CloudViewModelEvent::SortTimestampsChanged);
-                }
+                ctx.emit(CloudViewModelEvent::SortTimestampsChanged);
             }
         }
     }

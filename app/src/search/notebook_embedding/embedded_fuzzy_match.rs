@@ -1,5 +1,6 @@
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
+use warp_errors::report_error;
 
 // Embedded objects are matched on object name and its drive location breadcrumb.
 #[derive(Clone, Debug)]
@@ -43,7 +44,7 @@ impl FuzzyMatchEmbeddedObjectResult {
         if count == 0 {
             // This branch should never be executed because an embedded object search result should
             // always have some match with the query, otherwise it should not appear as a result.
-            log::error!("Embedded object has neither a name nor breadcrumb match result.");
+            report_error!("Embedded object has neither a name nor breadcrumb match result.");
             OrderedFloat(f64::MIN)
         } else {
             // All attributes have equal weight, so just take the avg score

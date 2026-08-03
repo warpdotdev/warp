@@ -20,10 +20,11 @@ use reqwest_eventsource::RequestBuilderExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use warp_core::channel::{Channel, ChannelState};
+use warp_core::execution_mode;
 use warp_core::operating_system_info::OperatingSystemInfo;
-use warp_core::{execution_mode, report_error};
+use warp_errors::report_error;
 
-use crate::iap::{IAP_PROXY_AUTH_HEADER, IapTokenProvider};
+use crate::iap::{IapTokenProvider, proxy_auth_header};
 
 pub mod headers {
     /// Custom Warp header indicating the version of the Warp app.
@@ -45,6 +46,12 @@ pub mod headers {
     /// Custom Warp header indicating the client role. We don't use the User-Agent header
     /// because it can't be set from WASM.
     pub(crate) const WARP_CLIENT_ID: &str = "X-Warp-Client-ID";
+
+    /// Custom Warp header carrying the client's current OTEL span context in W3C
+    /// `traceparent` wire format. It is deliberately distinct from the standard
+    /// `traceparent` header so the server links its request span to the client
+    /// span rather than reparenting the server span under the client trace.
+    pub(crate) const TRACE_LINK_HEADER: &str = "X-Warp-Traceparent";
 }
 
 /// The environment variable containing extra HTTP headers to attach to requests.
@@ -199,7 +206,8 @@ impl Client {
         }
 
         if let Some(token) = iap_token {
-            builder = builder.header(IAP_PROXY_AUTH_HEADER, format!("Bearer {token}"));
+            let (name, value) = proxy_auth_header(&token);
+            builder = builder.header(name, value);
         }
 
         builder
@@ -240,8 +248,7 @@ impl Client {
     fn iap_token_for<U: IntoUrl>(&self, url: U) -> Option<String> {
         let provider = self.iap_token_provider.as_ref()?;
         let url = url.into_url().ok()?;
-        let server_url = reqwest::Url::parse(ChannelState::server_root_url().as_ref()).ok()?;
-        if url.origin() != server_url.origin() {
+        if !is_warp_server_origin(&url) {
             return None;
         }
         provider.cached_token()
@@ -345,6 +352,13 @@ impl Client {
             }
         }
 
+        // Forward the current trace context so the server can attach a span link
+        // back to this client (cloud-agent) span. Only present when a valid OTEL
+        // span context exists; omitted otherwise (e.g. non-cloud-agent or wasm).
+        if let Some(trace_link) = current_trace_link_header() {
+            builder = builder.header(headers::TRACE_LINK_HEADER, trace_link);
+        }
+
         builder
     }
 
@@ -384,6 +398,48 @@ impl Client {
 
         Ok(Response(result))
     }
+}
+
+fn is_warp_server_origin(url: &reqwest::Url) -> bool {
+    [
+        ChannelState::server_root_url(),
+        ChannelState::rtc_http_url(),
+    ]
+    .iter()
+    .filter_map(|candidate| reqwest::Url::parse(candidate.as_ref()).ok())
+    .any(|candidate| candidate.origin() == url.origin())
+}
+
+/// Returns the current OTEL span context formatted as a W3C `traceparent` value
+/// (`00-<trace-id>-<span-id>-<flags>`) for the [`headers::TRACE_LINK_HEADER`]
+/// header, or `None` when there is no valid active span context.
+///
+/// A valid span context only exists in processes where the OpenTelemetry
+/// subscriber is installed — i.e. cloud-agent processes (see
+/// `app/src/tracing/native.rs`). Everywhere else, and on wasm, this returns
+/// `None` so the header is omitted rather than sent empty or malformed.
+#[cfg(not(target_family = "wasm"))]
+fn current_trace_link_header() -> Option<String> {
+    use opentelemetry::trace::TraceContextExt as _;
+    use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+
+    let context = tracing::Span::current().context();
+    let span = context.span();
+    let span_context = span.span_context();
+    if !span_context.is_valid() {
+        return None;
+    }
+    Some(format!(
+        "00-{}-{}-{:02x}",
+        span_context.trace_id(),
+        span_context.span_id(),
+        span_context.trace_flags().to_u8(),
+    ))
+}
+
+#[cfg(target_family = "wasm")]
+fn current_trace_link_header() -> Option<String> {
+    None
 }
 
 impl<'a> RequestBuilder<'a> {
@@ -760,3 +816,31 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Client {
         })
     }
 }
+
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+
+    #[test]
+    fn server_and_rtc_origins_match() {
+        // Derive the expected origins from `ChannelState` so the assertion holds
+        // regardless of which channel config the test build resolves to.
+        let server = reqwest::Url::parse(ChannelState::server_root_url().as_ref()).unwrap();
+        assert!(is_warp_server_origin(&server.join("/graphql/v2").unwrap()));
+
+        let rtc = reqwest::Url::parse(ChannelState::rtc_http_url().as_ref()).unwrap();
+        assert!(is_warp_server_origin(
+            &rtc.join("/api/v1/agent/events/stream").unwrap()
+        ));
+    }
+
+    #[test]
+    fn third_party_origin_does_not_match() {
+        let url = reqwest::Url::parse("https://evil.example.com/graphql/v2").unwrap();
+        assert!(!is_warp_server_origin(&url));
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "lib_tests.rs"]
+mod tests;
