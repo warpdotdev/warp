@@ -12,7 +12,7 @@ use warp::terminal::shell::{Shell, ShellType};
 use warpui_core::integration::{AssertionCallback, AssertionOutcome, TestStep};
 use warpui_core::{async_assert, async_assert_eq};
 
-use super::{new_builder, Builder};
+use super::{Builder, new_builder};
 use crate::util::skip_if_powershell_core_2303;
 
 pub fn test_typeahead() -> Builder {

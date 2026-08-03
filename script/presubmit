@@ -26,6 +26,9 @@ echo "Running clippy..."
 #
 # TODO(vorporeal): Re-enable the `all-features` flag once we've fixed things.
 cargo clippy --workspace --exclude warp_completer --all-targets --tests -- -D warnings
+# Workspace feature unification enables `warp/tui` through the `warp_tui` package.
+# Also lint the default GUI configuration used by `cargo run` and `./script/run`.
+cargo clippy -p warp --all-targets --tests -- -D warnings
 # Run clippy on warp_completer with default, rather than all features enabled, because there is
 # feature-gated logic for the WIP completions-on-js implementation.
 cargo clippy -p warp_completer --all-targets --tests -- -D warnings

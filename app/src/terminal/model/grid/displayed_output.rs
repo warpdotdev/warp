@@ -133,9 +133,11 @@ impl DisplayedOutput {
     ///     only have part of a logical line.
     pub fn new_from_displayed_lines(displayed_lines: Vec<DisplayedRows>) -> Self {
         // Assert that the displayed rows are in ascending order.
-        debug_assert!(displayed_lines
-            .windows(2)
-            .all(|w| w[0].range.end() < w[1].range.start()));
+        debug_assert!(
+            displayed_lines
+                .windows(2)
+                .all(|w| w[0].range.end() < w[1].range.start())
+        );
 
         let mut height = 0;
         for rows in displayed_lines.iter() {
@@ -193,10 +195,11 @@ impl DisplayedOutput {
         self.displayed_rows.extend(displayed_lines);
 
         // Assert that displayed_rows is still in ascending order.
-        debug_assert!(self
-            .displayed_rows
-            .windows(2)
-            .all(|w| w[0].range.end() < w[1].range.start()));
+        debug_assert!(
+            self.displayed_rows
+                .windows(2)
+                .all(|w| w[0].range.end() < w[1].range.start())
+        );
     }
 
     /// Marks a set of row ranges representing logical lines in the grid as
@@ -212,10 +215,11 @@ impl DisplayedOutput {
         self.prepend_to_row_translation();
 
         // Assert that displayed_rows is still in ascending order.
-        debug_assert!(self
-            .displayed_rows
-            .windows(2)
-            .all(|w| w[0].range.end() < w[1].range.start()));
+        debug_assert!(
+            self.displayed_rows
+                .windows(2)
+                .all(|w| w[0].range.end() < w[1].range.start())
+        );
     }
 
     /// Replaces the specified range in the existing displayed lines with new
@@ -246,10 +250,11 @@ impl DisplayedOutput {
         }
 
         // Assert that displayed_rows is still in ascending order.
-        debug_assert!(self
-            .displayed_rows
-            .windows(2)
-            .all(|w| w[0].range.end() < w[1].range.start()));
+        debug_assert!(
+            self.displayed_rows
+                .windows(2)
+                .all(|w| w[0].range.end() < w[1].range.start())
+        );
 
         removed
     }

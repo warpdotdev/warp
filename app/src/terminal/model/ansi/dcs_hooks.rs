@@ -437,11 +437,7 @@ where
 impl RawPrecmdValue {
     fn populate_field(&mut self, key: String, value: String) {
         let map_empty_to_none = |value: String| {
-            if value.is_empty() {
-                None
-            } else {
-                Some(value)
-            }
+            if value.is_empty() { None } else { Some(value) }
         };
         match key.as_str() {
             "pwd" => self.prompt_metadata.pwd = map_empty_to_none(value),

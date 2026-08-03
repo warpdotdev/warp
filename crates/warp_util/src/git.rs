@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 #[cfg(all(test, not(target_family = "wasm")))]
 #[path = "git_tests.rs"]
@@ -23,6 +23,7 @@ pub async fn run_git_command_with_env(
     path_env: Option<&str>,
 ) -> Result<String> {
     use command::Stdio;
+    use command::r#async::Command;
 
     log::debug!(
         "[GIT OPERATION] git.rs run_git_command git {}",

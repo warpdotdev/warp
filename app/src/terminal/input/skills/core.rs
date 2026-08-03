@@ -1,5 +1,5 @@
 use ai::skills::{SkillProvider, SkillReference, SkillScope};
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use fuzzy_match::{FuzzyMatchResult, match_indices_case_insensitive};
 use ordered_float::OrderedFloat;
 use warp_core::ui::icons::Icon;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -7,8 +7,7 @@ use warpui::{AppContext, EntityId, SingletonEntity as _};
 
 use crate::ai::skills::SkillManager;
 use crate::terminal::cli_agent_sessions::{CLIAgentInputState, CLIAgentSessionsModel};
-pub const LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE: &str =
-    "Local skills cannot run on a remote machine. Try forking the conversation locally and running the skill.";
+pub const LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE: &str = "Local skills cannot run on a remote machine. Try forking the conversation locally and running the skill.";
 
 /// Surface-neutral skill selection result shared by GUI and TUI menus.
 #[derive(Clone)]

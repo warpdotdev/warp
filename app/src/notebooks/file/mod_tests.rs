@@ -2,10 +2,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
-use repo_metadata::repositories::DetectedRepositories;
-use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
 use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
@@ -16,16 +16,16 @@ use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, View};
 
 use super::{FileNotebookView, FileState, MarkdownDisplayMode, SourceFile};
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::notebooks::context_menu::MenuSource;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::file::is_markdown_file;
 use crate::search::files::model::FileSearchModel;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
-use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::keys::TerminalKeybindings;

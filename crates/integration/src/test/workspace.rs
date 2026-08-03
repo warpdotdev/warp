@@ -4,7 +4,7 @@ use std::fs;
 use std::time::Duration;
 
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use settings::Setting as _;
 use warp::cmd_or_ctrl_shift;
 use warp::features::FeatureFlag;
@@ -12,7 +12,7 @@ use warp::integration_testing::clipboard::assert_clipboard_contains_string;
 use warp::integration_testing::pane_group::assert_focused_pane_index;
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::util::{
-    current_shell_starter_and_version, ExpectedExitStatus,
+    ExpectedExitStatus, current_shell_starter_and_version,
 };
 use warp::integration_testing::terminal::{
     assert_active_session_local_path, assert_command_executed_for_single_terminal_in_tab,
@@ -30,15 +30,15 @@ use warp::integration_testing::workspace::{
 use warp::settings::PaneSettings;
 use warp::terminal::shell::ShellType;
 use warp::workspace::tab_settings::{TabSettings, VerticalTabsDisplayGranularity};
-use warp::workspace::{WorkspaceAction, NEW_TAB_BUTTON_POSITION_ID};
+use warp::workspace::{NEW_TAB_BUTTON_POSITION_ID, WorkspaceAction};
 use warpui_core::event::{Event, ModifiersState};
 use warpui_core::integration::{AssertionCallback, AssertionOutcome, StepDataMap, TestStep};
 use warpui_core::windowing::WindowManager;
-use warpui_core::{async_assert, async_assert_eq, SingletonEntity, TypedActionView, WindowId};
+use warpui_core::{SingletonEntity, TypedActionView, WindowId, async_assert, async_assert_eq};
 
 use super::new_builder;
-use crate::util::skip_if_powershell_core_2303;
 use crate::Builder;
+use crate::util::skip_if_powershell_core_2303;
 
 const SOURCE_WINDOW_KEY: &str = "source window";
 const TARGET_WINDOW_KEY: &str = "target window";
@@ -335,9 +335,11 @@ fn assert_saved_positions_absent(labels: &'static [&'static str]) -> AssertionCa
         let presenter = app.presenter(window_id).expect("presenter should exist");
         let presenter = presenter.borrow();
         let position_cache = presenter.position_cache();
-        async_assert!(labels
-            .iter()
-            .all(|label| position_cache.get_position(label).is_none()))
+        async_assert!(
+            labels
+                .iter()
+                .all(|label| position_cache.get_position(label).is_none())
+        )
     })
 }
 
@@ -384,12 +386,12 @@ fn dispatch_mouse_event(app: &mut warpui_core::App, window_id: WindowId, event: 
 
 fn tab_bounds(app: &mut warpui_core::App, window_id: WindowId, tab_index: usize) -> RectF {
     let presenter = app.presenter(window_id).expect("presenter should exist");
-    let bounds = presenter
+
+    presenter
         .borrow()
         .position_cache()
         .get_position(tab_position_id(tab_index))
-        .unwrap_or_else(|| panic!("tab_position_{tab_index} should exist for {window_id:?}"));
-    bounds
+        .unwrap_or_else(|| panic!("tab_position_{tab_index} should exist for {window_id:?}"))
 }
 
 fn tab_center(app: &mut warpui_core::App, window_id: WindowId, tab_index: usize) -> Vector2F {

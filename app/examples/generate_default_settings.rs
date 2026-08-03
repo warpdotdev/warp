@@ -16,11 +16,11 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use settings::schema::SettingSchemaEntry;
 use settings::SettingsMode;
-use warp_core::features::{FeatureFlag, DEBUG_FLAGS, DOGFOOD_FLAGS, PREVIEW_FLAGS, RELEASE_FLAGS};
-use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
+use settings::schema::SettingSchemaEntry;
+use warp_core::features::{DEBUG_FLAGS, DOGFOOD_FLAGS, FeatureFlag, PREVIEW_FLAGS, RELEASE_FLAGS};
 use warpui_extras::user_preferences::UserPreferences as _;
+use warpui_extras::user_preferences::toml_backed::TomlBackedUserPreferences;
 
 /// Ensures all `inventory::submit!` registrations from the app crate's
 /// dependency tree are linked into the binary.
@@ -134,10 +134,10 @@ fn main() {
         }
 
         // Skip settings whose feature flag is not active for this channel.
-        if let Some(flag) = entry.feature_flag {
-            if !active_flags.contains(&flag) {
-                continue;
-            }
+        if let Some(flag) = entry.feature_flag
+            && !active_flags.contains(&flag)
+        {
+            continue;
         }
 
         // Skip settings that don't apply to the target surface.
@@ -147,16 +147,19 @@ fn main() {
 
         let default_json = (entry.file_default_value_fn)();
 
-        if let Err(err) = toml_prefs.write_value_with_hierarchy(
+        match toml_prefs.write_value_with_hierarchy(
             entry.storage_key,
             default_json,
             entry.hierarchy,
             entry.max_table_depth,
         ) {
-            eprintln!("Warning: failed to write {}: {err}", entry.storage_key);
-            failed += 1;
-        } else {
-            written += 1;
+            Err(err) => {
+                eprintln!("Warning: failed to write {}: {err}", entry.storage_key);
+                failed += 1;
+            }
+            _ => {
+                written += 1;
+            }
         }
     }
 

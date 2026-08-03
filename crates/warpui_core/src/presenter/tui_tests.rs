@@ -12,9 +12,9 @@ use instant::Instant;
 
 use super::TuiPresenter;
 use crate::elements::tui::{
-    TuiAnimated, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiLayoutContext,
-    TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiRect, TuiRectExt, TuiScreenPoint,
-    TuiScreenPosition, TuiSize,
+    TuiAnimated, TuiBufferExt, TuiChildView, TuiConstraint, TuiContainer, TuiElement,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiRect,
+    TuiRectExt, TuiScreenPoint, TuiScreenPosition, TuiSize,
 };
 use crate::platform::WindowStyle;
 use crate::{
@@ -348,6 +348,43 @@ impl TuiElement for RepaintDouble {
     }
 }
 
+/// A leaf that counts how many times `after_layout` is invoked on it, used to
+/// pin the presenter's post-layout pass and its propagation through containers.
+struct AfterLayoutDouble {
+    after_layout_calls: Rc<Cell<usize>>,
+    size: Option<TuiSize>,
+}
+
+impl TuiElement for AfterLayoutDouble {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        let size = constraint.clamp(TuiSize::new(1, 1));
+        self.size = Some(size);
+        size
+    }
+
+    fn after_layout(&mut self, _ctx: &mut TuiLayoutContext, _app: &AppContext) {
+        self.after_layout_calls
+            .set(self.after_layout_calls.get() + 1);
+    }
+
+    fn render(
+        &mut self,
+        _origin: TuiScreenPosition,
+        _surface: &mut TuiPaintSurface<'_>,
+        _ctx: &mut TuiPaintContext,
+    ) {
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+}
+
 // --- Real views for the child-view recursion tests -------------------------
 
 fn window_options() -> AddWindowOptions {
@@ -601,6 +638,33 @@ fn paint_only_repaint_reuses_the_cached_leaf_root_without_re_rendering() {
         });
         assert_eq!(frame.buffer.to_lines(), vec!["LEAF    "]);
         assert_eq!(renders.get(), 1);
+    });
+}
+
+#[test]
+fn after_layout_runs_once_and_propagates_through_containers() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let calls = Rc::new(Cell::new(0));
+            let leaf = AfterLayoutDouble {
+                after_layout_calls: calls.clone(),
+                size: None,
+            };
+            // Nest the leaf inside real containers so the assertion also covers
+            // container `after_layout` propagation, not just the root call.
+            let tree =
+                TuiContainer::new(TuiContainer::new(leaf.finish()).with_padding_x(1).finish())
+                    .finish();
+
+            let mut presenter = TuiPresenter::new();
+            presenter.present_element(tree, TuiRect::new(0, 0, 6, 3), app_ctx);
+
+            assert_eq!(
+                calls.get(),
+                1,
+                "after_layout should reach the nested leaf exactly once"
+            );
+        });
     });
 }
 

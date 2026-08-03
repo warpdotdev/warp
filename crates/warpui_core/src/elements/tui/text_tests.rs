@@ -13,6 +13,40 @@ fn renders_a_single_short_line() {
         vec!["hello     "],
     );
 }
+#[test]
+fn ellipsis_stays_inside_the_assigned_width() {
+    assert_eq!(
+        render_to_lines(
+            TuiText::new("infrastructure").truncate_with_ellipsis(),
+            TuiSize::new(8, 1),
+        ),
+        vec!["infra..."],
+    );
+    assert_eq!(
+        render_to_lines(
+            TuiText::new("abcdef").truncate_with_ellipsis(),
+            TuiSize::new(2, 1),
+        ),
+        vec![".."],
+    );
+}
+
+#[test]
+fn ellipsis_preserves_graphemes_and_span_style() {
+    let yellow = Style::default().fg(Color::Yellow);
+    let buffer = render_to_frame(
+        TuiText::from_spans([
+            ("e\u{301}cl".to_owned(), yellow),
+            ("air".to_owned(), Style::default()),
+        ])
+        .truncate_with_ellipsis(),
+        TuiSize::new(5, 1),
+    )
+    .buffer;
+
+    assert_eq!(buffer.to_lines(), vec!["e\u{301}c..."]);
+    assert_eq!(buffer[(2, 0)].fg, Color::Yellow);
+}
 
 #[test]
 fn layout_reports_content_width_and_row_count() {
@@ -35,6 +69,34 @@ fn layout_reports_content_width_and_row_count() {
     });
 }
 
+#[test]
+fn truncation_invalidates_a_cached_wrapped_measurement() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let constraint = TuiConstraint::loose(TuiSize::new(5, 10));
+            for truncate in [
+                TuiText::truncate as fn(TuiText) -> TuiText,
+                TuiText::truncate_with_ellipsis,
+            ] {
+                let mut text = TuiText::new("hello world");
+                let mut rendered_views = EntityIdMap::default();
+                let mut ctx = TuiLayoutContext {
+                    rendered_views: &mut rendered_views,
+                };
+                assert_eq!(
+                    text.layout(constraint, &mut ctx, app_ctx),
+                    TuiSize::new(5, 2)
+                );
+
+                text = truncate(text);
+                assert_eq!(
+                    text.layout(constraint, &mut ctx, app_ctx),
+                    TuiSize::new(5, 1)
+                );
+            }
+        });
+    });
+}
 #[test]
 fn word_wraps_at_the_width_boundary() {
     let text = TuiText::new("hello world foo");

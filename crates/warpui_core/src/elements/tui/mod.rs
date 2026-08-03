@@ -13,8 +13,8 @@
 //!   [`TuiDispatchEventResult`], [`TuiEventDispatchResult`]) threaded through
 //!   [`TuiElement::dispatch_event`]. (The crossterm → warp event *conversion*
 //!   lives with the runtime, in `crate::runtime`.)
-//! - The concrete elements: [`TuiText`], [`TuiFlex`], [`TuiContainer`],
-//!   [`TuiChildView`], and [`TuiEventHandler`].
+//! - The concrete elements: [`TuiText`], [`TuiFlex`], [`TuiStack`],
+//!   [`TuiContainer`], [`TuiChildView`], and [`TuiEventHandler`].
 //! - [`TuiParentElement`]: a trait for multi-child elements, providing
 //!   [`with_child`](TuiParentElement::with_child) /
 //!   [`with_children`](TuiParentElement::with_children) /
@@ -45,11 +45,16 @@ mod scene;
 mod scrollable;
 mod selectable;
 mod shimmering_text;
+mod size_constraint_switch;
+mod stack;
 mod text;
+mod text_helpers;
 mod viewported_list;
 
 pub use animated::TuiAnimated;
-pub use buffer::{Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiPaintSurface, TuiStyle};
+pub use buffer::{
+    Cell, Color, Modifier, TuiBuffer, TuiBufferExt, TuiPaintSurface, TuiStyle, TuiWidget,
+};
 pub use child_view::TuiChildView;
 pub use clipped::TuiClipped;
 pub use collapsible::tui_collapsible;
@@ -71,11 +76,14 @@ pub use scene::{
 };
 pub use scrollable::{TuiScrollable, TuiScrollableElement};
 pub use selectable::{
-    point_after_col, TuiRowGlyph, TuiRowResize, TuiSelectable, TuiSelectableElement,
-    TuiSelectionHandle, TuiSelectionSpan,
+    TuiRowGlyph, TuiRowResize, TuiSelectable, TuiSelectableElement, TuiSelectionHandle,
+    TuiSelectionSpan, point_after_col,
 };
 pub use shimmering_text::TuiShimmeringText;
+pub use size_constraint_switch::{TuiSizeConstraintCondition, TuiSizeConstraintSwitch};
+pub use stack::TuiStack;
 pub use text::TuiText;
+pub use text_helpers::{text_width, truncate_with_ellipsis};
 pub use viewported_list::{
     TuiViewportContent, TuiViewportPosition, TuiViewportVerticalAlignment, TuiViewportWindow,
     TuiViewportedElement, TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
@@ -140,6 +148,9 @@ pub struct TuiPaintContext<'a> {
     repaint_at: Option<Instant>,
     /// Hardware terminal cursor submitted during paint.
     terminal_cursor: Option<TuiScreenPoint>,
+    /// Stack-local captures of explicitly opaque paint regions. These regions
+    /// are compositing metadata only and never enter the terminal cell buffer.
+    opaque_region_captures: Vec<Vec<TuiScreenRect>>,
 }
 
 /// The soonest an element may request a repaint after the current paint.
@@ -156,6 +167,7 @@ impl<'a> TuiPaintContext<'a> {
             scene: TuiScene::default(),
             repaint_at: None,
             terminal_cursor: None,
+            opaque_region_captures: Vec::new(),
         }
     }
     /// Attaches the active scene layer to an absolute screen position.
@@ -206,6 +218,28 @@ impl<'a> TuiPaintContext<'a> {
     /// Makes the active scene layer transparent to hit testing.
     pub fn set_active_layer_click_through(&mut self) {
         self.scene.set_active_layer_click_through();
+    }
+
+    /// Captures explicit background fills painted by one stack child.
+    pub(crate) fn capture_opaque_regions<R>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> (R, Vec<TuiScreenRect>) {
+        self.opaque_region_captures.push(Vec::new());
+        let result = f(self);
+        let regions = self
+            .opaque_region_captures
+            .pop()
+            .expect("an opaque-region capture is active");
+        (result, regions)
+    }
+
+    /// Records an explicit background fill for the innermost containing stack.
+    /// Painting outside a stack needs no retained compositing metadata.
+    pub(crate) fn record_opaque_region(&mut self, region: TuiScreenRect) {
+        if let Some(regions) = self.opaque_region_captures.last_mut() {
+            regions.push(region);
+        }
     }
 
     /// Requests a repaint after `delay` (floored to [`MIN_REPAINT_DELAY`]),
@@ -272,6 +306,19 @@ pub trait TuiElement {
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> TuiSize;
+
+    /// Runs once after the whole tree has been laid out, before paint, so an
+    /// element can commit a *side effect* that depends on its final size
+    /// (mirroring the GUI's `Element::after_layout`). Unlike
+    /// [`layout`](TuiElement::layout) — the measurement pass, which may run more
+    /// than once and must stay pure — this fires exactly once per frame with the
+    /// arranged geometry settled, which is where size-driven effects like a PTY
+    /// resize belong. `ctx` carries the presenter's view map so container
+    /// elements can propagate the pass into their children (and
+    /// [`TuiChildView`](crate::elements::tui::TuiChildView) into its embedded
+    /// view). The default is a no-op; only container elements and elements with
+    /// a post-layout side effect override it.
+    fn after_layout(&mut self, _ctx: &mut TuiLayoutContext, _app: &AppContext) {}
 
     /// Paints this element at absolute `origin`. `surface` owns the active
     /// ratatui buffer and accepts only absolute-coordinate paint operations.

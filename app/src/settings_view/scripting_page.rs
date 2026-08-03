@@ -14,8 +14,8 @@ use warpui::ui_components::components::UiComponent;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::settings_page::{
-    render_body_item, LocalOnlyIconState, MatchData, PageType, SettingsPageMeta,
-    SettingsPageViewHandle, SettingsWidget,
+    LocalOnlyIconState, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
+    SettingsWidget, render_body_item,
 };
 use super::{SettingsSection, ToggleState};
 use crate::appearance::Appearance;
@@ -25,7 +25,7 @@ use crate::settings::{LocalControlMode, LocalControlModeSetting, LocalControlSet
 use crate::view_components::DismissibleToast;
 use crate::view_components::{Dropdown, DropdownItem};
 #[cfg(target_os = "macos")]
-use crate::workspace::{cli_install, ToastStack};
+use crate::workspace::{ToastStack, cli_install};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ScriptingSettingsPageAction {

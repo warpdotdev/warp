@@ -1,7 +1,7 @@
 [package]
 name = "mcp"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish.workspace = true
 license.workspace = true
 
@@ -34,7 +34,10 @@ warpui_extras = { workspace = true, features = ["default", "user_preferences-tom
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 rmcp = { workspace = true, features = ["client", "client-side-sse", "auth", "transport-streamable-http-client-reqwest", "transport-child-process"] }
-tokio = { workspace = true, features = ["sync", "macros", "rt", "time", "process", "io-util"] }
+tokio = { workspace = true, features = ["sync", "macros", "rt", "time", "process", "io-util", "net"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = ["Win32_System_Threading"] }
+
+[dev-dependencies]
+axum.workspace = true

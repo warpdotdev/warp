@@ -1,7 +1,7 @@
 [package]
 name = "warp_features"
 version = "0.0.0"
-edition = "2021"
+edition = "2024"
 authors.workspace = true
 publish.workspace = true
 license.workspace = true

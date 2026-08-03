@@ -6,10 +6,10 @@ use uuid::Uuid;
 use warp_errors::report_error;
 use warpui::{SingletonEntity, ViewContext};
 
-use super::{apply_hidden_child_agent_task_context, HiddenChildAgentTaskContext};
+use super::{HiddenChildAgentTaskContext, apply_hidden_child_agent_task_context};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
-use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::pane_group::{
     AmbientAgentViewModelHandleExt, PaneGroup, PaneId, TerminalPane, TerminalViewResources,
@@ -270,32 +270,35 @@ impl PaneGroup {
             ctx,
         );
 
-        if let Some(new_terminal_view) = self.terminal_view_from_pane_id(new_pane_id, ctx) {
-            if let Some(task_context) = child_task_context.as_ref() {
-                apply_hidden_child_agent_task_context(&new_terminal_view, task_context, ctx);
-            }
-            new_terminal_view.update(ctx, |terminal_view, ctx| {
-                terminal_view.restore_conversation_after_view_creation(
-                    RestoredAIConversation::new(child_conversation),
-                    true,
-                    RestoreConversationEntryBehavior::PreserveAgentViewState,
-                    ctx,
-                );
-                terminal_view.enter_agent_view(
-                    None,
-                    Some(child_id),
-                    AgentViewEntryOrigin::ChildAgent,
-                    ctx,
-                );
-            });
+        match self.terminal_view_from_pane_id(new_pane_id, ctx) {
+            Some(new_terminal_view) => {
+                if let Some(task_context) = child_task_context.as_ref() {
+                    apply_hidden_child_agent_task_context(&new_terminal_view, task_context, ctx);
+                }
+                new_terminal_view.update(ctx, |terminal_view, ctx| {
+                    terminal_view.restore_conversation_after_view_creation(
+                        RestoredAIConversation::new(child_conversation),
+                        true,
+                        RestoreConversationEntryBehavior::PreserveAgentViewState,
+                        ctx,
+                    );
+                    terminal_view.enter_agent_view(
+                        None,
+                        Some(child_id),
+                        AgentViewEntryOrigin::ChildAgent,
+                        ctx,
+                    );
+                });
 
-            self.child_agent_panes.insert(child_id, new_pane_id.into());
-        } else {
-            report_error!(
-                "Failed to get terminal view for child agent pane",
-                extra: { "child_id" => ?child_id }
-            );
-            self.discard_pane(new_pane_id.into(), ctx);
+                self.child_agent_panes.insert(child_id, new_pane_id.into());
+            }
+            _ => {
+                report_error!(
+                    "Failed to get terminal view for child agent pane",
+                    extra: { "child_id" => ?child_id }
+                );
+                self.discard_pane(new_pane_id.into(), ctx);
+            }
         }
     }
 

@@ -188,6 +188,7 @@ impl TuiPresenter {
             rendered_views: &mut self.rendered_views,
         };
         let arranged = arrange(element.as_mut(), area, &mut layout_ctx, ctx);
+        element.after_layout(&mut layout_ctx, ctx);
 
         let mut embeddings = EntityIdMap::default();
         {
@@ -221,6 +222,7 @@ impl TuiPresenter {
             rendered_views: &mut self.rendered_views,
         };
         let arranged = arrange(root.as_mut(), area, &mut layout_ctx, app);
+        root.after_layout(&mut layout_ctx, app);
         let (frame, scene) = paint(root.as_mut(), arranged, area, &mut self.rendered_views);
         self.last_element = Some(root);
         self.last_scene = Some(Rc::new(scene));

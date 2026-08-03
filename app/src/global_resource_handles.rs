@@ -58,7 +58,7 @@ pub struct GlobalResourceHandles {
 }
 
 impl GlobalResourceHandles {
-    #[cfg(any(test, feature = "integration_tests"))]
+    #[cfg(any(test, feature = "integration_tests", feature = "test-util"))]
     pub fn mock(app: &mut warpui::App) -> Self {
         let referral_theme_status = app.add_model(ReferralThemeStatus::new);
         let user_default_shell_unsupported_banner_model_handle =
@@ -83,6 +83,10 @@ pub struct GlobalResourceHandlesProvider {
 impl GlobalResourceHandlesProvider {
     pub fn get(&self) -> &GlobalResourceHandles {
         &self.global_resources
+    }
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn set_model_event_sender_for_test(&mut self, sender: SyncSender<ModelEvent>) {
+        self.global_resources.model_event_sender = Some(sender);
     }
 
     pub(super) fn new(global_resources: GlobalResourceHandles) -> Self {

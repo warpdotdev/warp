@@ -3,7 +3,7 @@
 
 //! Grid resize and reflow.
 
-use std::cmp::{min, Ordering};
+use std::cmp::{Ordering, min};
 use std::mem;
 
 use crate::terminal::model::cell::{Cell, Flags};

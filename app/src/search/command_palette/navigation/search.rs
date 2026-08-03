@@ -5,11 +5,11 @@ use itertools::Itertools;
 use warpui::{AppContext, ModelHandle};
 
 use crate::pane_group::PaneId;
+use crate::search::SyncDataSource;
+use crate::search::command_palette::navigation::DataSource;
 use crate::search::command_palette::navigation::render::CommandRenderInfo;
 use crate::search::command_palette::navigation::search_item::SearchItem;
-use crate::search::command_palette::navigation::DataSource;
 use crate::search::data_source::QueryResult;
-use crate::search::SyncDataSource;
 use crate::session_management::{CommandContext, SessionNavigationData, SessionSource};
 
 /// A session that was fuzzy matched against a search term.
@@ -252,8 +252,8 @@ mod full_text_searcher {
 
     use crate::pane_group::PaneId;
     use crate::search::command_palette::navigation::search::{
-        searchable_session_string_and_ranges, MatchedSession, SearcherAction,
-        SessionHighlightIndices, SessionMatchResult, SessionSearcher,
+        MatchedSession, SearcherAction, SessionHighlightIndices, SessionMatchResult,
+        SessionSearcher, searchable_session_string_and_ranges,
     };
     use crate::search::command_palette::navigation::search_item::SearchItem;
     use crate::search::data_source::QueryResult;
