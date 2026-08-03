@@ -905,6 +905,18 @@ fn login_line_label(signed_in_prefix: &str, user_info: TuiUserInfoSnapshot) -> O
         .map(|display| format!("{signed_in_prefix} {display}"))
 }
 
+/// User-facing copy for each visible background updater status.
+fn autoupdate_status_label(status: TuiAutoupdateStatus) -> Option<&'static str> {
+    match status {
+        TuiAutoupdateStatus::Idle => None,
+        TuiAutoupdateStatus::Checking => Some("checking for updates…"),
+        TuiAutoupdateStatus::Updating => Some("updating…"),
+        TuiAutoupdateStatus::UpToDate => Some("up to date"),
+        TuiAutoupdateStatus::Failed => Some("automatic update failed"),
+        TuiAutoupdateStatus::PendingRestart => Some("update installed, restart to apply"),
+    }
+}
+
 /// The version line: the release version (or "dev build"), with the
 /// background auto-updater's status appended in parentheses. Dev builds
 /// never run the updater (and have no version), so they render plain; the
@@ -918,20 +930,17 @@ fn render_version_line(builder: &TuiUiBuilder, app: &AppContext) -> Box<dyn TuiE
             .truncate()
             .finish();
     };
-    let suffix = match TuiAutoupdater::as_ref(app).status() {
-        TuiAutoupdateStatus::Idle => None,
-        TuiAutoupdateStatus::Checking => Some(("checking for updates…", muted)),
-        TuiAutoupdateStatus::Updating => Some(("updating…", muted)),
-        TuiAutoupdateStatus::UpToDate => Some(("up to date", muted)),
-        // The one state worth drawing attention to: an update is staged and
-        // a restart picks it up.
-        TuiAutoupdateStatus::PendingRestart => Some((
-            "update installed, restart to apply",
-            builder.success_glyph_style(),
-        )),
-    };
-    let Some((label, style)) = suffix else {
+    let status = TuiAutoupdater::as_ref(app).status();
+    let Some(label) = autoupdate_status_label(status) else {
         return TuiText::new(version).with_style(muted).truncate().finish();
+    };
+    let style = match status {
+        TuiAutoupdateStatus::Idle => unreachable!("idle status has no label"),
+        TuiAutoupdateStatus::Checking
+        | TuiAutoupdateStatus::Updating
+        | TuiAutoupdateStatus::UpToDate => muted,
+        TuiAutoupdateStatus::Failed => builder.error_text_style(),
+        TuiAutoupdateStatus::PendingRestart => builder.success_glyph_style(),
     };
     // Like the bullet rows below: the version reports its natural width and
     // the suffix wraps against the remaining column width.
