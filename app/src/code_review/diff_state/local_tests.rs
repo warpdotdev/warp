@@ -373,6 +373,68 @@ async fn renamed_file_content_at_head_reads_old_path() {
 }
 
 #[tokio::test]
+async fn staged_rename_and_modify_produces_non_empty_diff() {
+    let repo_dir = tempfile::tempdir().expect("create temp repo dir");
+    let repo_path = repo_dir.path();
+
+    run_git_command(repo_path, &["init", "-b", "main"])
+        .await
+        .expect("git init");
+    run_git_command(repo_path, &["config", "user.email", "test@test.com"])
+        .await
+        .expect("git config email");
+    run_git_command(repo_path, &["config", "user.name", "Test"])
+        .await
+        .expect("git config name");
+    std::fs::write(
+        repo_path.join("old.txt"),
+        "line one\nline two\nline three\n",
+    )
+    .expect("write old.txt");
+    run_git_command(repo_path, &["add", "old.txt"])
+        .await
+        .expect("git add");
+    run_git_command(repo_path, &["commit", "-m", "initial"])
+        .await
+        .expect("git commit");
+
+    // Stage both the rename and a content edit, so nothing is left unstaged (git status
+    // reports this as a plain "R " entry with no unstaged component).
+    run_git_command(repo_path, &["mv", "old.txt", "new.txt"])
+        .await
+        .expect("git mv");
+    std::fs::write(
+        repo_path.join("new.txt"),
+        "line one\nline two changed\nline three\n",
+    )
+    .expect("write new.txt");
+    run_git_command(repo_path, &["add", "new.txt"])
+        .await
+        .expect("git add new.txt");
+
+    let diff = LocalDiffStateModel::get_file_diff(
+        repo_path,
+        "new.txt",
+        &GitFileStatus::Renamed {
+            old_path: "old.txt".to_string(),
+        },
+        false,
+        None,
+    )
+    .await
+    .expect("get_file_diff should succeed for a fully staged rename+modify");
+
+    // A fully staged rename with a staged content edit must still render an inline diff
+    // instead of falling through to "File renamed without changes": comparing only the
+    // index against the working tree (as before the fix) produced an empty diff here,
+    // since both changes were already staged.
+    assert!(
+        !diff.is_empty(),
+        "expected a non-empty diff for a fully staged rename+modify"
+    );
+}
+
+#[tokio::test]
 async fn num_lines_in_file_if_non_binary_counts_lines_in_text_file() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let file_path = dir.path().join("file.txt");

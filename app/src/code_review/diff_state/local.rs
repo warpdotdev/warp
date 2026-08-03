@@ -2499,15 +2499,22 @@ impl LocalDiffStateModel {
                         file_path,
                     ]
                 }
-                GitFileStatus::Renamed { .. } => {
-                    // For renamed files - compare against index
+                GitFileStatus::Renamed { old_path } => {
+                    // Compare the working tree directly against HEAD, passing both the
+                    // old and new paths (mirroring the merge-base branch above). This
+                    // covers every staged/unstaged combination of the rename and any
+                    // content edit: comparing against the index alone (as before) produced
+                    // an empty diff whenever the rename and edit were both staged, since
+                    // the working tree then matched the index exactly.
                     vec![
                         "diff",
                         "--no-ext-diff",
                         "--patch-with-raw",
                         "-z",
                         "--no-color",
+                        "HEAD",
                         "--",
+                        old_path,
                         file_path,
                     ]
                 }
