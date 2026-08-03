@@ -160,7 +160,6 @@ const SECTION_BORDER_WIDTH: f32 = 1.;
 
 const POSITION_ID: &str = "settings_pane";
 
-#[derive(Debug, PartialEq, Eq)]
 struct PlanHeaderPresentation {
     badge_labels: Vec<String>,
     show_personal_upgrade: bool,
