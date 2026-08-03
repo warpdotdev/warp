@@ -4,13 +4,11 @@ use ai::LLMId;
 use onboarding::slides::OnboardingModelInfo;
 use onboarding::{CreditPackOption, OnboardingAuthState};
 use warp_core::ui::icons::Icon;
-use warpui::{AppContext, SingletonEntity, WindowId};
+use warpui::{AppContext, SingletonEntity};
 
-use super::AIRequestUsageModel;
 use super::llms::{LLMInfo, LLMPreferences};
 use crate::auth::AuthStateProvider;
 use crate::pricing::{PricingInfoModel, onboarding_credit_pack_options};
-use crate::server::ids::ServerId;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 impl From<&LLMInfo> for OnboardingModelInfo {
@@ -71,22 +69,4 @@ pub fn onboarding_credit_packs(ctx: &AppContext) -> Vec<CreditPackOption> {
         return Vec::new();
     };
     onboarding_credit_pack_options(options, policy.effective_premium_bps())
-}
-
-/// The team to bill an onboarding credit-pack purchase to: whichever team the
-/// window is currently scoped to. Usually `None` during onboarding, which lets
-/// the server resolve or create the buyer's personal team — but team discovery
-/// and domain capture can land a user on a team during signup, and in that case
-/// the server should be told which one rather than being handed `None`.
-pub fn onboarding_purchase_team_uid(window_id: WindowId, ctx: &AppContext) -> Option<ServerId> {
-    UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id)
-}
-
-/// The server-authoritative answer to "can this user start an AI request right
-/// now". `None` until the first answer arrives, which onboarding treats as "not
-/// yet known" rather than as availability.
-pub fn has_ai_credit_availability(ctx: &AppContext) -> bool {
-    AIRequestUsageModel::as_ref(ctx)
-        .server_availability()
-        .is_some_and(|availability| availability.available)
 }

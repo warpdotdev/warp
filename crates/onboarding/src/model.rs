@@ -563,16 +563,10 @@ impl OnboardingStateModel {
         ctx.notify();
     }
 
-    /// Reports the server's answer to "can this user start an AI request right
-    /// now", observed on a refresh while checkout is pending. The purchase
-    /// completes as soon as the answer is yes.
-    ///
-    /// This is deliberately the generic availability decision rather than
-    /// "did these particular add-on credits land". Onboarding doesn't care
-    /// *how* the user ended up with access — only that it never lets someone
-    /// through who still can't use AI. This offer is shown to users with no
-    /// base credits, so an available answer means access genuinely arrived,
-    /// and cancelling checkout leaves them here.
+    /// Reports whether the user can make an AI request, observed on a refresh
+    /// while checkout is pending. Deliberately the generic availability answer
+    /// rather than "did these particular credits land": onboarding only needs
+    /// to avoid letting through someone who still can't use AI.
     pub(crate) fn on_credit_availability_observed(
         &mut self,
         available: bool,

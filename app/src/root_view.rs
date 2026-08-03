@@ -42,8 +42,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::blocklist::SerializedBlockListItem;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::onboarding::{
-    build_onboarding_models, current_onboarding_auth_state, has_ai_credit_availability,
-    onboarding_credit_packs, onboarding_purchase_team_uid,
+    build_onboarding_models, current_onboarding_auth_state, onboarding_credit_packs,
 };
 use crate::ai::request_usage_model::AIRequestUsageModelEvent;
 use crate::app_state::{AppState, PaneUuid, WindowSnapshot};
@@ -2258,7 +2257,7 @@ impl RootView {
         );
 
         // Browser checkout doesn't report back to the app, so the purchase is
-        // only complete once the server reports the user can make AI requests.
+        // only complete once the user can actually make an AI request.
         let onboarding_view_for_usage = onboarding_view.clone();
         ctx.subscribe_to_model(
             &AIRequestUsageModel::handle(ctx),
@@ -2266,10 +2265,7 @@ impl RootView {
                 if !matches!(event, AIRequestUsageModelEvent::CreditAvailabilityUpdated) {
                     return;
                 }
-                // The view completes the purchase only when the server says AI
-                // is available, so a user who cancels checkout without gaining
-                // access stays on the slide.
-                let available = has_ai_credit_availability(ctx);
+                let available = AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx);
                 onboarding_view_for_usage.update(ctx, |onboarding_view, ctx| {
                     onboarding_view.on_ai_credit_availability_observed(available, ctx);
                 });
@@ -2950,13 +2946,8 @@ impl RootView {
                 }
             },
             AgentOnboardingEvent::PurchaseCreditsRequested { credits } => {
-                // Bill whichever team this window is scoped to. That is usually
-                // `None` during onboarding, which lets the server resolve or
-                // create the buyer's personal team — but team discovery and
-                // domain capture can land a user on a team during signup, and
-                // the server should be told which one rather than handed `None`.
                 let credits = *credits;
-                let team_uid = onboarding_purchase_team_uid(ctx.window_id(), ctx);
+                let team_uid = UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id());
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
                     user_workspaces.purchase_addon_credits(team_uid, credits, ctx);
                 });
@@ -2975,9 +2966,6 @@ impl RootView {
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
                     prefs.refresh_available_models(ctx);
                 });
-                // The workspace-metadata refresh above also carries the
-                // server's AI credit availability decision, which is what lets
-                // a checkout-pending onboarding purchase complete.
                 TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
                     drop(manager.refresh_workspace_metadata(ctx));
                 });
