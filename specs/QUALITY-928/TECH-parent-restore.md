@@ -463,5 +463,4 @@ Fix 1 has landed on the branch:
 - `b26b8aaaf` — loading-pane restore regression fix
   (`app/src/pane_group/ambient_pane_restoration.rs`).
 
-Fix 2 is not implemented yet and can land as a single follow-up commit; it is
-independent of Fix 1 and does not modify it.
+Fix 2 landed in commit c070c6910.
