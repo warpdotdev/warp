@@ -2237,9 +2237,6 @@ impl TypedActionView for BillingAndUsagePageV2View {
     }
 }
 
-/// Whether the "Open admin panel" link should be shown on the Billing & Usage
-/// page V2 plan header: visible for an enterprise-plan workspace/team when the
-/// viewer is either a team admin or a workspace admin.
 fn should_show_open_admin_panel_link(
     is_team_admin: bool,
     is_workspace_admin: bool,
