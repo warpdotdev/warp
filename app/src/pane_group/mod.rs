@@ -956,6 +956,12 @@ pub struct PaneGroup {
     /// populated when `OrchestrationUnifiedStack` is enabled.
     pending_child_hydrations: HashMap<AmbientAgentTaskId, AIConversationId>,
 
+    /// Restored cloud agent parents whose `task.children` have not yet been
+    /// fully materialized as local child conversations, keyed by the parent's
+    /// run id. Re-driven from the shared `TasksUpdated` subscription until
+    /// every child in the server-reported list has a local conversation.
+    pending_parent_child_seeds: HashMap<AmbientAgentTaskId, AIConversationId>,
+
     /// The most recent live session that failed to join for each viewer child.
     /// Re-drive does not retry the same session, but a later execution with a
     /// new session id may still attach.
@@ -3180,6 +3186,7 @@ impl PaneGroup {
             pending_ambient_agent_conversation_restorations: HashMap::new(),
             pending_remote_child_hydrations: HashMap::new(),
             pending_child_hydrations: HashMap::new(),
+            pending_parent_child_seeds: HashMap::new(),
             failed_viewer_child_sessions: HashMap::new(),
             pending_ambient_restoration_subscription_installed: false,
             child_agent_panes: HashMap::new(),
@@ -3327,6 +3334,7 @@ impl PaneGroup {
         // state is the active one.
         self.process_pending_remote_child_hydrations(ctx);
         self.process_pending_child_hydrations(ctx);
+        self.process_pending_parent_child_seeds(ctx);
     }
 
     /// Initial layout for a [`PaneGroup`] with a single ambient agent pane.
@@ -3729,13 +3737,16 @@ impl PaneGroup {
                 .ambient_agent_view_model()
                 .is_some()
             {
-                Self::load_data_into_restored_ambient_cloud_mode_view(
+                let parent_conversation_id = Self::load_data_into_restored_ambient_cloud_mode_view(
                     terminal_view,
                     cloud_conversation,
                     task_id,
                     true,
                     ctx,
                 );
+                if let Some(parent_conversation_id) = parent_conversation_id {
+                    self.seed_child_conversations_from_task(parent_conversation_id, task_id, ctx);
+                }
                 ctx.notify();
                 return;
             }
@@ -5364,7 +5375,7 @@ impl PaneGroup {
             Self::create_cloud_mode_terminal(resources, view_bounds.size(), true, ctx);
         let terminal_view_id = terminal_view.id();
 
-        Self::load_data_into_restored_ambient_cloud_mode_view(
+        let parent_conversation_id = Self::load_data_into_restored_ambient_cloud_mode_view(
             terminal_view.clone(),
             cloud_conversation,
             task_id,
@@ -5388,16 +5399,25 @@ impl PaneGroup {
             self.restore_missing_child_agent_panes_for_terminal_pane_if_needed(new_pane_id, ctx);
         }
 
+        // Seeded after the swap so the parent's pane is resolvable and any
+        // newly-created children can be materialized in the same pass.
+        if let Some(parent_conversation_id) = parent_conversation_id {
+            self.seed_child_conversations_from_task(parent_conversation_id, task_id, ctx);
+        }
+
         success
     }
 
+    /// Restores a cloud agent parent into a cloud-mode pane, returning the
+    /// parent's local conversation id when one was restored. Callers with
+    /// `&mut self` use it to seed the parent's children from server data.
     fn load_data_into_restored_ambient_cloud_mode_view(
         terminal_view: ViewHandle<TerminalView>,
         cloud_conversation: CloudConversationData,
         task_id: AmbientAgentTaskId,
         mark_as_viewing_shared_session: bool,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> Option<AIConversationId> {
         // URL-loaded conversation transcripts (e.g. Warp-on-Web deep links)
         // restore from conversation data before the ambient task cache is
         // guaranteed to contain this task. Native continuation usually reaches
@@ -5493,6 +5513,8 @@ impl PaneGroup {
         ActiveAgentViewsModel::handle(ctx).update(ctx, |active_views, ctx| {
             active_views.register_ambient_session(terminal_view.id(), task_id, ctx);
         });
+
+        conversation_id
     }
 
     /// Clear all panes that were hidden due to being closed (for undo functionality)

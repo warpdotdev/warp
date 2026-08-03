@@ -2757,7 +2757,9 @@ fn agent_event_filters_equivalent(a: &AgentEventFilter, b: &AgentEventFilter) ->
     }
 }
 
-fn agent_task_harness(task: &crate::ai::ambient_agents::task::AmbientAgentTask) -> Option<Harness> {
+pub(crate) fn agent_task_harness(
+    task: &crate::ai::ambient_agents::task::AmbientAgentTask,
+) -> Option<Harness> {
     task.agent_config_snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.harness.as_ref())

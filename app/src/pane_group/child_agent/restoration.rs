@@ -8,8 +8,11 @@ use warpui::{SingletonEntity, ViewContext};
 
 use super::{HiddenChildAgentTaskContext, apply_hidden_child_agent_task_context};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::orchestration_event_streamer::agent_task_harness;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::features::FeatureFlag;
 use crate::pane_group::{
@@ -62,6 +65,136 @@ impl PaneGroup {
             };
 
             self.create_hidden_child_agent_pane(child_conversation, parent_pane_id, ctx);
+        }
+    }
+
+    /// Rebuilds the parent→child conversation index for a restored cloud agent
+    /// parent from the server-reported `task.children` list. This is the only
+    /// pill-bar source on clients without cross-session SQLite (web) and on the
+    /// first restore of a run whose parent was never persisted.
+    ///
+    /// Idempotent: children that already resolve locally are left untouched, so
+    /// racing the SSE family drain or the local conversation index costs
+    /// nothing.
+    pub(in crate::pane_group) fn seed_child_conversations_from_task(
+        &mut self,
+        parent_conversation_id: AIConversationId,
+        parent_task_id: AmbientAgentTaskId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::OrchestrationUnifiedStack.is_enabled() {
+            return;
+        }
+
+        let task = AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+            model.get_or_async_fetch_task_data(&parent_task_id, ctx)
+        });
+        let Some(task) = task else {
+            // Fetch in flight: re-drive on the next `TasksUpdated`.
+            self.pending_parent_child_seeds
+                .insert(parent_task_id, parent_conversation_id);
+            self.ensure_pending_ambient_restoration_subscription(ctx);
+            return;
+        };
+
+        // Older servers don't populate `children`; fall back to whatever the
+        // local conversation index already holds.
+        if task.children.is_empty() {
+            self.pending_parent_child_seeds.remove(&parent_task_id);
+            return;
+        }
+
+        // Children whose task data is still being fetched keep the parent
+        // pending. Malformed ids are unrecoverable and are not retried.
+        let mut all_children_resolved = true;
+        for child_run_id in &task.children {
+            let Ok(child_task_id) = child_run_id.parse::<AmbientAgentTaskId>() else {
+                log::warn!(
+                    "seed_child_conversations_from_task: malformed child run id \
+                     {child_run_id:?} on parent {parent_task_id}; skipping"
+                );
+                continue;
+            };
+
+            let child_task = AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+                model.get_or_async_fetch_task_data(&child_task_id, ctx)
+            });
+            let Some(child_task) = child_task else {
+                all_children_resolved = false;
+                continue;
+            };
+
+            let Some(terminal_surface_id) = BlocklistAIHistoryModel::as_ref(ctx)
+                .terminal_surface_id_for_conversation(&parent_conversation_id)
+            else {
+                log::warn!(
+                    "seed_child_conversations_from_task: parent conversation \
+                     {parent_conversation_id:?} has no terminal surface; cannot seed \
+                     child_run_id={child_run_id}"
+                );
+                all_children_resolved = false;
+                continue;
+            };
+
+            let name = child_task.display_name().to_string();
+            let fallback_title = child_task.title.trim().to_string();
+            let harness = agent_task_harness(&child_task);
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.ensure_remote_child_conversation(
+                    terminal_surface_id,
+                    parent_conversation_id,
+                    child_run_id.clone(),
+                    child_task.task_id,
+                    name,
+                    fallback_title,
+                    harness,
+                    ctx,
+                )
+            });
+        }
+
+        if all_children_resolved {
+            self.pending_parent_child_seeds.remove(&parent_task_id);
+        } else {
+            self.pending_parent_child_seeds
+                .insert(parent_task_id, parent_conversation_id);
+            self.ensure_pending_ambient_restoration_subscription(ctx);
+        }
+
+        // Pills render straight off the conversation index, so a parent pane
+        // that isn't resolvable yet is not an error — children materialize
+        // lazily on click.
+        if let Some(parent_pane_id) =
+            self.pane_id_for_owned_conversation(parent_conversation_id, ctx)
+        {
+            self.restore_missing_child_agent_panes_for_parent(
+                parent_conversation_id,
+                parent_pane_id,
+                ctx,
+            );
+        }
+        ctx.notify();
+    }
+
+    /// Re-drives parent seeds whose task data (or a child's) was still being
+    /// fetched, using the shared `TasksUpdated` subscription.
+    pub(in crate::pane_group) fn process_pending_parent_child_seeds(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::OrchestrationUnifiedStack.is_enabled()
+            || self.pending_parent_child_seeds.is_empty()
+        {
+            return;
+        }
+
+        let pending: Vec<_> = self
+            .pending_parent_child_seeds
+            .iter()
+            .map(|(task_id, conversation_id)| (*task_id, *conversation_id))
+            .collect();
+        for (parent_task_id, parent_conversation_id) in pending {
+            self.seed_child_conversations_from_task(parent_conversation_id, parent_task_id, ctx);
         }
     }
 
