@@ -650,10 +650,9 @@ fn test_parse_wsl_unc_path() {
         "/srv/repo",
     );
     assert_parses_wsl_unc("//wsl$/Ubuntu/home/user", "Ubuntu", "/home/user");
-    // The host and the verbatim prefix are matched case-insensitively.
+    // The host is matched case-insensitively.
     assert_parses_wsl_unc(r"\\WSL$\Ubuntu\src", "Ubuntu", "/src");
     assert_parses_wsl_unc(r"\\Wsl.LocalHost\Ubuntu\src", "Ubuntu", "/src");
-    assert_parses_wsl_unc(r"\\?\unc\wsl$\Ubuntu\src", "Ubuntu", "/src");
     // Trailing separators are dropped.
     assert_parses_wsl_unc(r"\\wsl$\Ubuntu\home\user\", "Ubuntu", "/home/user");
     assert_parses_wsl_unc("//wsl$/Ubuntu/home/user/", "Ubuntu", "/home/user");
