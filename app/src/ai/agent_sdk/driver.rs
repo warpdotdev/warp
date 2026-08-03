@@ -26,6 +26,7 @@ use warp_cli::agent::{Harness, OutputFormat};
 use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
+use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::{safe_debug, safe_error, safe_info};
 use warp_errors::{ErrorExt, register_error, report_error, report_if_error};
@@ -2274,19 +2275,35 @@ impl AgentDriver {
                         .collect();
                     let credentials = foreground
                         .spawn(move |_, ctx| {
-                            let manager = TemplatableMCPServerManager::as_ref(ctx);
-                            let local_names = local_uuids
-                                .iter()
-                                .filter_map(|uuid| {
-                                    manager.get_installed_server(uuid).map(|installation| {
-                                        installation.templatable_mcp_server().name.clone()
+                            let (local_names, builtin_already_active) = {
+                                let manager = TemplatableMCPServerManager::as_ref(ctx);
+                                let local_names = local_uuids
+                                    .iter()
+                                    .filter_map(|uuid| {
+                                        manager.get_installed_server(uuid).map(|installation| {
+                                            installation.templatable_mcp_server().name.clone()
+                                        })
                                     })
-                                })
-                                .collect::<Vec<_>>();
+                                    .collect::<Vec<_>>();
+                                let builtin_already_active = manager.is_server_active_or_pending(
+                                    builtin::FACTORY_MCP_INSTALLATION_UUID,
+                                );
+                                (local_names, builtin_already_active)
+                            };
+                            // Interactive clients (GUI/TUI) attach built-ins
+                            // through `sync_builtin_servers`, under the same
+                            // stable installation UUID. The driver currently
+                            // only runs in SDK mode, where that path never
+                            // spawns, but guard anyway so this injection can
+                            // never double-spawn the built-in if the driver
+                            // is ever hosted in an interactive process.
+                            let builtin_owned_by_manager = builtin_already_active
+                                || AppExecutionMode::as_ref(ctx).can_autostart_mcp_servers();
                             let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
-                            let credentials = (!auth_state.is_anonymous_or_logged_out())
-                                .then(|| auth_state.credentials())
-                                .flatten();
+                            let credentials = (!builtin_owned_by_manager
+                                && !auth_state.is_anonymous_or_logged_out())
+                            .then(|| auth_state.credentials())
+                            .flatten();
                             (credentials, local_names)
                         })
                         .await
