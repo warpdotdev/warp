@@ -47,20 +47,18 @@ fn count_secret_regex_list_events(
     mutate: impl FnOnce(&mut PrivacySettings, &mut ModelContext<PrivacySettings>),
 ) -> usize {
     let (sender, receiver) = async_channel::unbounded();
-    let model_clone = model.clone();
-    model.update(app, move |_, ctx| {
-        let sender = sender.clone();
-        ctx.subscribe_to_model(
-            &model_clone,
-            move |_, event: &PrivacySettingsChangedEvent, _| {
-                if matches!(
-                    event,
-                    PrivacySettingsChangedEvent::CustomSecretRegexList { .. }
-                ) {
-                    let _ = sender.try_send(());
-                }
-            },
-        );
+    // Subscribe at the app level rather than from the model itself:
+    // `ModelContext::subscribe_to_model` disallows self-subscription, since
+    // `emit_event` removes the subscriber from `app.models` while dispatching.
+    app.update(|ctx| {
+        ctx.subscribe_to_model(model, move |_, event, _| {
+            if matches!(
+                event,
+                PrivacySettingsChangedEvent::CustomSecretRegexList { .. }
+            ) {
+                let _ = sender.try_send(());
+            }
+        });
     });
 
     model.update(app, |settings, ctx| mutate(settings, ctx));

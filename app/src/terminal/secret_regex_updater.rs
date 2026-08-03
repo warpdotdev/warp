@@ -34,7 +34,7 @@ impl CustomSecretRegexUpdater {
         // and still have an empty in-memory DFA, which silently bypasses the
         // local MCP-save redaction check that #10839 wired up. See #11262.
         let safe_mode_settings = SafeModeSettings::handle(ctx);
-        ctx.subscribe_to_model(&safe_mode_settings, |me, evt, ctx| {
+        ctx.subscribe_to_model(&safe_mode_settings, |me, _, evt, ctx| {
             if let SafeModeSettingsChangedEvent::SafeModeEnabled { .. } = evt {
                 me.update_custom_secret_regex_list(ctx);
             }
