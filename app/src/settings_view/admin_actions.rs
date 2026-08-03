@@ -12,7 +12,7 @@ impl AdminActions {
         format!("{}/admin/{}", ChannelState::server_root_url(), team_uid)
     }
 
-    pub fn admin_panel_link() -> String {
+    pub fn admin_panel_link_for_workspace() -> String {
         format!("{}/admin", ChannelState::server_root_url())
     }
 
@@ -23,7 +23,7 @@ impl AdminActions {
     }
 
     pub fn open_workspace_admin_panel(ctx: &mut AppContext) {
-        let url = Self::admin_panel_link();
+        let url = Self::admin_panel_link_for_workspace();
         ctx.open_url(&url);
     }
 
