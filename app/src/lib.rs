@@ -74,7 +74,6 @@ mod search_bar;
 mod server;
 mod session_management;
 mod shell_indicator;
-mod startup_steps;
 mod suggestions;
 mod system;
 mod tab;
@@ -1047,14 +1046,15 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     }
     timer.mark_interval_end("LOG_FILE_SETUP_COMPLETE");
 
-    // Claim a background-only process type before anything can touch AppKit or
-    // Launch Services, so a headless launch of the bundled GUI executable
-    // (most notably the `oz` / `oz-<channel>` CLI wrapper) never acquires a
-    // Dock tile. See `platform::mac::mark_process_as_background_only`.
+    // Any headless invocation must claim a background-only process type before
+    // anything can touch AppKit or Launch Services, so that a headless launch of
+    // the bundled GUI executable — most notably the `oz` / `oz-<channel>` CLI
+    // wrapper, which `exec`s it from inside `Warp.app` — never acquires a Dock
+    // tile. See APP-2946.
     #[cfg(target_os = "macos")]
-    if let Err(e) = startup_steps::with_background_process_setup(&launch_mode, || {
-        platform::mac::mark_process_as_background_only()
-    }) {
+    if launch_mode.is_headless()
+        && let Err(e) = platform::mac::mark_process_as_background_only()
+    {
         log::warn!("Failed to mark process as background-only: {e:#}");
     }
 
@@ -1228,8 +1228,10 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         app_builder.enable_headless_microphone_access_query();
     }
 
+    // A headless invocation has no Dock presence, so it performs no Dock-visible
+    // setup at all (Dock icon, Dock menu, menu bar). See APP-2946.
     #[cfg(target_os = "macos")]
-    startup_steps::with_dock_and_menu_setup(&launch_mode, || {
+    if !launch_mode.is_headless() {
         use warpui::AssetProvider as _;
         use warpui::platform::mac::AppExt;
 
@@ -1247,8 +1249,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         app_builder.set_show_dock_icon_on_launch(show_dock_icon);
         app_builder.set_menu_bar_builder(app_menus::menu_bar);
         app_builder.set_dock_menu_builder(|_| app_menus::dock_menu());
-        Ok(())
-    })?;
+    }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
@@ -1763,15 +1764,16 @@ pub(crate) fn initialize_app(
     // launched as part of the auto-update process. We may have failed to remove
     // the executable on a previous launch of the app and should try again.
     //
-    // This mutates the installed app bundle, so the step is restricted to launch
-    // modes that own it: a headless launch — in particular the bundled CLI,
-    // which runs the GUI executable from inside `Warp.app` — must leave the
-    // bundle alone.
-    if let Err(e) = startup_steps::with_old_executable_cleanup(
-        launch_mode,
-        FeatureFlag::Autoupdate.is_enabled(),
-        autoupdate::remove_old_executable,
-    ) {
+    // On macOS this deletes `Contents/MacOS/old` from inside the installed app
+    // bundle, so it runs behind the same `can_autoupdate` guard as the rest of
+    // the autoupdate machinery: an execution mode that never autoupdates must
+    // not mutate that bundle. The bundled CLI runs the GUI executable from
+    // inside `Warp.app`, so without this it would rewrite a bundle it does not
+    // own. See APP-2946.
+    if FeatureFlag::Autoupdate.is_enabled()
+        && AppExecutionMode::as_ref(ctx).can_autoupdate()
+        && let Err(e) = autoupdate::remove_old_executable()
+    {
         report_error!(e.context("Failed to remove old executable"));
     }
 
