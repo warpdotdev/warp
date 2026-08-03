@@ -333,6 +333,240 @@ in `process_pending_ambient_restorations`, and a cache-check branch in
 (~60-100 LOC including the fallback path and a test covering both orderings
 of transcript-fetch-first vs. ancestor-fetch-first completion).
 
+## No-Persistence Dependencies
+
+This section documents every place that currently depends on remote child
+conversations (`is_remote_child=true` rows) being persisted to the local
+`agent_conversations` table, discovered while investigating a regression from
+a trial change that stopped persisting them. The trial change broke child
+restore for a scenario this spec's Problem/Design sections do not cover:
+a **local, non-viewer parent** (a regular local agent-mode conversation that
+calls the `run_agents` tool, not `/cloud-agent`) with remote children. That
+parent is a normal local conversation — `is_viewing_shared_session=false` —
+so it is persisted today regardless of this spec, and would keep being
+persisted under a broader no-child-persistence change. Only its children
+(`is_remote_child=true`) would stop being persisted.
+
+### 1. Where persisted remote-child data is read at startup
+
+`BlocklistAIHistoryModel::new` (`history_model.rs:331-366`) runs
+`initialize_historical_conversations` (`conversation_loader.rs:489-608`)
+synchronously, in the constructor, over `multi_agent_conversations` — *every*
+locally persisted `agent_conversations` row, loaded eagerly and fully by
+`persistence::initialize` before any pane exists
+(`app/src/lib.rs:1506-1519`, `persistence/mod.rs:297`). For each row it
+deserializes `AgentConversationData` and calls
+`resolved_parent_conversation_id_from_persisted_data`
+(`history_model.rs:497-509`), which reads the persisted `parent_conversation_id`
+/ `parent_agent_id` fields (`crates/persistence/src/model.rs:1176-1192`). If a
+parent resolves, the row is treated as a child agent conversation and:
+
+- `index_child_conversation(conversation_id, parent_id)` is called
+  (`conversation_loader.rs:575`), populating `children_by_parent` —
+  synchronously, at boot, before any UI exists.
+- The full `AIConversation` is eagerly loaded (via `load_conversation_from_db`
+  or direct conversion) into `conversations_by_id`
+  (`conversation_loader.rs:593-608`), including its persisted `run_id` →
+  `task_id` (`conversation.rs:636`, `:1210` in the persistence model).
+- The row is excluded from `all_conversations_metadata` (`return None` at
+  `conversation_loader.rs:609`), so it never appears in conversation
+  history/sidebar lists — this exclusion is intentional and pre-existing,
+  independent of this spec.
+
+This is the **only** mechanism that populates `children_by_parent` and
+resolves child `task_id`s for a local (non-ambient) parent today. There is no
+lazy or async equivalent wired into the local-conversation restore path —
+unlike the ambient/viewer path, which now uses the ancestor-list seed
+(`seed_child_conversations_from_task`). Removing child persistence removes
+this mechanism's only data source with nothing to replace it for local
+parents.
+
+### 2. `child_conversation_ids_of` callers
+
+`child_conversation_ids_of` (`history_model.rs:658-663`) reads directly from
+`children_by_parent` with no fallback. Callers:
+
+- `restore_missing_child_agent_panes_for_parent` (`restoration.rs:44-46`) —
+  the pane-materialization entry point (see §3).
+- `descendant_conversation_ids_in_spawn_order` /
+  `descendant_conversations_in_pill_order` (`orchestration_topology.rs:160-181,
+  224-265`) — walked by the pill bar (`orchestration_pill_bar.rs:616`) and
+  keyboard navigation (`adjacent_orchestration_child_conversation_id`).
+- `orchestration_aware_conversation_status` / `has_local_orchestrated_children`
+  (`orchestration_topology.rs:196-207, 412-424`) — status aggregation and
+  cloud-handoff eligibility checks.
+
+All of these are synchronous, read-only queries against whatever
+`children_by_parent` currently holds. None of them know how to trigger a
+fetch when the index is empty — they are consumers, not the seed. If
+`children_by_parent` was never populated (no persistence, no seed run for
+this parent), every one of these silently reports "no children" forever, not
+just once.
+
+### 3. `restore_missing_child_agent_panes_for_parent` / `create_hidden_child_agent_pane`
+
+`restore_missing_child_agent_panes_for_parent` (`restoration.rs:38-75`) is
+called from **two independent trigger groups**:
+
+- Ambient/viewer restore, from `finish_seed_child_conversations_from_task`
+  (`restoration.rs:211-215`) — runs (and re-runs on retry) after the
+  ancestor-list seed links each child, so it's inherently async-tolerant.
+- Generic pane lifecycle, via
+  `restore_missing_child_agent_panes_for_terminal_pane_if_needed`
+  (`restoration.rs:245-273`), called from `replace_pane` (`mod.rs:5001`),
+  `restore_closed_pane` (`mod.rs:5566`), `add_pane_with_options`
+  (`mod.rs:6770`), and `reattach_panes` (`mod.rs:7731`); **and** directly from
+  `TerminalPane::attach`'s subscription to `AgentViewControllerEvent::EnteredAgentView`
+  when `display_mode.is_fullscreen()` (`pane/terminal_pane.rs:333-347`).
+
+The `EnteredAgentView` trigger is the one that fires for a restored **local**
+agent-view conversation: session restore re-enters fullscreen agent view for
+a conversation that was in that state when the session was saved, firing this
+subscription once, synchronously, with **no pending/retry mechanism** — unlike
+the ambient path's `pending_parent_child_seeds`. If `children_by_parent` is
+empty at that moment (no persistence, nothing async has populated it yet),
+this call finds nothing and is never invoked again for this parent+pane
+combination in this session, short of another full pane-lifecycle event
+(close/reopen, split, etc.).
+
+Downstream, `create_hidden_child_agent_pane` (`restoration.rs:345-440`) reads
+the child conversation object passed to it by the caller (already resolved
+via `child_conversation_ids_of` + `conversation()`/`RestoredAgentConversations`,
+see §5) — it does not touch the DB itself. With `OrchestrationUnifiedStack` on
+and `child_conversation.is_remote_child()` true, it delegates to
+`materialize_child_pane` (`child_agent/hydration.rs:115-156`), which
+requires `child_conversation.task_id()` to already be `Some` — if not, it
+logs a warning and returns without creating a pane
+(`hydration.rs:128-131`). Without persistence, `task_id` is only ever
+populated via `ensure_remote_child_conversation` → `assign_run_id_for_conversation`
+(the ancestor-list seed path), which today is never invoked for local parents.
+
+### 4. Local-parent + remote-children scenario, traced end to end
+
+With today's persistence (before the trial removal): a user runs `run_agents`
+from a local agent-mode conversation. The parent is a normal, persisted local
+conversation; each remote child is created via `ensure_remote_child_conversation`
+(from the live orchestration event stream) and persisted normally (no
+`is_viewing_shared_session`/`is_remote_child` gate exists on
+`write_updated_conversation_state` today — see `conversation.rs:3476-3569`).
+On restart: `initialize_historical_conversations` bulk-loads every child row,
+populates `children_by_parent` and `conversations_by_id` (with `task_id`
+resolved from the persisted `run_id`) — all before any pane is constructed.
+When the parent's terminal pane is reconstructed and re-enters fullscreen
+agent view, `EnteredAgentView` fires, `restore_missing_child_agent_panes_for_parent`
+finds the children already indexed, and `create_hidden_child_agent_pane` →
+`materialize_child_pane` succeeds immediately because `task_id` is already
+set. Pill bar and hidden panes both work.
+
+With remote-child persistence removed and no other change: `children_by_parent`
+is empty at boot (§1). `EnteredAgentView` fires as before, but
+`restore_missing_child_agent_panes_for_parent` finds no children and returns
+(§2, §3) — permanently, since nothing re-drives this call for a local parent.
+Unlike the ambient/viewer path, **no ancestor-list seed is ever kicked off**
+for a local parent today — `seed_child_conversations_from_task` is only
+called from the ambient-pane restore call sites
+(`load_data_into_transcript_viewer` and
+`replace_loading_pane_with_restored_ambient_cloud_mode_pane_inner`,
+`pane_group/mod.rs:3737-3739, 5401-5403`). This is the actual regression: not
+just an empty pill bar (recoverable once children eventually get linked, per
+the prior section), but **no hidden child panes ever materialize at all**, so
+clicking a (non-existent) pill or otherwise trying to reach a child is
+impossible — the children are functionally gone from the client until the
+user interacts with the run again in a way that re-triggers live discovery
+(e.g. the child sends new SSE events while the app is open).
+
+### 5. `RestoredAgentConversations`
+
+`RestoredAgentConversations` (`ai/restored_conversations.rs`) is a singleton
+read-through cache keyed by an *already-known* `AIConversationId`
+(`get_conversation` / `take_conversation`, lines 111-138). On a cache miss it
+calls `load_from_db`, a direct `read_agent_conversation_by_id` lookup
+(lines 83-107) — i.e. it is a **lazy hydration** helper for an ID the caller
+already learned about some other way, not a discovery mechanism. Its only
+caller in this flow is `restore_missing_child_agent_panes_for_parent`'s
+fallback (`restoration.rs:64-67`), reached only for IDs `child_conversation_ids_of`
+already returned — which itself requires `children_by_parent` to already have
+an entry (§1-§2). Since `initialize_historical_conversations` already eagerly
+loads every indexed child straight into `conversations_by_id`
+(`conversation_loader.rs:593-608`), this fallback is rarely exercised today
+and, like everything else in this list, depends on the same persisted rows —
+it provides no independent resilience against removing them.
+
+### 6. Conversation list / `AgentConversationEntry`
+
+No new problem here. Child agent conversations are already excluded from the
+conversation list/sidebar by design, independent of persistence:
+`initialize_historical_conversations` never inserts a row that resolves to a
+parent into `all_conversations_metadata` (`conversation_loader.rs:566-610`),
+and `merge_cloud_conversation_metadata` separately filters out any server
+token belonging to a conversation with `is_child_agent_conversation()`
+(`conversation_loader.rs:387-405`). Removing DB persistence of children
+doesn't change this — there was never a list entry to lose.
+
+### 7. What must change for a clean no-persistence solution
+
+The only path missing async-tolerant discovery is the **local-parent**
+restore path. The ambient/viewer path already has everything it needs
+(`seed_child_conversations_from_task`, `pending_parent_child_seeds`, the
+`finish_seed_child_conversations_from_task` → `restore_missing_child_agent_panes_for_parent`
+call chain); it just needs the pill bar notification fix from the prior
+section. For the local-parent path:
+
+1. **Call `seed_child_conversations_from_task` from the local-parent restore
+   trigger, not just the ambient one.** In the `EnteredAgentView`
+   (`display_mode.is_fullscreen()`) handler (`pane/terminal_pane.rs:333-347`)
+   — or equivalently, at the top of `restore_missing_child_agent_panes_for_parent`
+   itself, so every caller benefits — check `child_conversation_ids_of` is
+   empty and the conversation has a resolvable `task_id()`
+   (`conversation.rs:1037`; populated from the *parent's own* persisted
+   `run_id`, which is unaffected by removing *child* persistence), then call
+   `seed_child_conversations_from_task(conversation_id, task_id, ctx)`
+   exactly as the ambient path does. `seed_child_conversations_from_task` and
+   `finish_seed_child_conversations_from_task` are already generic — they
+   only need a `parent_conversation_id` and `parent_task_id`, and
+   `terminal_surface_id_for_conversation` / `pane_id_for_owned_conversation`
+   resolve identically for local and ambient panes — so no change is needed
+   inside `restoration.rs` itself. This one change also finishes the "single
+   restore mechanism" goal from this spec's Design section: local and viewer
+   parents converge on the same ancestor-list seed instead of local parents
+   keeping a DB-only path.
+2. **Accept a one-time, harmless ancestor-list fetch for local conversations
+   that never spawned children.** Every local conversation restored into
+   fullscreen agent view would now issue a `GET /agent/runs?ancestor_run_id=`
+   call; for the common case of a plain single-agent conversation this comes
+   back empty and `finish_seed_child_conversations_from_task` already
+   no-ops cleanly on an empty list (`restoration.rs:166-178, 197-203`). This
+   only fires on the user-driven "re-enter this agent's fullscreen view"
+   event, not a background scan over all history, so the added load is
+   proportional to how many agent conversations a user actually revisits.
+   If this proves too costly in practice, a follow-on optimization is to
+   persist a cheap boolean hint (e.g. `has_spawned_children`) on the *parent's*
+   own `AgentConversationData` — set once, the first time
+   `ensure_remote_child_conversation` links a child under it — and skip the
+   fetch when the hint is absent. This is a hint on a row that is already
+   persisted regardless of this change (the local parent), not a
+   reintroduction of child persistence, so it doesn't reopen the stable-ID
+   problem this spec removes. Start without the hint; add it only if restore
+   network volume is measured to be a problem.
+3. **No change needed to `create_hidden_child_agent_pane` /
+   `materialize_child_pane`.** Once (1) makes `task_id` and
+   `children_by_parent` populate the same way for local and ambient parents,
+   these already work unmodified — they only ever depended on the
+   `AIConversation` object having `task_id` set, not on how it got there.
+4. **No change needed for `RestoredAgentConversations` or the conversation
+   list.** Per §5-§6, neither depends on anything this change removes beyond
+   what's already covered by (1).
+
+**Estimated LOC.** The core fix (1) is small: a guard clause plus one call to
+an already-generic function, added either in `pane/terminal_pane.rs`'s
+`EnteredAgentView` handler or inside `restore_missing_child_agent_panes_for_parent`
+(~15-25 LOC, plus tests exercising local-parent restore with 0 and N remote
+children, and confirming the fetch does not run when `task_id()` is `None`).
+The optional hint-based follow-on (2) is larger: a new `AgentConversationData`
+field, a write site in `ensure_remote_child_conversation`, and a read/guard at
+the call site from (1) (~30-50 LOC) — do not build this until (1) ships and
+network volume is actually measured.
+
 ## Validation
 
 Manual (dogfood, flag on, server emits deployed):
