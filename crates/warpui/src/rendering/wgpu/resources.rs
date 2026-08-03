@@ -756,22 +756,8 @@ fn adapter_stability_sort_func(
     windowing_system: Option<windowing::System>,
     downrank_non_nvidia_vulkan_adapters: bool,
 ) -> AdapterSupport {
-    adapter_support(
-        &adapter.get_info(),
-        windowing_system,
-        downrank_non_nvidia_vulkan_adapters,
-    )
-}
+    let adapter_info = adapter.get_info();
 
-/// Computes the [`AdapterSupport`] level for the given adapter info.
-///
-/// This is split out from [`adapter_stability_sort_func`] so that it can be unit tested without a
-/// real GPU adapter.
-fn adapter_support(
-    adapter_info: &wgpu::AdapterInfo,
-    windowing_system: Option<windowing::System>,
-    downrank_non_nvidia_vulkan_adapters: bool,
-) -> AdapterSupport {
     let window_server_is_wayland = matches!(
         windowing_system,
         Some(windowing::System::Wayland) | Some(windowing::System::X11 { is_x_wayland: true })
@@ -779,7 +765,7 @@ fn adapter_support(
 
     if downrank_non_nvidia_vulkan_adapters
         && adapter_info.backend == Backend::Vulkan
-        && !is_vulkan_nvidia_adapter(adapter_info)
+        && !is_vulkan_nvidia_adapter(&adapter_info)
     {
         log::info!(
             "Deprioritizing non-NVIDIA Vulkan adapter (the PRIME performance profile is likely enabled)"
@@ -787,22 +773,22 @@ fn adapter_support(
         return AdapterSupport::Unsupported;
     }
 
-    if is_v3d_vulkan_adapter(adapter_info) {
+    if is_v3d_vulkan_adapter(&adapter_info) {
         log::warn!("Deprioritizing Vulkan-backed V3D adapter");
         return AdapterSupport::Unsupported;
     }
 
-    if is_intel_uhd_620_adapter_on_windows_with_vulkan_backend(adapter_info) {
+    if is_intel_uhd_620_adapter_on_windows_with_vulkan_backend(&adapter_info) {
         log::warn!("Deprioritizing Vulkan-backed Intel UHD 620 adapter");
         return AdapterSupport::SupportedWithIssues;
     }
 
-    if is_intel_uhd_770_adapter_on_windows(adapter_info) {
+    if is_intel_uhd_770_adapter_on_windows(&adapter_info) {
         log::warn!("Deprioritizing Intel UHD 770 integrated GPU on Windows");
         return AdapterSupport::SupportedWithIssues;
     }
 
-    if is_older_vulkan_intel_uhd_adapter(adapter_info) {
+    if is_older_vulkan_intel_uhd_adapter(&adapter_info) {
         log::warn!(
             "Deprioritizing Vulkan-backed Intel UHD adapter due to Mesa < {} (unsupported)",
             *MIN_SUPPORTED_INTEL_UHD_VERSION
@@ -810,14 +796,14 @@ fn adapter_support(
         AdapterSupport::SupportedWithIssues
     }
     // Deprioritize older lavapipe adapters where we have evidence that they are less stable.
-    else if is_older_lavapipe_adapter(adapter_info) {
+    else if is_older_lavapipe_adapter(&adapter_info) {
         log::warn!(
             "Deprioritizing Vulkan-backed llvmpipe adapter due to Mesa < {} (unsupported)",
             *MIN_SUPPORTED_LAVAPIPE_VERSION
         );
         AdapterSupport::Unsupported
     // Same with Nvidia drivers, though this is only an issue with a Wayland window server.
-    } else if window_server_is_wayland && is_older_nvidia_adapter(adapter_info) {
+    } else if window_server_is_wayland && is_older_nvidia_adapter(&adapter_info) {
         log::warn!(
             "Deprioritizing Vulkan-backed Nvidia adapter due to version < {} (unsupported).\nSee \
             the \"Graphics\" secion of our docs here: \
@@ -825,7 +811,7 @@ fn adapter_support(
             *MIN_SUPPORTED_NVIDIA_VERSION
         );
         AdapterSupport::Unsupported
-    } else if is_newer_nondx12_nvidia_adapter_on_windows(adapter_info) {
+    } else if is_newer_nondx12_nvidia_adapter_on_windows(&adapter_info) {
         log::warn!(
             "Deprioritizing non DX12 Nvidia adapter due to version > {} (unsupported). Newer NVIDIA \
             drivers can crash if multiple windows are created if the `Vulkan / OpenGL Present Method\
@@ -833,7 +819,7 @@ fn adapter_support(
             *MAX_SUPPORTED_NVIDIA_VERSION_ON_WINDOWS
         );
         AdapterSupport::SupportedWithIssues
-    } else if is_gl_to_metal_adapter_on_windows_in_parallels(adapter_info) {
+    } else if is_gl_to_metal_adapter_on_windows_in_parallels(&adapter_info) {
         log::warn!("Deprioritizing integrated OpenGL Windows Parallels adapter.");
         AdapterSupport::SupportedWithIssues
     } else {
