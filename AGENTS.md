@@ -112,6 +112,7 @@ Warp has two front-ends that share the `warp_core`/`warpui` Entity/model core (A
 - Integration tests are in `crates/integration/`
 
 **Coding Style Preferences**:
+- The formatter (`./script/format`) is configured with a `max_width` (max line length) of 100. Flow (reflow) comment line-wrapping to fill that full width rather than wrapping early at a narrower column, so comments span as few lines as possible.
 - Avoid unnecessary type annotations, especially in closure params.
 - Avoid using too many Rust path qualifiers and use imports for concision. Place import statements at the top of the file as per convention.
   An exception to this is inside cfg-guarded code branches. In those cases, you can either embed the import into the relevant scope or just use an absolute path for one-offs.

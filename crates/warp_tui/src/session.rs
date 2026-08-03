@@ -356,6 +356,7 @@ fn ensure_terminal_session(
         });
     }
     root.update(ctx, |root, ctx| root.show_terminal(ctx));
+    TuiLoginModel::record_terminal_shown(ctx);
 }
 
 #[cfg(test)]
