@@ -101,7 +101,7 @@ fn rank_by_support(adapter_infos: Vec<wgpu::AdapterInfo>) -> Vec<wgpu::AdapterIn
 
 #[test]
 fn test_is_unsupported_intel_uhd_adapter() {
-    assert!(is_older_vulkan_intel_mesa_adapter(&wgpu::AdapterInfo {
+    assert!(is_older_vulkan_intel_uhd_adapter(&wgpu::AdapterInfo {
         name: String::from("Intel(R) HD Graphics 620 (KBL GT2)"),
         vendor: 0,
         device: 0,
@@ -115,7 +115,7 @@ fn test_is_unsupported_intel_uhd_adapter() {
         transient_saves_memory: Some(false),
         limit_bucket: None,
     }));
-    assert!(!is_older_vulkan_intel_mesa_adapter(&wgpu::AdapterInfo {
+    assert!(!is_older_vulkan_intel_uhd_adapter(&wgpu::AdapterInfo {
         name: String::from("Intel(R) HD Graphics 620 (KBL GT2)"),
         vendor: 0,
         device: 0,
@@ -130,7 +130,7 @@ fn test_is_unsupported_intel_uhd_adapter() {
         transient_saves_memory: Some(false),
         limit_bucket: None,
     }));
-    assert!(!is_older_vulkan_intel_mesa_adapter(&wgpu::AdapterInfo {
+    assert!(!is_older_vulkan_intel_uhd_adapter(&wgpu::AdapterInfo {
         name: String::from("Intel(R) HD Graphics 620 (KBL GT2)"),
         vendor: 0,
         device: 0,
@@ -145,7 +145,7 @@ fn test_is_unsupported_intel_uhd_adapter() {
         transient_saves_memory: Some(false),
         limit_bucket: None,
     }));
-    assert!(is_older_vulkan_intel_mesa_adapter(&wgpu::AdapterInfo {
+    assert!(is_older_vulkan_intel_uhd_adapter(&wgpu::AdapterInfo {
         name: String::from("Intel(R) HD Graphics 620 (KBL GT2)"),
         vendor: 0,
         device: 0,
@@ -160,7 +160,7 @@ fn test_is_unsupported_intel_uhd_adapter() {
         transient_saves_memory: Some(false),
         limit_bucket: None,
     }));
-    assert!(!is_older_vulkan_intel_mesa_adapter(&wgpu::AdapterInfo {
+    assert!(!is_older_vulkan_intel_uhd_adapter(&wgpu::AdapterInfo {
         name: String::from("Intel(R) HD Graphics 620 (KBL GT2)"),
         vendor: 0,
         device: 0,
@@ -175,7 +175,7 @@ fn test_is_unsupported_intel_uhd_adapter() {
         transient_saves_memory: Some(false),
         limit_bucket: None,
     }));
-    assert!(is_older_vulkan_intel_mesa_adapter(&wgpu::AdapterInfo {
+    assert!(is_older_vulkan_intel_uhd_adapter(&wgpu::AdapterInfo {
         name: String::from("Intel(R) HD Graphics 620 (KBL GT2)"),
         vendor: 0,
         device: 0,
@@ -192,52 +192,18 @@ fn test_is_unsupported_intel_uhd_adapter() {
     }));
 }
 
-/// The Intel graphics family/GT tier in the adapter name must not affect the result: matching is
-/// based on the Mesa driver version. See https://github.com/warpdotdev/warp/issues/14577.
+/// The newly allowlisted `Intel(R) Xe Graphics (TGL GT2)` adapter reported in
+/// https://github.com/warpdotdev/warp/issues/14577 must also be matched by name.
 #[test]
-fn test_older_vulkan_intel_mesa_adapters_are_matched_regardless_of_family() {
-    for name in [
-        "Intel(R) Xe Graphics (TGL GT2)",
-        "Intel(R) UHD Graphics (TGL GT1)",
-        "Intel(R) UHD Graphics (ICL GT1)",
-        "Intel(R) HD Graphics 620 (KBL GT2)",
-        "Intel(R) Graphics (ADL GT2)",
-    ] {
-        let info = adapter_info(
-            name,
-            "Intel open-source Mesa driver",
-            "Mesa 21.2.6",
-            wgpu::Backend::Vulkan,
-            wgpu::DeviceType::IntegratedGpu,
-        );
-        assert!(
-            is_older_vulkan_intel_mesa_adapter(&info),
-            "expected {name} on Mesa 21.2.6 to be considered unsupported"
-        );
-    }
-}
-
-#[test]
-fn test_non_mesa_and_non_intel_adapters_are_unaffected() {
-    // Windows Intel drivers aren't Mesa, so their version strings must not be parsed as Mesa
-    // versions.
-    assert!(!is_older_vulkan_intel_mesa_adapter(&adapter_info(
-        "Intel(R) Iris(R) Xe Graphics",
-        "Intel Corporation",
-        "Intel driver 31.0.101.5445",
-        wgpu::Backend::Vulkan,
-        wgpu::DeviceType::IntegratedGpu,
-    )));
-    // Non-Intel Mesa drivers (e.g. RADV) are out of scope for this check.
-    assert!(!is_older_vulkan_intel_mesa_adapter(&adapter_info(
-        "AMD Radeon Graphics (RADV RENOIR)",
-        "radv",
-        "Mesa 21.2.6",
-        wgpu::Backend::Vulkan,
-        wgpu::DeviceType::IntegratedGpu,
-    )));
+fn test_is_unsupported_intel_xe_tgl_gt2_adapter() {
+    assert!(is_older_vulkan_intel_uhd_adapter(
+        &intel_xe_tgl_gt2_vulkan_adapter_info("21.2.6")
+    ));
+    assert!(!is_older_vulkan_intel_uhd_adapter(
+        &intel_xe_tgl_gt2_vulkan_adapter_info("24.0.2")
+    ));
     // The GL adapter for the same Intel GPU renders fine and must stay fully supported.
-    assert!(!is_older_vulkan_intel_mesa_adapter(
+    assert!(!is_older_vulkan_intel_uhd_adapter(
         &intel_xe_tgl_gt2_gl_adapter_info("21.2.6")
     ));
 }
@@ -264,7 +230,7 @@ fn test_intel_xe_tgl_gt2_is_used_on_newer_mesa() {
     let vulkan = intel_xe_tgl_gt2_vulkan_adapter_info("24.0.2");
     let gl = intel_xe_tgl_gt2_gl_adapter_info("24.0.2");
 
-    assert!(!is_older_vulkan_intel_mesa_adapter(&vulkan));
+    assert!(!is_older_vulkan_intel_uhd_adapter(&vulkan));
     assert_eq!(
         adapter_support(&vulkan, None, false),
         AdapterSupport::Supported

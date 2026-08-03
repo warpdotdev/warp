@@ -41,12 +41,12 @@ lazy_static! {
     static ref MIN_SUPPORTED_LAVAPIPE_VERSION: Version<'static> = Version::from("24.0.2")
         .expect("should not fail to parse version");
 
-    /// The minimum supported Mesa driver version for Vulkan-backed Intel integrated graphics.
+    /// The minimum supported driver version for Vulkan-backed Intel UHD integrated graphics.
     ///
     /// Some issues we've seen: PLAT-744 and PLAT-599.
     /// Mesa changelog mentions a fix for flickering on Intel UHD:
     /// https://docs.mesa3d.org/relnotes/21.3.6.html#:~:text=Flickering%20Intel%20Uhd%20620%20Graphics
-    static ref MIN_SUPPORTED_INTEL_MESA_VERSION: Version<'static> = Version::from("21.3.6")
+    static ref MIN_SUPPORTED_INTEL_UHD_VERSION: Version<'static> = Version::from("21.3.6")
         .expect("should not fail to parse version");
 
     /// Nvidia drivers version 535 have problems with Wayland window managers, e.g. PLAT-667 and
@@ -469,47 +469,40 @@ fn is_gl_to_metal_adapter_on_windows_in_parallels(adapter_info: &wgpu::AdapterIn
         && adapter_info.name.to_lowercase().starts_with("parallels")
 }
 
-/// Returns whether the provided adapter uses the Mesa open-source Intel driver (ANV for Vulkan,
-/// Iris/i965 for GL).
-fn is_intel_mesa_adapter(adapter_info: &wgpu::AdapterInfo) -> bool {
-    // The Mesa Intel Vulkan driver reports itself as "Intel open-source Mesa driver", so requiring
-    // "Mesa" in the driver name keeps us from misinterpreting non-Mesa (e.g. Windows) Intel driver
-    // version strings as Mesa versions.
-    adapter_info.driver.contains("Mesa")
-        && (adapter_info.driver.contains("Intel") || adapter_info.name.contains("Intel"))
-}
-
-/// Returns whether or not the provided adapter is an Intel integrated GPU running a Mesa Vulkan
-/// driver that is too old for warpui to render properly.
-///
-/// This is keyed off the Mesa version rather than an allowlist of adapter names: every Intel
-/// integrated GPU we've seen fail this way (`Intel(R) HD Graphics 620` (KBL GT2), `Intel(R) UHD
-/// Graphics (ICL GT1)`, `Intel(R) UHD Graphics (TGL GT1)`, `Intel(R) Xe Graphics (TGL GT2)`) has
-/// been on Mesa older than [`MIN_SUPPORTED_INTEL_MESA_VERSION`], and name-based matching kept
-/// missing new Intel graphics families and GT tiers on the exact same broken drivers.
-///
-/// Symptoms range from flickering (PLAT-744, PLAT-599, GH #4533) to a permanently frozen window
-/// caused by every `get_current_texture` call returning a validation error (GH #14325, GH #14577).
-///
-/// Note that this only deprioritizes the adapter: if no other adapter can present to the surface,
-/// we still fall back to using it rather than failing to open a window.
+/// Returns whether or not the provided adapter is an unsupported Intel UHD Mesa driver version for
+/// warpui to render properly. Affected adapters include:
+/// - `Intel(R) HD Graphics 620` (KBL GT2) — flickering (PLAT-744)
+/// - `Intel(R) UHD Graphics (ICL GT1)` — stuck at "Starting zsh..." on Mesa 21.2.6 (GH #14325)
+/// - `Intel(R) UHD Graphics (TGL GT1)` — window flashing/flicker on older Mesa (PLAT-599, GH #4533)
+/// - `Intel(R) Xe Graphics (TGL GT2)` — frozen window; every `get_current_texture` call returns a
+///   validation error on Mesa 21.2.6 (GH #14577)
 ///
 /// See the Mesa 21.3.6 changelog for the upstream fix:
 /// <https://docs.mesa3d.org/relnotes/21.3.6.html#:~:text=Flickering%20Intel%20Uhd%20620%20Graphics>
-fn is_older_vulkan_intel_mesa_adapter(adapter_info: &wgpu::AdapterInfo) -> bool {
+fn is_older_vulkan_intel_uhd_adapter(adapter_info: &wgpu::AdapterInfo) -> bool {
     if adapter_info.backend != wgpu::Backend::Vulkan
         || adapter_info.device_type != wgpu::DeviceType::IntegratedGpu
     {
         return false;
     }
 
-    if !is_intel_mesa_adapter(adapter_info) {
+    let affected_names = [
+        "Intel(R) HD Graphics 620",
+        "Intel(R) UHD Graphics (ICL GT1)",
+        "Intel(R) UHD Graphics (TGL GT1)",
+        "Intel(R) Xe Graphics (TGL GT2)",
+    ];
+
+    if !affected_names
+        .iter()
+        .any(|name| adapter_info.name.contains(name))
+    {
         return false;
     }
 
     mesa_driver_version_is_below_minimum(
         &adapter_info.driver_info,
-        &MIN_SUPPORTED_INTEL_MESA_VERSION,
+        &MIN_SUPPORTED_INTEL_UHD_VERSION,
     )
 }
 
@@ -809,10 +802,10 @@ fn adapter_support(
         return AdapterSupport::SupportedWithIssues;
     }
 
-    if is_older_vulkan_intel_mesa_adapter(adapter_info) {
+    if is_older_vulkan_intel_uhd_adapter(adapter_info) {
         log::warn!(
-            "Deprioritizing Vulkan-backed Intel adapter due to Mesa < {} (unsupported)",
-            *MIN_SUPPORTED_INTEL_MESA_VERSION
+            "Deprioritizing Vulkan-backed Intel UHD adapter due to Mesa < {} (unsupported)",
+            *MIN_SUPPORTED_INTEL_UHD_VERSION
         );
         AdapterSupport::SupportedWithIssues
     }
