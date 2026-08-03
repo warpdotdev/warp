@@ -299,9 +299,11 @@ impl BillingCycleUsageSectionView {
             .finish(),
         );
 
-        if (is_admin || self.viewer_is_native_workspaces_admin(workspace, app))
-            && let Some(banner) = self.render_visibility_cta_banner(workspace, app)
-        {
+        // No native-workspaces check here: reaching this function requires
+        // `shows_team_section`, so the viewer is always a team admin. Workspace
+        // admins without a team admin role land in
+        // `render_own_usage_with_workspace`, which has its own banner gate.
+        if is_admin && let Some(banner) = self.render_visibility_cta_banner(workspace, app) {
             column.add_child(Container::new(banner).with_margin_top(16.).finish());
         }
 
