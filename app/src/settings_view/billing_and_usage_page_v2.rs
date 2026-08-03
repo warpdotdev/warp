@@ -621,91 +621,97 @@ impl BillingAndUsagePageV2View {
                 .get()
                 .user_email()
                 .unwrap_or_default();
-            let has_admin_permissions = team.has_admin_permissions(&current_user_email);
+            let is_team_admin = team.has_admin_permissions(&current_user_email);
+            let is_workspace_admin = workspace
+                .is_some_and(|workspace| workspace.is_workspace_admin(&current_user_email));
 
-            if has_admin_permissions {
-                if billing_metadata.is_some_and(|billing_metadata| {
+            if is_team_admin
+                && billing_metadata.is_some_and(|billing_metadata| {
                     billing_metadata.customer_type != CustomerType::Enterprise
-                }) && workspace.is_some_and(|workspace| workspace.has_billing_history)
-                {
-                    let team_uid = team.uid;
-                    let fg_color = appearance.theme().active_ui_text_color();
-                    right_side.add_child(
-                        Container::new(
-                            appearance
-                                .ui_builder()
-                                .button(
-                                    ButtonVariant::Link,
-                                    self.plan_mouse_states.manage_billing_link.clone(),
+                })
+                && workspace.is_some_and(|workspace| workspace.has_billing_history)
+            {
+                let team_uid = team.uid;
+                let fg_color = appearance.theme().active_ui_text_color();
+                right_side.add_child(
+                    Container::new(
+                        appearance
+                            .ui_builder()
+                            .button(
+                                ButtonVariant::Link,
+                                self.plan_mouse_states.manage_billing_link.clone(),
+                            )
+                            .with_text_and_icon_label(
+                                TextAndIcon::new(
+                                    TextAndIconAlignment::IconFirst,
+                                    "Manage billing",
+                                    Icon::CoinsStacked.to_warpui_icon(fg_color),
+                                    MainAxisSize::Min,
+                                    MainAxisAlignment::Center,
+                                    vec2f(14., 14.),
                                 )
-                                .with_text_and_icon_label(
-                                    TextAndIcon::new(
-                                        TextAndIconAlignment::IconFirst,
-                                        "Manage billing",
-                                        Icon::CoinsStacked.to_warpui_icon(fg_color),
-                                        MainAxisSize::Min,
-                                        MainAxisAlignment::Center,
-                                        vec2f(14., 14.),
-                                    )
-                                    .with_inner_padding(4.),
-                                )
-                                .with_style(UiComponentStyles {
-                                    font_color: Some(fg_color.into()),
-                                    ..Default::default()
-                                })
-                                .build()
-                                .on_click(move |ctx, _, _| {
-                                    ctx.dispatch_typed_action(
-                                        BillingAndUsagePageAction::GenerateStripeBillingPortalLink {
-                                            team_uid,
-                                        },
-                                    );
-                                })
-                                .finish(),
-                        )
-                        .with_margin_left(8.)
-                        .finish(),
-                    );
-                }
+                                .with_inner_padding(4.),
+                            )
+                            .with_style(UiComponentStyles {
+                                font_color: Some(fg_color.into()),
+                                ..Default::default()
+                            })
+                            .build()
+                            .on_click(move |ctx, _, _| {
+                                ctx.dispatch_typed_action(
+                                    BillingAndUsagePageAction::GenerateStripeBillingPortalLink {
+                                        team_uid,
+                                    },
+                                );
+                            })
+                            .finish(),
+                    )
+                    .with_margin_left(8.)
+                    .finish(),
+                );
+            }
 
-                if billing_metadata.is_some_and(|metadata| metadata.is_enterprise_plan()) {
-                    let team_uid = team.uid;
-                    let fg_color = appearance.theme().active_ui_text_color();
-                    right_side.add_child(
-                        Container::new(
-                            appearance
-                                .ui_builder()
-                                .button(
-                                    ButtonVariant::Link,
-                                    self.plan_mouse_states.open_admin_panel_link.clone(),
+            if should_show_open_admin_panel_link(
+                is_team_admin,
+                is_workspace_admin,
+                billing_metadata.is_some_and(|metadata| metadata.is_enterprise_plan()),
+            ) {
+                let team_uid = team.uid;
+                let fg_color = appearance.theme().active_ui_text_color();
+                right_side.add_child(
+                    Container::new(
+                        appearance
+                            .ui_builder()
+                            .button(
+                                ButtonVariant::Link,
+                                self.plan_mouse_states.open_admin_panel_link.clone(),
+                            )
+                            .with_text_and_icon_label(
+                                TextAndIcon::new(
+                                    TextAndIconAlignment::IconFirst,
+                                    "Open admin panel",
+                                    Icon::Users.to_warpui_icon(fg_color),
+                                    MainAxisSize::Min,
+                                    MainAxisAlignment::Center,
+                                    vec2f(14., 14.),
                                 )
-                                .with_text_and_icon_label(
-                                    TextAndIcon::new(
-                                        TextAndIconAlignment::IconFirst,
-                                        "Open admin panel",
-                                        Icon::Users.to_warpui_icon(fg_color),
-                                        MainAxisSize::Min,
-                                        MainAxisAlignment::Center,
-                                        vec2f(14., 14.),
-                                    )
-                                    .with_inner_padding(4.),
-                                )
-                                .with_style(UiComponentStyles {
-                                    font_color: Some(fg_color.into()),
-                                    ..Default::default()
-                                })
-                                .build()
-                                .on_click(move |ctx, _, _| {
-                                    ctx.dispatch_typed_action(
-                                        BillingAndUsagePageAction::OpenAdminPanel { team_uid },
-                                    );
-                                })
-                                .finish(),
-                        )
-                        .with_margin_left(8.)
-                        .finish(),
-                    );
-                }
+                                .with_inner_padding(4.),
+                            )
+                            .with_style(UiComponentStyles {
+                                font_color: Some(fg_color.into()),
+                                ..Default::default()
+                            })
+                            .build()
+                            .on_click(move |ctx, _, _| {
+                                ctx.dispatch_typed_action(
+                                    BillingAndUsagePageAction::OpenAdminPanel { team_uid },
+                                );
+                            })
+                            .finish(),
+                    )
+                    .with_margin_left(8.)
+                    .finish(),
+                );
             }
         } else {
             let current_user_id = self.auth_state.user_id().unwrap_or_default();
@@ -2231,6 +2237,17 @@ impl TypedActionView for BillingAndUsagePageV2View {
     }
 }
 
+/// Whether the "Open admin panel" link should be shown on the Billing & Usage
+/// page V2 plan header: visible for an enterprise-plan workspace/team when the
+/// viewer is either a team admin or a workspace admin.
+fn should_show_open_admin_panel_link(
+    is_team_admin: bool,
+    is_workspace_admin: bool,
+    is_enterprise_plan: bool,
+) -> bool {
+    (is_team_admin || is_workspace_admin) && is_enterprise_plan
+}
+
 fn render_balance_card(
     appearance: &Appearance,
     dot_color: ColorU,
@@ -2319,3 +2336,7 @@ fn render_balance_card(
     .with_vertical_padding(12.)
     .finish()
 }
+
+#[cfg(test)]
+#[path = "billing_and_usage_page_v2_tests.rs"]
+mod tests;
