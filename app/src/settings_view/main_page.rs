@@ -373,7 +373,7 @@ impl AccountWidget {
         let current_user_id = auth_state.user_id().unwrap_or_default();
 
         let presentation = plan_header_presentation(None, false, true);
-        for badge_label in presentation.badge_labels {
+        if let Some(badge_label) = presentation.badge_label {
             plan_info.add_child(render_customer_type_badge(appearance, badge_label));
         }
         plan_info.add_child(
@@ -512,7 +512,7 @@ impl AccountWidget {
         let billing_metadata = workspace.map(|workspace| &workspace.billing_metadata);
         let team = workspaces.team_for_view_handle(&view.self_handle, app);
         let presentation = plan_header_presentation(billing_metadata, team.is_some(), false);
-        for badge_label in presentation.badge_labels {
+        if let Some(badge_label) = presentation.badge_label {
             plan_info.add_child(render_customer_type_badge(appearance, badge_label));
         }
         if let Some(team) = team {

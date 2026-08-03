@@ -19,7 +19,7 @@ fn paid_workspace_without_team_shows_only_workspace_badge() {
 
     let presentation = plan_header_presentation(Some(&billing_metadata), false, false);
 
-    assert_eq!(presentation.badge_labels, vec!["Enterprise"]);
+    assert_eq!(presentation.badge_label.as_deref(), Some("Enterprise"));
     assert!(!presentation.show_personal_upgrade);
 }
 
@@ -29,7 +29,7 @@ fn free_workspace_without_team_shows_free_badge_once() {
 
     let presentation = plan_header_presentation(Some(&billing_metadata), false, false);
 
-    assert_eq!(presentation.badge_labels, vec!["Free"]);
+    assert_eq!(presentation.badge_label.as_deref(), Some("Free"));
     assert!(presentation.show_personal_upgrade);
 }
 
@@ -39,7 +39,7 @@ fn paid_workspace_with_team_shows_only_workspace_badge() {
 
     let presentation = plan_header_presentation(Some(&billing_metadata), true, false);
 
-    assert_eq!(presentation.badge_labels, vec!["Enterprise"]);
+    assert_eq!(presentation.badge_label.as_deref(), Some("Enterprise"));
     assert!(!presentation.show_personal_upgrade);
 }
 
@@ -47,7 +47,7 @@ fn paid_workspace_with_team_shows_only_workspace_badge() {
 fn anonymous_account_shows_free_badge_once() {
     let presentation = plan_header_presentation(None, false, true);
 
-    assert_eq!(presentation.badge_labels, vec!["Free"]);
+    assert_eq!(presentation.badge_label.as_deref(), Some("Free"));
     assert!(presentation.show_personal_upgrade);
 }
 
@@ -55,7 +55,7 @@ fn anonymous_account_shows_free_badge_once() {
 fn signed_in_account_without_workspace_shows_free_badge_once() {
     let presentation = plan_header_presentation(None, false, false);
 
-    assert_eq!(presentation.badge_labels, vec!["Free"]);
+    assert_eq!(presentation.badge_label.as_deref(), Some("Free"));
     assert!(presentation.show_personal_upgrade);
 }
 

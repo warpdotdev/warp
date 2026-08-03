@@ -161,7 +161,7 @@ const SECTION_BORDER_WIDTH: f32 = 1.;
 const POSITION_ID: &str = "settings_pane";
 
 struct PlanHeaderPresentation {
-    badge_labels: Vec<String>,
+    badge_label: Option<String>,
     show_personal_upgrade: bool,
 }
 
@@ -170,17 +170,16 @@ fn plan_header_presentation(
     has_team: bool,
     is_anonymous: bool,
 ) -> PlanHeaderPresentation {
-    let mut badge_labels = Vec::new();
-    if is_anonymous || billing_metadata.is_none() {
-        badge_labels.push("Free".to_string());
-    } else if let Some(billing_metadata) = billing_metadata
-        && billing_metadata.customer_type != CustomerType::Unknown
-    {
-        badge_labels.push(billing_metadata.customer_type.to_display_string());
-    }
+    let badge_label = if is_anonymous || billing_metadata.is_none() {
+        Some("Free".to_string())
+    } else {
+        billing_metadata
+            .filter(|billing_metadata| billing_metadata.customer_type != CustomerType::Unknown)
+            .map(|billing_metadata| billing_metadata.customer_type.to_display_string())
+    };
 
     PlanHeaderPresentation {
-        badge_labels,
+        badge_label,
         show_personal_upgrade: is_anonymous
             || (!has_team
                 && billing_metadata.is_none_or(BillingMetadata::can_upgrade_to_build_plan)),

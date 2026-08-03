@@ -604,7 +604,7 @@ impl BillingAndUsagePageV2View {
         let billing_metadata = workspace.map(|workspace| &workspace.billing_metadata);
         let team = workspaces.team_for_view_handle(&self.self_handle, app);
         let presentation = plan_header_presentation(billing_metadata, team.is_some(), false);
-        for badge_label in presentation.badge_labels {
+        if let Some(badge_label) = presentation.badge_label {
             right_side.add_child(
                 Container::new(render_customer_type_badge(appearance, badge_label))
                     .with_margin_right(8.)
