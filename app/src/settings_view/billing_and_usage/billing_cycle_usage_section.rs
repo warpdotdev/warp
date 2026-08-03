@@ -730,7 +730,7 @@ impl BillingCycleUsageSectionView {
 
 const NATIVE_WORKSPACES_CTA: (&str, &str, BillingCycleUsageAction, Icon) = (
     "Open the admin panel",
-    "to view and edit workspace settings and spend limits.",
+    "to manage workspace settings and spend limits.",
     BillingCycleUsageAction::OpenAdminPanel,
     Icon::Users,
 );
