@@ -702,30 +702,25 @@ fn render_first_run_top_section(
             .truncate()
             .finish(),
     );
-    for (command, description) in [
-        (None, "State of the art coding agents"),
-        (None, "Frontier and open-weight models"),
-        (None, "Fully customizable model routers"),
-        (None, "Orchestration for fleets of agents"),
-        (None, "Better shell command support"),
+    for description in [
+        "State of the art coding agents",
+        "Frontier and open-weight models",
+        "Fully customizable model routers",
+        "Orchestration for fleets of agents",
+        "Better shell command support",
     ] {
-        column = column.child(render_first_run_capability(command, description, builder));
+        column = column.child(render_first_run_capability(description, builder));
     }
     column.child(blank_row())
 }
 
-fn render_first_run_capability(
-    command: Option<&str>,
-    description: &str,
-    builder: &TuiUiBuilder,
-) -> Box<dyn TuiElement> {
+fn render_first_run_capability(description: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
     let highlight = builder.success_glyph_style();
     let primary = builder.primary_text_style();
-    let mut spans = vec![("✶ ".to_owned(), highlight)];
-    if let Some(command) = command {
-        spans.push((format!("{command} "), highlight));
-    }
-    spans.push((description.to_owned(), primary));
+    let spans = vec![
+        ("✶ ".to_owned(), highlight),
+        (description.to_owned(), primary),
+    ];
     TuiText::from_spans(spans).finish()
 }
 
