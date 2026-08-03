@@ -300,7 +300,7 @@ impl BillingCycleUsageSectionView {
         );
 
         if (is_admin || self.viewer_is_native_workspaces_admin(workspace, app))
-            && let Some(banner) = self.render_visibility_cta_banner(workspace, appearance, app)
+            && let Some(banner) = self.render_visibility_cta_banner(workspace, app)
         {
             column.add_child(Container::new(banner).with_margin_top(16.).finish());
         }
@@ -351,7 +351,7 @@ impl BillingCycleUsageSectionView {
             .finish(),
         );
         if self.viewer_is_native_workspaces_admin(workspace, app)
-            && let Some(banner) = self.render_visibility_cta_banner(workspace, appearance, app)
+            && let Some(banner) = self.render_visibility_cta_banner(workspace, app)
         {
             column.add_child(Container::new(banner).with_margin_top(16.).finish());
         }
@@ -666,9 +666,9 @@ impl BillingCycleUsageSectionView {
     fn render_visibility_cta_banner(
         &self,
         workspace: &Workspace,
-        appearance: &Appearance,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
+        let appearance = Appearance::as_ref(app);
         let (link_text, trailing_copy, action, leading_icon) =
             if self.viewer_is_native_workspaces_admin(workspace, app) {
                 NATIVE_WORKSPACES_CTA
