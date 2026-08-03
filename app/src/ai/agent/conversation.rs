@@ -3477,8 +3477,11 @@ impl AIConversation {
         &mut self,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        // We should not persist non-local conversations (e.g. shared sessions).
-        if self.is_viewing_shared_session {
+        // Don't persist viewer conversations (shared sessions) or remote child
+        // placeholder conversations. Both are re-created from server task data
+        // on restore: viewer conversations via transcript fetch, remote children
+        // via seed_child_conversations_from_task (ancestor_run_id query).
+        if self.is_viewing_shared_session || self.is_remote_child {
             return;
         }
 
