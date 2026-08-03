@@ -513,3 +513,102 @@ pub fn test_with_launch_config_with_no_active_pane() -> Builder {
                 .add_assertion(assert_focused_pane_index(0, 0)),
         )
 }
+
+/// Opening a launch config that carries tab groups should rebuild those groups
+/// in the new window: names and colors restored, each tab back in the group it
+/// was saved under.
+///
+/// The config here also hand-writes a membership a live window can never
+/// produce -- group "Backend" on both sides of an ungrouped tab. The tab bar
+/// renders each *contiguous* run as one container, so restore keeps the first
+/// run and returns the straggler ungrouped rather than drawing two containers
+/// that share an id.
+pub fn test_launch_config_restores_tab_groups() -> Builder {
+    use warp::integration_testing::workspace::assert_tab_groups;
+    use warp::launch_configs::launch_config::{
+        LaunchConfig, PaneMode, PaneTemplateType, TabGroupTemplate, TabTemplate, WindowTemplate,
+    };
+    use warp::themes::theme::AnsiColorIdentifier;
+
+    FeatureFlag::GroupedTabs.set_enabled(true);
+
+    fn tab(title: &str, group: Option<usize>) -> TabTemplate {
+        TabTemplate {
+            group,
+            title: Some(title.to_owned()),
+            layout: PaneTemplateType::PaneTemplate {
+                is_focused: Some(true),
+                cwd: PathBuf::from("/some/path"),
+                commands: Vec::new(),
+                pane_mode: PaneMode::Terminal,
+                shell: None,
+            },
+            commands: Vec::new(),
+            color: None,
+        }
+    }
+
+    fn create_launch_config() -> LaunchConfig {
+        LaunchConfig {
+            name: "Mocked config".to_owned(),
+            active_window_index: Some(0),
+            windows: vec![WindowTemplate {
+                tab_groups: vec![
+                    TabGroupTemplate {
+                        name: Some("Backend".to_owned()),
+                        color: Some(AnsiColorIdentifier::Blue),
+                        collapsed: false,
+                        pinned: false,
+                    },
+                    TabGroupTemplate {
+                        name: Some("Frontend".to_owned()),
+                        color: None,
+                        collapsed: false,
+                        pinned: false,
+                    },
+                ],
+                active_tab_index: Some(0),
+                tabs: vec![
+                    tab("api", Some(0)),
+                    tab("worker", Some(0)),
+                    tab("scratch", None),
+                    tab("stray", Some(0)),
+                    tab("web", Some(1)),
+                ],
+            }],
+        }
+    }
+
+    new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            new_step_with_default_assertions("Assert we have only 1 window open at start")
+                .add_assertion(assert_num_windows_open(1)),
+        )
+        .with_step(
+            new_step_with_default_assertions("Open a launch config carrying tab groups")
+                .with_action(move |app, _, _| {
+                    app.dispatch_global_action(
+                        "root_view:open_launch_config",
+                        warp::root_view::OpenLaunchConfigArg {
+                            launch_config: create_launch_config(),
+                            ui_location: get_launch_config_ui_location(),
+                            open_in_active_window: false,
+                        },
+                    );
+                }),
+        )
+        .with_step(
+            new_step_with_default_assertions("Assert the groups came back with their tabs")
+                .add_assertion(assert_tab_count(5))
+                .add_assertion(assert_tab_groups(
+                    // "stray" asked for "Backend" again after an ungrouped tab,
+                    // so it restores ungrouped.
+                    vec![Some(0), Some(0), None, None, Some(1)],
+                    vec![
+                        (Some("Backend"), Some(AnsiColorIdentifier::Blue)),
+                        (Some("Frontend"), None),
+                    ],
+                )),
+        )
+}
