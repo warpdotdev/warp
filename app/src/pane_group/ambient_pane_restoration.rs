@@ -9,7 +9,7 @@ use crate::ai::agent_conversations_model::{
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::pane_group::{PaneGroup, PaneId, TerminalPane, TerminalViewResources};
+use crate::pane_group::{CloudConversationData, PaneGroup, PaneId, TerminalPane, TerminalViewResources};
 use crate::terminal::TerminalView;
 use crate::workspace::WorkspaceAction;
 
@@ -131,6 +131,47 @@ impl PaneGroup {
                             .insert(task_id, pane_id);
                     }
                 }
+                // An owned cloud agent conversation that is now locally
+                // persisted resolves to a local-conversation navigation action,
+                // which cannot be applied to an ambient loading pane. If the
+                // conversation is already associated with a terminal surface
+                // skip loading it again to avoid opening the same conversation
+                // on two surfaces; otherwise load the transcript from the server
+                // token stored on the task.
+                Some(WorkspaceAction::RestoreOrNavigateToConversation {
+                    conversation_id, ..
+                }) => {
+                    let already_open_surface = BlocklistAIHistoryModel::as_ref(ctx)
+                        .terminal_surface_id_for_conversation(&conversation_id);
+                    let already_open = already_open_surface.is_some();
+                    log::info!(
+                        "[ORCH-D:restore] RestoreOrNavigateToConversation task_id={task_id} \
+                         conversation_id={conversation_id:?} already_open={already_open} \
+                         surface={already_open_surface:?} task_conversation_id={:?}",
+                        task.conversation_id()
+                    );
+                    if already_open {
+                        self.replace_pane_with_new_cloud_conversation(pane_id, ctx);
+                    } else {
+                        match task
+                            .conversation_id()
+                            .map(|id| ServerConversationToken::new(id.to_string()))
+                        {
+                            Some(server_token) => {
+                                if !self.restore_pane_with_transcript(
+                                    pane_id,
+                                    server_token,
+                                    Some(task_id),
+                                    ctx,
+                                ) {
+                                    self.pending_ambient_agent_conversation_restorations
+                                        .insert(task_id, pane_id);
+                                }
+                            }
+                            None => self.replace_pane_with_new_cloud_conversation(pane_id, ctx),
+                        }
+                    }
+                }
                 _ => {
                     self.replace_pane_with_new_cloud_conversation(pane_id, ctx);
                 }
@@ -198,19 +239,30 @@ impl PaneGroup {
         });
         ctx.spawn(future, move |group, conversation, ctx| {
             if let Some(conversation) = conversation {
+                let exchange_count = match &conversation {
+                    CloudConversationData::Oz(c) => c.all_exchanges().len(),
+                    CloudConversationData::CLIAgent(_) => 0,
+                };
+                log::info!(
+                    "[ORCH-D:restore] fetch_and_load_transcript callback: conversation loaded \
+                     exchange_count={exchange_count} ambient_agent_task_id={ambient_agent_task_id:?}"
+                );
                 group.load_data_into_transcript_viewer(
                     target_view,
                     conversation,
                     ambient_agent_task_id,
                     ctx,
                 );
-            } else if let Some(pane_id) =
-                group.find_pane_id_for_terminal_view(target_view.id(), ctx)
-            {
-                report_error!(
-                    "Failed to restore ambient agent pane, replacing with new cloud conversation"
-                );
-                group.replace_pane_with_new_cloud_conversation(pane_id, ctx);
+            } else {
+                log::info!("[ORCH-D:restore] fetch_and_load_transcript callback: conversation is None — replacing with compose pane");
+                if let Some(pane_id) =
+                    group.find_pane_id_for_terminal_view(target_view.id(), ctx)
+                {
+                    report_error!(
+                        "Failed to restore ambient agent pane, replacing with new cloud conversation"
+                    );
+                    group.replace_pane_with_new_cloud_conversation(pane_id, ctx);
+                }
             }
         });
     }

@@ -1326,6 +1326,7 @@ impl OrchestrationEventStreamer {
         parent_task_id: AmbientAgentTaskId,
         ctx: &mut ModelContext<Self>,
     ) {
+        log::info!("[ORCH-D:streamer] spawning ancestor seed fetch parent_task_id={parent_task_id}");
         let ai_client = self.ai_client.clone();
         let filter = TaskListFilter {
             ancestor_run_id: Some(parent_task_id.to_string()),
@@ -1387,8 +1388,8 @@ impl OrchestrationEventStreamer {
                     }
                     entry.event_cursor = seed;
                     entry.seeded = true;
-                    log::debug!(
-                        "[orch-viewer-streamer] ancestor seed applied for parent_task_id={parent_task_id}: \
+                    log::info!(
+                        "[ORCH-D:streamer] ancestor seed applied parent_task_id={parent_task_id} \
                          tasks_received={tasks_received} children_seeded={} known_children_total={} \
                          seed_cursor={seed} local_cursor_before={local_cursor}",
                         seeded_run_ids.len(),
