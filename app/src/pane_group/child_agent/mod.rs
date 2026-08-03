@@ -89,6 +89,7 @@ fn start_new_child_conversation(
             name,
             parent_conversation_id,
             orchestration_harness,
+            false,
             ctx,
         )
     })

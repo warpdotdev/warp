@@ -631,6 +631,7 @@ fn start_new_child_conversation_persists_harness_metadata() {
                 "Agent 1".to_string(),
                 parent_conversation_id,
                 Some(Harness::Claude),
+                false,
                 ctx,
             );
             let child_b = history_model.start_new_child_conversation(
@@ -638,6 +639,7 @@ fn start_new_child_conversation_persists_harness_metadata() {
                 "Agent 2".to_string(),
                 parent_conversation_id,
                 Some(Harness::Codex),
+                false,
                 ctx,
             );
             (
@@ -2346,6 +2348,7 @@ fn test_start_new_child_conversation_persists_child_metadata_for_restore() {
                     "Agent 1".to_string(),
                     parent_conversation_id,
                     Some(Harness::Claude),
+                    false,
                     ctx,
                 );
                 (
@@ -2619,6 +2622,7 @@ fn test_optimistic_root_restore_round_trip_yields_in_progress_optimistic_root() 
                     "Round-trip child".to_string(),
                     parent_id,
                     Some(Harness::Claude),
+                    false,
                     ctx,
                 );
                 let expected_parent_agent_id = history_model

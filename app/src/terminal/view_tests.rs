@@ -7657,6 +7657,7 @@ fn cli_session_status_updates_active_child_conversation() {
                         "Agent 2".to_string(),
                         parent_conversation_id,
                         None,
+                        false,
                         ctx,
                     )
                 });
@@ -7809,6 +7810,7 @@ fn cli_session_status_updates_single_child_conversation_without_agent_view() {
                         "Agent 2".to_string(),
                         parent_conversation_id,
                         None,
+                        false,
                         ctx,
                     )
                 });

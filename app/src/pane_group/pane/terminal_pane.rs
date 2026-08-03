@@ -1936,10 +1936,13 @@ fn launch_remote_child(
             request_name.clone(),
             request.parent_conversation_id,
             Some(orchestration_harness),
+            true,
             ctx,
         );
-        // Mark as remote so the parent's LocalAgentTaskSyncModel skips status
-        // reporting — the remote worker handles it.
+        // `start_new_child_conversation` already marked this remote above
+        // (before its first persist); this call is now a no-op, kept so the
+        // parent's LocalAgentTaskSyncModel skipping status reporting for
+        // remote children stays obviously correct at a glance.
         history_model.mark_conversation_as_remote_child(id, ctx);
         id
     });
