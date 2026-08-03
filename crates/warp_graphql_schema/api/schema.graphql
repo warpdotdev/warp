@@ -2428,6 +2428,10 @@ type MultiAdminPolicy {
   enabled: Boolean!
 }
 
+type NativeWorkspacesPolicy {
+  enabled: Boolean!
+}
+
 scalar NodeHash
 
 type Notebook {
@@ -3845,6 +3849,7 @@ type Tier {
   managedByokByoePolicy: ManagedByokByoePolicy
   multiAdminPolicy: MultiAdminPolicy
   name: String!
+  nativeWorkspacesPolicy: NativeWorkspacesPolicy
   pricing: TierPricing
   purchaseAddOnCreditsPolicy: PurchaseAddOnCreditsPolicy
   sessionSharingPolicy: SessionSharingPolicy

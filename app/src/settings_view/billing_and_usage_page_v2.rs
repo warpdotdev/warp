@@ -677,6 +677,9 @@ impl BillingAndUsagePageV2View {
                 billing_metadata.is_some_and(|metadata| metadata.is_enterprise_plan()),
             ) {
                 let team_uid = team.uid;
+                let use_workspace_admin_panel = is_workspace_admin
+                    && billing_metadata
+                        .is_some_and(|metadata| metadata.is_native_workspaces_enabled());
                 let fg_color = appearance.theme().active_ui_text_color();
                 right_side.add_child(
                     Container::new(
@@ -703,9 +706,15 @@ impl BillingAndUsagePageV2View {
                             })
                             .build()
                             .on_click(move |ctx, _, _| {
-                                ctx.dispatch_typed_action(
-                                    BillingAndUsagePageAction::OpenAdminPanel { team_uid },
-                                );
+                                if use_workspace_admin_panel {
+                                    ctx.dispatch_typed_action(
+                                        BillingAndUsagePageAction::OpenWorkspaceAdminPanel,
+                                    );
+                                } else {
+                                    ctx.dispatch_typed_action(
+                                        BillingAndUsagePageAction::OpenTeamAdminPanel { team_uid },
+                                    );
+                                }
                             })
                             .finish(),
                     )
@@ -2062,8 +2071,11 @@ impl TypedActionView for BillingAndUsagePageV2View {
                     ws.generate_stripe_billing_portal_link(*team_uid, ctx);
                 });
             }
-            BillingAndUsagePageAction::OpenAdminPanel { team_uid } => {
+            BillingAndUsagePageAction::OpenTeamAdminPanel { team_uid } => {
                 super::admin_actions::AdminActions::open_admin_panel(*team_uid, ctx);
+            }
+            BillingAndUsagePageAction::OpenWorkspaceAdminPanel => {
+                super::admin_actions::AdminActions::open_workspace_admin_panel(ctx);
             }
             BillingAndUsagePageAction::ContactSupport => {
                 super::admin_actions::AdminActions::contact_support(ctx);
