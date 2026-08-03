@@ -54,7 +54,6 @@ use crate::ai::agent::{
     AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, CancellationOutcome,
     CancellationReason, MessageToAIAgentOutputMessageError, SummarizationType,
 };
-use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::{
@@ -63,7 +62,6 @@ use crate::ai::blocklist::{
 };
 use crate::ai::llms::LLMPreferences;
 use crate::ai::skills::SkillDescriptor;
-use crate::auth::AuthStateProvider;
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::notebooks::NotebookId;
 use crate::persistence::ModelEvent;
@@ -3475,43 +3473,12 @@ impl AIConversation {
         }
     }
 
-    /// Returns true when this conversation is the owner's view of their own
-    /// cloud agent run. Such conversations are persisted despite
-    /// `is_viewing_shared_session` being set: the client joins via the
-    /// shared-session protocol but the run belongs to the current user, so
-    /// the local conversation should survive restarts.
-    ///
-    /// Returns false when the task data is not yet cached — the caller
-    /// retries on the next update, which arrives after the cache is warm.
-    fn is_owned_cloud_agent_conversation(
-        &self,
-        ctx: &ModelContext<BlocklistAIHistoryModel>,
-    ) -> bool {
-        if !FeatureFlag::OrchestrationUnifiedStack.is_enabled() {
-            return false;
-        }
-        let Some(task_id) = self.task_id else {
-            return false;
-        };
-        let Some(current_uid) = AuthStateProvider::as_ref(ctx)
-            .get()
-            .user_id()
-            .map(|uid| uid.as_string())
-        else {
-            return false;
-        };
-        AgentConversationsModel::as_ref(ctx)
-            .get_task_data(&task_id)
-            .is_some_and(|task| task.creator.as_ref().is_some_and(|c| c.uid == current_uid))
-    }
-
     pub(crate) fn write_updated_conversation_state(
         &mut self,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        // We should not persist non-local conversations (e.g. shared sessions),
-        // unless the run belongs to the current user.
-        if self.is_viewing_shared_session && !self.is_owned_cloud_agent_conversation(ctx) {
+        // We should not persist non-local conversations (e.g. shared sessions).
+        if self.is_viewing_shared_session {
             return;
         }
 
@@ -3556,12 +3523,13 @@ impl AIConversation {
             }
         };
 
+        let updated_tasks: Vec<_> = self
+            .all_tasks()
+            .filter_map(|task| task.source_for_persistence())
+            .collect();
         let event = ModelEvent::UpdateMultiAgentConversation {
             conversation_id: self.id.to_string(),
-            updated_tasks: self
-                .all_tasks()
-                .filter_map(|task| task.source_for_persistence())
-                .collect(),
+            updated_tasks,
             conversation_data: AgentConversationData {
                 server_conversation_token: self
                     .server_conversation_token
