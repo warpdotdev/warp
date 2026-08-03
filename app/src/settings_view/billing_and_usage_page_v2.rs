@@ -673,8 +673,7 @@ impl BillingAndUsagePageV2View {
             ) {
                 let team_uid = team.uid;
                 let use_workspace_admin_panel = is_workspace_admin
-                    && billing_metadata
-                        .is_some_and(|metadata| metadata.is_native_workspaces_enabled());
+                    && workspace.is_some_and(|workspace| workspace.is_native_workspaces_enabled());
                 let fg_color = appearance.theme().active_ui_text_color();
                 right_side.add_child(
                     Container::new(
