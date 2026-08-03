@@ -3548,8 +3548,12 @@ impl AIConversation {
         &mut self,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        // Don't persist viewer conversations (e.g. shared sessions).
-        if self.is_viewing_shared_session {
+        // Don't persist viewer conversations (e.g. shared sessions) or
+        // remote-child placeholders. Remote children are always rediscovered
+        // on restore via the ancestor-list seed
+        // (`PaneGroup::seed_child_conversations_from_task`), so a persisted
+        // row would only risk going stale relative to the server.
+        if self.is_viewing_shared_session || self.is_remote_child {
             return;
         }
 

@@ -45,6 +45,30 @@ impl PaneGroup {
             .child_conversation_ids_of(&parent_conversation_id)
             .to_vec();
 
+        // Local (non-ambient) parents have no other discovery path for
+        // remote children: unlike ambient/viewer restore, nothing else
+        // calls `seed_child_conversations_from_task` for them. If we don't
+        // already know of any children and the parent has its own
+        // server-assigned run id, kick off the same ancestor-list seed the
+        // ambient path uses. Idempotent (routes through the pending map) and
+        // a no-op once resolved if the parent never spawned any children.
+        if child_ids.is_empty() {
+            let parent_task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&parent_conversation_id)
+                .and_then(AIConversation::task_id);
+            if let Some(parent_task_id) = parent_task_id
+                && !self
+                    .pending_parent_child_seeds
+                    .contains_key(&parent_task_id)
+            {
+                self.seed_child_conversations_from_task(
+                    parent_conversation_id,
+                    parent_task_id,
+                    ctx,
+                );
+            }
+        }
+
         for child_id in child_ids {
             if self
                 .child_agent_panes
