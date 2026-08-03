@@ -42,8 +42,10 @@ use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::mcp::JSONTransportType;
+use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
 use crate::ai::mcp::parsing::normalize_mcp_json;
 use crate::ai::skills::SkillManager;
+use crate::auth::credentials::Credentials;
 use crate::server::server_api::managed_mcp::MockManagedMcpClient;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
@@ -436,6 +438,59 @@ fn managed_command_config_missing_secret_leaves_placeholder() {
         }
         other => panic!("expected CLI server, got {other:?}"),
     }
+}
+
+// ── Built-in Factory MCP injection tests ────────────────────────────────────
+
+fn api_key_credentials() -> Credentials {
+    Credentials::ApiKey {
+        key: "wk-test-key".to_string(),
+        owner_type: None,
+    }
+}
+
+#[test]
+fn builtin_factory_mcp_attaches_with_api_key_credentials() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+
+    let installation =
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
+            .expect("built-in Factory MCP should attach when eligible");
+
+    assert_eq!(installation.uuid(), FACTORY_MCP_INSTALLATION_UUID);
+    assert_eq!(
+        installation.templatable_mcp_server().name,
+        FACTORY_MCP_SERVER_NAME
+    );
+}
+
+#[test]
+fn builtin_factory_mcp_skipped_when_flag_disabled() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(false);
+
+    assert!(
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
+            .is_none()
+    );
+}
+
+#[test]
+fn builtin_factory_mcp_skipped_without_credentials() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+
+    assert!(AgentDriver::builtin_factory_mcp_for_run(None, &HashSet::new()).is_none());
+}
+
+#[test]
+fn builtin_factory_mcp_skipped_on_name_collision() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+    // A user-configured server named `warp-factory` wins over the built-in.
+    let taken_server_names = HashSet::from([FACTORY_MCP_SERVER_NAME.to_string()]);
+
+    assert!(
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &taken_server_names)
+            .is_none()
+    );
 }
 
 #[test]

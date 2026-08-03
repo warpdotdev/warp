@@ -71,13 +71,14 @@ use crate::ai::mcp::parsing::{ParsedTemplatableMCPServerResult, normalize_mcp_js
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::ai::mcp::{
     JSONMCPServer, MCPServerState, TemplatableMCPServerInstallation, TemplatableMCPServerManager,
-    VariableType, VariableValue,
+    VariableType, VariableValue, builtin,
 };
 use crate::ai::skills::{
     SkillManager, SkillWatcher, filter_skills_by_spec, read_skills_from_directories,
     resolve_skill_repos,
 };
 use crate::auth::AuthStateProvider;
+use crate::auth::credentials::Credentials;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
 use crate::send_telemetry_from_app_ctx;
 use crate::server::ids::{ServerId, SyncId};
@@ -1286,6 +1287,39 @@ impl AgentDriver {
         Ok(resolved)
     }
 
+    /// Returns the built-in Factory MCP server installation to attach to this
+    /// run, or `None` when it should not be attached.
+    ///
+    /// Interactive clients (GUI/TUI) attach built-in Warp-hosted servers via
+    /// [`TemplatableMCPServerManager::sync_builtin_servers`], which skips CLI
+    /// agent runs. The driver mirrors the same eligibility rules for its
+    /// run-scoped ephemeral startup path: the `FactoryMcp` feature flag, a
+    /// usable bearer token, and no configured server already named
+    /// `warp-factory` (an explicit configuration wins over the built-in).
+    ///
+    /// The token is pinned into the transport at spawn time and is not
+    /// refreshed mid-run: cloud runs authenticate with API keys, which do not
+    /// rotate, so only Firebase-authenticated local runs that outlive their
+    /// token would see factory tool calls start failing.
+    fn builtin_factory_mcp_for_run(
+        credentials: Option<&Credentials>,
+        taken_server_names: &HashSet<String>,
+    ) -> Option<TemplatableMCPServerInstallation> {
+        if !FeatureFlag::FactoryMcp.is_enabled() {
+            return None;
+        }
+        if taken_server_names.contains(builtin::FACTORY_MCP_SERVER_NAME) {
+            log::info!(
+                "Skipping the built-in Factory MCP server: a server named '{}' is already configured for this run",
+                builtin::FACTORY_MCP_SERVER_NAME
+            );
+            return None;
+        }
+        let token = builtin::builtin_bearer_token(credentials?)?;
+        log::info!("Attaching the built-in Factory MCP server to this agent run");
+        Some(builtin::factory_mcp_installation(&token))
+    }
+
     fn installations_from_user_mcp_json(
         json_str: &str,
     ) -> Result<Vec<TemplatableMCPServerInstallation>, AgentDriverError> {
@@ -2226,7 +2260,45 @@ impl AgentDriver {
                         Self::resolve_mcp_specs(&mcp_specs, managed_mcp_client, &foreground)
                             .await?;
                     let existing_uuids = resolved_mcp_specs.local_uuids;
-                    let ephemeral_installations = resolved_mcp_specs.ephemeral_installations;
+                    let mut ephemeral_installations = resolved_mcp_specs.ephemeral_installations;
+
+                    // Attach the built-in Factory MCP server. Interactive
+                    // clients attach built-ins via
+                    // `TemplatableMCPServerManager::sync_builtin_servers`,
+                    // which skips CLI agent runs, so the driver injects the
+                    // same code-owned installation here, scoped to this run.
+                    let local_uuids = existing_uuids.clone();
+                    let mut taken_server_names: HashSet<String> = ephemeral_installations
+                        .iter()
+                        .map(|installation| installation.templatable_mcp_server().name.clone())
+                        .collect();
+                    let credentials = foreground
+                        .spawn(move |_, ctx| {
+                            let manager = TemplatableMCPServerManager::as_ref(ctx);
+                            let local_names = local_uuids
+                                .iter()
+                                .filter_map(|uuid| {
+                                    manager.get_installed_server(uuid).map(|installation| {
+                                        installation.templatable_mcp_server().name.clone()
+                                    })
+                                })
+                                .collect::<Vec<_>>();
+                            let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+                            let credentials = (!auth_state.is_anonymous_or_logged_out())
+                                .then(|| auth_state.credentials())
+                                .flatten();
+                            (credentials, local_names)
+                        })
+                        .await
+                        .map(|(credentials, local_names)| {
+                            taken_server_names.extend(local_names);
+                            credentials
+                        })?;
+                    if let Some(installation) =
+                        Self::builtin_factory_mcp_for_run(credentials.as_ref(), &taken_server_names)
+                    {
+                        ephemeral_installations.push(installation);
+                    }
 
                     log::info!(
                         "Starting {} existing and {} ephemeral MCP servers",
