@@ -8,8 +8,8 @@ use cfg_if::cfg_if;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use onboarding::{
-    AgentOnboardingEvent, AgentOnboardingView, CreditPackOption, OfferVariant, OnboardingEvent,
-    OnboardingIntention, SelectedSettings,
+    AgentOnboardingEvent, AgentOnboardingView, OfferVariant, OnboardingEvent, OnboardingIntention,
+    SelectedSettings,
 };
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
@@ -41,7 +41,10 @@ use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::blocklist::SerializedBlockListItem;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
-use crate::ai::onboarding::{build_onboarding_models, current_onboarding_auth_state};
+use crate::ai::onboarding::{
+    build_onboarding_models, current_onboarding_auth_state, has_ai_credit_availability,
+    onboarding_credit_packs, onboarding_purchase_team_uid,
+};
 use crate::ai::request_usage_model::AIRequestUsageModelEvent;
 use crate::app_state::{AppState, PaneUuid, WindowSnapshot};
 use crate::appearance::Appearance;
@@ -72,7 +75,7 @@ use crate::linear::LinearIssueWork;
 use crate::notebooks::manager::NotebookSource;
 use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::persistence::ModelEvent;
-use crate::pricing::{PricingInfoModel, PricingInfoModelEvent, onboarding_credit_pack_options};
+use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::auth::UserAuthenticationError;
@@ -142,39 +145,10 @@ fn offer_variant_for_account_class(account_class: FtueAccountClass) -> Option<Of
     }
 }
 
-/// The ad-hoc credit packs to offer during onboarding, priced for the current
-/// viewer. Empty when the server hasn't sent pricing yet or the viewer's plan
-/// can't buy packs at all, which hides the option.
-fn current_credit_pack_options(ctx: &AppContext) -> Vec<CreditPackOption> {
-    let workspaces = UserWorkspaces::as_ref(ctx);
-    let Some(policy) = workspaces.purchase_policy() else {
-        return Vec::new();
-    };
-    if !policy.allows_purchases() {
-        return Vec::new();
-    }
-    let Some(options) = PricingInfoModel::as_ref(ctx).addon_credits_options() else {
-        return Vec::new();
-    };
-    onboarding_credit_pack_options(options, policy.effective_premium_bps())
-}
-
-/// The credits a purchase lands in: the non-expired bonus grants scoped to the
-/// user and to their current workspace. Purchased add-on credits are granted as
-/// bonus credits, so this is the balance that says whether the user has
-/// purchasable AI credits — unlike "has any AI remaining", which is also true
-/// for base plan requests, BYOK credentials, overages and auto-reload, and so
-/// would advance a brand-new free user who cancelled checkout.
-fn purchased_credit_balance(ctx: &AppContext) -> i32 {
-    let usage = AIRequestUsageModel::as_ref(ctx);
-    usage.total_user_interactive_bonus_credits_remaining()
-        + usage.total_current_workspace_bonus_credits_remaining(ctx)
-}
-
 /// Relays the outcome of an onboarding-initiated credit purchase back to the
 /// onboarding view. On the checkout path the credits arrive asynchronously, so
-/// this only opens the browser; completion is detected from a later usage
-/// refresh.
+/// this only opens the browser; completion is detected later from the server's
+/// AI credit availability decision.
 fn handle_onboarding_credit_purchase_event(
     onboarding_view: &ViewHandle<AgentOnboardingView>,
     event: &UserWorkspacesEvent,
@@ -2216,7 +2190,7 @@ impl RootView {
                 auth_state,
                 ctx,
             );
-            view.set_credit_pack_options(current_credit_pack_options(ctx), ctx);
+            view.set_credit_pack_options(onboarding_credit_packs(ctx), ctx);
             view
         });
 
@@ -2226,7 +2200,7 @@ impl RootView {
             &PricingInfoModel::handle(ctx),
             move |_, _pricing, event, ctx| {
                 let PricingInfoModelEvent::PricingInfoUpdated = event;
-                let options = current_credit_pack_options(ctx);
+                let options = onboarding_credit_packs(ctx);
                 onboarding_view_for_pricing.update(ctx, |onboarding_view, ctx| {
                     onboarding_view.set_credit_pack_options(options, ctx);
                 });
@@ -2272,31 +2246,32 @@ impl RootView {
                     ctx,
                 );
                 let auth_state = current_onboarding_auth_state(ctx);
-                let credit_pack_options = current_credit_pack_options(ctx);
+                let credit_pack_options = onboarding_credit_packs(ctx);
                 onboarding_view_for_workspaces.update(ctx, |onboarding_view, ctx| {
                     onboarding_view.set_auth_state(auth_state, ctx);
-                    // The purchase policy (and so the premium) can change with
-                    // the user's teams, which moves the displayed prices.
+                    // The purchase policy (and so the premium) comes from the
+                    // user's workspace, so a metadata refresh can move the
+                    // displayed prices.
                     onboarding_view.set_credit_pack_options(credit_pack_options, ctx);
                 });
             },
         );
 
         // Browser checkout doesn't report back to the app, so the purchase is
-        // only complete once the granted credits show up on a usage refresh.
+        // only complete once the server reports the user can make AI requests.
         let onboarding_view_for_usage = onboarding_view.clone();
         ctx.subscribe_to_model(
             &AIRequestUsageModel::handle(ctx),
             move |_, _usage, event, ctx| {
-                if !matches!(event, AIRequestUsageModelEvent::RequestUsageUpdated) {
+                if !matches!(event, AIRequestUsageModelEvent::CreditAvailabilityUpdated) {
                     return;
                 }
-                // The view completes the purchase only if this balance is
-                // non-zero, so a brand-new user who cancels checkout stays on
-                // the slide.
-                let credits_now = purchased_credit_balance(ctx);
+                // The view completes the purchase only when the server says AI
+                // is available, so a user who cancels checkout without gaining
+                // access stays on the slide.
+                let available = has_ai_credit_availability(ctx);
                 onboarding_view_for_usage.update(ctx, |onboarding_view, ctx| {
-                    onboarding_view.on_purchased_credit_balance_observed(credits_now, ctx);
+                    onboarding_view.on_ai_credit_availability_observed(available, ctx);
                 });
             },
         );
@@ -2975,12 +2950,15 @@ impl RootView {
                 }
             },
             AgentOnboardingEvent::PurchaseCreditsRequested { credits } => {
-                // `team_uid` is intentionally omitted: the server resolves the
-                // buyer's personal team and creates one when a brand-new free
-                // user doesn't have one yet.
+                // Bill whichever team this window is scoped to. That is usually
+                // `None` during onboarding, which lets the server resolve or
+                // create the buyer's personal team — but team discovery and
+                // domain capture can land a user on a team during signup, and
+                // the server should be told which one rather than handed `None`.
                 let credits = *credits;
+                let team_uid = onboarding_purchase_team_uid(ctx.window_id(), ctx);
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-                    user_workspaces.purchase_addon_credits(None, credits, ctx);
+                    user_workspaces.purchase_addon_credits(team_uid, credits, ctx);
                 });
             }
             AgentOnboardingEvent::OfferCreditsPurchased { variant } => match variant {
@@ -2997,14 +2975,11 @@ impl RootView {
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
                     prefs.refresh_available_models(ctx);
                 });
+                // The workspace-metadata refresh above also carries the
+                // server's AI credit availability decision, which is what lets
+                // a checkout-pending onboarding purchase complete.
                 TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
                     drop(manager.refresh_workspace_metadata(ctx));
-                });
-                // Returning from browser checkout is the usual way an
-                // onboarding credit purchase completes, so refresh usage too:
-                // the granted credits are what allow onboarding to advance.
-                AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
-                    drop(model.refresh_request_usage(ctx));
                 });
             }
         }

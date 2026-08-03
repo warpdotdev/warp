@@ -86,12 +86,13 @@ fn main() -> Result<()> {
         ..Default::default()
     })?;
 
-    // Onboarding views read feature flags while rendering, and debug builds
-    // assert that flags were initialized first. The demo has no channel
-    // configuration, so the defaults are what it previews.
+    // Feature flags must be marked initialized before anything reads one: the
+    // onboarding slides check flags while rendering, and in a debug build that
+    // check panics if initialization never happened. The real app does this in
+    // `init_feature_flags`, which also turns on the flags for its release
+    // channel; this demo has no channel, so it previews the flag defaults.
     if demo_offer_variant().is_some() {
-        // The post-auth offer slide only exists on the account-first flow, so
-        // previewing it requires that flow to be on.
+        // Except for this one, which the offer slides live behind.
         warp_core::features::FeatureFlag::AccountFirstOnboarding.set_enabled(true);
     }
     warp_core::features::mark_initialized();

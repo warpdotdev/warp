@@ -563,23 +563,22 @@ impl OnboardingStateModel {
         ctx.notify();
     }
 
-    /// Reports the purchased-credit balance seen on a refresh while checkout is
-    /// pending. The purchase completes as soon as the user *has* purchasable
-    /// credits.
+    /// Reports the server's answer to "can this user start an AI request right
+    /// now", observed on a refresh while checkout is pending. The purchase
+    /// completes as soon as the answer is yes.
     ///
-    /// The bar is deliberately "non-zero", not "grew": the overwhelmingly
-    /// common case is a brand-new account with no credits, where cancelling
-    /// checkout must leave the user here — but someone who already holds
-    /// credits and lands on this slide is fine to continue. The balance must
-    /// still be the add-on/purchased one rather than general AI availability,
-    /// which would also count base free-plan requests and BYOK and so would
-    /// advance a brand-new user who cancelled.
-    pub(crate) fn on_credit_balance_observed(
+    /// This is deliberately the generic availability decision rather than
+    /// "did these particular add-on credits land". Onboarding doesn't care
+    /// *how* the user ended up with access — only that it never lets someone
+    /// through who still can't use AI. This offer is shown to users with no
+    /// base credits, so an available answer means access genuinely arrived,
+    /// and cancelling checkout leaves them here.
+    pub(crate) fn on_credit_availability_observed(
         &mut self,
-        credits_now: i32,
+        available: bool,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.credit_purchase_state != CreditPurchaseState::AwaitingCheckout || credits_now <= 0 {
+        if self.credit_purchase_state != CreditPurchaseState::AwaitingCheckout || !available {
             return;
         }
         self.on_credit_purchase_completed(ctx);

@@ -394,16 +394,16 @@ impl AgentOnboardingView {
         ctx.notify();
     }
 
-    /// Reports the purchased-credit balance seen on a refresh. Safe to call on
-    /// every refresh: it only completes a checkout-pending purchase, and only
-    /// when that balance is non-zero.
-    pub fn on_purchased_credit_balance_observed(
+    /// Reports the server's AI credit availability decision, seen on a refresh.
+    /// Safe to call on every refresh: it only completes a checkout-pending
+    /// purchase, and only when the server says AI is available.
+    pub fn on_ai_credit_availability_observed(
         &mut self,
-        credits_now: i32,
+        available: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         self.onboarding_state.update(ctx, |state, ctx| {
-            state.on_credit_balance_observed(credits_now, ctx);
+            state.on_credit_availability_observed(available, ctx);
         });
         ctx.notify();
     }

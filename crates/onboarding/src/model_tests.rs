@@ -174,21 +174,21 @@ fn abandoned_checkout_leaves_the_purchase_in_flight() {
         );
         assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
 
-        // Only observing available credits clears the in-flight purchase.
+        // Only the server reporting AI as available clears the in-flight
+        // purchase.
         model.update(&mut app, |model, ctx| {
-            model.on_credit_balance_observed(400, ctx)
+            model.on_credit_availability_observed(true, ctx)
         });
         assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
     });
 }
 
-/// Regression test for REV-1886: the advance is gated on the user having
-/// *purchased* credits, not on general AI availability. The case that matters
-/// is the common one — a brand-new account with no credits — where cancelling
-/// checkout must leave the user on the slide even though base free-plan
-/// requests or BYOK would make "has any AI remaining" true.
+/// Regression test for REV-1886: cancelling browser checkout must leave the
+/// user on the offer slide. The common case is a brand-new account that still
+/// can't make an AI request, so every refresh while checkout is open reports
+/// unavailable and the slide must hold.
 #[test]
-fn canceled_checkout_does_not_advance_a_user_with_no_credits() {
+fn canceled_checkout_does_not_advance_a_user_without_ai_access() {
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
         model.update(&mut app, |model, ctx| {
@@ -198,31 +198,33 @@ fn canceled_checkout_does_not_advance_a_user_with_no_credits() {
             model.on_credit_checkout_opened(ctx);
         });
 
-        // Every refresh while checkout is open still reports no credits.
+        // Every refresh while checkout is open still reports no AI access.
         for _ in 0..3 {
             model.update(&mut app, |model, ctx| {
-                model.on_credit_balance_observed(0, ctx)
+                model.on_credit_availability_observed(false, ctx)
             });
             assert_eq!(
                 purchase_state(&app, &model),
                 CreditPurchaseState::AwaitingCheckout,
-                "a zero balance must not complete the purchase"
+                "an unavailable answer must not complete the purchase"
             );
             assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
         }
 
-        // Credits arriving completes it.
+        // Access arriving completes it.
         model.update(&mut app, |model, ctx| {
-            model.on_credit_balance_observed(400, ctx)
+            model.on_credit_availability_observed(true, ctx)
         });
         assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
     });
 }
 
-/// Someone who already holds credits and lands on this slide is fine to
-/// continue — the bar is "has credits", not "balance grew".
+/// Onboarding doesn't care *how* the user ended up able to use AI — a team
+/// plan landing mid-checkout counts just as much as the add-on credits they
+/// were buying. The bar is "can make an AI request", not "this purchase
+/// settled".
 #[test]
-fn a_user_who_already_has_credits_can_continue() {
+fn access_arriving_from_any_source_completes_the_purchase() {
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
         model.update(&mut app, |model, ctx| {
@@ -230,30 +232,31 @@ fn a_user_who_already_has_credits_can_continue() {
             model.set_credit_pack_options(credit_packs(), ctx);
             model.request_credit_purchase(ctx);
             model.on_credit_checkout_opened(ctx);
-            // Same balance they had before checkout opened.
-            model.on_credit_balance_observed(250, ctx);
+            // Not the add-on credits: some other grant made AI usable.
+            model.on_credit_availability_observed(true, ctx);
         });
         assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
     });
 }
 
-/// The balance report is driven by a generic usage refresh, so it must be
-/// inert outside a pending checkout.
+/// The availability report rides along on a generic usage refresh, so it must
+/// be inert outside a pending checkout.
 #[test]
-fn observing_a_credit_balance_outside_checkout_does_nothing() {
+fn observing_availability_outside_checkout_does_nothing() {
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
         model.update(&mut app, |model, ctx| {
             model.set_credit_pack_options(credit_packs(), ctx);
-            model.on_credit_balance_observed(10_000, ctx);
+            model.on_credit_availability_observed(true, ctx);
         });
         assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
 
         // Still inert while the purchase mutation is in flight: that path
-        // completes on the server's explicit success, not on a balance read.
+        // completes on the server's explicit success, not on an availability
+        // read.
         model.update(&mut app, |model, ctx| {
             model.request_credit_purchase(ctx);
-            model.on_credit_balance_observed(10_000, ctx);
+            model.on_credit_availability_observed(true, ctx);
         });
         assert_eq!(
             purchase_state(&app, &model),
