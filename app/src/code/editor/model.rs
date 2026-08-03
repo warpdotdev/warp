@@ -862,32 +862,6 @@ impl CodeEditorModel {
         }
     }
 
-    pub fn fold_all(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.manual_folds.is_empty() {
-            return;
-        }
-        for fold in &mut self.manual_folds {
-            fold.closed = true;
-        }
-        let cursor = self.cursor_line(ctx);
-        if let Some(start) = self
-            .manual_folds
-            .iter()
-            .filter_map(|fold| self.manual_fold_range(fold, ctx))
-            .filter(|range| range.contains(&cursor))
-            .min_by_key(|range| range.start)
-            .map(|range| range.start)
-        {
-            let offset = self
-                .content
-                .as_ref(ctx)
-                .line_start(ContentLineCount::from(start + 1));
-            self.cursor_at(offset, ctx);
-        }
-        self.calculate_hidden_lines(ctx);
-        self.rebuild_layout_and_refresh_diff(ctx);
-    }
-
     pub fn unfold_all(&mut self, ctx: &mut ModelContext<Self>) {
         if !self.manual_folds.iter().any(|fold| fold.closed) {
             return;

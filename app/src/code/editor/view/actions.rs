@@ -503,17 +503,11 @@ pub fn init(app: &mut AppContext) {
         .with_key_binding("alt-cmdorctrl-]"),
         EditableBinding::new(
             "code_editor:fold_selected_ranges",
-            "Fold selected ranges",
+            "Fold selected lines (Code Editor)",
             CodeEditorViewAction::FoldSelectedRanges,
         )
         .with_context_predicate(text_entry.clone())
         .with_key_binding("alt-cmdorctrl-f"),
-        EditableBinding::new(
-            "code_editor:fold_all",
-            "Fold all created folds",
-            CodeEditorViewAction::FoldAll,
-        )
-        .with_context_predicate(text_entry.clone()),
         EditableBinding::new(
             "code_editor:unfold_all",
             "Unfold all",
@@ -660,7 +654,6 @@ pub enum CodeEditorViewAction {
     Fold,
     Unfold,
     FoldSelectedRanges,
-    FoldAll,
     UnfoldAll,
     ScrollVertical(Pixels),
     ScrollHorizontal(Pixels),
@@ -808,7 +801,6 @@ impl CodeEditorViewAction {
             | Self::Fold
             | Self::Unfold
             | Self::FoldSelectedRanges
-            | Self::FoldAll
             | Self::UnfoldAll
             | Self::SelectUp
             | Self::SelectDown
@@ -919,7 +911,6 @@ impl TypedActionView for CodeEditorView {
             FoldSelectedRanges => self
                 .model
                 .update(ctx, |model, ctx| model.fold_selected_ranges(ctx)),
-            FoldAll => self.model.update(ctx, |model, ctx| model.fold_all(ctx)),
             UnfoldAll => self.model.update(ctx, |model, ctx| model.unfold_all(ctx)),
             ScrollVertical(delta) => self.model.update(ctx, |model, ctx| {
                 model.render_state().update(ctx, |render_state, ctx| {
