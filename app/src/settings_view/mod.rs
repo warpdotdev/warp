@@ -7,7 +7,8 @@ use ai_page::{AISettingsPageAction, AISettingsPageEvent, AISettingsPageView, AIS
 use appearance_page::{AppearancePageAction, AppearanceSettingsPageView};
 use billing_and_usage_dispatch::BillingAndUsageDispatchView;
 use billing_and_usage_page::BillingAndUsagePageEvent;
-use code_page::{CodeSettingsPageAction, CodeSettingsPageEvent, CodeSubpage};
+use code_editor_review_page::{EditorAndCodeReviewPageAction, EditorAndCodeReviewPageView};
+use code_indexing_page::{CodeIndexingPageAction, CodeIndexingPageEvent};
 use environments_page::EnvironmentsPageView;
 use features_page::{FeaturesPageView, FeaturesSettingsPageEvent};
 use itertools::Itertools as _;
@@ -82,7 +83,8 @@ mod billing_and_usage;
 mod billing_and_usage_dispatch;
 mod billing_and_usage_page;
 mod billing_and_usage_page_v2;
-mod code_page;
+mod code_editor_review_page;
+mod code_indexing_page;
 pub(crate) mod custom_inference_modal;
 mod custom_router_view;
 mod delete_environment_confirmation_dialog;
@@ -121,7 +123,7 @@ mod warpify_page;
 pub use ai_page::cli_agent_settings_widget_id;
 pub(crate) use ai_page::custom_model_routers_widget_id;
 pub use billing_and_usage_page::create_discount_badge;
-pub use code_page::CodeSettingsPageView;
+pub use code_indexing_page::CodeIndexingPageView;
 pub use features_page::FeaturesPageAction;
 pub use main_page::handle_experiment_change;
 pub use privacy_page::PrivacyPageAction;
@@ -325,10 +327,8 @@ pub enum SettingsSection {
     AgentMCPServers,
     Knowledge,
     ThirdPartyCLIAgents,
-    /// Internal backing-page identifier for CodeSettingsPageView. Multiple subpages
-    /// (CodeIndexing, EditorAndCodeReview) share this single backing page,
-    /// so this variant is needed as the key in `settings_pages`.
-    /// External callers should navigate to a specific subpage instead.
+    /// Alias accepted from deeplinks and persisted sessions. Not a page key:
+    /// navigating here resolves to [`Self::CodeIndexing`].
     Code,
     // ── Code umbrella subpages ──
     CodeIndexing,
@@ -401,9 +401,7 @@ impl SettingsSection {
             Self::AgentMCPServers => Self::MCPServers,
             // All other AI subpages render within the AI page.
             s if s.is_ai_subpage() => Self::AI,
-            // Code subpages render within the Code page.
-            s if s.is_code_subpage() => Self::Code,
-            // CloudEnvironments and OzCloudAPIKeys ARE their own backing pages
+            // Code and Cloud platform subpages ARE their own backing pages
             // (1:1 mapping), so they return themselves.
             other => *other,
         }
@@ -702,7 +700,8 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     warpify_page::init_actions_from_parent_view(app, context, builder);
     privacy_page::init_actions_from_parent_view(app, context, builder);
     ai_page::init_actions_from_parent_view(app, context, builder);
-    code_page::init_actions_from_parent_view(app, context, builder);
+    code_indexing_page::init_actions_from_parent_view(app, context, builder);
+    code_editor_review_page::init_actions_from_parent_view(app, context, builder);
     warp_drive_page::init_actions_from_parent_view(app, context, builder);
 
     if ChannelState::enable_debug_features() || cfg!(windows) {
@@ -1006,7 +1005,8 @@ pub enum SettingsAction {
     FeaturesPageToggle(FeaturesPageAction),
     PrivacyPageToggle(PrivacyPageAction),
     AI(AISettingsPageAction),
-    Code(CodeSettingsPageAction),
+    CodeIndexing(CodeIndexingPageAction),
+    EditorAndCodeReview(EditorAndCodeReviewPageAction),
     WarpDrive(warp_drive_page::WarpDriveSettingsPageAction),
     WarpifyPageToggle(WarpifyPageAction),
     Tab,
@@ -1162,7 +1162,10 @@ macro_rules! update_page {
             SettingsPageViewHandle::AI(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::CloudEnvironments(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::About(handle) => $ctx.update_view(handle, $update),
-            SettingsPageViewHandle::Code(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::CodeIndexing(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::EditorAndCodeReview(handle) => {
+                $ctx.update_view(handle, $update)
+            }
             SettingsPageViewHandle::BillingAndUsage(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::MCPServers(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::WarpDrive(handle) => $ctx.update_view(handle, $update),
@@ -1185,8 +1188,6 @@ pub struct SettingsView {
     nav_items: Vec<SettingsNavItem>,
     /// Handle to the AI settings page, used to switch subpage modes.
     ai_page_handle: ViewHandle<AISettingsPageView>,
-    /// Handle to the Code settings page, used to switch subpage modes.
-    code_page_handle: ViewHandle<CodeSettingsPageView>,
     /// Per-subpage search match results. Populated during search so that
     /// subpages sharing the same backing page can be filtered independently.
     subpage_filter: HashMap<SettingsSection, MatchData>,
@@ -1269,12 +1270,12 @@ impl SettingsView {
         // Keybindings page
         let keybindings_handle = ctx.add_typed_action_view(KeybindingsView::new);
 
-        // Code page
-        let code_page_handle = ctx.add_typed_action_view(CodeSettingsPageView::new);
-        let code_page_handle_for_nav = code_page_handle.clone();
-        ctx.subscribe_to_view(&code_page_handle, |me, _, event, ctx| {
-            me.handle_code_page_event(event, ctx);
+        // Code umbrella pages
+        let code_indexing_page_handle = ctx.add_typed_action_view(CodeIndexingPageView::new);
+        ctx.subscribe_to_view(&code_indexing_page_handle, |me, _, event, ctx| {
+            me.handle_code_indexing_page_event(event, ctx);
         });
+        let editor_review_page_handle = ctx.add_typed_action_view(EditorAndCodeReviewPageView::new);
 
         // Teams page, adding unconditionally, as `should_render` later on decides whether it
         // should be shown to the user or not
@@ -1363,7 +1364,8 @@ impl SettingsView {
             SettingsPage::new(main_page_handle),
             SettingsPage::new(ai_page_handle),
             billing_and_usage_page,
-            SettingsPage::new(code_page_handle),
+            SettingsPage::new(code_indexing_page_handle),
+            SettingsPage::new(editor_review_page_handle),
             SettingsPage::new(teams_page_handle),
             SettingsPage::new(appearance_page_handle),
             SettingsPage::new(features_page_handle),
@@ -1472,7 +1474,6 @@ impl SettingsView {
             environments_page_handle,
             nav_items,
             ai_page_handle: ai_page_handle_for_nav,
-            code_page_handle: code_page_handle_for_nav,
             subpage_filter: HashMap::new(),
             settings_file_error: None,
             settings_error_banner_dismissed: false,
@@ -1603,18 +1604,6 @@ impl SettingsView {
                             self.subpage_filter.insert(subpage_section, match_data);
                         }
                     }
-                    // Do the same for Code subpages.
-                    for &subpage_section in SettingsSection::code_subpages() {
-                        if let Some(subpage) = CodeSubpage::from_section(subpage_section) {
-                            self.code_page_handle.update(ctx, |view, ctx| {
-                                view.set_active_subpage(subpage, ctx);
-                            });
-                            let match_data = self
-                                .code_page_handle
-                                .update(ctx, |view, ctx| view.update_filter(&search_query, ctx));
-                            self.subpage_filter.insert(subpage_section, match_data);
-                        }
-                    }
                 } else {
                     // Search cleared: restore umbrella expanded state.
                     for item in &mut self.nav_items {
@@ -1631,14 +1620,13 @@ impl SettingsView {
                 // that owns its whole widget list, including subpages backed by
                 // a standalone page such as AgentMCPServers.
                 //
-                // The AI and Code pages are skipped while a search is active:
-                // they multiplex several subpages over one widget list, so their
-                // result is the aggregate of the per-subpage results computed
-                // above. With no query there are no per-subpage results to
-                // aggregate, so they take the normal pass like everything else.
+                // The AI page is skipped while a search is active: it multiplexes
+                // several subpages over one widget list, so its result is the
+                // aggregate of the per-subpage results computed above. With no
+                // query there are no per-subpage results to aggregate, so it
+                // takes the normal pass like everything else.
                 for (i, page) in self.settings_pages.iter().enumerate() {
-                    let is_multiplexed =
-                        matches!(page.section, SettingsSection::AI | SettingsSection::Code);
+                    let is_multiplexed = matches!(page.section, SettingsSection::AI);
                     if is_search_active && is_multiplexed {
                         continue;
                     }
@@ -1655,10 +1643,6 @@ impl SettingsView {
 
                 if is_search_active {
                     self.set_aggregated_filter(SettingsSection::AI, SettingsSection::ai_subpages());
-                    self.set_aggregated_filter(
-                        SettingsSection::Code,
-                        SettingsSection::code_subpages(),
-                    );
                 }
 
                 // Restore the active subpage after filtering.
@@ -1669,14 +1653,6 @@ impl SettingsView {
                         && let Some(subpage) = AISubpage::from_section(current)
                     {
                         self.ai_page_handle.update(ctx, |view, ctx| {
-                            view.set_active_subpage(subpage, ctx);
-                            view.update_filter(&search_query, ctx);
-                        });
-                    }
-                    if current.is_code_subpage()
-                        && let Some(subpage) = CodeSubpage::from_section(current)
-                    {
-                        self.code_page_handle.update(ctx, |view, ctx| {
                             view.set_active_subpage(subpage, ctx);
                             view.update_filter(&search_query, ctx);
                         });
@@ -2088,21 +2064,21 @@ impl SettingsView {
         }
     }
 
-    fn handle_code_page_event(
+    fn handle_code_indexing_page_event(
         &mut self,
-        event: &CodeSettingsPageEvent,
+        event: &CodeIndexingPageEvent,
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            CodeSettingsPageEvent::SignupAnonymousUser => {
+            CodeIndexingPageEvent::SignupAnonymousUser => {
                 ctx.emit(SettingsViewEvent::SignupAnonymousUser)
             }
-            CodeSettingsPageEvent::OpenLspLogs { log_path } => {
+            CodeIndexingPageEvent::OpenLspLogs { log_path } => {
                 ctx.emit(SettingsViewEvent::OpenLspLogs {
                     log_path: log_path.clone(),
                 });
             }
-            CodeSettingsPageEvent::OpenProjectRules { rule_paths } => {
+            CodeIndexingPageEvent::OpenProjectRules { rule_paths } => {
                 ctx.emit(SettingsViewEvent::OpenProjectRulesPane {
                     rule_paths: rule_paths.clone(),
                 });
@@ -2188,16 +2164,8 @@ impl SettingsView {
                     view.set_active_subpage(subpage, ctx);
                 });
             }
-            // Code subpages: update the Code page's subpage mode.
-            if section.is_code_subpage()
-                && let Some(subpage) = CodeSubpage::from_section(section)
-            {
-                self.code_page_handle.update(ctx, |view, ctx| {
-                    view.set_active_subpage(subpage, ctx);
-                });
-            }
-            // Cloud platform subpages render their backing pages directly
-            // (no subpage mode switch needed — the full page is shown).
+            // Code and Cloud platform subpages render their backing pages
+            // directly (no subpage mode switch needed — the full page is shown).
 
             // Auto-expand the umbrella containing this subpage.
             for item in &mut self.nav_items {
@@ -2258,7 +2226,8 @@ impl SettingsView {
             SettingsPageViewHandle::AI(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::CloudEnvironments(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::MCPServers(v) => v.as_ref(app).should_render(app),
-            SettingsPageViewHandle::Code(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::CodeIndexing(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::EditorAndCodeReview(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::WarpDrive(v) => v.as_ref(app).should_render(app),
         }
     }
@@ -2360,7 +2329,7 @@ impl SettingsView {
         }
     }
 
-    /// Reapply the active search query to the currently-selected AI/Code subpage.
+    /// Reapply the active search query to the currently-selected AI subpage.
     fn reapply_search_filter_to_active_subpage(
         &mut self,
         query: &str,
@@ -2372,11 +2341,6 @@ impl SettingsView {
             && AISubpage::from_section(current).is_some()
         {
             self.ai_page_handle.update(ctx, |view, ctx| {
-                view.update_filter(query, ctx);
-            });
-        }
-        if current.is_code_subpage() && CodeSubpage::from_section(current).is_some() {
-            self.code_page_handle.update(ctx, |view, ctx| {
                 view.update_filter(query, ctx);
             });
         }
@@ -2942,12 +2906,21 @@ impl TypedActionView for SettingsView {
                     })
                 }
             }
-            SettingsAction::Code(code_action) => {
-                if let Some(code_page) = self.settings_page(SettingsSection::Code)
-                    && let SettingsPageViewHandle::Code(view) = &code_page.view_handle
+            SettingsAction::CodeIndexing(code_action) => {
+                if let Some(page) = self.settings_page(SettingsSection::CodeIndexing)
+                    && let SettingsPageViewHandle::CodeIndexing(view) = &page.view_handle
                 {
                     view.update(ctx, |view, ctx| {
                         view.handle_action(code_action, ctx);
+                    })
+                }
+            }
+            SettingsAction::EditorAndCodeReview(action) => {
+                if let Some(page) = self.settings_page(SettingsSection::EditorAndCodeReview)
+                    && let SettingsPageViewHandle::EditorAndCodeReview(view) = &page.view_handle
+                {
+                    view.update(ctx, |view, ctx| {
+                        view.handle_action(action, ctx);
                     })
                 }
             }
