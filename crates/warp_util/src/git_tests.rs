@@ -28,7 +28,7 @@ fn translates_git_in_unc_cwd() {
             "--short",
         ]
     );
-    assert_eq!(translated.wslenv, None);
+    assert_eq!(translated.wslenv, "");
 }
 
 #[test]
@@ -126,14 +126,14 @@ fn build_wslenv_excludes_path_case_insensitively() {
     // to `wsl.exe` through `WSLENV`; other keys are kept and suffixed with `/u`.
     assert_eq!(
         build_wslenv(&[("PATH", "/usr/bin"), ("GIT_OPTIONAL_LOCKS", "0")]),
-        Some("GIT_OPTIONAL_LOCKS/u".to_string())
+        "GIT_OPTIONAL_LOCKS/u"
     );
     assert_eq!(
         build_wslenv(&[("Path", "/usr/bin"), ("GIT_AUTHOR_NAME", "Ada")]),
-        Some("GIT_AUTHOR_NAME/u".to_string())
+        "GIT_AUTHOR_NAME/u"
     );
-    assert_eq!(build_wslenv(&[("path", "/usr/bin")]), None);
-    assert_eq!(build_wslenv(&[]), None);
+    assert_eq!(build_wslenv(&[("path", "/usr/bin")]), "");
+    assert_eq!(build_wslenv(&[]), "");
 }
 
 #[test]
@@ -144,17 +144,14 @@ fn builds_wslenv_from_env_keys() {
         &[("GIT_AUTHOR_NAME", "Ada"), ("GIT_OPTIONAL_LOCKS", "0")],
     );
 
-    assert_eq!(
-        translated.wslenv,
-        Some("GIT_AUTHOR_NAME/u:GIT_OPTIONAL_LOCKS/u".to_string())
-    );
+    assert_eq!(translated.wslenv, "GIT_AUTHOR_NAME/u:GIT_OPTIONAL_LOCKS/u");
 }
 
 #[test]
 fn omits_wslenv_when_no_env_keys() {
     let translated = translate(&["status"], r"\\wsl$\Ubuntu\repo", &[]);
 
-    assert_eq!(translated.wslenv, None);
+    assert_eq!(translated.wslenv, "");
 }
 
 #[test]
@@ -182,7 +179,7 @@ fn carries_explicit_path_through_argv() {
             "commit",
         ]
     );
-    assert_eq!(translated.wslenv, None);
+    assert_eq!(translated.wslenv, "");
 }
 
 #[test]
@@ -231,5 +228,5 @@ fn routes_through_login_shell_when_no_path() {
             "status",
         ]
     );
-    assert_eq!(translated.wslenv, Some("GIT_OPTIONAL_LOCKS/u".to_string()));
+    assert_eq!(translated.wslenv, "GIT_OPTIONAL_LOCKS/u");
 }

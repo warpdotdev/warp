@@ -87,8 +87,9 @@ fn git_command(repo_path: &Path, args: &[&str], env: &[(&str, &str)]) -> command
         for (key, value) in env.iter().filter(|(key, _)| !is_path_env_key(key)) {
             cmd.env(key, value);
         }
-        if let Some(wslenv) = translated.wslenv {
-            cmd.env("WSLENV", wslenv);
+        // Left unset when empty so the child keeps inheriting the parent's `WSLENV`.
+        if !translated.wslenv.is_empty() {
+            cmd.env("WSLENV", &translated.wslenv);
         }
         return cmd;
     }
@@ -108,10 +109,9 @@ fn git_command(repo_path: &Path, args: &[&str], env: &[(&str, &str)]) -> command
 struct WslGitCommand {
     /// The full argument vector for `wsl.exe`.
     args: Vec<String>,
-    /// The value for the `WSLENV` variable that propagates the explicitly-set
-    /// environment variables into the distribution, or `None` when there is
-    /// nothing to propagate.
-    wslenv: Option<String>,
+    /// The `WSLENV` value propagating the explicitly-set environment variables into the
+    /// distribution; empty when there is nothing to propagate.
+    wslenv: String,
 }
 
 /// Rewrites a `git` invocation whose working directory is a WSL UNC path into
@@ -192,8 +192,8 @@ fn translate_arg(arg: &str, distro: &str) -> String {
 
 /// Builds the `WSLENV` value that advertises the explicitly-set environment
 /// variables to the distribution, using the `/u` suffix so each variable is
-/// shared when invoking WSL from Windows. Returns `None` when no propagatable
-/// variables were set.
+/// shared when invoking WSL from Windows. Empty when no propagatable variables
+/// were set.
 ///
 /// `PATH` is deliberately excluded (case-insensitively): Windows applies a
 /// non-disableable Windows-to-WSL `PATH` conversion, and a `PATH` that is
@@ -203,15 +203,13 @@ fn translate_arg(arg: &str, distro: &str) -> String {
 /// [`translate_for_wsl_unc_cwd`]. This mirrors the `PATH` handling in
 /// `app/src/terminal/model/session/command_executor/wsl_command_executor.rs`.
 #[cfg(not(target_family = "wasm"))]
-fn build_wslenv(env: &[(&str, &str)]) -> Option<String> {
-    let joined = env
-        .iter()
+fn build_wslenv(env: &[(&str, &str)]) -> String {
+    env.iter()
         .map(|(key, _)| key)
         .filter(|key| !is_path_env_key(key))
         .map(|key| format!("{key}/u"))
         .collect::<Vec<_>>()
-        .join(":");
-    (!joined.is_empty()).then_some(joined)
+        .join(":")
 }
 
 /// True when `key` names the `PATH` environment variable, compared
