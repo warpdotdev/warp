@@ -299,8 +299,8 @@ impl BillingCycleUsageSectionView {
             .finish(),
         );
 
-        if is_admin
-            && let Some(banner) = self.render_visibility_cta_banner(workspace, appearance, app)
+        if (is_admin || workspace.is_native_workspaces_enabled())
+            && let Some(banner) = self.render_visibility_cta_banner(workspace, appearance)
         {
             column.add_child(Container::new(banner).with_margin_top(16.).finish());
         }
@@ -350,6 +350,11 @@ impl BillingCycleUsageSectionView {
             .with_margin_top(16.)
             .finish(),
         );
+        if workspace.is_native_workspaces_enabled()
+            && let Some(banner) = self.render_visibility_cta_banner(workspace, appearance)
+        {
+            column.add_child(Container::new(banner).with_margin_top(16.).finish());
+        }
         column.finish()
     }
 
@@ -646,32 +651,25 @@ impl BillingCycleUsageSectionView {
         .finish()
     }
 
-    /// Whether the viewer is an admin of this workspace on a tier that has
-    /// native workspaces enabled -- the case where the admin panel owns the
-    /// full workspace settings surface, not just per-user spend limits.
-    fn viewer_is_native_workspaces_admin(&self, workspace: &Workspace, app: &AppContext) -> bool {
-        workspace.is_native_workspaces_enabled()
-            && Self::resolved_viewer_email(app)
-                .as_deref()
-                .is_some_and(|email| workspace.is_workspace_admin(email))
-    }
-
     /// Renders the CTA banner that sits between the team-totals block and
-    /// the per-member rows. Workspace admins on a native-workspaces tier are
-    /// pointed at the admin panel for the whole workspace settings surface.
-    /// Otherwise the copy and action vary by visibility tier: non-FullBreakdown
-    /// admins see an upgrade nudge; FullBreakdown admins see a pointer to the
-    /// admin panel where per-user spend limits actually get configured.
+    /// the per-member rows. The copy and action vary by visibility tier:
+    /// non-FullBreakdown admins see an upgrade nudge; FullBreakdown admins
+    /// see a pointer to the admin panel where per-user spend limits actually
+    /// get configured.
     fn render_visibility_cta_banner(
         &self,
         workspace: &Workspace,
         appearance: &Appearance,
-        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let (link_text, trailing_copy, action, leading_icon) =
-            if self.viewer_is_native_workspaces_admin(workspace, app) {
-                NATIVE_WORKSPACES_ADMIN_CTA
+            if workspace.is_native_workspaces_enabled() {
+                NATIVE_WORKSPACES_CTA
             } else {
+                // Only show when there are teammates -- a single-member workspace
+                // doesn't benefit from any of the team-level visibility CTAs.
+                if workspace.members.len() <= 1 {
+                    return None;
+                }
                 let admin_granularity = workspace
                     .billing_metadata
                     .tier
@@ -684,12 +682,6 @@ impl BillingCycleUsageSectionView {
                 }
                 visibility_cta_for(admin_granularity)?
             };
-
-        // Only show when there are teammates -- a single-member workspace
-        // doesn't benefit from any of the team-level visibility CTAs.
-        if workspace.members.len() <= 1 {
-            return None;
-        }
 
         let theme = appearance.theme();
         let sub_text = theme.sub_text_color(theme.background());
@@ -736,10 +728,7 @@ impl BillingCycleUsageSectionView {
     }
 }
 
-/// The CTA shown to workspace admins whose tier has native workspaces
-/// enabled: the admin panel owns workspace settings as a whole there, so the
-/// copy points at that rather than only at per-user spend limits.
-const NATIVE_WORKSPACES_ADMIN_CTA: (&str, &str, BillingCycleUsageAction, Icon) = (
+const NATIVE_WORKSPACES_CTA: (&str, &str, BillingCycleUsageAction, Icon) = (
     "Open the admin panel",
     "to view and edit workspace settings and spend limits.",
     BillingCycleUsageAction::OpenAdminPanel,

@@ -95,8 +95,6 @@ impl Workspace {
             .is_some_and(|member| member.role.is_admin_or_owner())
     }
 
-    /// Whether the workspace's tier enables native workspaces, which move
-    /// workspace-level settings (including spend limits) into the admin panel.
     pub fn is_native_workspaces_enabled(&self) -> bool {
         self.billing_metadata
             .tier
