@@ -791,6 +791,12 @@ impl BillingMetadata {
             .is_some_and(|policy| policy.enabled)
     }
 
+    pub fn is_native_workspaces_enabled(&self) -> bool {
+        self.tier
+            .native_workspaces_policy
+            .is_some_and(|policy| policy.enabled)
+    }
+
     pub fn has_overages_used(&self) -> bool {
         self.ai_overages
             .as_ref()

@@ -2,8 +2,10 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use warp_core::channel::ChannelState;
+use warp_core::telemetry::testing::MockTelemetryContextProvider;
 use warpui::{App, SingletonEntity};
 
+use super::telemetry::TuiOnboardingTelemetry;
 use super::{
     TuiAuthBrowserFlow, TuiLoginEvent, TuiLoginModel, TuiLoginPhase, handle_auth_manager_event,
     has_validated_identity, initial_login_phase, set_logged_out_phase, set_login_phase,
@@ -16,9 +18,11 @@ use crate::auth::credentials::Credentials;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::auth::UserAuthenticationError;
 fn login_model(phase: TuiLoginPhase) -> TuiLoginModel {
+    let logged_in = matches!(phase, TuiLoginPhase::LoggedIn);
     TuiLoginModel {
         phase,
         browser_flow: TuiAuthBrowserFlow::DirectDeviceAuthorization,
+        telemetry: TuiOnboardingTelemetry::new(logged_in),
     }
 }
 
@@ -145,6 +149,7 @@ fn explicit_start_device_login_preserves_pending_logout_on_retry() {
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
         app.add_singleton_model(AuthManager::new_for_test);
         app.add_singleton_model(|_| TuiLoginModel::signed_out_for_test());
+        app.update(MockTelemetryContextProvider::register);
 
         let phase_changed_events = Rc::new(Cell::new(0));
         let phase_changed_events_for_subscription = phase_changed_events.clone();
@@ -271,6 +276,7 @@ fn post_logout_device_auth_opens_logout_with_device_continuation() {
         app.add_singleton_model(|_| TuiLoginModel {
             phase: TuiLoginPhase::AwaitingLogin { browser_url: None },
             browser_flow: TuiAuthBrowserFlow::LogoutThenDeviceAuthorizationPending,
+            telemetry: TuiOnboardingTelemetry::new(true),
         });
 
         app.update(|ctx| {
@@ -367,6 +373,7 @@ fn post_logout_device_code_failure_still_opens_web_logout() {
         app.add_singleton_model(|_| TuiLoginModel {
             phase: TuiLoginPhase::AwaitingLogin { browser_url: None },
             browser_flow: TuiAuthBrowserFlow::LogoutThenDeviceAuthorizationPending,
+            telemetry: TuiOnboardingTelemetry::new(true),
         });
         let browser_opened = Rc::new(Cell::new(false));
         let browser_opened_for_callback = browser_opened.clone();
@@ -442,6 +449,7 @@ fn emits_logged_in_event_when_login_completes() {
 fn emits_logged_out_event_and_resets_login_details() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| login_model(TuiLoginPhase::LoggedIn));
+        app.update(MockTelemetryContextProvider::register);
 
         let logged_out_events = Rc::new(Cell::new(0));
         let logged_out_events_for_subscription = logged_out_events.clone();

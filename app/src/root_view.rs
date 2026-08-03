@@ -41,7 +41,10 @@ use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::blocklist::SerializedBlockListItem;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
-use crate::ai::onboarding::{build_onboarding_models, current_onboarding_auth_state};
+use crate::ai::onboarding::{
+    build_onboarding_models, current_onboarding_auth_state, onboarding_credit_packs,
+};
+use crate::ai::request_usage_model::AIRequestUsageModelEvent;
 use crate::app_state::{AppState, PaneUuid, WindowSnapshot};
 use crate::appearance::Appearance;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
@@ -71,6 +74,7 @@ use crate::linear::LinearIssueWork;
 use crate::notebooks::manager::NotebookSource;
 use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::persistence::ModelEvent;
+use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::auth::UserAuthenticationError;
@@ -137,6 +141,47 @@ fn offer_variant_for_account_class(account_class: FtueAccountClass) -> Option<Of
         FtueAccountClass::Paid => None,
         FtueAccountClass::FreeIcp => Some(OfferVariant::HeadStart),
         FtueAccountClass::FreeStandard => Some(OfferVariant::ChooseHowToStart),
+    }
+}
+
+/// Relays the outcome of an onboarding-initiated credit purchase back to the
+/// onboarding view. On the checkout path the credits arrive asynchronously, so
+/// this only opens the browser; completion is detected later from the server's
+/// AI credit availability decision.
+fn handle_onboarding_credit_purchase_event(
+    onboarding_view: &ViewHandle<AgentOnboardingView>,
+    event: &UserWorkspacesEvent,
+    ctx: &mut ViewContext<RootView>,
+) {
+    if !onboarding_view
+        .as_ref(ctx)
+        .is_awaiting_purchased_credits(ctx)
+    {
+        return;
+    }
+    match event {
+        UserWorkspacesEvent::PurchaseAddonCreditsSuccess => {
+            onboarding_view.update(ctx, |onboarding_view, ctx| {
+                onboarding_view.on_credit_purchase_completed(ctx);
+            });
+        }
+        UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { checkout_url } => {
+            let checkout_url = checkout_url.clone();
+            onboarding_view.update(ctx, |onboarding_view, ctx| {
+                onboarding_view.on_credit_purchase_checkout_opened(ctx);
+            });
+            ctx.open_url(&checkout_url);
+        }
+        UserWorkspacesEvent::PurchaseAddonCreditsRejected(err) => {
+            safe_error!(
+                safe: ("Onboarding add-on credits purchase failed"),
+                full: ("Onboarding add-on credits purchase failed: {err}")
+            );
+            onboarding_view.update(ctx, |onboarding_view, ctx| {
+                onboarding_view.on_credit_purchase_failed(ctx);
+            });
+        }
+        _ => {}
     }
 }
 
@@ -1690,6 +1735,9 @@ enum AccountFirstCompletion {
     PaidTeam,
     FreeIcpSetupLater,
     FreeStandardSetupLater,
+    /// The user bought a one-time credit pack on the offer slide instead of
+    /// subscribing. They stay on the free plan, so they remain free-standard.
+    FreeStandardCreditsPurchased,
     UpgradeCompleted,
 }
 
@@ -1700,6 +1748,9 @@ impl AccountFirstCompletion {
             AccountFirstCompletion::PaidTeam => "paid_team",
             AccountFirstCompletion::FreeIcpSetupLater => "free_icp_setup_later",
             AccountFirstCompletion::FreeStandardSetupLater => "free_standard_setup_later",
+            AccountFirstCompletion::FreeStandardCreditsPurchased => {
+                "free_standard_credits_purchased"
+            }
             AccountFirstCompletion::UpgradeCompleted => "upgrade_completed",
         }
     }
@@ -1711,7 +1762,10 @@ impl AccountFirstCompletion {
                 Some(FtueAccountClass::Paid)
             }
             AccountFirstCompletion::FreeIcpSetupLater => Some(FtueAccountClass::FreeIcp),
-            AccountFirstCompletion::FreeStandardSetupLater => Some(FtueAccountClass::FreeStandard),
+            AccountFirstCompletion::FreeStandardSetupLater
+            | AccountFirstCompletion::FreeStandardCreditsPurchased => {
+                Some(FtueAccountClass::FreeStandard)
+            }
         }
     }
 
@@ -1721,6 +1775,7 @@ impl AccountFirstCompletion {
             AccountFirstCompletion::PaidTeam
                 | AccountFirstCompletion::FreeIcpSetupLater
                 | AccountFirstCompletion::FreeStandardSetupLater
+                | AccountFirstCompletion::FreeStandardCreditsPurchased
                 | AccountFirstCompletion::UpgradeCompleted
         )
     }
@@ -2124,7 +2179,7 @@ impl RootView {
 
             let auth_state = current_onboarding_auth_state(ctx);
 
-            AgentOnboardingView::new(
+            let mut view = AgentOnboardingView::new(
                 themes.clone(),
                 false, // Always use unskippable onboarding.
                 models,
@@ -2133,8 +2188,23 @@ impl RootView {
                 FeatureFlag::AgentView.is_enabled(),
                 auth_state,
                 ctx,
-            )
+            );
+            view.set_credit_pack_options(onboarding_credit_packs(ctx), ctx);
+            view
         });
+
+        // Keep the offer slide's credit packs in sync with server pricing.
+        let onboarding_view_for_pricing = onboarding_view.clone();
+        ctx.subscribe_to_model(
+            &PricingInfoModel::handle(ctx),
+            move |_, _pricing, event, ctx| {
+                let PricingInfoModelEvent::PricingInfoUpdated = event;
+                let options = onboarding_credit_packs(ctx);
+                onboarding_view_for_pricing.update(ctx, |onboarding_view, ctx| {
+                    onboarding_view.set_credit_pack_options(options, ctx);
+                });
+            },
+        );
 
         let onboarding_view_clone = onboarding_view.clone();
         ctx.subscribe_to_model(
@@ -2169,9 +2239,35 @@ impl RootView {
                             .set_workspace_enforces_autonomy(workspace_enforces_autonomy, ctx);
                     });
                 }
+                handle_onboarding_credit_purchase_event(
+                    &onboarding_view_for_workspaces,
+                    event,
+                    ctx,
+                );
                 let auth_state = current_onboarding_auth_state(ctx);
+                let credit_pack_options = onboarding_credit_packs(ctx);
                 onboarding_view_for_workspaces.update(ctx, |onboarding_view, ctx| {
                     onboarding_view.set_auth_state(auth_state, ctx);
+                    // The purchase policy (and so the premium) comes from the
+                    // user's workspace, so a metadata refresh can move the
+                    // displayed prices.
+                    onboarding_view.set_credit_pack_options(credit_pack_options, ctx);
+                });
+            },
+        );
+
+        // Browser checkout doesn't report back to the app, so the purchase is
+        // only complete once the user can actually make an AI request.
+        let onboarding_view_for_usage = onboarding_view.clone();
+        ctx.subscribe_to_model(
+            &AIRequestUsageModel::handle(ctx),
+            move |_, _usage, event, ctx| {
+                if !matches!(event, AIRequestUsageModelEvent::CreditAvailabilityUpdated) {
+                    return;
+                }
+                let available = AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx);
+                onboarding_view_for_usage.update(ctx, |onboarding_view, ctx| {
+                    onboarding_view.on_ai_credit_availability_observed(available, ctx);
                 });
             },
         );
@@ -2848,6 +2944,21 @@ impl RootView {
                 OfferVariant::ChooseHowToStart => {
                     self.complete_account_first(AccountFirstCompletion::FreeStandardSetupLater, ctx)
                 }
+            },
+            AgentOnboardingEvent::PurchaseCreditsRequested { credits } => {
+                let credits = *credits;
+                let team_uid = UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id());
+                UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                    user_workspaces.purchase_addon_credits(team_uid, credits, ctx);
+                });
+            }
+            AgentOnboardingEvent::OfferCreditsPurchased { variant } => match variant {
+                // Only the free-standard offer surfaces credit packs.
+                OfferVariant::ChooseHowToStart => self.complete_account_first(
+                    AccountFirstCompletion::FreeStandardCreditsPurchased,
+                    ctx,
+                ),
+                OfferVariant::HeadStart => {}
             },
             AgentOnboardingEvent::AppBecameActive => {
                 // fetch the models / workspace metadata when the user tabs/intents back

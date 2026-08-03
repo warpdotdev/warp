@@ -216,6 +216,16 @@ define_settings_group!(TuiZeroStateSettings, settings: [
         toml_path: "appearance.zero_state.show_animation",
         description: "Whether the Warp Agent CLI zero state shows the rotating object and its starfield.",
     },
+    freeze_animation_when_unfocused: TuiZeroStateFreezeAnimationWhenUnfocusedSetting {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::TUI,
+        private: false,
+        toml_path: "appearance.zero_state.freeze_animation_when_unfocused",
+        description: "Whether the Warp Agent CLI zero-state animation stops repainting while the terminal is unfocused.",
+    },
 ]);
 
 #[cfg(test)]

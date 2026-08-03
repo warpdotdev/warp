@@ -51,7 +51,7 @@ use crate::ui_components::icon_with_status::{
 };
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
-const CLOUD_AGENT_DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
+const CLOUD_AGENT_DOCS_URL: &str = "https://docs.warp.dev/platform/";
 const OZ_UPDATES_SECTION_HEADER: &str = "What's new in Oz";
 
 // The maximum number of Oz updates from the changelog rendered in-line in the 'What's new in Oz section'.

@@ -150,10 +150,8 @@ pub(crate) fn signed_out_welcome(
     let builder = TuiUiBuilder::from_app(app);
     let primary = builder.primary_text_style();
     let muted = builder.muted_text_style();
-    let title = builder
-        .credential_entry_accent_style()
-        .add_modifier(Modifier::BOLD);
-    let success = builder.success_glyph_style();
+    let title = builder.brand_primary_style().add_modifier(Modifier::BOLD);
+    let brand_accent = builder.brand_accent_style();
     let login_style = if login_mouse.lock().is_ok_and(|state| state.is_hovered()) {
         primary
             .add_modifier(Modifier::BOLD)
@@ -177,9 +175,12 @@ pub(crate) fn signed_out_welcome(
         )
         .child(
             TuiText::from_spans([
-                ("> ".to_owned(), success),
+                ("> ".to_owned(), brand_accent),
                 ("Press ".to_owned(), muted),
-                ("enter".to_owned(), success.add_modifier(Modifier::BOLD)),
+                (
+                    "enter".to_owned(),
+                    brand_accent.add_modifier(Modifier::BOLD),
+                ),
                 (" to get started".to_owned(), muted),
             ])
             .finish(),
@@ -216,7 +217,7 @@ pub(crate) fn signed_out_welcome(
         .child(capability_row(
             "⟡",
             "Prompts or shell commands autodetected",
-            builder.credential_entry_accent_style(),
+            builder.brand_primary_style(),
             primary,
         ))
         .child(capability_row(
@@ -228,7 +229,7 @@ pub(crate) fn signed_out_welcome(
         .child(capability_row(
             "✶",
             "Orchestrate fleets of agents",
-            success,
+            brand_accent,
             primary,
         ))
         .child(capability_row(

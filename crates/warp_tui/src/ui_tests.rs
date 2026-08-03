@@ -4,10 +4,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use warp::appearance::Appearance;
+use warp::tui_export::{dark_theme, light_theme};
+use warpui::SingletonEntity;
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
+    Color, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
     TuiText,
 };
@@ -270,6 +272,67 @@ fn signed_out_welcome_matches_designed_copy_and_layout() {
                 "welcome must not render a URL before device authorization: {lines:?}"
             );
         });
+    });
+}
+
+#[test]
+fn signed_out_welcome_uses_figma_brand_colors_in_dark_and_light_themes() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+
+        for (theme, brand_primary, brand_accent) in [
+            (
+                dark_theme(),
+                Color::Rgb(210, 181, 255),
+                Color::Rgb(226, 255, 212),
+            ),
+            (
+                light_theme(),
+                Color::Rgb(156, 88, 240),
+                Color::Rgb(51, 119, 11),
+            ),
+        ] {
+            Appearance::handle(&app).update(&mut app, |appearance, ctx| {
+                appearance.set_theme(theme, ctx);
+            });
+            app.read(|app_ctx| {
+                let mut presenter = TuiPresenter::new();
+                let frame = presenter.present_element(
+                    signed_out_welcome(
+                        AnimationClock::starting_at(Duration::ZERO),
+                        Arc::new(ZeroStateAnimationConfig::default()),
+                        MouseStateHandle::default(),
+                        MouseStateHandle::default(),
+                        app_ctx,
+                        |_, _| {},
+                        |_, _| {},
+                    ),
+                    TuiRect::new(0, 0, 80, 24),
+                    app_ctx,
+                );
+                let lines = frame.buffer.to_lines();
+                let cell_color = |text: &str, offset: usize| {
+                    let row = lines
+                        .iter()
+                        .position(|line| line.contains(text))
+                        .expect("designed text renders");
+                    let column = lines[row].find(text).expect("designed text offset") + offset;
+                    frame.buffer[(u16::try_from(column).unwrap(), u16::try_from(row).unwrap())].fg
+                };
+
+                assert_eq!(cell_color("Welcome to Warp", 0), brand_primary);
+                assert_eq!(cell_color("> Press enter to get started", 0), brand_accent);
+                assert_eq!(cell_color("> Press enter to get started", 8), brand_accent);
+                assert_eq!(
+                    cell_color("⟡ Prompts or shell commands autodetected", 0),
+                    brand_primary
+                );
+                assert_eq!(
+                    cell_color("✶ Orchestrate fleets of agents", 0),
+                    brand_accent
+                );
+            });
+        }
     });
 }
 
