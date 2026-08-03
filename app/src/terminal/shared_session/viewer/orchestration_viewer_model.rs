@@ -451,6 +451,7 @@ impl OrchestrationViewerModel {
                     name,
                     parent_conversation_id,
                     harness,
+                    false,
                     ctx,
                 );
                 history.set_viewing_shared_session_for_conversation(conversation_id, true);

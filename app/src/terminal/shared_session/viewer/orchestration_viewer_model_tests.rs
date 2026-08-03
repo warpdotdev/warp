@@ -652,6 +652,7 @@ fn does_not_register_streamer_consumer_for_a_child_placeholder() {
                 "child".to_string(),
                 parent_conv_id,
                 None,
+                false,
                 ctx,
             );
             history.set_viewing_shared_session_for_conversation(child_id, true);
