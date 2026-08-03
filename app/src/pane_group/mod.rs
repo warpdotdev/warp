@@ -4663,6 +4663,13 @@ impl PaneGroup {
             self.panes.remove_hidden_pane(child_pane_id);
             self.discard_pane(child_pane_id, ctx);
         }
+        // Drop any pending parent seed associated with the view being removed
+        // so the re-drive subscription doesn't fire for a closed pane.
+        self.pending_parent_child_seeds.retain(|_, parent_conv_id| {
+            BlocklistAIHistoryModel::as_ref(ctx)
+                .terminal_surface_id_for_conversation(parent_conv_id)
+                .is_some_and(|tv_id| tv_id != parent_terminal_view_id)
+        });
     }
 
     /// Permanently discards the pane backing a child agent conversation.

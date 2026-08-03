@@ -133,25 +133,37 @@ impl PaneGroup {
                 }
                 // An owned cloud agent conversation that is now locally
                 // persisted resolves to a local-conversation navigation action,
-                // which cannot be applied to an ambient loading pane. Load the
-                // transcript from the server token stored on the task instead.
-                Some(WorkspaceAction::RestoreOrNavigateToConversation { .. }) => {
-                    match task
-                        .conversation_id()
-                        .map(|id| ServerConversationToken::new(id.to_string()))
-                    {
-                        Some(server_token) => {
-                            if !self.restore_pane_with_transcript(
-                                pane_id,
-                                server_token,
-                                Some(task_id),
-                                ctx,
-                            ) {
-                                self.pending_ambient_agent_conversation_restorations
-                                    .insert(task_id, pane_id);
+                // which cannot be applied to an ambient loading pane. If the
+                // conversation is already associated with a terminal surface
+                // skip loading it again to avoid opening the same conversation
+                // on two surfaces; otherwise load the transcript from the server
+                // token stored on the task.
+                Some(WorkspaceAction::RestoreOrNavigateToConversation {
+                    conversation_id, ..
+                }) => {
+                    let already_open = BlocklistAIHistoryModel::as_ref(ctx)
+                        .terminal_surface_id_for_conversation(&conversation_id)
+                        .is_some();
+                    if already_open {
+                        self.replace_pane_with_new_cloud_conversation(pane_id, ctx);
+                    } else {
+                        match task
+                            .conversation_id()
+                            .map(|id| ServerConversationToken::new(id.to_string()))
+                        {
+                            Some(server_token) => {
+                                if !self.restore_pane_with_transcript(
+                                    pane_id,
+                                    server_token,
+                                    Some(task_id),
+                                    ctx,
+                                ) {
+                                    self.pending_ambient_agent_conversation_restorations
+                                        .insert(task_id, pane_id);
+                                }
                             }
+                            None => self.replace_pane_with_new_cloud_conversation(pane_id, ctx),
                         }
-                        None => self.replace_pane_with_new_cloud_conversation(pane_id, ctx),
                     }
                 }
                 _ => {

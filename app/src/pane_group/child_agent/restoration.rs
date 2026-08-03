@@ -104,6 +104,23 @@ impl PaneGroup {
             return;
         }
 
+        // The terminal surface lookup is loop-invariant: if the parent
+        // conversation has no surface now, TasksUpdated won't fix it, so bail
+        // early with a single warn rather than repeating it per child.
+        let Some(terminal_surface_id) = BlocklistAIHistoryModel::as_ref(ctx)
+            .terminal_surface_id_for_conversation(&parent_conversation_id)
+        else {
+            log::warn!(
+                "seed_child_conversations_from_task: parent conversation \
+                 {parent_conversation_id:?} has no terminal surface; leaving pending"
+            );
+            self.pending_parent_child_seeds
+                .insert(parent_task_id, parent_conversation_id);
+            self.ensure_pending_ambient_restoration_subscription(ctx);
+            ctx.notify();
+            return;
+        };
+
         // Children whose task data is still being fetched keep the parent
         // pending. Malformed ids are unrecoverable and are not retried.
         let mut all_children_resolved = true;
@@ -120,18 +137,6 @@ impl PaneGroup {
                 model.get_or_async_fetch_task_data(&child_task_id, ctx)
             });
             let Some(child_task) = child_task else {
-                all_children_resolved = false;
-                continue;
-            };
-
-            let Some(terminal_surface_id) = BlocklistAIHistoryModel::as_ref(ctx)
-                .terminal_surface_id_for_conversation(&parent_conversation_id)
-            else {
-                log::warn!(
-                    "seed_child_conversations_from_task: parent conversation \
-                     {parent_conversation_id:?} has no terminal surface; cannot seed \
-                     child_run_id={child_run_id}"
-                );
                 all_children_resolved = false;
                 continue;
             };
