@@ -3858,6 +3858,7 @@ fn add_orchestration_child(
                 name.to_owned(),
                 parent_conversation_id,
                 Some(Harness::Oz),
+                false,
                 ctx,
             );
             history.set_active_conversation_id(conversation_id, session_id.surface_id(), ctx);
