@@ -13,6 +13,7 @@ use environments_page::EnvironmentsPageView;
 use features_page::{FeaturesPageView, FeaturesSettingsPageEvent};
 use itertools::Itertools as _;
 use keybindings::KeybindingsView;
+use knowledge_page::{KnowledgePageAction, KnowledgePageEvent, KnowledgePageView};
 use main_page::{MainPageAction, MainSettingsPageEvent, MainSettingsPageView};
 use mcp_servers_page::MCPServersSettingsPageView;
 use nav::{SettingsNavItem, SettingsUmbrella};
@@ -96,6 +97,7 @@ mod features;
 mod features_page;
 pub(crate) mod handoff_environment_creation_modal;
 pub mod keybindings;
+mod knowledge_page;
 mod main_page;
 pub mod mcp_servers;
 pub mod mcp_servers_page;
@@ -398,9 +400,10 @@ impl SettingsSection {
     /// Non-subpage sections return themselves.
     pub fn parent_page_section(&self) -> Self {
         match self {
-            // AgentMCPServers renders the standalone MCPServers page directly.
+            // Agents children that render their own standalone page.
             Self::AgentMCPServers => Self::MCPServers,
-            // All other AI subpages render within the AI page.
+            Self::Knowledge => Self::Knowledge,
+            // The remaining Agents children share the AI page.
             s if s.is_ai_subpage() => Self::AI,
             // Code and Cloud platform subpages ARE their own backing pages
             // (1:1 mapping), so they return themselves.
@@ -701,6 +704,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     warpify_page::init_actions_from_parent_view(app, context, builder);
     privacy_page::init_actions_from_parent_view(app, context, builder);
     ai_page::init_actions_from_parent_view(app, context, builder);
+    knowledge_page::init_actions_from_parent_view(app, context, builder);
     code_indexing_page::init_actions_from_parent_view(app, context, builder);
     code_editor_review_page::init_actions_from_parent_view(app, context, builder);
     warp_drive_page::init_actions_from_parent_view(app, context, builder);
@@ -1006,6 +1010,7 @@ pub enum SettingsAction {
     FeaturesPageToggle(FeaturesPageAction),
     PrivacyPageToggle(PrivacyPageAction),
     AI(AISettingsPageAction),
+    Knowledge(KnowledgePageAction),
     CodeIndexing(CodeIndexingPageAction),
     EditorAndCodeReview(EditorAndCodeReviewPageAction),
     WarpDrive(warp_drive_page::WarpDriveSettingsPageAction),
@@ -1161,6 +1166,7 @@ macro_rules! update_page {
             SettingsPageViewHandle::Referrals(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Scripting(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::AI(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::Knowledge(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::CloudEnvironments(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::About(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::CodeIndexing(handle) => $ctx.update_view(handle, $update),
@@ -1253,6 +1259,12 @@ impl SettingsView {
         let ai_page_handle_for_nav = ai_page_handle.clone();
         ctx.subscribe_to_view(&ai_page_handle, |me, _, event, ctx| {
             me.handle_ai_page_event(event, ctx);
+        });
+
+        // Knowledge page, under the Agents umbrella
+        let knowledge_page_handle = ctx.add_typed_action_view(KnowledgePageView::new);
+        ctx.subscribe_to_view(&knowledge_page_handle, |me, _, event, ctx| {
+            me.handle_knowledge_page_event(event, ctx);
         });
 
         // Environments page
@@ -1364,6 +1376,7 @@ impl SettingsView {
         let mut settings_pages = vec![
             SettingsPage::new(main_page_handle),
             SettingsPage::new(ai_page_handle),
+            SettingsPage::new(knowledge_page_handle),
             billing_and_usage_page,
             SettingsPage::new(code_indexing_page_handle),
             SettingsPage::new(editor_review_page_handle),
@@ -2036,9 +2049,6 @@ impl SettingsView {
     fn handle_ai_page_event(&mut self, event: &AISettingsPageEvent, ctx: &mut ViewContext<Self>) {
         match event {
             AISettingsPageEvent::FocusModal => ctx.focus(&self.search_editor),
-            AISettingsPageEvent::OpenAIFactCollection => {
-                ctx.emit(SettingsViewEvent::OpenAIFactCollection)
-            }
             AISettingsPageEvent::OpenMCPServerCollection => {
                 ctx.emit(SettingsViewEvent::OpenMCPServerCollection)
             }
@@ -2061,6 +2071,18 @@ impl SettingsView {
             AISettingsPageEvent::ShowModal | AISettingsPageEvent::HideModal => {
                 // Modal rendering is handled in get_modal_content_for_page
                 ctx.notify();
+            }
+        }
+    }
+
+    fn handle_knowledge_page_event(
+        &mut self,
+        event: &KnowledgePageEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            KnowledgePageEvent::OpenAIFactCollection => {
+                ctx.emit(SettingsViewEvent::OpenAIFactCollection)
             }
         }
     }
@@ -2225,6 +2247,7 @@ impl SettingsView {
             SettingsPageViewHandle::Referrals(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Scripting(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::AI(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::Knowledge(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::CloudEnvironments(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::MCPServers(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::CodeIndexing(v) => v.as_ref(app).should_render(app),
@@ -2904,6 +2927,15 @@ impl TypedActionView for SettingsView {
                 {
                     view.update(ctx, |view, ctx| {
                         view.handle_action(ai_action, ctx);
+                    })
+                }
+            }
+            SettingsAction::Knowledge(knowledge_action) => {
+                if let Some(page) = self.settings_page(SettingsSection::Knowledge)
+                    && let SettingsPageViewHandle::Knowledge(view) = &page.view_handle
+                {
+                    view.update(ctx, |view, ctx| {
+                        view.handle_action(knowledge_action, ctx);
                     })
                 }
             }

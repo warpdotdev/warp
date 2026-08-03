@@ -36,6 +36,7 @@ use super::code_indexing_page::CodeIndexingPageView;
 use super::environments_page::EnvironmentsPageView;
 use super::features_page::FeaturesPageView;
 use super::keybindings::KeybindingsView;
+use super::knowledge_page::KnowledgePageView;
 use super::main_page::MainSettingsPageView;
 use super::mcp_servers_page::MCPServersSettingsPageView;
 use super::privacy_page::PrivacyPageView;
@@ -118,6 +119,7 @@ pub enum SettingsPageViewHandle {
     Referrals(ViewHandle<ReferralsPageView>),
     Scripting(ViewHandle<ScriptingSettingsPageView>),
     AI(ViewHandle<AISettingsPageView>),
+    Knowledge(ViewHandle<KnowledgePageView>),
     CloudEnvironments(ViewHandle<EnvironmentsPageView>),
     BillingAndUsage(ViewHandle<BillingAndUsageDispatchView>),
     MCPServers(ViewHandle<MCPServersSettingsPageView>),
@@ -143,6 +145,7 @@ impl SettingsPageViewHandle {
             Referrals(view_handle) => ChildView::new(view_handle).finish(),
             Scripting(view_handle) => ChildView::new(view_handle).finish(),
             AI(view_handle) => ChildView::new(view_handle).finish(),
+            Knowledge(view_handle) => ChildView::new(view_handle).finish(),
             CloudEnvironments(view_handle) => ChildView::new(view_handle).finish(),
             BillingAndUsage(view_handle) => ChildView::new(view_handle).finish(),
             MCPServers(view_handle) => ChildView::new(view_handle).finish(),

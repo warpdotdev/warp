@@ -13,16 +13,25 @@ use std::collections::HashMap;
 
 use settings::Setting;
 use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{Container, Element, Fill, MouseStateHandle};
+use warpui::elements::{Container, Element, Fill, HyperlinkUrl, MouseStateHandle};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::{Action, AppContext, SingletonEntity};
+use warpui::{Action, AppContext, SingletonEntity, View, ViewContext};
 
 use super::SettingsAction;
 use super::settings_page::{
     HEADER_PADDING, LocalOnlyIconState, ToggleState, build_toggle_element, render_body_item_label,
 };
 use crate::appearance::Appearance;
+
+/// Opens a documentation link from a settings description.
+///
+/// Every page under the Agents umbrella renders descriptions containing links,
+/// so each needs its own hyperlink action variant; they all resolve to this.
+pub fn open_hyperlink<V: View>(hyperlink: &HyperlinkUrl, ctx: &mut ViewContext<V>) {
+    ctx.notify();
+    ctx.open_url(&hyperlink.url);
+}
 
 /// A settings row: label on the left, switch on the right.
 pub fn render_ai_setting_toggle<S: Setting>(

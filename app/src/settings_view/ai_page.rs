@@ -100,12 +100,10 @@ use crate::settings::{
     CanUseWarpCreditsForFallback, CodeSettings, CodebaseContextEnabled, FileBasedMcpEnabled,
     GeminiEnterpriseCredentialsEnabled, GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory,
     InputSettings, IntelligentAutosuggestionsEnabled, LongRunningCommandSubmissionMode,
-    MemoryEnabled, NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled,
-    OrchestrationMessageDisplayMode, PromptSubmissionMode, RuleSuggestionsEnabled,
-    SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
+    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode,
+    PromptSubmissionMode, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
     ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
-    WarpDriveContextEnabled,
 };
 use crate::terminal::CLIAgent;
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
@@ -129,8 +127,6 @@ pub enum AISubpage {
     WarpAgent,
     /// Agent profiles and permissions.
     Profiles,
-    /// Knowledge / Rules settings.
-    Knowledge,
     /// Third-party CLI agent settings.
     ThirdPartyCLIAgents,
 }
@@ -140,9 +136,8 @@ impl AISubpage {
         match section {
             SettingsSection::WarpAgent => Some(Self::WarpAgent),
             SettingsSection::AgentProfiles => Some(Self::Profiles),
-            SettingsSection::Knowledge => Some(Self::Knowledge),
             SettingsSection::ThirdPartyCLIAgents => Some(Self::ThirdPartyCLIAgents),
-            // AgentMCPServers renders the standalone MCPServers page, not an AI subpage.
+            // AgentMCPServers and Knowledge render their own standalone pages.
             _ => None,
         }
     }
@@ -606,36 +601,6 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
         vec![
-            ToggleSettingActionPair::new(
-                "Rules",
-                builder(SettingsAction::AI(AISettingsPageAction::ToggleRules)),
-                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
-                flags::AI_RULES_FLAG,
-            )
-            .with_group(bindings::BindingGroup::WarpAi)
-            .with_enabled(|| FeatureFlag::AIRules.is_enabled()),
-            ToggleSettingActionPair::new(
-                "Suggested Rules",
-                builder(SettingsAction::AI(
-                    AISettingsPageAction::ToggleRuleSuggestions,
-                )),
-                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
-                flags::SUGGESTED_RULES_FLAG,
-            )
-            .with_group(bindings::BindingGroup::WarpAi)
-            .with_enabled(|| {
-                FeatureFlag::AIRules.is_enabled() && FeatureFlag::SuggestedRules.is_enabled()
-            }),
-            ToggleSettingActionPair::new(
-                "Warp Drive as agent context",
-                builder(SettingsAction::AI(
-                    AISettingsPageAction::ToggleWarpDriveContext,
-                )),
-                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
-                flags::WARP_DRIVE_CONTEXT_FLAG,
-            )
-            .with_group(bindings::BindingGroup::WarpAi)
-            .with_enabled(|| FeatureFlag::AIRules.is_enabled()),
             ToggleSettingActionPair::new(
                 "Auto-spawn servers from third-party agents",
                 builder(SettingsAction::AI(AISettingsPageAction::ToggleFileBasedMcp)),
@@ -2858,19 +2823,6 @@ impl AISettingsPageView {
             ctx.notify();
         }
     }
-    fn knowledge_widgets() -> Vec<Box<dyn SettingsWidget<View = Self>>> {
-        let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
-            vec![Box::new(RulesWidget::default())];
-        if FeatureFlag::SuggestedRules.is_enabled() {
-            widgets.push(Box::new(SuggestedRulesWidget::default()));
-        }
-        widgets.extend([
-            Box::new(ManageRulesWidget::default()) as Box<dyn SettingsWidget<View = Self>>,
-            Box::new(WarpDriveContextWidget::default()),
-        ]);
-        widgets
-    }
-
     fn build_page(subpage: AISubpage, ctx: &mut ViewContext<Self>) -> PageType<Self> {
         let ai_settings = AISettings::as_ref(ctx);
 
@@ -2929,11 +2881,6 @@ impl AISettingsPageView {
                 }
                 widgets.push(Box::new(AgentsWidget::default()));
             }
-            AISubpage::Knowledge => {
-                if FeatureFlag::AIRules.is_enabled() {
-                    widgets.extend(Self::knowledge_widgets());
-                }
-            }
             AISubpage::ThirdPartyCLIAgents => {
                 widgets.extend(cli_agent_widgets());
             }
@@ -2944,7 +2891,6 @@ impl AISettingsPageView {
         // Single-topic subpages follow the Account-page convention and render their title as
         // page chrome, so filtering their setting widgets never removes the title.
         let title = match subpage {
-            AISubpage::Knowledge => Some("Knowledge"),
             AISubpage::ThirdPartyCLIAgents => Some("Third party CLI agents"),
             AISubpage::WarpAgent | AISubpage::Profiles => None,
         };
@@ -3622,7 +3568,6 @@ impl View for AISettingsPageView {
 #[allow(clippy::large_enum_variant)]
 pub enum AISettingsPageEvent {
     FocusModal,
-    OpenAIFactCollection,
     OpenMCPServerCollection,
     #[cfg(feature = "local_fs")]
     OpenCustomRouterEditor(Option<crate::ai::custom_model_routers::CustomModelRouter>),
@@ -3670,7 +3615,6 @@ pub enum AISettingsPageAction {
     RemoveCLIAgentToolbarEnabledCommand(String),
     RemoveFromCommandExecutionAllowlist(AgentModeCommandExecutionPredicate),
     RemoveFromCommandExecutionDenylist(AgentModeCommandExecutionPredicate),
-    OpenAIFactCollection,
     OpenMCPServerCollection,
     OpenExecutionProfileEditor(ExecutionProfileId),
     SetBaseModel(LLMId),
@@ -3684,9 +3628,6 @@ pub enum AISettingsPageAction {
     SetAutonomySupervisedSetting,
     SetCodingPermission(AgentModeCodingPermissionsType),
     RemoveDirectoryFromCodeReadAllowlist(PathBuf),
-    ToggleRules,
-    ToggleRuleSuggestions,
-    ToggleWarpDriveContext,
     SetApplyCodeDiffs(ActionPermission),
     SetReadFiles(ActionPermission),
     SetExecuteCommands(ActionPermission),
@@ -4209,9 +4150,6 @@ impl TypedActionView for AISettingsPageView {
                     report_if_error!(model.remove_command_from_denylist(cmd, ctx));
                 })
             }
-            AISettingsPageAction::OpenAIFactCollection => {
-                ctx.emit(AISettingsPageEvent::OpenAIFactCollection)
-            }
             AISettingsPageAction::OpenMCPServerCollection => {
                 ctx.emit(AISettingsPageEvent::OpenMCPServerCollection)
             }
@@ -4343,28 +4281,6 @@ impl TypedActionView for AISettingsPageView {
                         model.remove_filepath_from_code_read_allowlist(dir.to_owned(), ctx)
                     );
                 });
-            }
-            AISettingsPageAction::ToggleRules => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let _ = settings.memory_enabled.toggle_and_save_value(ctx);
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::ToggleRuleSuggestions => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let _ = settings
-                        .rule_suggestions_enabled_internal
-                        .toggle_and_save_value(ctx);
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::ToggleWarpDriveContext => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let _ = settings
-                        .warp_drive_context_enabled
-                        .toggle_and_save_value(ctx);
-                });
-                ctx.notify();
             }
             AISettingsPageAction::RemoveFromProfileDirectoryAllowlist(path_buf) => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
@@ -6924,200 +6840,6 @@ impl SettingsWidget for MCPServersWidget {
             column = column.with_child(toggle);
         }
         column.finish()
-    }
-}
-
-#[derive(Default)]
-struct RulesWidget {
-    rules_toggle: SwitchStateHandle,
-    rules_link_index: HighlightedHyperlink,
-}
-
-impl SettingsWidget for RulesWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "fact memory memories rules conventions"
-    }
-
-    fn should_render(&self, _app: &AppContext) -> bool {
-        FeatureFlag::AIRules.is_enabled()
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let ai_settings = AISettings::as_ref(app);
-        let toggle = render_ai_setting_toggle::<MemoryEnabled>(
-            "Rules",
-            AISettingsPageAction::ToggleRules,
-            *ai_settings.memory_enabled,
-            ai_settings.is_any_ai_enabled(app),
-            self.rules_toggle.clone(),
-            &view.local_only_icon_tooltip_states,
-            app,
-        );
-
-        let rules_description = vec![
-            FormattedTextFragment::plain_text(
-                "Rules help the Warp Agent follow your conventions, whether for codebases or specific workflows. ",
-            ),
-            FormattedTextFragment::hyperlink(
-                "Learn more",
-                "https://docs.warp.dev/agents/capabilities/rules",
-            ),
-        ];
-        let description = Container::new(
-            FormattedTextElement::new(
-                FormattedText::new([FormattedTextLine::Line(rules_description)]),
-                CONTENT_FONT_SIZE,
-                appearance.ui_font_family(),
-                appearance.ui_font_family(),
-                styles::description_font_color(ai_settings.is_any_ai_enabled(app), app).into(),
-                self.rules_link_index.clone(),
-            )
-            .with_hyperlink_font_color(appearance.theme().accent().into_solid())
-            .register_default_click_handlers(|url, ctx, _| {
-                ctx.dispatch_typed_action(AISettingsPageAction::HyperlinkClick(url));
-            })
-            .finish(),
-        )
-        .with_margin_top(styles::DESCRIPTION_NEGATIVE_MARGIN_OFFSET)
-        .with_margin_bottom(styles::DESCRIPTION_MARGIN_BOTTOM)
-        .with_margin_right(styles::TOGGLE_WIDTH_MARGIN)
-        .finish();
-
-        Flex::column()
-            .with_child(toggle)
-            .with_child(description)
-            .finish()
-    }
-}
-
-#[derive(Default)]
-struct SuggestedRulesWidget {
-    rule_suggestions_toggle: SwitchStateHandle,
-}
-
-impl SettingsWidget for SuggestedRulesWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "suggested rules suggest save"
-    }
-
-    fn should_render(&self, _app: &AppContext) -> bool {
-        FeatureFlag::AIRules.is_enabled() && FeatureFlag::SuggestedRules.is_enabled()
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        _appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let ai_settings = AISettings::as_ref(app);
-        let toggle = render_ai_setting_toggle::<RuleSuggestionsEnabled>(
-            "Suggested Rules",
-            AISettingsPageAction::ToggleRuleSuggestions,
-            *ai_settings.rule_suggestions_enabled_internal,
-            ai_settings.is_any_ai_enabled(app),
-            self.rule_suggestions_toggle.clone(),
-            &view.local_only_icon_tooltip_states,
-            app,
-        );
-
-        let description = render_ai_setting_description(
-            "Let AI suggest rules to save based on your interactions.",
-            ai_settings.is_any_ai_enabled(app),
-            app,
-        );
-
-        Flex::column()
-            .with_child(toggle)
-            .with_child(description)
-            .finish()
-    }
-}
-
-#[derive(Default)]
-struct ManageRulesWidget {
-    manage_rules_button: MouseStateHandle,
-}
-
-impl SettingsWidget for ManageRulesWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "manage rules rule collection"
-    }
-
-    fn should_render(&self, _app: &AppContext) -> bool {
-        FeatureFlag::AIRules.is_enabled()
-    }
-
-    fn render(
-        &self,
-        _view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        render_full_pane_width_ai_button(
-            "Manage rules",
-            AISettings::as_ref(app).is_any_ai_enabled(app),
-            self.manage_rules_button.clone(),
-            AISettingsPageAction::OpenAIFactCollection,
-            appearance,
-        )
-    }
-}
-
-#[derive(Default)]
-struct WarpDriveContextWidget {
-    warp_drive_context_toggle: SwitchStateHandle,
-}
-
-impl SettingsWidget for WarpDriveContextWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "warp drive agent context contents personal team developer workflows environments notebooks environment variables"
-    }
-
-    fn should_render(&self, _app: &AppContext) -> bool {
-        FeatureFlag::AIRules.is_enabled()
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        _appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let ai_settings = AISettings::as_ref(app);
-        let toggle = render_ai_setting_toggle::<WarpDriveContextEnabled>(
-            "Warp Drive as agent context",
-            AISettingsPageAction::ToggleWarpDriveContext,
-            *ai_settings.warp_drive_context_enabled,
-            ai_settings.is_any_ai_enabled(app),
-            self.warp_drive_context_toggle.clone(),
-            &view.local_only_icon_tooltip_states,
-            app,
-        );
-
-        let description = render_ai_setting_description(
-            "The Warp Agent can leverage your Warp Drive Contents to tailor responses to your personal and team developer workflows and environments. This includes any Workflows, Notebooks, and Environment Variables.",
-            ai_settings.is_any_ai_enabled(app),
-            app,
-        );
-
-        Flex::column()
-            .with_child(toggle)
-            .with_child(description)
-            .finish()
     }
 }
 
