@@ -28,7 +28,7 @@ use warpui::{Action, AppContext, SingletonEntity, ViewContext, ViewHandle};
 
 use super::SettingsSection;
 use super::about_page::AboutPageView;
-use super::ai_page::{AISettingsPageAction, AISettingsPageView};
+use super::ai_page::AISettingsPageView;
 use super::appearance_page::AppearanceSettingsPageView;
 use super::billing_and_usage_dispatch::BillingAndUsageDispatchView;
 use super::code_editor_review_page::EditorAndCodeReviewPageView;
@@ -393,7 +393,7 @@ pub fn render_full_pane_width_ai_button(
     text: &str,
     is_any_ai_enabled: bool,
     mouse_state: MouseStateHandle,
-    action: AISettingsPageAction,
+    action: impl Action + Clone,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let (text_color, bg, icon_bg) = if is_any_ai_enabled {

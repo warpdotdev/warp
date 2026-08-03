@@ -78,6 +78,7 @@ mod about_page;
 mod admin_actions;
 mod agent_assisted_environment_modal;
 mod ai_page;
+mod ai_shared;
 mod appearance_page;
 mod billing_and_usage;
 mod billing_and_usage_dispatch;
