@@ -27,7 +27,6 @@ use warpui::{
     ViewContext, ViewHandle, WeakViewHandle,
 };
 
-use super::SettingsSection;
 use super::billing_and_usage::billing_cycle_usage_section::BillingCycleUsageSectionView;
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
@@ -38,6 +37,7 @@ use super::billing_and_usage_page::{
     render_premium_upgrade_savings_note,
 };
 use super::settings_page::{AdditionalInfo, render_customer_type_badge, render_info_icon};
+use super::{SettingsSection, plan_header_presentation};
 use crate::ai::AIRequestUsageModel;
 use crate::ai::request_usage_model::{
     AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD, BonusGrant, BonusGrantScope, BonusGrantType,
@@ -602,21 +602,16 @@ impl BillingAndUsagePageV2View {
         let workspaces = UserWorkspaces::as_ref(app);
         let workspace = workspaces.current_workspace();
         let billing_metadata = workspace.map(|workspace| &workspace.billing_metadata);
-
-        if let Some(billing_metadata) = billing_metadata
-            && billing_metadata.customer_type != CustomerType::Unknown
-        {
+        let team = workspaces.team_for_view_handle(&self.self_handle, app);
+        let presentation = plan_header_presentation(billing_metadata, team.is_some(), false);
+        for badge_label in presentation.badge_labels {
             right_side.add_child(
-                Container::new(render_customer_type_badge(
-                    appearance,
-                    billing_metadata.customer_type.to_display_string(),
-                ))
-                .with_margin_right(8.)
-                .finish(),
+                Container::new(render_customer_type_badge(appearance, badge_label))
+                    .with_margin_right(8.)
+                    .finish(),
             );
         }
-
-        if let Some(team) = workspaces.team_for_view_handle(&self.self_handle, app) {
+        if let Some(team) = team {
             let current_user_email = AuthStateProvider::as_ref(app)
                 .get()
                 .user_email()
@@ -707,13 +702,8 @@ impl BillingAndUsagePageV2View {
                     );
                 }
             }
-        } else {
+        } else if presentation.show_personal_upgrade {
             let current_user_id = self.auth_state.user_id().unwrap_or_default();
-            right_side.add_child(
-                Container::new(render_customer_type_badge(appearance, "Free".into()))
-                    .with_margin_right(8.)
-                    .finish(),
-            );
             right_side.add_child(
                 Container::new(
                     appearance

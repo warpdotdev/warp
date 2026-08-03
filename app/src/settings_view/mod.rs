@@ -70,6 +70,7 @@ use crate::ui_components::icons;
 use crate::util::bindings::{BindingGroup, CustomAction, keybinding_name_to_display_string};
 use crate::view_components::ToastFlavor;
 use crate::workspace::WorkspaceAction;
+use crate::workspaces::workspace::{BillingMetadata, CustomerType};
 use crate::{GlobalResourceHandlesProvider, TelemetryEvent};
 
 mod about_page;
@@ -158,6 +159,34 @@ fn sidebar_width() -> f32 {
 const SECTION_BORDER_WIDTH: f32 = 1.;
 
 const POSITION_ID: &str = "settings_pane";
+
+#[derive(Debug, PartialEq, Eq)]
+struct PlanHeaderPresentation {
+    badge_labels: Vec<String>,
+    show_personal_upgrade: bool,
+}
+
+fn plan_header_presentation(
+    billing_metadata: Option<&BillingMetadata>,
+    has_team: bool,
+    is_anonymous: bool,
+) -> PlanHeaderPresentation {
+    let mut badge_labels = Vec::new();
+    if is_anonymous {
+        badge_labels.push("Free".to_string());
+    } else if let Some(billing_metadata) = billing_metadata
+        && billing_metadata.customer_type != CustomerType::Unknown
+    {
+        badge_labels.push(billing_metadata.customer_type.to_display_string());
+    }
+
+    PlanHeaderPresentation {
+        badge_labels,
+        show_personal_upgrade: is_anonymous
+            || (!has_team
+                && billing_metadata.is_none_or(BillingMetadata::can_upgrade_to_build_plan)),
+    }
+}
 
 pub(super) fn editor_text_colors(appearance: &Appearance) -> TextColors {
     let theme = appearance.theme();
