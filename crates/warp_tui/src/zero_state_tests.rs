@@ -19,9 +19,9 @@ use warpui_core::elements::tui::{
 use warpui_core::{App, AppContext};
 
 use super::{
-    ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, build_zero_state_layout, build_zero_state_overlay,
-    build_zero_state_stack_layout, changelog_bullets_from_changelog, mcp_status_label,
-    render_first_run_top_section,
+    ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, ZeroStateSectionVisibility, build_zero_state_layout,
+    build_zero_state_overlay, build_zero_state_stack_layout, changelog_bullets_from_changelog,
+    mcp_status_label, render_first_run_top_section,
 };
 use crate::tui_builder::TuiUiBuilder;
 use crate::zero_state_animation::{
@@ -84,7 +84,8 @@ fn first_zero_state_matches_welcome_design_copy() {
         let lines = app.read(|ctx| {
             let builder = TuiUiBuilder::from_app(ctx);
             render_element_lines(
-                render_first_run_top_section(&builder, ctx).finish(),
+                render_first_run_top_section(&builder, ZeroStateSectionVisibility::default(), ctx)
+                    .finish(),
                 ctx,
                 LEFT_COLUMN_COLS,
                 16,
