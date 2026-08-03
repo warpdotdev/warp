@@ -15,7 +15,7 @@ use warp::tui_export::Appearance;
 use warp_core::ui::color::Opacity;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::{Fill as ThemeFill, WarpTheme};
+use warp_core::ui::theme::{ColorScheme, Fill as ThemeFill, WarpTheme};
 use warpui::SingletonEntity;
 use warpui_core::AppContext;
 use warpui_core::elements::tui::{
@@ -37,6 +37,12 @@ pub(crate) struct CloudRunMarkStyles {
     pub(crate) brightest: TuiStyle,
     pub(crate) ansi_bright: TuiStyle,
 }
+#[derive(Clone, Copy, Debug)]
+struct TuiDesignPalette {
+    brand_primary: ColorU,
+    brand_accent: ColorU,
+    agent_colors: [ColorU; 7],
+}
 
 /// Theme-derived styles and components for the TUI, mirroring the GUI's
 /// `UiBuilder` (minus fonts, which terminal cells don't have). Cheap to
@@ -57,6 +63,37 @@ impl TuiUiBuilder {
         Self {
             warp_theme: Appearance::as_ref(app).theme().clone(),
             terminal_background,
+        }
+    }
+
+    fn design_palette(&self) -> TuiDesignPalette {
+        match self.warp_theme.inferred_color_scheme() {
+            ColorScheme::LightOnDark => TuiDesignPalette {
+                brand_primary: ColorU::from_u32(0xD2B5FFFF),
+                brand_accent: ColorU::from_u32(0xE2FFD4FF),
+                agent_colors: [
+                    ColorU::from_u32(0xD0D1FEFF),
+                    ColorU::from_u32(0xA5D5FEFF),
+                    ColorU::from_u32(0xFF8FFDFF),
+                    ColorU::from_u32(0xD2B5FFFF),
+                    ColorU::from_u32(0xFF8AA6FF),
+                    ColorU::from_u32(0xE2FFD4FF),
+                    ColorU::from_u32(0xFBDC79FF),
+                ],
+            },
+            ColorScheme::DarkOnLight => TuiDesignPalette {
+                brand_primary: ColorU::from_u32(0x9C58F0FF),
+                brand_accent: ColorU::from_u32(0x33770BFF),
+                agent_colors: [
+                    ColorU::from_u32(0x20A5BAFF),
+                    ColorU::from_u32(0x008EC4FF),
+                    ColorU::from_u32(0x523C79FF),
+                    ColorU::from_u32(0x9C58F0FF),
+                    ColorU::from_u32(0xFF8AA6FF),
+                    ColorU::from_u32(0x33770BFF),
+                    ColorU::from_u32(0xC79A18FF),
+                ],
+            },
         }
     }
 
@@ -313,7 +350,21 @@ impl TuiUiBuilder {
         TuiStyle::default().fg(cell_color(self.cyan_overlay_2()))
     }
 
-    /// Lilac credential-entry accent used by the API-key input states.
+    /// Scheme-aware Lilac brand color used by branded titles and progress.
+    pub(crate) fn brand_primary_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::Solid(
+            self.design_palette().brand_primary,
+        )))
+    }
+
+    /// Scheme-aware green brand accent used by branded prompts and actions.
+    pub(crate) fn brand_accent_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(cell_color(ThemeFill::Solid(
+            self.design_palette().brand_accent,
+        )))
+    }
+
+    /// Magenta credential-entry accent used by the API-key input states.
     pub(crate) fn credential_entry_accent_style(&self) -> TuiStyle {
         TuiStyle::default().fg(cell_color(ThemeFill::from(
             self.warp_theme.terminal_colors().normal.magenta,
@@ -351,10 +402,10 @@ impl TuiUiBuilder {
         TuiStyle::default().fg(cell_color(ThemeFill::Solid(self.warp_theme.ansi_fg_blue())))
     }
 
-    /// The warping indicator's base fill: the terminal palette's bright
-    /// magenta, corresponding to the design's Lilac-200.
+    /// The warping indicator's base fill: Lilac-200 in dark themes and
+    /// Lilac-600 in light themes.
     fn warping_base_fill(&self) -> ThemeFill {
-        ThemeFill::from(self.warp_theme.terminal_colors().bright.magenta)
+        ThemeFill::Solid(self.design_palette().brand_primary)
     }
 
     /// The warping indicator's base color as a solid color, for per-glyph
@@ -459,7 +510,7 @@ impl TuiUiBuilder {
     /// The deterministic agent identity palette for this theme. See
     /// [`crate::orchestrated_agent_identity_styling`].
     pub(crate) fn agent_identity_palette(&self) -> Vec<AgentIdentity> {
-        agent_identity_palette(self.warp_theme.terminal_colors())
+        agent_identity_palette(&self.design_palette().agent_colors)
     }
     /// Bold cyan option text for the ask-question card.
     pub(crate) fn question_option_selected_style(&self) -> TuiStyle {

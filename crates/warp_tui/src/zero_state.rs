@@ -197,6 +197,9 @@ impl TuiZeroStateView {
                     }
                     | TuiZeroStateSettingsChangedEvent::TuiZeroStateExtrusionDepthSetting {
                         ..
+                    }
+                    | TuiZeroStateSettingsChangedEvent::TuiZeroStateFreezeAnimationWhenUnfocusedSetting {
+                        ..
                     } => {}
                 }
             });
@@ -683,7 +686,7 @@ fn render_first_run_top_section(
     visibility: ZeroStateSectionVisibility,
     app: &AppContext,
 ) -> TuiFlex {
-    let title_style = builder.accent_text_style().add_modifier(Modifier::BOLD);
+    let title_style = builder.brand_primary_style().add_modifier(Modifier::BOLD);
     let muted = builder.muted_text_style();
     let mut column = TuiFlex::column()
         .child(
@@ -715,7 +718,7 @@ fn render_first_run_top_section(
 }
 
 fn render_first_run_capability(description: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
-    let highlight = builder.success_glyph_style();
+    let highlight = builder.brand_accent_style();
     let primary = builder.primary_text_style();
     let spans = vec![
         ("✶ ".to_owned(), highlight),

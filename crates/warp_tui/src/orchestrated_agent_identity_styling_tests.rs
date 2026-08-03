@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use warp::tui_export::{dark_theme, light_theme};
-use warp_core::ui::theme::{Fill as ThemeFill, WarpTheme};
+use pathfinder_color::ColorU;
+use warp_core::ui::theme::Fill as ThemeFill;
 use warpui_core::elements::Fill as CoreFill;
 use warpui_core::elements::tui::Color;
 
@@ -9,34 +9,32 @@ use super::{
     AGENT_IDENTITY_GLYPHS, agent_identity_palette, assign_agent_identity_indices, stable_hash,
 };
 
-fn palette_len(theme: &WarpTheme) -> usize {
-    agent_identity_palette(theme.terminal_colors()).len()
+fn test_colors() -> [ColorU; 7] {
+    [
+        ColorU::from_u32(0x010101FF),
+        ColorU::from_u32(0x020202FF),
+        ColorU::from_u32(0x030303FF),
+        ColorU::from_u32(0x040404FF),
+        ColorU::from_u32(0x050505FF),
+        ColorU::from_u32(0x060606FF),
+        ColorU::from_u32(0x070707FF),
+    ]
 }
 
 #[test]
 fn palette_crosses_the_seven_design_glyphs_and_colors() {
     assert_eq!(AGENT_IDENTITY_GLYPHS, ["⊹", "⟡", "✶", "◊", "⊛", "*", "✠"]);
-    assert_eq!(palette_len(&dark_theme()), 49);
-    assert_eq!(palette_len(&light_theme()), 49);
+    assert_eq!(agent_identity_palette(&test_colors()).len(), 49);
 }
 
 #[test]
 fn palette_uses_the_themed_design_color_roles_in_order() {
-    let theme = dark_theme();
-    let colors = theme.terminal_colors();
-    let expected: Vec<Option<Color>> = [
-        colors.normal.cyan,
-        colors.normal.blue,
-        colors.normal.magenta,
-        colors.bright.magenta,
-        colors.normal.red,
-        colors.normal.green,
-        colors.normal.yellow,
-    ]
-    .into_iter()
-    .map(|color| Some(CoreFill::from(ThemeFill::from(color)).into()))
-    .collect();
-    let palette = agent_identity_palette(colors);
+    let colors = test_colors();
+    let expected: Vec<Option<Color>> = colors
+        .into_iter()
+        .map(|color| Some(CoreFill::from(ThemeFill::Solid(color)).into()))
+        .collect();
+    let palette = agent_identity_palette(&colors);
 
     assert_eq!(
         palette[..expected.len()]
@@ -49,8 +47,7 @@ fn palette_uses_the_themed_design_color_roles_in_order() {
 
 #[test]
 fn palette_entries_are_distinct_glyph_color_pairs() {
-    let theme = dark_theme();
-    let palette = agent_identity_palette(theme.terminal_colors());
+    let palette = agent_identity_palette(&test_colors());
     let unique: HashSet<String> = palette
         .iter()
         .map(|identity| format!("{}-{:?}", identity.glyph, identity.style.fg))
