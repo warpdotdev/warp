@@ -13,6 +13,8 @@ mod overlay;
 mod recording_metadata;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
+#[cfg(any(macos, linux))]
+mod thumbnail;
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -312,6 +314,41 @@ pub async fn finalized_video_duration(input: &Path) -> Result<Duration, Recordin
         let _ = input;
         Err(RecordingError::Finalize {
             reason: "video duration probing is unsupported on this platform".to_string(),
+        })
+    }
+}
+
+/// Generates a PR video thumbnail for `video`: extracts a representative,
+/// downscaled frame with ffmpeg, composites a centered play-button glyph, and
+/// writes the PNG to a sibling `{artifact_uid}-thumb.png`. Returns the thumbnail
+/// path; the caller owns cleanup of both the video and the thumbnail.
+///
+/// `artifact_uid` is the uploaded video's artifact UID; the server links the
+/// thumbnail to its video by the `{artifact_uid}-thumb.png` filename convention.
+///
+/// Best-effort by design: the caller treats any error as "no thumbnail" and
+/// falls back to a plain link, never blocking the video upload or PR creation.
+/// Recording and ffmpeg are only available on macOS and Linux; every other
+/// platform reports thumbnail generation as unsupported (recording itself does
+/// not run there either).
+pub async fn generate_video_thumbnail(
+    video: &Path,
+    artifact_uid: &str,
+) -> Result<PathBuf, RecordingError> {
+    #[cfg(any(macos, linux))]
+    {
+        thumbnail::generate_video_thumbnail(
+            video,
+            thumbnail::DEFAULT_THUMBNAIL_MAX_WIDTH,
+            artifact_uid,
+        )
+        .await
+    }
+    #[cfg(not(any(macos, linux)))]
+    {
+        let _ = (video, artifact_uid);
+        Err(RecordingError::Finalize {
+            reason: "video thumbnail generation is unsupported on this platform".to_string(),
         })
     }
 }

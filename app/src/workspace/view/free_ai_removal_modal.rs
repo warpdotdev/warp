@@ -129,7 +129,7 @@ impl FreeAiRemovalModal {
     }
 
     fn upgrade_url(ctx: &ViewContext<Self>) -> String {
-        if let Some(team) = UserWorkspaces::as_ref(ctx).current_team() {
+        if let Some(team) = UserWorkspaces::as_ref(ctx).team_for_view(ctx) {
             UserWorkspaces::upgrade_link_for_team(team.uid)
         } else {
             let user_id = AuthStateProvider::as_ref(ctx)

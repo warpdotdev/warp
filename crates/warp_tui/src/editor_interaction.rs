@@ -8,7 +8,7 @@ use warp_editor::selection::{TextDirection, TextUnit};
 use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 use warpui_core::{AppContext, ModelHandle};
 
-use crate::clipboard::copy_to_clipboard;
+use crate::clipboard::{copy_to_clipboard, read_from_clipboard};
 use crate::editor_element::TuiEditorAction;
 
 /// Editing commands shared by TUI text fields.
@@ -33,9 +33,12 @@ pub enum TuiEditorCommand {
     SelectDown,
     SelectWordLeft,
     SelectWordRight,
+    SelectToLineStart,
+    SelectToLineEnd,
     SelectAll,
     Copy,
     Cut,
+    Paste,
     KillToLineEnd,
     KillToLineStart,
     Yank,
@@ -55,6 +58,14 @@ pub(crate) enum TuiEditorLineMode {
 pub(crate) struct TuiEditorBehavior {
     line_mode: TuiEditorLineMode,
     viewport_rows: u32,
+    /// When `true`, completing a mouse drag-selection (i.e. `SelectionEnd`
+    /// from a mouse-up event) automatically copies the selected text to the
+    /// clipboard, matching the transcript view's highlight-to-copy behavior.
+    /// Keyboard selection commands (`SelectLeft`, `SelectWordRight`, etc.) do
+    /// **not** trigger an auto-copy: they go through `apply_command` and never
+    /// reach the `SelectionEnd` path. Disabled by default; opt in with
+    /// [`Self::with_copy_on_mouse_highlight`].
+    copy_on_mouse_highlight: bool,
 }
 
 impl TuiEditorBehavior {
@@ -63,6 +74,7 @@ impl TuiEditorBehavior {
         Self {
             line_mode: TuiEditorLineMode::SingleLine,
             viewport_rows: 1,
+            copy_on_mouse_highlight: false,
         }
     }
 
@@ -71,7 +83,19 @@ impl TuiEditorBehavior {
         Self {
             line_mode: TuiEditorLineMode::Multiline,
             viewport_rows,
+            copy_on_mouse_highlight: false,
         }
+    }
+
+    /// Enables automatic clipboard copy when the user completes a mouse
+    /// drag-selection (mouse-up → `SelectionEnd`), mirroring the transcript
+    /// view's highlight-to-copy behavior. Keyboard-driven selection commands
+    /// (`SelectLeft`, `SelectWordRight`, etc.) are intentionally excluded:
+    /// they go through `apply_command` and never reach the `SelectionEnd`
+    /// arm. Any editor that opts in will auto-copy on mouse-drag-release.
+    pub(crate) fn with_copy_on_mouse_highlight(mut self) -> Self {
+        self.copy_on_mouse_highlight = true;
+        self
     }
 
     /// Returns the number of visible editor rows.
@@ -99,6 +123,8 @@ pub(crate) enum TuiEditorInteractionOutcome {
     FollowCursor,
     PreserveViewport,
     Clipboard(TuiEditorClipboardAction),
+    /// Insert the OS clipboard's text at the cursor (`cmd-v` / paste).
+    Paste,
 }
 
 /// Clipboard operation requested by a shared TUI editor command.
@@ -215,14 +241,14 @@ const SHARED_EDITOR_BINDINGS: &[EditorBindingSpec] = &[
         input_name: Some("tui:input:move_to_line_start"),
         editor_name: Some("tui:editor:move_to_line_start"),
         description: "Move cursor to start of line",
-        keys: &["home", "ctrl-a"],
+        keys: &["home", "ctrl-a", "cmd-left"],
     },
     EditorBindingSpec {
         command: TuiEditorCommand::MoveToLineEnd,
         input_name: Some("tui:input:move_to_line_end"),
         editor_name: Some("tui:editor:move_to_line_end"),
         description: "Move cursor to end of line",
-        keys: &["end", "ctrl-e"],
+        keys: &["end", "ctrl-e", "cmd-right"],
     },
     EditorBindingSpec {
         command: TuiEditorCommand::SelectLeft,
@@ -267,25 +293,46 @@ const SHARED_EDITOR_BINDINGS: &[EditorBindingSpec] = &[
         keys: &["ctrl-shift-right", "alt-shift-right"],
     },
     EditorBindingSpec {
+        command: TuiEditorCommand::SelectToLineStart,
+        input_name: Some("tui:input:select_to_line_start"),
+        editor_name: Some("tui:editor:select_to_line_start"),
+        description: "Extend selection to start of line",
+        keys: &["cmd-shift-left"],
+    },
+    EditorBindingSpec {
+        command: TuiEditorCommand::SelectToLineEnd,
+        input_name: Some("tui:input:select_to_line_end"),
+        editor_name: Some("tui:editor:select_to_line_end"),
+        description: "Extend selection to end of line",
+        keys: &["cmd-shift-right"],
+    },
+    EditorBindingSpec {
         command: TuiEditorCommand::SelectAll,
         input_name: Some("tui:input:select_all"),
         editor_name: Some("tui:editor:select_all"),
         description: "Select all text",
-        keys: &["ctrl-shift-A"],
+        keys: &["ctrl-shift-A", "cmd-a"],
     },
     EditorBindingSpec {
         command: TuiEditorCommand::Copy,
         input_name: Some("tui:input:copy"),
         editor_name: Some("tui:editor:copy"),
         description: "Copy selected text",
-        keys: &["ctrl-shift-C", "alt-w"],
+        keys: &["ctrl-shift-C", "alt-w", "cmd-c"],
     },
     EditorBindingSpec {
         command: TuiEditorCommand::Cut,
         input_name: Some("tui:input:cut"),
         editor_name: Some("tui:editor:cut"),
         description: "Cut selected text",
-        keys: &["ctrl-x"],
+        keys: &["ctrl-x", "cmd-x"],
+    },
+    EditorBindingSpec {
+        command: TuiEditorCommand::Paste,
+        input_name: Some("tui:input:paste"),
+        editor_name: Some("tui:editor:paste"),
+        description: "Paste text from the clipboard",
+        keys: &["cmd-v"],
     },
     EditorBindingSpec {
         command: TuiEditorCommand::KillToLineEnd,
@@ -299,7 +346,7 @@ const SHARED_EDITOR_BINDINGS: &[EditorBindingSpec] = &[
         input_name: Some("tui:input:kill_to_line_start"),
         editor_name: Some("tui:editor:kill_to_line_start"),
         description: "Delete to start of line",
-        keys: &["ctrl-u"],
+        keys: &["ctrl-u", "cmd-backspace"],
     },
     EditorBindingSpec {
         command: TuiEditorCommand::Yank,
@@ -313,14 +360,14 @@ const SHARED_EDITOR_BINDINGS: &[EditorBindingSpec] = &[
         input_name: Some("tui:input:undo"),
         editor_name: Some("tui:editor:undo"),
         description: "Undo",
-        keys: &["ctrl-z"],
+        keys: &["ctrl-z", "cmd-z"],
     },
     EditorBindingSpec {
         command: TuiEditorCommand::Redo,
         input_name: Some("tui:input:redo"),
         editor_name: Some("tui:editor:redo"),
         description: "Redo",
-        keys: &["ctrl-shift-Z"],
+        keys: &["ctrl-shift-Z", "cmd-shift-Z"],
     },
 ];
 
@@ -457,6 +504,12 @@ impl TuiEditorState {
                     );
                 });
             }
+            TuiEditorCommand::SelectToLineStart => {
+                model.update(ctx, |model, ctx| model.select_to_line_start(ctx));
+            }
+            TuiEditorCommand::SelectToLineEnd => {
+                model.update(ctx, |model, ctx| model.select_to_line_end(ctx));
+            }
             TuiEditorCommand::SelectAll => {
                 model.update(ctx, |model, ctx| model.select_all(ctx));
             }
@@ -465,6 +518,9 @@ impl TuiEditorState {
             }
             TuiEditorCommand::Cut => {
                 return TuiEditorInteractionOutcome::Clipboard(TuiEditorClipboardAction::Cut);
+            }
+            TuiEditorCommand::Paste => {
+                return TuiEditorInteractionOutcome::Paste;
             }
             TuiEditorCommand::KillToLineEnd => {
                 if let Some(killed) = model.update(ctx, |model, ctx| {
@@ -538,6 +594,44 @@ pub(crate) fn apply_editor_clipboard_action_for_test(
 ) -> anyhow::Result<bool> {
     apply_editor_clipboard_action_with(model, action, copy, ctx)
 }
+
+/// Reads the OS clipboard and inserts its text at the cursor, applying the
+/// editor's line policy. Returns `false` when the clipboard has no text.
+pub(crate) fn apply_editor_paste(
+    model: &ModelHandle<CodeEditorModel>,
+    behavior: TuiEditorBehavior,
+    ctx: &mut AppContext,
+) -> anyhow::Result<bool> {
+    apply_editor_paste_with(model, read_from_clipboard, behavior, ctx)
+}
+
+fn apply_editor_paste_with(
+    model: &ModelHandle<CodeEditorModel>,
+    read: impl FnOnce() -> anyhow::Result<String>,
+    behavior: TuiEditorBehavior,
+    ctx: &mut AppContext,
+) -> anyhow::Result<bool> {
+    let text = read()?;
+    if text.is_empty() {
+        return Ok(false);
+    }
+    let text = behavior.normalize_text(&text).to_owned();
+    if text.is_empty() {
+        return Ok(false);
+    }
+    model.update(ctx, |model, ctx| model.user_insert(&text, ctx));
+    Ok(true)
+}
+
+#[cfg(test)]
+pub(crate) fn apply_editor_paste_for_test(
+    model: &ModelHandle<CodeEditorModel>,
+    read: impl FnOnce() -> anyhow::Result<String>,
+    behavior: TuiEditorBehavior,
+    ctx: &mut AppContext,
+) -> anyhow::Result<bool> {
+    apply_editor_paste_with(model, read, behavior, ctx)
+}
 /// Applies an element-originated action and reports the required viewport work.
 pub(crate) fn apply_editor_action(
     model: &ModelHandle<CodeEditorModel>,
@@ -574,6 +668,9 @@ pub(crate) fn apply_editor_action(
         }
         TuiEditorAction::SelectionEnd => {
             model.update(ctx, |model, ctx| model.end_selection(ctx));
+            if behavior.copy_on_mouse_highlight {
+                return TuiEditorInteractionOutcome::Clipboard(TuiEditorClipboardAction::Copy);
+            }
         }
         TuiEditorAction::Scroll { rows } => {
             scroll_editor_viewport(model, *rows, behavior, ctx);

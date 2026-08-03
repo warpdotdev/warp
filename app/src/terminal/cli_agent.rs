@@ -279,7 +279,7 @@ impl CLIAgent {
             CLIAgent::Vibe => None,
             CLIAgent::Antigravity => Some(Icon::AntigravityLogo),
             CLIAgent::Grok => Some(Icon::GrokLogo),
-            CLIAgent::WarpTui => None,
+            CLIAgent::WarpTui => Some(Icon::Warp),
             CLIAgent::Unknown => None,
         }
     }
@@ -368,7 +368,7 @@ impl CLIAgent {
             CLIAgent::Vibe => Some(MISTRAL_ORANGE),
             CLIAgent::Antigravity => Some(ANTIGRAVITY_COLOR),
             CLIAgent::Grok => Some(GROK_COLOR),
-            CLIAgent::WarpTui => None,
+            CLIAgent::WarpTui => Some(ColorU::black()),
             CLIAgent::Unknown => None,
         }
     }

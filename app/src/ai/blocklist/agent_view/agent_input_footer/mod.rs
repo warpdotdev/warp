@@ -48,8 +48,6 @@ use warpui::{
     ViewHandle,
 };
 
-#[cfg(feature = "local_fs")]
-pub(crate) use self::environment_selector::sort_environments_by_recency;
 pub(crate) use self::environment_selector::{
     EnvironmentSelector, EnvironmentSelectorEvent, EnvironmentSelectorTarget,
 };
@@ -1924,7 +1922,7 @@ impl AgentInputFooter {
                             transcribed_text,
                         ));
                     } else {
-                        ctx.emit(AgentInputFooterEvent::WriteToPty(transcribed_text));
+                        ctx.emit(AgentInputFooterEvent::InsertIntoCLIPty(transcribed_text));
                     }
                 }
             }
@@ -2659,6 +2657,8 @@ pub enum AgentInputFooterEvent {
     ToggleVoiceInput(voice_input::VoiceInputToggledFrom),
     SelectFile,
     WriteToPty(String),
+    /// Insert text into the CLI agent's PTY input using its paste strategy.
+    InsertIntoCLIPty(String),
     /// Insert text into the CLI agent rich input.
     InsertIntoCLIRichInput(String),
     ToggleCodeReviewPane(CLIAgent),

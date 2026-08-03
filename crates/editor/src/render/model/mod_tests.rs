@@ -1481,17 +1481,30 @@ mod char_cell {
     use rand::{Rng, SeedableRng};
     use string_offset::CharOffset;
 
+    use crate::render::model::test_utils::TEST_STYLES;
     use crate::render::model::{
-        CharCellState, ColumnUnit, LineCount, SoftWrapPoint, char_cell_display_widths,
+        CharCellState, CharCellTextIndex, ColumnUnit, LineCount, SoftWrapPoint,
         char_cell_line_break_opportunities, char_cell_line_row_starts, char_cell_max_line,
         char_cell_offset_to_softwrap_point, char_cell_softwrap_point_to_offset,
     };
+    #[test]
+    fn zero_tab_size_uses_the_default_tab_size() {
+        let mut styles = TEST_STYLES.clone();
+        styles.base_text.fixed_width_tab_size = Some(0);
+
+        assert_eq!(
+            CharCellTextIndex::new_with_styles(0, &styles)
+                .tab_size
+                .get(),
+            4
+        );
+    }
 
     /// Build the `(line_starts, line_breaks, char_widths)` triple from a text
     /// string (mirrors `CharCellState::update_text` logic) so tests can
     /// construct the char-cell layout inputs without a full `RenderState`.
     fn line_starts_for(text: &str) -> (Vec<CharOffset>, Vec<bool>, Vec<u8>) {
-        let char_widths = char_cell_display_widths(text);
+        let char_widths = CharCellTextIndex::default().display_widths(text);
         let mut starts = vec![CharOffset::zero()];
         for (i, ch) in text.chars().enumerate() {
             if ch == '\n' {
@@ -1836,16 +1849,28 @@ mod char_cell {
 
     #[test]
     fn display_width_basic() {
-        assert_eq!(char_cell_display_widths("a"), vec![1]);
-        assert_eq!(char_cell_display_widths("你"), vec![2]);
-        assert_eq!(char_cell_display_widths("\u{0301}"), vec![0]);
+        assert_eq!(CharCellTextIndex::default().display_widths("a"), vec![1]);
+        assert_eq!(CharCellTextIndex::default().display_widths("你"), vec![2]);
+        assert_eq!(
+            CharCellTextIndex::default().display_widths("\u{0301}"),
+            vec![0]
+        );
     }
 
     #[test]
     fn display_widths_preserve_char_offsets_for_graphemes() {
-        assert_eq!(char_cell_display_widths("\u{2328}\u{fe0f}"), vec![2, 0]);
-        assert_eq!(char_cell_display_widths("👨‍👩‍👧‍👦"), vec![2, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(char_cell_display_widths("🇺🇸"), vec![2, 0]);
+        assert_eq!(
+            CharCellTextIndex::default().display_widths("\u{2328}\u{fe0f}"),
+            vec![2, 0]
+        );
+        assert_eq!(
+            CharCellTextIndex::default().display_widths("👨‍👩‍👧‍👦"),
+            vec![2, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            CharCellTextIndex::default().display_widths("🇺🇸"),
+            vec![2, 0]
+        );
     }
 
     #[test]

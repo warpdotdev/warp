@@ -1229,7 +1229,7 @@ impl Buffer {
         if line_text.trim().is_empty() {
             line_start
         } else {
-            self.indented_line_start(offset).unwrap_or(line_start)
+            LineIndentation::from_line_start(self, line_start).first_character()
         }
     }
 

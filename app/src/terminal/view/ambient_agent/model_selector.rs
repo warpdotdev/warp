@@ -510,7 +510,7 @@ impl ModelSelector {
                 let leading_icon = if is_custom_router_id(llm.id.as_str()) {
                     Icon::Dataflow
                 } else {
-                    llm.provider.icon().unwrap_or(Icon::Oz)
+                    llm.provider.icon().unwrap_or(Icon::Agent)
                 };
                 let fields = MenuItemFields::new(display_name)
                     .with_icon(leading_icon)

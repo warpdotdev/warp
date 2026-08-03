@@ -86,8 +86,13 @@ done
 # Build with the `standalone` feature so `bundled_resources_dir()` resolves the
 # sibling `resources/` directory next to the executable at runtime (matching how
 # the packaged TUI is built in script/macos/bundle). Without it, the app can't
-# locate its bundled skills when run outside a `.app` bundle.
-CARGO_ARGS+=(--features standalone)
+# locate its bundled skills when run outside a `.app` bundle. Keep voice input
+# enabled for local macOS development while leaving Linux builds free of ALSA.
+TUI_FEATURES="standalone"
+if [[ "$(uname -s)" = "Darwin" ]]; then
+  TUI_FEATURES="$TUI_FEATURES,voice_input"
+fi
+CARGO_ARGS+=(--features "$TUI_FEATURES")
 
 # Resolve Cargo's actual target directory rather than assuming ./target
 # (honors CARGO_TARGET_DIR / build.target-dir).

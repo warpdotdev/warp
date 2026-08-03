@@ -513,6 +513,12 @@ codegen-units = 1
 [profile.release-cli-debug_assertions]
 inherits = "release-cli"
 debug-assertions = true
+# Short aliases keep Windows build paths below the legacy MAX_PATH limit.
+[profile.rcli]
+inherits = "release-cli"
+
+[profile.rclida]
+inherits = "release-cli-debug_assertions"
 
 # Release profile for the standalone TUI. Strip debug-map entries while
 # retaining function symbols so local backtraces and profiles remain readable.

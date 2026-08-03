@@ -251,7 +251,7 @@ pub fn render_settings_error_alert(
             text_color,
             mouse_states.alert_fix_with_oz_button.clone(),
             "Fix with Oz",
-            Some(Icon::Oz),
+            Some(Icon::Agent),
             /*bordered=*/ false,
             WorkspaceAction::FixSettingsWithOz { error_description },
         );
