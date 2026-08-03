@@ -82,7 +82,7 @@ pub fn get_cloud_mode_tips() -> Vec<CloudModeTip> {
         ),
         CloudModeTip::new(
             "Create reusable environments with Docker images for consistent agent execution.",
-            Some("https://docs.warp.dev/platform/environments"),
+            Some("https://docs.warp.dev/platform/environments/"),
         ),
         CloudModeTip::new(
             "Share agent session links with your team for collaborative debugging.",
@@ -138,7 +138,7 @@ pub fn get_cloud_mode_tips() -> Vec<CloudModeTip> {
         ),
         CloudModeTip::new(
             "Use `oz environment create` to define reproducible execution contexts.",
-            Some("https://docs.warp.dev/platform/environments"),
+            Some("https://docs.warp.dev/platform/environments/"),
         ),
         CloudModeTip::new(
             "Trigger agents from webhooks to respond to production incidents.",
