@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::env::{self, VarError};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
+use std::str;
 
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -11,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use typed_path::{
     PathType, TypedComponent, TypedPath, TypedPathBuf, UnixComponent, WindowsComponent,
-    WindowsPath, WindowsPathBuf,
+    WindowsPath, WindowsPathBuf, WindowsPrefix, WindowsPrefixComponent,
 };
 
 use crate::standardized_path::StandardizedPath;
@@ -59,6 +60,10 @@ lazy_static! {
 
 /// Leading prefix for a path to the home directory using the $HOME environment variable.
 pub const HOME_DIR_ENV_VAR_PREFIX: &str = "$HOME";
+
+/// The UNC hosts Windows exposes the WSL filesystem through: the legacy `wsl$` host and the newer
+/// `wsl.localhost` host. Both are served locally by the WSL filesystem provider.
+const WSL_UNC_SERVERS: [&str; 2] = ["wsl$", "wsl.localhost"];
 
 const DIRS_IN_MSYS2_ROOT: [&[u8]; 14] = [
     b"bin",
@@ -347,6 +352,31 @@ pub fn msys2_exe_to_root(exe_path: &WindowsPath) -> WindowsPathBuf {
         })
 }
 
+/// Returns true if the given UNC server component names the WSL filesystem provider rather than a
+/// remote host. UNC host names are case-insensitive, so `\\WSL$\...`, `\\wsl$\...`, and
+/// `\\Wsl.Localhost\...` all refer to the local WSL filesystem.
+fn is_wsl_unc_server(server: &[u8]) -> bool {
+    str::from_utf8(server).is_ok_and(|server| {
+        WSL_UNC_SERVERS
+            .iter()
+            .any(|wsl_server| server.eq_ignore_ascii_case(wsl_server))
+    })
+}
+
+/// Returns true if the given Windows path prefix is a UNC prefix pointing at the WSL filesystem,
+/// e.g. `\\wsl$\Ubuntu`, `//WSL.localhost/Ubuntu`, or `\\?\UNC\wsl$\Ubuntu`.
+fn is_wsl_unc_prefix(prefix: &WindowsPrefixComponent) -> bool {
+    match prefix.kind() {
+        WindowsPrefix::UNC(server, _) | WindowsPrefix::VerbatimUNC(server, _) => {
+            is_wsl_unc_server(server)
+        }
+        WindowsPrefix::Verbatim(_)
+        | WindowsPrefix::VerbatimDisk(_)
+        | WindowsPrefix::DeviceNS(_)
+        | WindowsPrefix::Disk(_) => false,
+    }
+}
+
 /// Converts the given [`typed_path::TypedPath`] representing a file from within Windows' MSYS2 to
 /// a Windows-native [`std::path::PathBuf`] such that the same file can be accessed from the
 /// native Windows environment.
@@ -357,12 +387,12 @@ pub fn convert_msys2_to_windows_native_path(
     if !unix_path.is_unix() {
         match unix_path.components().next() {
             // Generally Windows-encoded paths won't come out of MSYS2 sessions.
-            // However, there is an exception. WSL paths in MSYS2 have this UNIX-like prefix
-            // `//wsl$/` which, counter-intuitively, gets inferred as a Windows prefix when given
-            // to [`TypedPathBuf::from`]. This is the only Windows-encoded path we allow as input
-            // to this function.
+            // However, there is an exception. WSL paths in MSYS2 have a UNIX-like prefix such as
+            // `//wsl$/` or `//wsl.localhost/` which, counter-intuitively, gets inferred as a
+            // Windows UNC prefix when given to [`TypedPathBuf::from`]. This is the only
+            // Windows-encoded path we allow as input to this function.
             Some(TypedComponent::Windows(WindowsComponent::Prefix(prefix)))
-                if prefix.as_bytes().starts_with(b"//wsl$/") => {}
+                if is_wsl_unc_prefix(&prefix) => {}
             _ => {
                 return Err(MSYS2PathConversionError::NonUnixPath);
             }
@@ -378,7 +408,7 @@ pub fn convert_msys2_to_windows_native_path(
         [
             TypedComponent::Windows(WindowsComponent::Prefix(prefix)),
             ..,
-        ] if prefix.as_bytes().starts_with(b"//wsl$/") => unix_path.to_path_buf(),
+        ] if is_wsl_unc_prefix(prefix) => unix_path.to_path_buf(),
         [
             TypedComponent::Unix(UnixComponent::RootDir),
             TypedComponent::Unix(UnixComponent::Normal(bytes)),
@@ -390,11 +420,11 @@ pub fn convert_msys2_to_windows_native_path(
             windows_path
         }
         // Check if the prefix is "/c/" or similar, which is how MSYS2 refers to Windows drive
-        // "C:\". Valid drive names are a..=z, which are bytes 97..=122.
+        // "C:\". Valid drive names are single ASCII letters, in either case.
         [
             TypedComponent::Unix(UnixComponent::RootDir),
             TypedComponent::Unix(UnixComponent::Normal(bytes)),
-        ] if bytes.len() == 1 && (97..=122).contains(&bytes[0]) => {
+        ] if bytes.len() == 1 && bytes[0].is_ascii_alphabetic() => {
             let mut windows_path = TypedPathBuf::new(PathType::Windows);
             windows_path.push([*bytes, b":\\"].concat());
             for component in unix_path.with_windows_encoding().components().skip(2) {
@@ -461,12 +491,12 @@ pub fn convert_wsl_to_windows_host_path(
     let mut windows_path = TypedPathBuf::new(PathType::Windows);
     match prefix.as_slice() {
         // Check if the prefix is "/mnt/c/" or similar, which is how WSL refers to Windows drive
-        // "C:\". Valid drive names are a..=z, which are bytes 97..=122.
+        // "C:\". Valid drive names are single ASCII letters, in either case.
         [
             TypedComponent::Unix(UnixComponent::RootDir),
             TypedComponent::Unix(UnixComponent::Normal(b"mnt")),
             TypedComponent::Unix(UnixComponent::Normal(bytes)),
-        ] if bytes.len() == 1 && (97..=122).contains(&bytes[0]) => {
+        ] if bytes.len() == 1 && bytes[0].is_ascii_alphabetic() => {
             windows_path.push([*bytes, b":\\"].concat());
             for component in unix_path.with_windows_encoding().components().skip(3) {
                 windows_path.push(component.as_bytes());
@@ -513,8 +543,11 @@ pub fn is_network_resource(path: &Path) -> bool {
     use std::path::Prefix;
 
     match prefix(path) {
-        // Treat "WSL$" as a special case, not a network resource.
-        Some(Prefix::UNC(server, _)) | Some(Prefix::VerbatimUNC(server, _)) => server != "WSL$",
+        // Windows exposes the WSL filesystem over UNC, but it is served locally, so it is not a
+        // network resource.
+        Some(Prefix::UNC(server, _)) | Some(Prefix::VerbatimUNC(server, _)) => {
+            !is_wsl_unc_server(server.as_encoded_bytes())
+        }
         _ => false,
     }
 }
