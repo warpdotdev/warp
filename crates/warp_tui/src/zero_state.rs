@@ -197,6 +197,9 @@ impl TuiZeroStateView {
                     }
                     | TuiZeroStateSettingsChangedEvent::TuiZeroStateExtrusionDepthSetting {
                         ..
+                    }
+                    | TuiZeroStateSettingsChangedEvent::TuiZeroStateFreezeAnimationWhenUnfocusedSetting {
+                        ..
                     } => {}
                 }
             });

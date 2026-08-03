@@ -7,9 +7,9 @@ use settings_value::SettingsValue;
 use super::{
     MAX_TUI_ZERO_STATE_EXTRUSION_DEPTH, MAX_TUI_ZERO_STATE_ROTATION_PERIOD_SECONDS,
     MIN_TUI_ZERO_STATE_EXTRUSION_DEPTH, MIN_TUI_ZERO_STATE_ROTATION_PERIOD_SECONDS,
-    TuiZeroStateExtrusionDepth, TuiZeroStateExtrusionDepthSetting, TuiZeroStateObject,
-    TuiZeroStateObjectSetting, TuiZeroStateRotationPeriodSeconds,
-    TuiZeroStateRotationPeriodSecondsSetting,
+    TuiZeroStateExtrusionDepth, TuiZeroStateExtrusionDepthSetting,
+    TuiZeroStateFreezeAnimationWhenUnfocusedSetting, TuiZeroStateObject, TuiZeroStateObjectSetting,
+    TuiZeroStateRotationPeriodSeconds, TuiZeroStateRotationPeriodSecondsSetting,
 };
 
 #[test]
@@ -92,6 +92,11 @@ fn zero_state_settings_are_tui_local_file_settings() {
         Some("appearance.zero_state.extrusion_depth")
     );
     assert_eq!(
+        TuiZeroStateFreezeAnimationWhenUnfocusedSetting::toml_path(),
+        Some("appearance.zero_state.freeze_animation_when_unfocused")
+    );
+    assert!(!TuiZeroStateFreezeAnimationWhenUnfocusedSetting::default_value());
+    assert_eq!(
         TuiZeroStateObjectSetting::sync_to_cloud(),
         SyncToCloud::Never
     );
@@ -101,6 +106,10 @@ fn zero_state_settings_are_tui_local_file_settings() {
     );
     assert_eq!(
         TuiZeroStateExtrusionDepthSetting::sync_to_cloud(),
+        SyncToCloud::Never
+    );
+    assert_eq!(
+        TuiZeroStateFreezeAnimationWhenUnfocusedSetting::sync_to_cloud(),
         SyncToCloud::Never
     );
     assert_eq!(TuiZeroStateObjectSetting::max_table_depth(), Some(0));

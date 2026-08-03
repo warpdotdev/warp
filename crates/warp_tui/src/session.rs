@@ -13,12 +13,13 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use clap::error::ErrorKind;
 use inquire::{InquireError, Password, PasswordDisplayMode};
-use warp::settings::TuiThemeSettings;
+use warp::settings::{TuiThemeSettings, TuiZeroStateSettings, TuiZeroStateSettingsChangedEvent};
 #[cfg(feature = "voice_input")]
 use warp::settings::{TuiVoiceSettings, TuiVoiceSettingsChangedEvent};
 use warp::tui_export::{AIConversationAutoexecuteMode, Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::channel::ChannelState;
+use warp_core::settings::Setting as _;
 use warp_core::telemetry::TelemetryEvent as _;
 use warp_errors::report_error;
 use warpui::SingletonEntity as _;
@@ -257,17 +258,39 @@ fn init(
     let modifier_key_lifecycle_enabled = requires_modifier_key_reporting(ctx);
     #[cfg(not(feature = "voice_input"))]
     let modifier_key_lifecycle_enabled = false;
+    let freeze_repaints_when_unfocused = *TuiZeroStateSettings::as_ref(ctx)
+        .freeze_animation_when_unfocused
+        .value();
     match spawn_tui_driver(
         ctx,
         window_id,
         root.clone(),
         modifier_key_lifecycle_enabled,
+        freeze_repaints_when_unfocused,
         Some(probe),
     ) {
         Ok(driver) => {
             let sessions = ctx.add_singleton_model(|_| {
                 TuiSessions::new(driver, exit_summary, resume_token, default_autoexecute_mode)
             });
+            let sessions_for_zero_state_settings = sessions.clone();
+            ctx.subscribe_to_model(
+                &TuiZeroStateSettings::handle(ctx),
+                move |settings, event, ctx| {
+                    let TuiZeroStateSettingsChangedEvent::TuiZeroStateFreezeAnimationWhenUnfocusedSetting {
+                        ..
+                    } = event
+                    else {
+                        return;
+                    };
+                    let freeze =
+                        *settings.as_ref(ctx).freeze_animation_when_unfocused.value();
+                    sessions_for_zero_state_settings.update(ctx, |sessions, _| {
+                        sessions.set_freeze_repaints_when_unfocused(freeze);
+                    });
+                    ctx.invalidate_all_views();
+                },
+            );
             #[cfg(feature = "voice_input")]
             let sessions_for_voice_settings = sessions.clone();
             #[cfg(feature = "voice_input")]
