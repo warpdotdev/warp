@@ -703,16 +703,10 @@ fn render_first_run_top_section(
             .finish(),
     );
     for (command, description) in [
-        (
-            Some("/natural-language-detection"),
-            "to autodetect prompts or shell commands",
-        ),
-        (Some("/modify-settings"), "to set up custom model routers"),
-        (Some("/orchestrate"), "to spawn fleets of agents"),
-        (
-            None,
-            "Run full-screen terminal apps and cd into other directories",
-        ),
+        (None, "State of the art coding agents"),
+        (None, "Fully customizable model routers"),
+        (None, "Orchestrate fleets of agents"),
+        (None, "Work with shell commands like in a native terminal"),
     ] {
         column = column.child(render_first_run_capability(command, description, builder));
     }
