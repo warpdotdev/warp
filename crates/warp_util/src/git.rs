@@ -54,23 +54,17 @@ pub async fn run_git_command_with_env(
     }
 }
 
-/// Builds the command that runs `git` with `args` in `repo_path`, with `env`
-/// set on the child.
+/// Builds the command that runs `git` with `args` in `repo_path`, with `env` set on the child.
 ///
-/// On a native Windows build, Warp represents the working directory of a WSL
-/// session as a `\\wsl$\<distro>\...` UNC path. Running the Windows `git.exe`
-/// against such a path is broken: it reports "dubious ownership", produces
-/// bogus diffs, and can hang. For those paths the command is built as
-/// `wsl.exe --distribution <distro> --cd <linux_path> --exec git <args...>`
-/// instead, so the Linux-side git inside the distribution runs it. Every other
-/// path gets a plain `git` command with `repo_path` as its working directory.
+/// A WSL session's working directory is a `\\wsl$\<distro>\...` UNC path on a Windows host, and
+/// the Windows `git.exe` mishandles those: it reports "dubious ownership", produces bogus diffs,
+/// and can hang. Such a path is instead routed to the distribution's own git via `wsl.exe`.
 #[cfg(not(target_family = "wasm"))]
 fn git_command(repo_path: &Path, args: &[&str], env: &[(&str, &str)]) -> command::r#async::Command {
     use command::r#async::Command;
 
-    // The rewrite only applies to a Windows host. Gated with `cfg!` rather than
-    // `#[cfg]` so the translation below stays compiled and unit-tested on every
-    // platform.
+    // Gated with `cfg!` rather than `#[cfg]` so the translation stays compiled and unit-tested on
+    // every platform.
     let translated = if cfg!(windows) {
         translate_for_wsl_unc_cwd(args, repo_path, env)
     } else {
@@ -80,10 +74,8 @@ fn git_command(repo_path: &Path, args: &[&str], env: &[(&str, &str)]) -> command
     if let Some(translated) = translated {
         let mut cmd = Command::new("wsl.exe");
         cmd.args(&translated.args);
-        // The working directory is deliberately left unset: `--cd` supplies it
-        // inside the distribution, which keeps `wsl.exe` itself off the UNC
-        // path. `PATH` is skipped here because it rides through the argument
-        // vector instead (see [`translate_for_wsl_unc_cwd`]).
+        // The working directory is deliberately left unset: `--cd` supplies it inside the
+        // distribution, which keeps `wsl.exe` itself off the UNC path.
         for (key, value) in env.iter().filter(|(key, _)| !is_path_env_key(key)) {
             cmd.env(key, value);
         }
@@ -102,32 +94,20 @@ fn git_command(repo_path: &Path, args: &[&str], env: &[(&str, &str)]) -> command
     cmd
 }
 
-/// The `wsl.exe` invocation that replaces a `git` command whose working
-/// directory lives inside a WSL distribution.
+/// A `git` command rewritten to run inside a WSL distribution via `wsl.exe`.
 #[cfg(not(target_family = "wasm"))]
 #[derive(Debug, PartialEq, Eq)]
 struct WslGitCommand {
-    /// The full argument vector for `wsl.exe`.
     args: Vec<String>,
     /// The `WSLENV` value propagating the explicitly-set environment variables into the
     /// distribution; empty when there is nothing to propagate.
     wslenv: String,
 }
 
-/// Rewrites a `git` invocation whose working directory is a WSL UNC path into
-/// the equivalent `wsl.exe` invocation. Returns `None` when `repo_path` is not
-/// a WSL UNC path, in which case the caller runs `git` directly.
-///
-/// Non-`PATH` variables in `env` are advertised through `WSLENV` so they cross
-/// into the distribution (see [`build_wslenv`]). An explicitly set `PATH` is
-/// instead carried as an argv element:
-/// `... --exec /usr/bin/env PATH=<value> git <args...>`. This is the `--exec`
-/// analogue of the inline `PATH=...; cmd` assignment in
-/// `app/src/terminal/model/session/command_executor/wsl_command_executor.rs`.
-/// Routing `PATH` through argv bypasses Windows' non-disableable Windows-to-WSL
-/// `PATH` conversion, which would otherwise truncate the caller-supplied
-/// Linux-form `PATH` that `run_git_command_with_env` sets so hook tools such as
-/// `git-lfs` resolve inside the distribution.
+/// Rewrites a `git` invocation whose working directory is a WSL UNC path into the equivalent
+/// `wsl.exe` invocation, carrying `env` across as `WSLENV` entries except for `PATH`, which
+/// becomes an argv element (`--exec /usr/bin/env PATH=<value> git ...`). Returns `None` when
+/// `repo_path` is not a WSL UNC path.
 #[cfg(not(target_family = "wasm"))]
 fn translate_for_wsl_unc_cwd(
     args: &[&str],
@@ -144,25 +124,17 @@ fn translate_for_wsl_unc_cwd(
         "--exec".to_string(),
     ];
     match env.iter().find(|(key, _)| is_path_env_key(key)) {
-        // A caller-supplied `PATH` is applied to the executed program as an
-        // `env` assignment rather than propagated through `WSLENV`; see the
-        // rationale above. It already names the directories `git` lives in, so
-        // no further resolution is needed.
+        // A caller-supplied `PATH` already names the directory `git` lives in, so no login shell
+        // is needed to resolve it.
         Some((_, path_value)) => {
             translated_args.push("/usr/bin/env".to_string());
             translated_args.push(format!("PATH={path_value}"));
             translated_args.push("git".to_string());
         }
-        // Without one, `git` has to be resolved inside the distribution.
-        // `wsl.exe --exec` runs the program with a minimal default `PATH`
-        // (`/usr/bin`, `/bin`, ...), which resolves `git` on distributions that
-        // install it there but not on ones that do not — NixOS, for instance,
-        // exposes it only under `/etc/profiles` — so the invocation goes
-        // through a login shell to pick up the distribution's own `PATH`. This
-        // mirrors the "run through a shell" shape of
-        // `WslCommandExecutor::execute_local_command`. The arguments are passed
-        // as positional parameters rather than interpolated into the script, so
-        // no shell quoting is involved.
+        // Otherwise a login shell is needed: `wsl.exe --exec` searches only a minimal default
+        // `PATH` (`/usr/bin`, `/bin`, ...), which misses distributions that put `git` elsewhere —
+        // NixOS exposes it only under `/etc/profiles`. Arguments ride along as positional
+        // parameters so no shell quoting is involved.
         None => {
             translated_args.push("/bin/sh".to_string());
             translated_args.push("-lc".to_string());
@@ -178,10 +150,8 @@ fn translate_for_wsl_unc_cwd(
     })
 }
 
-/// Rewrites a single argument: an argument that is itself a WSL UNC path for
-/// the *same* distribution is converted to its Linux path, so paths passed to
-/// git resolve inside the distribution. Arguments for other distributions and
-/// non-UNC arguments are passed through unchanged.
+/// Converts an argument that is a UNC path for `distro` into its Linux path. Every other argument
+/// is passed through unchanged.
 #[cfg(not(target_family = "wasm"))]
 fn translate_arg(arg: &str, distro: &str) -> String {
     match crate::path::parse_wsl_unc_path(Path::new(arg)) {
@@ -190,18 +160,13 @@ fn translate_arg(arg: &str, distro: &str) -> String {
     }
 }
 
-/// Builds the `WSLENV` value that advertises the explicitly-set environment
-/// variables to the distribution, using the `/u` suffix so each variable is
-/// shared when invoking WSL from Windows. Empty when no propagatable variables
-/// were set.
+/// Builds the `WSLENV` value advertising the keys of `env` to the distribution, using the `/u`
+/// suffix that shares a variable when invoking WSL from Windows. Empty when there is nothing to
+/// propagate.
 ///
-/// `PATH` is deliberately excluded (case-insensitively): Windows applies a
-/// non-disableable Windows-to-WSL `PATH` conversion, and a `PATH` that is
-/// already in Linux form — as it is when a WSL session's environment is
-/// threaded through [`run_git_command_with_env`] — fails that conversion and
-/// gets truncated. `PATH` is instead carried as an argv element by
-/// [`translate_for_wsl_unc_cwd`]. This mirrors the `PATH` handling in
-/// `app/src/terminal/model/session/command_executor/wsl_command_executor.rs`.
+/// `PATH` is deliberately excluded: Windows applies a non-disableable Windows-to-WSL `PATH`
+/// conversion, and a `PATH` that is already in Linux form fails that conversion and gets
+/// truncated. It travels as an argv element instead.
 #[cfg(not(target_family = "wasm"))]
 fn build_wslenv(env: &[(&str, &str)]) -> String {
     env.iter()
@@ -212,9 +177,7 @@ fn build_wslenv(env: &[(&str, &str)]) -> String {
         .join(":")
 }
 
-/// True when `key` names the `PATH` environment variable, compared
-/// case-insensitively. Used to keep a Linux-form `PATH` out of both `WSLENV`
-/// and the environment handed to `wsl.exe` (see [`build_wslenv`]).
+/// True when `key` names the `PATH` environment variable, compared case-insensitively.
 #[cfg(not(target_family = "wasm"))]
 fn is_path_env_key(key: &str) -> bool {
     key.eq_ignore_ascii_case("PATH")

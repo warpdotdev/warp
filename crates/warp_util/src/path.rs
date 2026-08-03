@@ -494,16 +494,13 @@ pub fn convert_wsl_to_windows_host_path(
     }
 }
 
-/// A path that lives inside a WSL distribution, expressed on the Windows host
-/// as a UNC path. This is the decomposed form of what
+/// A path inside a WSL distribution, decomposed from the UNC form that
 /// [`convert_wsl_to_windows_host_path`] produces.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WslUncPath {
-    /// The distribution name exactly as it appears in the UNC path (case
-    /// preserved).
+    /// The distribution name exactly as it appears in the UNC path (case preserved).
     pub distro: String,
-    /// The corresponding Linux absolute path, using `/` separators. A UNC path
-    /// that points at the distribution root maps to `/`.
+    /// The Linux absolute path, using `/` separators. The distribution root maps to `/`.
     pub linux_path: String,
 }
 
