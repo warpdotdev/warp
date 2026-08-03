@@ -9,8 +9,6 @@ use command::blocking::Command;
 use instant::Instant;
 use warp_core::channel::Channel;
 
-#[cfg(windows)]
-use super::PREVIOUS_POINTER_NAME;
 use super::{
     CURRENT_POINTER_NAME, InstallLayout, TuiAutoupdateStatus, UpdateOutcome,
     VERSION_LEASES_DIR_NAME, VersionDirState, VersionLease, create_unique_staging_dir_with,
@@ -22,6 +20,8 @@ use super::{
     InstallLock, LOCK_FILE_NAME, LOCK_OWNER_FILE_NAME, StagedUpdate, finalize_staged_version,
     install_update, point_current_at,
 };
+#[cfg(windows)]
+use super::{PREVIOUS_POINTER_NAME, installer_dir_argument};
 
 const BINARY_NAME: &str = "warp-tui-dev";
 const HELPER_MODE_ENV: &str = "WARP_TUI_AUTOUPDATE_HELPER_MODE";
@@ -165,6 +165,29 @@ fn detects_managed_install_layout() {
         Path::new("/home/user/.warp/tui/versions/v0.2026.01.01.00.00.dev_00")
     );
     assert_eq!(layout.binary_name, BINARY_NAME);
+}
+
+/// `Path::canonicalize` hands back `\\?\C:\...` on Windows. Passing that
+/// through to Inno Setup makes it reject `/DIR` and exit with code 3, so the
+/// prefix has to be stripped before the installer sees it.
+#[cfg(windows)]
+#[test]
+fn installer_dir_argument_strips_verbatim_prefix() {
+    assert_eq!(
+        installer_dir_argument(Path::new(r"\\?\C:\Users\dev\AppData\Local\Warp\tui-dev"))
+            .to_string_lossy(),
+        r"/DIR=C:\Users\dev\AppData\Local\Warp\tui-dev"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn installer_dir_argument_preserves_plain_paths() {
+    assert_eq!(
+        installer_dir_argument(Path::new(r"C:\Users\dev\AppData\Local\Warp\tui-dev"))
+            .to_string_lossy(),
+        r"/DIR=C:\Users\dev\AppData\Local\Warp\tui-dev"
+    );
 }
 
 #[test]
