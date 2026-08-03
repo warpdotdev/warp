@@ -534,6 +534,21 @@ impl BlocklistAIHistoryModel {
         child_id: AIConversationId,
         parent_id: AIConversationId,
     ) {
+        // Remove the child from any previous parent entry before indexing under
+        // the new parent, so a live-session rejoin (which mints a fresh parent
+        // conversation ID) doesn't leave the child listed under both the old and
+        // new parent.
+        if let Some(old_parent) = self
+            .conversations_by_id
+            .get(&child_id)
+            .and_then(|c| c.parent_conversation_id())
+        {
+            if old_parent != parent_id {
+                if let Some(children) = self.children_by_parent.get_mut(&old_parent) {
+                    children.retain(|id| id != &child_id);
+                }
+            }
+        }
         let children = self.children_by_parent.entry(parent_id).or_default();
         if !children.contains(&child_id) {
             children.push(child_id);
@@ -596,6 +611,18 @@ impl BlocklistAIHistoryModel {
         ctx: &mut ModelContext<Self>,
     ) -> AIConversationId {
         if let Some(conversation_id) = self.conversation_id_for_agent_id(&run_id) {
+            // Re-index under the new parent if it has changed. This happens on a
+            // live-session rejoin: the viewer creates a fresh conversation ID each
+            // time it joins, while children persisted from a prior session still
+            // point at the previous parent ID. `index_child_conversation` removes
+            // the child from the stale parent entry before indexing the new one.
+            let current_parent = self
+                .conversations_by_id
+                .get(&conversation_id)
+                .and_then(|c| c.parent_conversation_id());
+            if current_parent != Some(parent_conversation_id) {
+                self.set_parent_for_conversation(conversation_id, parent_conversation_id);
+            }
             return conversation_id;
         }
 
