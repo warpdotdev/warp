@@ -1126,8 +1126,9 @@ fn test_keyboard_enhancement_event_types() {
 /// on macOS, so Cmd/Option + Backspace/Delete/arrows silently dropped their modifier. Each
 /// case asserts the exact bytes Kitty/Ghostty emit under `DISAMBIGUATE_ESCAPE`:
 /// - Backspace (codepoint 127, no legacy code) → CSI u.
-/// - Arrows & Delete (own legacy codes) → the legacy `CSI 1;<mods><letter>` / `CSI 3;<mods>~`
-///   forms, now carrying the full modifier value (Super = bit 8 → e.g. Cmd → `9`).
+/// - Arrows, Home/End & Delete (own legacy codes) → the legacy `CSI 1;<mods><letter>` /
+///   `CSI 3;<mods>~` forms, now carrying the full modifier value (Super = bit 8 →
+///   e.g. Cmd → `9`).
 #[test]
 fn test_kitty_protocol_cmd_and_option_editing_keys() {
     // `Keystroke::parse` has no portable `cmd-` token in these tests, so build Cmd combos
@@ -1153,28 +1154,27 @@ fn test_kitty_protocol_cmd_and_option_editing_keys() {
             Keystroke::parse("alt-backspace").unwrap(),
             b"\x1b[127;3u".to_vec(),
         ),
-        // Arrows → legacy `CSI 1;<mods> <letter>` (Kitty keeps the legacy code for these).
+        // Arrows and Home/End → legacy `CSI 1;<mods> <letter>` (Kitty keeps the legacy
+        // code for these).
         (cmd("left"), b"\x1b[1;9D".to_vec()),
         (cmd("right"), b"\x1b[1;9C".to_vec()),
+        (cmd("home"), b"\x1b[1;9H".to_vec()),
+        (cmd("end"), b"\x1b[1;9F".to_vec()),
         (Keystroke::parse("alt-left").unwrap(), b"\x1b[1;3D".to_vec()),
         (
             Keystroke::parse("alt-right").unwrap(),
             b"\x1b[1;3C".to_vec(),
         ),
-        // Cmd+Delete → legacy `CSI 3;<mods> ~`.
+        (Keystroke::parse("alt-home").unwrap(), b"\x1b[1;3H".to_vec()),
+        (Keystroke::parse("alt-end").unwrap(), b"\x1b[1;3F".to_vec()),
+        // Delete → legacy `CSI 3;<mods> ~`.
         (cmd("delete"), b"\x1b[3;9~".to_vec()),
-    ];
-    validate_keystroke_test_cases(os_independent, &mock);
-
-    // Option+Delete is asserted on macOS only: on other platforms Alt is interpreted as Meta
-    // and ESC-prefixes instead (`meta_keystroke_to_escape_sequence`).
-    if warpui_core::platform::OperatingSystem::get().is_mac() {
-        let mac_only: &[(Keystroke, Vec<u8>)] = &[(
+        (
             Keystroke::parse("alt-delete").unwrap(),
             b"\x1b[3;3~".to_vec(),
-        )];
-        validate_keystroke_test_cases(mac_only, &mock);
-    }
+        ),
+    ];
+    validate_keystroke_test_cases(os_independent, &mock);
 }
 
 /// On macOS, Option+Space composes a non-breaking space via the IME. Its key name is "space"

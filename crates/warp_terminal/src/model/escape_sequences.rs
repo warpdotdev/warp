@@ -247,8 +247,8 @@ impl<T: ModeProvider> ToEscapeSequence<T> for KeystrokeWithDetails<'_> {
         fn_keystroke_to_escape_sequence(keystroke, mode_provider)
             .or_else(|| keystroke_to_c0_control_code(keystroke, mode_provider))
             .or_else(|| cursor_movement_keystroke_to_escape_sequence(keystroke, mode_provider))
-            .or_else(|| meta_keystroke_to_escape_sequence(keystroke, mode_provider))
             .or_else(|| delete_keystroke_to_escape_sequence(keystroke))
+            .or_else(|| meta_keystroke_to_escape_sequence(keystroke, mode_provider))
             .or_else(|| backspace_keystroke_to_escape_sequence(keystroke))
     }
 }
