@@ -2,7 +2,8 @@ use std::path::Path;
 
 use super::{WslGitCommand, build_wslenv, translate_for_wsl_unc_cwd};
 
-/// Translates a git command in `cwd`, asserting that the working directory qualified.
+/// Translates a git command in `cwd`, asserting that the working directory qualified for the WSL
+/// rewrite.
 fn translate(args: &[&str], cwd: &str, env: &[(&str, &str)]) -> WslGitCommand {
     translate_for_wsl_unc_cwd(args, Path::new(cwd), env).expect("expected translation")
 }

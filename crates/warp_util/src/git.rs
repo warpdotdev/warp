@@ -76,6 +76,7 @@ fn git_command(repo_path: &Path, args: &[&str], env: &[(&str, &str)]) -> command
         cmd.args(&translated.args);
         // The working directory is deliberately left unset: `--cd` supplies it inside the
         // distribution, which keeps `wsl.exe` itself off the UNC path.
+        // A caller-supplied `PATH` rides through the argument vector instead; see `build_wslenv`.
         for (key, value) in env.iter().filter(|(key, _)| !is_path_env_key(key)) {
             cmd.env(key, value);
         }
