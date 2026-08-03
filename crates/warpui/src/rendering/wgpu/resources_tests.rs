@@ -235,8 +235,8 @@ fn test_intel_xe_tgl_gt2_is_used_on_newer_mesa() {
         adapter_support(&vulkan, None, false),
         AdapterSupport::Supported
     );
-    // With both adapters equally supported, the stability sort is a no-op and the earlier
-    // backend-priority sort (which prefers Vulkan on Linux) decides.
+    // Both adapters are equally supported, so the stability sort (the only sort `rank_by_support`
+    // applies) is a no-op and input order is preserved; this does not exercise backend priority.
     let ranked = rank_by_support(vec![vulkan, gl]);
     assert_eq!(ranked[0].backend, wgpu::Backend::Vulkan);
 }
