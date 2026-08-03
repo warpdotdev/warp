@@ -135,10 +135,6 @@ fn initialize_window_team_test_app(app: &mut App, workspaces: Vec<Workspace>) {
     });
 }
 
-// Registers the shared AI usage model (and its dependencies) so that the
-// `on_workspaces_updated` metadata-apply path — which now piggybacks the
-// server-authoritative AI credit availability onto every refresh — can update
-// it without panicking on a missing singleton.
 fn register_ai_usage_model(app: &mut App) {
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     if app.models_of_type::<PrivatePreferences>().is_empty() {

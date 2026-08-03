@@ -48,9 +48,6 @@ fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
     appearance::register(app);
     app.add_singleton_model(UserWorkspaces::default_mock);
-    // The transcript render path reads the shared AI usage model to decide
-    // whether to show prepared responses, so it must be registered (as it
-    // always is in the real app).
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     app.add_singleton_model(|ctx| {

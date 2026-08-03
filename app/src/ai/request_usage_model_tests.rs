@@ -1268,7 +1268,7 @@ fn test_availability_refresh_failure_keeps_last_known_good() {
         let request_usage_model = add_request_usage_model(&mut app);
 
         request_usage_model.update(&mut app, |model, ctx| {
-            // Local state says AI is available, so any legacy fallback would
+            // Local state says AI is available, so the pre-server-decision fallback would
             // report `true`.
             model.request_limit_info = RequestLimitInfo::new_for_test(10, 5);
 
@@ -1278,7 +1278,7 @@ fn test_availability_refresh_failure_keeps_last_known_good() {
 
             // The last-known-good server decision is retained: the error is
             // recorded but neither flips availability nor re-enables the
-            // legacy locally derived decision.
+            // pre-server-decision fallback.
             assert_eq!(model.server_availability(), Some(denied));
             assert!(!model.has_any_ai_remaining(ctx));
             assert_eq!(
@@ -1290,7 +1290,7 @@ fn test_availability_refresh_failure_keeps_last_known_good() {
 }
 
 #[test]
-fn test_availability_refresh_failure_before_first_success_uses_legacy_fallback() {
+fn test_availability_refresh_failure_before_first_success_uses_prefetch_fallback() {
     App::test((), |mut app| async move {
         app.add_singleton_model(UserWorkspaces::default_mock);
         let request_usage_model = add_request_usage_model(&mut app);
@@ -1300,7 +1300,7 @@ fn test_availability_refresh_failure_before_first_success_uses_legacy_fallback()
             model.apply_server_availability(Err(anyhow::anyhow!("unsupported operation")), ctx);
 
             // Without any successful fetch (e.g. server doesn't support the
-            // field yet), the legacy locally derived decision still applies.
+            // field yet), the pre-server-decision fallback still applies.
             assert_eq!(model.server_availability(), None);
             assert!(model.has_any_ai_remaining(ctx));
         });
@@ -1308,7 +1308,7 @@ fn test_availability_refresh_failure_before_first_success_uses_legacy_fallback()
 }
 
 #[test]
-fn test_reset_server_availability_restores_legacy_fallback() {
+fn test_reset_server_availability_restores_prefetch_fallback() {
     App::test((), |mut app| async move {
         app.add_singleton_model(UserWorkspaces::default_mock);
         let request_usage_model = add_request_usage_model(&mut app);
@@ -1323,8 +1323,8 @@ fn test_reset_server_availability_restores_legacy_fallback() {
             );
             assert!(!model.has_any_ai_remaining(ctx));
 
-            // On logout the server decision is cleared and pre-fetch behavior
-            // is restored for the next principal.
+            // On logout the server decision is cleared and the pre-server-decision
+            // fallback is restored for the next principal.
             model.reset_server_availability(ctx);
             assert_eq!(model.server_availability(), None);
             assert!(model.has_any_ai_remaining(ctx));

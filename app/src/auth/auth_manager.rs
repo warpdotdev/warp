@@ -455,7 +455,6 @@ impl AuthManager {
 
                 AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
                     usage_model.refresh_request_usage_async(ctx);
-                    usage_model.request_availability_refresh(ctx);
                 });
 
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {

@@ -185,21 +185,12 @@ fn get_cached_ambient_credits_banner_dismissed(app_mut: &mut AppContext) -> bool
         .unwrap_or_default()
 }
 
-/// The server-authoritative AI credit availability state shared by all AI
-/// surfaces. It is fed from exactly two paths: the workspace metadata refresh
-/// piggyback (primary cadence) and targeted fetches after meaningful state
-/// changes (auth completion, plan/billing, workspace selection, credentials).
 #[derive(Default)]
 struct ServerAvailabilityState {
-    /// The last successfully fetched decision. Retained as last-known-good
-    /// when a refresh fails; never cleared by transient errors.
+    /// Last successful decision; retained across transient refresh failures.
     latest: Option<AICreditAvailability>,
-    /// When `latest` was last updated from a successful response.
     last_success_time: Option<Instant>,
-    /// Whether a targeted availability fetch is currently in flight. Used to
-    /// coalesce coincident event-triggered fetches.
     refresh_in_flight: bool,
-    /// The most recent refresh failure, kept until the next success.
     last_error: Option<String>,
 }
 
@@ -341,13 +332,7 @@ impl AIRequestUsageModel {
         self.server_availability.latest
     }
 
-    /// Records the outcome of an availability fetch, whether piggybacked on a
-    /// workspace metadata refresh or from a targeted fetch.
-    ///
-    /// A failure keeps the last-known-good decision: a transport or resolver
-    /// error must never flip availability in either direction, and legacy
-    /// locally derived availability must not be re-enabled once a valid server
-    /// decision has been received.
+    /// Applies an availability fetch result, keeping last-known-good on failure.
     pub fn apply_server_availability(
         &mut self,
         result: Result<AICreditAvailability, anyhow::Error>,
@@ -368,13 +353,6 @@ impl AIRequestUsageModel {
         }
     }
 
-    /// Fetches the server-authoritative availability decision in response to a
-    /// meaningful state change (auth completion, plan/billing change,
-    /// workspace selection change, or API-key/credential change).
-    ///
-    /// Coincident triggers are coalesced: if a fetch is already in flight this
-    /// is a no-op. There is intentionally no retry loop — the next qualifying
-    /// trigger or workspace metadata refresh serves as the retry.
     pub fn request_availability_refresh(&mut self, ctx: &mut ModelContext<Self>) {
         if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
             return;
@@ -503,39 +481,21 @@ impl AIRequestUsageModel {
         }
     }
 
-    /// Returns `true` if the user still has unused **base-plan** AI request quota
-    /// (the monthly/weekly plan limit).
-    ///
-    /// This deliberately ignores add-on credits, bonus grants, overages,
-    /// auto-reload, and BYO credentials. It is **not** an AI-availability check —
-    /// use [`Self::has_any_ai_remaining`] when deciding whether the user can start
-    /// an interactive AI request.
+    /// Whether unused base-plan request quota remains.
     pub(crate) fn has_base_plan_requests_remaining(&self) -> bool {
         self.requests_remaining() > 0
     }
 
     /// Returns `true` if the user can start an interactive AI request.
-    /// Use this method as the starting point for AI availability checking.
-    ///
-    /// Once a server-authoritative availability decision has been received
-    /// this session, that decision (last-known-good on transient refresh
-    /// failures) is the authority. The locally derived fallback below is used
-    /// solely before the first successful fetch, e.g. right after startup or
-    /// against servers that don't support the availability field yet.
+    /// Prefers the server decision when present; otherwise uses the pre-fetch fallback.
     pub fn has_any_ai_remaining(&self, ctx: &AppContext) -> bool {
         if let Some(availability) = self.server_availability.latest {
             return Self::server_availability_permits_ai(availability, ctx);
         }
-        self.has_any_ai_remaining_from_local_state(ctx)
+        self.has_any_ai_remaining_before_server_decision(ctx)
     }
 
-    /// Interprets the server-authoritative decision. `available` means the
-    /// server knows for a fact that requests can run (a Warp credit source or
-    /// a server-managed BYO path) and is trusted outright. An `OutOfCredits`
-    /// denial means the server found no path *it can see* — locally stored
-    /// API keys are request-level parameters invisible to it — so the client
-    /// contributes that one fact. Every other denial is a hard rejection that
-    /// local keys cannot bypass.
+    /// Trusts `available`; only `OutOfCredits` may be refined by local BYO credentials.
     fn server_availability_permits_ai(
         availability: AICreditAvailability,
         ctx: &AppContext,
@@ -549,11 +509,8 @@ impl AIRequestUsageModel {
         ) && Self::has_usable_byo_inference_path(ctx)
     }
 
-    /// Whether a BYO inference path is usable with credentials held on this
-    /// machine: a stored API key, custom endpoint, or Grok subscription (when
-    /// the BYOK policy allows it), or loaded local-chain AWS credentials for
-    /// an enabled Bedrock host. Server-managed paths are already reflected in
-    /// the server's availability decision.
+    /// Whether a local BYO path is usable: stored API key/endpoint/Grok when
+    /// BYOK is allowed, or loaded AWS credentials for an enabled Bedrock host.
     fn has_usable_byo_inference_path(ctx: &AppContext) -> bool {
         let user_workspaces = UserWorkspaces::as_ref(ctx);
         let api_keys = ApiKeyManager::as_ref(ctx);
@@ -567,17 +524,8 @@ impl AIRequestUsageModel {
             )
     }
 
-    /// Legacy locally derived availability check. Returns `true` if the user
-    /// meets one of the following conditions:
-    /// 1. user has ai credits from the plan base limit
-    /// 2. user has overage enabled
-    /// 3. user has bonus grants (either team grants or user grants)
-    /// 4. user's team plan has pay-as-you-go enabled (enterprise only)
-    /// 5. user's team has enterprise bonus grants auto-reload enabled (enterprise only)
-    /// 6. user's team has self-serve auto-reload enabled within its monthly spend limit
-    /// 7. user has BYOK enabled and has either provided at least one API key or
-    ///    connected a Grok subscription
-    fn has_any_ai_remaining_from_local_state(&self, ctx: &AppContext) -> bool {
+    /// Prefetch fallback used only before any successful server availability decision this session.
+    fn has_any_ai_remaining_before_server_decision(&self, ctx: &AppContext) -> bool {
         let current_workspace = UserWorkspaces::as_ref(ctx).current_workspace();
 
         let has_base_plan_ai_requests = self.has_base_plan_requests_remaining();
@@ -740,13 +688,6 @@ impl AIRequestUsageModel {
     }
 
     /// Computes the current banner state based on live conditions.
-    /// This is called on-demand and always returns fresh state.
-    ///
-    /// Once a server-authoritative availability decision is known, the banner
-    /// hides whenever interactive AI is permitted (including `OutOfCredits`
-    /// refined by a usable local BYO path). Ambient-only credit sources are an
-    /// intentional exception: they fund cloud/ambient agents, not interactive
-    /// usage, so they must not suppress this banner.
     pub fn compute_buy_addon_credits_banner_display_state(
         &self,
         ctx: &AppContext,
@@ -794,7 +735,6 @@ impl AIRequestUsageModel {
                 return BuyCreditsBannerDisplayState::Hidden;
             }
         } else if self.has_base_plan_requests_remaining() || has_non_ambient_bonus_credits {
-            // Legacy pre-fetch path: local base quota / non-ambient bonus only.
             return BuyCreditsBannerDisplayState::Hidden;
         }
 
