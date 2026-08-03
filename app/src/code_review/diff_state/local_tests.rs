@@ -334,9 +334,8 @@ async fn renamed_file_content_at_head_reads_old_path() {
     let repo_dir = tempfile::tempdir().expect("create temp repo dir");
     let repo_path = repo_dir.path();
 
-    // Set up a real git repo with one committed file, then rename it in the
-    // working tree (without committing the rename) so HEAD only knows about
-    // the old path.
+    // Set up a real git repo with one committed file, then rename it in the working tree
+    // (without committing the rename) so HEAD only knows about the old path.
     run_git_command(repo_path, &["init", "-b", "main"])
         .await
         .expect("git init");
@@ -354,8 +353,8 @@ async fn renamed_file_content_at_head_reads_old_path() {
         .await
         .expect("git commit");
 
-    // Rename in the working tree only — `old.txt` no longer exists at this
-    // path, so `git show HEAD:new.txt` would fail (the bug in APP-5111).
+    // Rename in the working tree only — `old.txt` no longer exists at this path, so `git
+    // show HEAD:new.txt` would fail (the bug in APP-5111).
     std::fs::rename(repo_path.join("old.txt"), repo_path.join("new.txt"))
         .expect("rename old.txt to new.txt");
 
@@ -368,9 +367,8 @@ async fn renamed_file_content_at_head_reads_old_path() {
     )
     .await;
 
-    // The baseline content at HEAD must come from the old path, not the new
-    // one, so the code review pane can render a diff instead of "Unable to
-    // load file content".
+    // The baseline content at HEAD must come from the old path, not the new one, so the code
+    // review pane can render a diff instead of "Unable to load file content".
     assert_eq!(content, Some("hello world\n".to_string()));
 }
 
