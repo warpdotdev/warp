@@ -564,7 +564,18 @@ impl BlocklistAIHistoryModel {
             }
         }
         self.set_parent_for_conversation(conversation_id, parent_conversation_id);
-        self.persist_conversation_state(conversation_id, ctx);
+        // Under the unified stack, callers may still mark this conversation as
+        // a remote child (`ensure_remote_child_conversation`) immediately after
+        // this returns, which must never be persisted (see
+        // `write_updated_conversation_state`). Persisting here unconditionally
+        // would race ahead of that and write a garbage row with
+        // `is_remote_child=false`/`run_id=None` that then blocks all later
+        // persists of the *correct* state via the `is_remote_child` guard.
+        // Flag-off local child agents have no such follow-up call, so they
+        // still need this persist to survive a restart.
+        if !FeatureFlag::OrchestrationUnifiedStack.is_enabled() {
+            self.persist_conversation_state(conversation_id, ctx);
+        }
         conversation_id
     }
 
