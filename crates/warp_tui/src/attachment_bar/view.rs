@@ -134,11 +134,13 @@ pub(crate) fn init(app: &mut AppContext) {
 impl TuiAttachmentBar {
     pub(crate) fn new(model: ModelHandle<TuiAttachmentModel>, ctx: &mut ViewContext<Self>) -> Self {
         let model_for_subscription = model.clone();
-        ctx.subscribe_to_model(&model, move |view, _, event, ctx| match event {
+        ctx.subscribe_to_model(&model, move |_, _, event, ctx| match event {
             TuiAttachmentModelEvent::Updated => {
                 // TUI notifications invalidate the whole window, including the
                 // parent that conditionally renders this attachment bar.
-                if view.focused && !model_for_subscription.as_ref(ctx).should_render(ctx) {
+                // Emit ReturnFocus to prevent holding a stale frame
+                // (ex. showing the image chip after it's removed).
+                if !model_for_subscription.as_ref(ctx).should_render(ctx) {
                     ctx.emit(TuiAttachmentBarEvent::ReturnFocus);
                 }
                 ctx.notify();
@@ -199,10 +201,7 @@ fn render_attachment_snapshot(
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(ctx);
     let Some(selected) = snapshot.selected else {
-        return TuiText::new("loading image…")
-            .with_style(builder.muted_text_style())
-            .truncate()
-            .finish();
+        return TuiFlex::row().finish();
     };
     let kind = match selected.attachment_type {
         AttachmentType::Image => "[image]",

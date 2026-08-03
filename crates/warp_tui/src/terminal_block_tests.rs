@@ -8,7 +8,9 @@ use warp::tui_export::{
 };
 use warpui::App;
 use warpui_core::r#async::Timer;
-use warpui_core::elements::tui::{Color, Modifier, TuiBufferExt, TuiElement, TuiRect, TuiSize};
+use warpui_core::elements::tui::{
+    Color, Modifier, TuiBufferExt, TuiClipped, TuiElement, TuiRect, TuiSize,
+};
 use warpui_core::presenter::tui::TuiPresenter;
 
 use super::{
@@ -162,6 +164,59 @@ fn top_level_shell_command_row_uses_tinted_background() {
             assert_eq!(frame.buffer[(1, command_row as u16)].symbol(), " ");
             assert_eq!(frame.buffer[(2, command_row as u16)].symbol(), "e");
             assert_eq!(frame.buffer[(0, output_row as u16)].symbol(), "o");
+        });
+    });
+}
+
+#[test]
+fn inline_shell_command_content_renders_a_clipped_row_window() {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let mut model = TerminalModel::mock(None, None);
+        model.simulate_block(
+            "printf rows",
+            "zero\r\none\r\ntwo\r\nthree\r\nfour\r\nfive\r\n",
+        );
+        let block_id = model
+            .block_list()
+            .blocks()
+            .iter()
+            .rev()
+            .find(|block| block.finished())
+            .expect("simulated block should exist")
+            .id()
+            .clone();
+        let height = block_content_rows(
+            model
+                .block_list()
+                .block_with_id(&block_id)
+                .expect("simulated block should exist"),
+        )
+        .len() as u16;
+        let model = Arc::new(FairMutex::new(model));
+
+        app.read(|ctx| {
+            let mut presenter = TuiPresenter::new();
+            let full = presenter.present_element(
+                TerminalBlockElement::content(model.clone(), block_id.clone()).finish(),
+                TuiRect::new(0, 0, 12, height),
+                ctx,
+            );
+            let full_lines = full.buffer.to_lines();
+            let viewport_origin = 3usize;
+            let viewport_height = 3u16;
+            let clipped = presenter.present_element(
+                TuiClipped::new(TerminalBlockElement::content(model, block_id).finish())
+                    .with_viewport_origin_y(viewport_origin)
+                    .finish(),
+                TuiRect::new(0, 0, 12, viewport_height),
+                ctx,
+            );
+
+            assert_eq!(
+                clipped.buffer.to_lines(),
+                full_lines[viewport_origin..viewport_origin + usize::from(viewport_height)],
+            );
         });
     });
 }

@@ -172,6 +172,7 @@ pub(crate) struct TuiInlineMenuRow {
     pub(crate) prefix: Option<TuiInlineMenuRowPrefix>,
     pub(crate) description: Option<String>,
     pub(crate) state_suffix: Option<String>,
+    pub(crate) promotional_suffix: Option<String>,
     pub(crate) is_selectable: bool,
     pub(crate) style: TuiInlineMenuRowStyle,
 }
@@ -1368,7 +1369,11 @@ fn menu_result_row(
         }
     };
     let show_description = match row.style {
-        TuiInlineMenuRowStyle::Default => row.description.is_some() || row.state_suffix.is_some(),
+        TuiInlineMenuRowStyle::Default => {
+            row.description.is_some()
+                || row.state_suffix.is_some()
+                || row.promotional_suffix.is_some()
+        }
         TuiInlineMenuRowStyle::InlineMenuItem => {
             slash_command_columns.show_second && row.description.is_some()
         }
@@ -1455,6 +1460,14 @@ fn menu_result_row(
                 }
                 TuiInlineMenuRowStyle::InlineMenuItem => builder.success_glyph_style(),
                 TuiInlineMenuRowStyle::StateWithDetail => unreachable!(),
+            };
+            description_spans.push((format!(" {suffix}"), suffix_style));
+        }
+        if let Some(suffix) = &row.promotional_suffix {
+            let suffix_style = if is_selected {
+                builder.selection_promotional_suffix_style()
+            } else {
+                builder.promotional_suffix_style()
             };
             description_spans.push((format!(" {suffix}"), suffix_style));
         }

@@ -9,14 +9,17 @@ use command::blocking::Command;
 use instant::Instant;
 use warp_core::channel::Channel;
 
+#[cfg(windows)]
+use super::PREVIOUS_POINTER_NAME;
 use super::{
-    CURRENT_LINK_NAME, InstallLayout, InstallLock, LOCK_FILE_NAME, LOCK_OWNER_FILE_NAME,
-    VERSION_LEASES_DIR_NAME, VersionDirState, VersionLease, create_unique_staging_dir_with,
-    download_endpoint, is_complete_version_dir, latest_version_for, version_dir_state,
+    CURRENT_POINTER_NAME, InstallLayout, VERSION_LEASES_DIR_NAME, VersionDirState, VersionLease,
+    create_unique_staging_dir_with, download_endpoint, is_complete_version_dir,
+    is_safe_version_component, latest_version_for, prune_old_versions, version_dir_state,
 };
 #[cfg(unix)]
 use super::{
-    StagedUpdate, finalize_staged_version, install_update, point_current_at, prune_old_versions,
+    InstallLock, LOCK_FILE_NAME, LOCK_OWNER_FILE_NAME, StagedUpdate, finalize_staged_version,
+    install_update, point_current_at,
 };
 
 const BINARY_NAME: &str = "warp-tui-dev";
@@ -33,11 +36,39 @@ fn temp_root(name: &str) -> tempfile::TempDir {
         .unwrap()
 }
 
+#[test]
+fn version_directory_names_are_single_safe_components() {
+    for valid in ["v0.2026.07.28.12.00.dev_00", "preview-1", "A"] {
+        assert!(is_safe_version_component(valid), "{valid}");
+    }
+    for invalid in [
+        "",
+        ".",
+        "..",
+        "v1..dev",
+        "../v1",
+        "nested/v1",
+        "nested\\v1",
+        "version:stream",
+        "CON",
+        "trailing.",
+        "contains space",
+    ] {
+        assert!(!is_safe_version_component(invalid), "{invalid}");
+    }
+}
+fn set_current(layout: &InstallLayout, version: &str) {
+    #[cfg(unix)]
+    point_current_at(layout, version).unwrap();
+    #[cfg(windows)]
+    fs::write(&layout.current_pointer, version).unwrap();
+}
+
 fn layout(root: &Path, running_version: &str) -> InstallLayout {
     InstallLayout {
         root: root.to_path_buf(),
         versions_dir: root.join("versions"),
-        current_link: root.join(CURRENT_LINK_NAME),
+        current_pointer: root.join(CURRENT_POINTER_NAME),
         running_version_dir: root.join("versions").join(running_version),
         binary_name: BINARY_NAME.to_owned(),
     }
@@ -105,7 +136,7 @@ fn detects_managed_install_layout() {
         Path::new("/home/user/.warp/tui/versions")
     );
     assert_eq!(
-        layout.current_link,
+        layout.current_pointer,
         Path::new("/home/user/.warp/tui/current")
     );
     assert_eq!(
@@ -207,6 +238,7 @@ fn complete_versions_require_real_binary_and_resources() {
         version_dir_state(&layout, &version_dir).unwrap(),
         VersionDirState::Invalid
     );
+    #[cfg(not(windows))]
     assert_eq!(
         fs::read_to_string(version_dir.join(BINARY_NAME)).unwrap(),
         "original"
@@ -254,7 +286,7 @@ fn finalized_unlaunched_version_is_marked_and_reclaimed() {
     let root = temp_root("finalized-marker");
     let layout = layout(root.path(), "A");
     create_complete_version(root.path(), "A", "A");
-    point_current_at(&layout, "A").unwrap();
+    set_current(&layout, "A");
 
     let staging_dir = root.path().join("versions/.staging-B");
     let payload_dir = staging_dir.join("payload");
@@ -271,7 +303,7 @@ fn finalized_unlaunched_version_is_marked_and_reclaimed() {
     assert!(lease_path(root.path(), "B").is_file());
 
     create_complete_version(root.path(), "C", "C");
-    point_current_at(&layout, "C").unwrap();
+    set_current(&layout, "C");
     prune_old_versions(&layout, "C");
     assert!(!version_dir.exists());
 }
@@ -309,7 +341,6 @@ fn completed_version_is_reused_and_invalid_version_is_not_replaced() {
     assert!(super::current_points_at(&layout, "A"));
 }
 
-#[cfg(unix)]
 #[test]
 fn live_versions_are_retained_and_reclaimed_after_exit() {
     let root = temp_root("gc");
@@ -318,7 +349,7 @@ fn live_versions_are_retained_and_reclaimed_after_exit() {
     create_complete_version(root.path(), "C", "C");
     create_complete_version(root.path(), "legacy", "legacy");
     let layout = layout(root.path(), "C");
-    point_current_at(&layout, "C").unwrap();
+    set_current(&layout, "C");
 
     let a_ready = root.path().join("a-ready");
     let a_release = root.path().join("a-release");
@@ -350,7 +381,6 @@ fn live_versions_are_retained_and_reclaimed_after_exit() {
     assert!(root.path().join("versions/legacy").is_dir());
 }
 
-#[cfg(unix)]
 #[test]
 fn current_version_is_rechecked_before_gc_deletion() {
     let root = temp_root("gc-current");
@@ -359,7 +389,7 @@ fn current_version_is_rechecked_before_gc_deletion() {
     fs::create_dir_all(root.path().join(VERSION_LEASES_DIR_NAME)).unwrap();
     fs::write(lease_path(root.path(), "A"), "").unwrap();
     let layout = layout(root.path(), "C");
-    point_current_at(&layout, "A").unwrap();
+    set_current(&layout, "A");
 
     prune_old_versions(&layout, "C");
     assert!(root.path().join("versions/A").is_dir());
@@ -391,6 +421,27 @@ fn startup_fails_closed_if_gc_wins_the_lease_race() {
     assert!(child.wait().unwrap().success());
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_gc_retains_rollback_version() {
+    let root = temp_root("windows-rollback-gc");
+    let layout = layout(root.path(), "C");
+    for version in ["A", "B", "C"] {
+        create_complete_version(root.path(), version, version);
+        fs::create_dir_all(root.path().join(VERSION_LEASES_DIR_NAME)).unwrap();
+        fs::write(lease_path(root.path(), version), "").unwrap();
+    }
+    fs::write(&layout.current_pointer, "C").unwrap();
+    fs::write(root.path().join(PREVIOUS_POINTER_NAME), "B").unwrap();
+
+    prune_old_versions(&layout, "C");
+
+    assert!(!root.path().join("versions/A").exists());
+    assert!(root.path().join("versions/B").exists());
+    assert!(root.path().join("versions/C").exists());
+}
+
+#[cfg(unix)]
 #[test]
 fn directory_install_lock_is_cross_process_and_token_owned() {
     let root = temp_root("install-lock");
@@ -418,6 +469,7 @@ fn directory_install_lock_is_cross_process_and_token_owned() {
     assert!(root.path().join(LOCK_FILE_NAME).is_dir());
 }
 
+#[cfg(unix)]
 #[test]
 fn install_lock_migrates_stale_legacy_file_and_directory() {
     for representation in ["file", "directory"] {
@@ -443,6 +495,7 @@ fn install_lock_migrates_stale_legacy_file_and_directory() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn fresh_legacy_install_lock_is_contention() {
     let root = temp_root("fresh-legacy-lock");
@@ -474,6 +527,7 @@ fn lease_process_helper() {
             let result = VersionLease::acquire(&layout(&root, &version));
             fs::write(&ready, if result.is_ok() { "acquired" } else { "error" }).unwrap();
         }
+        #[cfg(unix)]
         "hold-install-lock" => {
             let lock = InstallLock::acquire(&root).unwrap().unwrap();
             fs::write(&ready, "locked").unwrap();

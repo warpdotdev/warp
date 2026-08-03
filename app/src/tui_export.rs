@@ -83,7 +83,7 @@ pub use crate::ai::blocklist::handoff::{
 };
 pub use crate::ai::blocklist::history_model::{
     AIQueryHistory, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
-    ConversationStatusUpdate,
+    ConversationStatusUpdate, FORK_PREFIX, ForkConversationError,
 };
 pub use crate::ai::blocklist::inline_action::code_diff_view::convert_file_edits_to_file_diffs;
 pub use crate::ai::blocklist::orchestration_event_streamer::{
@@ -137,7 +137,8 @@ pub use crate::ai::harness_availability::{
     HarnessAvailabilityModel, HarnessModelInfo,
 };
 pub use crate::ai::llms::{
-    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, should_show_key_icon_for_model,
+    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, should_show_bedrock_icon_for_model,
+    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
 };
 pub use crate::ai::orchestration::{
     AuthSecretSelection, CloudAgentStartupAuthFlow, CloudAgentStartupBlocker,
@@ -252,11 +253,15 @@ pub use crate::tui::{
     TuiMcpTransport, TuiMcpVariableValue, TuiUserInfoManager, TuiUserInfoManagerEvent,
     TuiUserInfoSnapshot, log_out_tui,
 };
+pub use crate::tui_onboarding_markers::{
+    TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
+};
 #[cfg(any(test, feature = "test-util"))]
 pub use crate::tui_test_support::{
     add_tui_history_test_models, append_tui_history_test_command,
-    blocklist_ai_history_model_with_queries, queue_tui_permission_action,
-    register_tui_input_mode_test_settings, register_tui_session_view_test_singletons,
+    blocklist_ai_history_model_with_queries, forkable_tui_conversation_for_test,
+    queue_tui_permission_action, register_tui_input_mode_test_settings,
+    register_tui_session_view_test_singletons,
 };
 pub use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 pub use crate::util::image::{

@@ -13,6 +13,7 @@ fn row(id: &str, is_selectable: bool, is_key_connected: bool) -> TuiModelMenuRow
         title: id.to_owned(),
         is_selectable,
         is_key_connected,
+        discount_percentage: None,
     }
 }
 

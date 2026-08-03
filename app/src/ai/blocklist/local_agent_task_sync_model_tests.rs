@@ -174,10 +174,13 @@ fn transient_network_error_is_error_with_internal_and_debug_details() {
 #[test]
 fn agent_exited_shell_is_failed_with_invalid_request() {
     assert_update(
-        classify_renderable_error(&RenderableAIError::AgentExitedShell),
+        classify_renderable_error(&RenderableAIError::AgentExitedShell {
+            command: "exit 1".into(),
+        }),
         AgentTaskState::Failed,
         Some(PlatformErrorCode::InvalidRequest),
-        Some("shell exited"),
+        // The message must name the command that exited the shell.
+        Some("exit 1"),
     );
 }
 
@@ -329,7 +332,11 @@ fn map_conversation_status_error_without_exchange_error_is_generic() {
 #[test]
 fn map_conversation_status_error_classifies_agent_exited_shell() {
     let mut conversation = AIConversation::new(false, false);
-    conversation.append_root_exchange_for_test(error_exchange(RenderableAIError::AgentExitedShell));
+    conversation.append_root_exchange_for_test(error_exchange(
+        RenderableAIError::AgentExitedShell {
+            command: "exit 1".into(),
+        },
+    ));
     conversation.set_status_for_test(ConversationStatus::Error);
     assert_update(
         map_conversation_status(&conversation),
@@ -360,7 +367,9 @@ fn map_conversation_status_error_classifies_status_error_via_setter() {
                 .expect("conversation was just restored");
             conv.update_status_with_error(
                 ConversationStatus::Error,
-                Some(RenderableAIError::AgentExitedShell),
+                Some(RenderableAIError::AgentExitedShell {
+                    command: "exit 1".into(),
+                }),
                 terminal_view_id,
                 ctx,
             );
@@ -403,7 +412,9 @@ fn map_conversation_status_error_classifies_status_error_other_as_error() {
 fn map_conversation_status_error_classifies_status_error() {
     let mut conversation = AIConversation::new(false, false);
     conversation.set_status_for_test(ConversationStatus::Error);
-    conversation.set_status_error_for_test(Some(RenderableAIError::AgentExitedShell));
+    conversation.set_status_error_for_test(Some(RenderableAIError::AgentExitedShell {
+        command: "exit 1".into(),
+    }));
     assert_update(
         map_conversation_status(&conversation),
         AgentTaskState::Failed,

@@ -933,6 +933,10 @@ impl TeamsPageView {
 
                 ctx.emit(TeamsPageViewEvent::TeamsChanged);
             }
+            UserWorkspacesEvent::CurrentWorkspaceChanged => {
+                // A workspace selection change always emits `TeamsChanged` too,
+                // which already refreshes this page.
+            }
             UserWorkspacesEvent::ToggleInviteLinksSuccess => {
                 self.show_success("Toggled invite links", ctx);
                 ctx.notify();
@@ -1048,6 +1052,9 @@ impl TeamsPageView {
             }
             UserWorkspacesEvent::PurchaseAddonCreditsSuccess => {
                 // Addon credits purchase success is handled in billing_and_usage_page
+            }
+            UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { .. } => {
+                // Checkout handoff is handled by the surface that initiated the purchase
             }
             UserWorkspacesEvent::PurchaseAddonCreditsRejected(_) => {
                 // Addon credits purchase rejection is handled in billing_and_usage_page

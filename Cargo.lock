@@ -16011,6 +16011,7 @@ dependencies = [
  "chrono",
  "clap",
  "command",
+ "criterion",
  "dirs 6.0.0",
  "fs4",
  "futures",

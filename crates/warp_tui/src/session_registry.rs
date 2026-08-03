@@ -130,6 +130,7 @@ pub(crate) enum TuiSessionsEvent {
 pub(crate) struct TuiSessions {
     /// TUI-specific process driver. Its handle restores terminal mode on
     /// drop, so the app-lifetime session singleton must retain it.
+    #[cfg_attr(not(feature = "voice_input"), allow(dead_code))]
     driver: Option<TuiDriverHandle>,
     keyboard_enhancement_supported: bool,
     exit_summary: TuiExitSummaryHandle,
@@ -151,6 +152,7 @@ impl TuiSessions {
         sessions: &ModelHandle<Self>,
         window_id: WindowId,
         focus: bool,
+        handles_first_run_onboarding: bool,
         startup_directory: Option<PathBuf>,
         ctx: &mut AppContext,
     ) -> (TuiSessionId, ViewHandle<TuiTerminalSessionView>) {
@@ -197,6 +199,7 @@ impl TuiSessions {
                         exit_summary,
                         keyboard_enhancement_supported,
                         default_autoexecute_mode,
+                        handles_first_run_onboarding,
                         initial_settings_file_error,
                         ctx,
                     )
@@ -268,8 +271,14 @@ impl TuiSessions {
         conversation: AIConversation,
         ctx: &mut AppContext,
     ) -> (TuiSessionId, ViewHandle<TuiTerminalSessionView>) {
-        let (session_id, surface) =
-            Self::create_local_terminal_session(sessions, window_id, false, startup_directory, ctx);
+        let (session_id, surface) = Self::create_local_terminal_session(
+            sessions,
+            window_id,
+            false,
+            false,
+            startup_directory,
+            ctx,
+        );
         surface.update(ctx, |view, ctx| {
             view.restore_orchestrated_child_conversation(conversation, ctx);
         });
@@ -434,6 +443,7 @@ impl TuiSessions {
                     &sessions,
                     window_id,
                     false,
+                    false,
                     working_directory.clone(),
                     ctx,
                 );
@@ -593,6 +603,7 @@ impl TuiSessions {
         }
     }
 
+    #[cfg(feature = "voice_input")]
     pub(crate) fn set_modifier_key_lifecycle_enabled(
         &mut self,
         enabled: bool,

@@ -482,6 +482,7 @@ impl TuiApiKeysMenuModel {
             prefix: None,
             description,
             state_suffix,
+            promotional_suffix: None,
             is_selectable,
             style,
         }

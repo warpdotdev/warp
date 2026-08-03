@@ -1,7 +1,14 @@
 use ai::LLMProvider;
 use clap::Parser;
+use warp::tui_export::register_tui_session_view_test_singletons;
+use warpui::platform::WindowStyle;
+use warpui::{AddWindowOptions, SingletonEntity};
+use warpui_core::App;
 
-use super::{TuiArgs, parse_resume_token};
+use super::{TuiArgs, ensure_terminal_session, parse_resume_token};
+use crate::root_view::RootTuiView;
+use crate::session_registry::TuiSessions;
+use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
 
 #[test]
 fn parses_provider_api_key_setup_flag() {
@@ -76,6 +83,33 @@ fn parses_resume_server_token() {
             .as_str(),
         token
     );
+}
+
+#[test]
+fn terminal_bootstrap_is_idempotent_after_background_terminal_exists() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        add_test_semantic_selection(&mut app);
+        app.update(crate::autoupdate::TuiAutoupdater::register);
+        let (window_id, root) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |_| RootTuiView::new(),
+            )
+        });
+        let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test());
+        let (surface, manager) = add_test_terminal_session(&mut app, window_id);
+        app.update(|ctx| {
+            TuiSessions::register_session(&sessions, surface, manager, true, ctx);
+            ensure_terminal_session(&sessions, &root, ctx);
+            ensure_terminal_session(&sessions, &root, ctx);
+        });
+
+        app.read(|ctx| assert_eq!(TuiSessions::as_ref(ctx).len(), 1));
+    });
 }
 
 #[test]

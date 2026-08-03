@@ -1,3 +1,4 @@
+#[cfg(feature = "voice_input")]
 use std::time::Duration;
 
 use pathfinder_color::ColorU;
@@ -169,6 +170,7 @@ fn selected_state_suffix_midpoint_matches_figma_dark_palette() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_input_border_pulses_between_cyan_overlay_2_and_lilac_600() {
     let theme = light_theme();
     let builder = TuiUiBuilder {

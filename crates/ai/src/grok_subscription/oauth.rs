@@ -246,23 +246,33 @@ async fn run_oauth_flow(
     // The loopback accept loop is blocking, so run it on a dedicated OS thread
     // and bridge the result back through a runtime-agnostic async channel.
     let (tx, rx) = async_channel::bounded(1);
-    std::thread::Builder::new()
+    let callback_thread = std::thread::Builder::new()
         .name("grok-oauth-callback".to_owned())
         .spawn(move || {
+            let callback = wait_for_callback(&listener, CALLBACK_TIMEOUT, &cancellation);
+            // Close the loopback socket *before* publishing the result. Whoever
+            // observes the result may immediately rebind the redirect port (a
+            // retried login, or Grok CLI), and that bind fails with "address in
+            // use" while this listener is still open.
+            drop(listener);
             // `send_blocking` is disallowed (no wasm support); block this
             // dedicated thread on the async `send` instead.
-            let _ = warpui_core::r#async::block_on(tx.send(wait_for_callback(
-                &listener,
-                CALLBACK_TIMEOUT,
-                &cancellation,
-            )));
+            let _ = warpui_core::r#async::block_on(tx.send(callback));
         })
         .context("failed to spawn the Grok OAuth callback server thread")?;
 
     let callback = rx
         .recv()
         .await
-        .context("the Grok OAuth callback server stopped unexpectedly")??;
+        .context("the Grok OAuth callback server stopped unexpectedly");
+
+    // Publishing the result is the callback thread's last act, so this join
+    // returns immediately; it guarantees the thread — and every resource it
+    // owned — is fully torn down before this flow hands control back, on the
+    // cancelled, timed-out, and completed paths alike.
+    let _ = callback_thread.join();
+
+    let callback = callback??;
 
     if callback.state != pkce.state {
         bail!("the authorization response state did not match — aborting to prevent CSRF");
