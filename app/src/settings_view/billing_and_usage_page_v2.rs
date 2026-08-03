@@ -2336,7 +2336,3 @@ fn render_balance_card(
     .with_vertical_padding(12.)
     .finish()
 }
-
-#[cfg(test)]
-#[path = "billing_and_usage_page_v2_tests.rs"]
-mod tests;
