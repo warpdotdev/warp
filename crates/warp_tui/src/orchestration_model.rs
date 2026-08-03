@@ -639,9 +639,9 @@ impl TuiOrchestrationModel {
                 display_name,
                 request.parent_conversation_id,
                 Some(orchestration_harness),
+                true,
                 ctx,
             );
-            history.mark_conversation_as_remote_child(conversation_id, ctx);
             history.set_active_conversation_id(conversation_id, surface_id, ctx);
             history.record_new_conversation_request_complete(request.id, conversation_id, ctx);
             conversation_id
@@ -817,6 +817,7 @@ impl TuiOrchestrationModel {
                 conversation_name,
                 request.parent_conversation_id,
                 Some(Harness::Oz),
+                false,
                 ctx,
             );
             // Stamp the task id before completing the request so the
@@ -1212,6 +1213,7 @@ impl TuiOrchestrationModel {
                 request.name.trim().to_owned(),
                 request.parent_conversation_id,
                 None,
+                false,
                 ctx,
             );
             history.update_conversation_status_with_error(

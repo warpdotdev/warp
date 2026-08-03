@@ -90,6 +90,7 @@ fn add_child_session(
                 name.to_owned(),
                 parent_conversation_id,
                 Some(Harness::Oz),
+                false,
                 ctx,
             );
             history.set_active_conversation_id(conversation_id, session_id.surface_id(), ctx);
@@ -415,6 +416,7 @@ fn snapshot_is_shared_across_tree_and_filters_conversations_without_sessions() {
                     "missing-session".to_owned(),
                     parent_conversation_id,
                     Some(Harness::Oz),
+                    false,
                     ctx,
                 );
             });
