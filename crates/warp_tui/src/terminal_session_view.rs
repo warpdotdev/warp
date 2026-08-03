@@ -9,7 +9,6 @@ use std::time::Duration;
 use async_channel::Sender;
 use instant::Instant;
 use parking_lot::FairMutex;
-use warp::appearance::AppearanceEvent;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 #[cfg(feature = "voice_input")]
 use warp::settings::TuiVoiceSettings;
@@ -39,12 +38,12 @@ use warp::tui_export::{
     ServerConversationToken, SessionSettings, Sessions, ShellCommandExecutorEvent, SizeInfo,
     SizeUpdate, SkillReference, SlashCommandDataSource as _, SlashCommandKind,
     SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest, StaticCommand,
-    TelemetryEvent, TerminalColorList, TerminalColors, TerminalModel, TerminalSurface,
-    TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiMcpServerId,
-    TuiMcpVariableValue, TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
-    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind,
-    TuiUserInfoManager, TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason,
-    WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
+    TelemetryEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope,
+    TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue, TuiOnboardingMarker,
+    TuiOnboardingMarkers, TuiOnboardingMarkersEvent, TuiSlashCommandDataSource,
+    TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
+    TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
+    WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
     build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown, log_out_tui,
     maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
     record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
@@ -133,7 +132,7 @@ use crate::telemetry::{
     TuiConversationMenuTelemetryEvent, TuiConversationRestoreTelemetryEvent,
     TuiConversationRestoreTelemetryState, TuiConversationRestoreTelemetryTarget,
 };
-use crate::terminal_background::TuiHostTerminalBackground;
+use crate::terminal_background::probed_colors;
 use crate::terminal_content_element::TuiTerminalContentElement;
 use crate::terminal_use::{
     TerminalUseInterruptAction, TuiInputTarget, hide_agent_requested_command_from_top_level,
@@ -1479,9 +1478,6 @@ impl TuiTerminalSessionView {
             .lock()
             .block_list_mut()
             .set_transcript_scope(TranscriptScope::Unfiltered);
-        ctx.subscribe_to_model(&Appearance::handle(ctx), |view, _, event, ctx| {
-            view.handle_appearance_event(event, ctx);
-        });
         ctx.subscribe_to_model(&WarpConfig::handle(ctx), |view, _, event, ctx| {
             if let WarpConfigUpdateEvent::SettingsErrors(error) = event {
                 view.show_settings_file_error(error, ctx);
@@ -2296,21 +2292,6 @@ impl TuiTerminalSessionView {
         });
         publisher.as_ref(ctx).publish_session_start(ctx);
         self.cli_agent_osc_event_publisher = Some(publisher);
-    }
-    fn handle_appearance_event(&mut self, event: &AppearanceEvent, ctx: &mut ViewContext<Self>) {
-        match event {
-            AppearanceEvent::ThemeChanged => {
-                let theme = Appearance::as_ref(ctx).theme().clone();
-                let colors = TerminalColorList::from(&TerminalColors::from(theme));
-                self.terminal_model.lock().update_colors(colors);
-                ctx.notify();
-            }
-            AppearanceEvent::UiFontFamilyChanged { .. }
-            | AppearanceEvent::MonospaceFontSizeChanged { .. }
-            | AppearanceEvent::MonospaceFontFamilyChanged { .. }
-            | AppearanceEvent::MonospaceFontWeightChanged { .. }
-            | AppearanceEvent::LineHeightRatioChanged { .. } => {}
-        }
     }
 
     /// Starts the first request for a child conversation hosted by this
@@ -4887,10 +4868,11 @@ impl TuiTerminalSessionView {
             .update(ctx, |settings, ctx| settings.theme.set_value(theme, ctx));
         match result {
             Ok(()) => {
-                let resolved_theme = TuiHostTerminalBackground::handle(ctx)
-                    .update(ctx, |background, _| background.select_theme(theme));
                 Appearance::handle(ctx).update(ctx, |appearance, ctx| {
-                    appearance.set_theme(resolved_theme, ctx);
+                    appearance.set_theme(
+                        theme.resolve_for_background(probed_colors().background_luminance()),
+                        ctx,
+                    );
                 });
                 let hint = match theme {
                     TuiTheme::Auto => format!(

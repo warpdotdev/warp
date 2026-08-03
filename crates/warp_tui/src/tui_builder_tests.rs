@@ -8,7 +8,6 @@ use warp_core::ui::theme::Fill as ThemeFill;
 use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::Fill as CoreFill;
 use warpui_core::elements::tui::{Color, Modifier};
-use warpui_core::runtime::ProbedRgb;
 
 use super::{TuiUiBuilder, rounded_midpoint_color};
 
@@ -37,10 +36,7 @@ fn design_palettes_match_figma_in_dark_and_light_themes() {
             ],
         ),
     ] {
-        let builder = TuiUiBuilder {
-            warp_theme: theme,
-            terminal_background: None,
-        };
+        let builder = TuiUiBuilder { warp_theme: theme };
 
         assert_eq!(builder.brand_primary_style().fg, Some(rgb(brand_primary)));
         assert_eq!(builder.brand_accent_style().fg, Some(rgb(brand_accent)));
@@ -68,7 +64,6 @@ fn text_styles_follow_light_theme_foreground() {
     let theme = light_theme();
     let builder = TuiUiBuilder {
         warp_theme: theme.clone(),
-        terminal_background: None,
     };
 
     let details = theme.details();
@@ -187,29 +182,6 @@ fn text_styles_follow_light_theme_foreground() {
 }
 
 #[test]
-fn base_background_uses_terminal_background_snapshot() {
-    let terminal_background = ProbedRgb {
-        r: 240,
-        g: 230,
-        b: 220,
-    };
-    let builder = TuiUiBuilder {
-        warp_theme: light_theme(),
-        terminal_background: Some(terminal_background),
-    };
-
-    assert_eq!(
-        builder.base_background(),
-        ThemeFill::Solid(ColorU::new(
-            terminal_background.r,
-            terminal_background.g,
-            terminal_background.b,
-            u8::MAX,
-        ))
-    );
-}
-
-#[test]
 fn selected_state_suffix_midpoint_matches_figma_dark_palette() {
     assert_eq!(
         rounded_midpoint_color(
@@ -226,7 +198,6 @@ fn voice_input_border_pulses_between_cyan_overlay_2_and_lilac_600() {
     let theme = light_theme();
     let builder = TuiUiBuilder {
         warp_theme: theme.clone(),
-        terminal_background: None,
     };
     let cyan_fill = ThemeFill::from(theme.terminal_colors().normal.cyan);
     let cyan: Color = CoreFill::from(cyan_fill).into();
