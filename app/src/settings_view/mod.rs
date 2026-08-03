@@ -39,7 +39,7 @@ use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty,
     EventHandler, Expanded, Fill, Flex, MainAxisSize, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack,
-    Text,
+    Text, Wrap,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::{ContextPredicate, EnabledPredicate, FixedBinding};
@@ -186,7 +186,7 @@ pub(super) fn render_beta_chip(appearance: &Appearance) -> Box<dyn Element> {
     .finish()
 }
 
-/// Renders a horizontal row of pill-shaped chips for model labels.
+/// Renders a wrapping row of pill-shaped chips for model labels.
 /// Used by custom inference endpoint cards and the remove confirmation dialog.
 pub(super) fn render_model_chips(
     labels: impl IntoIterator<Item = String>,
@@ -209,7 +209,10 @@ pub(super) fn render_model_chips(
         ..Default::default()
     };
 
-    let mut chips = Flex::row().with_spacing(8.);
+    let mut chips = Wrap::row()
+        .with_spacing(8.)
+        .with_run_spacing(8.)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center);
     for label in labels {
         chips.add_child(Chip::new(label, chip_style).build().finish());
     }
