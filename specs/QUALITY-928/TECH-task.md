@@ -247,6 +247,92 @@ and web.
   and no reconciliation pass. One less thing that must stay correct across
   every future change to the persistence layer.
 
+## Pill bar notification gap on restore
+
+Because children are never persisted, `children_by_parent` is always empty
+the instant a restored parent pane is created — the only source of children
+is the ancestor-list fetch kicked off by `seed_child_conversations_from_task`
+(`restoration.rs:87-125`), which is async. `OrchestrationPillBar` is
+constructed unconditionally in `TerminalView::new()`
+(`app/src/terminal/view.rs:4211-4213`), i.e. before that fetch can possibly
+resolve, and `pill_specs` (`orchestration_pill_bar.rs:600-624`) returns `None`
+whenever the orchestrator has zero children. So the pill bar's first render is
+always empty; whether it ever becomes non-empty depends entirely on the pill
+bar receiving a re-render notification once `finish_seed_child_conversations_from_task`
+(`restoration.rs:131-218`) finishes linking children.
+
+**Traced notification chain.** `finish_seed_child_conversations_from_task`
+routes every discovered child through `ensure_remote_child_conversation`
+(`history_model.rs:591-639`). For a child never seen before in this session
+(true for every child on a cold, unpersisted restart) this takes the `else`
+branch: `start_new_child_conversation` → `start_new_conversation`, which emits
+`BlocklistAIHistoryEvent::StartedNewConversation` (`history_model.rs:1345-1372`),
+followed by `assign_run_id_for_conversation`, which emits
+`ConversationServerTokenAssigned` (`history_model.rs:1487-1530`; per its own
+doc comment this exists so `StartAgentExecutor` can resolve a pending
+`start_agent` tool call, not for pill bar refresh).
+`OrchestrationPillBar::new` subscribes directly to the `BlocklistAIHistoryModel`
+singleton (`orchestration_pill_bar.rs:352-384`) and matches
+`StartedNewConversation` (alongside `UpdatedConversationStatus`,
+`AppendedExchange`, `SetActiveConversation`) to call `ctx.notify()`;
+`ConversationServerTokenAssigned` falls through the wildcard `_ => {}` arm and
+is dropped. Separately, `TerminalView::handle_ai_history_model_event`
+(`view.rs:6044-6576`) calls `ctx.notify()` unconditionally at the end of
+handling any event addressed to it, including `ConversationServerTokenAssigned`,
+but that only re-renders the parent's own `TerminalView`, not `OrchestrationPillBar`
+directly.
+
+Net effect: today, `StartedNewConversation` incidentally does notify the pill
+bar for the exact restore scenario (every child is genuinely new), so the pill
+bar likely *does* converge once children are created. But this is fragile,
+incidental coupling, not an intentional signal — nothing in
+`orchestration_pill_bar.rs` documents that pill bar correctness depends on
+`start_new_conversation` always being called for every newly-linked child.
+Any future change that discovers/attaches a child through a path other than
+`start_new_child_conversation` (e.g. a pre-created shell conversation, or a
+different SSE/hydration path that calls `assign_run_id_for_conversation`
+directly without minting a fresh conversation first) would silently reproduce
+a permanently-empty pill bar, because the one event that's semantically
+"this child now belongs under this parent" (`ConversationServerTokenAssigned`,
+or the `set_parent_for_conversation` / `index_child_conversation` call inside
+`ensure_remote_child_conversation`) is never observed by the pill bar.
+
+**Recommended fix.** Make the notification explicit and independent of
+incidental conversation-creation side effects, rather than relying on
+alternative 4(a)'s fetch-timing change or 4(c)'s pre-population scheme:
+
+1. Add `ConversationServerTokenAssigned` to the set of events
+   `OrchestrationPillBar::new`'s subscription matches (`orchestration_pill_bar.rs:352-359`),
+   calling `ensure_mouse_states` + `ctx.notify()` exactly as the existing four
+   variants do. This event already fires for every remote child exactly once
+   per `ensure_remote_child_conversation` call that actually links a child
+   (new creation today; any future direct-attach path tomorrow), so this
+   closes the gap without depending on `StartedNewConversation` continuing to
+   fire incidentally.
+2. Treat 4(a) (start the ancestor-list fetch in parallel with the transcript
+   fetch in `process_pending_ambient_restorations`, `ambient_pane_restoration.rs:81-138`,
+   caching the result for `seed_child_conversations_from_task` to consume
+   synchronously) as a follow-on latency improvement, not a correctness
+   requirement — it shrinks or eliminates the empty-pill-bar flash on restore,
+   but (1) is what guarantees the pill bar eventually renders correctly even
+   if the ancestor fetch is slow or retried.
+3. Do not pursue 4(c) (pre-populating `children_by_parent` before the parent's
+   `AIConversationId` exists): `children_by_parent` is keyed by the local
+   parent id, which doesn't exist until the transcript loads, so this would
+   need a second, task-id-keyed staging index that gets reconciled once the
+   parent id is minted — reintroducing exactly the "two mechanisms to keep
+   synchronized" complexity this spec sets out to remove (see Problem, bullet
+   3).
+
+**Estimated LOC.** Fix (1) is a one-arm addition to an existing match plus a
+comment explaining why (~5-10 LOC) in `orchestration_pill_bar.rs`, no new
+event variant or model changes required. The optional follow-on (2) is
+larger: a new per-task cache field on `PaneGroup`, a fetch kicked off earlier
+in `process_pending_ambient_restorations`, and a cache-check branch in
+`seed_child_conversations_from_task` before falling back to today's fetch
+(~60-100 LOC including the fallback path and a test covering both orderings
+of transcript-fetch-first vs. ancestor-fetch-first completion).
+
 ## Validation
 
 Manual (dogfood, flag on, server emits deployed):
