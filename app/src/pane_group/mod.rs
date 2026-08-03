@@ -3732,11 +3732,13 @@ impl PaneGroup {
         if FeatureFlag::HandoffCloudCloud.is_enabled()
             && let Some(task_id) = ambient_agent_task_id
         {
-            if terminal_view
-                .as_ref(ctx)
-                .ambient_agent_view_model()
-                .is_some()
-            {
+            let has_ovm = terminal_view.as_ref(ctx).ambient_agent_view_model().is_some();
+            let pane_still_present = self.find_pane_id_for_terminal_view(terminal_view.id(), ctx).is_some();
+            log::info!(
+                "[ORCH-D:restore] load_data_into_transcript_viewer HandoffCloudCloud=true \
+                 task_id={task_id} has_ovm={has_ovm} pane_still_present={pane_still_present}"
+            );
+            if has_ovm {
                 let parent_conversation_id = Self::load_data_into_restored_ambient_cloud_mode_view(
                     terminal_view,
                     cloud_conversation,
