@@ -2,10 +2,6 @@ use std::path::Path;
 
 use anyhow::{Result, anyhow};
 
-#[cfg(all(test, not(target_family = "wasm")))]
-#[path = "git_tests.rs"]
-mod tests;
-
 /// Runs a git command and returns the output as a string.
 /// Thin wrapper over [`run_git_command_with_env`] with no `PATH` override.
 #[cfg(not(target_family = "wasm"))]
@@ -239,3 +235,7 @@ pub async fn run_git_command_with_env(
 ) -> Result<String> {
     Err(anyhow!("Not supported on wasm"))
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "git_tests.rs"]
+mod tests;
