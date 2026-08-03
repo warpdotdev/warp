@@ -119,7 +119,7 @@ impl BillingCycleUsageSectionView {
         AuthStateProvider::as_ref(app).get().user_email()
     }
 
-    fn viewer_is_admin(&self, app: &AppContext) -> bool {
+    fn viewer_is_team_admin(&self, app: &AppContext) -> bool {
         let Some(team) = UserWorkspaces::as_ref(app).team_for_view_handle(&self.self_handle, app)
         else {
             return false;
@@ -165,7 +165,7 @@ impl BillingCycleUsageSectionView {
     /// Note: per the backend invariant `VIS != OwnOnly => viewer is admin`,
     /// so we don't need a separate admin gate here.
     fn shows_team_section(&self, workspace: &Workspace, app: &AppContext) -> bool {
-        let visibility = workspace.resolve_usage_visibility(self.viewer_is_admin(app));
+        let visibility = workspace.resolve_usage_visibility(self.viewer_is_team_admin(app));
         if visibility.granularity == UsageVisibilityGranularity::OwnOnly {
             return false;
         }
@@ -267,7 +267,7 @@ impl BillingCycleUsageSectionView {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let is_admin = self.viewer_is_admin(app);
+        let is_admin = self.viewer_is_team_admin(app);
         let visibility = workspace.resolve_usage_visibility(is_admin);
 
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
@@ -329,7 +329,7 @@ impl BillingCycleUsageSectionView {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let visibility = workspace.resolve_usage_visibility(self.viewer_is_admin(app));
+        let visibility = workspace.resolve_usage_visibility(self.viewer_is_team_admin(app));
         let entries = filter_legacy_buckets(
             self.current_summary(workspace)
                 .map(|s| s.entries.as_slice())
