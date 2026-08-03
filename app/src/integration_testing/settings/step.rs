@@ -170,6 +170,21 @@ pub fn assert_settings_umbrella_visible(label: &'static str, visible: bool) -> T
     )
 }
 
+/// Asserts whether the settings widget with `widget_id` has been rendered in
+/// the content pane.
+///
+/// Unlike nav rows, widgets cache their position indefinitely, so this really
+/// asserts "has been painted at least once since the app started". That makes
+/// it useful for proving a page's content rendered for the first time, but not
+/// for observing that content later disappeared.
+pub fn assert_settings_widget_rendered(widget_id: &'static str, rendered: bool) -> TestStep {
+    assert_row_painted(
+        widget_id.to_string(),
+        format!("settings widget {widget_id}"),
+        rendered,
+    )
+}
+
 /// Asserts whether the umbrella labelled `label` is expanded.
 pub fn assert_umbrella_expanded(label: &'static str, expanded: bool) -> TestStep {
     TestStep::new(&format!(

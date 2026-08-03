@@ -284,6 +284,7 @@ integration_tests! {
     test_settings_keyboard_navigation_after_manual_collapse,
     test_settings_search_filters_top_level_pages,
     test_settings_search_filters_subpages,
+    test_settings_search_subpage_still_renders_content,
     test_settings_search_clear_restores_umbrella_state,
     test_settings_search_preserved_on_sidebar_click,
     // The command palette entry for MCP servers dispatches the internal

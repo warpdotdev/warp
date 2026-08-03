@@ -118,7 +118,7 @@ mod warp_drive_page;
 mod warpify_page;
 
 #[cfg(not(target_family = "wasm"))]
-pub(crate) use ai_page::cli_agent_settings_widget_id;
+pub use ai_page::cli_agent_settings_widget_id;
 pub(crate) use ai_page::custom_model_routers_widget_id;
 pub use billing_and_usage_page::create_discount_badge;
 pub use code_page::CodeSettingsPageView;
@@ -1522,6 +1522,47 @@ impl SettingsView {
             })
     }
 
+    /// The combined filter result for a page that multiplexes several subpages.
+    ///
+    /// Such a page owns no widget list of its own — each subpage renders a
+    /// disjoint slice of the widgets — so "does this page match" is "does any
+    /// of its subpages match". Subpages backed by a standalone page (for
+    /// example `AgentMCPServers`) have no `subpage_filter` entry and are
+    /// covered by that page's own filter pass instead.
+    fn aggregate_subpage_match_data(&self, subpages: &[SettingsSection]) -> MatchData {
+        let mut total = 0;
+        let mut matched = false;
+        for match_data in subpages
+            .iter()
+            .filter_map(|section| self.subpage_filter.get(section))
+        {
+            match match_data {
+                MatchData::Countable(count) => {
+                    total += *count;
+                    matched |= *count > 0;
+                }
+                MatchData::Uncounted(is_match) => matched |= *is_match,
+            }
+        }
+        if total > 0 {
+            MatchData::Countable(total)
+        } else {
+            MatchData::Uncounted(matched)
+        }
+    }
+
+    /// Points `backing`'s filter entry at the aggregate of its subpages' results.
+    fn set_aggregated_filter(&mut self, backing: SettingsSection, subpages: &[SettingsSection]) {
+        let match_data = self.aggregate_subpage_match_data(subpages);
+        if let Some(index) = self
+            .settings_pages
+            .iter()
+            .position(|page| page.section == backing)
+        {
+            self.pages_filter[index] = match_data;
+        }
+    }
+
     fn handle_search_editor_event(
         &mut self,
         editor: ViewHandle<EditorView>,
@@ -1554,7 +1595,7 @@ impl SettingsView {
                         }
                         if let Some(subpage) = AISubpage::from_section(subpage_section) {
                             self.ai_page_handle.update(ctx, |view, ctx| {
-                                view.set_active_subpage(Some(subpage), ctx);
+                                view.set_active_subpage(subpage, ctx);
                             });
                             let match_data = self
                                 .ai_page_handle
@@ -1566,7 +1607,7 @@ impl SettingsView {
                     for &subpage_section in SettingsSection::code_subpages() {
                         if let Some(subpage) = CodeSubpage::from_section(subpage_section) {
                             self.code_page_handle.update(ctx, |view, ctx| {
-                                view.set_active_subpage(Some(subpage), ctx);
+                                view.set_active_subpage(subpage, ctx);
                             });
                             let match_data = self
                                 .code_page_handle
@@ -1586,20 +1627,21 @@ impl SettingsView {
                     self.subpage_filter.clear();
                 }
 
-                // Run the standard page-level filter (needed for non-subpage pages
-                // and for subpages with their own backing page like AgentMCPServers).
-                // Switch AI/Code to all-widgets mode so standalone backing page
-                // filter is correct for pages_filter.
-                if is_search_active {
-                    self.ai_page_handle.update(ctx, |view, ctx| {
-                        view.set_active_subpage(None, ctx);
-                    });
-                    self.code_page_handle.update(ctx, |view, ctx| {
-                        view.set_active_subpage(None, ctx);
-                    });
-                }
-
+                // Run the standard page-level filter. This covers every page
+                // that owns its whole widget list, including subpages backed by
+                // a standalone page such as AgentMCPServers.
+                //
+                // The AI and Code pages are skipped while a search is active:
+                // they multiplex several subpages over one widget list, so their
+                // result is the aggregate of the per-subpage results computed
+                // above. With no query there are no per-subpage results to
+                // aggregate, so they take the normal pass like everything else.
                 for (i, page) in self.settings_pages.iter().enumerate() {
+                    let is_multiplexed =
+                        matches!(page.section, SettingsSection::AI | SettingsSection::Code);
+                    if is_search_active && is_multiplexed {
+                        continue;
+                    }
                     self.pages_filter[i] = update_page!(
                         &page.view_handle,
                         |view, ctx| {
@@ -1611,6 +1653,14 @@ impl SettingsView {
                     );
                 }
 
+                if is_search_active {
+                    self.set_aggregated_filter(SettingsSection::AI, SettingsSection::ai_subpages());
+                    self.set_aggregated_filter(
+                        SettingsSection::Code,
+                        SettingsSection::code_subpages(),
+                    );
+                }
+
                 // Restore the active subpage after filtering.
                 if is_search_active {
                     let current = self.current_settings_page;
@@ -1619,7 +1669,7 @@ impl SettingsView {
                         && let Some(subpage) = AISubpage::from_section(current)
                     {
                         self.ai_page_handle.update(ctx, |view, ctx| {
-                            view.set_active_subpage(Some(subpage), ctx);
+                            view.set_active_subpage(subpage, ctx);
                             view.update_filter(&search_query, ctx);
                         });
                     }
@@ -1627,7 +1677,7 @@ impl SettingsView {
                         && let Some(subpage) = CodeSubpage::from_section(current)
                     {
                         self.code_page_handle.update(ctx, |view, ctx| {
-                            view.set_active_subpage(Some(subpage), ctx);
+                            view.set_active_subpage(subpage, ctx);
                             view.update_filter(&search_query, ctx);
                         });
                     }
@@ -2130,15 +2180,18 @@ impl SettingsView {
         // and auto-expand the umbrella containing it.
         if section.is_subpage() {
             // AI subpages: update the AI page's subpage mode.
-            if section.is_ai_subpage() && section != SettingsSection::AgentMCPServers {
-                let subpage = AISubpage::from_section(section);
+            if section.is_ai_subpage()
+                && section != SettingsSection::AgentMCPServers
+                && let Some(subpage) = AISubpage::from_section(section)
+            {
                 self.ai_page_handle.update(ctx, |view, ctx| {
                     view.set_active_subpage(subpage, ctx);
                 });
             }
             // Code subpages: update the Code page's subpage mode.
-            if section.is_code_subpage() {
-                let subpage = CodeSubpage::from_section(section);
+            if section.is_code_subpage()
+                && let Some(subpage) = CodeSubpage::from_section(section)
+            {
                 self.code_page_handle.update(ctx, |view, ctx| {
                     view.set_active_subpage(subpage, ctx);
                 });

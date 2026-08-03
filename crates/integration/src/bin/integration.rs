@@ -422,6 +422,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_settings_keyboard_navigation_after_manual_collapse);
     register_test!(test_settings_search_filters_top_level_pages);
     register_test!(test_settings_search_filters_subpages);
+    register_test!(test_settings_search_subpage_still_renders_content);
     register_test!(test_settings_search_clear_restores_umbrella_state);
     register_test!(test_settings_search_preserved_on_sidebar_click);
     register_test!(test_settings_agent_mcp_servers_renders_standalone_page);

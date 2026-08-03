@@ -7,12 +7,12 @@
 
 use warp::integration_testing::settings::{
     assert_settings_nav_page_visible, assert_settings_nav_subpage_visible, assert_settings_section,
-    assert_umbrella_expanded, clear_settings_search, click_settings_nav_subpage,
-    click_settings_umbrella, open_settings_page, press_settings_nav_down, press_settings_nav_up,
-    type_settings_search,
+    assert_settings_widget_rendered, assert_umbrella_expanded, clear_settings_search,
+    click_settings_nav_subpage, click_settings_umbrella, open_settings_page,
+    press_settings_nav_down, press_settings_nav_up, type_settings_search,
 };
 use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
-use warp::settings_view::SettingsSection;
+use warp::settings_view::{SettingsSection, cli_agent_settings_widget_id};
 
 use super::{Builder, new_builder};
 
@@ -144,6 +144,34 @@ pub fn test_settings_search_filters_subpages() -> Builder {
         ))
         .with_step(assert_settings_section(
             SettingsSection::ThirdPartyCLIAgents,
+        ))
+}
+
+/// A search that matches only one subpage must still render that subpage's
+/// content, not an empty pane.
+///
+/// The Agents umbrella's subpages share one backing page that owns no widget
+/// list of its own, so whether that page survives the filter is derived from
+/// its subpages' results. If that derivation were wrong the sidebar would still
+/// show the matching row while the content pane rendered nothing, which no
+/// sidebar-only assertion would catch.
+pub fn test_settings_search_subpage_still_renders_content() -> Builder {
+    new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(open_settings_page(SettingsSection::Account))
+        // The CLI agent widget lives on the Third party CLI agents subpage, and
+        // nothing has rendered it yet.
+        .with_step(assert_settings_widget_rendered(
+            cli_agent_settings_widget_id(),
+            false,
+        ))
+        .with_step(type_settings_search("codex"))
+        .with_step(assert_settings_section(
+            SettingsSection::ThirdPartyCLIAgents,
+        ))
+        .with_step(assert_settings_widget_rendered(
+            cli_agent_settings_widget_id(),
+            true,
         ))
 }
 
