@@ -580,7 +580,7 @@ impl SkillManager {
         }
     }
 
-    /// Registers skills loaded from `SKILLS_DIRS` environment variable directories
+    /// Registers skills loaded from `WARP_SKILL_DIRS` environment variable directories
     /// as personal (home) tier skills.
     ///
     /// Unlike [`handle_skills_added`], this method does not require each skill's path
@@ -591,7 +591,7 @@ impl SkillManager {
     /// Call this after reading skills with [`ai::skills::read_skills_for_skills_dirs`].
     pub fn add_skills_dirs_skills(&mut self, skills: Vec<ParsedSkill>) {
         let Some(home_dir) = dirs::home_dir() else {
-            log::warn!("SKILLS_DIRS: home directory unavailable; cannot register env skills");
+            log::warn!("WARP_SKILL_DIRS: home directory unavailable; cannot register env skills");
             return;
         };
         let home_dir = LocalOrRemotePath::Local(home_dir);

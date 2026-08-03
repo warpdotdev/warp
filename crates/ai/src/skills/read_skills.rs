@@ -7,15 +7,20 @@ use super::skill_provider::SkillScope;
 /// The environment variable that specifies extra skill directories to index at
 /// personal (home) precedence. Value is a comma-separated list of paths; each
 /// path is itself a skills directory whose **direct children** are skill folders
-/// containing `SKILL.md`.
-pub const SKILLS_DIRS_ENV: &str = "SKILLS_DIRS";
+/// containing `SKILL.md`. Relative paths are resolved against the environment
+/// working directory (see [`resolve_skills_dirs`]).
+pub const WARP_SKILL_DIRS_ENV: &str = "WARP_SKILL_DIRS";
 
-/// Parse the `SKILLS_DIRS` environment variable into a list of directory paths.
+/// Parse the `WARP_SKILL_DIRS` environment variable into a list of directory paths.
 ///
 /// Splits on commas, trims leading/trailing whitespace from each entry, and
 /// drops blank entries. Returns an empty vec when the variable is unset or empty.
+///
+/// Entries are returned verbatim — callers resolve relative paths against the
+/// environment working directory (see [`resolve_skills_dirs`]) rather than
+/// letting them depend on the process's current working directory.
 pub fn parse_skills_dirs_env() -> Vec<PathBuf> {
-    let Ok(val) = std::env::var(SKILLS_DIRS_ENV) else {
+    let Ok(val) = std::env::var(WARP_SKILL_DIRS_ENV) else {
         return Vec::new();
     };
     val.split(',')
@@ -25,12 +30,30 @@ pub fn parse_skills_dirs_env() -> Vec<PathBuf> {
         .collect()
 }
 
+/// Resolve entries parsed from [`WARP_SKILL_DIRS_ENV`] against a base directory.
+///
+/// Absolute entries pass through unchanged; relative entries are joined onto
+/// `base` (the environment working directory) so their meaning does not depend
+/// on the agent process's current working directory, which environment setup
+/// may have changed.
+pub fn resolve_skills_dirs(base: &Path, dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    dirs.into_iter()
+        .map(|dir| {
+            if dir.is_absolute() {
+                dir
+            } else {
+                base.join(dir)
+            }
+        })
+        .collect()
+}
+
 /// Read skills from a slice of directories, treating each as a personal (home)
 /// tier skills root.
 ///
 /// Each directory in `dirs` is expected to contain individual skill folders as
 /// **direct children** (e.g. `<dir>/<skill-name>/SKILL.md`). This matches the
-/// layout used by `SKILLS_DIRS`. Entries that are not directories are skipped
+/// layout used by `WARP_SKILL_DIRS`. Entries that are not directories are skipped
 /// with a warning.
 ///
 /// Skills loaded this way are assigned `SkillScope::Home` so they are always
@@ -42,7 +65,7 @@ pub fn read_skills_for_skills_dirs(dirs: &[PathBuf]) -> Vec<ParsedSkill> {
                 return true;
             }
             log::warn!(
-                "SKILLS_DIRS: skipping '{}' — not a directory or does not exist",
+                "WARP_SKILL_DIRS: skipping '{}' — not a directory or does not exist",
                 dir.display()
             );
             false

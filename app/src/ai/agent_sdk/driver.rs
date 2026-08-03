@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime};
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use ai::skills::{
     ParsedSkill, SKILL_PROVIDER_DEFINITIONS, parse_skills_dirs_env, read_skills_for_skills_dirs,
+    resolve_skills_dirs,
 };
 use anyhow::{Context as _, anyhow};
 use futures::FutureExt as _;
@@ -2139,12 +2140,14 @@ impl AgentDriver {
         }
     }
 
-    /// Load skills from the `SKILLS_DIRS` environment variable as personal (home) tier skills.
+    /// Load skills from the `WARP_SKILL_DIRS` environment variable as personal (home) tier skills.
     ///
-    /// `SKILLS_DIRS` is a comma-separated list of paths; each entry is itself a skills directory
-    /// whose **direct children** are expected to be skill folders containing `SKILL.md`.
-    /// Skills loaded this way behave identically to `~/.agents/skills` personal skills—always
-    /// in scope, regardless of the current working directory.
+    /// `WARP_SKILL_DIRS` is a comma-separated list of paths; each entry is itself a skills directory
+    /// whose **direct children** are expected to be skill folders containing `SKILL.md`. Relative
+    /// entries are resolved against the driver's working directory — not the process's current
+    /// working directory, which environment preparation may have changed (e.g. by cd-ing into a
+    /// cloned repo). Skills loaded this way behave identically to `~/.agents/skills` personal
+    /// skills—always in scope, regardless of the current working directory.
     ///
     /// Invalid, missing, or unreadable entries are skipped with a warning; an unset or empty
     /// variable is a no-op.
@@ -2154,16 +2157,17 @@ impl AgentDriver {
             return;
         }
         log::info!(
-            "SKILLS_DIRS: loading skills from {} directories",
+            "WARP_SKILL_DIRS: loading skills from {} directories",
             dirs.len()
         );
         let load_result = foreground
-            .spawn(move |_, ctx| {
+            .spawn(move |me, ctx| {
+                let dirs = resolve_skills_dirs(&me.working_dir, dirs);
                 let skills = read_skills_for_skills_dirs(&dirs);
                 if skills.is_empty() {
-                    log::info!("SKILLS_DIRS: no skills found");
+                    log::info!("WARP_SKILL_DIRS: no skills found");
                 } else {
-                    log::info!("SKILLS_DIRS: loaded {} skill(s)", skills.len());
+                    log::info!("WARP_SKILL_DIRS: loaded {} skill(s)", skills.len());
                 }
                 SkillManager::handle(ctx).update(ctx, |manager, _| {
                     manager.add_skills_dirs_skills(skills);
@@ -2171,7 +2175,7 @@ impl AgentDriver {
             })
             .await;
         if let Err(err) = load_result {
-            log::warn!("Failed to load SKILLS_DIRS skills: {err}");
+            log::warn!("Failed to load WARP_SKILL_DIRS skills: {err}");
         }
     }
 

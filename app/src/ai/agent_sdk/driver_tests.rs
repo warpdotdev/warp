@@ -1256,7 +1256,7 @@ fn write_skill_file(repo: &Path, name: &str) {
 }
 
 /// Write a minimal SKILL.md at `{skills_dir}/{name}/SKILL.md`.
-/// This is the flat layout expected by `SKILLS_DIRS` (no `.agents/skills` wrapper).
+/// This is the flat layout expected by `WARP_SKILL_DIRS` (no `.agents/skills` wrapper).
 fn write_flat_skill(skills_dir: &Path, name: &str) {
     let skill_dir = skills_dir.join(name);
     fs::create_dir_all(&skill_dir).unwrap();
@@ -1267,12 +1267,12 @@ fn write_flat_skill(skills_dir: &Path, name: &str) {
     .unwrap();
 }
 
-/// Verifies that `load_skills_dirs` reads skills from the `SKILLS_DIRS` environment variable
-/// and registers them in the personal (home) bucket so they are always in scope,
+/// Verifies that `load_skills_dirs` reads skills from the `WARP_SKILL_DIRS` environment
+/// variable and registers them in the personal (home) bucket so they are always in scope,
 /// regardless of the current working directory.
 #[test]
 #[serial_test::serial]
-fn skills_dirs_env_loads_skills_as_home_tier() {
+fn warp_skill_dirs_env_loads_skills_as_home_tier() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
@@ -1286,10 +1286,10 @@ fn skills_dirs_env_loads_skills_as_home_tier() {
         write_flat_skill(&skills_dir_a, "env-skill-a2");
         write_flat_skill(&skills_dir_b, "env-skill-b1");
 
-        // Point SKILLS_DIRS at both directories.
+        // Point WARP_SKILL_DIRS at both directories.
         let skills_dirs_value = format!("{},{}", skills_dir_a.display(), skills_dir_b.display());
         // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::set_var("SKILLS_DIRS", &skills_dirs_value) };
+        unsafe { std::env::set_var("WARP_SKILL_DIRS", &skills_dirs_value) };
 
         let terminal_view = add_window_with_terminal(&mut app, None);
         let driver_handle = app.add_model(|ctx| {
@@ -1312,9 +1312,9 @@ fn skills_dirs_env_loads_skills_as_home_tier() {
         done_rx.await.expect("loading task should complete");
 
         // TODO: Audit that the environment access only happens in single-threaded code.
-        unsafe { std::env::remove_var("SKILLS_DIRS") };
+        unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
 
-        // Skills from SKILLS_DIRS are home-tier, so they appear for any working directory.
+        // Skills from WARP_SKILL_DIRS are home-tier, so they appear for any working directory.
         // Use None cwd — home skills are included regardless of is_cloud_environment.
         let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
             manager
@@ -1326,15 +1326,15 @@ fn skills_dirs_env_loads_skills_as_home_tier() {
 
         assert!(
             skill_names.contains(&"env-skill-a1".to_string()),
-            "'env-skill-a1' from SKILLS_DIRS should be loaded; got: {skill_names:?}"
+            "'env-skill-a1' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
         );
         assert!(
             skill_names.contains(&"env-skill-a2".to_string()),
-            "'env-skill-a2' from SKILLS_DIRS should be loaded; got: {skill_names:?}"
+            "'env-skill-a2' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
         );
         assert!(
             skill_names.contains(&"env-skill-b1".to_string()),
-            "'env-skill-b1' from SKILLS_DIRS should be loaded; got: {skill_names:?}"
+            "'env-skill-b1' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
         );
 
         // Verify the skills have Home scope (personal tier).
@@ -1348,7 +1348,65 @@ fn skills_dirs_env_loads_skills_as_home_tier() {
         });
         assert!(
             scope_check,
-            "all SKILLS_DIRS skills must have SkillScope::Home"
+            "all WARP_SKILL_DIRS skills must have SkillScope::Home"
+        );
+    });
+}
+
+/// Verifies that relative `WARP_SKILL_DIRS` entries are resolved against the driver's
+/// working directory rather than the process's current working directory (which
+/// `prepare_environment` may have changed).
+#[test]
+#[serial_test::serial]
+fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+
+        // Create a flat skills directory inside the working dir and reference it by
+        // relative path only. No `rel-skills` directory exists under the process cwd,
+        // so this only loads if resolution is anchored at the driver's working dir.
+        write_flat_skill(&working_dir.join("rel-skills"), "env-skill-rel");
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("WARP_SKILL_DIRS", "rel-skills") };
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    AgentDriver::load_skills_dirs(&spawner).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
+
+        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            skill_names.contains(&"env-skill-rel".to_string()),
+            "'env-skill-rel' should load via a relative WARP_SKILL_DIRS entry resolved against the driver's working dir; got: {skill_names:?}"
         );
     });
 }
