@@ -27,6 +27,9 @@ pub fn assert_focused_tab_index(tab_index: usize) -> AssertionCallback {
 /// Group colors are given the way a launch config writes them -- `None` for a
 /// group that saved no color -- and are compared against the `SelectedTabColor`
 /// restore is expected to produce.
+///
+/// The workspace must hold exactly the groups listed, so a group that no tab
+/// belongs to is a failure rather than something the caller can omit.
 pub fn assert_tab_groups(
     expected_memberships: Vec<Option<usize>>,
     expected_groups: Vec<(Option<&'static str>, Option<AnsiColorIdentifier>)>,
@@ -55,6 +58,16 @@ pub fn assert_tab_groups(
                 return async_assert!(
                     false,
                     "Expected tab group memberships {expected_memberships:?}, but there were {memberships:?}"
+                );
+            }
+
+            if view.tab_groups.len() != group_order.len() {
+                return async_assert!(
+                    false,
+                    "Expected the workspace to hold exactly {} group(s), the ones its tabs \
+                     belong to, but it holds {} -- the extras have no members",
+                    group_order.len(),
+                    view.tab_groups.len()
                 );
             }
 

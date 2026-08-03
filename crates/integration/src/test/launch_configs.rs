@@ -518,11 +518,14 @@ pub fn test_with_launch_config_with_no_active_pane() -> Builder {
 /// in the new window: names and colors restored, each tab back in the group it
 /// was saved under.
 ///
-/// The config here also hand-writes a membership a live window can never
-/// produce -- group "Backend" on both sides of an ungrouped tab. The tab bar
-/// renders each *contiguous* run as one container, so restore keeps the first
-/// run and returns the straggler ungrouped rather than drawing two containers
-/// that share an id.
+/// The config here also hand-writes two shapes a live window can never produce:
+///
+/// - group "Backend" on both sides of an ungrouped tab. The tab bar renders
+///   each *contiguous* run as one container, so restore keeps the first run and
+///   returns the straggler ungrouped rather than drawing two containers that
+///   share an id.
+/// - group "Orphan", which no tab joins. Restore must not put it in workspace
+///   state, where nothing could reach it.
 pub fn test_launch_config_restores_tab_groups() -> Builder {
     use warp::integration_testing::workspace::assert_tab_groups;
     use warp::launch_configs::launch_config::{
@@ -566,6 +569,12 @@ pub fn test_launch_config_restores_tab_groups() -> Builder {
                         collapsed: false,
                         pinned: false,
                     },
+                    TabGroupTemplate {
+                        name: Some("Orphan".to_owned()),
+                        color: Some(AnsiColorIdentifier::Red),
+                        collapsed: false,
+                        pinned: false,
+                    },
                 ],
                 active_tab_index: Some(0),
                 tabs: vec![
@@ -605,6 +614,9 @@ pub fn test_launch_config_restores_tab_groups() -> Builder {
                     // "stray" asked for "Backend" again after an ungrouped tab,
                     // so it restores ungrouped.
                     vec![Some(0), Some(0), None, None, Some(1)],
+                    // "Orphan" is absent: assert_tab_groups requires the
+                    // workspace to hold exactly these, so a memberless group
+                    // left behind would fail here.
                     vec![
                         (Some("Backend"), Some(AnsiColorIdentifier::Blue)),
                         (Some("Frontend"), None),

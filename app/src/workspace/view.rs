@@ -3860,44 +3860,54 @@ impl Workspace {
     ) {
         let start_index = self.tabs.len();
 
-        // Create the groups first so the per-tab assignments below have
-        // something to point at. Ids are minted here rather than restored:
-        // a launch config can be opened repeatedly, and into a workspace that
-        // already holds groups, so reusing saved ids would collide.
-        let group_ids: Vec<TabGroupId> = if FeatureFlag::GroupedTabs.is_enabled() {
-            window
-                .tab_groups
-                .iter()
-                .map(|group_template| {
-                    let group = TabGroup {
-                        id: TabGroupId::new(),
-                        name: group_template.name.clone(),
-                        color: group_template
-                            .color
-                            .map_or(SelectedTabColor::Unset, SelectedTabColor::Color),
-                        collapsed: group_template.collapsed,
-                        draggable_state: Default::default(),
-                        // Mirrors the session-restore path: only honor pinned
-                        // state while the Pinned Tabs feature is enabled.
-                        pinned: FeatureFlag::PinnedTabs.is_enabled() && group_template.pinned,
-                    };
-                    let id = group.id;
-                    self.tab_groups.insert(id, group);
-                    id
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-
         // `tab_bar_slots` turns every *contiguous* run of same-group tabs into
         // one group container, so interleaved membership would render as two
         // containers sharing one id. `resolve_group_memberships` collapses that
         // to the first run of each group; see its docs for why.
+        let group_count = if FeatureFlag::GroupedTabs.is_enabled() {
+            window.tab_groups.len()
+        } else {
+            0
+        };
         let memberships = crate::launch_configs::launch_config::resolve_group_memberships(
             &window.tabs,
-            group_ids.len(),
+            group_count,
         );
+
+        // Only mint ids for groups that kept a member. A hand-authored config
+        // can name a group no tab joins, and the collapse above can strip a
+        // group's last tab; inserting those anyway would leave empty groups in
+        // workspace state that nothing can reach. This mirrors the save path,
+        // which already drops groups whose members were all unsaveable.
+        //
+        // Ids are minted here rather than restored: a launch config can be
+        // opened repeatedly, and into a workspace that already holds groups, so
+        // reusing saved ids would collide.
+        let group_ids: Vec<Option<TabGroupId>> = window
+            .tab_groups
+            .iter()
+            .enumerate()
+            .map(|(group_index, group_template)| {
+                if !memberships.contains(&Some(group_index)) {
+                    return None;
+                }
+                let group = TabGroup {
+                    id: TabGroupId::new(),
+                    name: group_template.name.clone(),
+                    color: group_template
+                        .color
+                        .map_or(SelectedTabColor::Unset, SelectedTabColor::Color),
+                    collapsed: group_template.collapsed,
+                    draggable_state: Default::default(),
+                    // Mirrors the session-restore path: only honor pinned
+                    // state while the Pinned Tabs feature is enabled.
+                    pinned: FeatureFlag::PinnedTabs.is_enabled() && group_template.pinned,
+                };
+                let id = group.id;
+                self.tab_groups.insert(id, group);
+                Some(id)
+            })
+            .collect();
 
         window
             .tabs
@@ -3914,7 +3924,7 @@ impl Workspace {
                     .color
                     .map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
                 self.tabs[start_index + tab_index].group_id = memberships[tab_index]
-                    .and_then(|group_index| group_ids.get(group_index).copied());
+                    .and_then(|group_index| group_ids.get(group_index).copied().flatten());
             });
 
         if !window.tabs.is_empty() {
