@@ -1722,6 +1722,28 @@ pub(crate) fn initialize_app(
         manager
     });
 
+    ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |_, event, ctx| {
+        if matches!(
+            event,
+            UserWorkspacesEvent::CurrentWorkspaceChanged
+                | UserWorkspacesEvent::AiOveragesUpdated
+                | UserWorkspacesEvent::PurchaseAddonCreditsSuccess
+        ) {
+            AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
+                usage_model.request_availability_refresh(ctx);
+            });
+        }
+    });
+    ctx.subscribe_to_model(
+        &::ai::api_keys::ApiKeyManager::handle(ctx),
+        |_, event, ctx| {
+            let ::ai::api_keys::ApiKeyManagerEvent::KeysUpdated = event;
+            AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
+                usage_model.request_availability_refresh(ctx);
+            });
+        },
+    );
+
     ctx.add_singleton_model(AntivirusInfo::new);
 
     cfg_if::cfg_if! {

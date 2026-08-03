@@ -1796,6 +1796,7 @@ impl AISettingsPageView {
         ctx.subscribe_to_model(&ai_request_model, |me, _, event, ctx| {
             match event {
                 AIRequestUsageModelEvent::RequestUsageUpdated => ctx.notify(),
+                AIRequestUsageModelEvent::CreditAvailabilityUpdated => ctx.notify(),
                 AIRequestUsageModelEvent::RequestBonusRefunded { .. } => ctx.notify(),
                 AIRequestUsageModelEvent::AmbientCreditsBannerDismissed => {}
             }
@@ -2226,7 +2227,8 @@ impl AISettingsPageView {
         let on_paid_plan = UserWorkspaces::as_ref(ctx)
             .current_workspace()
             .is_some_and(|workspace| workspace.billing_metadata.is_user_on_paid_plan());
-        let out_of_monthly_credits = !AIRequestUsageModel::as_ref(ctx).has_requests_remaining();
+        let out_of_monthly_credits =
+            !AIRequestUsageModel::as_ref(ctx).has_base_plan_requests_remaining();
         !on_paid_plan && out_of_monthly_credits && !Self::active_base_model_is_byo_covered(ctx)
     }
 

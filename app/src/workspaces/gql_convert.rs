@@ -1179,6 +1179,7 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
             joinable_teams,
             experiments,
             feature_model_choices,
+            ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
             user_purchase_policy,
         }
     }

@@ -932,6 +932,13 @@ pub enum FeatureFlag {
     /// authenticated with the logged-in user's session token. No manual MCP
     /// setup or API key required.
     FactoryMcp,
+
+    /// Gates the TUI cost footer's credits⇄dollars toggle. When enabled (dogfood
+    /// / staging and local/dev builds), the footer usage entry follows the
+    /// persisted `agents.usage_display_mode` setting and is click-to-toggleable
+    /// between credits and dollars. When disabled (prod/stable), the footer
+    /// falls back to a static, non-interactive credits total.
+    TuiCostTransparency,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1006,6 +1013,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::WellKnownMcpIds,
     FeatureFlag::FactoryMcp,
+    FeatureFlag::TuiCostTransparency,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

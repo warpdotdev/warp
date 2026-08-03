@@ -9,6 +9,7 @@
 
 use warp::settings::TuiUsageDisplayMode;
 use warp::tui_export::{ConversationUsageTotals, format_credits};
+use warp_core::features::FeatureFlag;
 use warpui_core::AppContext;
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{TuiElement, TuiEventContext, TuiHoverable, TuiText};
@@ -32,6 +33,14 @@ impl UsageToggle {
     /// `on_click` runs on a left click; the composing view uses it to
     /// dispatch the typed action that flips the persisted display-mode
     /// setting (the element pass only has an immutable [`AppContext`]).
+    ///
+    /// The credits⇄dollars toggle is gated behind
+    /// [`FeatureFlag::TuiCostTransparency`]. When the flag is disabled
+    /// (prod/stable), this falls back to the pre-CODE-1831 behavior: a static,
+    /// non-interactive credits total. The usage entry is still shown — only the
+    /// click-to-toggle affordance is removed, and the persisted display mode is
+    /// ignored so the dollar cost is never surfaced (`mode` and `on_click` are
+    /// unused in that case).
     pub(crate) fn render_entry(
         &self,
         mode: TuiUsageDisplayMode,
@@ -39,11 +48,17 @@ impl UsageToggle {
         app: &AppContext,
         on_click: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
     ) -> Box<dyn TuiElement> {
+        let builder = TuiUiBuilder::from_app(app);
+        if !FeatureFlag::TuiCostTransparency.is_enabled() {
+            return TuiText::new(entry_text(TuiUsageDisplayMode::Credits, totals))
+                .with_style(builder.muted_text_style())
+                .truncate()
+                .finish();
+        }
         let is_hovered = self
             .hover_state
             .lock()
             .is_ok_and(|state| state.is_hovered());
-        let builder = TuiUiBuilder::from_app(app);
         let style = if is_hovered {
             builder.primary_text_style()
         } else {
