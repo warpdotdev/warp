@@ -12,10 +12,11 @@ use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::appearance::Appearance;
+use warp_errors::report_error;
+use warpui::r#async::Timer;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::MouseStateHandle;
 use warpui::platform::Cursor;
-use warpui::r#async::Timer;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::UiComponent;
 use warpui::units::IntoLines;
@@ -23,11 +24,11 @@ use warpui::{AppContext, Element, ModelHandle, SingletonEntity, ViewContext};
 
 use super::adapter::{Adapter, Kind, Participant};
 use super::cloud_conversation_continuation::{
-    conversation_failed_before_task_creation, resolve_cloud_conversation_continuation_ui_state,
-    CloudConversationContinuationUiState, TombstoneCta,
+    CloudConversationContinuationUiState, TombstoneCta, conversation_failed_before_task_creation,
+    resolve_cloud_conversation_continuation_ui_state,
 };
-use super::sharer::inactivity_modal::InactivityModalEvent;
 use super::sharer::Sharer;
+use super::sharer::inactivity_modal::InactivityModalEvent;
 use super::viewer::Viewer;
 use super::{ConversationEndedTombstoneEvent, ConversationEndedTombstoneView};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
@@ -40,6 +41,7 @@ use crate::editor::{InteractionState, ReplicaId};
 use crate::menu::{Event as MenuEvent, MenuItem, MenuItemFields};
 use crate::server::telemetry::SharingDialogSource;
 use crate::settings::InputModeSettings;
+use crate::terminal::TerminalModel;
 use crate::terminal::block_list_viewport::ScrollPositionUpdate;
 use crate::terminal::model::blocks::BlockListPoint;
 use crate::terminal::model::index::Point;
@@ -57,17 +59,16 @@ use crate::terminal::shared_session::role_change_modal::{
 };
 use crate::terminal::shared_session::settings::SharedSessionSettings;
 use crate::terminal::shared_session::{
-    join_link, SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
-    SharedSessionStatus, COPY_LINK_TEXT,
+    COPY_LINK_TEXT, SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
+    SharedSessionStatus, join_link,
 };
 use crate::terminal::view::{
     ContextMenuAction, Event, InlineBannerItem, InlineBannerType, PendingUserQueryKind,
     RichContentInsertionPosition, SharedSessionBanners, SizeUpdateBuilder, TerminalAction,
     TerminalView,
 };
-use crate::terminal::TerminalModel;
 use crate::view_components::{DismissibleToast, ToastFlavor};
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 impl TerminalView {
     pub fn sharer_session_kind(&self) -> Option<&Kind> {
@@ -128,6 +129,17 @@ impl TerminalView {
             {
                 return None;
             }
+
+            let is_cloud_conversation_selection = model.is_shared_ambient_agent_session()
+                || model.is_conversation_transcript_viewer()
+                || self
+                    .ambient_agent_view_model
+                    .as_ref()
+                    .is_some_and(|model| model.as_ref(ctx).is_ambient_agent());
+            if !is_cloud_conversation_selection {
+                return None;
+            }
+
             self.ambient_agent_task_id_for_details_panel_from_model(&model, ctx)
         };
         let Some(task_id) = task_id else {
@@ -143,6 +155,29 @@ impl TerminalView {
                 .should_fallback_to_tombstone()
                 .then_some(CloudConversationContinuationUiState::Tombstone { cta: None }),
         }
+    }
+
+    pub(in crate::terminal::view) fn blocks_cloud_followups_for_ambient_agent_session_from_model(
+        &self,
+        model: &TerminalModel,
+        ctx: &AppContext,
+    ) -> bool {
+        if self
+            .ambient_agent_view_model
+            .as_ref()
+            .is_some_and(|model| model.as_ref(ctx).blocks_cloud_followups())
+        {
+            return true;
+        }
+
+        let Some(task_id) = self.ambient_agent_task_id_for_details_panel_from_model(model, ctx)
+        else {
+            return false;
+        };
+
+        AgentConversationsModel::as_ref(ctx)
+            .get_task_data(&task_id)
+            .is_some_and(|task| task.blocks_cloud_followups())
     }
 
     pub(crate) fn owned_ambient_agent_task_id(
@@ -243,10 +278,10 @@ impl TerminalView {
                     .presence_manager()
                     .as_ref(ctx)
                     .viewer_role(participant_id);
-                if let Some(old_role) = viewer_role {
-                    if old_role == *role {
-                        return;
-                    }
+                if let Some(old_role) = viewer_role
+                    && old_role == *role
+                {
+                    return;
                 }
 
                 let should_confirm_shared_session_edit_access =
@@ -535,7 +570,7 @@ impl TerminalView {
             && scrollback_type == SharedSessionScrollbackType::None
         {
             let has_conversations = BlocklistAIHistoryModel::as_ref(ctx)
-                .all_live_conversations_for_terminal_view(ctx.handle().id())
+                .all_live_conversations_for_terminal_surface(ctx.handle().id())
                 .any(|conv| conv.exchange_count() > 0);
 
             if has_conversations {
@@ -647,6 +682,15 @@ impl TerminalView {
         reason: SessionEndedReason,
         ctx: &mut ViewContext<Self>,
     ) {
+        let session_id = self.shared_session_id().cloned();
+        let source_task_id = self
+            .model
+            .lock()
+            .shared_session_source()
+            .and_then(|share_source| share_source.orchestrator_task_id().map(str::to_owned));
+        log::info!(
+            "Shared session view stop requested: session_id={session_id:?} source_task_id={source_task_id:?} action_source={source:?} reason={reason:?}"
+        );
         ctx.emit(Event::StopSharingCurrentSession { reason });
 
         send_telemetry_from_ctx!(
@@ -799,10 +843,10 @@ impl TerminalView {
             self.insert_conversation_ended_tombstone_with_cta(None, ctx);
         }
         // Ensure inactivity timer is aborted for sharer
-        if let Some(sharer) = self.shared_session_sharer_mut() {
-            if let Some(old_abort_handle) = sharer.inactivity_timer_abort_handle.take() {
-                old_abort_handle.abort();
-            }
+        if let Some(sharer) = self.shared_session_sharer_mut()
+            && let Some(old_abort_handle) = sharer.inactivity_timer_abort_handle.take()
+        {
+            old_abort_handle.abort();
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.active_viewer_driven_size.is_some() && !self.is_shared_session_for_ambient_agent() {
@@ -1020,10 +1064,10 @@ impl TerminalView {
         // session due to inactivity. Clear any existing timer and return early so
         // the session stays open until explicitly closed.
         if self.model.lock().is_shared_ambient_agent_session() {
-            if let Some(sharer) = self.shared_session_sharer_mut() {
-                if let Some(old_abort_handle) = sharer.inactivity_timer_abort_handle.take() {
-                    old_abort_handle.abort();
-                }
+            if let Some(sharer) = self.shared_session_sharer_mut()
+                && let Some(old_abort_handle) = sharer.inactivity_timer_abort_handle.take()
+            {
+                old_abort_handle.abort();
             }
             return;
         }
@@ -1090,11 +1134,11 @@ impl TerminalView {
             .text_selection_range(semantic_selection, input_mode.is_inverted_blocklist())
         {
             let Some(start) = start.to_session_sharing_block_point(model_lock.block_list()) else {
-                log::error!("Failed convert start of selection range to BlockPoint");
+                report_error!("Failed convert start of selection range to BlockPoint");
                 return session_sharing_protocol::common::Selection::None;
             };
             let Some(end) = end.to_session_sharing_block_point(model_lock.block_list()) else {
-                log::error!("Failed convert end of selection range to BlockPoint");
+                report_error!("Failed convert end of selection range to BlockPoint");
                 return session_sharing_protocol::common::Selection::None;
             };
             return session_sharing_protocol::common::Selection::BlockText {
@@ -1239,11 +1283,9 @@ impl TerminalView {
 
         // If we the participant has block(s) selected, scroll to the block where the avatar is.
         // Otherwise, if the participant has block text selected, scroll so the cursor is in view.
-        if let Some(block_index) = {
-            let index =
-                participant.get_selected_block_index_for_avatar(self.model.lock().block_list());
-            index
-        } {
+        if let Some(block_index) =
+            { participant.get_selected_block_index_for_avatar(self.model.lock().block_list()) }
+        {
             self.update_scroll_position_locking(
                 ScrollPositionUpdate::ScrollToTopOfBlockWithBuffer {
                     block_index,
@@ -1479,6 +1521,13 @@ impl TerminalView {
                 let role = &role;
                 editor.set_interaction_state(role.into(), ctx);
             });
+            // Role gates whether prompts can be sent, so the queued prompts panel's
+            // send-now buttons and enter hint must re-sync.
+            if let Some(panel) = input.queued_prompts_panel().cloned() {
+                panel.update(ctx, |panel, ctx| {
+                    panel.set_can_send_prompt(role.can_execute(), ctx);
+                });
+            }
         });
     }
 
@@ -1488,12 +1537,12 @@ impl TerminalView {
         role_request_response: RoleRequestResponse,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(shared_session) = self.shared_session.as_mut() {
-            if let RoleRequestResponse::Approved { new_role } = role_request_response {
-                let self_id = shared_session.presence_manager().as_ref(ctx).id();
-                shared_session.update_participant_role(&self_id, new_role, ctx);
-                self.on_self_role_updated(new_role, ctx);
-            }
+        if let Some(shared_session) = self.shared_session.as_mut()
+            && let RoleRequestResponse::Approved { new_role } = role_request_response
+        {
+            let self_id = shared_session.presence_manager().as_ref(ctx).id();
+            shared_session.update_participant_role(&self_id, new_role, ctx);
+            self.on_self_role_updated(new_role, ctx);
         }
 
         self.update_shared_session_pane_header(ctx);
@@ -1750,23 +1799,21 @@ impl TerminalView {
         // The cloud-mode queued-prompt block is pinned to the bottom so it stays below any
         // streaming agent output. When inserting the conversation-ended tombstone we want the
         // tombstone below the queued prompt instead, so unpin the queued prompt first.
-        if self.pending_user_query_kind == Some(PendingUserQueryKind::CloudMode) {
-            if let Some(pending_query_view_id) = self.pending_user_query_view_id {
-                self.model
-                    .lock()
-                    .block_list_mut()
-                    .unpin_rich_content_from_bottom(pending_query_view_id);
-            }
+        if self.pending_user_query_kind == Some(PendingUserQueryKind::CloudMode)
+            && let Some(pending_query_view_id) = self.pending_user_query_view_id
+        {
+            self.model
+                .lock()
+                .block_list_mut()
+                .unpin_rich_content_from_bottom(pending_query_view_id);
         }
-        self.insert_rich_content(
-            None,
-            tombstone_view_handle,
-            None,
-            RichContentInsertionPosition::Append {
+        let insertion_position = self
+            .pending_user_query_view_id
+            .map(RichContentInsertionPosition::AfterRichContent)
+            .unwrap_or(RichContentInsertionPosition::Append {
                 insert_below_long_running_block: true,
-            },
-            ctx,
-        );
+            });
+        self.insert_rich_content(None, tombstone_view_handle, None, insertion_position, ctx);
         self.conversation_ended_tombstone_view_id = Some(tombstone_view_id);
     }
 

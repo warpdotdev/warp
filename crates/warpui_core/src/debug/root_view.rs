@@ -1,9 +1,8 @@
-use std::collections::HashMap;
-
 use super::view_tree_debug_view::ViewTreeDebugView;
 use crate::elements::ChildView;
 use crate::{
-    AppContext, Element, Entity, EntityId, TypedActionView, View, ViewContext, ViewHandle, WindowId,
+    AppContext, Element, Entity, EntityId, EntityIdMap, TypedActionView, View, ViewContext,
+    ViewHandle, WindowId,
 };
 
 /// A root view for a window that provides debugging tools for the UI framework.
@@ -18,7 +17,7 @@ impl TypedActionView for DebugRootView {
 impl DebugRootView {
     pub fn new(
         target_window_id: WindowId,
-        view_parent_map: HashMap<EntityId, EntityId>,
+        view_parent_map: EntityIdMap<EntityId>,
         root_view_id: EntityId,
         ctx: &mut ViewContext<Self>,
     ) -> Self {

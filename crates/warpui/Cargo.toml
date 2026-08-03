@@ -1,10 +1,15 @@
 [package]
 name = "warpui"
 version = "0.0.0"
-edition = "2021"
+edition = "2024"
 authors.workspace = true
 publish.workspace = true
 license = "MIT"
+
+[[test]]
+name = "headless_main_thread"
+path = "tests/headless_main_thread.rs"
+harness = false
 
 [features]
 # Enabling this feature works around a bug in Metal frame capture by loading
@@ -17,6 +22,8 @@ fontkit-rasterizer = []
 traces = ["warpui_core/traces"]
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = ["warpui_core/integration_tests"]
+# See warpui_core's defer_scene_build feature.
+defer_scene_build = ["warpui_core/defer_scene_build"]
 # If enabled, writes named telemetry events to the info log.  Should never be
 # enabled in release builds without a PII audit of telemetry data.
 log_named_telemetry_events = ["warpui_core/log_named_telemetry_events"]
@@ -27,6 +34,7 @@ test-util = ["warpui_core/test-util"]
 experimental-wgpu-renderer = ["dep:wgpu", "dep:bytemuck", "dep:version-compare"]
 
 [dependencies]
+warp_errors.workspace = true
 async-task.workspace = true
 anyhow.workspace = true
 bytemuck = { workspace = true, features = ["derive"], optional = true }
@@ -48,6 +56,7 @@ pathfinder_geometry.workspace = true
 sum_tree.workspace = true
 takecell = "0.1.1"
 thiserror.workspace = true
+url.workspace = true
 vec1.workspace = true
 version-compare = { workspace = true, optional = true }
 warpui_core.workspace = true
@@ -58,6 +67,7 @@ asset_cache.workspace = true
 env_logger.workspace = true
 futures-timer = "3.0.2"
 image = { workspace = true, default-features = false, features = ["png"] }
+libtest-mimic.workspace = true
 rust-embed.workspace = true
 warpui = { workspace = true, features = ["test-util"] }
 warpui_core = { workspace = true, features = ["test-util"] }
@@ -71,10 +81,66 @@ core-graphics = "0.25.0"
 core-text = "21.0.0"
 dispatch = "0.2.0"
 font-kit.workspace = true
-foreign-types = "0.5.0"
+foreign-types = "0.5"
 libc.workspace = true
-metal = "0.33.0"
 objc.workspace = true
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = [
+    "NSAlert",
+    "NSApplication",
+    "NSButton",
+    "NSCell",
+    "NSControl",
+    "NSCursor",
+    "NSEvent",
+    "NSImage",
+    "NSMenu",
+    "NSMenuItem",
+    "NSPasteboard",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSView",
+    "NSWindow",
+    "objc2-quartz-core",
+] }
+objc2-av-foundation = { workspace = true, features = ["AVCaptureDevice", "AVMediaFormat"] }
+objc2-core-foundation.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSData",
+    "NSGeometry",
+    "NSString",
+    "NSURL",
+    "NSValue",
+    "objc2-core-foundation",
+] }
+objc2-metal = { workspace = true, features = [
+    "MTLDevice",
+    "MTLCommandQueue",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLRenderCommandEncoder",
+    "MTLRenderPass",
+    "MTLRenderPipeline",
+    "MTLLibrary",
+    "MTLBuffer",
+    "MTLTexture",
+    "MTLResource",
+    "MTLAllocation",
+    "MTLArgument",
+    "MTLDrawable",
+    "MTLPixelFormat",
+    "MTLTypes",
+    "dispatch2",
+] }
+objc2-quartz-core = { workspace = true, features = [
+    "CALayer",
+    "CAMetalLayer",
+    "objc2-core-foundation",
+    "objc2-metal",
+] }
+dispatch2 = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 rand.workspace = true

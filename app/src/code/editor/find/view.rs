@@ -4,6 +4,7 @@
 use pathfinder_color::ColorU;
 use warp_editor::editor::NavigationKey;
 use warp_editor::search::{SearchEvent, Searcher};
+pub use warpui::AppContext;
 pub use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::elements::{
     Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
@@ -16,7 +17,6 @@ pub use warpui::geometry::vector::vec2f;
 use warpui::keymap::EditableBinding;
 use warpui::presenter::ChildView;
 use warpui::ui_components::components::UiComponent;
-pub use warpui::AppContext;
 use warpui::{
     Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,

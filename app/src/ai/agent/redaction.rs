@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::super::blocklist::block::secret_redaction::{
-    find_secrets_in_text, SECRET_REDACTION_REPLACEMENT_CHARACTER,
+    SECRET_REDACTION_REPLACEMENT_CHARACTER, find_secrets_in_text,
 };
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput, AnyFileContent,
@@ -134,13 +134,19 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                         }
                     }
                     AIAgentActionResultType::ReadFiles(read_files_result) => {
-                        if let crate::ai::agent::ReadFilesResult::Success { files } =
-                            read_files_result
+                        if let crate::ai::agent::ReadFilesResult::Success {
+                            files,
+                            failed_files,
+                        } = read_files_result
                         {
                             for file in files {
                                 if let AnyFileContent::StringContent(content) = &mut file.content {
                                     redact_secrets(content);
                                 }
+                            }
+                            for failed_file in failed_files {
+                                redact_secrets(&mut failed_file.path);
+                                redact_secrets(&mut failed_file.message);
                             }
                         }
                     }
@@ -238,9 +244,6 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                     // (client inputs -> redaction -> server request -> task messages)
                     AIAgentActionResultType::FetchConversation(_) => {}
 
-                    // StartAgent results contain only an agent ID string, no secrets
-                    AIAgentActionResultType::StartAgent(_) => {}
-
                     // SendMessageToAgent results contain only a message ID or error string, no secrets
                     AIAgentActionResultType::SendMessageToAgent(_) => {}
                     // TransferShellCommandControlToUser result - similar to WriteToLongRunningShellCommand
@@ -263,12 +266,13 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                     }
                     // Orchestrate results contain agent IDs / canonical error
                     // strings only; no user-provided text to redact.
-                    AIAgentActionResultType::RunAgents(_) => {}
+                    AIAgentActionResultType::RunAgents(_)
+                    | AIAgentActionResultType::WaitForEvents(_) => {}
+
+                    // Recording results carry an artifact ref and metadata only.
+                    AIAgentActionResultType::StartRecording(_)
+                    | AIAgentActionResultType::StopRecording(_) => {}
                 }
-            }
-            AIAgentInput::FetchReviewComments { repo_path, context } => {
-                redact_secrets(repo_path);
-                redact_context(Arc::make_mut(context));
             }
             AIAgentInput::InvokeSkill {
                 context,
@@ -348,6 +352,8 @@ fn redact_context(context: &mut [AIAgentContext]) {
             | AIAgentContext::Codebase { .. }
             | AIAgentContext::ProjectRules { .. }
             | AIAgentContext::Git { .. }
+            | AIAgentContext::Repository { .. }
+            | AIAgentContext::PullRequest { .. }
             | AIAgentContext::File(_)
             | AIAgentContext::Skills { .. } => {}
         }

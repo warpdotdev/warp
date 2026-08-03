@@ -1,7 +1,7 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
-use super::terminal::ShareSessionError;
 use super::AgentDriverError;
+use super::terminal::ShareSessionError;
 use crate::ai::blocklist::local_agent_task_sync_model::classify_renderable_error;
 use crate::server::server_api::ai::TaskStatusUpdate;
 
@@ -17,10 +17,10 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::InternalError,
             ),
         ),
-        AgentDriverError::BootstrapFailed => (
+        AgentDriverError::BootstrapFailed { error } => (
             AgentTaskState::Error,
             TaskStatusUpdate::with_error_code(
-                "Terminal session failed to start. Please try running your task again.",
+                format!("Terminal session failed to start: {error}"),
                 PlatformErrorCode::InternalError,
             ),
         ),
@@ -100,13 +100,29 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
-        AgentDriverError::MCPStartupFailed => (
+        AgentDriverError::ManagedMcpResolutionFailed { uid, message } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
-                "One or more MCP servers failed to start. Check that your MCP server configuration is valid and the server process is runnable.",
+                format!("Managed MCP server {uid} could not be resolved: {message}"),
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
+        AgentDriverError::MCPStartupFailed { details } => {
+            let server_lines = details
+                .iter()
+                .map(|detail| format!("- {detail}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (
+                AgentTaskState::Failed,
+                TaskStatusUpdate::with_error_code(
+                    format!(
+                        "One or more MCP servers failed to start:\n\n{server_lines}\n\nCheck that each server's configuration is valid and that it is reachable from the agent's environment."
+                    ),
+                    PlatformErrorCode::EnvironmentSetupFailed,
+                ),
+            )
+        }
         AgentDriverError::MCPJsonParseError(msg) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -154,6 +170,16 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 format!(
                     "Environment setup failed: {msg}. Check your repository URLs and setup commands."
                 ),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
+        // The shell died while an environment setup command was running
+        // (e.g. the command ran `exit`). This is a user-side environment
+        // configuration problem, so classify as FAILED.
+        AgentDriverError::SetupCommandExitedShell { .. } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                error.to_string(),
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
@@ -234,6 +260,13 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::InternalError,
             ),
         ),
+        AgentDriverError::TaskMetadataFetchFailed(err) => (
+            AgentTaskState::Error,
+            TaskStatusUpdate::with_error_code(
+                format!("Failed to fetch task metadata: {err}"),
+                PlatformErrorCode::InternalError,
+            ),
+        ),
         AgentDriverError::AwsBedrockCredentialsFailed(msg) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -310,13 +343,12 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
-        AgentDriverError::HarnessAuthCheckFailed { harness, detail } => {
+        AgentDriverError::HarnessAuthCheckFailed { harness, .. } => {
             let message = format!(
                 "Harness '{harness}' authentication check failed: login credentials \
                  are invalid or expired. Verify that the authentication secret \
                  configured for this harness is correct."
             );
-            log::error!("Preflight detail for {harness}: {detail}");
             (
                 AgentTaskState::Failed,
                 TaskStatusUpdate::with_error_code(
@@ -336,7 +368,6 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                  This usually means the API key is invalid, out of credits, or the \
                  account is misconfigured."
             );
-            log::error!("Runtime failure for {harness}: pattern={pattern}, excerpt={excerpt}");
             (
                 AgentTaskState::Failed,
                 TaskStatusUpdate::with_error_code(

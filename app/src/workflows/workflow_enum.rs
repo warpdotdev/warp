@@ -1,17 +1,13 @@
-pub use warp_server_client::cloud_object::models::{EnumVariants, WorkflowEnum};
-
-use crate::cloud_object::model::generic_string_model::{
-    GenericStringModel, GenericStringObjectId, StringModel,
+pub use cloud_object_models::{
+    CloudWorkflowEnum, CloudWorkflowEnumModel, EnumVariants, WorkflowEnum,
 };
-use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::cloud_object::model::json_model::JsonModel;
 use crate::cloud_object::{
-    GenericCloudObject, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
-    Revision,
+    GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType, Revision,
 };
 use crate::server::sync_queue::QueueItem;
-
-pub type CloudWorkflowEnum = GenericCloudObject<GenericStringObjectId, CloudWorkflowEnumModel>;
-pub type CloudWorkflowEnumModel = GenericStringModel<WorkflowEnum, JsonSerializer>;
 
 impl StringModel for WorkflowEnum {
     type CloudObjectType = CloudWorkflowEnum;

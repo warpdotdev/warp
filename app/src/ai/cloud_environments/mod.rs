@@ -1,27 +1,30 @@
-// Some of these re-exported types aren't used in the wasm build, so we suppress this
-// warning.
+mod catalog;
+pub use catalog::CloudEnvironmentCatalog;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+pub(crate) use catalog::sort_environments_by_recency;
+#[cfg(feature = "tui")]
+pub use catalog::{CloudEnvironment, CloudEnvironmentCatalogEvent};
 #[cfg_attr(target_family = "wasm", expect(unused_imports))]
-pub use warp_server_client::cloud_object::models::{
-    AmbientAgentEnvironment, AwsProviderConfig, BaseImage, GcpProviderConfig, GithubRepo,
-    ProvidersConfig,
+pub use cloud_object_models::{
+    AmbientAgentEnvironment, AwsProviderConfig, BaseImage, CloudAmbientAgentEnvironment,
+    CloudAmbientAgentEnvironmentModel, CodeForge, GcpProviderConfig, GithubRepo, ProvidersConfig,
+    SourceRepo,
 };
-use warp_server_client::cloud_object::{
-    GenericCloudObject, GenericStringModel, GenericStringObjectFormat,
-    GenericStringObjectUniqueKey, JsonObjectType, Owner, Revision,
-};
-use warp_server_client::ids::GenericStringObjectId;
-use warpui::{AppContext, SingletonEntity as _};
+use cloud_objects::cloud_object::Owner;
+use warpui::{AppContext, Entity, SingletonEntity as _, ViewContext};
 
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::generic_string_model::StringModel;
-use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::model::json_model::JsonModel;
+use crate::cloud_object::{
+    GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType, Revision,
+};
 use crate::server::sync_queue::QueueItem;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
-pub type CloudAmbientAgentEnvironment =
-    GenericCloudObject<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>;
-pub type CloudAmbientAgentEnvironmentModel =
-    GenericStringModel<AmbientAgentEnvironment, JsonSerializer>;
+/// Oz web app page for viewing and creating cloud environments.
+#[cfg(feature = "tui")]
+pub const OZ_ENVIRONMENTS_URL: &str = "https://oz.warp.dev/environments";
 
 impl StringModel for AmbientAgentEnvironment {
     type CloudObjectType = CloudAmbientAgentEnvironment;
@@ -73,13 +76,11 @@ impl JsonModel for AmbientAgentEnvironment {
     }
 }
 
-/// Resolves the current owner for creating new environments.
-///
-/// If the user is on a team, returns `Owner::Team`. Otherwise, returns
-/// `Owner::User` with the current user's ID. Returns `None` if the user
-/// is not logged in.
-pub fn owner_for_new_environment(ctx: &AppContext) -> Option<Owner> {
-    if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
+pub fn owner_for_new_environment<T: Entity>(ctx: &ViewContext<T>) -> Option<Owner> {
+    if let Some(team_uid) = UserWorkspaces::as_ref(ctx)
+        .team_for_view(ctx)
+        .map(|team| team.uid)
+    {
         Some(Owner::Team { team_uid })
     } else {
         let user_id = AuthStateProvider::as_ref(ctx).get().user_id()?;
@@ -95,7 +96,3 @@ pub fn owner_for_new_personal_environment(ctx: &AppContext) -> Option<Owner> {
     let user_id = AuthStateProvider::as_ref(ctx).get().user_id()?;
     Some(Owner::User { user_uid: user_id })
 }
-
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;

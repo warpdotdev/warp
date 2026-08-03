@@ -1,4 +1,5 @@
-use std::{collections::HashMap, ffi::OsString};
+use std::collections::HashMap;
+use std::ffi::OsString;
 
 use crate::channel::ChannelState;
 

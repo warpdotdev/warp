@@ -14,10 +14,10 @@ use warp::integration_testing::view_getters::single_terminal_view;
 use warp::settings_view::{PrivacyPageAction, SettingsAction};
 use warp::terminal::model::index::Point;
 use warp::terminal::model::terminal_model::WithinModel;
-use warpui::async_assert;
-use warpui::integration::TestStep;
+use warpui_core::async_assert;
+use warpui_core::integration::TestStep;
 
-use super::{new_builder, Builder};
+use super::{Builder, new_builder};
 use crate::util::skip_if_powershell_core_2303;
 
 pub fn test_secret_is_obfuscated_on_copy() -> Builder {

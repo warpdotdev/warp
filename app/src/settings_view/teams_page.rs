@@ -12,6 +12,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, Border, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
@@ -28,19 +29,19 @@ use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::ui_components::text_input::TextInput;
 use warpui::{
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    ViewContext, ViewHandle, WeakViewHandle,
 };
 
+use super::SettingsSection;
 use super::admin_actions::AdminActions;
 use super::settings_page::{
-    render_customer_type_badge, render_separator, render_sub_header, MatchData, PageType,
-    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    render_customer_type_badge, render_separator, render_sub_header,
 };
 use super::tab_menu::Tabs;
 use super::transfer_ownership_confirmation_modal::{
     TransferOwnershipConfirmationEvent, TransferOwnershipConfirmationModal,
 };
-use super::SettingsSection;
 use crate::ai::AIRequestUsageModel;
 use crate::appearance::Appearance;
 use crate::auth::auth_manager::{AuthManager, LoginGatedFeature};
@@ -105,14 +106,14 @@ const TEXT_FIELD_TOP_PADDING: f32 = 12.;
 const HORIZONTAL_BAR_TO_SUB_HEADER_PADDING: f32 = 9.;
 const SUBSECTION_HEADER_FONT_SIZE: f32 = 18.;
 const SUBSUBSECTION_HEADER_FONT_SIZE: f32 = 14.;
+const OWNER_STATE_CHIP_ACCENT_OPACITY: u8 = 30;
 
 const INVITE_LINK_PREFIX: &str = "/team/";
 const INVALID_DOMAINS_INSTRUCTIONS: &str =
     "Some of the provided domains are invalid, or have already been added.";
 
 const INVITE_LINK_TOGGLE_INSTRUCTIONS: &str = "As an admin, you can choose whether to enable or disable the ability for team members to invite others by invitation link.";
-const INVITE_LINK_DOMAIN_RESTRICTIONS_INSTRUCTIONS: &str =
-    "Restrict by domain — only allow users with emails at specific domains to join your team through the invite link.";
+const INVITE_LINK_DOMAIN_RESTRICTIONS_INSTRUCTIONS: &str = "Restrict by domain — only allow users with emails at specific domains to join your team through the invite link.";
 
 const INVITE_BY_EMAIL_EXPIRY_INSTRUCTIONS: &str = "Email invitations are valid for 7 days.";
 const INVALID_EMAILS_INSTRUCTIONS: &str =
@@ -130,6 +131,13 @@ lazy_static! {
     static ref PAST_DUE_BADGE_COLOR: ColorU = ColorU::new(254, 253, 194, 255);
     static ref UNPAID_BADGE_COLOR: ColorU = ColorU::new(255, 130, 114, 255);
     static ref DELINQUENCY_BADGE_TEXT_COLOR: ColorU = ColorU::new(0, 0, 0, 190);
+}
+
+fn owner_state_chip_text_color(theme: &themes::theme::WarpTheme) -> ColorU {
+    let chip_background = theme
+        .background()
+        .blend(&theme.accent().with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY));
+    theme.main_text_color(chip_background).into_solid()
 }
 
 #[derive(Debug, Clone)]
@@ -446,6 +454,7 @@ enum TeamActionConfirmationTarget {
 }
 
 pub struct TeamsPageView {
+    self_handle: WeakViewHandle<Self>,
     page: PageType<Self>,
     auth_state: Arc<AuthState>,
     create_team_editor: ViewHandle<EditorView>,
@@ -744,7 +753,7 @@ impl TeamsPageView {
             me.handle_email_invites_block_editor_event(event, ctx);
         });
 
-        let current_user_team = user_workspaces.as_ref(ctx).current_team();
+        let current_user_team = user_workspaces.as_ref(ctx).team_for_view(ctx);
 
         let team_members_mouse_state_handles =
             current_user_team.map_or_else(Vec::new, |user_team| {
@@ -825,6 +834,7 @@ impl TeamsPageView {
 
         let page = PageType::new_monolith(TeamsWidget::default(), None, true);
         TeamsPageView {
+            self_handle: ctx.handle(),
             page,
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
             create_team_editor,
@@ -861,7 +871,7 @@ impl TeamsPageView {
     }
 
     fn open_member_actions_menu_for_item(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
-        let Some(team) = self.user_workspaces.as_ref(ctx).current_team() else {
+        let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) else {
             return;
         };
         let Some(current_user_email) = self.auth_state.user_email() else {
@@ -922,6 +932,10 @@ impl TeamsPageView {
                 });
 
                 ctx.emit(TeamsPageViewEvent::TeamsChanged);
+            }
+            UserWorkspacesEvent::CurrentWorkspaceChanged => {
+                // A workspace selection change always emits `TeamsChanged` too,
+                // which already refreshes this page.
             }
             UserWorkspacesEvent::ToggleInviteLinksSuccess => {
                 self.show_success("Toggled invite links", ctx);
@@ -992,7 +1006,7 @@ impl TeamsPageView {
                 let message = self
                     .user_workspaces
                     .as_ref(ctx)
-                    .current_team()
+                    .team_for_view(ctx)
                     .map_or("Successfully joined team".to_string(), |team| {
                         format!("Successfully joined {}", team.name)
                     });
@@ -1011,7 +1025,7 @@ impl TeamsPageView {
             }
             UserWorkspacesEvent::FetchDiscoverableTeamsRejected(e) => {
                 // Don't show toast, only log to sentry
-                log::error!("Failed to fetch discoverable teams: {e:?}");
+                report_error!(e);
             }
             UserWorkspacesEvent::TransferTeamOwnershipSuccess => {
                 self.show_success("Successfully transferred team ownership", ctx);
@@ -1038,6 +1052,9 @@ impl TeamsPageView {
             }
             UserWorkspacesEvent::PurchaseAddonCreditsSuccess => {
                 // Addon credits purchase success is handled in billing_and_usage_page
+            }
+            UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { .. } => {
+                // Checkout handoff is handled by the surface that initiated the purchase
             }
             UserWorkspacesEvent::PurchaseAddonCreditsRejected(_) => {
                 // Addon credits purchase rejection is handled in billing_and_usage_page
@@ -1274,7 +1291,7 @@ impl TeamsPageView {
     }
 
     fn update_approved_domains_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
+        if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
             self.team_approved_domains_mouse_state_handles = team
                 .invite_link_domain_restrictions
                 .iter()
@@ -1288,7 +1305,7 @@ impl TeamsPageView {
     // to use when rendering the different word chips on the editor.
     fn update_domains_validator(&mut self, ctx: &mut ViewContext<Self>) {
         let current_domain_restrictions =
-            if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
+            if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
                 team.invite_link_domain_restrictions
                     .iter()
                     .map(|domain_restriction| domain_restriction.domain.clone())
@@ -1327,7 +1344,7 @@ impl TeamsPageView {
         let blocked = self
             .user_workspaces
             .as_ref(ctx)
-            .current_team()
+            .team_for_view(ctx)
             .map(|team| TeamsWidget::grow_team_warning(team).is_some())
             .unwrap_or(false);
         let state = if blocked {
@@ -1341,7 +1358,7 @@ impl TeamsPageView {
     }
 
     fn update_team_member_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
+        if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
             let total_length = team.pending_email_invites.len() + team.members.len();
             self.team_members_mouse_state_handles =
                 (0..total_length).map(|_| Default::default()).collect();
@@ -1350,7 +1367,7 @@ impl TeamsPageView {
     }
 
     fn update_team_name(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
+        if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
             let team_name = team.name.clone();
             self.rename_team_editor.update(ctx, |editor, ctx| {
                 editor.handle_action(&ClickableTextInputAction::UpdateText(team_name), ctx)
@@ -1362,7 +1379,7 @@ impl TeamsPageView {
     // to use when rendering the different word chips on the editor.
     fn update_email_validator(&mut self, ctx: &mut ViewContext<Self>) {
         let (member_emails, invitee_emails) =
-            if let Some(team) = self.user_workspaces.as_ref(ctx).current_team() {
+            if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
                 (
                     team.members
                         .iter()
@@ -1419,9 +1436,9 @@ impl TeamsPageView {
 
         // Log error to sentry
         if let Some(error) = error {
-            log::error!("{message}: {error:#}");
+            report_error!(error);
         } else {
-            log::error!("{message}");
+            report_error!(anyhow::Error::msg(message.clone()));
         }
     }
 
@@ -1458,7 +1475,11 @@ impl TeamsPageView {
     }
 
     fn leave_team(&mut self, ctx: &mut ViewContext<Self>) {
-        let team_uid = self.user_workspaces.as_ref(ctx).current_team_uid();
+        let team_uid = self
+            .user_workspaces
+            .as_ref(ctx)
+            .team_for_view(ctx)
+            .map(|team| team.uid);
         if let Some(team_uid) = team_uid {
             TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
                 manager.leave_team(team_uid, CloudObjectEventEntrypoint::TeamSettings, ctx)
@@ -1663,8 +1684,16 @@ impl TeamsPageView {
     ) {
         match event {
             ClickableTextInputEvent::Submit(new_name) => {
+                let Some(team_uid) = self
+                    .user_workspaces
+                    .as_ref(ctx)
+                    .team_for_view(ctx)
+                    .map(|team| team.uid)
+                else {
+                    return;
+                };
                 TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.rename_team(new_name.to_string(), ctx)
+                    manager.rename_team(new_name.to_string(), team_uid, ctx)
                 });
                 self.rename_team_editor.update(ctx, |editor, ctx| {
                     editor.handle_action(
@@ -1682,7 +1711,7 @@ impl TeamsPageView {
     fn focus_on_next_input(&mut self, ctx: &mut ViewContext<Self>) {
         let workspaces: &UserWorkspaces = self.user_workspaces.as_ref(ctx);
 
-        if let Some(team) = workspaces.current_team() {
+        if let Some(team) = workspaces.team_for_view(ctx) {
             if team.organization_settings.is_invite_link_enabled {
                 ctx.focus(&self.approve_domains_block_editor);
             } else {
@@ -2573,50 +2602,48 @@ impl TeamsWidget {
         let mut shared_objects_usage_row =
             Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
-        if let Some(policy) = team.billing_metadata.tier.shared_notebooks_policy {
-            if !policy.is_unlimited {
-                let mut shared_notebooks_column = Flex::column();
-                shared_notebooks_column.add_child(
-                    self.render_plan_usage_header("Shared Notebooks".into(), appearance),
-                );
-                let num_shared_notebooks = cloud_model
-                    .active_notebooks_in_space(Space::Team { team_uid: team.uid }, app)
-                    .count();
-                shared_notebooks_column.add_child(
-                    Container::new(self.render_plan_usage_text(
-                        format!("{}/{}", num_shared_notebooks, policy.limit),
-                        appearance,
-                    ))
-                    .with_margin_top(4.)
+        if let Some(policy) = team.billing_metadata.tier.shared_notebooks_policy
+            && !policy.is_unlimited
+        {
+            let mut shared_notebooks_column = Flex::column();
+            shared_notebooks_column
+                .add_child(self.render_plan_usage_header("Shared Notebooks".into(), appearance));
+            let num_shared_notebooks = cloud_model
+                .active_notebooks_in_space(Space::Team { team_uid: team.uid }, app)
+                .count();
+            shared_notebooks_column.add_child(
+                Container::new(self.render_plan_usage_text(
+                    format!("{}/{}", num_shared_notebooks, policy.limit),
+                    appearance,
+                ))
+                .with_margin_top(4.)
+                .finish(),
+            );
+            shared_objects_usage_row.add_child(
+                Container::new(shared_notebooks_column.finish())
+                    .with_margin_right(64.)
                     .finish(),
-                );
-                shared_objects_usage_row.add_child(
-                    Container::new(shared_notebooks_column.finish())
-                        .with_margin_right(64.)
-                        .finish(),
-                );
-            }
+            );
         }
 
-        if let Some(policy) = team.billing_metadata.tier.shared_workflows_policy {
-            if !policy.is_unlimited {
-                let mut shared_workflows_column = Flex::column();
-                shared_workflows_column.add_child(
-                    self.render_plan_usage_header("Shared Workflows".into(), appearance),
-                );
-                let num_shared_workflows = cloud_model
-                    .active_workflows_in_space(Space::Team { team_uid: team.uid }, app)
-                    .count();
-                shared_workflows_column.add_child(
-                    Container::new(self.render_plan_usage_text(
-                        format!("{}/{}", num_shared_workflows, policy.limit),
-                        appearance,
-                    ))
-                    .with_margin_top(4.)
-                    .finish(),
-                );
-                shared_objects_usage_row.add_child(shared_workflows_column.finish());
-            }
+        if let Some(policy) = team.billing_metadata.tier.shared_workflows_policy
+            && !policy.is_unlimited
+        {
+            let mut shared_workflows_column = Flex::column();
+            shared_workflows_column
+                .add_child(self.render_plan_usage_header("Shared Workflows".into(), appearance));
+            let num_shared_workflows = cloud_model
+                .active_workflows_in_space(Space::Team { team_uid: team.uid }, app)
+                .count();
+            shared_workflows_column.add_child(
+                Container::new(self.render_plan_usage_text(
+                    format!("{}/{}", num_shared_workflows, policy.limit),
+                    appearance,
+                ))
+                .with_margin_top(4.)
+                .finish(),
+            );
+            shared_objects_usage_row.add_child(shared_workflows_column.finish());
         }
 
         section.add_child(
@@ -3502,14 +3529,20 @@ impl TeamsWidget {
                         );
                     }
                     ItemState::Owner => {
-                        pending_and_close_row.add_child(self.render_state_chip(
-                            appearance,
-                            "OWNER".into(),
-                            appearance.theme().accent().into(),
-                            appearance.theme().accent().with_opacity(30).into(),
-                            appearance.ui_font_size() - 1.,
-                            Weight::Normal,
-                        ));
+                        pending_and_close_row.add_child(
+                            self.render_state_chip(
+                                appearance,
+                                "OWNER".into(),
+                                owner_state_chip_text_color(appearance.theme()),
+                                appearance
+                                    .theme()
+                                    .accent()
+                                    .with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY)
+                                    .into(),
+                                appearance.ui_font_size() - 1.,
+                                Weight::Normal,
+                            ),
+                        );
                     }
                     ItemState::Admin => {
                         pending_and_close_row.add_child(
@@ -3635,15 +3668,13 @@ impl TeamsWidget {
                 let list_element =
                     Container::new(row.finish()).with_uniform_padding(SCROLLABLE_LIST_ITEM_PADDING);
 
-                let container = if idx % 2 == 0 {
+                if idx % 2 == 0 {
                     list_element
                         .with_background(internal_colors::fg_overlay_1(appearance.theme()))
                         .finish()
                 } else {
                     list_element.finish()
-                };
-
-                container
+                }
             })
             .collect::<Vec<_>>()
             .into_iter();
@@ -4358,7 +4389,7 @@ impl SettingsWidget for TeamsWidget {
             let cloud_model = view.cloud_model.as_ref(app);
             let ai_request_usage_model = view.ai_request_usage_model.as_ref(app);
 
-            match teams.current_team() {
+            match teams.team_for_view_handle(&view.self_handle, app) {
                 Some(team) => self.render_team_management_page(
                     team,
                     cloud_model,
@@ -4423,4 +4454,31 @@ pub fn test_valid_domains() {
     assert!(TeamsPageView::is_valid_domain("warp0.dev0"));
     assert!(TeamsPageView::is_valid_domain("warp.dev"));
     assert!(TeamsPageView::is_valid_domain("miniclip.com"));
+}
+
+#[cfg(test)]
+#[test]
+pub fn test_owner_state_chip_text_contrasts_with_accent_overlay() {
+    let theme_config = themes::theme::WarpThemeConfig::new();
+
+    for theme_kind in [
+        themes::theme::ThemeKind::CyberWave,
+        themes::theme::ThemeKind::WillowDream,
+        themes::theme::ThemeKind::SolarFlare,
+    ] {
+        let theme = theme_config.theme(&theme_kind);
+        let chip_background = theme
+            .background()
+            .blend(&theme.accent().with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY));
+        let text_color = owner_state_chip_text_color(&theme);
+
+        assert!(
+            crate::util::color::high_enough_contrast(
+                text_color,
+                chip_background.into_solid(),
+                crate::util::color::MinimumAllowedContrast::Text,
+            ),
+            "{theme_kind} owner chip text should contrast with its accent overlay"
+        );
+    }
 }

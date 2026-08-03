@@ -7,6 +7,12 @@ use crate::terminal::model::terminal_model::BlockIndex;
 
 impl TerminalFindModel {
     pub fn visible_block_list_match_count(&self) -> usize {
+        // On the async path, `match_count` already excludes filter-hidden
+        // matches, so it reports the visible count consistent with the sync
+        // branch below.
+        if let Some(controller) = self.async_find_controller.as_ref() {
+            return controller.match_count();
+        }
         self.block_list_find_run
             .as_ref()
             .map(|run| {

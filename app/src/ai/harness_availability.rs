@@ -6,17 +6,17 @@ use serde::{Deserialize, Serialize};
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences;
+use warp_errors::report_error;
 use warp_managed_secrets::client::SecretOwner;
 use warp_managed_secrets::{ManagedSecretManager, ManagedSecretValue};
 use warpui::{Entity, ModelContext, RequestState, SingletonEntity};
 
 use crate::ai::harness_display;
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
-use crate::report_error;
 use crate::server::retry_strategies::{
-    is_transient_graphql_or_http_error, OUT_OF_BAND_REQUEST_RETRY_STRATEGY,
+    OUT_OF_BAND_REQUEST_RETRY_STRATEGY, is_transient_graphql_or_http_error,
 };
 use crate::server::server_api::ServerApiProvider;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
@@ -105,7 +105,7 @@ impl HarnessAvailabilityModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let harnesses = get_cached(ctx).unwrap_or_else(default_harnesses);
 
-        ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, _, event, ctx| {
             if let NetworkStatusEvent::NetworkStatusChanged {
                 new_status: NetworkStatusKind::Online,
             } = event
@@ -114,7 +114,7 @@ impl HarnessAvailabilityModel {
             }
         });
 
-        ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, _, event, ctx| {
             if let AuthManagerEvent::AuthComplete = event {
                 let cached_harnesses: Vec<Harness> = me.auth_secrets.keys().copied().collect();
                 for harness in cached_harnesses {
@@ -124,7 +124,7 @@ impl HarnessAvailabilityModel {
             }
         });
 
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
             if let UserWorkspacesEvent::TeamsChanged = event {
                 me.refresh(ctx);
             }
@@ -368,13 +368,12 @@ impl HarnessAvailabilityModel {
     }
 
     fn cache(&self, ctx: &ModelContext<Self>) {
-        if let Ok(serialized) = serde_json::to_string(&self.harnesses) {
-            if let Err(e) = ctx
+        if let Ok(serialized) = serde_json::to_string(&self.harnesses)
+            && let Err(e) = ctx
                 .private_user_preferences()
                 .write_value(CACHE_KEY, serialized)
-            {
-                report_error!(anyhow::anyhow!(e).context("Failed to cache available harnesses"));
-            }
+        {
+            report_error!(anyhow::anyhow!(e).context("Failed to cache available harnesses"));
         }
     }
 }

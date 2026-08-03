@@ -113,7 +113,9 @@ pub fn render_results_body_container(body: Box<dyn Element>, app: &AppContext) -
         .finish()
 }
 
-pub fn render_loading_header(
+/// Renders a single-line status header (icon + title) for a loading, cancelled, or
+/// error state; the caller-supplied icon conveys the status.
+pub fn render_status_header(
     text: String,
     icon: warpui::elements::Icon,
     app: &AppContext,

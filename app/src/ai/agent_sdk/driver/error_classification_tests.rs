@@ -1,8 +1,8 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::classify_driver_error;
-use crate::ai::agent_sdk::driver::terminal::ShareSessionError;
 use crate::ai::agent_sdk::driver::AgentDriverError;
+use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 
 fn assert_state_and_code(
     error: AgentDriverError,
@@ -20,12 +20,56 @@ fn assert_state_and_code(
 // --- Infrastructure errors → ERROR ---
 
 #[test]
-fn bootstrap_failed_is_error_with_internal() {
-    assert_state_and_code(
-        AgentDriverError::BootstrapFailed,
-        AgentTaskState::Error,
-        Some(PlatformErrorCode::InternalError),
+fn bootstrap_pty_spawn_failed_with_reason_includes_reason_in_message() {
+    let (state, update) = classify_driver_error(&AgentDriverError::BootstrapFailed {
+        error: BootstrapError::PtySpawnFailed {
+            reason: Some("Argument list too long (os error 7)".to_string()),
+        },
+    });
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
+    assert!(
+        update.message.contains("Argument list too long"),
+        "message should include the specific failure reason: {:?}",
+        update.message
     );
+}
+
+#[test]
+fn bootstrap_pty_spawn_failed_without_reason_is_generic() {
+    let (state, update) = classify_driver_error(&AgentDriverError::BootstrapFailed {
+        error: BootstrapError::PtySpawnFailed { reason: None },
+    });
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
+    assert!(
+        update.message.contains("Shell spawn failed"),
+        "message should describe the spawn failure: {:?}",
+        update.message
+    );
+}
+
+#[test]
+fn bootstrap_timed_out_is_error_with_internal() {
+    let (state, update) = classify_driver_error(&AgentDriverError::BootstrapFailed {
+        error: BootstrapError::TimedOut,
+    });
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
+    assert!(
+        update.message.contains("did not start within"),
+        "message should describe the timeout: {:?}",
+        update.message
+    );
+}
+
+#[test]
+fn bootstrap_internal_error_is_error_with_internal() {
+    let (state, update) = classify_driver_error(&AgentDriverError::BootstrapFailed {
+        error: BootstrapError::InternalError,
+    });
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
 }
 
 #[test]
@@ -73,11 +117,71 @@ fn mcp_server_not_found_is_failed_with_env_setup() {
 }
 
 #[test]
+fn managed_mcp_resolution_failed_is_failed_with_env_setup() {
+    assert_state_and_code(
+        AgentDriverError::ManagedMcpResolutionFailed {
+            uid: uuid::Uuid::nil(),
+            message: "not active".into(),
+        },
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::EnvironmentSetupFailed),
+    );
+}
+
+#[test]
+fn mcp_startup_failed_is_failed_with_env_setup_and_per_server_details() {
+    let (state, update) = classify_driver_error(&AgentDriverError::MCPStartupFailed {
+        details: vec![
+            "'devin' failed to start: connection refused".to_string(),
+            "'datadog' did not start within 20s".to_string(),
+        ],
+    });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+    // Each unavailable server is rendered as its own bullet line.
+    assert!(
+        update
+            .message
+            .contains("- 'devin' failed to start: connection refused")
+    );
+    assert!(
+        update
+            .message
+            .contains("- 'datadog' did not start within 20s")
+    );
+}
+
+#[test]
 fn environment_setup_failed_is_failed() {
     assert_state_and_code(
         AgentDriverError::EnvironmentSetupFailed("bad repo".into()),
         AgentTaskState::Failed,
         Some(PlatformErrorCode::EnvironmentSetupFailed),
+    );
+}
+
+#[test]
+fn setup_command_exited_shell_is_failed_with_env_setup_and_names_command() {
+    let (state, update) = classify_driver_error(&AgentDriverError::SetupCommandExitedShell {
+        command: "./setup.sh".into(),
+    });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+    // The message must name the setup command that exited the shell and
+    // point the user at the environment's setup commands.
+    assert!(update.message.contains("./setup.sh"), "{}", update.message);
+    assert!(
+        update
+            .message
+            .contains("Check the setup commands for this environment"),
+        "{}",
+        update.message
     );
 }
 

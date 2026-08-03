@@ -5,7 +5,9 @@ use warp_util::path::EscapeChar;
 use super::super::lexer::Lexer;
 use super::super::{Command, Part};
 use super::*;
-use crate::parsers::simple::{decompose_command, top_level_command};
+use crate::parsers::simple::{
+    command_without_leading_env_vars, decompose_command, top_level_command,
+};
 
 #[test]
 fn test_parse_open_subshell() {
@@ -18,11 +20,13 @@ fn test_parse_open_subshell() {
             Part::Literal("cat".into()).spanned((0, 3)),
             Part::Concatenated(vec![
                 Part::Literal("Hello ".into()).spanned((4, 11)),
-                Part::OpenSubshell(vec![Command::new(vec![
-                    Part::Literal("ls".into()).spanned((13, 15)),
-                    Part::Literal("-la".into()).spanned((16, 19)),
+                Part::OpenSubshell(vec![
+                    Command::new(vec![
+                        Part::Literal("ls".into()).spanned((13, 15)),
+                        Part::Literal("-la".into()).spanned((16, 19)),
+                    ])
+                    .spanned((13, 19)),
                 ])
-                .spanned((13, 19)),])
                 .spanned((11, 19)),
             ])
             .spanned((4, 19)),
@@ -42,11 +46,13 @@ fn test_parse_nested_command() {
             Part::Literal("cat".into()).spanned((0, 3)),
             Part::Concatenated(vec![
                 Part::Literal("Hello ".into()).spanned((4, 11)),
-                Part::ClosedSubshell(vec![Command::new(vec![
-                    Part::Literal("ls".into()).spanned((13, 15)),
-                    Part::Literal("-la".into()).spanned((16, 19)),
+                Part::ClosedSubshell(vec![
+                    Command::new(vec![
+                        Part::Literal("ls".into()).spanned((13, 15)),
+                        Part::Literal("-la".into()).spanned((16, 19)),
+                    ])
+                    .spanned((13, 19)),
                 ])
-                .spanned((13, 19)),])
                 .spanned((11, 20)),
             ])
             .spanned((4, 21)),
@@ -82,11 +88,13 @@ cat "Hello $(ls -la)" && echo `ps \`; {echo Goodbye😀}"#;
                 Part::Literal("cat".into()).spanned((36, 39)),
                 Part::Concatenated(vec![
                     Part::Literal("Hello ".into()).spanned((40, 47)),
-                    Part::ClosedSubshell(vec![Command::new(vec![
-                        Part::Literal("ls".into()).spanned((49, 51)),
-                        Part::Literal("-la".into()).spanned((52, 55)),
+                    Part::ClosedSubshell(vec![
+                        Command::new(vec![
+                            Part::Literal("ls".into()).spanned((49, 51)),
+                            Part::Literal("-la".into()).spanned((52, 55)),
+                        ])
+                        .spanned((49, 55))
                     ])
-                    .spanned((49, 55))])
                     .spanned((47, 56)),
                 ])
                 .spanned((40, 57))
@@ -94,11 +102,13 @@ cat "Hello $(ls -la)" && echo `ps \`; {echo Goodbye😀}"#;
             .spanned((36, 58)),
             Command::new(vec![
                 Part::Literal("echo".into()).spanned((61, 65)),
-                Part::ClosedSubshell(vec![Command::new(vec![
-                    Part::Literal("ps".into()).spanned((67, 69)),
-                    Part::Literal("\\".into()).spanned((70, 71)),
+                Part::ClosedSubshell(vec![
+                    Command::new(vec![
+                        Part::Literal("ps".into()).spanned((67, 69)),
+                        Part::Literal("\\".into()).spanned((70, 71)),
+                    ])
+                    .spanned((67, 71))
                 ])
-                .spanned((67, 71))])
                 .spanned((66, 72)),
             ])
             .spanned((61, 72)),
@@ -157,6 +167,26 @@ fn test_decompose_command() {
         assert_eq!(
             HashSet::<String>::from_iter(decompose_command(input, EscapeChar::Backslash).0),
             HashSet::from_iter(expected_output.into_iter().map(ToString::to_string)),
+        );
+    }
+}
+
+#[test]
+fn test_command_without_leading_env_vars() {
+    let test_data = vec![
+        ("X=1 rm -rf target", Some("rm -rf target")),
+        (
+            "X=1 Y=2 curl https://example.com",
+            Some("curl https://example.com"),
+        ),
+        ("rm -rf target", Some("rm -rf target")),
+        ("X=1", None),
+    ];
+
+    for (input, expected_output) in test_data {
+        assert_eq!(
+            command_without_leading_env_vars(input, EscapeChar::Backslash),
+            expected_output.map(ToString::to_string)
         );
     }
 }

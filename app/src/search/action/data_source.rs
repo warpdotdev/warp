@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use fuzzy_match::{FuzzyMatchResult, match_indices_case_insensitive};
 use warpui::keymap::{BindingId, DescriptionContext};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
@@ -103,9 +103,7 @@ impl SyncDataSource for CommandBindingDataSource {
         self.searcher
             .search(&query.text.trim().to_lowercase())
             .map_err(|err| {
-                let search_error = DataSourceSearchError {
-                    message: err.to_string(),
-                };
+                let search_error = DataSourceSearchError::new(err.to_string());
                 Box::new(search_error) as DataSourceRunErrorWrapper
             })
     }
@@ -186,14 +184,14 @@ mod full_text_searcher {
     use std::sync::Arc;
 
     use fuzzy_match::FuzzyMatchResult;
+    use warp_search_core::define_search_schema;
     use warpui::keymap::{BindingId, DescriptionContext};
 
-    use crate::define_search_schema;
-    use crate::search::action::data_source::{is_excluded_binding, ActionSearcher, SearcherAction};
+    use crate::search::action::data_source::{ActionSearcher, SearcherAction, is_excluded_binding};
     use crate::search::action::search_item::MatchedBinding;
     use crate::search::data_source::QueryResult;
     use crate::search::searcher::{
-        SimpleFullTextSearcher, DEFAULT_MEMORY_BUDGET, SCORE_CONVERSION_FACTOR,
+        DEFAULT_MEMORY_BUDGET, SCORE_CONVERSION_FACTOR, SimpleFullTextSearcher,
     };
     use crate::util::bindings::CommandBinding;
 
@@ -259,7 +257,7 @@ mod full_text_searcher {
 
         fn build_index(&mut self) {
             if self.rebuild_search_index().is_err() {
-                log::error!("Failed to create search index writer for actions");
+                warp_errors::report_error!("Failed to create search index writer for actions");
                 self.clear_search_index();
             }
         }

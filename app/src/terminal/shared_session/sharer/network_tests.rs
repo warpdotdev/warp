@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_channel::Sender;
+use byte_unit::Byte;
 use futures_util::stream::AbortHandle;
 use instant::Instant;
 use parking_lot::FairMutex;
@@ -8,18 +9,24 @@ use session_sharing_protocol::common::{
     ActivePrompt, OrderedTerminalEvent, OrderedTerminalEventType, ParticipantId, Selection,
     SessionId,
 };
-use session_sharing_protocol::sharer::{DownstreamMessage, ReconnectToken, UpstreamMessage};
+use session_sharing_protocol::sharer::{
+    DownstreamMessage, FailedToInitializeSessionReason, QuotaType, ReconnectToken, UpstreamMessage,
+};
+use warp_server_client::iap::IapManager;
+use warpui::r#async::FutureExt as _;
 use warpui::{App, ModelHandle};
 use websocket::{Message, WebsocketMessage as _};
 
-use super::{Network, PtyBytesBatchStatus, Stage};
-use crate::auth::auth_manager::AuthManager;
+use super::{
+    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus,
+    Stage, StartupFailure, StartupRetryState, startup_max_attempts,
+};
 use crate::auth::AuthStateProvider;
-use crate::editor::ReplicaId;
+use crate::auth::auth_manager::AuthManager;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::terminal::shared_session::{SharedSessionScrollbackType, MAX_BYTES_SHAREABLE};
 use crate::terminal::TerminalModel;
+use crate::terminal::shared_session::{MAX_BYTES_SHAREABLE, SharedSessionSource};
 use crate::test_util::assert_eventually;
 
 fn is_upstream_message_pty_bytes_read(
@@ -32,6 +39,117 @@ fn is_upstream_message_pty_bytes_read(
         event_no,
         event_type: OrderedTerminalEventType::PtyBytesRead { bytes },
     }) if event_no == expected_event_no && bytes == compressed_bytes)
+}
+
+#[test]
+fn test_startup_max_attempts_only_retries_ambient_agent_sources() {
+    assert_eq!(
+        startup_max_attempts(&SharedSessionSource::ambient_agent(Some(
+            "task-id".to_string()
+        ))),
+        AMBIENT_CREATE_SESSION_MAX_ATTEMPTS
+    );
+    assert_eq!(startup_max_attempts(&SharedSessionSource::user(None)), 1);
+}
+
+#[test]
+fn test_startup_failure_retryability() {
+    assert!(StartupFailure::Transport.is_retryable());
+    assert!(StartupFailure::InitializeSend.is_retryable());
+    assert!(StartupFailure::WebsocketClosedBeforeStarted.is_retryable());
+    assert!(StartupFailure::WebsocketError.is_retryable());
+    assert!(StartupFailure::Timeout.is_retryable());
+    assert!(
+        StartupFailure::ServerRejected(FailedToInitializeSessionReason::InternalServerError {
+            details: "transient".to_string(),
+        })
+        .is_retryable()
+    );
+
+    assert!(
+        !StartupFailure::ServerRejected(FailedToInitializeSessionReason::ScrollbackTooLarge {})
+            .is_retryable()
+    );
+    assert!(
+        !StartupFailure::ServerRejected(FailedToInitializeSessionReason::NoUserQuotaRemaining {
+            quota_type: QuotaType::SessionsCreated,
+        })
+        .is_retryable()
+    );
+    assert!(
+        !StartupFailure::ServerRejected(FailedToInitializeSessionReason::UserNotFound)
+            .is_retryable()
+    );
+}
+
+#[test]
+fn test_should_retry_startup_failure_respects_attempt_budget() {
+    App::test((), |mut app| async move {
+        let network = create_network(&mut app, false).0;
+
+        network.update(&mut app, |network, _| {
+            network.stage = Stage::BeforeStarted {
+                startup_retry: StartupRetryState {
+                    current_attempt: 1,
+                    max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    timeout_abort_handle: None,
+                    transport_abort_handle: None,
+                },
+            };
+            assert!(network.should_retry_startup_failure(&StartupFailure::Timeout));
+
+            network.stage = Stage::BeforeStarted {
+                startup_retry: StartupRetryState {
+                    current_attempt: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    timeout_abort_handle: None,
+                    transport_abort_handle: None,
+                },
+            };
+            assert!(!network.should_retry_startup_failure(&StartupFailure::Timeout));
+
+            let mut startup_retry = StartupRetryState::new(1);
+            startup_retry.current_attempt = 1;
+            network.stage = Stage::BeforeStarted { startup_retry };
+            assert!(
+                !network.should_retry_startup_failure(&StartupFailure::ServerRejected(
+                    FailedToInitializeSessionReason::InternalServerError {
+                        details: "transient".to_string(),
+                    }
+                ))
+            );
+        });
+    });
+}
+
+#[test]
+fn test_startup_attempt_stale_filtering() {
+    App::test((), |mut app| async move {
+        let network = create_network(&mut app, false).0;
+
+        network.update(&mut app, |network, _| {
+            network.stage = Stage::BeforeStarted {
+                startup_retry: StartupRetryState {
+                    current_attempt: 1,
+                    max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    timeout_abort_handle: None,
+                    transport_abort_handle: None,
+                },
+            };
+            assert!(!network.should_ignore_startup_attempt_websocket_callback(1));
+            assert!(network.should_ignore_startup_attempt_websocket_callback(0));
+            network.stage = Stage::StartedSuccessfully {
+                startup_attempt: Some(1),
+            };
+            assert!(!network.should_ignore_startup_attempt_websocket_callback(1));
+            assert!(network.should_ignore_startup_attempt_websocket_callback(0));
+
+            network.stage = Stage::StartedSuccessfully {
+                startup_attempt: None,
+            };
+            assert!(!network.should_ignore_startup_attempt_websocket_callback(0));
+        });
+    });
 }
 
 fn is_upstream_message_command_executed(
@@ -49,7 +167,6 @@ fn create_network(
     session_initialized: bool,
 ) -> (ModelHandle<Network>, Sender<OrderedTerminalEventType>) {
     let (ordered_events_tx, ordered_events_rx) = async_channel::unbounded();
-    let scrollback_type = SharedSessionScrollbackType::None;
     let active_prompt = ActivePrompt::default();
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
 
@@ -57,17 +174,18 @@ fn create_network(
         Network::new_for_test(
             terminal_model,
             ordered_events_rx,
-            scrollback_type,
             active_prompt,
             Selection::None,
-            ReplicaId::random(),
+            Byte::from_u64(MAX_BYTES_SHAREABLE as u64),
             ctx,
         )
     });
 
     if session_initialized {
         network.update(app, |network, _| {
-            network.stage = Stage::StartedSuccessfully;
+            network.stage = Stage::StartedSuccessfully {
+                startup_attempt: None,
+            };
         });
     }
 
@@ -258,20 +376,29 @@ fn test_handle_pty_read_event_while_not_batching() {
             .try_send(event)
             .expect("Can send event over ordered_events_tx");
 
+        // The test executor uses real (async_io) timers with no mock clock, so this
+        // test relies on the batch timer actually firing. Under test builds
+        // PTY_READS_BATCH_THRESHOLD is larger than the ~50ms production value so the
+        // transient `Batching` state below is reliably observable instead of racing the
+        // timer under coarse scheduler granularity (which flaked on Windows CI).
         assert_eventually!(
+            200 =>
             network.read(&app, |network, _ctx| {
                 matches!(&network.pty_bytes_batch_status, PtyBytesBatchStatus::Batching { accumulated, .. } if accumulated == b"a" )
             }),
             "Batching status should be batching"
         );
 
-        // When the timer is done, the accumulated event should be sent to the server.
-        assert_eventually!(
-            ws_proxy_rx.len() == 1,
-            "Accumulated event should be sent to the server"
-        );
-
-        let item = ws_proxy_rx.recv().await;
+        // When the batch timer fires, the accumulated event is flushed to the server.
+        // Await the flush directly rather than polling a fixed tick budget, but bound the
+        // wait (generously, relative to the test-build batch threshold) so a regression in
+        // the timer/flush path fails this test promptly instead of hanging until the CI
+        // timeout.
+        let item = ws_proxy_rx
+            .recv()
+            .with_timeout(PTY_READS_BATCH_THRESHOLD * 20)
+            .await
+            .expect("Accumulated event should be flushed before the timeout");
         assert!(is_upstream_message_pty_bytes_read(
             item.unwrap(),
             0,
@@ -465,7 +592,7 @@ fn test_messages_are_buffered_before_session_initialized() {
         // The network should start in the BeforeStarted state with no events.
         assert_eq!(ws_proxy_rx.len(), 0);
         network.read(&app, |network, _| {
-            assert!(matches!(&network.stage, Stage::BeforeStarted));
+            assert!(matches!(&network.stage, Stage::BeforeStarted { .. }));
             assert_eq!(network.unacked_terminal_events.len(), 0);
         });
 
@@ -486,7 +613,7 @@ fn test_messages_are_buffered_before_session_initialized() {
         // The message should not be sent to the server but should instead be buffered.
         assert_eq!(ws_proxy_rx.len(), 0);
         network.read(&app, |network, _| {
-            assert!(matches!(&network.stage, Stage::BeforeStarted));
+            assert!(matches!(&network.stage, Stage::BeforeStarted { .. }));
             assert!(is_upstream_message_command_executed(
                 &UpstreamMessage::OrderedTerminalEvent(
                     network.unacked_terminal_events.get(&0).unwrap().clone()
@@ -517,7 +644,7 @@ fn test_messages_are_buffered_before_session_initialized() {
         matches!(item.unwrap(), UpstreamMessage::UpdateActivePrompt(_));
 
         network.read(&app, |network, _| {
-            assert!(matches!(&network.stage, Stage::StartedSuccessfully));
+            assert!(matches!(&network.stage, Stage::StartedSuccessfully { .. }));
         });
     });
 }
@@ -526,6 +653,16 @@ fn test_messages_are_buffered_before_session_initialized() {
 fn test_messages_are_buffered_while_reconnecting() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        // Disabled (`None`) IapManager so the reconnect path, which reads the
+        // singleton, doesn't panic; inert no-op in tests.
+        app.add_singleton_model(|ctx| {
+            IapManager::new(
+                None,
+                Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
+                None,
+                ctx,
+            )
+        });
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
         app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
         app.add_singleton_model(AuthManager::new_for_test);
@@ -535,7 +672,7 @@ fn test_messages_are_buffered_while_reconnecting() {
         // The network should start in the BeforeStarted state with no events.
         assert_eq!(ws_proxy_rx.len(), 0);
         network.read(&app, |network, _| {
-            assert!(matches!(&network.stage, Stage::BeforeStarted));
+            assert!(matches!(&network.stage, Stage::BeforeStarted { .. }));
             assert_eq!(network.unacked_terminal_events.len(), 0);
         });
 
@@ -612,7 +749,7 @@ fn test_messages_are_buffered_while_reconnecting() {
         matches!(item.unwrap(), UpstreamMessage::UpdateActivePrompt(_));
 
         network.read(&app, |network, _| {
-            assert!(matches!(&network.stage, Stage::StartedSuccessfully));
+            assert!(matches!(&network.stage, Stage::StartedSuccessfully { .. }));
         });
     });
 }

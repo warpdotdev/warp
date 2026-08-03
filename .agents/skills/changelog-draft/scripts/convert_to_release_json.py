@@ -14,7 +14,8 @@ The output schema:
       "improvements": ["..."],
       "bugFixes": ["..."],
       "images": ["..."],
-      "oz_updates": ["..."]
+      "oz_updates": ["..."],
+      "tui_updates": ["..."]
     }
 """
 
@@ -28,8 +29,14 @@ CATEGORY_MAP = {
     "IMPROVEMENT": "improvements",
     "BUG-FIX": "bugFixes",
     "OZ": "oz_updates",
+    "TUI": "tui_updates",
     "IMAGE": "images",
 }
+
+
+def github_profile_link(username: str) -> str:
+    """Format a GitHub username as a markdown profile link."""
+    return f"[@{username}](https://github.com/{username})"
 
 
 def format_entry(entry: dict) -> str:
@@ -47,7 +54,7 @@ def format_entry(entry: dict) -> str:
 
     attribution = ""
     if entry.get("is_external") and entry.get("author"):
-        attribution = f" — @{entry['author']} ✨"
+        attribution = f" — {github_profile_link(entry['author'])} ✨"
     return f"{text}{link}{attribution}"
 
 
@@ -59,6 +66,7 @@ def convert(draft: dict) -> dict:
         "bugFixes": [],
         "images": [],
         "oz_updates": [],
+        "tui_updates": [],
     }
 
     for entry in draft.get("entries", []):

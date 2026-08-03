@@ -1,10 +1,9 @@
-#[allow(deprecated)]
-use cocoa::base::id;
-use warpui::platform::mac::make_nsstring;
+use objc2::rc::Retained;
+use objc2_foundation::NSString;
 
 use crate::channel::ChannelState;
 
-extern "C" {
+unsafe extern "C" {
     /// ObjC function to create and register the NSServices provider for the
     /// application.
     fn warp_register_services_provider();
@@ -22,9 +21,9 @@ pub fn init() {
 ///
 /// Called synchronously from the NSServices dispatch path in
 /// `services.m::forFilesFromPasteboard:performAction:`, which wraps the body in
-/// an `@autoreleasepool` block. That ambient pool owns the returned NSString.
-#[allow(deprecated)]
-#[no_mangle]
-extern "C-unwind" fn warp_services_provider_custom_url_scheme() -> id {
-    make_nsstring(ChannelState::url_scheme())
+/// an `@autoreleasepool` block. `autorelease_return` hands the string to that
+/// ambient pool, which takes ownership of it.
+#[unsafe(no_mangle)]
+extern "C-unwind" fn warp_services_provider_custom_url_scheme() -> *mut NSString {
+    Retained::autorelease_return(NSString::from_str(ChannelState::url_scheme()))
 }

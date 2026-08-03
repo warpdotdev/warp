@@ -68,6 +68,39 @@ fn from_local_canonicalized_nonexistent() {
 }
 
 #[test]
+fn from_local_absolute_unchecked_accepts_absolute() {
+    // Regression: on wasm32-unknown-unknown, std's `Path::is_absolute()` returns
+    // false for a Unix-rooted path, which used to trip the debug assert here and
+    // panic in debug wasm builds. The guard now checks absoluteness via the
+    // encoding-aware `typed_path` path, so a genuinely-absolute path must be
+    // accepted (and not panic) on every target.
+    #[cfg(unix)]
+    let (input, expected) = (Path::new("/Users/david/src/warp"), "/Users/david/src/warp");
+    #[cfg(windows)]
+    let (input, expected) = (Path::new("C:\\Users\\david\\src"), "C:\\Users\\david\\src");
+
+    let p = StandardizedPath::from_local_absolute_unchecked(input);
+    assert_eq!(p.as_str(), expected);
+}
+
+#[test]
+fn from_local_absolute_unchecked_normalizes() {
+    #[cfg(unix)]
+    let (input, expected) = (
+        Path::new("/home/user/./project/../project"),
+        "/home/user/project",
+    );
+    #[cfg(windows)]
+    let (input, expected) = (
+        Path::new("C:\\home\\user\\.\\project\\..\\project"),
+        "C:\\home\\user\\project",
+    );
+
+    let p = StandardizedPath::from_local_absolute_unchecked(input);
+    assert_eq!(p.as_str(), expected);
+}
+
+#[test]
 fn file_name() {
     let p = StandardizedPath::try_new("/home/user/file.rs").unwrap();
     assert_eq!(p.file_name(), Some("file.rs"));
@@ -100,6 +133,30 @@ fn strip_prefix() {
     let p = StandardizedPath::try_new("/home/user/project/src/main.rs").unwrap();
     let base = StandardizedPath::try_new("/home/user/project").unwrap();
     assert_eq!(p.strip_prefix(&base), Some("src/main.rs"));
+}
+
+#[test]
+fn strip_prefix_equal_path() {
+    let p = StandardizedPath::try_new("/home/user/project").unwrap();
+    let base = StandardizedPath::try_new("/home/user/project").unwrap();
+    assert_eq!(p.strip_prefix(&base), Some(""));
+}
+
+#[test]
+fn strip_prefix_matches_only_whole_components() {
+    // `/repository` is a string-prefix sibling of `/repo`, but it is NOT a
+    // path-component descendant of it. `strip_prefix` must behave like
+    // `starts_with` and refuse to strip, returning `None` rather than a
+    // bogus mid-component remainder like `Some("sitory/foo.rs")`.
+    let base = StandardizedPath::try_new("/repo").unwrap();
+    let sibling = StandardizedPath::try_new("/repository/foo.rs").unwrap();
+    assert!(!sibling.starts_with(&base));
+    assert_eq!(sibling.strip_prefix(&base), None);
+
+    let nested_base = StandardizedPath::try_new("/home/user").unwrap();
+    let nested_sibling = StandardizedPath::try_new("/home/username/x").unwrap();
+    assert!(!nested_sibling.starts_with(&nested_base));
+    assert_eq!(nested_sibling.strip_prefix(&nested_base), None);
 }
 
 #[test]

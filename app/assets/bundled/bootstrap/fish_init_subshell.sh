@@ -1,4 +1,4 @@
-set -g WARP_SESSION_ID (random)
+set -g WARP_SESSION_ID @@WARP_SESSION_ID@@
 set _hostname (command -v hostname >/dev/null 2>&1 && command hostname 2>/dev/null || uname -n)
 set _user (command -v whoami >/dev/null 2>&1 && command whoami 2>/dev/null || echo $USER)
 set -g WARP_IN_MSYS2 (test "$OS" = Windows_NT; and echo true; or echo false)

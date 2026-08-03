@@ -1,5 +1,5 @@
 use string_offset::CharOffset;
-use warpui::text::TextBuffer;
+use warpui_core::text::TextBuffer;
 
 /// Returns the offset of the first newline above a paragraph start before the current position.
 pub fn find_previous_paragraph_start<'a, T, C>(buffer: &'a T, offset: C) -> Option<CharOffset>

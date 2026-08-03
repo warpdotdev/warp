@@ -45,7 +45,7 @@ impl LineEditorStatus {
         sessions: ModelHandle<Sessions>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&model_event_dispatcher, |me, event, ctx| {
+        ctx.subscribe_to_model(&model_event_dispatcher, |me, _, event, ctx| {
             me.handle_model_event(event, ctx);
         });
         LineEditorStatus {

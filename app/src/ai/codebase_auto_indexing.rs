@@ -22,6 +22,16 @@ impl CodebaseAutoIndexingSurface {
     }
 }
 
+pub(crate) fn should_use_codebase_indexing(
+    surface: CodebaseAutoIndexingSurface,
+    ctx: &AppContext,
+) -> bool {
+    codebase_indexing_enabled(
+        surface,
+        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx),
+    )
+}
+
 pub(crate) fn should_auto_index_codebase(
     surface: CodebaseAutoIndexingSurface,
     ctx: &AppContext,
@@ -33,15 +43,21 @@ pub(crate) fn should_auto_index_codebase(
     )
 }
 
+fn codebase_indexing_enabled(
+    surface: CodebaseAutoIndexingSurface,
+    codebase_context_enabled: bool,
+) -> bool {
+    FeatureFlag::FullSourceCodeEmbedding.is_enabled()
+        && surface.required_feature_enabled()
+        && codebase_context_enabled
+}
+
 pub(crate) fn codebase_auto_indexing_enabled(
     surface: CodebaseAutoIndexingSurface,
     codebase_context_enabled: bool,
     auto_indexing_enabled: bool,
 ) -> bool {
-    FeatureFlag::FullSourceCodeEmbedding.is_enabled()
-        && surface.required_feature_enabled()
-        && codebase_context_enabled
-        && auto_indexing_enabled
+    codebase_indexing_enabled(surface, codebase_context_enabled) && auto_indexing_enabled
 }
 
 pub(crate) fn auto_index_candidate_roots<Root>(
@@ -62,72 +78,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn local_auto_indexing_requires_full_source_code_embedding_codebase_context_and_auto_indexing()
-    {
-        {
-            let _flag = FeatureFlag::FullSourceCodeEmbedding.override_enabled(false);
-            assert!(!codebase_auto_indexing_enabled(
-                CodebaseAutoIndexingSurface::Local,
-                true,
-                true,
-            ));
-        }
-        {
-            let _flag = FeatureFlag::FullSourceCodeEmbedding.override_enabled(true);
-            assert!(codebase_auto_indexing_enabled(
-                CodebaseAutoIndexingSurface::Local,
-                true,
-                true,
-            ));
-            assert!(!codebase_auto_indexing_enabled(
-                CodebaseAutoIndexingSurface::Local,
-                false,
-                true,
-            ));
-            assert!(!codebase_auto_indexing_enabled(
-                CodebaseAutoIndexingSurface::Local,
-                true,
-                false,
-            ));
-            assert!(!codebase_auto_indexing_enabled(
-                CodebaseAutoIndexingSurface::Local,
-                false,
-                false,
-            ));
-        }
-    }
-
-    #[test]
-    fn remote_auto_indexing_requires_remote_feature() {
-        {
-            let _remote_flag = FeatureFlag::RemoteCodebaseIndexing.override_enabled(false);
-            let _flag = FeatureFlag::FullSourceCodeEmbedding.override_enabled(true);
-            assert!(!codebase_auto_indexing_enabled(
-                CodebaseAutoIndexingSurface::Remote,
-                true,
-                true,
-            ));
-        }
-        {
-            let _remote_flag = FeatureFlag::RemoteCodebaseIndexing.override_enabled(true);
-            let _flag = FeatureFlag::FullSourceCodeEmbedding.override_enabled(true);
-            assert!(codebase_auto_indexing_enabled(
-                CodebaseAutoIndexingSurface::Remote,
-                true,
-                true,
-            ));
-        }
-    }
-
-    #[test]
-    fn candidate_roots_are_deduped_before_filtering() {
-        let roots = vec!["/repo", "/repo", "/other"];
-        let candidates = auto_index_candidate_roots(roots, |root| *root != "/other");
-
-        assert_eq!(candidates, vec!["/repo"]);
-    }
-}
+#[path = "codebase_auto_indexing_tests.rs"]
+mod tests;

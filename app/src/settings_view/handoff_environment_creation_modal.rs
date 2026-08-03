@@ -1,10 +1,14 @@
 use pathfinder_color::ColorU;
+use warp_errors::report_error;
 use warpui::elements::{
     Align, ChildView, ClippedScrollStateHandle, ClippedScrollable, CrossAxisAlignment, Dismiss,
     Element, Flex, MouseStateHandle, ParentElement, ScrollbarWidth,
 };
 use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+use warpui::{
+    AppContext, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
 
 use crate::ai::ambient_agents::github_auth_url::{AuthSource, GithubAuthRedirectTarget};
 use crate::ai::cloud_environments;
@@ -16,7 +20,7 @@ use crate::settings_view::update_environment_form::{
     EnvironmentFormInitArgs, UpdateEnvironmentForm, UpdateEnvironmentFormEvent,
 };
 use crate::ui_components::buttons::icon_button;
-use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::dialog::{Dialog, dialog_styles};
 use crate::ui_components::icons::Icon;
 
 const DIALOG_WIDTH: f32 = 600.;
@@ -110,7 +114,7 @@ impl HandoffEnvironmentCreationModal {
                 };
 
                 let Some(owner) = owner else {
-                    log::error!("Unable to create environment: not logged in");
+                    report_error!("Unable to create environment: not logged in");
                     ctx.emit(HandoffEnvironmentCreationModalEvent::CreationFailed {
                         error_message: "Not logged in".to_string(),
                     });
@@ -134,7 +138,7 @@ impl HandoffEnvironmentCreationModal {
                         ctx.emit(HandoffEnvironmentCreationModalEvent::Created { env_id });
                     }
                     Err(err) => {
-                        log::error!("Failed to create environment for handoff: {err:#}");
+                        report_error!(&err);
                         ctx.emit(HandoffEnvironmentCreationModalEvent::CreationFailed {
                             error_message: err.to_string(),
                         });
@@ -238,5 +242,11 @@ impl View for HandoffEnvironmentCreationModal {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         self.render_dialog(appearance, app)
+    }
+
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() {
+            ctx.focus(&self.environment_form);
+        }
     }
 }

@@ -12,6 +12,7 @@ const clientMutations = [
   'createFileArtifactUploadTarget',
   'createFolder',
   'createGenericStringObject',
+  'createManagedMcpClientConfig',
   'createManagedSecret',
   'createNotebook',
   'createTeam',
@@ -101,6 +102,7 @@ const clientQueries = [
   'task',
   'taskGitCredentials',
   'taskSecrets',
+  'tuiOnboardingMarkers',
   'listAIConversations',
   'suggestCloudEnvironmentImage'
 ];

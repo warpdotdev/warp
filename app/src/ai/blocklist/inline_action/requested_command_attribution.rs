@@ -1,12 +1,12 @@
 //! Module to attribute AI-generated requested commands
 //! to known documents (e.g. Warp Drive objects).
 
-use markdown_parser::{parse_markdown, FormattedTextLine};
+use markdown_parser::{FormattedTextLine, parse_markdown};
 use warpui::{AppContext, SingletonEntity};
 
 use crate::ai::agent::AIAgentCitation;
 use crate::cloud_object::model::persistence::CloudModel;
-use crate::env_vars::{EnvVarCollection, EnvVarValue};
+use crate::env_vars::{EnvVarCollection, EnvVarCollectionExt, EnvVarExt, EnvVarValue};
 use crate::notebooks::CloudNotebookModel;
 use crate::terminal::shell::ShellType;
 use crate::workflows::command_parser::command_matches_workflow;
@@ -62,10 +62,10 @@ fn is_command_copied_from_notebook(command: &str, notebook: &CloudNotebookModel)
     };
 
     for line in md.lines {
-        if let FormattedTextLine::CodeBlock(code) = line {
-            if command == code.code.trim() {
-                return true;
-            }
+        if let FormattedTextLine::CodeBlock(code) = line
+            && command == code.code.trim()
+        {
+            return true;
         }
     }
 
@@ -89,10 +89,10 @@ fn is_command_copied_from_env_var_collection(
 
     for var in &collection.vars {
         // Check if the env-var is defined as a command and matches the given command exactly.
-        if let EnvVarValue::Command(secret_command) = &var.value {
-            if secret_command.command == command {
-                return true;
-            }
+        if let EnvVarValue::Command(secret_command) = &var.value
+            && secret_command.command == command
+        {
+            return true;
         }
 
         // Check if the command is an initialization of the specific env-var.

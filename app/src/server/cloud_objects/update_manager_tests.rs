@@ -3,6 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use cloud_object_client::MockObjectClient;
+use cloud_object_models::JsonSerializer;
 use futures_lite::future;
 use settings::{RespectUserSyncSetting, SyncToCloud};
 use warp_core::features::FeatureFlag;
@@ -11,16 +13,16 @@ use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{App, ModelHandle, SingletonEntity};
 
 use super::{GetCloudObjectResponse, InitialLoadResponse, UpdateManager};
+use crate::ASSETS;
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
 };
-use crate::auth::user::TEST_USER_UID;
 use crate::auth::UserUid;
+use crate::auth::user::TEST_USER_UID;
 use crate::cloud_object::model::actions::{
     ObjectAction, ObjectActionHistory, ObjectActionSubtype, ObjectActionType, ObjectActions,
 };
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
-use crate::cloud_object::model::json_model::JsonSerializer;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent, UpdateSource};
 use crate::cloud_object::{
     BulkCreateCloudObjectResult, CloudModelType, CloudObjectEventEntrypoint, CloudObjectGuest,
@@ -28,27 +30,25 @@ use crate::cloud_object::{
     GenericCloudObject, GenericStringObjectFormat, JsonObjectType, ObjectDeleteResult,
     ObjectIdType, ObjectMetadataUpdateResult, ObjectPermissionsUpdateData, ObjectType, Owner,
     Revision, RevisionAndLastEditor, ServerCloudObject, ServerFolder, ServerGuestSubject,
-    ServerObject, ServerObjectGuest, ServerPreference, ServerWorkflow, ServerWorkflowEnum, Space,
-    UpdateCloudObjectResult,
+    ServerNotebook, ServerObject, ServerObjectGuest, ServerPreference, ServerWorkflow,
+    ServerWorkflowEnum, Space, UpdateCloudObjectResult,
 };
+use crate::drive::CloudObjectTypeAndId;
 use crate::drive::folders::{CloudFolder, CloudFolderModel, FolderId};
 use crate::drive::sharing::{SharingAccessLevel, Subject, UserKind};
-use crate::drive::CloudObjectTypeAndId;
 use crate::notebooks::{CloudNotebook, CloudNotebookModel, NotebookId};
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::listener::ObjectUpdateMessage;
 use crate::server::cloud_objects::test_utils::{
-    create_update_manager_struct, initialize_app, mock_server_api, UpdateManagerStruct,
+    UpdateManagerStruct, create_update_manager_struct, initialize_app, mock_server_api,
 };
 use crate::server::cloud_objects::update_manager::{
-    get_duplicate_object_name, FetchSingleObjectOption, GenericStringObjectInput, InitiatedBy,
-    ServerMetadata, ServerNotebook, ServerPermissions,
+    FetchSingleObjectOption, GenericStringObjectInput, InitiatedBy, ServerMetadata,
+    ServerPermissions, get_duplicate_object_name,
 };
 use crate::server::ids::{
     ClientId, HashableId, ObjectUid, ServerId, ServerIdAndType, SyncId, ToServerId,
 };
-#[cfg(test)]
-use crate::server::server_api::object::MockObjectClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::{CloudPreferenceModel, Preference};
 use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
@@ -57,7 +57,6 @@ use crate::workflows::workflow_enum::{
 };
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel, WorkflowId};
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
-use crate::ASSETS;
 
 fn create_object<K, M>(
     app: &mut App,
@@ -4593,9 +4592,11 @@ fn test_create_object_online_failure() {
 
         // Verify the object was NOT created in CloudModel.
         CloudModel::handle(&app).read(&app, |cloud_model, _ctx| {
-            assert!(cloud_model
-                .get_workflow(&SyncId::ClientId(client_id))
-                .is_none());
+            assert!(
+                cloud_model
+                    .get_workflow(&SyncId::ClientId(client_id))
+                    .is_none()
+            );
         });
 
         // Verify no database events occurred.
@@ -4656,9 +4657,11 @@ fn test_create_object_online_user_facing_error() {
 
         // Verify the object was NOT created in CloudModel.
         CloudModel::handle(&app).read(&app, |cloud_model, _ctx| {
-            assert!(cloud_model
-                .get_workflow(&SyncId::ClientId(client_id))
-                .is_none());
+            assert!(
+                cloud_model
+                    .get_workflow(&SyncId::ClientId(client_id))
+                    .is_none()
+            );
         });
 
         // Verify no database events occurred.
@@ -4785,15 +4788,19 @@ fn test_create_object_online_with_client_folder_id_fails() {
 
         // Await the result and expect failure.
         let error = result.await.expect_err("create should fail");
-        assert!(error
-            .to_string()
-            .contains("Folder does not exist on the server"));
+        assert!(
+            error
+                .to_string()
+                .contains("Folder does not exist on the server")
+        );
 
         // Verify the object was NOT created in CloudModel.
         CloudModel::handle(&app).read(&app, |cloud_model, _ctx| {
-            assert!(cloud_model
-                .get_workflow(&SyncId::ClientId(client_id))
-                .is_none());
+            assert!(
+                cloud_model
+                    .get_workflow(&SyncId::ClientId(client_id))
+                    .is_none()
+            );
         });
 
         // Verify no database events occurred.
@@ -7210,11 +7217,9 @@ fn test_permissions_update_grants_access() {
         );
 
         // The object isn't in memory yet.
-        assert!(
-            CloudModel::handle(&app).read(&app, |cloud_model, _| cloud_model
-                .get_notebook(&sync_id)
-                .is_none()),
-        );
+        assert!(CloudModel::handle(&app).read(&app, |cloud_model, _| {
+            cloud_model.get_notebook(&sync_id).is_none()
+        }),);
         assert!(cloud_events(&update_manager_struct).is_empty());
 
         // The permissions change should also insert new user profiles.

@@ -5,32 +5,33 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::ops::Deref;
 
-use chrono::DateTime;
+use ai::skills::SkillPathOrigin;
+use anyhow::Context as _;
 use field_mask::{FieldMaskError, FieldMaskOperation};
 use helper::{MessageExt, SubagentExt, ToolCallExt};
 use itertools::Itertools;
 use prost_types::FieldMask;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use warp_multi_agent_api::message::tool_call::subagent::Metadata;
+use warp_errors::report_error;
 use warp_multi_agent_api::message::Message;
+use warp_multi_agent_api::message::tool_call::subagent::Metadata;
 use warp_multi_agent_api::{self as api};
 
 use super::api::convert_conversation::convert_tool_call_result_to_input;
 use super::api::{
-    user_inputs_from_messages, ConversionParams, ConvertAPIMessageToClientOutputMessage,
+    ConversionParams, ConvertAPIMessageToClientOutputMessage, user_inputs_from_messages,
 };
+use super::comment::CodeReview;
 use super::conversation::{context_in_exchanges, update_todo_list_from_todo_op};
 use super::{
     AIAgentContext, AIAgentExchange, AIAgentExchangeId, AIAgentOutput, AIAgentOutputMessage,
     AIAgentOutputStatus, MaybeAIAgentOutputMessage, MessageId, MessageToAIAgentOutputMessageError,
     Shared,
 };
-use crate::ai::agent::comment::CodeReview;
-use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
-use crate::server::datetime_ext::DateTimeExt;
-use crate::terminal::model::block::BlockId;
 use crate::AIAgentTodoList;
+use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
+use crate::terminal::model::block::BlockId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskId(String);
@@ -166,6 +167,12 @@ pub struct Task {
     /// List of `AIAgentExchange`s corresponding to messages contained in this task.
     exchanges: Vec<AIAgentExchange>,
 }
+#[derive(Clone, Copy)]
+pub(super) struct TaskMessageContext<'a> {
+    pub(super) current_todo_list: Option<&'a AIAgentTodoList>,
+    pub(super) active_code_review: Option<&'a CodeReview>,
+    pub(super) skill_path_origin: &'a SkillPathOrigin,
+}
 
 impl Task {
     pub(super) fn new_optimistic_root() -> Self {
@@ -193,6 +200,7 @@ impl Task {
         parent_task: Option<&api::Task>,
         current_todo_list: Option<&AIAgentTodoList>,
         active_code_review: Option<&CodeReview>,
+        skill_path_origin: &SkillPathOrigin,
     ) -> Result<Self, UpgradeOptimisticTaskError> {
         match self.data {
             TaskImpl::Optimistic(optimistic::Task::Root) => {
@@ -234,19 +242,22 @@ impl Task {
         };
 
         let messages = self.source().expect("exists").messages.clone();
-        if let Some(exchange_id) = self.exchanges.last().map(|exchange| exchange.id) {
-            if let Err(e) = self.update_exchange_from_messages(
+        if let Some(exchange_id) = self.exchanges.last().map(|exchange| exchange.id)
+            && let Err(e) = self.update_exchange_from_messages(
                 messages,
                 exchange_id,
-                current_todo_list,
-                active_code_review,
+                TaskMessageContext {
+                    current_todo_list,
+                    active_code_review,
+                    skill_path_origin,
+                },
                 false,
+            )
+            .context(
+                "Failed to update last exchange from messages upon converting to a server created task",
             ) {
-                log::error!(
-                    "Failed to update last exchange from messages upon converting to a server created task: {e:?}"
-                );
+                report_error!(e);
             }
-        }
         Ok(self)
     }
 
@@ -267,26 +278,13 @@ impl Task {
         }
     }
 
-    pub(super) fn new_restored_optimistic_root(
-        task_id: String,
-        restored_exchanges: impl Iterator<Item = AIAgentExchange>,
-    ) -> Self {
-        let mut restored_exchanges = restored_exchanges.collect_vec();
-        restored_exchanges.sort_by_key(|exchange| exchange.start_time);
-
-        Self {
-            id: TaskId::new(task_id),
-            data: TaskImpl::Optimistic(optimistic::Task::Root),
-            exchanges: restored_exchanges,
-        }
-    }
-
     pub(super) fn new_subtask(
         subtask: api::Task,
         parent_task: &api::Task,
         existing_exchange: &AIAgentExchange,
         current_todo_list: Option<&AIAgentTodoList>,
-        current_comment_state: Option<&CodeReview>,
+        active_code_review: Option<&CodeReview>,
+        skill_path_origin: &SkillPathOrigin,
         should_convert_input_messages: bool,
     ) -> Self {
         let subagent_call_and_id = parent_task.messages.iter().find_map(|message| {
@@ -301,7 +299,7 @@ impl Task {
             input: vec![],
             output_status: AIAgentOutputStatus::Streaming { output: None },
             added_message_ids: Default::default(),
-            start_time: DateTime::now().into(),
+            start_time: chrono::Local::now(),
             finish_time: None,
             time_to_first_token_ms: None,
             working_directory: existing_exchange.working_directory.clone(),
@@ -339,8 +337,11 @@ impl Task {
         me.update_exchange_from_messages(
             messages_clone,
             new_exchange_id,
-            current_todo_list,
-            current_comment_state,
+            TaskMessageContext {
+                current_todo_list,
+                active_code_review,
+                skill_path_origin,
+            },
             should_convert_input_messages,
         )
         .expect("Exchange exists and output is in 'streaming' state.");
@@ -433,7 +434,7 @@ impl Task {
             input: vec![],
             output_status: AIAgentOutputStatus::Streaming { output: None },
             added_message_ids: Default::default(),
-            start_time: DateTime::now().into(),
+            start_time: chrono::Local::now(),
             finish_time: None,
             time_to_first_token_ms: None,
             working_directory: existing_exchange.working_directory.clone(),
@@ -481,10 +482,6 @@ impl Task {
                 .is_none_or(|deps| deps.parent_task_id.is_empty()),
             TaskImpl::Optimistic(task) => task.is_root(),
         }
-    }
-
-    pub(super) fn is_optimistic_root_task(&self) -> bool {
-        matches!(&self.data, TaskImpl::Optimistic(optimistic::Task::Root))
     }
 
     pub fn is_cli_subagent(&self) -> bool {
@@ -581,14 +578,12 @@ impl Task {
     pub(super) fn source_for_persistence(&self) -> Option<api::Task> {
         match &self.data {
             TaskImpl::Server(server_data) => Some(server_data.source.clone()),
-            TaskImpl::Optimistic(optimistic::Task::Root) => Some(api::Task {
-                id: self.id.to_string(),
-                messages: vec![],
-                dependencies: None,
-                description: String::new(),
-                summary: String::new(),
-                server_data: String::new(),
-            }),
+            // Optimistic root tasks have a client-generated UUID and no
+            // server-side identity yet. Persisting a stub `api::Task` for them
+            // produces an orphan row in `agent_tasks` that survives the later
+            // server-side upgrade and breaks restore by competing with the
+            // real server root for parentless-task selection. See QUALITY-774.
+            TaskImpl::Optimistic(optimistic::Task::Root) => None,
             TaskImpl::Optimistic(optimistic::Task::CLIAgent(_)) => None,
         }
     }
@@ -667,8 +662,7 @@ impl Task {
         &mut self,
         messages: Vec<api::Message>,
         exchange_id: AIAgentExchangeId,
-        current_todo_list: Option<&AIAgentTodoList>,
-        current_comments: Option<&CodeReview>,
+        message_context: TaskMessageContext<'_>,
         should_convert_input_messages: bool,
     ) -> Result<(), UpdateTaskError> {
         if self.source().is_none() {
@@ -677,8 +671,7 @@ impl Task {
         self.update_exchange_from_messages(
             messages.clone(),
             exchange_id,
-            current_todo_list,
-            current_comments,
+            message_context,
             should_convert_input_messages,
         )?;
         self.try_get_source_mut()?.messages.extend(messages);
@@ -689,8 +682,7 @@ impl Task {
         &mut self,
         message: api::Message,
         exchange_id: AIAgentExchangeId,
-        current_todo_list: Option<&AIAgentTodoList>,
-        current_comments: Option<&CodeReview>,
+        message_context: TaskMessageContext<'_>,
         mask: FieldMask,
         should_convert_input_messages: bool,
     ) -> Result<&api::Message, UpdateTaskError> {
@@ -704,8 +696,7 @@ impl Task {
             self.add_messages(
                 vec![message.clone()],
                 exchange_id,
-                current_todo_list,
-                current_comments,
+                message_context,
                 should_convert_input_messages,
             )?;
             return self
@@ -724,41 +715,42 @@ impl Task {
             .exchange_mut(exchange_id)
             .ok_or(UpdateTaskError::ExchangeNotFound)?;
         exchange_to_update.upsert_output_for_message(
-            &id,
             &updated_message,
-            current_todo_list,
-            current_comments,
+            ConversionParams {
+                task_id: &id,
+                current_todo_list: message_context.current_todo_list,
+                active_code_review: message_context.active_code_review,
+                skill_path_origin: message_context.skill_path_origin,
+            },
         )?;
 
         // Task message updates can carry tool call result updates with them,
         // so we need to convert any tool call results and update the exchange accordingly
         // (this is necessary for session sharing, where the tool call input has not already been
         // optimistically inserted into the exchange)
-        if should_convert_input_messages {
-            if let Some(tool_call_result) = message.tool_call_result() {
-                let mut document_versions: HashMap<AIDocumentId, AIDocumentVersion> =
-                    HashMap::new();
-                if let Some(input) = convert_tool_call_result_to_input(
-                    &id,
-                    tool_call_result,
-                    &HashMap::new(),
-                    &mut document_versions,
-                ) {
-                    if let Some(action_result) = input.action_result() {
-                        if let Some(existing_result) =
-                            exchange_to_update.input.iter_mut().find(|existing_input| {
-                                existing_input
-                                    .action_result()
-                                    .is_some_and(|existing_result| {
-                                        existing_result.id == action_result.id
-                                    })
-                            })
-                        {
-                            *existing_result = input;
-                        }
-                    } else {
-                        exchange_to_update.input.push(input)
+        if should_convert_input_messages && let Some(tool_call_result) = message.tool_call_result()
+        {
+            let mut document_versions: HashMap<AIDocumentId, AIDocumentVersion> = HashMap::new();
+            if let Some(input) = convert_tool_call_result_to_input(
+                &id,
+                tool_call_result,
+                &HashMap::new(),
+                &mut document_versions,
+            ) {
+                if let Some(action_result) = input.action_result() {
+                    if let Some(existing_result) =
+                        exchange_to_update.input.iter_mut().find(|existing_input| {
+                            existing_input
+                                .action_result()
+                                .is_some_and(|existing_result| {
+                                    existing_result.id == action_result.id
+                                })
+                        })
+                    {
+                        *existing_result = input;
                     }
+                } else {
+                    exchange_to_update.input.push(input)
                 }
             }
         }
@@ -772,8 +764,7 @@ impl Task {
         &mut self,
         message: api::Message,
         exchange_id: AIAgentExchangeId,
-        current_todo_list: Option<&AIAgentTodoList>,
-        current_comments: Option<&CodeReview>,
+        message_context: TaskMessageContext<'_>,
         mask: FieldMask,
     ) -> Result<&api::Message, UpdateTaskError> {
         let Some((idx, existing_message)) = self
@@ -783,7 +774,7 @@ impl Task {
             .enumerate()
             .find(|(_, m)| message.id == m.id)
         else {
-            log::error!("Message not found for append client action.");
+            report_error!("Message not found for append client action.");
             return Err(UpdateTaskError::MessageNotFound);
         };
         let updated_message =
@@ -796,10 +787,13 @@ impl Task {
             .exchange_mut(exchange_id)
             .ok_or(UpdateTaskError::ExchangeNotFound)?;
         exchange_to_update.upsert_output_for_message(
-            &id,
             &updated_message,
-            current_todo_list,
-            current_comments,
+            ConversionParams {
+                task_id: &id,
+                current_todo_list: message_context.current_todo_list,
+                active_code_review: message_context.active_code_review,
+                skill_path_origin: message_context.skill_path_origin,
+            },
         )?;
 
         let source = self.try_get_source_mut()?;
@@ -924,8 +918,7 @@ impl Task {
         &mut self,
         messages: Vec<api::Message>,
         exchange_id: AIAgentExchangeId,
-        current_todo_list: Option<&AIAgentTodoList>,
-        active_code_review: Option<&CodeReview>,
+        message_context: TaskMessageContext<'_>,
         should_convert_input_messages: bool,
     ) -> Result<(), UpdateTaskError> {
         let exchange = self
@@ -941,8 +934,8 @@ impl Task {
             for input in user_inputs.into_iter() {
                 // If the input is an ActionResult with an action ID that already exists,
                 // replace the existing one (to handle updates to long-running commands).
-                if let Some(action_result) = input.action_result() {
-                    if let Some(existing_result) =
+                if let Some(action_result) = input.action_result()
+                    && let Some(existing_result) =
                         exchange.input.iter_mut().find(|existing_input| {
                             existing_input
                                 .action_result()
@@ -950,10 +943,9 @@ impl Task {
                                     existing_result.id == action_result.id
                                 })
                         })
-                    {
-                        *existing_result = input;
-                        continue;
-                    }
+                {
+                    *existing_result = input;
+                    continue;
                 }
 
                 exchange.input.push(input);
@@ -967,8 +959,9 @@ impl Task {
                 .filter_map(|m| {
                     match m.to_client_output_message(ConversionParams {
                         task_id: &self.id,
-                        current_todo_list,
-                        active_code_review,
+                        current_todo_list: message_context.current_todo_list,
+                        active_code_review: message_context.active_code_review,
+                        skill_path_origin: message_context.skill_path_origin,
                     }) {
                         Ok(MaybeAIAgentOutputMessage::Message(m)) => Some(Ok(m)),
                         Ok(MaybeAIAgentOutputMessage::NoClientRepresentation) => None,
@@ -988,10 +981,10 @@ pub fn derive_todo_lists_from_root_task(root_task: &Task) -> Vec<AIAgentTodoList
     // Sort messages by their index in the task (messages are already in order within each task)
     // For simplicity, we'll iterate through messages and apply UpdateTodos operations
     for message in root_task.messages() {
-        if let Some(api::message::Message::UpdateTodos(update)) = &message.message {
-            if let Some(operation) = &update.operation {
-                update_todo_list_from_todo_op(&mut todo_lists, operation.clone());
-            }
+        if let Some(api::message::Message::UpdateTodos(update)) = &message.message
+            && let Some(operation) = &update.operation
+        {
+            update_todo_list_from_todo_op(&mut todo_lists, operation.clone());
         }
     }
 
@@ -1003,10 +996,8 @@ impl AIAgentExchange {
     /// Note: this means updates will insert a new entry after previously added entries.
     fn upsert_output_for_message(
         &self,
-        task_id: &TaskId,
         task_message: &api::Message,
-        todo_list: Option<&AIAgentTodoList>,
-        comments: Option<&CodeReview>,
+        conversion_params: super::api::ConversionParams<'_>,
     ) -> Result<(), UpdateTaskError> {
         if let AIAgentOutputStatus::Streaming {
             output: Some(output),
@@ -1020,11 +1011,8 @@ impl AIAgentExchange {
 
             match task_message
                 .clone()
-                .to_client_output_message(ConversionParams {
-                    current_todo_list: todo_list,
-                    active_code_review: comments,
-                    task_id,
-                })? {
+                .to_client_output_message(conversion_params)?
+            {
                 MaybeAIAgentOutputMessage::Message(m) => {
                     // Extract citations from the message and add to the output citations
                     output.extend_citations(m.citations.clone());

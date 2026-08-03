@@ -1,4 +1,4 @@
-use std::any::{type_name, TypeId};
+use std::any::{TypeId, type_name};
 use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
@@ -147,10 +147,10 @@ impl AnyModelHandle {
     }
 
     pub fn downcast<T: Entity>(self) -> Option<ModelHandle<T>> {
-        if self.is::<T>() {
-            if let Some(ref_counts) = self.ref_counts.upgrade() {
-                return Some(ModelHandle::new(self.model_id, &ref_counts));
-            }
+        if self.is::<T>()
+            && let Some(ref_counts) = self.ref_counts.upgrade()
+        {
+            return Some(ModelHandle::new(self.model_id, &ref_counts));
         }
         None
     }
@@ -218,7 +218,9 @@ impl<T: Entity> WeakModelHandle<T> {
     }
 
     pub fn upgrade(&self, app: &AppContext) -> Option<ModelHandle<T>> {
-        if app.models.contains_key(&self.model_id) {
+        if app.models.contains_key(&self.model_id)
+            && !app.ref_counts.lock().is_model_dropped(self.model_id)
+        {
             Some(ModelHandle::new(self.model_id, &app.ref_counts))
         } else {
             None

@@ -4,9 +4,11 @@
 
 mod agent_mode;
 mod ai_assistant;
+mod ai_document;
 mod block_filtering;
 mod bootstrapping;
 mod code_review;
+mod copy_current_path;
 mod ctrl_d;
 mod file_tree;
 mod goto_line;
@@ -15,13 +17,16 @@ mod input;
 mod keyboard_protocol;
 mod launch_configs;
 mod notebooks;
+mod osc8_hyperlinks;
 mod pane_restoration;
 #[cfg(target_os = "macos")]
 mod preview_config_migration;
 mod remote_server;
+mod rich_input_ctrl_enter;
 mod rules;
 mod secrets;
 mod session_restoration;
+mod settings_execution_profiles;
 mod settings_file_errors;
 mod settings_file_hot_reload;
 mod settings_file_migration;
@@ -43,10 +48,12 @@ use std::time::Duration;
 
 pub use agent_mode::*;
 pub use ai_assistant::*;
-use anyhow::{anyhow, Result};
+pub use ai_document::*;
+use anyhow::{Result, anyhow};
 pub use block_filtering::*;
 pub use bootstrapping::*;
 pub use code_review::*;
+pub use copy_current_path::*;
 pub use ctrl_d::*;
 pub use file_tree::*;
 use float_cmp::assert_approx_eq;
@@ -56,6 +63,7 @@ pub use input::*;
 pub use keyboard_protocol::*;
 pub use launch_configs::*;
 pub use notebooks::*;
+pub use osc8_hyperlinks::*;
 pub use pane_restoration::*;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
@@ -63,11 +71,13 @@ use pathfinder_geometry::vector::Vector2F;
 #[cfg(target_os = "macos")]
 pub use preview_config_migration::*;
 pub use remote_server::*;
+pub use rich_input_ctrl_enter::*;
 pub use rules::*;
 use rust_embed::RustEmbed;
 pub use secrets::*;
 pub use session_restoration::*;
 use settings::Setting as _;
+pub use settings_execution_profiles::*;
 pub use settings_file_errors::*;
 pub use settings_file_hot_reload::*;
 pub use settings_file_migration::*;
@@ -87,12 +97,12 @@ use warp::integration_testing::assertions::{
     assert_binding_display_string, go_offline, go_online, join_a_workspace,
 };
 use warp::integration_testing::block::{
-    assert_block_visible, assert_bottom_of_block_approx_at, assert_num_blocks_in_model,
-    BlockPosition, LinePosition,
+    BlockPosition, LinePosition, assert_block_visible, assert_bottom_of_block_approx_at,
+    assert_num_blocks_in_model,
 };
 use warp::integration_testing::clipboard::assert_clipboard_contains_string;
 use warp::integration_testing::command_palette::{
-    close_command_palette, open_command_palette, open_command_palette_and_run_action, TestStepsExt,
+    TestStepsExt, close_command_palette, open_command_palette, open_command_palette_and_run_action,
 };
 use warp::integration_testing::context_chips::assert_working_dir_is_present;
 use warp::integration_testing::find::{Find, FindWithinBlockState};
@@ -100,7 +110,7 @@ use warp::integration_testing::input::{
     input_contains_string, input_is_empty, open_input_context_menu,
 };
 use warp::integration_testing::navigation_palette::{
-    check_recency, navigate_to_other_session_step, open_navigation_palette_step, RecentSession,
+    RecentSession, check_recency, navigate_to_other_session_step, open_navigation_palette_step,
 };
 use warp::integration_testing::pane_group::assert_focused_pane_index;
 use warp::integration_testing::settings::{
@@ -112,7 +122,7 @@ use warp::integration_testing::step::{
 };
 use warp::integration_testing::tab::{assert_pane_title, assert_tab_title, tab_title_step};
 use warp::integration_testing::terminal::util::{
-    current_shell_starter_and_version, ExactLine, ExpectedExitStatus,
+    ExactLine, ExpectedExitStatus, current_shell_starter_and_version,
 };
 use warp::integration_testing::terminal::{
     assert_active_block_output, assert_active_block_output_for_single_terminal_in_tab,
@@ -149,7 +159,7 @@ use warp::integration_testing::workspace::assert_tab_count;
 use warp::integration_testing::{self, view_of_type};
 use warp::pane_group::AGENT_MODE_PANE_DEFAULT_MINIMUM_WIDTH;
 use warp::settings::{
-    CompletionsOpenWhileTyping, CtrlTabBehavior, MonospaceFontSize, TabBehavior, INPUT_MODE,
+    CompletionsOpenWhileTyping, CtrlTabBehavior, INPUT_MODE, MonospaceFontSize, TabBehavior,
 };
 use warp::settings_view::keybindings::KeybindingsView;
 use warp::settings_view::{FeaturesPageAction, SettingsAction, SettingsSection, SettingsView};
@@ -159,39 +169,40 @@ use warp::terminal::block_list_viewport::{InputMode, ScrollLines, ScrollPosition
 use warp::terminal::find::TerminalFindModel;
 use warp::terminal::input::{Input, InputSuggestionsMode};
 use warp::terminal::keys_settings::KeysSettings;
+use warp::terminal::local_tty::TerminalManager as LocalTtyTerminalManager;
 use warp::terminal::model::ansi::{Handler, InitShellValue};
 use warp::terminal::model::blocks::{BlockHeightItem, BlockHeightSummary, TotalIndex};
-use warp::terminal::model::grid::grid_handler::TermMode;
 use warp::terminal::model::grid::Dimensions;
+use warp::terminal::model::grid::grid_handler::TermMode;
 use warp::terminal::model::terminal_model::BlockIndex;
 use warp::terminal::session_settings::{HonorPS1, SessionSettings, StartupShellOverride};
 use warp::terminal::view::{
-    BlockVisibilityMode, TerminalAction, TerminalViewState, ALIAS_EXPANSION_BANNER_SEEN_KEY,
+    ALIAS_EXPANSION_BANNER_SEEN_KEY, BlockVisibilityMode, TerminalAction, TerminalViewState,
 };
-use warp::terminal::{shell, TerminalView};
+use warp::terminal::{TerminalView, shell};
 use warp::util::bindings::CustomAction;
 use warp::workflows::categories::CategoriesView;
 use warp::workspace::{
-    Workspace, WorkspaceAction, NEW_SESSION_MENU_BUTTON_POSITION_ID, NEW_TAB_BUTTON_POSITION_ID,
+    NEW_SESSION_MENU_BUTTON_POSITION_ID, NEW_TAB_BUTTON_POSITION_ID, Workspace, WorkspaceAction,
 };
-use warp::{cmd_or_ctrl_shift, AgentModeEntrypoint};
-use warpui::event::KeyState;
-use warpui::integration::{AssertionOutcome, StepData, TestStep};
-use warpui::keymap::{Keystroke, PerPlatformKeystroke, Trigger};
-use warpui::platform::keyboard::KeyCode;
-use warpui::platform::{OperatingSystem, TerminationMode};
-use warpui::units::Lines;
-use warpui::windowing::WindowManager;
-use warpui::{
-    async_assert, async_assert_eq, AssetProvider, Event, SingletonEntity, UpdateView, ViewHandle,
+use warp::{AgentModeEntrypoint, cmd_or_ctrl_shift};
+use warpui_core::event::KeyState;
+use warpui_core::integration::{AssertionOutcome, StepData, TestStep};
+use warpui_core::keymap::{Keystroke, PerPlatformKeystroke, Trigger};
+use warpui_core::platform::keyboard::KeyCode;
+use warpui_core::platform::{OperatingSystem, TerminationMode};
+use warpui_core::units::Lines;
+use warpui_core::windowing::WindowManager;
+use warpui_core::{
+    AssetProvider, Event, SingletonEntity, UpdateView, ViewHandle, async_assert, async_assert_eq,
 };
 pub use websockets::*;
 pub use workflows::*;
 pub use workspace::*;
 
 use crate::builder::cargo_target_tmpdir;
-use crate::util::{skip_if_powershell_core_2303, ShellRcType};
-use crate::{user_defaults, Builder};
+use crate::util::{ShellRcType, skip_if_powershell_core_2303};
+use crate::{Builder, user_defaults};
 
 const ADD_NEXT_OCCURRENCE_KEYBINDING: &str = "ctrl-g";
 
@@ -828,8 +839,10 @@ pub fn test_waterfall_input_alt_grid() -> Builder {
         TestStep::new("Close vim")
             .with_typed_characters(&[":q"])
             .with_keystrokes(&["enter"]),
-        vec![TestStep::new("waterfall background should not be rendered")
-            .add_assertion(assert_waterfall_gap_empty_background_rendered(false))],
+        vec![
+            TestStep::new("waterfall background should not be rendered")
+                .add_assertion(assert_waterfall_gap_empty_background_rendered(false)),
+        ],
     );
     builder = builder.with_steps(steps);
 
@@ -1879,8 +1892,8 @@ pub fn test_change_font_size() -> Builder {
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(
-            new_step_with_default_assertions("Press ctrl-shift-> and verify font size increases")
-                .with_keystrokes(&["ctrl-shift->"])
+            new_step_with_default_assertions("Press alt-shift-> and verify font size increases")
+                .with_keystrokes(&["alt-shift->"])
                 .add_assertion(|app, window_id| {
                     let input_view = single_input_view_for_tab(app, window_id, 0);
                     input_view.read(app, |view, _ctx| {
@@ -1901,8 +1914,8 @@ pub fn test_change_font_size() -> Builder {
                 }),
         )
         .with_step(
-            new_step_with_default_assertions("Press ctrl-shift-< and verify font size decreases")
-                .with_keystrokes(&["ctrl-shift-<"])
+            new_step_with_default_assertions("Press alt-shift-< and verify font size decreases")
+                .with_keystrokes(&["alt-shift-<"])
                 .add_assertion(|app, window_id| {
                     let input_view = single_input_view_for_tab(app, window_id, 0);
                     input_view.read(app, |view, _ctx| {
@@ -2003,7 +2016,7 @@ pub fn test_add_and_close_session() -> Builder {
                                     .expect("pane at index 0 is a terminal pane")
                                     .as_ref(ctx)
                                     .as_any()
-                                    .downcast_ref::<warp::terminal::local_tty::TerminalManager>()
+                                    .downcast_ref::<LocalTtyTerminalManager<TerminalView>>()
                                     .expect("terminal pane at index 0 contains a local session")
                                     .pid()
                                     .expect("shell should be spawned")
@@ -5843,6 +5856,101 @@ function prompt {{
         )
 }
 
+pub fn test_copy_block_command_and_output_honor_ps1_disabled() -> Builder {
+    let command = "echo WARP_COPY_E2E_OUTPUT";
+    new_builder()
+        .use_tmp_filesystem_for_test_root_directory()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            command.into(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(
+            new_step_with_default_assertions("Select last block")
+                .with_keystrokes(&["cmdorctrl-up"])
+                .add_assertion(assert_selected_block_index_is_last_renderable()),
+        )
+        .with_steps(open_context_menu_for_selected_block())
+        .with_step(
+            new_step_with_default_assertions("Copy block copies command and output")
+                .with_click_on_saved_position("Copy")
+                .add_assertion(assert_clipboard_contains_string(format!(
+                    "{command}\nWARP_COPY_E2E_OUTPUT"
+                ))),
+        )
+}
+
+pub fn test_copy_block_command_and_output_honor_ps1_enabled() -> Builder {
+    let prompt_text = "this is my custom prompt";
+    let command = "echo WARP_PS1_COPY_E2E_OUTPUT";
+    new_builder()
+        // TODO(CORE-2732): Flakey on linux
+        .set_should_run_test(skip_if_powershell_core_2303)
+        .with_user_defaults(HashMap::from([(
+            HonorPS1::storage_key().to_owned(),
+            true.to_string(),
+        )]))
+        .with_setup(move |utils| {
+            let dir = utils.test_dir();
+            write_rc_files_for_test(
+                &dir,
+                format!(r#"export PS1="{prompt_text}""#),
+                [ShellRcType::Bash, ShellRcType::Zsh],
+            );
+            write_rc_files_for_test(
+                &dir,
+                format!(
+                    r#"
+function fish_prompt
+  echo -n "{prompt_text}"
+end
+"#
+                ),
+                [ShellRcType::Fish],
+            );
+            write_rc_files_for_test(
+                &dir,
+                format!(
+                    r#"
+function prompt {{
+    "{prompt_text}"
+}}
+"#
+                ),
+                [ShellRcType::PowerShell],
+            )
+        })
+        .with_step(
+            wait_until_bootstrapped_single_pane_for_tab(0).add_assertion(move |app, window_id| {
+                let input = single_input_view_for_tab(app, window_id, 0);
+                let input_text = input.read(app, |input, ctx| input.prompt_and_rprompt_text(ctx).0);
+
+                async_assert_eq!(input_text, prompt_text)
+            }),
+        )
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            command.into(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(
+            new_step_with_default_assertions("Select last block")
+                .with_keystrokes(&["cmdorctrl-up"])
+                .add_assertion(assert_selected_block_index_is_last_renderable()),
+        )
+        .with_steps(open_context_menu_for_selected_block())
+        .with_step(
+            new_step_with_default_assertions("Copy block includes PS1 prompt, command, and output")
+                .with_click_on_saved_position("Copy")
+                .add_assertion(assert_clipboard_contains_string(format!(
+                    "{prompt_text}{command}\nWARP_PS1_COPY_E2E_OUTPUT"
+                ))),
+        )
+}
+
 pub fn test_copy_prompt_from_input_honor_ps1_disabled() -> Builder {
     new_builder()
         .use_tmp_filesystem_for_test_root_directory()
@@ -5863,6 +5971,28 @@ pub fn test_copy_prompt_from_input_honor_ps1_disabled() -> Builder {
                 .with_click_on_saved_position("Copy prompt")
                 .add_assertion(assert_clipboard_contains_string("~".into())),
         )
+}
+pub fn test_warp_prompt_unsets_zsh_rprompt() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            let (starter, _) = current_shell_starter_and_version();
+            starter.shell_type() == shell::ShellType::Zsh
+        })
+        .with_user_defaults(HashMap::from([(
+            HonorPS1::storage_key().to_owned(),
+            false.to_string(),
+        )]))
+        .with_setup(|utils| {
+            let dir = utils.test_dir();
+            write_rc_files_for_test(&dir, r#"export RPROMPT="right prompt""#, [ShellRcType::Zsh]);
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "print -r -- ${+RPROMPT}".into(),
+            ExpectedExitStatus::Success,
+            ExactLine::from("0"),
+        ))
 }
 
 pub fn test_copy_prompt_from_input_honor_ps1_enabled() -> Builder {

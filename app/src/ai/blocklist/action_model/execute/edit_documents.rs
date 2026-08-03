@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use ai::diff_validation::DiffDelta;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
@@ -33,7 +33,7 @@ impl EditDocumentsExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let ExecuteActionInput { action, .. } = input;
         let AIAgentAction {
             action: AIAgentActionType::EditDocuments(EditDocumentsRequest { diffs }),

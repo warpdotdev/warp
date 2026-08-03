@@ -17,6 +17,7 @@ use warp_completer::completer::{CommandExitStatus, CommandOutput};
 #[cfg(windows)]
 use warp_core::paths::base_config_dir;
 use warp_core::platform::SessionPlatform;
+use warp_errors::report_error;
 use warp_util::path::{
     convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
 };
@@ -323,10 +324,12 @@ impl ShellType {
             }
             #[cfg(windows)]
             ShellType::PowerShell => {
-                vec![base_config_dir()
-                    .join("Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt")
-                    .display()
-                    .to_string()]
+                vec![
+                    base_config_dir()
+                        .join("Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt")
+                        .display()
+                        .to_string(),
+                ]
             }
         }
     }
@@ -631,7 +634,10 @@ impl ShellType {
                 // this will print one item per line. However, when it is converted to a string,
                 // it will join the entries together with a space. So to make sure we get one item
                 // per line, we explicitly join the results with a newline.
-                "Get-Command -CommandType Application | Select-Object -ExpandProperty Name"
+                //
+                // We write the joined text to stdout as explicit UTF-8 bytes so localized
+                // executable names do not depend on the machine's active Windows code page.
+                r#"$names = Get-Command -CommandType Application | Select-Object -ExpandProperty Name; $text = [string]::Join([Environment]::NewLine, $names); $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($text); [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)"#
             }
         }
     }
@@ -734,6 +740,31 @@ impl ShellType {
                 log::warn!("Generator for executable names failed: {e:#}");
                 Vec::new()
             }
+        }
+    }
+
+    pub fn shell_command_to_get_all_functions(&self) -> Option<&'static str> {
+        match self {
+            ShellType::PowerShell => Some(
+                "$names = Get-Command -CommandType Function | Where-Object { \
+                -not $_.Name.StartsWith('Warp') } | Select-Object -ExpandProperty Name; \
+                $text = [string]::Join([Environment]::NewLine, $names); \
+                $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($text); \
+                [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)",
+            ),
+            _ => None,
+        }
+    }
+
+    pub fn shell_command_to_get_all_builtins(&self) -> Option<&'static str> {
+        match self {
+            ShellType::PowerShell => Some(
+                "$names = Get-Command -CommandType Cmdlet | Select-Object -ExpandProperty Name; \
+                $text = [string]::Join([Environment]::NewLine, $names); \
+                $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($text); \
+                [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)",
+            ),
+            _ => None,
         }
     }
 
@@ -906,15 +937,13 @@ impl From<ShellLaunchData> for SessionPlatform {
 /// Unescape the key and value for an alias, returning None if either fails
 fn unescape_alias_key_value(key: &str, value: &str) -> Option<(SmolStr, String)> {
     let key = unescape_quotes(key)
-        .map_err(|e| {
-            log::error!("Unable to unescape key for alias: {e}");
-            e
+        .inspect_err(|e| {
+            report_error!(e);
         })
         .ok()?;
     let value = unescape_quotes(value)
-        .map_err(|e| {
-            log::error!("Unable to unescape value for alias: {e}");
-            e
+        .inspect_err(|e| {
+            report_error!(e);
         })
         .ok()?;
     Some((key.into(), value))

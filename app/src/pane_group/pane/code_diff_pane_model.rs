@@ -11,7 +11,7 @@ pub struct CodeDiffPaneModel {}
 impl CodeDiffPaneModel {
     pub fn new(view: ViewHandle<CodeDiffView>, ctx: &mut ModelContext<Self>) -> Self {
         // Subscribe to the CodeDiffView events
-        ctx.subscribe_to_view(&view, |_model, event, ctx| ctx.emit(event.clone()));
+        ctx.subscribe_to_view(&view, |_model, _, event, ctx| ctx.emit(event.clone()));
 
         Self {}
     }

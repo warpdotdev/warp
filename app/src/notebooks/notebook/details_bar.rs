@@ -10,14 +10,14 @@ use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, SingletonEntity};
 
 use super::super::active_notebook_data::ActiveNotebookData;
-use super::{NotebookAction, EDIT_BUTTON_MARGIN};
+use super::{EDIT_BUTTON_MARGIN, NotebookAction};
 use crate::appearance::Appearance;
 use crate::cloud_object::breadcrumbs::ContainingObject;
 use crate::cloud_object::model::view::{Editor, EditorState};
 use crate::drive::sharing::ContentEditability;
 use crate::notebooks::active_notebook_data::Mode;
 use crate::notebooks::styles;
-use crate::ui_components::breadcrumb::{render_breadcrumbs, BreadcrumbState};
+use crate::ui_components::breadcrumb::{BreadcrumbState, render_breadcrumbs};
 use crate::ui_components::buttons::{accent_icon_button, icon_button};
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_profiles::UserProfiles;

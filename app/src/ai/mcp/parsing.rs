@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use chrono::DateTime;
 use handlebars::{get_arguments, render_template};
 #[cfg(feature = "local_fs")]
 use serde::Deserialize;
@@ -11,7 +10,6 @@ use crate::ai::mcp::templatable_installation::{
 };
 #[cfg(feature = "local_fs")]
 use crate::ai::mcp::{JSONMCPServer, JSONTransportType};
-use crate::server::datetime_ext::DateTimeExt;
 
 /// Normalize MCP JSON input to ensure it has a server name wrapper.
 ///
@@ -192,6 +190,8 @@ pub(crate) fn normalize_codex_toml_to_json(file_contents: &str) -> Result<String
 pub struct ParsedTemplatableMCPServerResult {
     pub templatable_mcp_server: TemplatableMCPServer,
     pub templatable_mcp_server_installation: Option<TemplatableMCPServerInstallation>,
+    #[cfg_attr(target_family = "wasm", expect(dead_code))]
+    pub variable_values: HashMap<String, VariableValue>,
 }
 
 /// Extracts a field from JSON as a HashMap<String, String>.
@@ -237,6 +237,7 @@ impl ParsedTemplatableMCPServerResult {
     /// Unlike [`from_user_json`], this only recognises servers under a known
     /// wrapper key (`mcpServers`, `servers`, etc.) and will **not** fall back to
     /// treating every top-level key as a server name.
+    #[cfg(not(target_family = "wasm"))]
     pub fn from_config_file_json(json: &str) -> serde_json::Result<Vec<Self>> {
         let json = json.trim();
         let json = if json.starts_with('{') {
@@ -325,7 +326,7 @@ impl ParsedTemplatableMCPServerResult {
                 json: normalized_json,
                 variables,
             },
-            version: DateTime::now().timestamp(),
+            version: chrono::Local::now().timestamp(),
             gallery_data: None,
         };
 
@@ -344,33 +345,32 @@ impl ParsedTemplatableMCPServerResult {
             .iter()
             .all(|variable| combined_values.contains_key(&variable.key));
 
-        let templatable_mcp_server_installation = match all_variables_present {
-            true => {
-                let variable_values = combined_values
-                    .into_iter()
-                    .map(|(key, value)| {
-                        (
-                            key,
-                            VariableValue {
-                                variable_type: VariableType::Text,
-                                value,
-                            },
-                        )
-                    })
-                    .collect();
+        let variable_values: HashMap<String, VariableValue> = combined_values
+            .into_iter()
+            .map(|(key, value)| {
+                (
+                    key,
+                    VariableValue {
+                        variable_type: VariableType::Text,
+                        value,
+                    },
+                )
+            })
+            .collect();
 
-                Some(TemplatableMCPServerInstallation::new(
-                    uuid::Uuid::new_v4(),
-                    templatable_mcp_server.clone(),
-                    variable_values,
-                ))
-            }
+        let templatable_mcp_server_installation = match all_variables_present {
+            true => Some(TemplatableMCPServerInstallation::new(
+                uuid::Uuid::new_v4(),
+                templatable_mcp_server.clone(),
+                variable_values.clone(),
+            )),
             false => None,
         };
 
         ParsedTemplatableMCPServerResult {
             templatable_mcp_server,
             templatable_mcp_server_installation,
+            variable_values,
         }
     }
 }

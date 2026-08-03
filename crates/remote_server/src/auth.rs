@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use warpui::r#async::BoxFuture;
+use warpui_core::r#async::BoxFuture;
 type GetAuthTokenFn = dyn Fn() -> BoxFuture<'static, Option<String>> + Send + Sync;
 type RemoteServerIdentityKeyFn = dyn Fn() -> String + Send + Sync;
 /// App-supplied authentication and preference context for transport-agnostic

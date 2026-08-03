@@ -4,12 +4,12 @@ use std::path::Path;
 use std::sync::Arc;
 
 use itertools::Itertools as _;
-use markdown_parser::{parse_markdown, FormattedText, FormattedTextFragment, FormattedTextLine};
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine, parse_markdown};
 use parking_lot::FairMutex;
 use settings::Setting;
 use warp_core::features::FeatureFlag;
-use warp_core::report_if_error;
 use warp_core::ui::Icon;
+use warp_errors::report_if_error;
 use warpui::elements::{
     Clipped, Container, CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement,
     HighlightedHyperlink, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
@@ -20,15 +20,17 @@ use warpui::prelude::{
     Align, ConstrainedBox, Cursor, Empty, Hoverable, MainAxisAlignment, SavePosition,
 };
 use warpui::scene::Border;
+use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
 use warpui::{
-    AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+    Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext,
 };
 
 use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::agent_view::{
-    agent_view_bg_color, AgentViewController, AgentViewEntryOrigin,
-    ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE, ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
+    AgentViewController, AgentViewEntryOrigin, ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
+    ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
 };
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::conversation_navigation::ConversationNavigationData;
@@ -41,9 +43,12 @@ use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::model::blocks::BlockHeightItem;
 use crate::terminal::model::session::{BootstrapSessionType, Session, SessionType, Sessions};
 use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
-use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::terminal::view::TerminalAction;
-use crate::terminal::{self, prompt, TerminalModel};
+use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
+use crate::terminal::{self, TerminalModel, prompt};
+use crate::ui_components::icon_with_status::{
+    CIRCLE_RATIO, IconWithStatusVariant, render_icon_with_status,
+};
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
 const CLOUD_AGENT_DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
@@ -105,18 +110,16 @@ impl AgentViewZeroStateBlock {
                 if let BlocklistAIHistoryEvent::AppendedExchange {
                     conversation_id, ..
                 } = event
+                    && *conversation_id == me.conversation_id
                 {
-                    if *conversation_id == me.conversation_id {
-                        me.should_hide = true;
-                        ctx.unsubscribe_to_model(&model_events_clone);
-                        ctx.unsubscribe_to_model(&history_model);
-                        if let Some(cloud_agent_view_model) = cloud_agent_view_model_clone.as_ref()
-                        {
-                            ctx.unsubscribe_to_model(cloud_agent_view_model);
-                        }
-                        ctx.notify();
-                        return;
+                    me.should_hide = true;
+                    ctx.unsubscribe_to_model(&model_events_clone);
+                    ctx.unsubscribe_to_model(&history_model);
+                    if let Some(cloud_agent_view_model) = cloud_agent_view_model_clone.as_ref() {
+                        ctx.unsubscribe_to_model(cloud_agent_view_model);
                     }
+                    ctx.notify();
+                    return;
                 }
 
                 match event {
@@ -254,6 +257,10 @@ impl AgentViewZeroStateBlock {
                 Self::recent_conversations_for_working_directory(current_working_directory, ctx)
             })
             .unwrap_or_default();
+        let should_hide = matches!(origin, AgentViewEntryOrigin::AcceptedPassiveCodeDiff)
+            || is_local_to_cloud_handoff;
+        let is_oz_updates_expanded = !origin.is_cloud_agent()
+            && *AISettings::handle(ctx).as_ref(ctx).should_expand_oz_updates;
 
         Self {
             conversation_id,
@@ -263,13 +270,11 @@ impl AgentViewZeroStateBlock {
             terminal_model,
             current_working_directory,
             cached_recent_conversations,
-            should_hide: matches!(origin, AgentViewEntryOrigin::AcceptedPassiveCodeDiff)
-                || is_local_to_cloud_handoff,
+            should_hide,
             should_show_init_callout,
             has_parent_terminal,
             state_handles,
-            is_oz_updates_expanded: !origin.is_cloud_agent()
-                && *AISettings::handle(ctx).as_ref(ctx).should_expand_oz_updates,
+            is_oz_updates_expanded,
         }
     }
 
@@ -401,7 +406,10 @@ impl View for AgentViewZeroStateBlock {
             HeaderProps {
                 title: "New Oz cloud agent conversation".into(),
                 description: AgentViewDescription::CloudModeWithDocsLink,
-                icon: Icon::OzCloud,
+                icon: IconWithStatusVariant::OzAgent {
+                    status: None,
+                    is_ambient: true,
+                },
             }
         } else {
             let mut local_description =
@@ -417,7 +425,10 @@ impl View for AgentViewZeroStateBlock {
             HeaderProps {
                 title: "New Oz agent conversation".into(),
                 description: AgentViewDescription::PlainText(vec![local_description.into()]),
-                icon: Icon::Oz,
+                icon: IconWithStatusVariant::OzAgent {
+                    status: None,
+                    is_ambient: false,
+                },
             }
         };
 
@@ -425,25 +436,25 @@ impl View for AgentViewZeroStateBlock {
             .with_main_axis_size(MainAxisSize::Min)
             .with_children(render_title_and_description(header_props, app));
 
-        if !self.origin.is_cloud_agent() {
-            if let Some(oz_updates_section) = render_oz_updates(
+        if !self.origin.is_cloud_agent()
+            && let Some(oz_updates_section) = render_oz_updates(
                 OzUpdatesProps {
                     is_expanded: self.is_oz_updates_expanded,
                     state_handles: &self.state_handles,
                 },
                 app,
-            ) {
-                content.add_children([Container::new(oz_updates_section)
-                    .with_margin_top(8.)
-                    .with_margin_bottom(16.)
-                    .finish()]);
-            }
+            )
+        {
+            content.add_children([Container::new(oz_updates_section)
+                .with_margin_top(8.)
+                .with_margin_bottom(16.)
+                .finish()]);
         }
 
         let active_session = self.active_session(app);
         let body = render_body(
             ZeroStateBodyProps {
-                origin: self.origin,
+                origin: self.origin.clone(),
                 has_parent_terminal: self.has_parent_terminal,
                 should_show_init_callout: self.should_show_init_callout,
                 recent_conversations: &self.cached_recent_conversations,
@@ -512,9 +523,11 @@ impl TypedActionView for AgentViewZeroStateBlock {
                 self.is_oz_updates_expanded = !is_expanded;
 
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .should_expand_oz_updates
-                        .set_value(!is_expanded, ctx));
+                    report_if_error!(
+                        settings
+                            .should_expand_oz_updates
+                            .set_value(!is_expanded, ctx)
+                    );
                 });
             }
             AgentViewZeroStateAction::OpenConversation { conversation_id } => {
@@ -564,7 +577,7 @@ enum AgentViewDescription {
 struct HeaderProps {
     title: Cow<'static, str>,
     description: AgentViewDescription,
-    icon: Icon,
+    icon: IconWithStatusVariant,
 }
 
 fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box<dyn Element>> {
@@ -578,23 +591,17 @@ fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box
     } = props;
 
     let title_font_size = styles::title_font_size(appearance);
+    let icon_size = title_font_size / CIRCLE_RATIO;
     let title = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_child(
-            Container::new(
-                ConstrainedBox::new(
-                    icon.to_warpui_icon(
-                        theme
-                            .main_text_color(theme.background())
-                            .into_solid()
-                            .into(),
-                    )
-                    .finish(),
-                )
-                .with_height(title_font_size)
-                .with_width(title_font_size)
-                .finish(),
-            )
+            Container::new(render_icon_with_status(
+                icon,
+                icon_size,
+                0.,
+                theme,
+                theme.background(),
+            ))
             .with_margin_right(8.)
             .finish(),
         )
@@ -613,9 +620,9 @@ fn render_title_and_description(props: HeaderProps, app: &AppContext) -> Vec<Box
             .finish(),
     );
 
-    let bg = agent_view_bg_color(app);
-    let sub_text_color = theme.sub_text_color(bg.into()).into_solid();
-    let main_text_color = theme.main_text_color(bg.into()).into_solid();
+    let bg = theme.background();
+    let sub_text_color = theme.sub_text_color(bg).into_solid();
+    let main_text_color = theme.main_text_color(bg).into_solid();
 
     match description {
         AgentViewDescription::PlainText(text_items) => {
@@ -711,94 +718,100 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
     if origin.is_cloud_agent() {
         return vec![];
     }
-    let mut body_items = if let Some(recent_conversations_section) =
-        render_recent_conversations_section(
-            RecentConversationProps {
-                recent_conversations,
-                active_session,
-                current_working_directory,
-                state_handles,
-            },
-            app,
-        ) {
-        vec![recent_conversations_section]
-    } else {
-        let mut body_items = vec![
-            render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone()),
-                        MessageItem::text("start a new agent conversation"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation);
-                    },
-                    state_handles.start_new_conversation.clone(),
-                )]),
-                app,
-            ),
-            render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(
-                            ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone(),
-                        ),
-                        MessageItem::text("start a new cloud agent conversation"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::EnterCloudAgentView);
-                    },
-                    state_handles.start_cloud_conversation.clone(),
-                )]),
-                app,
-            ),
-            render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(Keystroke {
-                            key: "/model".to_owned(),
-                            ..Default::default()
-                        }),
-                        MessageItem::text("switch model"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::OpenModelSelector);
-                    },
-                    state_handles.switch_model.clone(),
-                )]),
-                app,
-            ),
-        ];
-
-        // Only show "escape to go back" if there's a parent terminal
-        if has_parent_terminal {
-            body_items.push(render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(Keystroke {
-                            key: "escape".to_owned(),
-                            ..Default::default()
-                        }),
-                        MessageItem::text("go back to terminal"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::ExitAgentView);
-                    },
-                    state_handles.exit.clone(),
-                )]),
-                app,
-            ));
+    let mut body_items = match render_recent_conversations_section(
+        RecentConversationProps {
+            recent_conversations,
+            active_session,
+            current_working_directory,
+            state_handles,
+        },
+        app,
+    ) {
+        Some(recent_conversations_section) => {
+            vec![recent_conversations_section]
         }
+        _ => {
+            let mut body_items = vec![
+                render_standard_message(
+                    Message::new(vec![MessageItem::clickable(
+                        vec![
+                            MessageItem::keystroke(
+                                ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone(),
+                            ),
+                            MessageItem::text("start a new agent conversation"),
+                        ],
+                        |ctx| {
+                            ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation {
+                                origin: AgentViewEntryOrigin::Input {
+                                    was_prompt_autodetected: false,
+                                },
+                            });
+                        },
+                        state_handles.start_new_conversation.clone(),
+                    )]),
+                    app,
+                ),
+                render_standard_message(
+                    Message::new(vec![MessageItem::clickable(
+                        vec![
+                            MessageItem::keystroke(
+                                ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone(),
+                            ),
+                            MessageItem::text("start a new cloud agent conversation"),
+                        ],
+                        |ctx| {
+                            ctx.dispatch_typed_action(TerminalAction::EnterCloudAgentView);
+                        },
+                        state_handles.start_cloud_conversation.clone(),
+                    )]),
+                    app,
+                ),
+                render_standard_message(
+                    Message::new(vec![MessageItem::clickable(
+                        vec![
+                            MessageItem::keystroke(Keystroke {
+                                key: "/model".to_owned(),
+                                ..Default::default()
+                            }),
+                            MessageItem::text("switch model"),
+                        ],
+                        |ctx| {
+                            ctx.dispatch_typed_action(TerminalAction::OpenModelSelector);
+                        },
+                        state_handles.switch_model.clone(),
+                    )]),
+                    app,
+                ),
+            ];
 
-        body_items
+            // Only show "escape to go back" if there's a parent terminal
+            if has_parent_terminal {
+                body_items.push(render_standard_message(
+                    Message::new(vec![MessageItem::clickable(
+                        vec![
+                            MessageItem::keystroke(Keystroke {
+                                key: "escape".to_owned(),
+                                ..Default::default()
+                            }),
+                            MessageItem::text("go back to terminal"),
+                        ],
+                        |ctx| {
+                            ctx.dispatch_typed_action(TerminalAction::ExitAgentView);
+                        },
+                        state_handles.exit.clone(),
+                    )]),
+                    app,
+                ));
+            }
+
+            body_items
+        }
     };
 
     if should_show_init_callout {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
-        let main_text_color = theme
-            .main_text_color(agent_view_bg_color(app).into())
-            .into_solid();
+        let main_text_color = theme.main_text_color(theme.background()).into_solid();
         let init_message = Message::new(vec![
             MessageItem::keystroke(Keystroke {
                 key: "/init".to_owned(),
@@ -1170,9 +1183,7 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
                 appearance.monospace_font_size() - 2.,
                 appearance.ui_font_family(),
                 appearance.monospace_font_family(),
-                theme
-                    .main_text_color(agent_view_bg_color(app).into())
-                    .into_solid(),
+                theme.main_text_color(theme.background()).into_solid(),
                 state_handles
                     .update_hyperlinks
                     .get(i)
@@ -1212,14 +1223,19 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
 }
 
 /// Renders the ambient credits banner showing free cloud credits.
-/// If `link_mouse_state` is provided, a "Launch cloud agent" link is shown.
-pub fn render_ambient_credits_banner(credits: i32, app: &AppContext) -> Box<dyn Element> {
+pub fn render_ambient_credits_banner<A>(
+    credits: i32,
+    close_button_mouse_state: MouseStateHandle,
+    dismiss_action: A,
+    app: &AppContext,
+) -> Box<dyn Element>
+where
+    A: Action + Clone + 'static,
+{
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let font_family = appearance.ui_font_family();
     let font_size = styles::CREDITS_BANNER_FONT_SIZE;
-
-    // Use ANSI terminal colors for the pill styling.
     let text_color = theme.terminal_colors().normal.blue;
 
     let credits_text = format!("{credits} free cloud agent credits");
@@ -1228,8 +1244,26 @@ pub fn render_ambient_credits_banner(credits: i32, app: &AppContext) -> Box<dyn 
         .with_style(Properties::default().weight(Weight::Semibold))
         .soft_wrap(false)
         .finish();
+    let close_button = appearance
+        .ui_builder()
+        .close_button(12., close_button_mouse_state)
+        .with_style(UiComponentStyles {
+            font_color: Some(text_color.into()),
+            ..Default::default()
+        })
+        .build()
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(dismiss_action.clone());
+        })
+        .finish();
 
-    Container::new(text)
+    let content = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(text)
+        .with_child(Container::new(close_button).with_margin_left(4.).finish())
+        .finish();
+
+    Container::new(content)
         .with_border(Border::all(1.).with_border_color(text_color.into()))
         .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
         .with_vertical_padding(2.)

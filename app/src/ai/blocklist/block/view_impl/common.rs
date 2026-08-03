@@ -51,10 +51,10 @@ use super::{add_highlights_to_rich_text, add_highlights_to_text};
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::icons::red_stop_icon;
 use crate::ai::agent::{
-    icons, AIAgentAction, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType,
-    AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram,
-    AgentOutputTable, AgentOutputTableRendering, MessageId, ProgrammingLanguage, RenderableAIError,
-    ShellCommandDelay, SummarizationType, UserQueryMode, WebSearchStatus,
+    AIAgentAction, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType, AIAgentTextSection,
+    AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable,
+    AgentOutputTableRendering, MessageId, ProgrammingLanguage, RenderableAIError,
+    ShellCommandDelay, SummarizationType, UserQueryMode, WebSearchStatus, icons,
 };
 use crate::ai::blocklist::block::find::FindState;
 use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBarAction;
@@ -64,22 +64,26 @@ use crate::ai::blocklist::block::{
     TableSectionHandles,
 };
 use crate::ai::blocklist::code_block::{
-    render_code_block_plain, render_code_block_with_warp_text, CodeBlockOptions,
-    CodeSnippetButtonHandles,
+    CodeBlockOptions, CodeSnippetButtonHandles, render_code_block_plain,
+    render_code_block_with_warp_text,
 };
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
+use crate::ai::blocklist::inline_action::gemini_enterprise_credentials_error::GeminiEnterpriseCredentialsErrorView;
 use crate::ai::blocklist::inline_action::inline_action_header::{
     INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
 use crate::ai::blocklist::inline_action::requested_action::RenderableAction;
 use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
-use crate::ai::blocklist::secret_redaction::{redact_secrets_in_element, SecretRedactionState};
-use crate::ai::blocklist::view_util::error_color;
+use crate::ai::blocklist::secret_redaction::{SecretRedactionState, redact_secrets_in_element};
+use crate::ai::blocklist::view_util::{
+    FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL, error_color,
+    failed_output_presentation,
+};
 use crate::ai::blocklist::{BlocklistAIActionModel, ShellCommandExecutor, TextLocation};
 use crate::ai::loading::shimmering_warp_loading_text;
-use crate::ai::AIRequestUsageModel;
+use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::code::editor::view::CodeEditorView;
 use crate::code::editor_management::CodeSource;
 use crate::notebooks::editor::{markdown_table_appearance, rich_text_styles};
@@ -95,7 +99,8 @@ use crate::ui_components::avatar::{Avatar, AvatarContent};
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
-use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
+use crate::util::link_detection::{DetectedLinksState, add_link_detection_mouse_interactions};
+use crate::util::time_format::format_elapsed_seconds;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::CustomerType;
@@ -104,9 +109,6 @@ pub const STATUS_ICON_SIZE_DELTA: f32 = 4.;
 pub const STATUS_FOOTER_VERTICAL_PADDING: f32 = 4.;
 pub const WAITING_FOR_USER_INPUT_MESSAGE: &str = "Agent waiting for instructions...";
 const IMAGE_SOURCE_LINK_LINE_INDEX: usize = 1;
-
-const ERROR_APOLOGY_TEXT: &str = "I'm sorry, I couldn't complete that request.";
-const INTERNAL_WARP_ERROR: &str = "Internal Warp error.";
 
 pub const LOAD_OUTPUT_MESSAGE: &str = "Warping...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_ADJUSTING: &str = "Adjusting tasks...";
@@ -127,7 +129,6 @@ pub const LOAD_OUTPUT_MESSAGE_FOR_WRITING_TO_COMMAND: &str = "Writing command in
 pub const LOAD_OUTPUT_MESSAGE_FOR_WAITING_FOR_COMMAND_COMPLETION: &str =
     "Waiting for command to exit...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_WEB_SEARCH: &str = "Searching the web...";
-pub const LOAD_OUTPUT_MESSAGE_FOR_FETCHING_REVIEW_COMMENTS: &str = "Fetching PR comments...";
 
 #[cfg(feature = "local_fs")]
 pub(crate) type ResolvedBlocklistImageSources = HashMap<String, Option<AssetSource>>;
@@ -141,6 +142,7 @@ pub const BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB: &str =
     "OK if I search the files in this directory?";
 
 const BLOCKLIST_VISUAL_SECTION_HEIGHT_LINE_MULTIPLIER: f32 = 10.0;
+const BLOCKLIST_MERMAID_MAX_HEIGHT_LINE_MULTIPLIER: f32 = 40.0;
 const INLINE_IMAGE_HEIGHT: f32 = 164.;
 const INLINE_IMAGE_MAX_WIDTH: f32 = 218.;
 const INLINE_IMAGE_SPACING: f32 = 32.;
@@ -159,7 +161,7 @@ pub struct WarpingProps<'a, V> {
     pub summarization_start_time: Option<instant::Instant>,
     pub hide_responses_button: Option<(ButtonProps<'a>, bool)>,
     pub take_over_lrc_control_button: Option<ButtonProps<'a>>,
-    pub auto_execute_button: Option<ButtonProps<'a>>,
+    pub auto_execute_button: Option<AutoExecuteButtonProps<'a>>,
     pub queue_next_prompt_button: Option<ButtonProps<'a>>,
     pub stop_button: Option<ButtonProps<'a>>,
     /// Inline `Check now` affordance displayed alongside `Last seen by agent ...`
@@ -178,6 +180,18 @@ pub struct ButtonProps<'a> {
     pub button_handle: &'a MouseStateHandle,
     pub keystroke: Option<&'a Keystroke>,
     pub is_active: bool,
+}
+
+/// Props for the auto-approve / fast-forward button in the warping indicator.
+///
+/// When `is_locked` is set, the button is rendered in its always-on state and
+/// the click handler (plus the action dispatched by the keybinding) are no-ops.
+/// Used for ambient agent conversations where fast-forward is always conceptually on.
+pub struct AutoExecuteButtonProps<'a> {
+    pub button_handle: &'a MouseStateHandle,
+    pub keystroke: Option<&'a Keystroke>,
+    pub is_active: bool,
+    pub is_locked: bool,
 }
 
 pub struct ForceRefreshButtonProps<'a> {
@@ -245,12 +259,6 @@ pub fn render_warping_indicator<V: View>(
         })
     });
 
-    let is_fetching_review_comments = props
-        .model
-        .inputs_to_render(app)
-        .iter()
-        .any(|input| matches!(input, AIAgentInput::FetchReviewComments { .. }));
-
     let summarization_type: Option<SummarizationType> =
         if FeatureFlag::SummarizationCancellationConfirmation.is_enabled() {
             output_to_render.as_ref().and_then(|output| {
@@ -313,8 +321,6 @@ pub fn render_warping_indicator<V: View>(
         LOAD_OUTPUT_MESSAGE_FOR_PREPARING_QUESTION.to_string()
     } else if is_searching_web {
         LOAD_OUTPUT_MESSAGE_FOR_WEB_SEARCH.to_string()
-    } else if is_fetching_review_comments {
-        LOAD_OUTPUT_MESSAGE_FOR_FETCHING_REVIEW_COMMENTS.to_string()
     } else if is_interrupt_query_for_same_conversation
         && output_to_render
             .as_ref()
@@ -332,8 +338,16 @@ pub fn render_warping_indicator<V: View>(
                 LOAD_OUTPUT_MESSAGE_FOR_SEARCH_CODEBASE.to_owned()
             }
             Some(AIAgentActionType::Grep { .. }) => LOAD_OUTPUT_MESSAGE_FOR_GREP.to_owned(),
-            Some(AIAgentActionType::CallMCPTool { name, .. }) => {
-                format!("Calling \"{name}\" MCP tool...")
+            Some(AIAgentActionType::CallMCPTool {
+                server_id, name, ..
+            }) => {
+                match server_id
+                    .as_ref()
+                    .and_then(|id| TemplatableMCPServerManager::get_mcp_name(id, app))
+                {
+                    Some(server) => format!("Calling \"{name}\" MCP tool on {server}..."),
+                    None => format!("Calling \"{name}\" MCP tool..."),
+                }
             }
             Some(AIAgentActionType::ReadMCPResource { name, .. }) => {
                 format!("Reading \"{name}\" MCP resource...")
@@ -513,6 +527,23 @@ pub struct WarpingIndicatorProps {
     pub secondary_element: Option<Box<dyn Element>>,
 }
 
+/// Computes the fixed height of the warping-indicator footer.
+///
+/// The warping text occupies a single line. When a secondary element (an agent
+/// tip or fallback-model explanation) is present, it renders on a second line
+/// below the warping text, so the footer must reserve room for that extra line;
+/// otherwise the `Clipped` wrapper — which keeps action chips from overflowing
+/// narrow panes — also clips the secondary line. The extra line accounts for the
+/// secondary element's font size (`monospace_font_size - 3`, see
+/// `render_agent_tip` / `render_fallback_explanation`) plus its 1px top margin.
+fn warping_footer_height(monospace_font_size: f32, has_secondary_element: bool) -> f32 {
+    let mut height = STATUS_FOOTER_VERTICAL_PADDING * 2. + monospace_font_size;
+    if has_secondary_element {
+        height += (monospace_font_size - 3.) + 1.;
+    }
+    height
+}
+
 /// Helper function to render text in the "warping..." footer.
 /// Additional text that does not use the shimmering text animation can be passed in via
 /// `non_shimmering_text` which is useful if you want some part of the text to constantly update
@@ -530,6 +561,10 @@ pub fn render_warping_indicator_base(
         is_passive_code_diff,
         secondary_element,
     } = props;
+    // Whether a secondary element (an agent tip or fallback-model explanation)
+    // will be rendered on a second line below the warping text. Captured before
+    // `secondary_element` is consumed so the container can reserve room for it.
+    let has_secondary_element = secondary_element.is_some();
     // Unicode code point for the Warp glyph that is embedded in the version of Roboto we bundle
     // into the app. This code point MUST be rendered using Roboto (the default ui font) or else the
     // glyph may not be rendered.
@@ -633,7 +668,10 @@ pub fn render_warping_indicator_base(
     } else {
         let mut container = Container::new(
             ConstrainedBox::new(content)
-                .with_height(STATUS_FOOTER_VERTICAL_PADDING * 2. + appearance.monospace_font_size())
+                .with_height(warping_footer_height(
+                    appearance.monospace_font_size(),
+                    has_secondary_element,
+                ))
                 .finish(),
         )
         .with_padding_right(CONTENT_HORIZONTAL_PADDING);
@@ -646,16 +684,6 @@ pub fn render_warping_indicator_base(
         }
 
         container.finish()
-    }
-}
-
-/// Formats elapsed time as a human-readable string with proper singular/plural.
-pub fn format_elapsed_seconds(elapsed: std::time::Duration) -> String {
-    let total_seconds = elapsed.as_secs();
-    if total_seconds == 1 {
-        "1 second".to_string()
-    } else {
-        format!("{total_seconds} seconds")
     }
 }
 
@@ -764,6 +792,7 @@ fn render_hide_responses_button(
         props.keystroke,
         tooltip_text.to_string(),
         props.is_active,
+        false,
         |ctx| {
             ctx.dispatch_typed_action(BlocklistAIStatusBarAction::ToggleHideResponses);
         },
@@ -795,6 +824,7 @@ pub fn render_switch_control_to_user_button(
         props.keystroke,
         tooltip.to_string(),
         props.is_active,
+        false,
         |ctx| {
             ctx.dispatch_typed_action(TerminalAction::SetInputModeTerminal);
         },
@@ -818,6 +848,7 @@ fn render_stop_button(props: ButtonProps, appearance: &Appearance) -> Box<dyn El
         props.keystroke,
         "Stop agent task".to_string(),
         props.is_active,
+        false,
         |ctx: &mut EventContext<'_>| {
             ctx.dispatch_typed_action(BlocklistAIStatusBarAction::Stop);
         },
@@ -855,14 +886,21 @@ fn render_queue_next_prompt_button(
         props.keystroke,
         tooltip_text.to_string(),
         props.is_active,
+        false,
         |ctx| {
             ctx.dispatch_typed_action(TerminalAction::ToggleQueueNextPrompt);
         },
     )
 }
 
-fn render_auto_approve_button(props: ButtonProps, appearance: &Appearance) -> Box<dyn Element> {
-    let icon = if props.is_active {
+fn render_auto_approve_button(
+    props: AutoExecuteButtonProps,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    // In locked mode (ambient/cloud agent conversations), the button is always
+    // rendered in its "on" state regardless of the underlying conversation state.
+    let is_active = props.is_active || props.is_locked;
+    let icon = if is_active {
         Icon::FastForwardFilled
     } else {
         Icon::FastForward
@@ -879,7 +917,9 @@ fn render_auto_approve_button(props: ButtonProps, appearance: &Appearance) -> Bo
     )
     .finish();
 
-    let tooltip_text = if props.is_active {
+    let tooltip_text = if props.is_locked {
+        "Fast forward is always enabled for cloud agent conversations"
+    } else if is_active {
         "Turn off auto-approve all agent actions"
     } else {
         "Auto-approve all agent actions for this task"
@@ -891,8 +931,12 @@ fn render_auto_approve_button(props: ButtonProps, appearance: &Appearance) -> Bo
         icon,
         props.keystroke,
         tooltip_text.to_string(),
-        props.is_active,
-        |ctx| {
+        is_active,
+        props.is_locked,
+        move |ctx| {
+            if props.is_locked {
+                return;
+            }
             ctx.dispatch_typed_action(TerminalAction::ToggleAutoexecuteMode);
         },
     )
@@ -970,6 +1014,7 @@ fn render_force_refresh_inline(
     .finish()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_warping_indicator_button<F>(
     mouse_state: MouseStateHandle,
     appearance: &Appearance,
@@ -977,6 +1022,7 @@ fn render_warping_indicator_button<F>(
     keybinding: Option<&Keystroke>,
     tooltip: String,
     is_active: bool,
+    is_disabled: bool,
     mut on_click: F,
 ) -> Box<dyn Element>
 where
@@ -1023,6 +1069,12 @@ where
         UiComponentStyles::default().set_background(internal_colors::fg_overlay_3(theme).into()),
     );
 
+    let cursor = if is_disabled {
+        Cursor::Arrow
+    } else {
+        Cursor::PointingHand
+    };
+
     let mut button = Button::new(
         mouse_state,
         styles,
@@ -1032,7 +1084,7 @@ where
     )
     .with_custom_label(button_content)
     .with_tooltip(move || ui_builder.tool_tip(tooltip.clone()).build().finish())
-    .with_cursor(Some(Cursor::PointingHand));
+    .with_cursor(Some(cursor));
 
     if is_active {
         button = button.active();
@@ -1114,11 +1166,11 @@ pub fn render_text_sections<V: View, A: Action>(
                 // Carve off a subslice of the pre-allocated handles for just
                 // this group, and advance the counter so subsequent image
                 // sections pick up handles from later in the slice.
-                let handle_start = *props.starting_image_section_index;
-                let handle_end = (handle_start + image_group.images.len())
-                    .min(props.image_section_tooltip_handles.len());
-                let handles_for_group =
-                    &props.image_section_tooltip_handles[handle_start..handle_end];
+                let handles_for_group = image_tooltip_handles_for_group(
+                    props.image_section_tooltip_handles,
+                    *props.starting_image_section_index,
+                    image_group.images.len(),
+                );
                 *props.starting_image_section_index += image_group.images.len();
                 let render_context = ImageRenderContext {
                     detected_links: props.detected_links,
@@ -1294,6 +1346,17 @@ fn text_sections_with_indices(
         .map(move |(offset, section)| (starting_text_section_index + offset, section))
 }
 
+fn image_tooltip_handles_for_group(
+    tooltip_handles: &[MouseStateHandle],
+    starting_image_section_index: usize,
+    image_group_len: usize,
+) -> &[MouseStateHandle] {
+    let available_handles = tooltip_handles
+        .get(starting_image_section_index..)
+        .unwrap_or(&[]);
+    &available_handles[..available_handles.len().min(image_group_len)]
+}
+
 #[derive(Clone, Copy)]
 struct IndexedImageSection<'a> {
     section_index: usize,
@@ -1333,11 +1396,12 @@ fn collect_renderable_image_group<'a>(
         let (section_index, section) = indexed_sections[section_offset];
         // Skip whitespace-only plain text sections (e.g. blank lines between images)
         // so that adjacent images separated only by blank lines are grouped together.
-        if let AIAgentTextSection::PlainText { text } = section {
-            if !images.is_empty() && text.text().trim().is_empty() {
-                section_offset += 1;
-                continue;
-            }
+        if let AIAgentTextSection::PlainText { text } = section
+            && !images.is_empty()
+            && text.text().trim().is_empty()
+        {
+            section_offset += 1;
+            continue;
         }
         let AIAgentTextSection::Image { image } = section else {
             break;
@@ -1548,15 +1612,15 @@ pub(super) fn render_rich_text_output_text_section(
         }
 
         let secret_redaction = get_secret_obfuscation_mode(app);
-        if secret_redaction.should_redact_secret() {
-            if let Some(secrets) = props.secret_redaction_state.secrets_for_location(&location) {
-                frame = redact_secrets_in_element(
-                    frame,
-                    secrets,
-                    location,
-                    secret_redaction.is_visually_obfuscated(),
-                );
-            }
+        if secret_redaction.should_redact_secret()
+            && let Some(secrets) = props.secret_redaction_state.secrets_for_location(&location)
+        {
+            frame = redact_secrets_in_element(
+                frame,
+                secrets,
+                location,
+                secret_redaction.is_visually_obfuscated(),
+            );
         }
         frame
     });
@@ -1706,12 +1770,26 @@ enum VisualMarkdownAlignment {
     Center,
 }
 
+/// How a visual markdown block (image or mermaid diagram) is sized.
+#[derive(Clone, Copy, Debug)]
+enum VisualMarkdownSizing {
+    /// Fixed element height. Width is fixed when `width` is set, otherwise
+    /// bounded by `max_width`, otherwise falls back to a square of `height`.
+    FixedHeight {
+        height: f32,
+        width: Option<f32>,
+        max_width: Option<f32>,
+    },
+    /// Fill the available width, deriving the element height from the
+    /// image's intrinsic aspect ratio, capped at `max_height`. When the cap
+    /// applies, the width shrinks proportionally instead of letterboxing.
+    FitWidth { max_height: f32 },
+}
+
 #[derive(Clone)]
 struct VisualMarkdownBlockOptions<A: 'static> {
-    height: f32,
-    width: Option<f32>,
+    sizing: VisualMarkdownSizing,
     copy_action_factory: Option<CopyCodeActionFactory<A>>,
-    max_width: Option<f32>,
     alignment: VisualMarkdownAlignment,
     lightbox_trigger: Option<VisualMarkdownLightboxTrigger>,
     /// When `Some(non_empty)`, the rendered image is wrapped in the standard
@@ -1922,10 +2000,12 @@ fn render_inline_image_group_item<A: Action>(
         asset_source,
         indexed_image.image.markdown_source.clone(),
         VisualMarkdownBlockOptions {
-            height: INLINE_IMAGE_HEIGHT,
-            width: Some(width),
+            sizing: VisualMarkdownSizing::FixedHeight {
+                height: INLINE_IMAGE_HEIGHT,
+                width: Some(width),
+                max_width: None,
+            },
             copy_action_factory: render_context.copy_action_factory,
-            max_width: None,
             alignment: VisualMarkdownAlignment::Left,
             lightbox_trigger: lightbox_trigger_for_section(
                 render_context.lightbox_collection,
@@ -2015,10 +2095,12 @@ fn render_block_image_group_row<A: Action>(
         asset_source,
         indexed_image.image.markdown_source.clone(),
         VisualMarkdownBlockOptions {
-            height: BLOCK_IMAGE_THUMBNAIL_SIZE,
-            width: Some(BLOCK_IMAGE_THUMBNAIL_SIZE),
+            sizing: VisualMarkdownSizing::FixedHeight {
+                height: BLOCK_IMAGE_THUMBNAIL_SIZE,
+                width: Some(BLOCK_IMAGE_THUMBNAIL_SIZE),
+                max_width: None,
+            },
             copy_action_factory: render_context.copy_action_factory,
-            max_width: None,
             alignment: VisualMarkdownAlignment::Center,
             lightbox_trigger: lightbox_trigger_for_section(
                 render_context.lightbox_collection,
@@ -2079,14 +2161,23 @@ fn render_mermaid_diagram_section<A: Action>(
     }
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
+    let sizing = if matches!(asset_state, AssetState::Loaded { .. }) {
+        VisualMarkdownSizing::FitWidth {
+            max_height: mermaid_section_max_height(app),
+        }
+    } else {
+        VisualMarkdownSizing::FixedHeight {
+            height: visual_section_height(app),
+            width: None,
+            max_width: None,
+        }
+    };
     let mermaid_block = render_visual_markdown_block(
         asset_source,
         diagram.markdown_source.clone(),
         VisualMarkdownBlockOptions {
-            height: visual_section_height(app),
-            width: None,
+            sizing,
             copy_action_factory,
-            max_width: visual_section_max_width(&asset_state, visual_section_height(app)),
             alignment: VisualMarkdownAlignment::Center,
             lightbox_trigger: lightbox_trigger_for_section(lightbox_collection, section_index),
             // Mermaid diagrams don't carry CommonMark image titles.
@@ -2147,15 +2238,30 @@ fn render_visual_markdown_block<A: Action>(
         .contain()
         .before_load(placeholder)
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)));
-    let mut content = ConstrainedBox::new(Box::new(image)).with_height(options.height);
-    if let Some(width) = finite_positive_visual_size(options.width) {
-        content = content.with_width(width);
-    } else if let Some(max_width) = finite_positive_visual_size(options.max_width) {
-        content = content.with_max_width(max_width);
-    } else if let Some(fallback_width) = finite_positive_visual_size(Some(options.height)) {
-        content = content.with_width(fallback_width);
-    }
-    let content = content.finish();
+    let content = match options.sizing {
+        VisualMarkdownSizing::FixedHeight {
+            height,
+            width,
+            max_width,
+        } => {
+            let mut content = ConstrainedBox::new(Box::new(image)).with_height(height);
+            if let Some(width) = finite_positive_visual_size(width) {
+                content = content.with_width(width);
+            } else if let Some(max_width) = finite_positive_visual_size(max_width) {
+                content = content.with_max_width(max_width);
+            } else if let Some(fallback_width) = finite_positive_visual_size(Some(height)) {
+                content = content.with_width(fallback_width);
+            }
+            content.finish()
+        }
+        VisualMarkdownSizing::FitWidth { max_height } => {
+            let mut content = ConstrainedBox::new(Box::new(image.layout_using_paint_bounds()));
+            if let Some(max_height) = finite_positive_visual_size(Some(max_height)) {
+                content = content.with_max_height(max_height);
+            }
+            content.finish()
+        }
+    };
     let content = match options.alignment {
         VisualMarkdownAlignment::Left => Align::new(content).left().finish(),
         VisualMarkdownAlignment::Center => Align::new(content).finish(),
@@ -2312,10 +2418,17 @@ fn is_supported_blocklist_image_source(source: &str) -> bool {
 }
 
 fn visual_section_height(app: &AppContext) -> f32 {
+    blocklist_base_line_height(app) * BLOCKLIST_VISUAL_SECTION_HEIGHT_LINE_MULTIPLIER
+}
+
+fn mermaid_section_max_height(app: &AppContext) -> f32 {
+    blocklist_base_line_height(app) * BLOCKLIST_MERMAID_MAX_HEIGHT_LINE_MULTIPLIER
+}
+
+fn blocklist_base_line_height(app: &AppContext) -> f32 {
     rich_text_styles(Appearance::as_ref(app), FontSettings::as_ref(app))
         .base_line_height()
         .as_f32()
-        * BLOCKLIST_VISUAL_SECTION_HEIGHT_LINE_MULTIPLIER
 }
 
 const TABLE_BLOCK_CORNER_RADIUS: f32 = 8.0;
@@ -2860,7 +2973,7 @@ pub fn get_highlight_ranges_for_find_matches(
     location: TextLocation,
     find_state: &FindState,
     find_model: &TerminalFindModel,
-) -> impl Iterator<Item = HighlightedRange> {
+) -> impl Iterator<Item = HighlightedRange> + use<> {
     let find_match_locations = find_state.matches_for_location(location);
     let focused_match_location = find_model
         .focused_rich_content_match_id()
@@ -2903,7 +3016,7 @@ pub(crate) fn resolve_absolute_file_path(
 ) -> Option<PathBuf> {
     use warp_util::path::CleanPathResult;
 
-    use crate::util::file::{absolute_path_if_valid, ShellPathType};
+    use crate::util::file::{ShellPathType, absolute_path_if_valid};
 
     let clean_path = CleanPathResult::with_line_and_column_number(&path.to_string_lossy());
 
@@ -2931,83 +3044,61 @@ pub(crate) fn resolve_absolute_file_path(
 pub struct FailedOutputProps<'a> {
     pub error: &'a RenderableAIError,
     pub invalid_api_key_button_handle: &'a MouseStateHandle,
+    pub subscribe_button_handle: &'a MouseStateHandle,
     pub aws_bedrock_credentials_error_view: Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
+    pub gemini_enterprise_credentials_error_view:
+        Option<&'a ViewHandle<GeminiEnterpriseCredentialsErrorView>>,
     pub is_ai_input_enabled: bool,
     pub icon_right_margin: f32,
 }
 
 pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
+    let Some(presentation) = failed_output_presentation(props.error, app) else {
+        return Empty::new().finish();
+    };
 
-    let error_text = match props.error {
-        RenderableAIError::QuotaLimit {
-            user_display_message,
-        } => {
-            if let Some(message) = user_display_message {
-                format!("{ERROR_APOLOGY_TEXT}\n\n{message}")
-            } else {
-                let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
-                let formatted_next_refresh_time = ai_request_usage_model
-                    .next_refresh_time()
-                    .format("%B %d")
-                    .to_string();
-
-                format!(
-                    "{ERROR_APOLOGY_TEXT}\n\nYou've reached your credit limit. Your credit limit resets on {formatted_next_refresh_time}.",
-                )
-            }
+    let error_text = match presentation {
+        FailedOutputPresentation::Message(message) => message,
+        FailedOutputPresentation::OutOfCredits { message, .. } => {
+            return render_out_of_credits_error(
+                &message,
+                props.subscribe_button_handle,
+                props.is_ai_input_enabled,
+                props.icon_right_margin,
+                app,
+            );
         }
-        RenderableAIError::ServerOverloaded => {
-            "Warp is currently overloaded. Please try again later.".to_string()
-        }
-        RenderableAIError::InternalWarpError => {
-            format!("{ERROR_APOLOGY_TEXT}\n\n{INTERNAL_WARP_ERROR}")
-        }
-        RenderableAIError::Other {
-            error_message,
-            will_attempt_resume,
-            waiting_for_network,
-        } => {
-            if *will_attempt_resume {
-                if *waiting_for_network {
-                    format!(
-                        "{error_message}\n\nWill resume conversation when network connectivity is restored..."
-                    )
-                } else {
-                    format!("{error_message}\n\nAttempting to resume conversation...")
-                }
-            } else {
-                format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
-            }
-        }
-        RenderableAIError::InvalidApiKey {
-            provider,
-            model_name,
-        } => {
+        FailedOutputPresentation::InvalidApiKey { title, detail } => {
             return render_invalid_api_key_error(
-                provider,
-                model_name,
+                title,
+                &detail,
                 props.invalid_api_key_button_handle,
                 app,
             );
         }
-        RenderableAIError::ContextWindowExceeded(error) => {
+        FailedOutputPresentation::ContextWindowExceeded { message } => {
             // This is rendered in a different way, like a failed action.
-            return RenderableAction::new(error.as_str(), app)
+            return RenderableAction::new(message.as_str(), app)
                 .with_icon(inline_action_icons::cancelled_icon(appearance).finish())
                 .render(app)
                 .finish();
         }
-        RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid { model_name } => {
+        FailedOutputPresentation::AwsBedrockCredentialsExpiredOrInvalid { fallback_message } => {
             // Use the rich stateful view if it exists, otherwise show a simple error message
             if let Some(view) = props.aws_bedrock_credentials_error_view {
                 return ChildView::new(view).finish();
             }
             // Fallback for contexts that don't have the stateful view (e.g. CLI subagent)
-            format!(
-                "{ERROR_APOLOGY_TEXT}\n\nAWS credentials expired or missing for {model_name}. \
-                 Please refresh your AWS credentials."
-            )
+            fallback_message
+        }
+        FailedOutputPresentation::GeminiEnterpriseCredentialsExpiredOrInvalid {
+            fallback_message,
+        } => {
+            if let Some(view) = props.gemini_enterprise_credentials_error_view {
+                return ChildView::new(view).finish();
+            }
+            fallback_message
         }
     };
 
@@ -3054,10 +3145,116 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
         )
         .finish()
 }
+/// Builds an out-of-credits CTA button, styled like the invalid-API-key error's button.
+fn out_of_credits_cta_button(
+    label: &str,
+    state_handle: &MouseStateHandle,
+    app: &AppContext,
+) -> Button {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+
+    appearance
+        .ui_builder()
+        .button(
+            warpui::ui_components::button::ButtonVariant::Outlined,
+            state_handle.clone(),
+        )
+        .with_style(UiComponentStyles {
+            font_size: Some(14.),
+            border_color: Some(internal_colors::neutral_4(theme).into()),
+            ..Default::default()
+        })
+        .with_hovered_styles(UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_2(theme).into()),
+            ..Default::default()
+        })
+        .with_clicked_styles(UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_3(theme).into()),
+            ..Default::default()
+        })
+        .with_text_label(label.to_string())
+        .with_cursor(Some(Cursor::PointingHand))
+}
+
+/// Renders the out-of-credits failure: alert icon + message with a Subscribe CTA below.
+fn render_out_of_credits_error(
+    message: &str,
+    subscribe_button_handle: &MouseStateHandle,
+    is_ai_input_enabled: bool,
+    icon_right_margin: f32,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+
+    let icon = Container::new(
+        ConstrainedBox::new(
+            warpui::elements::Icon::new(
+                Icon::AlertTriangle.into(),
+                error_color(appearance.theme()),
+            )
+            .finish(),
+        )
+        .with_width(icon_size(app))
+        .with_height(icon_size(app))
+        .finish(),
+    )
+    .with_margin_right(icon_right_margin)
+    .finish();
+
+    let text = Text::new(
+        message.to_owned(),
+        appearance.monospace_font_family(),
+        appearance.monospace_font_size(),
+    )
+    .with_color(blended_colors::text_sub(
+        appearance.theme(),
+        appearance.theme().surface_1(),
+    ))
+    .with_selection_color(if is_ai_input_enabled {
+        appearance
+            .theme()
+            .text_selection_as_context_color()
+            .into_solid()
+    } else {
+        appearance.theme().text_selection_color().into_solid()
+    })
+    .finish();
+
+    let subscribe_button =
+        out_of_credits_cta_button(OUT_OF_CREDITS_SUBSCRIBE_LABEL, subscribe_button_handle, app)
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
+            })
+            .finish();
+
+    Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_spacing(12.)
+        .with_child(
+            Flex::row()
+                .with_child(icon)
+                .with_child(Shrinkable::new(1., text).finish())
+                .finish(),
+        )
+        .with_child(
+            Container::new(
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_main_axis_alignment(MainAxisAlignment::Start)
+                    .with_child(subscribe_button)
+                    .finish(),
+            )
+            .with_margin_left(icon_size(app) + icon_right_margin)
+            .finish(),
+        )
+        .finish()
+}
 
 fn render_invalid_api_key_error(
-    provider: &str,
-    model_name: &str,
+    title: &str,
+    detail: &str,
     state_handle: &MouseStateHandle,
     app: &AppContext,
 ) -> Box<dyn Element> {
@@ -3073,29 +3270,18 @@ fn render_invalid_api_key_error(
     .with_height(icon_size(app))
     .finish();
 
-    let alert_text = Text::new(
-        "Provided API key is not valid",
-        appearance.ui_font_family(),
-        14.,
-    )
-    .with_color(error_color(appearance.theme()))
-    .with_selectable(false)
-    .finish();
+    let alert_text = Text::new(title.to_string(), appearance.ui_font_family(), 14.)
+        .with_color(error_color(appearance.theme()))
+        .with_selectable(false)
+        .finish();
 
-    let detail_text = Text::new(
-        format!(
-            "Failed to authenticate with {provider} when using {model_name}. \
-                     Double-check that your API key is correct."
-        ),
-        appearance.ui_font_family(),
-        14.,
-    )
-    .with_color(blended_colors::text_sub(
-        appearance.theme(),
-        appearance.theme().surface_1(),
-    ))
-    .with_selectable(false)
-    .finish();
+    let detail_text = Text::new(detail.to_string(), appearance.ui_font_family(), 14.)
+        .with_color(blended_colors::text_sub(
+            appearance.theme(),
+            appearance.theme().surface_1(),
+        ))
+        .with_selectable(false)
+        .finish();
 
     let settings_button = appearance
         .ui_builder()
@@ -3208,9 +3394,12 @@ pub(crate) fn render_debug_footer<V: View>(
 
     // Check if we should show the submit button (hide for dogfood and enterprise users)
     let is_dogfood = ChannelState::channel().is_dogfood();
-    let is_enterprise_user = UserWorkspaces::as_ref(app)
-        .current_team()
-        .is_some_and(|team| team.billing_metadata.customer_type == CustomerType::Enterprise);
+    let is_enterprise_user =
+        UserWorkspaces::as_ref(app)
+            .current_workspace()
+            .is_some_and(|workspace| {
+                workspace.billing_metadata.customer_type == CustomerType::Enterprise
+            });
     let submit_button = if !is_dogfood && !is_enterprise_user {
         let submit_button_style = UiComponentStyles {
             font_color: Some(
@@ -3413,10 +3602,9 @@ pub(super) fn query_prefix_highlight_len(
     if let AIAgentInput::UserQuery {
         user_query_mode, ..
     } = input
+        && let Some(prefix_len) = user_query_mode_prefix_highlight_len(*user_query_mode)
     {
-        if let Some(prefix_len) = user_query_mode_prefix_highlight_len(*user_query_mode) {
-            return Some(prefix_len);
-        }
+        return Some(prefix_len);
     }
 
     if displayed_query.starts_with(commands::CREATE_ENVIRONMENT.name) {
@@ -3437,7 +3625,6 @@ pub(super) fn query_prefix_highlight_len(
             | AIAgentInput::CreateNewProject { .. }
             | AIAgentInput::CloneRepository { .. }
             | AIAgentInput::CodeReview { .. }
-            | AIAgentInput::FetchReviewComments { .. }
             | AIAgentInput::SummarizeConversation { .. }
             | AIAgentInput::StartFromAmbientRunPrompt { .. }
             | AIAgentInput::ActionResult { .. }

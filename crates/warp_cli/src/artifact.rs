@@ -14,6 +14,16 @@ pub enum ArtifactCommand {
     Download(DownloadArtifactArgs),
 }
 
+impl ArtifactCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            ArtifactCommand::Upload(_) => "artifact upload",
+            ArtifactCommand::Get(_) => "artifact get",
+            ArtifactCommand::Download(_) => "artifact download",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Args)]
 #[command(
     group(

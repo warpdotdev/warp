@@ -1,10 +1,10 @@
 use itertools::Itertools;
 use string_offset::ByteOffset;
-use warpui::platform::OperatingSystem;
+use warpui_core::platform::OperatingSystem;
 
 use super::context::CompletionContext;
-use super::suggest::{suggestions, CompleterOptions, CompletionsFallbackStrategy, SuggestionType};
-use super::{get_path_separators, Match, MatchStrategy};
+use super::suggest::{CompleterOptions, CompletionsFallbackStrategy, SuggestionType, suggestions};
+use super::{Match, MatchStrategy, get_path_separators};
 use crate::completer::suggest::MatchRequirement;
 use crate::meta::{HasSpan, Span, Spanned, SpannedItem};
 use crate::parsers::simple::command_at_cursor_position;

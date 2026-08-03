@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use fuzzy_match::match_indices_case_insensitive;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::search::command_palette::launch_config::search_item::SearchItem;
@@ -48,7 +48,12 @@ impl DataSource {
         Self { searcher }
     }
 
-    fn handle_config_event(&mut self, event: &WarpConfigUpdateEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_config_event(
+        &mut self,
+        _: ModelHandle<WarpConfig>,
+        event: &WarpConfigUpdateEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if matches!(event, WarpConfigUpdateEvent::LaunchConfigs) {
             self.searcher.refresh_search_index(ctx);
         }
@@ -66,9 +71,7 @@ impl SyncDataSource for DataSource {
             .searcher
             .search(&query.text.trim().to_lowercase())
             .map_err(|err| {
-                Box::new(DataSourceSearchError {
-                    message: err.to_string(),
-                }) as DataSourceRunErrorWrapper
+                Box::new(DataSourceSearchError::new(err.to_string())) as DataSourceRunErrorWrapper
             })?
             .into_iter()
             .map(QueryResult::from)
@@ -123,10 +126,10 @@ mod full_text_searcher {
     use std::sync::Arc;
 
     use fuzzy_match::FuzzyMatchResult;
+    use warp_search_core::define_search_schema;
     use warpui::r#async::executor::Background;
     use warpui::{AppContext, SingletonEntity};
 
-    use crate::define_search_schema;
     use crate::launch_configs::launch_config::LaunchConfig;
     use crate::search::command_palette::launch_config::data_source::LaunchConfigSearcher;
     use crate::search::command_palette::launch_config::search_item::SearchItem;
@@ -190,7 +193,9 @@ mod full_text_searcher {
                 .map(|config| (config.name.to_lowercase(), config.clone()))
                 .collect();
             if self.rebuild_search_index().is_err() {
-                log::error!("Failed to create search index writer for launch configs");
+                warp_errors::report_error!(
+                    "Failed to create search index writer for launch configs"
+                );
                 self.clear_search_index();
             }
         }

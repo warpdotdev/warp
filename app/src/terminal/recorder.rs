@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_broadcast::InactiveReceiver;
+#[cfg(feature = "local_fs")]
+use warp_errors::report_error;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, ModelContext, SingletonEntity, WindowId};
 
@@ -44,7 +46,7 @@ impl PtyRecorder {
         window_id: WindowId,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&DebugSettings::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&DebugSettings::handle(ctx), |me, _, event, ctx| {
             if let DebugSettingsChangedEvent::RecordingModeEnabled { .. } = event {
                 me.update_recording_state(ctx);
             }
@@ -132,7 +134,9 @@ impl PtyRecorder {
 
         let recordings_dir = self.path.parent()?;
         if let Err(e) = fs::create_dir_all(recordings_dir) {
-            log::error!("Failed to create PTY recordings directory: {e}");
+            report_error!(
+                anyhow::Error::new(e).context("Failed to create PTY recordings directory")
+            );
             return None;
         }
 

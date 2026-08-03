@@ -33,7 +33,7 @@ grep -i "font" {{settings_schema_path}}
 Once you have a candidate key name, run the bundled script to get the **full dotted path**, the setting's properties, and any parent context. This is critical — the schema has multiple sections with similar names (e.g. several `input` keys), so never assume the nesting from grep output alone.
 
 ```sh
-python3 <skill_dir>/scripts/find_setting.py {{settings_schema_path}} <key_name>
+python3 {{skill_dir}}/scripts/find_setting.py {{settings_schema_path}} <key_name>
 ```
 
 The output gives you the unambiguous full path (e.g. `properties.appearance.properties.input.properties.input_mode`) and the setting's full definition including valid values.

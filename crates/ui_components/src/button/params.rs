@@ -2,9 +2,9 @@ use std::borrow::Cow;
 
 use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
-use warpui::fonts;
-use warpui::keymap::Keystroke;
-use warpui::prelude::stack;
+use warpui_core::fonts;
+use warpui_core::keymap::Keystroke;
+use warpui_core::prelude::stack;
 
 use super::Theme;
 use crate::{keyboard_shortcut, tooltip};

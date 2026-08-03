@@ -1,5 +1,6 @@
 use warpui::{AppContext, Entity, ModelHandle};
 
+use crate::search::SyncDataSource;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::command_palette::navigation::search::{
     FuzzySessionSearcher, MatchedSession, SessionMatchResult, SessionSearcher,
@@ -7,7 +8,6 @@ use crate::search::command_palette::navigation::search::{
 use crate::search::command_palette::navigation::search_item::SearchItem;
 use crate::search::data_source::{DataSourceSearchError, Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
-use crate::search::SyncDataSource;
 use crate::session_management::{SessionNavigationData, SessionSource};
 use crate::workspace::PaneViewLocator;
 
@@ -57,9 +57,7 @@ impl SyncDataSource for DataSource {
         self.searcher
             .search(&query.text.trim().to_lowercase(), app)
             .map_err(|err| {
-                let search_error = DataSourceSearchError {
-                    message: err.to_string(),
-                };
+                let search_error = DataSourceSearchError::new(err.to_string());
                 Box::new(search_error) as DataSourceRunErrorWrapper
             })
     }

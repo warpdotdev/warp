@@ -14,7 +14,7 @@ use super::team::{MembershipRole, Team};
 use crate::ai::execution_profiles::{
     ActionPermission, ComputerUsePermission, WriteToPtyPermission,
 };
-use crate::ai::llms::LLMModelHost;
+use crate::ai::llms::{LLMModelHost, LLMProvider};
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
 use crate::settings::AgentModeCommandExecutionPredicate;
@@ -135,19 +135,18 @@ impl Workspace {
     }
 
     pub fn are_overages_remaining(&self) -> bool {
-        if self.settings.usage_based_pricing_settings.enabled {
-            if let Some(max_spend_cents) = self
+        if self.settings.usage_based_pricing_settings.enabled
+            && let Some(max_spend_cents) = self
                 .settings
                 .usage_based_pricing_settings
                 .max_monthly_spend_cents
-            {
-                if let Some(ai_overages) = &self.billing_metadata.ai_overages {
-                    return ai_overages.current_monthly_request_cost_cents < max_spend_cents as i32;
-                } else {
-                    // If they have the setting enabled but no overages usage so far,
-                    // that means they have no database entry, so they have overages remaining.
-                    return true;
-                }
+        {
+            if let Some(ai_overages) = &self.billing_metadata.ai_overages {
+                return ai_overages.current_monthly_request_cost_cents < max_spend_cents as i32;
+            } else {
+                // If they have the setting enabled but no overages usage so far,
+                // that means they have no database entry, so they have overages remaining.
+                return true;
             }
         }
 
@@ -176,7 +175,8 @@ impl Workspace {
         }
     }
 
-    /// Returns the price in cents for the selected auto-reload credit denomination.
+    /// Returns the price in cents for the selected auto-reload credit denomination,
+    /// including any plan surcharge (premium plans reload at the premium price).
     /// Returns None if auto-reload is not configured or if the denomination can't be found in pricing options.
     pub fn get_auto_reload_price_cents(
         &self,
@@ -190,7 +190,11 @@ impl Workspace {
         addon_credits_options
             .iter()
             .find(|option| option.credits == selected_credits)
-            .map(|option| option.price_usd_cents)
+            .map(|option| {
+                option.price_usd_cents_with_premium(
+                    self.billing_metadata.addon_credits_price_premium_bps(),
+                )
+            })
     }
 }
 
@@ -377,8 +381,45 @@ pub struct ByoApiKeyPolicy {
 }
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
+pub struct ByoEndpointPolicy {
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Copy, Serialize, Deserialize)]
+pub struct ManagedByokByoePolicy {
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PurchaseAddOnCreditsPolicy {
     pub enabled: bool,
+    /// When `enabled` is false, allows purchasing add-on credit packs at a
+    /// `price_premium_bps` surcharge over list price (e.g. on the Free plan).
+    #[serde(default)]
+    pub premium_enabled: bool,
+    /// Surcharge in basis points applied to list prices when purchasing via
+    /// the premium path (1000 bps = +10%). 0 for standard purchasing plans.
+    #[serde(default)]
+    pub price_premium_bps: i32,
+}
+
+impl PurchaseAddOnCreditsPolicy {
+    /// Whether this plan may purchase add-on credit packs at all, either at
+    /// list price (`enabled`) or at a premium surcharge (`premium_enabled`).
+    pub fn allows_purchases(&self) -> bool {
+        self.enabled || self.premium_enabled
+    }
+
+    /// The surcharge in basis points applied to pack list prices. 0 whenever
+    /// standard (list price) purchasing is enabled — standard purchasing
+    /// wins if the server ever sends both flags.
+    pub fn effective_premium_bps(&self) -> i32 {
+        if !self.enabled && self.premium_enabled {
+            self.price_premium_bps
+        } else {
+            0
+        }
+    }
 }
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
@@ -474,6 +515,8 @@ pub struct Tier {
     pub usage_based_pricing_policy: Option<UsageBasedPricingPolicy>,
     pub codebase_context_policy: Option<CodebaseContextPolicy>,
     pub byo_api_key_policy: Option<ByoApiKeyPolicy>,
+    pub byo_endpoint_policy: Option<ByoEndpointPolicy>,
+    pub managed_byok_byoe_policy: Option<ManagedByokByoePolicy>,
     pub purchase_add_on_credits_policy: Option<PurchaseAddOnCreditsPolicy>,
     pub enterprise_pay_as_you_go_policy: Option<EnterprisePayAsYouGoPolicy>,
     pub enterprise_credits_auto_reload_policy: Option<EnterpriseCreditsAutoReloadPolicy>,
@@ -495,6 +538,26 @@ pub struct BillingMetadata {
     pub ai_overages: Option<AiOverages>,
 }
 
+/// The effective account outcome used to route users after account-first signup.
+///
+/// Paid status and free AI availability are resolved from fresh server-authored
+/// data during post-auth onboarding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FtueAccountClass {
+    Paid,
+    FreeIcp,
+    FreeStandard,
+}
+
+impl FtueAccountClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FtueAccountClass::Paid => "paid",
+            FtueAccountClass::FreeIcp => "free_icp",
+            FtueAccountClass::FreeStandard => "free_standard",
+        }
+    }
+}
 #[derive(Clone, Debug, Default)]
 pub struct BonusGrantsPurchased {
     pub total_credits_purchased: i32,
@@ -703,6 +766,18 @@ impl BillingMetadata {
             .is_some_and(|policy| policy.enabled)
     }
 
+    pub fn is_byo_endpoint_enabled(&self) -> bool {
+        self.tier
+            .byo_endpoint_policy
+            .is_some_and(|policy| policy.enabled)
+    }
+
+    pub fn is_managed_byok_byoe_enabled(&self) -> bool {
+        self.tier
+            .managed_byok_byoe_policy
+            .is_some_and(|policy| policy.enabled)
+    }
+
     pub fn has_overages_used(&self) -> bool {
         self.ai_overages
             .as_ref()
@@ -732,10 +807,28 @@ impl BillingMetadata {
                 .is_some_and(|policy| policy.enabled)
     }
 
+    /// Whether this plan may purchase add-on credit packs at all, either at
+    /// list price (`enabled`) or at a premium surcharge (`premium_enabled`).
     pub fn is_purchase_add_on_credits_policy_enabled(&self) -> bool {
         self.tier
             .purchase_add_on_credits_policy
-            .is_some_and(|policy| policy.enabled)
+            .is_some_and(|policy| policy.allows_purchases())
+    }
+
+    /// Whether add-on credit purchases on this plan go through the premium
+    /// (surcharged) path rather than standard list-price purchasing.
+    pub fn is_premium_addon_credits_purchase(&self) -> bool {
+        self.tier
+            .purchase_add_on_credits_policy
+            .is_some_and(|policy| !policy.enabled && policy.premium_enabled)
+    }
+
+    /// The surcharge in basis points applied to add-on credit pack list
+    /// prices for this plan. 0 whenever standard purchasing is enabled.
+    pub fn addon_credits_price_premium_bps(&self) -> i32 {
+        self.tier
+            .purchase_add_on_credits_policy
+            .map_or(0, |policy| policy.effective_premium_bps())
     }
 }
 
@@ -747,6 +840,17 @@ mod tests;
 pub struct LlmHostSettings {
     pub enabled: bool,
     pub enablement_setting: HostEnablementSetting,
+    /// Full resource name of the GCP workload identity provider that Gemini Enterprise
+    /// (GEAP) credential minting exchanges Warp OIDC JWTs against. Only populated on the
+    /// `GeminiEnterprise` host entry; `None` for other hosts and for workspace caches
+    /// written before this field existed.
+    #[serde(default)]
+    pub gcp_audience: Option<String>,
+    /// Email of the GCP service account that Gemini Enterprise credential minting
+    /// impersonates after the STS exchange. `None` (or empty) means the federated token
+    /// is used directly.
+    #[serde(default)]
+    pub gcp_sa_email: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -895,6 +999,7 @@ pub struct SandboxedAgentSettings {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct WorkspaceSettings {
     pub llm_settings: LlmSettings,
+    pub team_byo: Option<TeamByoSettings>,
     pub telemetry_settings: TelemetrySettings,
     pub ugc_collection_settings: UgcCollectionSettings,
     pub cloud_conversation_storage_settings: CloudConversationStorageSettings,
@@ -914,4 +1019,38 @@ pub struct WorkspaceSettings {
     pub enable_warp_attribution: AdminEnablementSetting,
     #[serde(default)]
     pub default_host_slug: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamByoSettings {
+    pub first_party_enabled: bool,
+    pub endpoints_enabled: bool,
+    pub allow_user_keys: bool,
+    pub allow_user_endpoints: bool,
+    pub first_party_keys: Vec<ByoFirstPartyKey>,
+    pub endpoints: Vec<ByoEndpointMetadata>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ByoFirstPartyKey {
+    pub provider: LLMProvider,
+    pub credential_uid: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ByoEndpointMetadata {
+    pub uid: String,
+    pub name: String,
+    pub enabled: bool,
+    pub credential_uid: String,
+    pub models: Vec<ByoEndpointModelMetadata>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ByoEndpointModelMetadata {
+    pub config_key: String,
+    pub slug: String,
+    pub alias: Option<String>,
+    pub display_name: String,
+    pub enabled: bool,
 }

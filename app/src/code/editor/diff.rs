@@ -15,7 +15,7 @@ use string_offset::CharOffset;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
 use warp_editor::content::edit::TemporaryBlock;
 use warp_editor::content::version::BufferVersion;
-use warp_editor::multiline::{AnyMultilineString, MultilineStr, MultilineString, LF};
+use warp_editor::multiline::{AnyMultilineString, LF, MultilineStr, MultilineString};
 use warp_editor::render::model::{Decoration, LineCount, LineDecoration};
 use warpui::{Entity, ModelContext};
 
@@ -85,11 +85,55 @@ pub(crate) fn remove_inline_overlay_color(appearance: &Appearance) -> ColorU {
 }
 
 pub enum DiffModelEvent {
-    DiffUpdated {
-        version: BufferVersion,
-        should_recalculate_hidden_lines: bool,
-    },
+    DiffUpdated { version: BufferVersion },
     UnifiedDiffComputed(Rc<DiffResult>),
+}
+
+/// Computes the unified diff (3 context lines, git style) and line stats
+/// between two contents.
+pub(crate) async fn compute_unified_diff(
+    base: &MultilineStr<LF>,
+    new: &MultilineStr<LF>,
+    file_name: &str,
+) -> DiffResult {
+    if base == new {
+        return DiffResult {
+            unified_diff: String::new(),
+            lines_added: 0,
+            lines_removed: 0,
+        };
+    }
+
+    let text_diff = TextDiff::from_lines(base.as_str(), new.as_str());
+
+    // Calculate diff statistics.
+    let mut lines_added = 0;
+    let mut lines_removed = 0;
+
+    for op in text_diff.ops() {
+        match op {
+            DiffOp::Equal { .. } => (),
+            DiffOp::Delete { old_len, .. } => lines_removed += old_len,
+            DiffOp::Insert { new_len, .. } => lines_added += new_len,
+            DiffOp::Replace {
+                old_len, new_len, ..
+            } => {
+                lines_added += new_len;
+                lines_removed += old_len;
+            }
+        }
+    }
+
+    DiffResult {
+        unified_diff: text_diff
+            .unified_diff()
+            .context_radius(3)
+            .header(file_name, file_name)
+            .missing_newline_hint(false)
+            .to_string(),
+        lines_added,
+        lines_removed,
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -450,16 +494,15 @@ impl DiffModel {
     /// Convert a line index in the base version of the text to an editor line location.
     pub fn base_line_index_to_line_location(&self, index: usize) -> Option<EditorLineLocation> {
         for (line_range, change) in self.status.change_mapping.iter() {
-            if let ChangeType::Replacement { replaced_range, .. } = change {
-                if replaced_range.contains(&index) {
-                    return Some(EditorLineLocation::Removed {
-                        // Subtracting 1 as the diff is currently represented as attaching to the _previous line_.
-                        line_number: LineCount::from(line_range.start),
-                        line_range: LineCount::from(line_range.start)
-                            ..LineCount::from(line_range.end),
-                        index: index - replaced_range.start,
-                    });
-                }
+            if let ChangeType::Replacement { replaced_range, .. } = change
+                && replaced_range.contains(&index)
+            {
+                return Some(EditorLineLocation::Removed {
+                    // Subtracting 1 as the diff is currently represented as attaching to the _previous line_.
+                    line_number: LineCount::from(line_range.start),
+                    line_range: LineCount::from(line_range.start)..LineCount::from(line_range.end),
+                    index: index - replaced_range.start,
+                });
             }
         }
 
@@ -544,7 +587,6 @@ impl DiffModel {
     pub fn compute_diff(
         &mut self,
         new: MultilineString<LF>,
-        should_recalculate_hidden_lines: bool,
         version: BufferVersion,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -569,10 +611,7 @@ impl DiffModel {
                     model.status.change_mapping = change_mapping;
                     model.status.deletion_mapping = deletion_mapping;
                     log::debug!("diff status updated: {:#?}", &model.status);
-                    ctx.emit(DiffModelEvent::DiffUpdated {
-                        should_recalculate_hidden_lines,
-                        version,
-                    });
+                    ctx.emit(DiffModelEvent::DiffUpdated { version });
                 },
             )
             .abort_handle();
@@ -606,59 +645,12 @@ impl DiffModel {
         ctx.spawn(
             async move {
                 let new = new.to_format();
-                Self::retrieve_unified_diff_internal(&base_text, new.as_ref(), file_name.as_str())
-                    .await
+                compute_unified_diff(&base_text, new.as_ref(), file_name.as_str()).await
             },
             |_, unified_diff, ctx| {
                 ctx.emit(DiffModelEvent::UnifiedDiffComputed(Rc::new(unified_diff)));
             },
         );
-    }
-
-    async fn retrieve_unified_diff_internal(
-        base: &MultilineStr<LF>,
-        new: &MultilineStr<LF>,
-        file_name: &str,
-    ) -> DiffResult {
-        if base == new {
-            return DiffResult {
-                unified_diff: String::new(),
-                lines_added: 0,
-                lines_removed: 0,
-            };
-        }
-
-        // Show 3 context lines (standard of git diff).
-        let text_diff = TextDiff::from_lines(base.as_str(), new.as_str());
-
-        // Calculate diff statistics.
-        let mut lines_added = 0;
-        let mut lines_removed = 0;
-
-        for op in text_diff.ops() {
-            match op {
-                DiffOp::Equal { .. } => (),
-                DiffOp::Delete { old_len, .. } => lines_removed += old_len,
-                DiffOp::Insert { new_len, .. } => lines_added += new_len,
-                DiffOp::Replace {
-                    old_len, new_len, ..
-                } => {
-                    lines_added += new_len;
-                    lines_removed += old_len;
-                }
-            }
-        }
-
-        DiffResult {
-            unified_diff: text_diff
-                .unified_diff()
-                .context_radius(3)
-                .header(file_name, file_name)
-                .missing_newline_hint(false)
-                .to_string(),
-            lines_added,
-            lines_removed,
-        }
     }
 
     async fn compute_diff_internal(

@@ -2,7 +2,7 @@
 name = "warp_completer"
 authors = ["Warp Team <dev@warp.dev>"]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Warp completions engine"
 publish.workspace = true
 license.workspace = true
@@ -33,7 +33,7 @@ thiserror.workspace = true
 warp_cli.workspace = true
 warp_core.workspace = true
 warp_js = { workspace = true, optional = true }
-warpui.workspace = true
+warpui_core.workspace = true
 warp_util.workspace = true
 typed-path.workspace = true
 

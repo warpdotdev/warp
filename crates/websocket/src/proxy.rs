@@ -9,9 +9,9 @@
 use std::env;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
-use base64::engine::general_purpose::STANDARD as BASE64;
+use anyhow::{Context, bail};
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use http_body_util::Empty;
 use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;

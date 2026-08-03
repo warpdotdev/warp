@@ -1,22 +1,25 @@
 use std::cell::RefCell;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::task::{Context, Poll};
 
 use anyhow::Result;
-use futures_util::{stream, Stream};
+use futures_util::{Stream, stream};
 use parking_lot::Mutex;
 
 use super::*;
-use crate::elements::*;
-use crate::keymap::macros::*;
-use crate::keymap::Keystroke;
 use crate::r#async::Timer;
+use crate::elements::*;
+use crate::keymap::Keystroke;
+use crate::keymap::macros::*;
 
 #[path = "transfer_view_tests.rs"]
 mod transfer_view_tests;
+
+#[path = "ref_count_tests.rs"]
+mod ref_count_tests;
 
 #[test]
 fn test_subscribe_and_emit_from_model() {
@@ -37,10 +40,10 @@ fn test_subscribe_and_emit_from_model() {
         let handle_2b = handle_2.clone();
 
         handle_1.update(app, |_, c| {
-            c.subscribe_to_model(&handle_2, move |model: &mut Model, event, c| {
+            c.subscribe_to_model(&handle_2, move |model: &mut Model, _, event, c| {
                 model.events.push(*event);
 
-                c.subscribe_to_model(&handle_2b, |model, event, _| {
+                c.subscribe_to_model(&handle_2b, |model, _, event, _| {
                     model.events.push(*event * 2);
                 });
             });
@@ -252,7 +255,7 @@ fn test_subscribe_to_view_from_model() {
 
         let model_handle = app.add_model(|ctx| {
             let model = Model::default();
-            ctx.subscribe_to_view(&view_handle, |model: &mut Model, event, _ctx| {
+            ctx.subscribe_to_view(&view_handle, |model: &mut Model, _, event, _ctx| {
                 model.val = *event;
             });
             model
@@ -747,7 +750,7 @@ fn test_dropping_subscribers() {
             ctx.subscribe_to_model(&observed_model, |_, _, _, _| {});
         });
         observing_model.update(app, |_, ctx| {
-            ctx.subscribe_to_model(&observed_model, |_, _, _| {});
+            ctx.subscribe_to_model(&observed_model, |_, _, _, _| {});
         });
 
         app.update(|_| {
@@ -1382,7 +1385,9 @@ fn test_dispatch_action() {
 
         assert_eq!(
             *actions.borrow(),
-            vec!["4 d", "4 c", "3 b", "3 a", "2 d", "2 c", "1 b", "1 a", "global b", "global a"]
+            vec![
+                "4 d", "4 c", "3 b", "3 a", "2 d", "2 c", "1 b", "1 a", "global b", "global a"
+            ]
         );
 
         // Remove view_1, which doesn't propagate the action.
@@ -1396,7 +1401,9 @@ fn test_dispatch_action() {
 
         assert_eq!(
             *actions.borrow(),
-            vec!["4 d", "4 c", "3 b", "3 a", "2 d", "2 c", "global b", "global a"]
+            vec![
+                "4 d", "4 c", "3 b", "3 a", "2 d", "2 c", "global b", "global a"
+            ]
         );
 
         actions.borrow_mut().clear();
@@ -2349,7 +2356,7 @@ fn test_unsubscribe_from_model_inside_callback() {
         // Subscribe, and unsubscribe from inside the callback.
         subscriber.update(&mut app, |_, ctx| {
             let emitter_for_unsubscribe = emitter_clone.clone();
-            ctx.subscribe_to_model(&emitter_clone, move |model, event, ctx| {
+            ctx.subscribe_to_model(&emitter_clone, move |model, _, event, ctx| {
                 model.events.push(*event);
                 // Unsubscribe from inside the callback.
                 ctx.unsubscribe_from_model(&emitter_for_unsubscribe);
@@ -2407,13 +2414,13 @@ fn test_unsubscribe_from_model_inside_callback_with_multiple_subscriptions() {
         subscriber.update(&mut app, |_, ctx| {
             // First subscription: will call unsubscribe.
             let emitter_for_unsubscribe = emitter_clone1.clone();
-            ctx.subscribe_to_model(&emitter_clone1, move |model, _, ctx| {
+            ctx.subscribe_to_model(&emitter_clone1, move |model, _, _, ctx| {
                 model.events.push("first");
                 ctx.unsubscribe_from_model(&emitter_for_unsubscribe);
             });
 
             // Second subscription: should still be called for this event.
-            ctx.subscribe_to_model(&emitter_clone2, move |model, _, _| {
+            ctx.subscribe_to_model(&emitter_clone2, move |model, _, _, _| {
                 model.events.push("second");
             });
         });
@@ -2467,12 +2474,12 @@ fn test_unsubscribe_then_resubscribe_from_model_inside_callback_keeps_new_subscr
             let emitter_for_unsubscribe = emitter_clone.clone();
             let emitter_for_resubscribe = emitter_clone.clone();
 
-            ctx.subscribe_to_model(&emitter_clone, move |model, _, ctx| {
+            ctx.subscribe_to_model(&emitter_clone, move |model, _, _, ctx| {
                 model.events.push("old");
 
                 ctx.unsubscribe_from_model(&emitter_for_unsubscribe);
 
-                ctx.subscribe_to_model(&emitter_for_resubscribe, |model, _, _| {
+                ctx.subscribe_to_model(&emitter_for_resubscribe, |model, _, _, _| {
                     model.events.push("new");
                 });
             });
@@ -2525,10 +2532,10 @@ fn test_subscribe_then_unsubscribe_from_model_inside_callback_drops_new_subscrip
             let emitter_for_subscribe = emitter_clone.clone();
             let emitter_for_unsubscribe = emitter_clone.clone();
 
-            ctx.subscribe_to_model(&emitter_clone, move |model, _, ctx| {
+            ctx.subscribe_to_model(&emitter_clone, move |model, _, _, ctx| {
                 model.events.push("old");
 
-                ctx.subscribe_to_model(&emitter_for_subscribe, |model, _, _| {
+                ctx.subscribe_to_model(&emitter_for_subscribe, |model, _, _, _| {
                     model.events.push("new");
                 });
 

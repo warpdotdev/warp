@@ -1,11 +1,11 @@
 use std::time::Duration;
 
+use axum::Router;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, Method, Response};
 use axum::routing::get;
-use axum::Router;
 use tower::ServiceBuilder;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;

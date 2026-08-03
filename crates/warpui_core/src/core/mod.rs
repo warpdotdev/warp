@@ -7,7 +7,7 @@ mod view;
 mod window;
 
 use std::any::{Any, TypeId};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::mem;
@@ -31,7 +31,7 @@ pub use window::*;
 
 use crate::platform::{self, FullscreenState, WindowBounds, WindowStyle};
 use crate::rendering::OnGPUDeviceSelected;
-use crate::{keymap, Element};
+use crate::{Element, keymap};
 
 /// A unique identifier for a display.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,7 +94,7 @@ impl fmt::Display for DisplayIdx {
 }
 
 /// Information to display the IME editor near the active cursor.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct CursorInfo {
     /// Position of the active cursor.
     pub position: RectF,
@@ -132,10 +132,9 @@ impl fmt::Display for TaskId {
 pub type OptionalPlatformWindow = Option<Rc<dyn platform::Window>>;
 
 type ActionCallback =
-    dyn FnMut(&mut dyn AnyView, &dyn Any, &mut AppContext, WindowId, EntityId) -> bool;
+    dyn FnMut(&mut dyn Any, &dyn Any, &mut AppContext, WindowId, EntityId) -> bool;
 
-type TypedActionCallback =
-    dyn FnMut(&mut dyn AnyView, &dyn Any, &mut AppContext, WindowId, EntityId);
+type TypedActionCallback = dyn FnMut(&mut dyn Any, &dyn Any, &mut AppContext, WindowId, EntityId);
 
 type GlobalActionCallback =
     dyn FnMut(&dyn Any, &'static std::panic::Location<'static>, &mut AppContext);
@@ -193,8 +192,8 @@ pub(crate) type SpawnedFuture = BoxFuture<'static, ()>;
 
 #[derive(Debug, Default, Clone)]
 pub struct WindowInvalidation {
-    pub updated: HashSet<EntityId>,
-    pub removed: HashSet<EntityId>,
+    pub updated: EntityIdSet,
+    pub removed: EntityIdSet,
     /// Stores whether an element in the window needs to be repainted. Currently an
     /// invalidation will repaint the entire element tree for that window, so we
     /// only store a boolean. In the future we can extend this to store entity ids
@@ -264,6 +263,7 @@ pub trait AnyView {
         app: &mut AppContext,
         view_id: EntityId,
     );
+    fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId>;
     fn self_or_child_interacted_with(
         &self,
         app: &mut AppContext,
@@ -318,12 +318,12 @@ where
         let mut ctx = ViewContext::new(app, window_id, view_id);
         View::on_focus(self, focus_ctx, &mut ctx);
         // Send notification to a11y tools that the view gained focus
-        if focus_ctx.is_self_focused() {
-            if let Some(accessibility_contents) = View::accessibility_contents(self, app) {
-                app.platform_delegate.set_accessibility_contents(
-                    accessibility_contents.with_verbosity(app.a11y_verbosity),
-                );
-            }
+        if focus_ctx.is_self_focused()
+            && let Some(accessibility_contents) = View::accessibility_contents(self, app)
+        {
+            app.platform_delegate.set_accessibility_contents(
+                accessibility_contents.with_verbosity(app.a11y_verbosity),
+            );
         }
     }
 
@@ -352,6 +352,10 @@ where
     ) {
         let mut ctx = ViewContext::new(app, target_window_id, view_id);
         View::on_window_transferred(self, source_window_id, target_window_id, &mut ctx);
+    }
+
+    fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId> {
+        View::child_view_ids(self, app)
     }
 
     fn keymap_context(&self, app: &AppContext) -> keymap::Context {
@@ -392,13 +396,13 @@ pub enum EntityLocation {
 
 #[derive(Default)]
 struct RefCounts {
-    entity_counts: HashMap<EntityId, usize>,
+    entity_counts: EntityIdMap<usize>,
     dropped: DroppedItems,
 }
 
 #[derive(Default)]
 struct DroppedItems {
-    models: HashSet<EntityId>,
+    models: EntityIdSet,
     views: HashSet<(WindowId, EntityId)>,
 }
 
@@ -430,6 +434,14 @@ impl RefCounts {
         } else {
             panic!("Expected ref count to be positive")
         }
+    }
+
+    fn is_model_dropped(&self, model_id: EntityId) -> bool {
+        self.dropped.models.contains(&model_id)
+    }
+
+    fn is_view_dropped(&self, view_id: EntityId) -> bool {
+        self.dropped.views.iter().any(|(_, id)| *id == view_id)
     }
 
     fn take_dropped(&mut self) -> DroppedItems {
@@ -531,12 +543,12 @@ type ModelFromStreamItemCallback = dyn FnMut(&mut dyn Any, Box<dyn Any>, &mut Ap
 type ModelFromStreamDoneCallback = dyn FnOnce(&mut dyn Any, &mut AppContext, EntityId);
 
 type ViewFromFutureCallback =
-    dyn FnOnce(&mut dyn AnyView, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
+    dyn FnOnce(&mut dyn Any, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
 
 type ViewFromStreamItemCallback =
-    dyn FnMut(&mut dyn AnyView, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
+    dyn FnMut(&mut dyn Any, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
 
-type ViewFromStreamDoneCallback = dyn FnOnce(&mut dyn AnyView, &mut AppContext, WindowId, EntityId);
+type ViewFromStreamDoneCallback = dyn FnOnce(&mut dyn Any, &mut AppContext, WindowId, EntityId);
 
 enum TaskCallback {
     ModelFromFuture {
@@ -554,7 +566,6 @@ enum TaskCallback {
         callback: Box<ViewFromFutureCallback>,
     },
     ViewFromStream {
-        window_id: WindowId,
         view_id: EntityId,
         on_item: Box<ViewFromStreamItemCallback>,
         on_done: Box<ViewFromStreamDoneCallback>,
@@ -662,3 +673,7 @@ impl<T> RequestState<T> {
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "tui"))]
+#[path = "tui_view_tests.rs"]
+mod tui_view_tests;

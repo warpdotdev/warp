@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use warp_core::safe_warn;
 use warp_util::git::run_git_command;
 #[cfg(feature = "local_fs")]
@@ -246,7 +246,7 @@ pub async fn get_repo_git_summary(repo_root: &Path) -> Option<RepoGitSummary> {
     })
 }
 
-/// Short summary of a commit: hash and subject line.
+/// Short summary of a commit: hash, subject line, and per-file changes.
 #[derive(Debug, Clone)]
 pub struct Commit {
     pub hash: String,
@@ -254,6 +254,7 @@ pub struct Commit {
     pub files_changed: usize,
     pub additions: usize,
     pub deletions: usize,
+    pub files: Vec<FileChangeEntry>,
 }
 
 /// A single changed file with per-file addition/deletion counts.
@@ -293,21 +294,20 @@ pub async fn get_file_change_entries(
     }
 
     // Also include untracked files when showing all changes.
-    if include_unstaged {
-        if let Ok(untracked) =
+    if include_unstaged
+        && let Ok(untracked) =
             run_git_command(repo_path, &["ls-files", "--others", "--exclude-standard"]).await
-        {
-            for file_name in untracked.lines() {
-                if file_name.is_empty() {
-                    continue;
-                }
-                let additions = count_lines_if_text_file(&repo_path.join(file_name)) as usize;
-                entries.push(FileChangeEntry {
-                    path: file_name.to_string(),
-                    additions,
-                    deletions: 0,
-                });
+    {
+        for file_name in untracked.lines() {
+            if file_name.is_empty() {
+                continue;
             }
+            let additions = count_lines_if_text_file(&repo_path.join(file_name)) as usize;
+            entries.push(FileChangeEntry {
+                path: file_name.to_string(),
+                additions,
+                deletions: 0,
+            });
         }
     }
 
@@ -319,6 +319,58 @@ pub async fn get_file_change_entries(
     _repo_path: &Path,
     _include_unstaged: bool,
 ) -> Result<Vec<FileChangeEntry>> {
+    Err(anyhow!("Not supported on wasm"))
+}
+
+/// Returns per-file change entries for the **committed** branch diff
+/// (`merge_base(HEAD, main)..HEAD`) — exactly what an opened PR would contain.
+///
+/// Unlike [`get_file_change_entries`] and the `against_base_branch` metadata
+/// which diff the working tree against the merge base and append untracked files,
+/// this only includes committed changes. The base is the detected main branch,
+/// matching the `--base` that [`create_pr`] targets.
+///
+/// Returns an empty list when the merge base can't be resolved (e.g. no commits
+/// yet, or the branch shares no history with main).
+#[cfg(feature = "local_fs")]
+pub async fn get_committed_branch_file_entries(repo_path: &Path) -> Result<Vec<FileChangeEntry>> {
+    let main_branch = detect_main_branch(repo_path).await?;
+    let merge_base =
+        match run_git_command(repo_path, &["merge-base", "HEAD", main_branch.trim()]).await {
+            Ok(output) => output.trim().to_string(),
+            Err(err) => {
+                log::warn!("Could not determine merge base against branch {main_branch}: {err:?}");
+                return Ok(Vec::new());
+            }
+        };
+
+    // `git diff --numstat <merge_base> HEAD` is the committed-only diff
+    // (equivalent to `main...HEAD`): no working-tree edits, no untracked files.
+    let output = run_git_command(repo_path, &["diff", "--numstat", &merge_base, "HEAD"])
+        .await
+        .unwrap_or_default();
+    let mut entries = Vec::new();
+    for line in output.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() >= 3 {
+            entries.push(FileChangeEntry {
+                path: parts[2].to_string(),
+                // Binary files render as "-\t-\t<path>"; parse failures fall back
+                // to 0, mirroring `get_file_change_entries`.
+                additions: parts[0].parse().unwrap_or(0),
+                deletions: parts[1].parse().unwrap_or(0),
+            });
+        }
+    }
+
+    Ok(entries)
+}
+
+#[cfg(not(feature = "local_fs"))]
+pub async fn get_committed_branch_file_entries(_repo_path: &Path) -> Result<Vec<FileChangeEntry>> {
     Err(anyhow!("Not supported on wasm"))
 }
 
@@ -378,6 +430,7 @@ fn parse_commit_log(output: &str) -> Result<Vec<Commit>> {
                     files_changed: 0,
                     additions: 0,
                     deletions: 0,
+                    files: Vec::new(),
                 });
             }
         } else if !line.is_empty() {
@@ -385,9 +438,16 @@ fn parse_commit_log(output: &str) -> Result<Vec<Commit>> {
             if let Some(ref mut commit) = current {
                 let parts: Vec<&str> = line.splitn(3, '\t').collect();
                 if parts.len() == 3 {
-                    commit.additions += parts[0].parse::<usize>().unwrap_or(0);
-                    commit.deletions += parts[1].parse::<usize>().unwrap_or(0);
+                    let additions = parts[0].parse::<usize>().unwrap_or(0);
+                    let deletions = parts[1].parse::<usize>().unwrap_or(0);
+                    commit.additions += additions;
+                    commit.deletions += deletions;
                     commit.files_changed += 1;
+                    commit.files.push(FileChangeEntry {
+                        path: parts[2].to_string(),
+                        additions,
+                        deletions,
+                    });
                 }
             }
         }
@@ -409,43 +469,53 @@ pub async fn get_unpushed_commits(
     Err(anyhow!("Not supported on wasm"))
 }
 
-/// Returns the list of files changed in a specific commit, with per-file stats.
+/// Computes the branch's unpushed commits together with its upstream
+/// tracking ref, so callers that need both (metadata refresh, the remote
+/// git-operation delta returned to the client) don't repeat the work.
+/// Returns `(Vec::new(), None)` on failure rather than erroring, since the
+/// caller treats "no upstream" and "detection failed" the same way.
 #[cfg(feature = "local_fs")]
-pub async fn get_commit_files(repo_path: &Path, hash: &str) -> Result<Vec<FileChangeEntry>> {
-    let output = run_git_command(
+pub async fn compute_unpushed_state(repo_path: &Path) -> (Vec<Commit>, Option<String>) {
+    let current_branch = detect_current_branch(repo_path).await.ok();
+    let upstream_ref = run_git_command(
         repo_path,
-        &[
-            "diff-tree",
-            "--root",
-            "--no-commit-id",
-            "-r",
-            "--numstat",
-            hash,
-        ],
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
     )
-    .await?;
-
-    let mut entries = Vec::new();
-    for line in output.lines() {
-        if line.is_empty() {
-            continue;
-        }
-        let parts: Vec<&str> = line.splitn(3, '\t').collect();
-        if parts.len() == 3 {
-            entries.push(FileChangeEntry {
-                path: parts[2].to_string(),
-                additions: parts[0].parse().unwrap_or(0),
-                deletions: parts[1].parse().unwrap_or(0),
-            });
-        }
-    }
-
-    Ok(entries)
+    .await
+    .ok()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty());
+    let unpushed = get_unpushed_commits(
+        repo_path,
+        current_branch.as_deref(),
+        upstream_ref.as_deref(),
+    )
+    .await
+    .unwrap_or_default();
+    (unpushed, upstream_ref)
 }
 
 #[cfg(not(feature = "local_fs"))]
-pub async fn get_commit_files(_repo_path: &Path, _hash: &str) -> Result<Vec<FileChangeEntry>> {
-    Err(anyhow!("Not supported on wasm"))
+pub async fn compute_unpushed_state(_repo_path: &Path) -> (Vec<Commit>, Option<String>) {
+    (Vec::new(), None)
+}
+
+/// Returns `true` if the repository is mid-operation (merge / cherry-pick /
+/// revert / rebase) or another process holds the index lock, detected by
+/// probing the sentinel files git writes under `.git/`. Code-review git
+/// mutations are blocked in these states because they would behave
+/// surprisingly (e.g. a commit would complete an in-progress merge) or fail.
+/// Shared by the local pre-emptive guard (`is_git_operation_blocked`) and the
+/// daemon-side execution-time check.
+#[cfg(feature = "local_fs")]
+pub fn git_operation_in_progress(repo_path: &Path) -> bool {
+    let git_dir = repo_path.join(".git");
+    git_dir.join("MERGE_HEAD").exists()
+        || git_dir.join("CHERRY_PICK_HEAD").exists()
+        || git_dir.join("REVERT_HEAD").exists()
+        || git_dir.join("rebase-merge").exists()
+        || git_dir.join("rebase-apply").exists()
+        || git_dir.join("index.lock").exists()
 }
 
 /// Maximum number of characters of diff content to send to AI for commit
@@ -514,60 +584,59 @@ pub async fn get_diff_for_commit_message(
     // `git diff HEAD` only shows changes to already-tracked files. New files that
     // haven't been staged yet are invisible to it, so we synthesise diff hunks for
     // them here — mirroring the logic in `get_file_change_entries`.
-    if include_unstaged {
-        if let Ok(untracked) = run_git_command(
+    if include_unstaged
+        && let Ok(untracked) = run_git_command(
             repo_path,
             &["ls-files", "--others", "--exclude-standard", "-z"],
         )
         .await
-        {
-            // `-z` separates paths with NUL bytes and disables C-style
-            // quoting, so paths containing spaces or non-ASCII characters
-            // round-trip intact.
-            // Cap the read to cover both the binary-check window and the
-            // synthesised-hunk budget.
-            let read_cap = BINARY_CHECK_BYTES.max(MAX_UNTRACKED_FILE_BYTES);
-            for file_name_bytes in untracked.as_bytes().split(|b| *b == 0) {
-                if file_name_bytes.is_empty() {
-                    continue;
-                }
-                let Ok(file_name) = std::str::from_utf8(file_name_bytes) else {
-                    continue;
-                };
-                let file_path = repo_path.join(file_name);
-                // Async + bounded so a large untracked file doesn't block
-                // the executor or balloon memory.
-                let Ok(file) = tokio::fs::File::open(&file_path).await else {
-                    continue;
-                };
-                let mut bytes = Vec::with_capacity(read_cap);
-                use tokio::io::AsyncReadExt as _;
-                if file
-                    .take(read_cap as u64)
-                    .read_to_end(&mut bytes)
-                    .await
-                    .is_err()
-                {
-                    continue;
-                }
-                let check_len = bytes.len().min(BINARY_CHECK_BYTES);
-                if warp_util::file_type::is_buffer_binary(&bytes[..check_len]) {
-                    continue;
-                }
-                let Ok(content) = std::str::from_utf8(&bytes) else {
-                    continue;
-                };
-                let content = truncate_on_char_boundary(content, MAX_UNTRACKED_FILE_BYTES);
-                let line_count = content.lines().count();
-                diff.push_str(&format!(
-                    "diff --git a/{file_name} b/{file_name}\nnew file mode 100644\n\
+    {
+        // `-z` separates paths with NUL bytes and disables C-style
+        // quoting, so paths containing spaces or non-ASCII characters
+        // round-trip intact.
+        // Cap the read to cover both the binary-check window and the
+        // synthesised-hunk budget.
+        let read_cap = BINARY_CHECK_BYTES.max(MAX_UNTRACKED_FILE_BYTES);
+        for file_name_bytes in untracked.as_bytes().split(|b| *b == 0) {
+            if file_name_bytes.is_empty() {
+                continue;
+            }
+            let Ok(file_name) = std::str::from_utf8(file_name_bytes) else {
+                continue;
+            };
+            let file_path = repo_path.join(file_name);
+            // Async + bounded so a large untracked file doesn't block
+            // the executor or balloon memory.
+            let Ok(file) = tokio::fs::File::open(&file_path).await else {
+                continue;
+            };
+            let mut bytes = Vec::with_capacity(read_cap);
+            use tokio::io::AsyncReadExt as _;
+            if file
+                .take(read_cap as u64)
+                .read_to_end(&mut bytes)
+                .await
+                .is_err()
+            {
+                continue;
+            }
+            let check_len = bytes.len().min(BINARY_CHECK_BYTES);
+            if warp_util::file_type::is_buffer_binary(&bytes[..check_len]) {
+                continue;
+            }
+            let Ok(content) = std::str::from_utf8(&bytes) else {
+                continue;
+            };
+            let content = truncate_on_char_boundary(content, MAX_UNTRACKED_FILE_BYTES);
+            let line_count = content.lines().count();
+            diff.push_str(&format!(
+                "diff --git a/{file_name} b/{file_name}\nnew file mode 100644\n\
                      --- /dev/null\n+++ b/{file_name}\n@@ -0,0 +1,{line_count} @@\n"
-                ));
-                for line in content.lines() {
-                    diff.push('+');
-                    diff.push_str(line);
-                    diff.push('\n');
-                }
+            ));
+            for line in content.lines() {
+                diff.push('+');
+                diff.push_str(line);
+                diff.push('\n');
             }
         }
     }
@@ -602,6 +671,24 @@ pub async fn run_commit(
     if include_unstaged {
         run_git_command_with_env(repo_path, &["add", "-A"], path_env).await?;
     }
+    // `git commit` exits 1 with an informational message on stdout when nothing
+    // is staged, which `run_git_command_with_env` reports as `Ok` (exit 1 +
+    // stdout is how it tolerates `git diff`). Guard explicitly so an empty
+    // commit surfaces as an error toast instead of a phantom "committed"
+    // success — this is the authoritative backstop now that the dialog no
+    // longer pre-gates on a synced staged-changes bit.
+    let staged = run_git_command_with_env(
+        repo_path,
+        &["--no-optional-locks", "diff", "--cached", "--name-only"],
+        path_env,
+    )
+    .await?;
+    if staged.trim().is_empty() {
+        if include_unstaged {
+            anyhow::bail!("nothing to commit, working tree clean");
+        }
+        anyhow::bail!("no changes added to commit");
+    }
     run_git_command_with_env(repo_path, &["commit", "-m", message], path_env).await
 }
 
@@ -612,49 +699,6 @@ pub async fn run_commit(
     _include_unstaged: bool,
     _path_env: Option<&str>,
 ) -> Result<String> {
-    Err(anyhow!("Not supported on wasm"))
-}
-
-/// Per-file stats for what would land in a PR: default branch vs
-/// `origin/<current>` (or HEAD when unpushed).
-#[cfg(feature = "local_fs")]
-pub async fn get_branch_diff_entries(repo_path: &Path) -> Result<Vec<FileChangeEntry>> {
-    let base = detect_main_branch(repo_path).await?;
-    let base = base.trim();
-    let current = detect_current_branch(repo_path).await?;
-    let remote_ref = format!("origin/{current}");
-
-    // Use the remote ref if it exists, otherwise fall back to HEAD.
-    let end_ref = if run_git_command(repo_path, &["rev-parse", "--verify", &remote_ref])
-        .await
-        .is_ok()
-    {
-        remote_ref
-    } else {
-        "HEAD".to_string()
-    };
-
-    let range = format!("{base}..{end_ref}");
-    let output = run_git_command(repo_path, &["diff", "--numstat", &range]).await?;
-    let mut entries = Vec::new();
-    for line in output.lines() {
-        if line.is_empty() {
-            continue;
-        }
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() >= 3 {
-            entries.push(FileChangeEntry {
-                path: parts[2].to_string(),
-                additions: parts[0].parse().unwrap_or(0),
-                deletions: parts[1].parse().unwrap_or(0),
-            });
-        }
-    }
-    Ok(entries)
-}
-
-#[cfg(not(feature = "local_fs"))]
-pub async fn get_branch_diff_entries(_repo_path: &Path) -> Result<Vec<FileChangeEntry>> {
     Err(anyhow!("Not supported on wasm"))
 }
 
@@ -682,6 +726,82 @@ pub async fn run_push(_repo_path: &Path, _branch: &str, _path_env: Option<&str>)
 pub struct PrInfo {
     pub number: u64,
     pub url: String,
+    pub state: String,
+    pub draft: bool,
+    pub base_branch: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryInfo {
+    pub name: String,
+    pub owner: Option<String>,
+    /// The repository host (e.g. "github.com"), parsed from the repo URL.
+    pub host: Option<String>,
+}
+
+#[cfg(feature = "local_fs")]
+fn repository_info_from_gh_output(output: &str) -> Result<RepositoryInfo> {
+    let parsed: serde_json::Value = serde_json::from_str(output.trim())
+        .map_err(|e| anyhow!("Failed to parse gh output: {e}"))?;
+    let name = parsed["name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| anyhow!("Missing 'name' in gh output"))?
+        .to_string();
+    let owner = parsed["owner"]["login"]
+        .as_str()
+        .filter(|owner| !owner.is_empty())
+        .ok_or_else(|| anyhow!("Missing 'owner.login' in gh output"))?
+        .to_string();
+    // The host is best-effort: parsed from the repo URL when present.
+    let host = parsed["url"]
+        .as_str()
+        .and_then(|u| url::Url::parse(u).ok())
+        .and_then(|u| u.host_str().map(|host| host.to_string()));
+    Ok(RepositoryInfo {
+        name,
+        owner: Some(owner),
+        host,
+    })
+}
+
+#[cfg(feature = "local_fs")]
+pub async fn get_repository_info(
+    repo_path: &Path,
+    path_env: Option<&str>,
+) -> Result<Option<RepositoryInfo>> {
+    if run_git_command(repo_path, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Ok(None);
+    }
+
+    match run_gh_command(
+        repo_path,
+        &["repo", "view", "--json", "name,owner,url"],
+        path_env,
+    )
+    .await
+    {
+        Ok(stdout) => repository_info_from_gh_output(&stdout).map(Some),
+        Err(e) => {
+            let msg = e.to_string();
+            if is_repository_lookup_not_applicable_error(&msg) {
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "local_fs"))]
+pub async fn get_repository_info(
+    _repo_path: &Path,
+    _path_env: Option<&str>,
+) -> Result<Option<RepositoryInfo>> {
+    Err(anyhow!("Not supported without local_fs"))
 }
 
 /// Runs a `gh` CLI command and returns stdout on success. `path_env`, when
@@ -689,8 +809,8 @@ pub struct PrInfo {
 /// findable from macOS GUI launches (launchd's minimal `PATH` excludes it).
 #[cfg(feature = "local_fs")]
 async fn run_gh_command(repo_path: &Path, args: &[&str], path_env: Option<&str>) -> Result<String> {
-    use command::r#async::Command;
     use command::Stdio;
+    use command::r#async::Command;
 
     log::debug!(
         "[GIT OPERATION] git.rs run_gh_command gh {}",
@@ -742,7 +862,18 @@ pub async fn get_pr_for_branch(repo_path: &Path, path_env: Option<&str>) -> Resu
     {
         return Ok(None);
     }
-    match run_gh_command(repo_path, &["pr", "view", "--json", "number,url"], path_env).await {
+    match run_gh_command(
+        repo_path,
+        &[
+            "pr",
+            "view",
+            "--json",
+            "number,url,state,isDraft,baseRefName",
+        ],
+        path_env,
+    )
+    .await
+    {
         Ok(stdout) => {
             let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
                 .map_err(|e| anyhow!("Failed to parse gh output: {e}"))?;
@@ -753,7 +884,24 @@ pub async fn get_pr_for_branch(repo_path: &Path, path_env: Option<&str>) -> Resu
                 .as_str()
                 .ok_or_else(|| anyhow!("Missing 'url' in gh output"))?
                 .to_string();
-            Ok(Some(PrInfo { number, url }))
+            let state = parsed["state"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Missing 'state' in gh output"))?
+                .to_string();
+            let draft = parsed["isDraft"]
+                .as_bool()
+                .ok_or_else(|| anyhow!("Missing 'isDraft' in gh output"))?;
+            let base_branch = parsed["baseRefName"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Missing 'baseRefName' in gh output"))?
+                .to_string();
+            Ok(Some(PrInfo {
+                number,
+                url,
+                state,
+                draft,
+                base_branch,
+            }))
         }
         Err(e) => {
             let msg = e.to_string();
@@ -789,6 +937,19 @@ fn is_pr_lookup_not_applicable_error(error_msg: &str) -> bool {
             "none of the git remotes configured for this repository point to a known github host",
         )
         || lower.contains("no github remotes")
+        || lower.contains("not a github repository")
+        || lower.contains("could not determine base repo")
+}
+
+/// Classifies `gh repo view` failures that authoritatively mean the current
+/// repository has no GitHub repository info, rather than a transient fetch
+/// failure.
+#[cfg(feature = "local_fs")]
+fn is_repository_lookup_not_applicable_error(error_msg: &str) -> bool {
+    let lower = error_msg.to_lowercase();
+    lower.contains(
+        "none of the git remotes configured for this repository point to a known github host",
+    ) || lower.contains("no github remotes")
         || lower.contains("not a github repository")
         || lower.contains("could not determine base repo")
 }
@@ -903,7 +1064,13 @@ pub async fn create_pr(
         .next()
         .and_then(|s| s.parse::<u64>().ok())
         .ok_or_else(|| anyhow!("Could not parse PR number from URL: {url}"))?;
-    Ok(PrInfo { number, url })
+    Ok(PrInfo {
+        number,
+        url,
+        state: "OPEN".to_string(),
+        draft: false,
+        base_branch: base.to_string(),
+    })
 }
 
 /// Trims an AI-generated PR title to a single line and caps its length.

@@ -9,4 +9,4 @@ if ! command -v cargo-binstall; then
     cargo install cargo-binstall@1.14.3 --locked
 fi
 
-cargo binstall cargo-binstall
+cargo binstall --no-confirm cargo-binstall

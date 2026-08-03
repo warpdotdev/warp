@@ -1,15 +1,15 @@
 use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
+use warp_server_client::base_client::CLOUD_AGENT_ID_HEADER;
 
-use super::super::auth::CLOUD_AGENT_ID_HEADER;
 use super::super::ServerApi;
 use super::{
-    build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
     AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
-    ArtifactDownloadResponse, ArtifactType, ConnectedSelfHostedWorker, ExecutionLocation,
-    ForkConversationResponse, ListConnectedSelfHostedWorkersResponse, ListRunsResponse,
-    ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
-    TaskListFilter, UserQueryMode, CONNECTED_SELF_HOSTED_WORKERS_PATH,
+    ArtifactDownloadResponse, ArtifactType, CONNECTED_SELF_HOSTED_WORKERS_PATH,
+    ConnectedSelfHostedWorker, ExecutionLocation, ForkConversationResponse,
+    ListConnectedSelfHostedWorkersResponse, ListRunsResponse, ReadAgentMessageResponse,
+    RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest, TaskListFilter, UserQueryMode,
+    build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
 };
 use crate::notebooks::NotebookId;
 
@@ -30,14 +30,17 @@ fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
 
     assert_eq!(
         cloud_agent_headers,
-        vec![(CLOUD_AGENT_ID_HEADER, task_scoped_id.to_string())]
+        vec![(
+            CLOUD_AGENT_ID_HEADER.to_string(),
+            task_scoped_id.to_string()
+        )]
     );
 }
 
 #[test]
 fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
     let request = SpawnAgentRequest {
-        prompt: "hello".to_string(),
+        prompt: Some("hello".to_string()),
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
@@ -52,6 +55,7 @@ fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
         conversation_id: None,
         initial_snapshot_token: None,
         snapshot_disabled: None,
+        orchestration_handoff: None,
     };
 
     let value = serde_json::to_value(&request).unwrap();
@@ -110,6 +114,33 @@ fn deserialize_connected_self_hosted_workers_response() {
         ]
     );
 }
+
+#[test]
+fn spawn_agent_request_omits_prompt_when_none() {
+    let request = SpawnAgentRequest {
+        prompt: None,
+        mode: UserQueryMode::Normal,
+        config: None,
+        title: None,
+        team: None,
+        agent_identity_uid: None,
+        skill: None,
+        attachments: vec![],
+        interactive: None,
+        parent_run_id: None,
+        runtime_skills: vec![],
+        referenced_attachments: vec![],
+        conversation_id: None,
+        initial_snapshot_token: None,
+        snapshot_disabled: None,
+        orchestration_handoff: None,
+    };
+
+    let value = serde_json::to_value(&request).unwrap();
+
+    assert!(value.get("prompt").is_none());
+}
+
 #[test]
 fn test_deserialize_file_artifact_download_response() {
     let json = r#"{

@@ -20,7 +20,7 @@ impl CustomSecretRegexUpdater {
         updater.update_custom_secret_regex_list(ctx);
 
         let privacy_settings = PrivacySettings::handle(ctx);
-        ctx.subscribe_to_model(&privacy_settings, |me, evt, ctx| {
+        ctx.subscribe_to_model(&privacy_settings, |me, _, evt, ctx| {
             if let PrivacySettingsChangedEvent::CustomSecretRegexList { .. } = evt {
                 me.update_custom_secret_regex_list(ctx);
             }

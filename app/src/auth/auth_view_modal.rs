@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use url::Url;
-use warp_core::errors::ErrorExt;
 use warp_core::features::FeatureFlag;
+use warp_core::{safe_anyhow, safe_error};
+use warp_errors::{ErrorExt, report_error};
 use warpui::actions::StandardAction;
 use warpui::elements::{
     ChildAnchor, ChildView, Container, Fill, HighlightedHyperlink, MouseStateHandle,
@@ -18,11 +19,11 @@ use warpui::{
     ViewHandle,
 };
 
+use super::UserUid;
 use super::auth_manager::{AuthManager, AuthManagerEvent};
-use super::auth_view_body::{AuthStep, AuthViewBodyEvent};
+use super::auth_view_body::{AuthStep, AuthViewBodyAction, AuthViewBodyEvent};
 use super::credentials::RefreshToken;
 use super::login_failure_notification::{self, LoginFailureReason};
-use super::UserUid;
 use crate::appearance::Appearance;
 use crate::auth::auth_view_body::AuthViewBody;
 use crate::modal::Modal;
@@ -100,7 +101,10 @@ impl AuthRedirectPayload {
     /// must be of format {scheme}://auth/desktop_redirect?refresh_token={token}.
     pub fn from_url(url: Url) -> Result<Self> {
         if url.host_str() != Some(AUTH_URL_HOST) {
-            return Err(anyhow!("Received URL with unexpected host: {} ", url));
+            return Err(safe_anyhow!(
+                safe: ("Auth redirect URL has unexpected host"),
+                full: ("Received URL with unexpected host: {} ", url)
+            ));
         }
         let query_params: HashMap<_, _> = url.query_pairs().into_owned().collect();
         if let Some(token) = query_params.get(AUTH_URL_REFRESH_TOKEN_QUERY_PARAM) {
@@ -117,9 +121,9 @@ impl AuthRedirectPayload {
                 state: query_params.get(AUTH_URL_STATE_QUERY_PARAM).cloned(),
             })
         } else {
-            Err(anyhow!(
-                "Received URL without refresh token query param: {}",
-                url
+            Err(safe_anyhow!(
+                safe: ("Auth redirect URL is missing required credential"),
+                full: ("Received URL without refresh token query param: {}", url)
             ))
         }
     }
@@ -211,6 +215,12 @@ impl AuthView {
         self.set_auth_step(ctx, AuthStep::BrowserOpen);
     }
 
+    pub fn start_sign_in(&mut self, ctx: &mut ViewContext<Self>) {
+        self.update_auth_body(ctx, |body, ctx| {
+            body.handle_action(&AuthViewBodyAction::Login, ctx);
+        });
+    }
+
     fn focus(&self, ctx: &mut ViewContext<Self>) {
         ctx.focus(&self.auth_screen_modal);
         ctx.notify();
@@ -243,7 +253,10 @@ impl AuthView {
                 });
             }
             Err(error) => {
-                log::error!("Failed to parse AuthRedirectPayload from redirect URL: {error:#}");
+                safe_error!(
+                    safe: ("Failed to parse AuthRedirectPayload from redirect URL"),
+                    full: ("Failed to parse AuthRedirectPayload from redirect URL: {error:#}")
+                );
                 self.last_login_failure_reason =
                     Some(LoginFailureReason::InvalidRedirectUrl { was_pasted: true });
                 self.set_auth_token_input_editable(true, ctx);
@@ -282,7 +295,7 @@ impl AuthView {
             }
             AuthManagerEvent::AuthFailed(err) => {
                 if err.is_actionable() {
-                    log::error!("Failed to log in user: {err:#}");
+                    report_error!(err);
                 }
 
                 if let UserAuthenticationError::InvalidStateParameter = err {

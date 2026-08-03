@@ -17,6 +17,16 @@ pub enum ApiKeyCommand {
     Expire(ExpireApiKeyArgs),
 }
 
+impl ApiKeyCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            ApiKeyCommand::List(_) => "api-key list",
+            ApiKeyCommand::Create(_) => "api-key create",
+            ApiKeyCommand::Expire(_) => "api-key expire",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct ListApiKeysArgs {
     /// Sort field.

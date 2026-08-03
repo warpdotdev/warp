@@ -1,16 +1,16 @@
 use std::ops::Range;
 
 use string_offset::CharOffset;
-use warpui::elements::{
+use warpui_core::elements::{
     Axis, CornerRadius, DEFAULT_SCROLL_WHEEL_PIXELS_PER_LINE, Radius, ScrollData,
     ScrollbarAppearance, ScrollbarGeometry, ScrollbarWidth, compute_scrollbar_geometry,
     project_scroll_delta_by_sensitivity, scroll_delta_for_pointer_movement,
 };
-use warpui::event::DispatchedEvent;
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{Vector2F, vec2f};
-use warpui::units::{IntoPixels, Pixels};
-use warpui::{AppContext, ClipBounds, Event, EventContext};
+use warpui_core::event::DispatchedEvent;
+use warpui_core::geometry::rect::RectF;
+use warpui_core::geometry::vector::{Vector2F, vec2f};
+use warpui_core::units::{IntoPixels, Pixels};
+use warpui_core::{AppContext, ClipBounds, Event, EventContext};
 
 use super::paint::{CursorData, CursorDisplayType};
 use super::{RenderContext, RenderableBlock};
@@ -112,7 +112,7 @@ impl RenderableBlock for RenderableTable {
         &self.viewport_item
     }
 
-    fn layout(&mut self, _: &RenderState, _: &mut warpui::LayoutContext, _: &AppContext) {}
+    fn layout(&mut self, _: &RenderState, _: &mut warpui_core::LayoutContext, _: &AppContext) {}
 
     fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, _app: &AppContext) {
         let content = model.content();

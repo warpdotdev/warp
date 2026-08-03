@@ -1,3 +1,6 @@
+use objc2::runtime::ProtocolObject;
+use objc2_metal::MTLDevice;
+
 pub mod frame_capture;
 mod renderer;
 mod renderer_manager;
@@ -8,6 +11,6 @@ pub use renderer_manager::RendererManager;
 ///
 /// In dual GPU Macs, this is `false` for the discrete high-performance GPU.
 #[cfg_attr(wgpu, allow(dead_code))]
-pub fn is_integrated_gpu(device: &metal::Device) -> bool {
-    device.is_low_power() && !device.is_removable()
+pub fn is_integrated_gpu(device: &ProtocolObject<dyn MTLDevice>) -> bool {
+    device.isLowPower() && !device.isRemovable()
 }

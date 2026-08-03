@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::marker::PhantomData;
 
 use pathfinder_color::ColorU;
 use warpui::elements::{
@@ -25,6 +26,38 @@ pub const TOP_MENU_BAR_MAX_WIDTH: f32 = 190.;
 pub const DROPDOWN_PADDING: f32 = 6.;
 
 pub type MenuHeaderTextFormatter = Box<dyn Fn(&str) -> String>;
+pub trait DropdownItemAction: Action {
+    fn clone_box(&self) -> Box<dyn DropdownItemAction>;
+    fn eq_action(&self, other: &dyn DropdownItemAction) -> bool;
+}
+
+impl<T> DropdownItemAction for T
+where
+    T: Action + Clone + PartialEq + 'static,
+{
+    fn clone_box(&self) -> Box<dyn DropdownItemAction> {
+        Box::new(self.clone())
+    }
+
+    fn eq_action(&self, other: &dyn DropdownItemAction) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<T>()
+            .is_some_and(|other| self == other)
+    }
+}
+
+impl Clone for Box<dyn DropdownItemAction> {
+    fn clone(&self) -> Self {
+        self.as_ref().clone_box()
+    }
+}
+
+impl PartialEq for Box<dyn DropdownItemAction> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref().eq_action(other.as_ref())
+    }
+}
 
 #[derive(Clone, Default)]
 pub enum DropdownStyle {
@@ -60,7 +93,12 @@ impl DropdownStyle {
 
 /// A dropdown menu view. The view renders each DropdownItem. When a menu item is clicked,
 /// on_click_action_name is dispatched, with the value of the corresponding menu item.
-pub struct Dropdown<A: Action + Clone> {
+///
+/// The item action type powers typed item helpers like `set_items` and
+/// `set_selected_by_action`. Callers that populate the menu with already-erased rich
+/// [`MenuItem<DropdownAction>`] values through `set_rich_items` do not need to name a concrete
+/// item action type.
+pub struct Dropdown<A: DropdownItemAction = ()> {
     is_expanded: bool,
     disabled: bool,
     top_bar_mouse_state: MouseStateHandle,
@@ -69,8 +107,8 @@ pub struct Dropdown<A: Action + Clone> {
     child_anchor: ChildAnchor,
     main_axis_size: MainAxisSize,
 
-    dropdown: ViewHandle<Menu<DropdownAction<A>>>,
-    selected_item: Option<MenuItem<DropdownAction<A>>>,
+    dropdown: ViewHandle<Menu<DropdownAction>>,
+    selected_item: Option<MenuItem<DropdownAction>>,
     // Function for overriding the default closed-state text (the selected item)
     menu_header_text_override: Option<MenuHeaderTextFormatter>,
     self_handle: WeakViewHandle<Self>,
@@ -110,10 +148,18 @@ pub struct Dropdown<A: Action + Clone> {
     /// confirmation card pickers.
     use_overlay_layer: bool,
     match_menu_width_to_top_bar: bool,
+    /// When true, the Dropdown skips rendering the open menu popup internally.
+    /// Callers must use `render_menu_as_overlay` to obtain the popup element and
+    /// positioning, then attach it directly to an outer Stack as a positioned
+    /// overlay child so the popup paints on top of all sibling content.
+    render_popup_externally: bool,
+    // The menu stores erased `DropdownAction`s internally, but the public API remains generic over
+    // the caller's concrete item action type (`set_items`, `set_selected_by_action`, etc.).
+    _item_action_type: PhantomData<A>,
 }
 
 #[derive(Clone)]
-pub struct DropdownItem<A: Action + Clone> {
+pub struct DropdownItem<A: DropdownItemAction = ()> {
     /// Text to display for the item
     pub display_text: String,
     /// Constructor for the typed action object
@@ -129,7 +175,7 @@ pub struct DropdownItem<A: Action + Clone> {
 
 impl<A> DropdownItem<A>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
     pub fn new<S>(display_text: S, action: A) -> Self
     where
@@ -167,14 +213,14 @@ where
     }
 }
 
-impl<A> From<&DropdownItem<A>> for MenuItem<DropdownAction<A>>
+impl<A> From<&DropdownItem<A>> for MenuItem<DropdownAction>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
-    fn from(dropdown_item: &DropdownItem<A>) -> MenuItem<DropdownAction<A>> {
+    fn from(dropdown_item: &DropdownItem<A>) -> MenuItem<DropdownAction> {
         let mut menu_item = MenuItemFields::new(dropdown_item.display_text.clone())
             .with_on_select_action(DropdownAction::SelectActionAndClose(
-                dropdown_item.action.clone(),
+                dropdown_item.action.clone_box(),
             ));
         if let Some(tooltip) = &dropdown_item.tooltip {
             menu_item = menu_item.with_tooltip(tooltip.clone());
@@ -190,21 +236,27 @@ where
     }
 }
 
-impl<A> From<A> for DropdownAction<A>
-where
-    A: Action + Clone,
-{
-    fn from(action: A) -> DropdownAction<A> {
-        DropdownAction::SelectActionAndClose(action)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
-pub enum DropdownAction<A: Action + Clone> {
+pub enum DropdownAction {
     Focus(usize),
     Close,
-    SelectActionAndClose(A),
+    SelectActionAndClose(Box<dyn DropdownItemAction>),
     ToggleExpanded,
+}
+
+impl DropdownAction {
+    /// Wraps a caller item action so menu selection can close the dropdown before dispatching the
+    /// typed action.
+    ///
+    /// This is an inherent constructor instead of `From<A>` because a blanket
+    /// `impl<A> From<A> for DropdownAction` would overlap with Rust's `impl<T> From<T> for T`
+    /// when `A = DropdownAction`.
+    pub fn select_action_and_close<A>(action: A) -> Self
+    where
+        A: DropdownItemAction,
+    {
+        Self::SelectActionAndClose(Box::new(action))
+    }
 }
 
 pub enum DropdownEvent {
@@ -214,7 +266,7 @@ pub enum DropdownEvent {
 
 impl<A> Dropdown<A>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let dropdown = ctx.add_typed_action_view(|ctx| {
@@ -253,7 +305,42 @@ where
             top_bar_height: TOP_MENU_BAR_HEIGHT,
             use_overlay_layer: true,
             match_menu_width_to_top_bar: false,
+            render_popup_externally: false,
+            _item_action_type: PhantomData,
         }
+    }
+
+    /// When `render_popup_externally` is true, the dropdown skips its
+    /// internal popup rendering even when expanded. Callers must use
+    /// [`Self::render_menu_as_overlay`] to obtain the popup and attach it
+    /// to an outer [`Stack`] as a positioned overlay child, ensuring the
+    /// popup paints on top of all subsequent sibling form content.
+    pub fn set_render_popup_externally(&mut self, value: bool, ctx: &mut ViewContext<Self>) {
+        self.render_popup_externally = value;
+        ctx.notify();
+    }
+
+    /// Returns the open menu element and its positioning for external
+    /// rendering, or `None` when the dropdown is closed or
+    /// `render_popup_externally` is not set.
+    pub fn render_menu_as_overlay(&self) -> Option<(Box<dyn Element>, OffsetPositioning)> {
+        if !self.is_expanded || !self.render_popup_externally {
+            return None;
+        }
+        let mut menu: Box<dyn Element> = ChildView::new(&self.dropdown).finish();
+        if self.use_drop_shadow {
+            menu = Container::new(menu)
+                .with_drop_shadow(DropShadow::default())
+                .finish();
+        }
+        let positioning = OffsetPositioning::offset_from_save_position_element(
+            self.top_bar_label(),
+            vec2f(0., 0.),
+            PositionedElementOffsetBounds::WindowByPosition,
+            self.element_anchor,
+            self.child_anchor,
+        );
+        Some((menu, positioning))
     }
 
     /// Controls whether the open menu is rendered in an `Overlay`
@@ -394,11 +481,14 @@ where
         ctx.notify();
     }
 
-    // Most dropdowns don't need to use rich menu features like separators, indents, and submenus.
-    // But some do and, for those, we expose a "rich" item API.
+    /// Set items from rich menu items.
+    ///
+    /// Rich menu items already carry erased [`DropdownAction`]s. The dropdown dispatches selected
+    /// item actions through normal action propagation, so callers should ensure each action is
+    /// handled by an appropriate view in the containing view hierarchy.
     pub fn set_rich_items(
         &mut self,
-        items: impl IntoIterator<Item = MenuItem<DropdownAction<A>>>,
+        items: impl IntoIterator<Item = MenuItem<DropdownAction>>,
         ctx: &mut ViewContext<Self>,
     ) {
         self.dropdown.update(ctx, |dropdown, ctx| {
@@ -445,12 +535,10 @@ where
     /// this clears the selection.
     ///
     /// This is primarily useful when items are dynamically generated and correspond to some backing data that's captured by the action.
-    pub fn set_selected_by_action(&mut self, action: A, ctx: &mut ViewContext<Self>)
-    where
-        A: PartialEq,
-    {
+    pub fn set_selected_by_action(&mut self, action: A, ctx: &mut ViewContext<Self>) {
+        let action = DropdownAction::SelectActionAndClose(Box::new(action));
         self.dropdown.update(ctx, |dropdown, ctx| {
-            dropdown.set_selected_by_action(&DropdownAction::SelectActionAndClose(action), ctx);
+            dropdown.set_selected_by_action(&action, ctx);
             ctx.notify();
         });
         self.selected_item = self.selected_item(ctx);
@@ -460,6 +548,29 @@ where
     pub fn set_selected_to_none(&mut self, ctx: &mut ViewContext<Self>) {
         self.selected_item = None;
         ctx.notify();
+    }
+
+    /// Returns a clone of the concrete item action for the currently selected
+    /// item, if any.
+    ///
+    /// This reads the dropdown's mirrored selection state (kept current via
+    /// menu events), so it is reliable even when the popup is rendered
+    /// externally via [`Self::set_render_popup_externally`], where the
+    /// selection action does not bubble through this view's own element
+    /// subtree to fire the item action.
+    pub fn selected_action(&self) -> Option<A>
+    where
+        A: Clone,
+    {
+        let DropdownAction::SelectActionAndClose(action) =
+            self.selected_item.as_ref()?.item_on_select_action()?
+        else {
+            return None;
+        };
+        // Deref the `Box<dyn DropdownItemAction>` to the inner trait object
+        // before `as_any`: the blanket `Action` impl also covers `Box<_>`, so
+        // calling `as_any` on the box would downcast the box, not the action.
+        (**action).as_any().downcast_ref::<A>().cloned()
     }
 
     pub fn set_top_bar_max_width(&mut self, max_width: f32) {
@@ -480,7 +591,7 @@ where
         })
     }
 
-    fn selected_item(&self, ctx: &mut ViewContext<Self>) -> Option<MenuItem<DropdownAction<A>>> {
+    fn selected_item(&self, ctx: &mut ViewContext<Self>) -> Option<MenuItem<DropdownAction>> {
         self.dropdown
             .read(ctx, |dropdown, _| dropdown.selected_item())
     }
@@ -490,7 +601,11 @@ where
         ctx.notify();
     }
 
-    fn select_action_and_close(&mut self, action: &A, ctx: &mut ViewContext<Self>) {
+    fn select_action_and_close(
+        &mut self,
+        action: &dyn DropdownItemAction,
+        ctx: &mut ViewContext<Self>,
+    ) {
         ctx.dispatch_typed_action(action);
         self.close(ctx);
     }
@@ -504,10 +619,10 @@ where
     pub fn toggle_expanded(&mut self, ctx: &mut ViewContext<Self>) {
         self.is_expanded = !self.is_expanded;
         if self.is_expanded {
-            if self.match_menu_width_to_top_bar {
-                if let Some(bounds) = ctx.element_position_by_id(self.top_bar_label()) {
-                    self.set_menu_width(bounds.width(), ctx);
-                }
+            if self.match_menu_width_to_top_bar
+                && let Some(bounds) = ctx.element_position_by_id(self.top_bar_label())
+            {
+                self.set_menu_width(bounds.width(), ctx);
             }
             ctx.focus(&self.dropdown);
             ctx.emit(DropdownEvent::ToggleExpanded);
@@ -581,7 +696,7 @@ where
         }
 
         let top_bar_element = top_bar.build().on_click(|ctx, _, _| {
-            ctx.dispatch_typed_action(DropdownAction::<A>::ToggleExpanded);
+            ctx.dispatch_typed_action(DropdownAction::ToggleExpanded);
         });
 
         SavePosition::new(
@@ -615,23 +730,23 @@ where
 
 impl<A> Entity for Dropdown<A>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
     type Event = DropdownEvent;
 }
 
 impl<A> TypedActionView for Dropdown<A>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
-    type Action = DropdownAction<A>;
+    type Action = DropdownAction;
 
-    fn handle_action(&mut self, action: &DropdownAction<A>, ctx: &mut ViewContext<Self>) {
+    fn handle_action(&mut self, action: &DropdownAction, ctx: &mut ViewContext<Self>) {
         match action {
             DropdownAction::Focus(delta) => self.focus(*delta, ctx),
             DropdownAction::Close => self.close(ctx),
             DropdownAction::SelectActionAndClose(action) => {
-                self.select_action_and_close(action, ctx)
+                self.select_action_and_close(action.as_ref(), ctx)
             }
             DropdownAction::ToggleExpanded => self.toggle_expanded(ctx),
         }
@@ -640,7 +755,7 @@ where
 
 impl<A> View for Dropdown<A>
 where
-    A: Action + Clone,
+    A: DropdownItemAction,
 {
     fn ui_name() -> &'static str {
         "Dropdown"
@@ -649,7 +764,8 @@ where
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let mut dropdown_stack = Stack::new().with_child(self.render_top_bar(appearance));
-        if self.is_expanded {
+        // Skip internal popup rendering when an outer Stack is handling it.
+        if self.is_expanded && !self.render_popup_externally {
             let mut menu = ChildView::new(&self.dropdown).finish();
             if self.use_drop_shadow {
                 menu = Container::new(menu)

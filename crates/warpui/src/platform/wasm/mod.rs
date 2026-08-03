@@ -12,6 +12,7 @@ use wasm_bindgen::{JsCast, UnwrapThrowExt};
 
 use super::KEYS_TO_IGNORE;
 use crate::keymap::Keystroke;
+use crate::platform::OperatingSystem;
 // Re-export a couple winit types and modules as the concrete implementations
 // for the wasm platform.
 pub use crate::windowing::winit::app::App;
@@ -108,7 +109,8 @@ pub(crate) fn add_prevent_default_listener(canvas: &web_sys::HtmlCanvasElement) 
                     key: event.key(),
                 };
 
-                let allow_default_event = KEYS_TO_IGNORE.contains(&keystroke);
+                let allow_default_event =
+                    KEYS_TO_IGNORE.contains(&keystroke) || is_browser_shortcut(event);
                 if !allow_default_event {
                     event.prevent_default();
                 }
@@ -116,6 +118,54 @@ pub(crate) fn add_prevent_default_listener(canvas: &web_sys::HtmlCanvasElement) 
         ));
         Box::leak(prevent_default_listener);
     }
+}
+
+fn is_browser_shortcut(event: &web_sys::KeyboardEvent) -> bool {
+    let key = event.key().to_ascii_lowercase();
+
+    if !event.ctrl_key() && !event.alt_key() && !event.meta_key() {
+        return key == "f5";
+    }
+
+    if is_browser_history_shortcut(event, &key) {
+        return true;
+    }
+
+    if !has_browser_primary_modifier(event) || event.alt_key() {
+        return false;
+    }
+
+    // These are standard browser chrome shortcuts that should keep working in WASM sessions.
+    // This allowlist uses the browser's primary shortcut modifier for the current OS
+    // (Cmd on macOS, Ctrl elsewhere), so the behavior is not macOS-specific.
+    let browser_primary_shortcut_keys = [
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-", "=", "+", "[", "]", "l", "n", "r",
+        "t", "tab", "w", "pageup", "pagedown",
+    ];
+    let browser_shifted_primary_shortcut_keys = [
+        "-", "=", "+", "[", "]", "{", "}", "n", "r", "t", "tab", "w", "pageup", "pagedown",
+    ];
+
+    if event.shift_key() {
+        browser_shifted_primary_shortcut_keys.contains(&key.as_str())
+    } else {
+        browser_primary_shortcut_keys.contains(&key.as_str())
+    }
+}
+
+fn has_browser_primary_modifier(event: &web_sys::KeyboardEvent) -> bool {
+    match OperatingSystem::get() {
+        OperatingSystem::Mac => event.meta_key() && !event.ctrl_key(),
+        _ => event.ctrl_key() && !event.meta_key(),
+    }
+}
+
+fn is_browser_history_shortcut(event: &web_sys::KeyboardEvent, key: &str) -> bool {
+    if event.shift_key() || event.ctrl_key() || event.meta_key() {
+        return false;
+    }
+
+    event.alt_key() && matches!(key, "arrowleft" | "arrowright")
 }
 
 pub(crate) fn add_paste_listener(event_loop_proxy: winit::event_loop::EventLoopProxy<CustomEvent>) {

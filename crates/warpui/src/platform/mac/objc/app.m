@@ -254,8 +254,30 @@ NSUInteger activeScreenId() {
     }
 }
 
+// Returns YES when the in-flight quit Apple event carries a kAEQuitReason
+// indicating the system (logout / restart / shutdown / scheduled OS update)
+// initiated the termination, as opposed to the user quitting the app directly.
+// Per AERegistry.h, the documented kAEQuitReason values are kAEQuitAll,
+// kAEShutDown, kAERestart, and kAEReallyLogOut; a missing event or reason
+// (both accessors return 0 on nil) means the user or another process quit us.
+static BOOL isSystemInitiatedTermination(void) {
+    NSAppleEventDescriptor *event =
+        [[NSAppleEventManager sharedAppleEventManager] currentAppleEvent];
+    NSAppleEventDescriptor *reason = [event attributeDescriptorForKeyword:kAEQuitReason];
+    switch ([reason typeCodeValue]) {
+        case kAEQuitAll:
+        case kAEShutDown:
+        case kAERestart:
+        case kAEReallyLogOut:
+            return YES;
+        default:
+            return NO;
+    }
+}
+
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)application {
     BOOL okToTerminate = YES;
+    BOOL systemInitiated = isSystemInitiatedTermination();
 
     // If this is the second termination attempt after we've already hidden the app, we can go ahead
     // and terminate.
@@ -266,10 +288,18 @@ NSUInteger activeScreenId() {
     if (!forceTermination) {
         // Make sure the rust app doesn't have any reasons to interrupt quit, e.g. needs to relaunch
         // for autoupdate, but launching the new process failed.
-        okToTerminate = warp_app_should_terminate_app(application);
+        okToTerminate = warp_app_should_terminate_app(application, systemInitiated);
     }
 
     if (okToTerminate) {
+        if (systemInitiated) {
+            // Comply immediately when the system asked us to quit. Anything but
+            // `NSTerminateNow` here (including the hide-then-reterminate dance
+            // below, which returns `NSTerminateCancel`) makes macOS treat Warp
+            // as blocking the logout/shutdown, which can abort a scheduled OS
+            // update and leave the app in a stuck-looking state (#12441).
+            return NSTerminateNow;
+        }
         // We want to hide the application before we start the teardown
         // process, to ensure the user isn't affected by any slow teardown
         // steps.  The tricky part here is that a call to `[NSApp hide]` isn't
@@ -437,6 +467,11 @@ NSUInteger activeScreenId() {
     return self.dockMenu;
 }
 
+- (BOOL)setDockIconVisible:(BOOL)visible {
+    NSApplicationActivationPolicy policy =
+        visible ? NSApplicationActivationPolicyRegular : NSApplicationActivationPolicyAccessory;
+    return [NSApp setActivationPolicy:policy];
+}
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
     didReceiveNotificationResponse:(UNNotificationResponse *)response
              withCompletionHandler:(void (^)(void))completionHandler {

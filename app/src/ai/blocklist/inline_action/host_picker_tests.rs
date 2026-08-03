@@ -3,14 +3,14 @@
 //! testing.
 
 use super::{
-    build_menu_items, menu_label_for, normalize_slug, DropdownAction, InternalAction, MenuItem,
-    ORCHESTRATION_WARP_WORKER_HOST,
+    DropdownAction, InternalAction, MenuItem, ORCHESTRATION_WARP_WORKER_HOST, build_menu_items,
+    menu_label_for, normalize_slug,
 };
 
 /// Extracts the visible label text out of a `MenuItem::Item`, panicking
 /// on the unreachable `Header` / `Separator` cases that our builder
 /// doesn't emit.
-fn item_label(item: &MenuItem<DropdownAction<InternalAction>>) -> &str {
+fn item_label(item: &MenuItem<DropdownAction>) -> &str {
     match item {
         MenuItem::Item(fields) => fields.label(),
         other => panic!("expected MenuItem::Item, got {other:?}"),
@@ -18,7 +18,7 @@ fn item_label(item: &MenuItem<DropdownAction<InternalAction>>) -> &str {
 }
 
 /// Extracts the on-select action from a `MenuItem::Item`.
-fn item_action(item: &MenuItem<DropdownAction<InternalAction>>) -> &DropdownAction<InternalAction> {
+fn item_action(item: &MenuItem<DropdownAction>) -> &DropdownAction {
     match item {
         MenuItem::Item(fields) => fields
             .on_select_action()
@@ -41,7 +41,7 @@ fn build_menu_items_promotes_default_to_top() {
     // matching the Oz webapp's HostSelector layout.
     let items = build_menu_items(Some("my-corp"), None, &[]);
     assert_eq!(items.len(), 3);
-    assert_eq!(item_label(&items[0]), "my-corp  (Default)");
+    assert_eq!(item_label(&items[0]), "my-corp");
     assert_eq!(item_label(&items[1]), ORCHESTRATION_WARP_WORKER_HOST);
     assert_eq!(item_label(&items[2]), "Custom host\u{2026}");
 }
@@ -61,7 +61,7 @@ fn build_menu_items_dedups_recent_when_it_matches_default_or_warp() {
     // Same as the workspace default → no duplicate "Recent" row.
     let items = build_menu_items(Some("my-corp"), Some("my-corp"), &[]);
     assert_eq!(items.len(), 3);
-    assert_eq!(item_label(&items[0]), "my-corp  (Default)");
+    assert_eq!(item_label(&items[0]), "my-corp");
     assert_eq!(item_label(&items[1]), ORCHESTRATION_WARP_WORKER_HOST);
     assert_eq!(item_label(&items[2]), "Custom host\u{2026}");
 
@@ -80,7 +80,7 @@ fn build_menu_items_adds_connected_hosts_before_recent_and_dedups_known_hosts() 
     ];
     let items = build_menu_items(Some("my-corp"), Some("beta"), &connected_hosts);
     assert_eq!(items.len(), 5);
-    assert_eq!(item_label(&items[0]), "my-corp  (Default)");
+    assert_eq!(item_label(&items[0]), "my-corp");
     assert_eq!(item_label(&items[1]), ORCHESTRATION_WARP_WORKER_HOST);
     assert_eq!(item_label(&items[2]), "alpha");
     assert_eq!(item_label(&items[3]), "beta");
@@ -91,8 +91,17 @@ fn build_menu_items_adds_connected_hosts_before_recent_and_dedups_known_hosts() 
 fn build_menu_items_warp_entry_dispatches_select_known_warp() {
     let items = build_menu_items(None, None, &[]);
     match item_action(&items[0]) {
-        DropdownAction::SelectActionAndClose(InternalAction::SelectKnown(slug)) => {
-            assert_eq!(slug, ORCHESTRATION_WARP_WORKER_HOST);
+        DropdownAction::SelectActionAndClose(action) => {
+            let action = action
+                .as_any()
+                .downcast_ref::<InternalAction>()
+                .expect("expected InternalAction");
+            match action {
+                InternalAction::SelectKnown(slug) => {
+                    assert_eq!(slug, ORCHESTRATION_WARP_WORKER_HOST);
+                }
+                other => panic!("expected SelectKnown, got {other:?}"),
+            }
         }
         other => panic!("expected SelectActionAndClose(SelectKnown), got {other:?}"),
     }
@@ -103,7 +112,12 @@ fn build_menu_items_custom_entry_dispatches_enter_custom_mode() {
     let items = build_menu_items(None, None, &[]);
     let custom = items.last().expect("custom entry is always last");
     match item_action(custom) {
-        DropdownAction::SelectActionAndClose(InternalAction::EnterCustomMode) => {}
+        DropdownAction::SelectActionAndClose(action) => {
+            assert_eq!(
+                action.as_any().downcast_ref::<InternalAction>(),
+                Some(&InternalAction::EnterCustomMode)
+            );
+        }
         other => panic!("expected EnterCustomMode, got {other:?}"),
     }
 }

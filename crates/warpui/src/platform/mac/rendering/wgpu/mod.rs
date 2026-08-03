@@ -3,9 +3,8 @@ mod renderer_manager;
 
 use std::ptr::NonNull;
 
-use anyhow::{anyhow, Result};
-use cocoa::appkit::NSView;
-use cocoa::base::id;
+use anyhow::Result;
+use objc2_app_kit::NSView;
 use pathfinder_geometry::vector::vec2f;
 pub use renderer_manager::RendererManager;
 use wgpu::rwh::{
@@ -20,18 +19,14 @@ use crate::rendering::{GPUPowerPreference, OnGPUDeviceSelected};
 impl Device {
     /// Constructs a new [`Device`] to render using WGPU.
     pub fn new_wgpu(
-        native_view: id,
+        native_view: &NSView,
         gpu_power_preference: GPUPowerPreference,
         on_gpu_device_info: Box<OnGPUDeviceSelected>,
     ) -> Result<Device> {
-        let view_frame = unsafe { NSView::frame(native_view) };
+        let view_frame = native_view.frame();
         let surface_size = vec2f(view_frame.size.width as f32, view_frame.size.height as f32);
 
-        let appkit_window_handle = AppKitWindowHandle::new(
-            NonNull::new(native_view)
-                .ok_or_else(|| anyhow!("Received null NSView pointer"))?
-                .cast(),
-        );
+        let appkit_window_handle = AppKitWindowHandle::new(NonNull::from(native_view).cast());
         let window_handle =
             unsafe { WindowHandle::borrow_raw(RawWindowHandle::AppKit(appkit_window_handle)) };
         let display_handle = unsafe {

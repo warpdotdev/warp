@@ -14,9 +14,9 @@ use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View
 
 use super::render::{HORIZONTAL_TEXT_MARGIN, SSH_DOCS_URL, SUBSHELL_DOCS_URL};
 use super::settings::WarpifySettings;
-use super::{render, subshell_bootstrap_success_block_bytes, WarpificationSource};
+use super::{WarpificationSource, render, subshell_bootstrap_success_block_bytes};
 use crate::ai::agent::ProgrammingLanguage;
-use crate::ai::blocklist::code_block::{render_runnable_code_snippet, CodeSnippetButtonHandles};
+use crate::ai::blocklist::code_block::{CodeSnippetButtonHandles, render_runnable_code_snippet};
 use crate::appearance::Appearance;
 use crate::terminal::model::terminal_model::SubshellInitializationInfo;
 use crate::terminal::shell::{Shell, ShellType};
@@ -66,7 +66,6 @@ impl WarpifySuccessBlock {
         spawning_command: String,
         subshell_info: Option<SubshellInitializationInfo>,
         shell: Shell,
-        disable_tmux: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&WarpifySettings::handle(ctx), move |_, _, _, ctx| {
@@ -93,7 +92,6 @@ impl WarpifySuccessBlock {
                         &subshell_info,
                         shell.shell_type(),
                         remote_os,
-                        disable_tmux,
                     );
                     if command.is_empty() {
                         return ("".into(), false);

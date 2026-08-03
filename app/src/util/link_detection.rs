@@ -3,17 +3,17 @@ use std::ops::Range;
 
 use string_offset::ByteOffset;
 use urlocator::{UrlLocation, UrlLocator};
+use warpui::Action;
 use warpui::elements::{MouseStateHandle, PartialClickableElement};
 use warpui::platform::Cursor;
 use warpui::text::char_slice;
-use warpui::Action;
 
 use crate::ai::agent::{AIAgentActionType, AIAgentOutput, AIAgentTextSection, ReadFilesRequest};
-use crate::ai::blocklist::block::view_impl::output::LinkActionConstructors;
 use crate::ai::blocklist::block::TextLocation;
-use crate::terminal::links::should_directly_open_link;
-use crate::terminal::model::grid::grid_handler::is_file_link_separator;
+use crate::ai::blocklist::block::view_impl::output::LinkActionConstructors;
 use crate::terminal::ShellLaunchData;
+use crate::terminal::links::should_directly_open_link;
+use crate::terminal::model::grid::grid_handler::{is_file_link_separator, is_url_link_separator};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -43,9 +43,24 @@ pub(crate) struct DetectedLinksState {
     // on a link to open the tooltip, this link should remain highlighted and the tooltip in place
     // even if we hover over other links.
     pub(crate) link_location_open_tooltip: Option<LinkLocation>,
+    // Per-view-unique save-position id used to anchor the link tooltip overlay. Unique per AI
+    // block so that multiple blocks' tooltips don't collide on a single shared anchor id (which
+    // caused the tooltip to fail to position in multi-block conversations).
+    pub(crate) tooltip_position_id: String,
 }
 
 impl DetectedLinksState {
+    /// Returns the per-view save-position id used to anchor this block's link tooltip overlay,
+    /// falling back to the shared constant if one hasn't been set yet (only happens when no
+    /// tooltip is open, in which case the id is never consumed).
+    pub(crate) fn resolved_tooltip_position_id(&self) -> String {
+        if self.tooltip_position_id.is_empty() {
+            RICH_CONTENT_LINK_FIRST_CHAR_POSITION_ID.to_owned()
+        } else {
+            self.tooltip_position_id.clone()
+        }
+    }
+
     /// Given a text location and char range, returns the detected link there if any.
     pub fn link_at(
         &self,
@@ -179,10 +194,37 @@ pub(crate) fn add_link_detection_mouse_interactions<T: PartialClickableElement, 
 
 /// Returns the char ranges of detected URLs in the given text.
 fn detect_urls(text: &str) -> Vec<Range<usize>> {
+    fn push_url_range(
+        url_ranges: &mut Vec<Range<usize>>,
+        text: &str,
+        start: Option<usize>,
+        end: Option<usize>,
+    ) {
+        let Some((start, mut end)) = start.zip(end) else {
+            return;
+        };
+
+        while end > start && text.chars().nth(end - 1).is_some_and(is_url_link_separator) {
+            end -= 1;
+        }
+
+        if start < end {
+            url_ranges.push(start..end);
+        }
+    }
+
     let mut locator = UrlLocator::new();
     let mut url_ranges = vec![];
     let (mut start, mut end) = (None, None);
     for (i, c) in text.chars().enumerate() {
+        if is_url_link_separator(c) {
+            push_url_range(&mut url_ranges, text, start, end);
+            start = None;
+            end = None;
+            locator = UrlLocator::new();
+            continue;
+        }
+
         // Reference to https://docs.rs/urlocator/latest/urlocator/#example-url-boundaries
         // We know we have fully parsed an url when the locator advances from the `UrlLocation::Url`
         // to the `UrlLocation::Reset` stage.
@@ -192,9 +234,7 @@ fn detect_urls(text: &str) -> Vec<Range<usize>> {
                 start = Some(end.unwrap() - length as usize);
             }
             UrlLocation::Reset => {
-                if let Some((start, end)) = start.zip(end) {
-                    url_ranges.push(start..end)
-                }
+                push_url_range(&mut url_ranges, text, start, end);
                 start = None;
                 end = None;
             }
@@ -202,9 +242,7 @@ fn detect_urls(text: &str) -> Vec<Range<usize>> {
         }
     }
     // If the last character completes a valid URL, add it.
-    if let Some((start, end)) = start.zip(end) {
-        url_ranges.push(start..end)
-    }
+    push_url_range(&mut url_ranges, text, start, end);
     url_ranges
 }
 
@@ -301,7 +339,7 @@ fn compute_valid_file_path(
     files_and_folders_in_working_directory: &HashSet<PathBuf>,
     shell_launch_data: Option<&crate::terminal::ShellLaunchData>,
 ) -> Option<DetectedLinkType> {
-    use crate::util::file::{absolute_path_if_valid, ShellPathType};
+    use crate::util::file::{ShellPathType, absolute_path_if_valid};
     // Scan for line and column number in the current word (left + right).
     let cleaned_path = CleanPathResult::with_line_and_column_number(expanded_path);
 
@@ -420,8 +458,8 @@ pub(crate) fn get_word_range_at_offset(
     word_boundary_policy: Option<WordBoundariesPolicy>,
 ) -> Option<Range<CharOffset>> {
     use warp_editor::content::buffer::{ToBufferCharOffset, ToBufferPoint};
-    use warpui::text::words::is_default_word_boundary;
     use warpui::text::TextBuffer;
+    use warpui::text::words::is_default_word_boundary;
 
     let word_boundary_policy = word_boundary_policy.unwrap_or(WordBoundariesPolicy::Default);
     let mut word_found_at: Option<CharOffset> = None;

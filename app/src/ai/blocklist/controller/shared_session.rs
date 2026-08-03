@@ -6,17 +6,18 @@ use std::collections::HashMap;
 use itertools::Itertools;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId, ServerConversationToken};
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_multi_agent_api::client_action::Action;
 use warp_multi_agent_api::message::Message;
-use warp_multi_agent_api::response_event::{stream_finished, ClientActions};
+use warp_multi_agent_api::response_event::{ClientActions, stream_finished};
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::response_stream::ResponseStreamId;
-use super::{BlocklistAIController, RequestInput};
+use super::{BlocklistAIController, RequestInput, SessionContext};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentActionId, AIAgentAttachment, EntrypointType};
 use crate::ai::attachment_utils::{
-    build_file_attachment_map, download_file, sanitize_filename, DownloadedAttachment,
+    DownloadedAttachment, build_file_attachment_map, download_file, sanitize_filename,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
@@ -116,7 +117,7 @@ impl BlocklistAIController {
         self.shared_session_state.current_response_id = None;
         self.shared_session_state
             .should_skip_current_replayed_response = false;
-        let terminal_view_id = self.terminal_view_id;
+        let terminal_surface_id = self.terminal_surface_id;
         let history = BlocklistAIHistoryModel::handle(ctx);
 
         // If the server conversation already exists locally (matched by server_conversation_token), reuse it.
@@ -161,7 +162,7 @@ impl BlocklistAIController {
             })
             .unwrap_or_else(|| {
                 history.update(ctx, |h, ctx| {
-                    h.start_new_conversation(terminal_view_id, false, true, false, ctx)
+                    h.start_new_conversation(terminal_surface_id, false, true, false, ctx)
                 })
             });
         if self.should_skip_replayed_response_for_existing_conversation(
@@ -184,8 +185,9 @@ impl BlocklistAIController {
         }
 
         let Some(conversation) = history.as_ref(ctx).conversation(&conversation_id) else {
-            log::error!(
-                "Tried to initialize shared session stream for non-existent conversation  {conversation_id:?}"
+            report_error!(
+                "Tried to initialize shared session stream for non-existent conversation",
+                extra: { "conversation_id" => ?conversation_id }
             );
             return;
         };
@@ -205,30 +207,34 @@ impl BlocklistAIController {
                     &self.active_session,
                     self.get_current_response_initiator(),
                     conversation_id,
-                    self.terminal_view_id,
+                    self.terminal_surface_id,
                     ctx,
                 ),
                 stream_id.clone(),
-                self.terminal_view_id,
+                self.terminal_surface_id,
                 ctx,
             );
 
             history_model.initialize_output_for_response_stream(
                 &stream_id,
                 conversation_id,
-                self.terminal_view_id,
+                self.terminal_surface_id,
                 init_event.clone(),
                 ctx,
             );
 
             // Mark conversation as in progress and active/selected
             history_model.update_conversation_status(
-                self.terminal_view_id,
+                self.terminal_surface_id,
                 conversation_id,
                 ConversationStatus::InProgress,
                 ctx,
             );
-            history_model.set_active_conversation_id(conversation_id, self.terminal_view_id, ctx);
+            history_model.set_active_conversation_id(
+                conversation_id,
+                self.terminal_surface_id,
+                ctx,
+            );
         });
         self.context_model.update(ctx, |context_model, ctx| {
             context_model.set_pending_query_state_for_existing_conversation(
@@ -312,22 +318,30 @@ impl BlocklistAIController {
         };
 
         self.update_directory_context_from_client_actions(&actions, ctx);
+        let skill_path_origin =
+            SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin();
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         history_model.update(ctx, |history_model, ctx| {
             if let Err(e) = history_model.apply_client_actions(
                 &stream_id,
                 actions.actions,
                 conversation_id,
-                self.terminal_view_id,
+                self.terminal_surface_id,
+                &skill_path_origin,
                 ctx,
             ) {
-                log::error!(
-                    "Failed to apply client actions to conversation for shared session: {e:?}"
+                report_error!(
+                    anyhow::Error::new(e).context(
+                        "Failed to apply client actions to conversation for shared session"
+                    )
                 );
             }
         });
         let Some(conversation) = history_model.as_ref(ctx).conversation(&conversation_id) else {
-            log::error!("Failed to find conversation with id: {conversation_id:?}");
+            report_error!(
+                "Failed to find conversation with id",
+                extra: { "conversation_id" => ?conversation_id }
+            );
             return;
         };
 
@@ -374,24 +388,24 @@ impl BlocklistAIController {
                             _ => None,
                         };
 
-                        if let Some(input_ctx) = ctx_opt {
-                            if let Some(dir) = &input_ctx.directory {
-                                self.context_model.update(ctx, |context_model, ctx| {
-                                    context_model.update_directory_context(
-                                        if dir.pwd.is_empty() {
-                                            None
-                                        } else {
-                                            Some(dir.pwd.clone())
-                                        },
-                                        if dir.home.is_empty() {
-                                            None
-                                        } else {
-                                            Some(dir.home.clone())
-                                        },
-                                        ctx,
-                                    );
-                                });
-                            }
+                        if let Some(input_ctx) = ctx_opt
+                            && let Some(dir) = &input_ctx.directory
+                        {
+                            self.context_model.update(ctx, |context_model, ctx| {
+                                context_model.update_directory_context(
+                                    if dir.pwd.is_empty() {
+                                        None
+                                    } else {
+                                        Some(dir.pwd.clone())
+                                    },
+                                    if dir.home.is_empty() {
+                                        None
+                                    } else {
+                                        Some(dir.home.clone())
+                                    },
+                                    ctx,
+                                );
+                            });
                         }
                     }
                 }
@@ -428,7 +442,10 @@ impl BlocklistAIController {
 
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         let Some(conversation) = history_model.as_ref(ctx).conversation(&conversation_id) else {
-            log::error!("Failed to find conversation with id: {conversation_id:?}");
+            report_error!(
+                "Failed to find conversation with id",
+                extra: { "conversation_id" => ?conversation_id }
+            );
             return;
         };
 
@@ -464,7 +481,7 @@ impl BlocklistAIController {
     }
 
     /// Finds an existing client conversation whose server_conversation_token matches `server_token`.
-    /// Searches only live conversations for this terminal view. Returns None if no match is found.
+    /// Searches only live conversations for this terminal surface. Returns None if no match is found.
     pub fn find_existing_conversation_by_server_token(
         &self,
         server_token: &str,
@@ -473,7 +490,7 @@ impl BlocklistAIController {
         let history = BlocklistAIHistoryModel::handle(ctx);
         history
             .as_ref(ctx)
-            .all_live_conversations_for_terminal_view(self.terminal_view_id)
+            .all_live_conversations_for_terminal_surface(self.terminal_surface_id)
             .find_map(|conv| {
                 conv.server_conversation_token()
                     .and_then(|t| (t.as_str() == server_token).then_some(conv.id()))
@@ -499,9 +516,10 @@ impl BlocklistAIController {
                 .conversation(&conv_id)
                 .map(|conversation| stream_finished::ConversationUsageMetadata {
                     context_window_usage: conversation.context_window_usage(),
-                    credits_spent: conversation.credits_spent(),
-                    platform_credits_spent: 0.0,
+                    credits_spent: conversation.inference_credits_spent(),
+                    platform_credits_spent: conversation.platform_credits_spent(),
                     summarized: conversation.was_summarized(),
+                    total_input_tokens: 0,
                     #[allow(deprecated)]
                     token_usage: conversation
                         .token_usage()
@@ -523,6 +541,11 @@ impl BlocklistAIController {
                         .token_usage()
                         .iter()
                         .filter_map(|u| u.to_proto_custom_endpoint_usage())
+                        .collect(),
+                    context_window_segments: conversation
+                        .context_window_segments()
+                        .iter()
+                        .map(Into::into)
                         .collect(),
                 })
         });
@@ -646,8 +669,9 @@ impl BlocklistAIController {
                 |id| match BlocklistAIHistoryModel::as_ref(ctx).conversation(&id) {
                     Some(c) => Some(c),
                     None => {
-                        log::error!(
-                            "Tried to execute prompt for non-existent conversation: {id:?}",
+                        report_error!(
+                            "Tried to execute prompt for non-existent conversation",
+                            extra: { "id" => ?id }
                         );
                         None
                     }
@@ -705,7 +729,7 @@ impl BlocklistAIController {
 
         // We have file downloads — ensure both the download dir and task ID are available.
         let Some(attachment_dir) = self.attachments_download_dir.clone() else {
-            log::error!(
+            report_error!(
                 "No attachments_download_dir set on controller, cannot process file attachments"
             );
             self.send_shared_session_query(
@@ -718,7 +742,7 @@ impl BlocklistAIController {
             return;
         };
         let Some(task_id) = self.ambient_agent_task_id else {
-            log::error!("No task_id available to download attachments");
+            report_error!("No task_id available to download attachments");
             self.send_shared_session_query(
                 prompt,
                 conversation_id,
@@ -747,13 +771,18 @@ impl BlocklistAIController {
                         .map(|att| (att.attachment_id, att.download_url))
                         .collect::<std::collections::HashMap<_, _>>(),
                     Err(e) => {
-                        log::error!("Failed to get download URLs for task {task_id}: {e}");
+                        report_error!(
+                            e.context("Failed to get download URLs for task"),
+                            extra: { "task_id" => %task_id }
+                        );
                         return vec![];
                     }
                 };
 
                 if let Err(e) = async_fs::create_dir_all(&attachment_dir).await {
-                    log::error!("Failed to create attachments directory: {e}");
+                    report_error!(
+                        anyhow::Error::new(e).context("Failed to create attachments directory")
+                    );
                     return vec![];
                 }
 
@@ -775,7 +804,10 @@ impl BlocklistAIController {
                             });
                         }
                         Err(e) => {
-                            log::error!("Failed to download {safe_name}: {e}");
+                            report_error!(
+                                e.context("Failed to download attachment"),
+                                extra: { "file_name" => %safe_name }
+                            );
                         }
                     }
                 }
@@ -845,13 +877,11 @@ impl BlocklistAIController {
                     })
                     .or_else(|| {
                         self.context_model.update(ctx, |context_model, ctx| {
-                            context_model
-                                .try_enter_agent_view_for_new_conversation(origin, ctx)
-                                .ok()
+                            context_model.try_start_new_conversation(origin, ctx).ok()
                         })
                     })
                 else {
-                    log::error!("Failed to get conversation id for shared session prompt");
+                    report_error!("Failed to get conversation id for shared session prompt");
                     return;
                 };
 

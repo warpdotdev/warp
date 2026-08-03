@@ -5,6 +5,7 @@ use crate::object_permissions::ObjectPermissions;
 use crate::request_context::RequestContext;
 use crate::response_context::ResponseContext;
 use crate::schema;
+use crate::user::PublicUserProfile;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct ListAIConversationsVariables {
@@ -53,6 +54,7 @@ pub struct AIConversationMetadata {
     pub working_directory: Option<String>,
     pub usage: ConversationUsage,
     pub metadata: ObjectMetadata,
+    pub creator: Option<PublicUserProfile>,
     pub permissions: ObjectPermissions,
     pub ambient_agent_task_id: Option<cynic::Id>,
     pub artifacts: Option<Vec<AIConversationArtifact>>,

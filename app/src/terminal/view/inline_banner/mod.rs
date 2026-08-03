@@ -14,7 +14,6 @@ pub(crate) mod prompt_suggestions;
 mod session_state;
 mod shared_sessions;
 mod shell_process_terminated;
-mod ssh;
 mod vim_mode;
 
 pub use agent_mode_setup::*;
@@ -30,8 +29,8 @@ use pathfinder_color::ColorU;
 pub use session_state::*;
 pub use shared_sessions::*;
 pub use shell_process_terminated::*;
-pub use ssh::*;
 pub use vim_mode::*;
+use warpui::Element;
 use warpui::elements::{
     Align, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Icon,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
@@ -40,7 +39,6 @@ use warpui::elements::{
 use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::Element;
 
 pub use self::prompt_suggestions::*;
 use crate::appearance::Appearance;
@@ -48,7 +46,7 @@ use crate::terminal::view::TerminalAction;
 use crate::themes::theme::Blend;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon as UiIcon;
-use crate::util::color::{coloru_with_opacity, ContrastingColor, MinimumAllowedContrast, Opacity};
+use crate::util::color::{ContrastingColor, MinimumAllowedContrast, Opacity, coloru_with_opacity};
 
 pub const INLINE_BANNER_BUTTON_PADDING: f32 = 4.0;
 const INLINE_BANNER_MARGIN: f32 = 20.0;

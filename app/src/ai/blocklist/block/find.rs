@@ -3,9 +3,11 @@ use std::ops::Range;
 
 use itertools::Itertools;
 use regex::RegexBuilder;
+use warpui::SingletonEntity;
 
 use super::{AIBlock, TextLocation};
 use crate::ai::agent::{AIAgentTextSection, MessageId};
+use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::terminal::find::{FindOptions, FindableRichContentView, RichContentMatchId};
 
 /// Represents the location of a find match in an AI block.
@@ -37,6 +39,12 @@ impl FindState {
     pub(super) fn location_for_match(&self, id: RichContentMatchId) -> Option<&FindMatchLocation> {
         self.matches.get(&id)
     }
+
+    /// The number of find matches currently cached for this block.
+    #[cfg(test)]
+    pub(crate) fn match_count(&self) -> usize {
+        self.matches.len()
+    }
 }
 
 impl FindableRichContentView for AIBlock {
@@ -49,8 +57,13 @@ impl FindableRichContentView for AIBlock {
         self.clear_matches(ctx);
 
         let mut new_match_ids = vec![];
+        // Match against the displayed query (including any "/agent" prefix added for the
+        // initial conversation query) so highlight ranges line up with the rendered text.
+        let initial_conversation_query = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&self.client_ids.conversation_id)
+            .and_then(|conversation| conversation.initial_user_query());
         for (i, input) in self.model.inputs_to_render(ctx).iter().enumerate() {
-            if let Some(query) = input.user_query() {
+            if let Some(query) = input.display_user_query(initial_conversation_query.as_ref()) {
                 for find_match_range in compute_find_matches(&query, options).into_iter() {
                     let id = RichContentMatchId::default();
                     new_match_ids.push(id);
@@ -131,6 +144,10 @@ impl FindableRichContentView for AIBlock {
         ctx.notify();
     }
 }
+
+#[cfg(test)]
+#[path = "find_tests.rs"]
+mod tests;
 
 /// Computes find matches (represented as character offsets) within the given `text`.
 fn compute_find_matches(text: &str, options: &FindOptions) -> Vec<Range<usize>> {
