@@ -171,7 +171,7 @@ fn plan_header_presentation(
     is_anonymous: bool,
 ) -> PlanHeaderPresentation {
     let mut badge_labels = Vec::new();
-    if is_anonymous {
+    if is_anonymous || billing_metadata.is_none() {
         badge_labels.push("Free".to_string());
     } else if let Some(billing_metadata) = billing_metadata
         && billing_metadata.customer_type != CustomerType::Unknown
