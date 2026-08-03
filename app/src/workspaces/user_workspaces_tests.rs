@@ -1614,6 +1614,7 @@ fn gql_tier(purchase_policy: Option<GqlPurchaseAddOnCreditsPolicy>) -> GqlTier {
         enterprise_pay_as_you_go_policy: None,
         enterprise_credits_auto_reload_policy: None,
         multi_admin_policy: None,
+        native_workspaces_policy: None,
         ambient_agents_policy: None,
         usage_visibility_policy: None,
     }
