@@ -299,8 +299,8 @@ impl BillingCycleUsageSectionView {
             .finish(),
         );
 
-        if (is_admin || workspace.is_native_workspaces_enabled())
-            && let Some(banner) = self.render_visibility_cta_banner(workspace, appearance)
+        if (is_admin || self.viewer_is_native_workspaces_admin(workspace, app))
+            && let Some(banner) = self.render_visibility_cta_banner(workspace, appearance, app)
         {
             column.add_child(Container::new(banner).with_margin_top(16.).finish());
         }
@@ -350,8 +350,8 @@ impl BillingCycleUsageSectionView {
             .with_margin_top(16.)
             .finish(),
         );
-        if workspace.is_native_workspaces_enabled()
-            && let Some(banner) = self.render_visibility_cta_banner(workspace, appearance)
+        if self.viewer_is_native_workspaces_admin(workspace, app)
+            && let Some(banner) = self.render_visibility_cta_banner(workspace, appearance, app)
         {
             column.add_child(Container::new(banner).with_margin_top(16.).finish());
         }
@@ -651,6 +651,13 @@ impl BillingCycleUsageSectionView {
         .finish()
     }
 
+    fn viewer_is_native_workspaces_admin(&self, workspace: &Workspace, app: &AppContext) -> bool {
+        workspace.is_native_workspaces_enabled()
+            && Self::resolved_viewer_email(app)
+                .as_deref()
+                .is_some_and(|email| workspace.is_workspace_admin(email))
+    }
+
     /// Renders the CTA banner that sits between the team-totals block and
     /// the per-member rows. The copy and action vary by visibility tier:
     /// non-FullBreakdown admins see an upgrade nudge; FullBreakdown admins
@@ -660,9 +667,10 @@ impl BillingCycleUsageSectionView {
         &self,
         workspace: &Workspace,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let (link_text, trailing_copy, action, leading_icon) =
-            if workspace.is_native_workspaces_enabled() {
+            if self.viewer_is_native_workspaces_admin(workspace, app) {
                 NATIVE_WORKSPACES_CTA
             } else {
                 // Only show when there are teammates -- a single-member workspace
