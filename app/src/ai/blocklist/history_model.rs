@@ -596,6 +596,17 @@ impl BlocklistAIHistoryModel {
         ctx: &mut ModelContext<Self>,
     ) -> AIConversationId {
         if let Some(conversation_id) = self.conversation_id_for_agent_id(&run_id) {
+            // Re-index under the new parent if it has changed. This happens on a
+            // live-session rejoin: the viewer creates a fresh conversation ID each
+            // time, while children persisted from a prior session still point at
+            // the previous parent ID.
+            let current_parent = self
+                .conversations_by_id
+                .get(&conversation_id)
+                .and_then(|c| c.parent_conversation_id());
+            if current_parent != Some(parent_conversation_id) {
+                self.set_parent_for_conversation(conversation_id, parent_conversation_id);
+            }
             return conversation_id;
         }
 

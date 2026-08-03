@@ -3548,10 +3548,8 @@ impl AIConversation {
         &mut self,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        // Don't persist viewer conversations (e.g. shared sessions) or
-        // remote child placeholder conversations. Both are re-created from
-        // server task data on restore.
-        if self.is_viewing_shared_session || self.is_remote_child {
+        // Don't persist viewer conversations (e.g. shared sessions).
+        if self.is_viewing_shared_session {
             return;
         }
 
