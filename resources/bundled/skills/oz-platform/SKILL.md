@@ -16,7 +16,7 @@ Use the Oz REST API and CLI to:
 
 Prefer current, authoritative sources when answering questions or authoring skills about Oz platform behavior:
 * Start with https://docs.warp.dev/llms.txt to discover the relevant documentation page.
-* Every `docs.warp.dev` page has an agent-readable Markdown version at the same URL with `.md` appended. Fetch that version when reading documentation; for example, https://docs.warp.dev/agent-platform/capabilities/computer-use.md.
+* Every `docs.warp.dev` page has an agent-readable Markdown version at the same URL with `.md` appended. Fetch that version when reading documentation; for example, https://docs.warp.dev/agents/capabilities/computer-use.md.
 * For CLI commands and flags, also confirm the installed version's behavior with `{{warp_cli_binary_name}} help` or `{{warp_cli_binary_name}} help <subcommand>`.
 
 Treat the examples below as starting points, not the sole source of truth for details that can evolve, such as computer-use artifacts, CLI flags, and API behavior. If they conflict with the live Markdown documentation or CLI help, follow the live source.

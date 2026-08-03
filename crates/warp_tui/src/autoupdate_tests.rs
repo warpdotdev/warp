@@ -12,9 +12,10 @@ use warp_core::channel::Channel;
 #[cfg(windows)]
 use super::PREVIOUS_POINTER_NAME;
 use super::{
-    CURRENT_POINTER_NAME, InstallLayout, VERSION_LEASES_DIR_NAME, VersionDirState, VersionLease,
-    create_unique_staging_dir_with, download_endpoint, is_complete_version_dir,
-    is_safe_version_component, latest_version_for, prune_old_versions, version_dir_state,
+    CURRENT_POINTER_NAME, InstallLayout, TuiAutoupdateStatus, UpdateOutcome,
+    VERSION_LEASES_DIR_NAME, VersionDirState, VersionLease, create_unique_staging_dir_with,
+    download_endpoint, is_complete_version_dir, is_safe_version_component, latest_version_for,
+    prune_old_versions, settled_status, version_dir_state,
 };
 #[cfg(unix)]
 use super::{
@@ -34,6 +35,26 @@ fn temp_root(name: &str) -> tempfile::TempDir {
         .prefix(&format!("warp-tui-autoupdate-{name}-"))
         .tempdir()
         .unwrap()
+}
+
+#[test]
+fn failed_check_replaces_stale_up_to_date_status() {
+    let result: anyhow::Result<UpdateOutcome> = Err(anyhow::anyhow!("dns lookup failed"));
+
+    assert_eq!(
+        settled_status(&result, TuiAutoupdateStatus::UpToDate),
+        TuiAutoupdateStatus::Failed
+    );
+}
+
+#[test]
+fn failed_check_preserves_pending_restart_status() {
+    let result: anyhow::Result<UpdateOutcome> = Err(anyhow::anyhow!("dns lookup failed"));
+
+    assert_eq!(
+        settled_status(&result, TuiAutoupdateStatus::PendingRestart),
+        TuiAutoupdateStatus::PendingRestart
+    );
 }
 
 #[test]
