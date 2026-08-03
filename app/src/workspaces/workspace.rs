@@ -95,13 +95,6 @@ impl Workspace {
             .is_some_and(|member| member.role.is_admin_or_owner())
     }
 
-    pub fn is_native_workspaces_enabled(&self) -> bool {
-        self.billing_metadata
-            .tier
-            .native_workspaces_policy
-            .is_some_and(|policy| policy.enabled)
-    }
-
     pub fn resolve_usage_visibility(&self, is_admin: bool) -> UsageVisibility {
         let Some(policy) = self.billing_metadata.tier.usage_visibility_policy else {
             return UsageVisibility::default();
