@@ -1543,6 +1543,7 @@ fn test_create_missing_child_agent_panes_restores_remote_child_from_history_mode
             panes.restore_missing_child_agent_panes_for_parent(
                 parent_conversation_id,
                 parent_pane_id,
+                true,
                 ctx,
             );
 

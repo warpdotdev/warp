@@ -341,6 +341,7 @@ impl PaneContent for TerminalPane {
                 group.restore_missing_child_agent_panes_for_parent(
                     *conversation_id,
                     terminal_pane_id.into(),
+                    true,
                     ctx,
                 );
             }

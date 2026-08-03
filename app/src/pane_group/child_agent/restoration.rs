@@ -35,10 +35,18 @@ impl PaneGroup {
     /// Unlike the old startup sweep, this runs only when the parent agent view
     /// is actually restored or entered. Children that already belong to some
     /// other pane or tab are left alone.
+    ///
+    /// `trigger_seed_if_empty` gates the local-parent ancestor-list seed
+    /// below: pass `true` only from entry points that are *not* themselves
+    /// downstream of `finish_seed_child_conversations_from_task` completing.
+    /// That function already calls this with `false` after linking children,
+    /// so a fresh, still-empty result (a parent that legitimately has no
+    /// children) doesn't immediately re-trigger its own seed and loop.
     pub(in crate::pane_group) fn restore_missing_child_agent_panes_for_parent(
         &mut self,
         parent_conversation_id: AIConversationId,
         parent_pane_id: PaneId,
+        trigger_seed_if_empty: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         let child_ids = BlocklistAIHistoryModel::as_ref(ctx)
@@ -52,7 +60,7 @@ impl PaneGroup {
         // server-assigned run id, kick off the same ancestor-list seed the
         // ambient path uses. Idempotent (routes through the pending map) and
         // a no-op once resolved if the parent never spawned any children.
-        if child_ids.is_empty() {
+        if trigger_seed_if_empty && child_ids.is_empty() {
             let parent_task_id = BlocklistAIHistoryModel::as_ref(ctx)
                 .conversation(&parent_conversation_id)
                 .and_then(AIConversation::task_id);
@@ -232,9 +240,13 @@ impl PaneGroup {
         if let Some(parent_pane_id) =
             self.pane_id_for_owned_conversation(parent_conversation_id, ctx)
         {
+            // `false`: this call is itself the completion of a seed fetch,
+            // so an empty result here must not immediately kick off another
+            // one (that would loop forever for a parent with no children).
             self.restore_missing_child_agent_panes_for_parent(
                 parent_conversation_id,
                 parent_pane_id,
+                false,
                 ctx,
             );
         }
@@ -292,6 +304,7 @@ impl PaneGroup {
         self.restore_missing_child_agent_panes_for_parent(
             parent_conversation_id,
             terminal_pane_id.into(),
+            true,
             ctx,
         );
     }
@@ -355,6 +368,7 @@ impl PaneGroup {
         self.restore_missing_child_agent_panes_for_parent(
             parent_conversation_id,
             parent_pane_id,
+            true,
             ctx,
         );
 
