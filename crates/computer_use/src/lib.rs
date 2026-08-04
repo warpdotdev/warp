@@ -114,22 +114,25 @@ pub fn background_supported() -> bool {
 }
 
 /// Ends the background computer-use session owned by `owner` (the client conversation id),
-/// restoring the user's original keyboard focus.
+/// releasing the session state that outlives individual action batches.
 ///
 /// On macOS a background session activates the target window and installs focus-suppression
 /// taps; this tears down only the windows owned by `owner`, deactivates them, and re-activates the
 /// app that was frontmost before the session, so the user's keystrokes return to where they were.
-/// Scoping by owner keeps concurrent background sessions (e.g. another conversation driving a
-/// different window) intact. Idempotent and a no-op when `owner` has no active session, and on
-/// platforms without background per-window control.
+/// On Linux X11 a background session drives a session-scoped agent seat (a second input seat
+/// shared across the session's action batches so state like a held mouse button mid-drag
+/// survives between batches); this removes `owner`'s seat, its on-screen cursor, and any input
+/// state it still holds. Scoping by owner keeps concurrent background sessions (e.g. another
+/// conversation driving a different window) intact. Idempotent and a no-op when `owner` has no
+/// active session, and on platforms without background per-window control.
 ///
 /// Call this whenever a computer-use session ends — normal completion, cancellation, or teardown.
 pub fn end_background_session(owner: &str) {
-    #[cfg(macos)]
+    #[cfg(any(macos, linux))]
     {
         imp::end_background_session(owner);
     }
-    #[cfg(not(macos))]
+    #[cfg(not(any(macos, linux)))]
     {
         let _ = owner;
     }

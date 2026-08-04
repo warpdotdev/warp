@@ -12,6 +12,7 @@ mod screenshot;
 mod seat;
 pub(crate) mod windows;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -43,8 +44,14 @@ pub struct Actor {
     /// character typed.
     keyboard_mapping: xproto::GetKeyboardMappingReply,
     /// The agent seat used for background window targets, created lazily by the first
-    /// window-targeted action and removed when the actor is dropped.
-    agent: Option<seat::AgentSeat>,
+    /// window-targeted action. Owner-tagged actors (the in-app session path) share the
+    /// session-scoped seat from [`seat::shared_for_session`], so input state that spans action
+    /// batches — most importantly a held button mid-drag — survives the per-batch actor
+    /// teardown. Owner-less actors (the developer CLI) hold a private seat removed when the
+    /// actor is dropped.
+    agent: Option<Arc<seat::AgentSeat>>,
+    /// The background-session owner (the client conversation id) keying the shared agent seat.
+    background_session_owner: Option<String>,
 }
 
 impl Actor {
@@ -76,6 +83,7 @@ impl Actor {
             screen_index,
             keyboard_mapping,
             agent: None,
+            background_session_owner: None,
         })
     }
 
@@ -86,6 +94,13 @@ impl Actor {
     fn screen(&self) -> &xproto::Screen {
         &self.conn.setup().roots[self.screen_index]
     }
+}
+
+/// Ends the background computer-use session owned by `owner`: removes the session's shared
+/// agent seat (and its on-screen cursor), implicitly releasing any input state — held buttons,
+/// the agent keyboard's focus — it still holds.
+pub fn end_background_session(owner: &str) {
+    seat::end_session(owner);
 }
 
 /// Probes whether the display supports the XInput2 device hierarchy required for background,
@@ -171,6 +186,10 @@ impl crate::Actor for Actor {
         Some(crate::Platform::LinuxX11)
     }
 
+    fn set_background_session_owner(&mut self, owner: Option<String>) {
+        self.background_session_owner = owner;
+    }
+
     async fn perform_actions(
         &mut self,
         actions: &[TargetedAction],
@@ -212,8 +231,14 @@ impl crate::Actor for Actor {
             }
         }
         if needs_agent_seat && self.agent.is_none() {
-            let agent_seat = seat::AgentSeat::new()
-                .map_err(|e| format!("Background window control is unavailable: {e}"))?;
+            // In-app sessions (owner-tagged) share the session's seat so a drag that spans
+            // batches keeps its button held; the owner-less CLI gets a private, actor-scoped
+            // seat.
+            let agent_seat = match &self.background_session_owner {
+                Some(owner) => seat::shared_for_session(owner),
+                None => seat::AgentSeat::new().map(Arc::new),
+            }
+            .map_err(|e| format!("Background window control is unavailable: {e}"))?;
             self.agent = Some(agent_seat);
         }
 
