@@ -258,6 +258,20 @@ const DRAG_TRAIL_THICKNESS: f64 = 4.0;
 const CLICK_RING_TAIL_HEADROOM: Duration = Duration::from_millis(100);
 #[cfg(any(linux, test))]
 const DRAG_FADE_TAIL_HEADROOM: Duration = Duration::from_millis(400);
+/// Drag dispatches are effectively instantaneous on the recording timeline, so
+/// the trail and held indicator use a synthetic, visible draw interval instead
+/// of the raw event offsets. Keep this below the retained post-action margin so
+/// the complete trail is present before its fade begins.
+#[cfg(any(linux, test))]
+const DRAG_DRAW_DURATION_TARGET: Duration = Duration::from_millis(600);
+#[cfg(any(linux, test))]
+const DRAG_DRAW_TAIL_HEADROOM: Duration = Duration::from_millis(100);
+/// Bound each revealed trail quad so a long, single-event drag does not expose
+/// the entire future path when the press begins. The quads are timed by
+/// distance across the synthetic draw interval, keeping the line visually
+/// attached to the moving held indicator.
+#[cfg(any(linux, test))]
+const DRAG_TRAIL_REVEAL_MAX_LENGTH: f64 = 32.0;
 
 #[cfg(any(linux, test))]
 fn click_ring_duration() -> Duration {
@@ -267,6 +281,13 @@ fn click_ring_duration() -> Duration {
 #[cfg(any(linux, test))]
 fn drag_trail_fade_duration() -> Duration {
     SEGMENT_MARGIN_POST.saturating_sub(DRAG_FADE_TAIL_HEADROOM)
+}
+
+#[cfg(any(linux, test))]
+fn drag_draw_duration() -> Duration {
+    SEGMENT_MARGIN_POST
+        .saturating_sub(DRAG_DRAW_TAIL_HEADROOM)
+        .min(DRAG_DRAW_DURATION_TARGET)
 }
 
 /// One retained source segment of the cut recording.
@@ -719,9 +740,13 @@ fn append_click_ring(
 }
 
 /// A drag's trail (a stroked polyline), start anchor, and held indicator (a dot
-/// that moves along the path). On release the trail and anchor fade over the
-/// (capped) fade duration; a held press with no release stays through the end of
-/// its retained window.
+/// that moves along the path). Pointer dispatch is effectively instantaneous, so
+/// the trail and dot are paced over [`drag_draw_duration`]. Each path segment is
+/// subdivided into short, distance-weighted quads so a long segment reveals
+/// behind the moving dot rather than exposing its full future geometry at press
+/// time. On release the complete trail and anchor fade over the (capped) fade
+/// duration; a held press with no release stays through the end of its retained
+/// window.
 #[cfg(any(linux, test))]
 fn append_drag(
     script: &mut String,
@@ -734,32 +759,92 @@ fn append_drag(
     let Some(&(start_off, _)) = points.first() else {
         return;
     };
-    let last_off = points[points.len() - 1].0;
     let fade = drag_trail_fade_duration();
-    let vis_end = match release {
-        Some(r) => r + fade,
-        // Held with no release: keep it visible for the longest animation tail
-        // (the ring duration), which stays within the retained post-action footage.
-        None => last_off + click_ring_duration(),
-    };
+    let draw_duration = drag_draw_duration();
+    let draw_end = start_off + draw_duration;
+    // The synthetic release is at least the end of the draw interval. This keeps
+    // the fully revealed trail visible before the post-release fade, even when
+    // X11 reports Down/Move/Up within a few milliseconds.
+    let animation_release = release.map(|offset| offset.max(draw_end));
+    let held_end = animation_release.unwrap_or_else(|| {
+        let last_off = points[points.len() - 1].0;
+        draw_end.max(last_off + click_ring_duration())
+    });
+    let vis_end = animation_release.map_or(held_end, |offset| offset + fade);
     let clamped: Vec<(i32, i32)> = points
         .iter()
         .map(|(_, point)| clamp_point(*point, width, height))
         .collect();
     let (anchor_x, anchor_y) = clamped[0];
-    let (last_x, last_y) = clamped[clamped.len() - 1];
 
-    // Trail + anchor, shown from press through the end of the release fade.
-    if let Some((out_start, out_end)) = remap_source_interval(start_off, vis_end, segments) {
-        let dur_ms = (out_end - out_start).as_millis();
-        let fade_tag = if release.is_some() {
-            let fade_from = dur_ms.saturating_sub(fade.as_millis());
-            format!("\\t({fade_from},{dur_ms},\\1a&HFF&)")
+    // ASS transforms are relative to each dialogue, so calculate the fade's
+    // absolute output start once and express it relative to each trail/anchor
+    // dialogue. This keeps the fade aligned after smart-cut remapping.
+    let fade_tag = |out_start: Duration, out_end: Duration| {
+        if let Some(animation_release) = animation_release {
+            let fade_start = remap_source_interval(animation_release, vis_end, segments)
+                .map(|(start, _)| start.max(out_start))
+                .unwrap_or(out_end);
+            let fade_from = fade_start
+                .saturating_sub(out_start)
+                .as_millis()
+                .min((out_end - out_start).as_millis());
+            format!(
+                "\\t({fade_from},{},\\1a&HFF&)",
+                (out_end - out_start).as_millis()
+            )
         } else {
             String::new()
-        };
-        if clamped.len() >= 2 {
-            let quads = ass_trail_quads(&clamped);
+        }
+    };
+
+    // Compute cumulative path lengths so segment start times are proportional
+    // to distance, not to the near-zero raw event offsets.
+    let path_segments = clamped
+        .windows(2)
+        .enumerate()
+        .filter_map(|(index, pair)| {
+            let dx = (pair[1].0 - pair[0].0) as f64;
+            let dy = (pair[1].1 - pair[0].1) as f64;
+            let length = (dx * dx + dy * dy).sqrt();
+            (length > f64::EPSILON).then_some((index, length))
+        })
+        .collect::<Vec<_>>();
+    let total_length = path_segments.iter().map(|(_, length)| *length).sum::<f64>();
+
+    // Trail dialogues are staggered by cumulative path length. Long source
+    // segments are subdivided into short quads so a one-move drag reveals the
+    // line continuously behind the held indicator. Each quad remains visible
+    // through the synthetic release and then receives the normal fade.
+    let mut cumulative_length = 0.0;
+    for (index, length) in &path_segments {
+        let chunk_count = (*length / DRAG_TRAIL_REVEAL_MAX_LENGTH).ceil() as usize;
+        let (from_x, from_y) = clamped[*index];
+        let (to_x, to_y) = clamped[*index + 1];
+        for chunk_index in 0..chunk_count {
+            let chunk_start_ratio = chunk_index as f64 / chunk_count as f64;
+            let chunk_end_ratio = (chunk_index + 1) as f64 / chunk_count as f64;
+            let chunk_start_length = cumulative_length + *length * chunk_start_ratio;
+            let segment_start = start_off
+                + Duration::from_secs_f64(
+                    draw_duration.as_secs_f64() * chunk_start_length / total_length,
+                );
+            let point_at = |ratio: f64| {
+                (
+                    (from_x as f64 + (to_x - from_x) as f64 * ratio).round() as i32,
+                    (from_y as f64 + (to_y - from_y) as f64 * ratio).round() as i32,
+                )
+            };
+            let quads = ass_trail_quads(&[point_at(chunk_start_ratio), point_at(chunk_end_ratio)]);
+            if quads.is_empty() {
+                continue;
+            }
+            let Some((out_start, out_end)) =
+                remap_source_interval(segment_start, vis_end, segments)
+            else {
+                continue;
+            };
+            let fade_tag = fade_tag(out_start, out_end);
             script.push_str(&format!(
                 "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
                  {{\\an7\\pos(0,0)\\clip(0,0,{width},{height})\
@@ -768,6 +853,13 @@ fn append_drag(
                 end = format_ass_timecode(out_end),
             ));
         }
+        cumulative_length += length;
+    }
+
+    // The anchor is visible for the same interval as the trail. It remains
+    // separate so its centered circle is present before the first segment.
+    if let Some((out_start, out_end)) = remap_source_interval(start_off, vis_end, segments) {
+        let fade_tag = fade_tag(out_start, out_end);
         let anchor = ass_circle_path(DRAG_ANCHOR_RADIUS);
         script.push_str(&format!(
             "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
@@ -778,17 +870,57 @@ fn append_drag(
         ));
     }
 
-    // Held indicator: a filled dot moving from the press to the release point
-    // while the button is held. Disappears at release (no fade). `\an7` centers
-    // the dot on the moving point (see [`append_click_ring`]).
-    let held_end = release.unwrap_or(vis_end);
-    if let Some((out_start, out_end)) = remap_source_interval(start_off, held_end, segments) {
+    // Held indicator: one dialogue per non-zero segment, each moving from one
+    // point to the next over its distance-weighted synthetic interval. A final
+    // stationary dialogue keeps the dot at the endpoint if the real release
+    // arrived after the synthetic draw completed. `\an7` centers the dot on each
+    // point (see [`append_click_ring`]).
+    let held = ass_circle_path(HELD_INDICATOR_RADIUS);
+    let mut cumulative_length = 0.0;
+    for (index, length) in &path_segments {
+        let segment_start = start_off
+            + Duration::from_secs_f64(
+                draw_duration.as_secs_f64() * cumulative_length / total_length,
+            );
+        cumulative_length += length;
+        let segment_end = start_off
+            + Duration::from_secs_f64(
+                draw_duration.as_secs_f64() * cumulative_length / total_length,
+            );
+        let Some((out_start, out_end)) =
+            remap_source_interval(segment_start, segment_end, segments)
+        else {
+            continue;
+        };
         let dur_ms = (out_end - out_start).as_millis();
-        let held = ass_circle_path(HELD_INDICATOR_RADIUS);
+        let (from_x, from_y) = clamped[*index];
+        let (to_x, to_y) = clamped[*index + 1];
         script.push_str(&format!(
             "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
-             {{\\an7\\move({anchor_x},{anchor_y},{last_x},{last_y},0,{dur_ms})\
+             {{\\an7\\move({from_x},{from_y},{to_x},{to_y},0,{dur_ms})\
              \\clip(0,0,{width},{height})\\1c&H{POINTER_COLOR_BGR}&\\1a&H4B&\\bord0\\p1}}{held}{{\\p0}}\n",
+            start = format_ass_timecode(out_start),
+            end = format_ass_timecode(out_end),
+        ));
+    }
+
+    let endpoint = clamped[clamped.len() - 1];
+    let stationary_start = if path_segments.is_empty() {
+        start_off
+    } else {
+        draw_end
+    };
+    if held_end > stationary_start
+        && let Some((out_start, out_end)) =
+            remap_source_interval(stationary_start, held_end, segments)
+    {
+        let dur_ms = (out_end - out_start).as_millis();
+        script.push_str(&format!(
+            "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
+             {{\\an7\\move({x},{y},{x},{y},0,{dur_ms})\
+             \\clip(0,0,{width},{height})\\1c&H{POINTER_COLOR_BGR}&\\1a&H4B&\\bord0\\p1}}{held}{{\\p0}}\n",
+            x = endpoint.0,
+            y = endpoint.1,
             start = format_ass_timecode(out_start),
             end = format_ass_timecode(out_end),
         ));
