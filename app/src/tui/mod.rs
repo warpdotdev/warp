@@ -8,7 +8,6 @@
 mod mcp;
 mod telemetry;
 mod user_info;
-use std::env;
 
 pub use mcp::{
     TuiMcpAction, TuiMcpConfigDiagnostic, TuiMcpFileScope, TuiMcpFileSource, TuiMcpInstallRequest,
@@ -21,7 +20,6 @@ use telemetry::{
 };
 use url::Url;
 pub use user_info::{TuiUserInfoManager, TuiUserInfoManagerEvent, TuiUserInfoSnapshot};
-use warp_core::channel::ChannelState;
 use warp_core::telemetry::TelemetryEvent as _;
 use warpui::{AppContext, Entity, SingletonEntity};
 
@@ -30,7 +28,6 @@ use crate::ai::mcp::FileBasedMCPManager;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::auth_state::AuthState;
 use crate::auth::{self, AuthStateProvider};
-use crate::terminal::focus_env::FOCUS_URL_ENV;
 use crate::tui_onboarding_markers::TuiOnboardingMarkers;
 
 /// Login state of the headless TUI, observed by the `warp_tui` root view to
@@ -338,60 +335,19 @@ fn authorize_device(ctx: &mut AppContext) {
 }
 
 fn tui_verification_url(verification_url: &str, user_code: &str) -> String {
-    let focus_url = env::var(FOCUS_URL_ENV).ok();
-    tui_verification_url_with_return(verification_url, user_code, focus_url.as_deref())
-}
-
-fn tui_verification_url_with_return(
-    verification_url: &str,
-    user_code: &str,
-    focus_url: Option<&str>,
-) -> String {
     let Ok(mut verification_url) = Url::parse(verification_url) else {
         return verification_url.to_owned();
     };
     let has_user_code = verification_url
         .query_pairs()
         .any(|(key, value)| key == "user_code" && !value.is_empty());
-    let return_to = validated_tui_focus_url(focus_url);
     let mut query = verification_url.query_pairs_mut();
     if !has_user_code {
         query.append_pair("user_code", user_code);
     }
     query.append_pair("source", "warp-agent-cli");
-    if let Some(return_to) = return_to {
-        query.append_pair("return_to", &return_to);
-    }
     drop(query);
     verification_url.into()
-}
-
-fn validated_tui_focus_url(focus_url: Option<&str>) -> Option<String> {
-    let mut focus_url = Url::parse(focus_url?).ok()?;
-    if focus_url.scheme() != ChannelState::url_scheme()
-        || focus_url.host_str() != Some("session")
-        || !focus_url.username().is_empty()
-        || focus_url.password().is_some()
-        || focus_url.port().is_some()
-        || focus_url.query().is_some()
-        || focus_url.fragment().is_some()
-    {
-        return None;
-    }
-
-    let session_uuid = {
-        let mut path_segments = focus_url.path_segments()?;
-        let session_uuid = path_segments.next()?.to_ascii_lowercase();
-        if path_segments.next().is_some()
-            || session_uuid.len() != 32
-            || !session_uuid.chars().all(|char| char.is_ascii_hexdigit())
-        {
-            return None;
-        }
-        session_uuid
-    };
-    focus_url.set_path(&format!("/{session_uuid}"));
-    Some(focus_url.into())
 }
 
 fn activate_global_mcp_servers(ctx: &mut AppContext) {

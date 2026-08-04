@@ -199,7 +199,7 @@ fn mcp_menu_footer_replaces_status_with_controls() {
 }
 
 #[test]
-fn out_of_credits_ctrl_o_binding_opens_pricing() {
+fn out_of_credits_ctrl_o_binding_opens_upgrade() {
     App::test((), |mut app| async move {
         app.update(crate::keybindings::init);
         app.read(|ctx| {
@@ -239,7 +239,7 @@ fn out_of_credits_ctrl_o_binding_opens_pricing() {
         });
         assert_eq!(
             opened_urls.borrow().as_slice(),
-            &["https://www.warp.dev/pricing".to_owned()]
+            &["https://app.warp.dev/upgrade?source=warp-agent-cli".to_owned()]
         );
     });
 }

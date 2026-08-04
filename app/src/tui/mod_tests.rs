@@ -9,7 +9,7 @@ use super::telemetry::TuiOnboardingTelemetry;
 use super::{
     TuiAuthBrowserFlow, TuiLoginEvent, TuiLoginModel, TuiLoginPhase, handle_auth_manager_event,
     has_validated_identity, initial_login_phase, set_logged_out_phase, set_login_phase,
-    start_tui_device_login, tui_verification_url_with_return, validated_tui_focus_url,
+    start_tui_device_login, tui_verification_url,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
@@ -65,10 +65,9 @@ fn missing_credentials_and_identity_start_signed_out() {
 
 #[test]
 fn tags_tui_verification_url_without_losing_existing_query_parameters() {
-    let url = tui_verification_url_with_return(
+    let url = tui_verification_url(
         "https://app.warp.dev/device?user_code=ABCD-EFGH&existing=value#fragment",
         "ABCD-EFGH",
-        None,
     );
     let url = url::Url::parse(&url).unwrap();
 
@@ -86,14 +85,14 @@ fn tags_tui_verification_url_without_losing_existing_query_parameters() {
 #[test]
 fn leaves_invalid_verification_url_unchanged() {
     assert_eq!(
-        tui_verification_url_with_return("not a URL", "ABCD-EFGH", None),
+        tui_verification_url("not a URL", "ABCD-EFGH"),
         "not a URL".to_owned()
     );
 }
 
 #[test]
 fn adds_user_code_when_complete_verification_url_is_unavailable() {
-    let url = tui_verification_url_with_return("https://app.warp.dev/device", "ABCD-EFGH", None);
+    let url = tui_verification_url("https://app.warp.dev/device", "ABCD-EFGH");
     let url = url::Url::parse(&url).unwrap();
 
     assert_eq!(
@@ -102,44 +101,13 @@ fn adds_user_code_when_complete_verification_url_is_unavailable() {
             .map(|(_, value)| value.into_owned()),
         Some("ABCD-EFGH".to_owned())
     );
-}
-
-#[test]
-fn adds_valid_focus_url_to_tui_verification_url() {
-    let focus_url = format!(
-        "{}://session/0123456789ABCDEF0123456789ABCDEF",
-        ChannelState::url_scheme()
-    );
-    let verification_url = tui_verification_url_with_return(
-        "https://app.warp.dev/device?user_code=CODE",
-        "CODE",
-        Some(&focus_url),
-    );
-    let verification_url = url::Url::parse(&verification_url).unwrap();
 
     assert_eq!(
-        verification_url
-            .query_pairs()
-            .find(|(key, _)| key == "return_to")
-            .map(|(_, value)| value.into_owned()),
-        Some(format!(
-            "{}://session/0123456789abcdef0123456789abcdef",
-            ChannelState::url_scheme()
-        ))
+        url.query_pairs()
+            .filter(|(key, _)| key == "return_to")
+            .count(),
+        0
     );
-}
-
-#[test]
-fn rejects_invalid_focus_urls() {
-    let scheme = ChannelState::url_scheme();
-    for focus_url in [
-        "https://app.warp.dev/session/0123456789abcdef0123456789abcdef".to_owned(),
-        format!("{scheme}://action/0123456789abcdef0123456789abcdef"),
-        format!("{scheme}://session/not-a-session-id"),
-        format!("{scheme}://session/0123456789abcdef0123456789abcdef?extra=value"),
-    ] {
-        assert_eq!(validated_tui_focus_url(Some(&focus_url)), None);
-    }
 }
 
 #[test]
