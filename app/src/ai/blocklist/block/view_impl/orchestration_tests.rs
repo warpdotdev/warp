@@ -81,6 +81,7 @@ fn participant_for_agent_id_uses_pill_style_child_agent_avatar() {
                 "Agent 1".to_string(),
                 parent_conversation_id,
                 Some(Harness::Claude),
+                false,
                 ctx,
             );
             history_model.set_server_conversation_token_for_conversation(

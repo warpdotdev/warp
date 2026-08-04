@@ -40,6 +40,31 @@ enum AuthFixture {
     LoggedOut,
 }
 
+#[test]
+fn routing_allows_live_input_only_for_executable_shared_session_role() {
+    App::test((), |mut app| async move {
+        let task_id = ambient_task_id(1);
+        let reader = ambient_pane_model(task_id, SharedSessionStatus::reader());
+        let executor = ambient_pane_model(task_id, SharedSessionStatus::executor());
+        app.update(|ctx| {
+            assert_eq!(
+                resolve_ai_query_routing(EntityId::new(), None, &reader, ctx),
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: false,
+                    ambient_agent_task_id: Some(task_id),
+                }
+            );
+            assert_eq!(
+                resolve_ai_query_routing(EntityId::new(), None, &executor, ctx),
+                AIQueryRouting::LiveRemoteVm {
+                    is_executor: true,
+                    ambient_agent_task_id: Some(task_id),
+                }
+            );
+        });
+    });
+}
+
 #[derive(Clone, Copy)]
 enum ConversationPermissionFixture {
     CurrentUserOwner,
@@ -684,6 +709,24 @@ fn missing_metadata_returns_error() {
 }
 
 #[test]
+fn completed_child_presentation_requires_edit_access() {
+    assert_eq!(
+        completed_child_presentation(ConversationAccess::Edit, false),
+        CompletedChildPresentation::Continuation
+    );
+    for access in [ConversationAccess::ViewOnly, ConversationAccess::Unknown] {
+        assert_eq!(
+            completed_child_presentation(access, false),
+            CompletedChildPresentation::PassiveTranscript
+        );
+    }
+    assert_eq!(
+        completed_child_presentation(ConversationAccess::Edit, true),
+        CompletedChildPresentation::PassiveTranscript
+    );
+}
+
+#[test]
 fn owned_oz_task_without_metadata_shows_inline_followup_input() {
     App::test((), |mut app| async move {
         let TestHandles {
@@ -731,6 +774,28 @@ fn owned_third_party_task_without_metadata_shows_continue_in_cloud_tombstone() {
                 Ok(CloudConversationContinuationUiState::Tombstone {
                     cta: Some(TombstoneCta::ContinueInCloud { task_id }),
                 })
+            );
+        });
+    });
+}
+
+/// With `TaskScope` removed, task ownership under `OrchestrationUnifiedStack`
+/// reduces to the same `creator.uid == current_user_uid` check as the
+/// flag-OFF path; owned tasks fall back to the metadata-free continuation
+/// path when no server conversation metadata is available yet.
+#[test]
+fn owned_task_without_metadata_allows_metadata_free_fallback() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_owned_task_without_server_metadata(&mut app);
+
+        app.update(|ctx| {
+            assert_eq!(
+                resolve_cloud_conversation_continuation_ui_state(terminal_view_id, task_id, ctx),
+                Ok(CloudConversationContinuationUiState::FollowupInput)
             );
         });
     });

@@ -1,4 +1,5 @@
 pub(in crate::pane_group) mod hydration;
+pub(crate) mod materialization;
 mod restoration;
 
 use std::collections::HashMap;
@@ -88,6 +89,7 @@ fn start_new_child_conversation(
             name,
             parent_conversation_id,
             orchestration_harness,
+            false,
             ctx,
         )
     })

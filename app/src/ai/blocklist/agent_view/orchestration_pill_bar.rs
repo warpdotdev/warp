@@ -353,7 +353,11 @@ impl OrchestrationPillBar {
             BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
             | BlocklistAIHistoryEvent::AppendedExchange { .. }
             | BlocklistAIHistoryEvent::SetActiveConversation { .. }
-            | BlocklistAIHistoryEvent::StartedNewConversation { .. } => {
+            | BlocklistAIHistoryEvent::StartedNewConversation { .. }
+            // Fires when a remote child conversation is linked to a run id,
+            // which is the reliable signal that children_by_parent has been
+            // updated after a task-driven restore seed.
+            | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. } => {
                 this.ensure_mouse_states(ctx);
                 ctx.notify();
             }
@@ -613,7 +617,8 @@ impl OrchestrationPillBar {
 
         // Use the shared canonical pill ordering so the visible row and
         // keyboard navigation cannot drift.
-        let children: Vec<_> = descendant_conversations_in_pill_order(history, orchestrator_id)
+        let children: Vec<_> = descendant_conversations_in_pill_order(history, orchestrator_id);
+        let children: Vec<_> = children
             .into_iter()
             .filter_map(|descendant| history.conversation(&descendant.conversation_id))
             .collect();

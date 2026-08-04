@@ -3477,8 +3477,12 @@ impl AIConversation {
         &mut self,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        // We should not persist non-local conversations (e.g. shared sessions).
-        if self.is_viewing_shared_session {
+        // Don't persist viewer conversations (e.g. shared sessions) or
+        // remote-child placeholders. Remote children are always rediscovered
+        // on restore via the ancestor-list seed
+        // (`PaneGroup::seed_child_conversations_from_task`), so a persisted
+        // row would only risk going stale relative to the server.
+        if self.is_viewing_shared_session || self.is_remote_child {
             return;
         }
 
@@ -3523,12 +3527,13 @@ impl AIConversation {
             }
         };
 
+        let updated_tasks: Vec<_> = self
+            .all_tasks()
+            .filter_map(|task| task.source_for_persistence())
+            .collect();
         let event = ModelEvent::UpdateMultiAgentConversation {
             conversation_id: self.id.to_string(),
-            updated_tasks: self
-                .all_tasks()
-                .filter_map(|task| task.source_for_persistence())
-                .collect(),
+            updated_tasks,
             conversation_data: AgentConversationData {
                 server_conversation_token: self
                     .server_conversation_token

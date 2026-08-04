@@ -7,6 +7,11 @@
 //! session links, REST seed rows, and in-band registrations — enters through
 //! the single [`OrchestrationChildTracker::observe_child`] entry point.
 //!
+//! `FamilyDrainMode` captures the one behavioral axis between orchestrator
+//! and shared-session observer: who pushes the server cursor and who receives
+//! the parent's own inbox events. It says nothing about authenticated
+//! ownership, permissions, or pane capability.
+//!
 //! Pill-bar broadcasts (`ChildSpawned` / `ChildStatusChanged`) are emitted
 //! via the `ctx` so downstream views can react without polling.
 //!
@@ -50,9 +55,11 @@ pub enum ChildSignal {
     Lifecycle(api::LifecycleEventType),
     /// A REST seed row (cold-start seed / restore fetch). Boxed because the
     /// task row dwarfs the other variants.
+    #[allow(dead_code)]
     Seeded(Box<AmbientAgentTask>),
     /// A child created in this process, already backed by a local
     /// conversation that its executor hydrates.
+    #[allow(dead_code)]
     Registered,
 }
 
@@ -67,6 +74,7 @@ pub struct TrackedChild {
     /// `true` for every placeholder the tracker materializes on behalf of a
     /// run hosted elsewhere. `false` only for in-band children, which already
     /// own a real local conversation and are tracked for status only.
+    #[allow(dead_code)]
     pub is_remote_child: bool,
 }
 
@@ -160,8 +168,9 @@ impl OrchestrationChildTracker {
 
     /// Discovery via `child_agent_started`. Idempotent: an already-known child
     /// only continues hydrating, while the first sighting of a genuinely new
-    /// out-of-band run kicks off a single metadata fetch to create its
-    /// placeholder.
+    /// out-of-band run inserts a pending `TrackedChild` immediately — before
+    /// the async metadata fetch completes — so later `Lifecycle` and
+    /// `SessionLinked` signals see a known child and are processed.
     fn apply_started(
         &mut self,
         task_id: AmbientAgentTaskId,
@@ -174,9 +183,24 @@ impl OrchestrationChildTracker {
             self.maybe_request_pane_materialization(task_id, ctx);
             return;
         }
-        // New out-of-band child: start (or dedupe) discovery. The placeholder
-        // is created when the fetch completes (a cache hit resolves inline; an
-        // in-flight fetch resolves on a later re-drive).
+        // Insert a placeholder TrackedChild immediately so lifecycle and
+        // session-linked signals that arrive before the async metadata fetch
+        // completes see tracker_known=true. Any session_id that arrived
+        // before this signal is also applied now.
+        let session_id = self.pending_session_ids.remove(&task_id);
+        self.insert_child(
+            task_id,
+            run_id,
+            TrackedChild {
+                session_id,
+                last_state: None,
+                pane_materialized: false,
+                is_remote_child: true,
+            },
+            ctx,
+        );
+        // Also kick the metadata fetch to get real task state, session_id,
+        // and conversation token for transcript / live-attach decisions.
         self.spawn_metadata_fetch(task_id, run_id, ctx);
     }
 
@@ -192,7 +216,8 @@ impl OrchestrationChildTracker {
         kind: api::LifecycleEventType,
         ctx: &mut ModelContext<OrchestrationEventStreamer>,
     ) {
-        if self.children.contains_key(&task_id) {
+        let tracker_known = self.children.contains_key(&task_id);
+        if tracker_known {
             let status = conversation_status_from_lifecycle_event_type(kind);
             // Write status through immediately so the pill bar badge reflects
             // the lifecycle transition without waiting for a redraw cycle.
@@ -228,11 +253,17 @@ impl OrchestrationChildTracker {
             self.maybe_request_pane_materialization(task_id, ctx);
             return;
         }
-        // Lifecycle for an unknown run: only self-heal a real discovery miss,
-        // not a run whose fetch is already in flight.
-        if !self.metadata_fetches.contains(run_id) {
-            self.spawn_metadata_fetch(task_id, run_id, ctx);
-        }
+        // Lifecycle for an unknown run is a complete discovery backstop:
+        // insert once (emitting ChildSpawned), start/dedupe metadata hydration,
+        // and publish the status immediately. This handles a missed or
+        // reordered child_agent_started event without a tracker-only ghost.
+        self.apply_started(task_id, run_id, ctx);
+        let status = conversation_status_from_lifecycle_event_type(kind);
+        ctx.emit(OrchestrationEventStreamerEvent::ChildStatusChanged {
+            parent_task_id: self.parent_task_id,
+            run_id: run_id.to_string(),
+            status,
+        });
     }
 
     /// Registers a child created in this process against its existing local

@@ -122,7 +122,8 @@ use session_sharing_protocol::sharer::{
 use settings::{Setting, ToggleableSetting};
 use shared_session::cloud_conversation_continuation::CloudConversationContinuationUiState;
 pub(crate) use shared_session::cloud_conversation_continuation::{
-    AIQueryRouting, resolve_ai_query_routing,
+    AIQueryRouting, CompletedChildPresentation, ConversationAccess,
+    completed_child_conversation_access, completed_child_presentation, resolve_ai_query_routing,
 };
 use shared_session::{SharedSessionAdapter, Viewer};
 use ssh_file_upload::{FileUpload, FileUploadEvent};
@@ -217,7 +218,8 @@ use crate::ai::agent::{
 use crate::ai::agent::{CurrentHead, DiffBase};
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::ambient_agents::{
-    AmbientAgentTaskId, AmbientConversationStatus, conversation_output_status_from_conversation,
+    AmbientAgentTask, AmbientAgentTaskId, AmbientConversationStatus,
+    conversation_output_status_from_conversation,
 };
 use crate::ai::blocklist::agent_view::agent_input_footer::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::agent_view::{
@@ -2014,6 +2016,20 @@ pub enum Event {
         conversation_id: AIConversationId,
         session_id: session_sharing_protocol::common::SessionId,
     },
+    /// Unified-stack counterpart to [`Self::EnsureSharedSessionViewerChildPane`].
+    /// Carries the fetched task snapshot so pane construction uses the same
+    /// current-state materialization decision as pill-click restoration.
+    EnsureUnifiedViewerChildPane {
+        conversation_id: AIConversationId,
+        task: Box<AmbientAgentTask>,
+    },
+    /// A unified-stack child viewer could not join its dedicated live
+    /// execution session. The pane group keeps the child passive and
+    /// re-drives it from current task metadata.
+    OrchestrationChildSharedSessionJoinFailed {
+        conversation_id: AIConversationId,
+        session_id: session_sharing_protocol::common::SessionId,
+    },
     /// Emitted when "Open in new tab" is picked from a child pill's 3-dot menu.
     /// Bubbles up to the workspace to create the new tab.
     OpenChildAgentInNewTab {
@@ -2824,6 +2840,9 @@ pub struct TerminalView {
 
     ambient_agent_view_model: Option<ModelHandle<ambient_agent::AmbientAgentViewModel>>,
     pending_cloud_followup_task_id: Option<AmbientAgentTaskId>,
+    /// A passive orchestration child whose live execution session could not
+    /// be joined. Task refresh may later replace this with a transcript.
+    orchestration_child_live_unavailable: bool,
 
     /// Conversation details panel (side panel showing conversation/task metadata).
     /// Available for cloud Oz runs and for any active local AI conversation.
@@ -4385,6 +4404,7 @@ impl TerminalView {
             has_auto_opened_conversation_details_panel: false,
             conversation_details_panel_auto_open_policy: Default::default(),
             pending_cloud_followup_task_id: None,
+            orchestration_child_live_unavailable: false,
             #[cfg(not(target_arch = "wasm32"))]
             conversation_details_panel_toggle_mouse_state: Default::default(),
             ambient_agent_cancel_mouse_state: Default::default(),
@@ -8042,6 +8062,29 @@ impl TerminalView {
     pub(crate) fn suppress_initial_conversation_details_panel_auto_open(&mut self) {
         self.conversation_details_panel_auto_open_policy =
             ConversationDetailsPanelAutoOpenPolicy::DefaultClosed;
+    }
+
+    pub(crate) fn set_orchestration_child_live_unavailable(
+        &mut self,
+        unavailable: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.orchestration_child_live_unavailable == unavailable {
+            return;
+        }
+        self.orchestration_child_live_unavailable = unavailable;
+        ctx.notify();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_orchestration_child_live_unavailable_for_test(&self) -> bool {
+        self.orchestration_child_live_unavailable
+    }
+    #[cfg(test)]
+    pub(crate) fn has_agent_view_zero_state_for_test(&self) -> bool {
+        self.rich_content_views
+            .iter()
+            .any(|view| view.is_agent_view_zero_state())
     }
 
     #[cfg(test)]
@@ -23290,6 +23333,42 @@ impl TerminalView {
         .finish()
     }
 
+    fn render_orchestration_child_live_unavailable(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let color = appearance
+            .theme()
+            .sub_text_color(appearance.theme().background());
+
+        SavePosition::new(
+            Align::new(
+                Flex::column()
+                    .with_child(
+                        Text::new_inline(
+                            "Live session unavailable",
+                            appearance.ui_font_family(),
+                            14.,
+                        )
+                        .with_color(color.into())
+                        .finish(),
+                    )
+                    .with_child(
+                        Text::new_inline(
+                            "The transcript will appear when this child finishes.",
+                            appearance.ui_font_family(),
+                            12.,
+                        )
+                        .with_color(color.into())
+                        .finish(),
+                    )
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .finish(),
+            )
+            .finish(),
+            &self.content_element_position_id,
+        )
+        .finish()
+    }
+
     fn render_bookmark_element(
         index: BlockIndex,
         bookmark_mouse_state: MouseStateHandle,
@@ -27510,7 +27589,9 @@ impl View for TerminalView {
                         && !self.is_ambient_agent_session(app);
                     let is_loading_transcript = model.is_loading_conversation_transcript();
                     let should_show_loading = is_view_pending_clause || is_loading_transcript;
-                    let output_area = if should_show_loading {
+                    let output_area = if self.orchestration_child_live_unavailable {
+                        self.render_orchestration_child_live_unavailable(app)
+                    } else if should_show_loading {
                         self.render_viewer_loading(app)
                     } else if is_alt_screen_active {
                         did_wrap_terminal_size = true;
