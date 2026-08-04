@@ -719,6 +719,7 @@ pub(super) struct VerticalTabsPanelState {
     branch_option_mouse_state: MouseStateHandle,
     subtitle_option_1_mouse_state: MouseStateHandle,
     subtitle_option_2_mouse_state: MouseStateHandle,
+    subtitle_option_3_mouse_state: MouseStateHandle,
     show_pr_link_mouse_state: MouseStateHandle,
     show_pr_link_info_tooltip_mouse_state: MouseStateHandle,
     show_diff_stats_mouse_state: MouseStateHandle,
@@ -757,6 +758,7 @@ impl Default for VerticalTabsPanelState {
             branch_option_mouse_state: Default::default(),
             subtitle_option_1_mouse_state: Default::default(),
             subtitle_option_2_mouse_state: Default::default(),
+            subtitle_option_3_mouse_state: Default::default(),
             show_pr_link_mouse_state: Default::default(),
             show_pr_link_info_tooltip_mouse_state: Default::default(),
             show_diff_stats_mouse_state: Default::default(),
@@ -5610,6 +5612,9 @@ fn compute_tab_group_color_mode(
     }
 }
 
+/// Resolves the stored subtitle preference against the primary line, so a
+/// compact row never shows the same field twice. `None` names no field, so it
+/// can never conflict and is always honored as stored.
 fn resolve_compact_subtitle(
     primary: VerticalTabsPrimaryInfo,
     subtitle_pref: VerticalTabsCompactSubtitle,
@@ -5642,9 +5647,17 @@ fn default_compact_subtitle(primary: VerticalTabsPrimaryInfo) -> VerticalTabsCom
     }
 }
 
+/// Number of choices offered under "Additional metadata": the two fields not
+/// already used as the primary line, plus "None".
+///
+/// The popup pairs these options with a same-sized array of mouse states by
+/// index, so both arrays are bound to this constant — a future option added to
+/// one and not the other is a compile error rather than an out-of-bounds panic.
+const SUBTITLE_OPTION_COUNT: usize = 3;
+
 fn subtitle_options_for_primary(
     primary: VerticalTabsPrimaryInfo,
-) -> [(VerticalTabsCompactSubtitle, &'static str); 2] {
+) -> [(VerticalTabsCompactSubtitle, &'static str); SUBTITLE_OPTION_COUNT] {
     match primary {
         VerticalTabsPrimaryInfo::Command => [
             (VerticalTabsCompactSubtitle::Branch, "Branch"),
@@ -5652,6 +5665,7 @@ fn subtitle_options_for_primary(
                 VerticalTabsCompactSubtitle::WorkingDirectory,
                 "Working Directory",
             ),
+            (VerticalTabsCompactSubtitle::None, "None"),
         ],
         VerticalTabsPrimaryInfo::WorkingDirectory => [
             (VerticalTabsCompactSubtitle::Branch, "Branch"),
@@ -5659,6 +5673,7 @@ fn subtitle_options_for_primary(
                 VerticalTabsCompactSubtitle::Command,
                 "Command / Conversation",
             ),
+            (VerticalTabsCompactSubtitle::None, "None"),
         ],
         VerticalTabsPrimaryInfo::Branch => [
             (
@@ -5669,6 +5684,7 @@ fn subtitle_options_for_primary(
                 VerticalTabsCompactSubtitle::WorkingDirectory,
                 "Working Directory",
             ),
+            (VerticalTabsCompactSubtitle::None, "None"),
         ],
     }
 }
@@ -5968,9 +5984,10 @@ pub(super) fn render_settings_popup(
             popup_col.add_child(subtitle_header);
 
             let options = subtitle_options_for_primary(current_primary_info);
-            let mouse_states = [
+            let mouse_states: [MouseStateHandle; SUBTITLE_OPTION_COUNT] = [
                 state.subtitle_option_1_mouse_state.clone(),
                 state.subtitle_option_2_mouse_state.clone(),
+                state.subtitle_option_3_mouse_state.clone(),
             ];
             for (i, (value, label)) in options.iter().enumerate() {
                 popup_col.add_child(render_compact_subtitle_option(
@@ -7257,6 +7274,7 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
                             .finish(),
                     )
                 }
+                VerticalTabsCompactSubtitle::None => None,
             };
 
             (title, subtitle)

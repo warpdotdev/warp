@@ -13,13 +13,13 @@ use super::{
     code_detail_kind_label, compact_branch_subtitle_display, detail_sidecar_width_and_bounds,
     detail_target_for_hovered_row, non_terminal_search_text_fragments,
     pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
-    push_normalized_unique_summary_label, search_fragments_contain_query,
+    push_normalized_unique_summary_label, resolve_compact_subtitle, search_fragments_contain_query,
     select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
-    should_show_tab_group_header, sort_summary_primary_labels_status_first, summary_overflow_count,
-    summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
-    terminal_pull_request_badge_label, terminal_search_text_fragments,
-    terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
-    vtab_diff_stats_text,
+    should_show_tab_group_header, sort_summary_primary_labels_status_first,
+    subtitle_options_for_primary, summary_overflow_count, summary_search_text_fragments,
+    terminal_kind_badge_label, terminal_primary_line_data, terminal_pull_request_badge_label,
+    terminal_search_text_fragments, terminal_title_fallback_font, uses_outer_group_container,
+    visible_pane_ids_for_detail_target, vtab_diff_stats_text,
 };
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::context_chips::display_chip::GitLineChanges;
@@ -27,7 +27,9 @@ use crate::pane_group::pane::IPaneType;
 use crate::pane_group::{PaneId, TerminalPaneId};
 use crate::safe_triangle::SafeTriangle;
 use crate::terminal::CLIAgent;
-use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
+use crate::workspace::tab_settings::{
+    VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo,
+};
 
 fn label(text: &str) -> VerticalTabsSummaryPrimaryLabel {
     VerticalTabsSummaryPrimaryLabel {
@@ -929,6 +931,94 @@ fn compact_branch_subtitle_falls_back_to_working_directory_without_branch_icon()
     assert_eq!(
         compact_branch_subtitle_display(Some("main"), Some("~/warp")),
         Some(("main".to_string(), true))
+    );
+}
+
+#[test]
+fn every_primary_info_offers_a_none_subtitle_option() {
+    for primary in [
+        VerticalTabsPrimaryInfo::Command,
+        VerticalTabsPrimaryInfo::WorkingDirectory,
+        VerticalTabsPrimaryInfo::Branch,
+    ] {
+        let options = subtitle_options_for_primary(primary);
+        assert!(
+            options
+                .iter()
+                .any(|(value, label)| *value == VerticalTabsCompactSubtitle::None
+                    && *label == "None"),
+            "primary {primary:?} offers no way to turn the subtitle off"
+        );
+    }
+}
+
+#[test]
+fn subtitle_options_never_repeat_the_primary_line() {
+    for (primary, conflicting) in [
+        (
+            VerticalTabsPrimaryInfo::Command,
+            VerticalTabsCompactSubtitle::Command,
+        ),
+        (
+            VerticalTabsPrimaryInfo::WorkingDirectory,
+            VerticalTabsCompactSubtitle::WorkingDirectory,
+        ),
+        (
+            VerticalTabsPrimaryInfo::Branch,
+            VerticalTabsCompactSubtitle::Branch,
+        ),
+    ] {
+        let options = subtitle_options_for_primary(primary);
+        assert!(
+            options.iter().all(|(value, _)| *value != conflicting),
+            "primary {primary:?} offers {conflicting:?} as a subtitle"
+        );
+    }
+}
+
+#[test]
+fn none_subtitle_is_honored_for_every_primary_line() {
+    // `None` names no field, so it can never collide with the primary line and
+    // must survive resolution unchanged — otherwise switching "Pane title as"
+    // would silently bring the metadata line back.
+    for primary in [
+        VerticalTabsPrimaryInfo::Command,
+        VerticalTabsPrimaryInfo::WorkingDirectory,
+        VerticalTabsPrimaryInfo::Branch,
+    ] {
+        assert_eq!(
+            resolve_compact_subtitle(primary, VerticalTabsCompactSubtitle::None),
+            VerticalTabsCompactSubtitle::None,
+            "primary {primary:?} overrode an explicit None subtitle"
+        );
+    }
+}
+
+#[test]
+fn conflicting_subtitle_still_falls_back_instead_of_hiding() {
+    // Guards the pre-existing fallback: a stored preference that duplicates the
+    // primary line resolves to a real field, never to None.
+    assert_eq!(
+        resolve_compact_subtitle(
+            VerticalTabsPrimaryInfo::Command,
+            VerticalTabsCompactSubtitle::Command
+        ),
+        VerticalTabsCompactSubtitle::Branch
+    );
+    assert_eq!(
+        resolve_compact_subtitle(
+            VerticalTabsPrimaryInfo::Branch,
+            VerticalTabsCompactSubtitle::Branch
+        ),
+        VerticalTabsCompactSubtitle::Command
+    );
+}
+
+#[test]
+fn compact_subtitle_defaults_to_branch_so_upgrades_do_not_change_tabs() {
+    assert_eq!(
+        VerticalTabsCompactSubtitle::default(),
+        VerticalTabsCompactSubtitle::Branch
     );
 }
 

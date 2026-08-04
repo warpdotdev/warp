@@ -132,13 +132,13 @@ In compact mode, only one of the two remaining metadata categories can be shown 
 
 ### "Additional metadata" setting (compact mode only)
 
-A new synced cloud setting (`VerticalTabsCompactSubtitle`) controls which metadata category is shown as the compact subtitle for terminal panes. The available options depend on the current "Pane title as" selection — the two categories not used as the title are offered as choices.
+A new synced cloud setting (`VerticalTabsCompactSubtitle`) controls which metadata category is shown as the compact subtitle for terminal panes. The available options depend on the current "Pane title as" selection — the two categories not used as the title are offered as choices, plus **None**, which omits the subtitle slot entirely (see goal 4 and acceptance criterion 9).
 
 **Available options per "Pane title as" selection:**
 
-- **Pane title as: Command** → Additional metadata options: Branch (default), Working Directory
-- **Pane title as: Working Directory** → Additional metadata options: Branch (default), Command/Conversation
-- **Pane title as: Branch** → Additional metadata options: Command/Conversation (default), Working Directory
+- **Pane title as: Command** → Additional metadata options: Branch (default), Working Directory, None
+- **Pane title as: Working Directory** → Additional metadata options: Branch (default), Command/Conversation, None
+- **Pane title as: Branch** → Additional metadata options: Command/Conversation (default), Working Directory, None
 
 **Defaults:** Each "Pane title as" selection has a sensible default subtitle so the setting works out of the box:
 - Command → Branch
@@ -149,7 +149,7 @@ A new synced cloud setting (`VerticalTabsCompactSubtitle`) controls which metada
 
 The "Additional metadata" section appears in the settings popup **only when compact mode is active**. When expanded mode is selected, this section is hidden (since expanded mode shows all three metadata categories across its 3 lines).
 
-The section renders as a set of selectable options (same style as "Pane title as") with the header "Additional metadata". Only the two options relevant to the current "Pane title as" selection are shown.
+The section renders as a set of selectable options (same style as "Pane title as") with the header "Additional metadata". Only the two categories relevant to the current "Pane title as" selection are shown, followed by None.
 
 **Subtitle rendering rules:**
 

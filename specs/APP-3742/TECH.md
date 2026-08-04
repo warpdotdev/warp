@@ -259,6 +259,8 @@ pub enum VerticalTabsCompactSubtitle {
     Branch,
     WorkingDirectory,
     Command,
+    /// Omits the subtitle slot entirely (acceptance criterion 9).
+    None,
 }
 ```
 
@@ -266,7 +268,7 @@ Registered via `implement_setting_for_enum!` with `SyncToCloud::Globally`, same 
 
 **Resolving the effective subtitle:**
 
-The persisted `VerticalTabsCompactSubtitle` value may be incompatible with the current `VerticalTabsPrimaryInfo` (e.g., user has `Branch` as both title and subtitle). A helper function `resolve_compact_subtitle()` maps the combination:
+The persisted `VerticalTabsCompactSubtitle` value may be incompatible with the current `VerticalTabsPrimaryInfo` (e.g., user has `Branch` as both title and subtitle). A helper function `resolve_compact_subtitle()` maps the combination. `None` names no category, so it never conflicts and is always honored as stored:
 
 ```rust
 fn resolve_compact_subtitle(

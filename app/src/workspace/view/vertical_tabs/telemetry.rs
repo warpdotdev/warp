@@ -54,6 +54,7 @@ impl VerticalTabsDisplayOption {
                 json!("working_directory")
             }
             Self::CompactSubtitle(VerticalTabsCompactSubtitle::Command) => json!("command"),
+            Self::CompactSubtitle(VerticalTabsCompactSubtitle::None) => json!("none"),
             Self::ShowPrLink(value) => json!(value),
             Self::ShowDiffStats(value) => json!(value),
             Self::ShowDetailsOnHover(value) => json!(value),

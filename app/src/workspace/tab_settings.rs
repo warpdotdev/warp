@@ -443,6 +443,9 @@ pub enum VerticalTabsCompactSubtitle {
     Branch,
     WorkingDirectory,
     Command,
+    /// No subtitle. Compact rows render the pane title on its own, matching
+    /// expanded mode, where every metadata row can be toggled off.
+    None,
 }
 
 settings::macros::implement_setting_for_enum!(
