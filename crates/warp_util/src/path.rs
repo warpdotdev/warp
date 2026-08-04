@@ -11,8 +11,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use typed_path::{
-    PathType, TypedComponent, TypedPath, TypedPathBuf, UnixComponent, WindowsComponent,
-    WindowsPath, WindowsPathBuf, WindowsPrefix, WindowsPrefixComponent,
+    PathType, TypedComponent, TypedPath, TypedPathBuf, UnixComponent, Utf8Component,
+    Utf8WindowsComponent, Utf8WindowsPath, Utf8WindowsPrefix, WindowsComponent, WindowsPath,
+    WindowsPathBuf, WindowsPrefix, WindowsPrefixComponent,
 };
 
 use crate::standardized_path::StandardizedPath;
@@ -60,10 +61,6 @@ lazy_static! {
 
 /// Leading prefix for a path to the home directory using the $HOME environment variable.
 pub const HOME_DIR_ENV_VAR_PREFIX: &str = "$HOME";
-
-/// The UNC hosts Windows exposes the WSL filesystem through: the legacy `wsl$` host and the newer
-/// `wsl.localhost` host. Both are served locally by the WSL filesystem provider.
-const WSL_UNC_SERVERS: [&str; 2] = ["wsl$", "wsl.localhost"];
 
 const DIRS_IN_MSYS2_ROOT: [&[u8]; 14] = [
     b"bin",
@@ -352,23 +349,12 @@ pub fn msys2_exe_to_root(exe_path: &WindowsPath) -> WindowsPathBuf {
         })
 }
 
-/// Returns true if the given UNC server component names the WSL filesystem provider rather than a
-/// remote host. UNC host names are case-insensitive, so `\\WSL$\...`, `\\wsl$\...`, and
-/// `\\Wsl.Localhost\...` all refer to the local WSL filesystem.
-fn is_wsl_unc_server(server: &[u8]) -> bool {
-    str::from_utf8(server).is_ok_and(|server| {
-        WSL_UNC_SERVERS
-            .iter()
-            .any(|wsl_server| server.eq_ignore_ascii_case(wsl_server))
-    })
-}
-
-/// Returns true if the given Windows path prefix is a UNC prefix pointing at the WSL filesystem,
-/// e.g. `\\wsl$\Ubuntu`, `//WSL.localhost/Ubuntu`, or `\\?\UNC\wsl$\Ubuntu`.
+/// [`is_wsl_unc_host`] for a [`typed_path`] prefix, e.g. `\\wsl$\Ubuntu`, `//WSL.localhost/Ubuntu`,
+/// or `\\?\UNC\wsl$\Ubuntu`. Non-UNC prefixes are never WSL paths.
 fn is_wsl_unc_prefix(prefix: &WindowsPrefixComponent) -> bool {
     match prefix.kind() {
-        WindowsPrefix::UNC(server, _) | WindowsPrefix::VerbatimUNC(server, _) => {
-            is_wsl_unc_server(server)
+        WindowsPrefix::UNC(host, _) | WindowsPrefix::VerbatimUNC(host, _) => {
+            str::from_utf8(host).is_ok_and(is_wsl_unc_host)
         }
         WindowsPrefix::Verbatim(_)
         | WindowsPrefix::VerbatimDisk(_)
@@ -523,6 +509,63 @@ pub fn convert_wsl_to_windows_host_path(
     }
 }
 
+/// A path inside a WSL distribution, decomposed from the UNC form that
+/// [`convert_wsl_to_windows_host_path`] produces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WslUncPath {
+    /// The distribution name exactly as it appears in the UNC path (case preserved).
+    pub distro: String,
+    /// The Linux absolute path, using `/` separators. The distribution root maps to `/`.
+    pub linux_path: String,
+}
+
+/// The host components that identify a WSL UNC path.
+const WSL_UNC_HOSTS: &[&str] = &["wsl$", "wsl.localhost"];
+
+/// Returns true if the given UNC host component names the WSL filesystem provider rather than a
+/// remote machine. UNC host names are case-insensitive, so `\\WSL$\...`, `\\wsl$\...`, and
+/// `\\Wsl.Localhost\...` all name the local WSL filesystem.
+fn is_wsl_unc_host(host: &str) -> bool {
+    WSL_UNC_HOSTS.iter().any(|h| host.eq_ignore_ascii_case(h))
+}
+
+/// Parses a WSL UNC path into its distribution and Linux path, the inverse of
+/// [`convert_wsl_to_windows_host_path`]. Accepts the `\\wsl$\...`, `\\wsl.localhost\...`,
+/// verbatim `\\?\UNC\wsl$\...`, and forward-slash `//wsl$/...` spellings, matching the host
+/// case-insensitively. Returns `None` for non-WSL UNC paths, drive-letter paths, and relative
+/// paths.
+pub fn parse_wsl_unc_path(path: &Path) -> Option<WslUncPath> {
+    let mut components = Utf8WindowsPath::new(path.to_str()?).components();
+    let (host, distro) = match components.next()? {
+        Utf8WindowsComponent::Prefix(prefix) => match prefix.kind() {
+            Utf8WindowsPrefix::UNC(host, distro) | Utf8WindowsPrefix::VerbatimUNC(host, distro) => {
+                (host, distro)
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+    if distro.is_empty() || !is_wsl_unc_host(host) {
+        return None;
+    }
+
+    let linux_path: String = components
+        .filter_map(|component| match component {
+            Utf8WindowsComponent::RootDir => None,
+            component => Some(format!("/{}", component.as_str())),
+        })
+        .collect();
+
+    Some(WslUncPath {
+        distro: distro.to_string(),
+        linux_path: if linux_path.is_empty() {
+            "/".to_string()
+        } else {
+            linux_path
+        },
+    })
+}
+
 #[cfg(windows)]
 fn prefix(path: &Path) -> Option<std::path::Prefix<'_>> {
     use std::path::Component;
@@ -545,8 +588,8 @@ pub fn is_network_resource(path: &Path) -> bool {
     match prefix(path) {
         // Windows exposes the WSL filesystem over UNC, but it is served locally, so it is not a
         // network resource.
-        Some(Prefix::UNC(server, _)) | Some(Prefix::VerbatimUNC(server, _)) => {
-            !is_wsl_unc_server(server.as_encoded_bytes())
+        Some(Prefix::UNC(host, _)) | Some(Prefix::VerbatimUNC(host, _)) => {
+            !host.to_str().is_some_and(is_wsl_unc_host)
         }
         _ => false,
     }

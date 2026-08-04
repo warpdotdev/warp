@@ -419,24 +419,25 @@ fn test_clean_path() {
     );
 }
 
+/// The single predicate every WSL UNC host check in this module goes through, so its casing and
+/// host-spelling table is asserted here rather than repeated at each call site.
 #[test]
-fn test_is_wsl_unc_server() {
-    for server in [
+fn test_is_wsl_unc_host() {
+    for host in [
         "wsl$",
         "WSL$",
         "Wsl$",
         "wsl.localhost",
         "WSL.localhost",
         "Wsl.Localhost",
-        "WSL.LOCALHOST",
     ] {
         assert!(
-            is_wsl_unc_server(server.as_bytes()),
-            "{server} should be recognized as a WSL UNC host"
+            is_wsl_unc_host(host),
+            "{host} should be recognized as a WSL UNC host"
         );
     }
 
-    for server in [
+    for host in [
         "",
         "wsl",
         "wsl$$",
@@ -445,12 +446,13 @@ fn test_is_wsl_unc_server() {
         "server",
     ] {
         assert!(
-            !is_wsl_unc_server(server.as_bytes()),
-            "{server} should not be recognized as a WSL UNC host"
+            !is_wsl_unc_host(host),
+            "{host} should not be recognized as a WSL UNC host"
         );
     }
 }
 
+/// Covers the prefix-kind dispatch — only UNC and verbatim UNC prefixes carry a host to check.
 #[test]
 fn test_is_wsl_unc_prefix() {
     fn is_wsl_unc_path_prefix(path: &str) -> bool {
@@ -465,11 +467,7 @@ fn test_is_wsl_unc_prefix() {
 
     for path in [
         "//wsl$/Ubuntu/home",
-        "//WSL$/Ubuntu/home",
-        "//Wsl$/Ubuntu/home",
-        "//wsl.localhost/Ubuntu/home",
         "//WSL.localhost/Ubuntu/home",
-        "//Wsl.Localhost/Ubuntu/home",
         r"\\wsl$\Ubuntu\home",
         r"\\?\UNC\WSL.localhost\Ubuntu\home",
     ] {
@@ -777,6 +775,61 @@ fn test_convert_wsl_to_windows_host_path() {
         ),
         Err(WSLPathConversionError::NonUnixPath)
     ));
+}
+
+/// Asserts that `input` parses into the given distribution and Linux path.
+fn assert_parses_wsl_unc(input: &str, distro: &str, linux_path: &str) {
+    assert_eq!(
+        parse_wsl_unc_path(Path::new(input)),
+        Some(WslUncPath {
+            distro: distro.to_string(),
+            linux_path: linux_path.to_string(),
+        }),
+        "input: {input:?}"
+    );
+}
+
+#[test]
+fn test_parse_wsl_unc_path() {
+    assert_parses_wsl_unc(r"\\wsl$\Ubuntu\home\user", "Ubuntu", "/home/user");
+    assert_parses_wsl_unc(r"\\wsl.localhost\Ubuntu\home", "Ubuntu", "/home");
+    assert_parses_wsl_unc(r"\\?\UNC\wsl$\Ubuntu\home\user", "Ubuntu", "/home/user");
+    assert_parses_wsl_unc(
+        r"\\?\UNC\wsl.localhost\Ubuntu\srv\repo",
+        "Ubuntu",
+        "/srv/repo",
+    );
+    assert_parses_wsl_unc("//wsl$/Ubuntu/home/user", "Ubuntu", "/home/user");
+    // The host is matched case-insensitively.
+    assert_parses_wsl_unc(r"\\WSL$\Ubuntu\src", "Ubuntu", "/src");
+    assert_parses_wsl_unc(r"\\Wsl.LocalHost\Ubuntu\src", "Ubuntu", "/src");
+    // Trailing separators are dropped.
+    assert_parses_wsl_unc(r"\\wsl$\Ubuntu\home\user\", "Ubuntu", "/home/user");
+    assert_parses_wsl_unc("//wsl$/Ubuntu/home/user/", "Ubuntu", "/home/user");
+    // Distribution names may contain dots and dashes.
+    assert_parses_wsl_unc(
+        r"\\wsl.localhost\Ubuntu-24.04\home\krag",
+        "Ubuntu-24.04",
+        "/home/krag",
+    );
+    // The distribution root maps to `/`.
+    assert_parses_wsl_unc(r"\\wsl$\Ubuntu", "Ubuntu", "/");
+    assert_parses_wsl_unc(r"\\wsl$\Ubuntu\", "Ubuntu", "/");
+    assert_parses_wsl_unc("//wsl$/archlinux", "archlinux", "/");
+}
+
+#[test]
+fn test_parse_wsl_unc_path_rejects_other_paths() {
+    // Non-WSL UNC share.
+    assert_eq!(parse_wsl_unc_path(Path::new(r"\\server\share\dir")), None);
+    // Drive-letter path.
+    assert_eq!(parse_wsl_unc_path(Path::new(r"C:\Users\foo")), None);
+    // Relative paths.
+    assert_eq!(parse_wsl_unc_path(Path::new(r"foo\bar")), None);
+    assert_eq!(parse_wsl_unc_path(Path::new("foo/bar")), None);
+    // WSL host without a distribution name.
+    assert_eq!(parse_wsl_unc_path(Path::new(r"\\wsl$")), None);
+    assert_eq!(parse_wsl_unc_path(Path::new(r"\\wsl$\")), None);
 }
 
 #[test]

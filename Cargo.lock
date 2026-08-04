@@ -16013,6 +16013,7 @@ dependencies = [
  "command",
  "criterion",
  "dirs 6.0.0",
+ "dunce",
  "fs4",
  "futures",
  "futures-lite 1.13.0",

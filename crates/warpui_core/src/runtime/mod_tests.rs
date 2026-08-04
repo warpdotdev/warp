@@ -107,7 +107,6 @@ fn invalidation_driver_does_not_schedule_repaints_while_unfocused() {
             window_id,
             root,
             TestTerminal::new(TuiSize::new(20, 3)),
-            Arc::new(Mutex::new(())),
         )));
         let timer = Rc::new(RefCell::new(None));
         let focused = Rc::new(Cell::new(true));
@@ -443,8 +442,7 @@ fn repeats_dispatch_keymaps_while_modifier_events_bypass_them() {
             })
         });
         let terminal = TestTerminal::new(TuiSize::new(20, 3));
-        let mut screen =
-            TuiScreen::new(window_id, root.clone(), terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root.clone(), terminal);
         app.update(|ctx| screen.draw(ctx)).unwrap();
 
         let modifier = screen
@@ -474,7 +472,7 @@ fn shift_lifecycle_restores_shift_and_normalizes_symbol_keystrokes() {
         let (window_id, root) =
             app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
         let terminal = TestTerminal::new(TuiSize::new(20, 3));
-        let mut screen = TuiScreen::new(window_id, root, terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
 
         screen
             .convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
@@ -532,7 +530,7 @@ fn shift_remains_active_until_both_shift_keys_are_released() {
         let (window_id, root) =
             app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
         let terminal = TestTerminal::new(TuiSize::new(20, 3));
-        let mut screen = TuiScreen::new(window_id, root, terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
 
         for modifier in [ModifierKeyCode::LeftShift, ModifierKeyCode::RightShift] {
             screen.convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
@@ -578,7 +576,7 @@ fn stale_shift_state_is_cleared_by_events_that_report_shift_accurately() {
         let (window_id, root) =
             app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
         let terminal = TestTerminal::new(TuiSize::new(20, 3));
-        let mut screen = TuiScreen::new(window_id, root, terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
 
         let shift_press = || {
             CrosstermEvent::Key(KeyEvent::new_with_kind(
@@ -812,8 +810,7 @@ fn synthetic_mouse_move_after_redraw_updates_hover() {
             })
         });
         let terminal = TestTerminal::new(TuiSize::new(20, 5));
-        let mut screen =
-            TuiScreen::new(window_id, root.clone(), terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root.clone(), terminal);
         app.update(|ctx| screen.draw(ctx)).unwrap();
 
         let mouse_moved = TuiEvent::MouseMoved {
@@ -911,32 +908,6 @@ fn terminal_screen_lifecycle_toggles_focus_reporting() {
     );
 }
 
-#[test]
-fn terminal_background_probe_only_runs_on_quiet_active_focus_gain() {
-    let key = CrosstermEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()));
-
-    assert!(should_probe_after_event(
-        &CrosstermEvent::FocusGained,
-        true,
-        false,
-    ));
-    assert!(!should_probe_after_event(
-        &CrosstermEvent::FocusGained,
-        false,
-        false,
-    ));
-    assert!(!should_probe_after_event(
-        &CrosstermEvent::FocusGained,
-        true,
-        true,
-    ));
-    assert!(!should_probe_after_event(
-        &CrosstermEvent::FocusLost,
-        true,
-        false,
-    ));
-    assert!(!should_probe_after_event(&key, true, false));
-}
 /// Enhancement-capable terminals report standalone modifier event types while
 /// preserving shifted text through Crossterm's alternate-key decoding (CSI
 /// `>15u`), then restore the previous protocol on exit.

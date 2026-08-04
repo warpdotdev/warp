@@ -679,12 +679,27 @@ async fn install_update(layout: InstallLayout, latest_version: String) -> Result
     .await
 }
 
+/// Builds the Inno Setup `/DIR` argument naming the install root.
+///
+/// [`InstallLayout::detect`] canonicalizes the running executable, which on
+/// Windows yields a Win32 extended-length path (`\\?\C:\...`). Inno Setup
+/// validates `/DIR` as a plain folder name and rejects the `?` and second `:`
+/// that prefix introduces, reporting "Folder names cannot include any of the
+/// following characters" and exiting with code 3 before installing anything.
+/// `/SUPPRESSMSGBOXES` hides that dialog, so the failure would otherwise
+/// surface only as a bare exit code.
+#[cfg(windows)]
+fn installer_dir_argument(root: &Path) -> OsString {
+    let mut argument = OsString::from("/DIR=");
+    argument.push(dunce::simplified(root));
+    argument
+}
+
 #[cfg(windows)]
 async fn install_update(layout: InstallLayout, latest_version: String) -> Result<UpdateOutcome> {
     let client = http_client::Client::new();
     let installer = download_windows_installer(&layout, &client, &latest_version).await?;
-    let mut install_dir = OsString::from("/DIR=");
-    install_dir.push(&layout.root);
+    let install_dir = installer_dir_argument(&layout.root);
 
     let output = command::r#async::Command::new(&installer.path)
         .args([
