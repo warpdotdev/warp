@@ -5,6 +5,7 @@ use super::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
     CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
+use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::blocklist::{InputConfig, InputType};
 use crate::terminal::CLIAgent;
 
@@ -491,6 +492,47 @@ fn non_codex_session_rich_after_rich_notification() {
 
     session.received_rich_notification = true;
     assert!(session.supports_rich_status());
+}
+
+#[test]
+fn terminal_chrome_status_hides_success_after_completion_badge_is_read() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::Success,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        received_rich_notification: true,
+    };
+    assert_eq!(session.terminal_chrome_status(), None);
+
+    session.status = CLIAgentSessionStatus::InProgress;
+    session.received_rich_notification = false;
+    assert_eq!(session.terminal_chrome_status(), None);
+
+    session.received_rich_notification = true;
+    assert_eq!(
+        session.terminal_chrome_status(),
+        Some(ConversationStatus::InProgress),
+    );
+
+    session.status = CLIAgentSessionStatus::Blocked {
+        message: Some("approval required".to_string()),
+    };
+    assert_eq!(
+        session.terminal_chrome_status(),
+        Some(ConversationStatus::Blocked {
+            blocked_action: "approval required".to_string(),
+        }),
+    );
+
+    session.received_rich_notification = false;
+    assert_eq!(session.terminal_chrome_status(), None);
 }
 
 /// Constructs a session with permission-scoped state already populated, as if

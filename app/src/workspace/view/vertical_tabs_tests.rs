@@ -26,6 +26,9 @@ use crate::context_chips::display_chip::GitLineChanges;
 use crate::pane_group::pane::IPaneType;
 use crate::pane_group::{PaneId, TerminalPaneId};
 use crate::safe_triangle::SafeTriangle;
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
+};
 use crate::terminal::CLIAgent;
 use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
 
@@ -1144,6 +1147,25 @@ fn sort_summary_primary_labels_moves_status_first_and_preserves_order() {
             },
         ]
     );
+}
+
+#[test]
+fn cli_agent_display_status_hides_success_badge_after_completion_is_read() {
+    let session = CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::Success,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        received_rich_notification: true,
+    };
+
+    assert_eq!(super::cli_agent_display_status(&session), None);
 }
 
 #[test]

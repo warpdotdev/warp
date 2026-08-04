@@ -10,6 +10,7 @@ use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::listener::CLIAgentSessionListener;
 use super::CLIAgent;
+use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::blocklist::InputConfig;
 
 /// Status of a tracked CLI agent session.
@@ -27,8 +28,7 @@ pub enum CLIAgentSessionStatus {
 }
 
 impl CLIAgentSessionStatus {
-    pub fn to_conversation_status(&self) -> crate::ai::agent::conversation::ConversationStatus {
-        use crate::ai::agent::conversation::ConversationStatus;
+    pub fn to_conversation_status(&self) -> ConversationStatus {
         match self {
             CLIAgentSessionStatus::InProgress => ConversationStatus::InProgress,
             CLIAgentSessionStatus::Success => ConversationStatus::Success,
@@ -166,6 +166,16 @@ impl CLIAgentSession {
     /// an actual rich notification arrives.
     pub fn supports_rich_status(&self) -> bool {
         self.received_rich_notification
+    }
+
+    /// Status shown in terminal chrome surfaces. A successful CLI turn is represented by the
+    /// unread notification badge first; once read, it should not leave a persistent checkmark.
+    pub fn terminal_chrome_status(&self) -> Option<ConversationStatus> {
+        match &self.status {
+            CLIAgentSessionStatus::Success => None,
+            _ if self.supports_rich_status() => Some(self.status.to_conversation_status()),
+            _ => None,
+        }
     }
 
     /// Clears state populated by `PermissionRequest`. Called whenever the
