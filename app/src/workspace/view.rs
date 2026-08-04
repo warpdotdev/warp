@@ -15149,7 +15149,7 @@ impl Workspace {
                 );
             }
             SettingsViewEvent::OpenMCPServerCollection => {
-                self.show_settings_with_section(Some(SettingsSection::MCPServers), ctx);
+                self.show_settings_with_section(Some(SettingsSection::AgentMCPServers), ctx);
 
                 send_telemetry_from_ctx!(
                     TelemetryEvent::MCPServerCollectionPaneOpened {
@@ -17621,7 +17621,7 @@ impl Workspace {
                 );
             }
             DrivePanelEvent::OpenMCPServerCollection => {
-                self.show_settings_with_section(Some(SettingsSection::MCPServers), ctx);
+                self.show_settings_with_section(Some(SettingsSection::AgentMCPServers), ctx);
 
                 send_telemetry_from_ctx!(
                     TelemetryEvent::MCPServerCollectionPaneOpened {
@@ -18637,7 +18637,7 @@ impl Workspace {
         autoinstall_gallery_title: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.show_settings_with_section(Some(SettingsSection::MCPServers), ctx);
+        self.show_settings_with_section(Some(SettingsSection::AgentMCPServers), ctx);
 
         self.settings_pane.update(ctx, |view, ctx| {
             view.open_mcp_servers_page(page, autoinstall_gallery_title, ctx);
@@ -25354,7 +25354,7 @@ impl TypedActionView for Workspace {
                 );
             }
             OpenMCPServerCollection => {
-                self.show_settings_with_section(Some(SettingsSection::MCPServers), ctx);
+                self.show_settings_with_section(Some(SettingsSection::AgentMCPServers), ctx);
 
                 send_telemetry_from_ctx!(
                     TelemetryEvent::MCPServerCollectionPaneOpened {

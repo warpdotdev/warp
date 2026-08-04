@@ -5,7 +5,6 @@ mod tests;
 
 #[cfg(feature = "local_fs")]
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use ::local_control::protocol::{
     Direction as ControlDirection, DirectionParams, FileOpenParams, PageQueryParams, QueryParams,
@@ -681,13 +680,20 @@ fn surface_settings_open(
     )
 }
 
+/// Resolves the `--page` argument of `surface.settings.open`.
+///
+/// The accepted vocabulary is [`SettingsSection::from_slug`], a stable
+/// identifier that is deliberately decoupled from the sidebar labels so that
+/// UI copy changes cannot break this CLI contract.
 fn settings_section(page: String) -> Result<SettingsSection, ControlError> {
-    let section = SettingsSection::from_str(&page).map_err(|_| {
+    let section = SettingsSection::from_slug(&page).ok_or_else(|| {
         ControlError::new(
             ErrorCode::InvalidParams,
             format!("surface.settings.open cannot resolve settings page {page:?}"),
         )
     })?;
+    // Warp Drive settings are reached through `surface.warp-drive.open`
+    // instead; this guard predates the page split and is intentional.
     if section == SettingsSection::WarpDrive {
         return Err(ControlError::new(
             ErrorCode::UnsupportedAction,

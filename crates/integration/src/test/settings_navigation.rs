@@ -217,10 +217,8 @@ pub fn test_settings_search_preserved_on_sidebar_click() -> Builder {
 /// page, so it has to highlight its row and expand its umbrella like any other
 /// subpage.
 ///
-/// Ignored until the settings page model is unified: the command palette entry
-/// `workspace:show_mcp_servers_settings_page` dispatches the internal backing
-/// key `SettingsSection::MCPServers` (see `app/src/workspace/mod.rs`), which
-/// has no sidebar row, so nothing highlights and the umbrella stays collapsed.
+/// Opening with the legacy `SettingsSection::MCPServers` key exercises the
+/// alias path that persisted sessions and older deeplinks still use.
 pub fn test_settings_agent_mcp_servers_renders_standalone_page() -> Builder {
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))

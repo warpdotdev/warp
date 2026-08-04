@@ -1,6 +1,4 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use about_page::AboutPageView;
 use agent_profiles_page::{AgentProfilesPageAction, AgentProfilesPageEvent, AgentProfilesPageView};
@@ -311,7 +309,6 @@ pub enum SettingsSection {
     About,
     #[default]
     Account,
-    MCPServers,
     BillingAndUsage,
     Appearance,
     Features,
@@ -323,18 +320,22 @@ pub enum SettingsSection {
     Teams,
     WarpDrive,
     Warpify,
-    /// Alias accepted from deeplinks and persisted sessions. Not a page key:
-    /// navigating here resolves to [`Self::WarpAgent`].
+    // ── Aliases ──
+    // Accepted from deeplinks, persisted sessions and the command palette.
+    // These are neither sidebar nav targets nor page keys;
+    // [`SettingsSection::resolve_alias`] maps each to the page it opens.
+    /// Alias resolving to [`Self::WarpAgent`].
     AI,
+    /// Alias resolving to [`Self::CodeIndexing`].
+    Code,
+    /// Alias resolving to [`Self::AgentMCPServers`].
+    MCPServers,
     // ── Agents umbrella subpages ──
     WarpAgent,
     AgentProfiles,
     AgentMCPServers,
     Knowledge,
     ThirdPartyCLIAgents,
-    /// Alias accepted from deeplinks and persisted sessions. Not a page key:
-    /// navigating here resolves to [`Self::CodeIndexing`].
-    Code,
     // ── Code umbrella subpages ──
     CodeIndexing,
     EditorAndCodeReview,
@@ -371,99 +372,103 @@ impl Display for SettingsSection {
 }
 
 impl SettingsSection {
-    /// Returns true if this section is a subpage under any umbrella.
-    pub fn is_subpage(&self) -> bool {
-        self.is_ai_subpage() || self.is_code_subpage() || self.is_cloud_platform_subpage()
-    }
-
-    /// Returns true if this section is a subpage under the "Agents" umbrella.
-    pub fn is_ai_subpage(&self) -> bool {
-        matches!(
-            self,
-            Self::WarpAgent
-                | Self::AgentProfiles
-                | Self::AgentMCPServers
-                | Self::Knowledge
-                | Self::ThirdPartyCLIAgents
-        )
-    }
-
-    /// Returns true if this section is a subpage under the "Code" umbrella.
-    pub fn is_code_subpage(&self) -> bool {
-        matches!(self, Self::CodeIndexing | Self::EditorAndCodeReview)
-    }
-
-    /// Returns true if this section is a subpage under the "Cloud platform" umbrella.
-    pub fn is_cloud_platform_subpage(&self) -> bool {
-        matches!(self, Self::CloudEnvironments | Self::OzCloudAPIKeys)
-    }
-
-    /// Maps subpage sections back to their parent page section for page lookup.
-    /// Non-subpage sections return themselves.
-    pub fn parent_page_section(&self) -> Self {
+    /// Resolves an alias variant to the section it actually navigates to.
+    /// Every other section resolves to itself.
+    ///
+    /// Aliases exist so that older persisted sessions, deeplinks and the
+    /// command palette can keep naming a page by a key that is not itself a
+    /// sidebar row. Resolving them at the two entry points into the view
+    /// ([`SettingsView::new`] and
+    /// [`SettingsView::set_and_refresh_current_page_internal`]) keeps every
+    /// other code path dealing only in real nav targets.
+    pub fn resolve_alias(self) -> Self {
         match self {
-            // The only remaining subpage whose backing page is keyed under a
-            // different section. Every other subpage is its own backing page.
-            Self::AgentMCPServers => Self::MCPServers,
-            other => *other,
+            Self::AI => Self::WarpAgent,
+            Self::Code => Self::CodeIndexing,
+            Self::MCPServers => Self::AgentMCPServers,
+            other => other,
         }
     }
 
-    /// The ordered list of AI subpage sections shown under the Agents umbrella.
-    pub fn ai_subpages() -> &'static [Self] {
-        &[
-            Self::WarpAgent,
-            Self::AgentProfiles,
-            Self::AgentMCPServers,
-            Self::Knowledge,
-            Self::ThirdPartyCLIAgents,
-        ]
+    /// Stable identifier for this section, used everywhere the section leaves
+    /// the process: the SQLite session-restore key and the
+    /// `surface.settings.open --page` warpctrl vocabulary.
+    ///
+    /// These strings are a compatibility contract — changing one breaks
+    /// session restore for existing users and a public CLI argument. They were
+    /// seeded from the [`Display`] labels that previously did this job, so no
+    /// migration is needed. [`Display`] is now purely the user-facing sidebar
+    /// label and is free to change without touching anything here.
+    ///
+    /// Deeplinks are deliberately *not* on this vocabulary: `warp://settings`
+    /// uses its own snake_cased allowlist (see
+    /// `settings_section_for_simple_subpage`).
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::About => "About",
+            Self::Account => "Account",
+            Self::BillingAndUsage => "Billing and usage",
+            Self::Appearance => "Appearance",
+            Self::Features => "Features",
+            Self::Keybindings => "Keyboard shortcuts",
+            Self::Privacy => "Privacy",
+            Self::Referrals => "Referrals",
+            Self::Scripting => "Scripting",
+            Self::SharedBlocks => "Shared blocks",
+            Self::Teams => "Teams",
+            Self::WarpDrive => "Warp Drive",
+            Self::Warpify => "Warpify",
+            Self::AI => "AI",
+            Self::Code => "Code",
+            Self::MCPServers => "MCP Servers",
+            Self::WarpAgent => "Warp Agent",
+            Self::AgentProfiles => "Profiles",
+            Self::AgentMCPServers => "MCP servers",
+            Self::Knowledge => "Knowledge",
+            Self::ThirdPartyCLIAgents => "Third party CLI agents",
+            Self::CodeIndexing => "Indexing and projects",
+            Self::EditorAndCodeReview => "Editor and Code Review",
+            Self::CloudEnvironments => "Environments",
+            Self::OzCloudAPIKeys => "Oz Cloud API Keys",
+        }
     }
 
-    /// The ordered list of Code subpage sections shown under the Code umbrella.
-    pub fn code_subpages() -> &'static [Self] {
-        &[Self::CodeIndexing, Self::EditorAndCodeReview]
-    }
-
-    /// The ordered list of Cloud platform subpage sections.
-    pub fn cloud_platform_subpages() -> &'static [Self] {
-        &[Self::CloudEnvironments, Self::OzCloudAPIKeys]
-    }
-}
-
-impl FromStr for SettingsSection {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "About" => Ok(Self::About),
-            "Account" => Ok(Self::Account),
-            "AI" => Ok(Self::AI),
-            "MCP Servers" => Ok(Self::MCPServers),
-            "Billing and usage" => Ok(Self::BillingAndUsage),
-            "Appearance" => Ok(Self::Appearance),
-            "Code" => Ok(Self::Code),
-            "Features" => Ok(Self::Features),
-            "Keyboard shortcuts" => Ok(Self::Keybindings),
-            "Privacy" => Ok(Self::Privacy),
-            "Referrals" => Ok(Self::Referrals),
-            "Scripting" => Ok(Self::Scripting),
-            "Shared blocks" => Ok(Self::SharedBlocks),
-            "Teams" => Ok(Self::Teams),
-            "Warpify" => Ok(Self::Warpify),
-            "WarpDrive" | "Warp Drive" => Ok(Self::WarpDrive),
+    /// Parses a [`Self::slug`], also accepting the legacy spellings that
+    /// persisted sessions and existing warpctrl callers may still be using.
+    ///
+    /// Alias sections are returned as-is rather than resolved, so callers keep
+    /// control over when [`Self::resolve_alias`] runs.
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        let section = match slug {
+            "About" => Self::About,
+            "Account" => Self::Account,
+            "Billing and usage" => Self::BillingAndUsage,
+            "Appearance" => Self::Appearance,
+            "Features" => Self::Features,
+            "Keyboard shortcuts" => Self::Keybindings,
+            "Privacy" => Self::Privacy,
+            "Referrals" => Self::Referrals,
+            "Scripting" => Self::Scripting,
+            "Shared blocks" => Self::SharedBlocks,
+            "Teams" => Self::Teams,
+            "Warp Drive" | "WarpDrive" => Self::WarpDrive,
+            "Warpify" => Self::Warpify,
+            "AI" => Self::AI,
+            "Code" => Self::Code,
+            "MCP Servers" => Self::MCPServers,
             // This page was called "Oz" at one point, keep for backward compatibility.
-            "Oz" | "Warp Agent" => Ok(Self::WarpAgent),
-            "Profiles" | "AgentProfiles" => Ok(Self::AgentProfiles),
-            "MCP servers" | "AgentMCPServers" => Ok(Self::AgentMCPServers),
-            "Knowledge" => Ok(Self::Knowledge),
-            "Third party CLI agents" | "ThirdPartyCLIAgents" => Ok(Self::ThirdPartyCLIAgents),
-            "Indexing and projects" | "CodeIndexing" => Ok(Self::CodeIndexing),
-            "Editor and Code Review" | "EditorAndCodeReview" => Ok(Self::EditorAndCodeReview),
-            "CloudEnvironments" => Ok(Self::CloudEnvironments),
-            "Oz Cloud API Keys" | "OzCloudAPIKeys" => Ok(Self::OzCloudAPIKeys),
-            _ => Err(()),
-        }
+            "Warp Agent" | "Oz" => Self::WarpAgent,
+            "Profiles" | "AgentProfiles" => Self::AgentProfiles,
+            "MCP servers" | "AgentMCPServers" => Self::AgentMCPServers,
+            "Knowledge" => Self::Knowledge,
+            "Third party CLI agents" | "ThirdPartyCLIAgents" => Self::ThirdPartyCLIAgents,
+            "Indexing and projects" | "CodeIndexing" => Self::CodeIndexing,
+            "Editor and Code Review" | "EditorAndCodeReview" => Self::EditorAndCodeReview,
+            "Environments" | "CloudEnvironments" => Self::CloudEnvironments,
+            "Oz Cloud API Keys" | "OzCloudAPIKeys" => Self::OzCloudAPIKeys,
+            _ => return None,
+        };
+        Some(section)
     }
 }
 
@@ -1195,12 +1200,9 @@ pub struct SettingsView {
     context_menu: ViewHandle<Menu<SettingsAction>>,
     context_menu_state: Option<Vector2F>,
     environments_page_handle: ViewHandle<EnvironmentsPageView>,
-    /// Sidebar navigation items (pages + umbrellas).
+    /// Sidebar navigation items (pages + umbrellas). This is the single source
+    /// of truth for which sections sit under which umbrella.
     nav_items: Vec<SettingsNavItem>,
-    /// Per-subpage search match results. No page multiplexes subpages any
-    /// more, so nothing populates this; sidebar visibility falls back to the
-    /// backing page's own filter entry. Removed in the type-model collapse.
-    subpage_filter: HashMap<SettingsSection, MatchData>,
     /// Current settings.toml error, mirrored from `Workspace` via
     /// [`set_settings_error_state`]. Used by the sidebar footer to decide
     /// whether to show the inline error alert.
@@ -1418,13 +1420,19 @@ impl SettingsView {
             SettingsPage::new(about_page_handle),
         ]);
 
-        // Build sidebar nav items. AI page is presented as an "Agents" umbrella
-        // with subpages; the actual AI SettingsPage is hidden from direct sidebar listing.
+        // Build sidebar nav items. Umbrellas group their subpages here and
+        // nowhere else, so this list is the only place membership is declared.
         let mut nav_items = vec![
             SettingsNavItem::Page(SettingsSection::Account),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
                 "Agents",
-                SettingsSection::ai_subpages().to_vec(),
+                vec![
+                    SettingsSection::WarpAgent,
+                    SettingsSection::AgentProfiles,
+                    SettingsSection::AgentMCPServers,
+                    SettingsSection::Knowledge,
+                    SettingsSection::ThirdPartyCLIAgents,
+                ],
             )),
             SettingsNavItem::Page(SettingsSection::BillingAndUsage),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
@@ -1466,25 +1474,20 @@ impl SettingsView {
             );
         }
 
-        // Resolve the initial page: map internal backing-page sections to their default subpage.
-        let initial_page = match page {
-            Some(SettingsSection::AI) => SettingsSection::WarpAgent,
-            Some(SettingsSection::Code) => SettingsSection::CodeIndexing,
+        // Resolve the initial page: alias sections map to the nav target they open.
+        let initial_page = match page.map(SettingsSection::resolve_alias) {
             Some(SettingsSection::Scripting) if !FeatureFlag::WarpControlCli.is_enabled() => {
                 SettingsSection::Account
             }
-            Some(section) if section.is_subpage() => section,
             other => other.unwrap_or_default(),
         };
 
         // Auto-expand the umbrella if the initial page is one of its subpages.
-        if initial_page.is_subpage() {
-            for item in &mut nav_items {
-                if let SettingsNavItem::Umbrella(umbrella) = item
-                    && umbrella.contains(initial_page)
-                {
-                    umbrella.expanded = true;
-                }
+        for item in &mut nav_items {
+            if let SettingsNavItem::Umbrella(umbrella) = item
+                && umbrella.contains(initial_page)
+            {
+                umbrella.expanded = true;
             }
         }
 
@@ -1503,7 +1506,6 @@ impl SettingsView {
             context_menu_state: Default::default(),
             environments_page_handle,
             nav_items,
-            subpage_filter: HashMap::new(),
             settings_file_error: None,
             settings_error_banner_dismissed: false,
             footer_mouse_states: SettingsFooterMouseStates::default(),
@@ -1597,52 +1599,41 @@ impl SettingsView {
                     );
                 }
 
-                // Auto-expand umbrellas that have matching subpages during search.
+                // Auto-expand umbrellas that have matching subpages during
+                // search. Collected first so the read of the page filter does
+                // not overlap the mutable borrow of `nav_items`.
                 if is_search_active {
-                    for item in &mut self.nav_items {
-                        if let SettingsNavItem::Umbrella(umbrella) = item {
-                            let has_match = umbrella.subpages.iter().any(|subpage_section| {
-                                self.subpage_filter
-                                    .get(subpage_section)
-                                    .map(|md| md.is_truthy())
-                                    .unwrap_or_else(|| {
-                                        // Subpages with their own backing page
-                                        // (e.g. AgentMCPServers, CloudEnvironments)
-                                        // fall back to pages_filter.
-                                        let backing = subpage_section.parent_page_section();
-                                        self.settings_pages
-                                            .iter()
-                                            .zip(self.pages_filter.iter())
-                                            .any(|(p, md)| p.section == backing && md.is_truthy())
-                                    })
-                            });
-                            if has_match {
-                                umbrella.expanded = true;
-                            }
+                    let matching_umbrellas: Vec<usize> = self
+                        .nav_items
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(nav_index, item)| match item {
+                            SettingsNavItem::Umbrella(umbrella) => umbrella
+                                .subpages
+                                .iter()
+                                .any(|subpage| self.section_passes_search_filter(*subpage))
+                                .then_some(nav_index),
+                            SettingsNavItem::Page(_) => None,
+                        })
+                        .collect();
+                    for nav_index in matching_umbrellas {
+                        if let Some(SettingsNavItem::Umbrella(umbrella)) =
+                            self.nav_items.get_mut(nav_index)
+                        {
+                            umbrella.expanded = true;
                         }
                     }
                 }
 
-                // Auto-select: if the current subpage/page is no longer visible,
-                // jump to the first visible subpage or page.
-                let current_still_visible = if is_search_active {
-                    // For subpages with per-subpage filter, check the subpage itself.
-                    if let Some(md) = self.subpage_filter.get(&self.current_settings_page) {
-                        md.is_truthy()
-                    } else {
-                        // Fall back to backing page filter.
-                        let current_backing = self.current_settings_page.parent_page_section();
-                        self.filtered_pages(ctx)
-                            .any(|(page, _)| page.section == current_backing)
-                    }
-                } else {
-                    let current_backing = self.current_settings_page.parent_page_section();
-                    self.filtered_pages(ctx)
-                        .any(|(page, _)| page.section == current_backing)
-                };
+                // Auto-select: if the current page is no longer visible, jump
+                // to the first visible subpage or page.
+                let current_still_visible = self
+                    .filtered_pages(ctx)
+                    .any(|(page, _)| page.section == self.current_settings_page);
 
                 if !current_still_visible {
-                    // Find the first visible section: check subpages first, then pages.
+                    // While searching, walk the sidebar order so a matching
+                    // subpage is preferred over a later top-level page.
                     let first_visible = if is_search_active {
                         self.nav_items
                             .iter()
@@ -1650,17 +1641,7 @@ impl SettingsView {
                                 SettingsNavItem::Page(section) => vec![*section],
                                 SettingsNavItem::Umbrella(umbrella) => umbrella.subpages.clone(),
                             })
-                            .find(|section| {
-                                if let Some(md) = self.subpage_filter.get(section) {
-                                    md.is_truthy()
-                                } else {
-                                    let backing = section.parent_page_section();
-                                    self.settings_pages
-                                        .iter()
-                                        .zip(self.pages_filter.iter())
-                                        .any(|(p, md)| p.section == backing && md.is_truthy())
-                                }
-                            })
+                            .find(|section| self.section_passes_search_filter(*section))
                     } else {
                         self.filtered_pages(ctx)
                             .next()
@@ -2057,11 +2038,9 @@ impl SettingsView {
     }
 
     fn current_settings_page(&self) -> Option<&SettingsPage> {
-        // For AI subpages, the backing SettingsPage has section == AI.
-        let lookup_section = self.current_settings_page.parent_page_section();
         self.settings_pages
             .iter()
-            .find(|page| page.section == lookup_section)
+            .find(|page| page.section == self.current_settings_page)
     }
 
     fn settings_page(&self, section: SettingsSection) -> Option<&SettingsPage> {
@@ -2082,17 +2061,12 @@ impl SettingsView {
         allow_steal_focus: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        // Map internal backing-page sections to their default subpage.
-        // External callers should use subpage variants directly.
-        let section = match section {
-            SettingsSection::AI => SettingsSection::WarpAgent,
-            SettingsSection::Code => SettingsSection::CodeIndexing,
-            other => other,
-        };
+        // Alias sections (e.g. the persisted `MCPServers` backing key) map to
+        // the nav target they open. External callers may use either spelling.
+        let section = section.resolve_alias();
 
-        // For AI subpages, the backing page is the AI page. Check it exists.
-        let page_section = section.parent_page_section();
-        if self.settings_page(page_section).is_none() {
+        // Every nav target owns its backing page. Check it exists.
+        if self.settings_page(section).is_none() {
             return;
         }
         let previous_section = self.current_settings_page;
@@ -2120,13 +2094,11 @@ impl SettingsView {
 
         // Every subpage renders its own backing page directly, so navigating
         // to one only needs to auto-expand the umbrella containing it.
-        if section.is_subpage() {
-            for item in &mut self.nav_items {
-                if let SettingsNavItem::Umbrella(umbrella) = item
-                    && umbrella.contains(section)
-                {
-                    umbrella.expanded = true;
-                }
+        for item in &mut self.nav_items {
+            if let SettingsNavItem::Umbrella(umbrella) = item
+                && umbrella.contains(section)
+            {
+                umbrella.expanded = true;
             }
         }
 
@@ -2211,9 +2183,10 @@ impl SettingsView {
         autoinstall_gallery_title: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
-        // Navigate to the AgentMCPServers subpage (under the Agents umbrella).
-        self.set_and_refresh_current_page(SettingsSection::AgentMCPServers, ctx);
-        if let Some(mcp_page) = self.settings_page(SettingsSection::MCPServers)
+        // Callers reach this through `Workspace::open_mcp_servers_page`, which
+        // has already navigated to the page; only the sub-view selection is
+        // left to do.
+        if let Some(mcp_page) = self.settings_page(SettingsSection::AgentMCPServers)
             && let SettingsPageViewHandle::MCPServers(view) = &mcp_page.view_handle
         {
             view.update(ctx, |view, ctx| {
@@ -2274,15 +2247,10 @@ impl SettingsView {
     /// when rendering sidebar items so arrow-key navigation stays in sync
     /// with what the user can actually see.
     fn section_passes_search_filter(&self, section: SettingsSection) -> bool {
-        if let Some(md) = self.subpage_filter.get(&section) {
-            md.is_truthy()
-        } else {
-            let backing = section.parent_page_section();
-            self.settings_pages
-                .iter()
-                .zip(self.pages_filter.iter())
-                .any(|(p, md)| p.section == backing && md.is_truthy())
-        }
+        self.settings_pages
+            .iter()
+            .zip(self.pages_filter.iter())
+            .any(|(page, match_data)| page.section == section && match_data.is_truthy())
     }
 
     fn cycle_pages(&mut self, direction: CycleDirection, ctx: &mut ViewContext<Self>) {
@@ -2514,15 +2482,12 @@ impl View for SettingsView {
         let settings_pages = self.filtered_pages(app).collect_vec();
         let appearance = Appearance::as_ref(app);
 
-        // For AI subpages, the backing SettingsPage has a different section
-        // (e.g. Oz -> AI, AgentMCPServers -> MCPServers).
-        let content_page_section = self.current_settings_page.parent_page_section();
         let (page, current_page_handle) = if settings_pages.is_empty() {
             (self.render_search_zero_state(appearance), None)
         } else {
             match settings_pages
                 .iter()
-                .find(|(page, _)| page.section == content_page_section)
+                .find(|(page, _)| page.section == self.current_settings_page)
             {
                 None => (Empty::new().finish(), None),
                 Some((page, _)) => (page.view_handle.child_view(), Some(&page.view_handle)),
@@ -2562,14 +2527,10 @@ impl View for SettingsView {
                     }
                 }
                 SettingsNavItem::Umbrella(umbrella) => {
-                    // Check which subpages are visible. Use per-subpage filter
-                    // if available (search active), otherwise fall back to backing page.
                     let is_subpage_visible = |section: &SettingsSection| -> bool {
-                        if let Some(md) = self.subpage_filter.get(section) {
-                            return md.is_truthy();
-                        }
-                        let backing = section.parent_page_section();
-                        settings_pages.iter().any(|(p, _)| p.section == backing)
+                        settings_pages
+                            .iter()
+                            .any(|(page, _)| page.section == *section)
                     };
 
                     let any_subpage_visible = umbrella.subpages.iter().any(is_subpage_visible);
@@ -2601,19 +2562,11 @@ impl View for SettingsView {
                     if umbrella.expanded {
                         for (sub_idx, subpage_section) in umbrella.subpages.iter().enumerate() {
                             let subpage_section = *subpage_section;
-                            // Use per-subpage filter if available, otherwise backing page.
-                            let match_data = self
-                                .subpage_filter
-                                .get(&subpage_section)
-                                .copied()
-                                .unwrap_or_else(|| {
-                                    let backing = subpage_section.parent_page_section();
-                                    settings_pages
-                                        .iter()
-                                        .find(|(p, _)| p.section == backing)
-                                        .map(|(_, md)| *md)
-                                        .unwrap_or(MatchData::Uncounted(false))
-                                });
+                            let match_data = settings_pages
+                                .iter()
+                                .find(|(page, _)| page.section == subpage_section)
+                                .map(|(_, match_data)| *match_data)
+                                .unwrap_or(MatchData::Uncounted(false));
 
                             if !match_data.is_truthy() {
                                 continue;
@@ -2773,7 +2726,7 @@ impl TypedActionView for SettingsView {
             SettingsAction::SelectAndRefresh(section) => {
                 self.set_and_refresh_current_page_internal(*section, false, true, ctx);
 
-                if *section == SettingsSection::MCPServers {
+                if *section == SettingsSection::AgentMCPServers {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::MCPServerCollectionPaneOpened {
                             entrypoint: MCPServerCollectionPaneEntrypoint::MCPSettingsTab,

@@ -539,7 +539,9 @@ impl TypedActionView for MCPServersSettingsPageView {
 
 impl SettingsPageMeta for MCPServersSettingsPageView {
     fn section() -> SettingsSection {
-        SettingsSection::MCPServers
+        // Keyed on the sidebar nav target rather than the legacy `MCPServers`
+        // alias, so nav targets and backing pages stay one-to-one.
+        SettingsSection::AgentMCPServers
     }
 
     fn should_render(&self, _ctx: &AppContext) -> bool {

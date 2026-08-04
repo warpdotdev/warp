@@ -1674,6 +1674,11 @@ fn dispatch_action_in_new_or_existing_window<T: 'static>(
     }
 }
 
+/// Maps a `warp://settings/<subpage>` path segment to the section it opens.
+///
+/// These URL slugs are their own stable vocabulary, deliberately separate from
+/// [`SettingsSection::slug`]: they are lowercase, snake_cased and only cover
+/// the allowlisted subset that is safe to expose in a public URL.
 fn settings_section_for_simple_subpage(subpage: &str) -> Option<SettingsSection> {
     match subpage {
         "billing_and_usage" => Some(SettingsSection::BillingAndUsage),
