@@ -383,9 +383,9 @@ fn test_markdown_toggle_is_noop_for_non_markdown_pane() {
         init_app(&mut app);
         let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
 
-        // A static pane has no backing file path, so `is_markdown_file()` is false.
+        // A static pane has no backing file path, so `shows_markdown_toggle()` is false.
         // The toggle keybinding is registered view-wide, so firing it here must not
-        // switch display modes (only markdown panes expose the rendered/raw toggle).
+        // switch display modes (only panes that expose the rendered/raw toggle do).
         handle.update(&mut app, |file_notebook, ctx| {
             file_notebook.open_static("Plain pane", "just some text", ctx);
             file_notebook.handle_action(
@@ -442,6 +442,73 @@ fn test_markdown_toggle_switches_markdown_pane_to_raw() {
             mode,
             MarkdownDisplayMode::Raw,
             "toggling a markdown pane should switch it to raw mode"
+        );
+    });
+}
+
+#[test]
+fn test_markdown_toggle_switches_jupyter_notebook_pane_to_raw() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let _flag = FeatureFlag::JupyterNotebookRendering.override_enabled(true);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("analysis.ipynb");
+        std::fs::write(
+            &path,
+            r##"{
+                "nbformat": 4,
+                "nbformat_minor": 5,
+                "metadata": {"language_info": {"name": "python"}},
+                "cells": [
+                    {"cell_type": "markdown", "source": ["# Notebook heading"]}
+                ]
+            }"##,
+        )
+        .unwrap();
+
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+        let session = Arc::new(Session::test());
+        handle
+            .update(&mut app, |file_notebook, ctx| {
+                file_notebook.open_local(&path, Some(session), ctx);
+
+                let file_id = file_notebook
+                    .file_id
+                    .expect("File should be opened and have a file_id");
+
+                let future_handle = FileModel::as_ref(ctx)
+                    .get_future_handle(file_id)
+                    .expect("Loading future should be present");
+
+                ctx.await_spawned_future(future_handle.future_id())
+            })
+            .await;
+
+        // A rendered .ipynb pane is not a markdown file, but it does expose the
+        // rendered/raw toggle (PRODUCT invariant 14), so the shared action must keep
+        // switching it to raw — this is the existing header segmented control's path,
+        // not just the new keybinding.
+        handle.update(&mut app, |file_notebook, ctx| {
+            assert!(
+                !file_notebook.is_markdown_file(),
+                "an .ipynb pane is not a markdown file"
+            );
+            assert!(
+                file_notebook.shows_markdown_toggle(),
+                "a rendered notebook should expose the Rendered/Raw toggle"
+            );
+            file_notebook.handle_action(
+                &FileNotebookAction::ToggleMarkdownDisplayMode(MarkdownDisplayMode::Raw),
+                ctx,
+            );
+        });
+
+        let mode = handle.read(&app, |view, _ctx| view.markdown_display_mode);
+        assert_eq!(
+            mode,
+            MarkdownDisplayMode::Raw,
+            "toggling a notebook pane should switch it to raw mode"
         );
     });
 }

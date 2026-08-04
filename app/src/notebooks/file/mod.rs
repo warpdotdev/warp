@@ -1091,10 +1091,12 @@ impl TypedActionView for FileNotebookView {
                 self.context_menu.handle_action(action, ctx);
             }
             FileNotebookAction::ToggleMarkdownDisplayMode(mode) => {
-                // The rendered/raw toggle only applies to markdown files (its segmented
-                // control is only shown for them). The keybinding is registered view-wide,
-                // so ignore it on non-markdown panes.
-                if !self.is_markdown_file() {
+                // The keybinding is registered view-wide, but only panes that actually
+                // expose the rendered/raw toggle have something to switch to. Reuse the
+                // exact predicate that gates the header segmented control (markdown, plus
+                // Jupyter notebooks when their feature flag is on) so this action behaves
+                // identically for every entry point that dispatches it.
+                if !self.shows_markdown_toggle() {
                     return;
                 }
                 self.markdown_display_mode = *mode;
