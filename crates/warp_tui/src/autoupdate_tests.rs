@@ -9,18 +9,19 @@ use command::blocking::Command;
 use instant::Instant;
 use warp_core::channel::Channel;
 
-#[cfg(windows)]
-use super::PREVIOUS_POINTER_NAME;
 use super::{
-    CURRENT_POINTER_NAME, InstallLayout, VERSION_LEASES_DIR_NAME, VersionDirState, VersionLease,
-    create_unique_staging_dir_with, download_endpoint, is_complete_version_dir,
-    is_safe_version_component, latest_version_for, prune_old_versions, version_dir_state,
+    CURRENT_POINTER_NAME, InstallLayout, TuiAutoupdateStatus, UpdateOutcome,
+    VERSION_LEASES_DIR_NAME, VersionDirState, VersionLease, create_unique_staging_dir_with,
+    download_endpoint, is_complete_version_dir, is_safe_version_component, latest_version_for,
+    prune_old_versions, settled_status, version_dir_state,
 };
 #[cfg(unix)]
 use super::{
     InstallLock, LOCK_FILE_NAME, LOCK_OWNER_FILE_NAME, StagedUpdate, finalize_staged_version,
     install_update, point_current_at,
 };
+#[cfg(windows)]
+use super::{PREVIOUS_POINTER_NAME, installer_dir_argument};
 
 const BINARY_NAME: &str = "warp-tui-dev";
 const HELPER_MODE_ENV: &str = "WARP_TUI_AUTOUPDATE_HELPER_MODE";
@@ -34,6 +35,26 @@ fn temp_root(name: &str) -> tempfile::TempDir {
         .prefix(&format!("warp-tui-autoupdate-{name}-"))
         .tempdir()
         .unwrap()
+}
+
+#[test]
+fn failed_check_replaces_stale_up_to_date_status() {
+    let result: anyhow::Result<UpdateOutcome> = Err(anyhow::anyhow!("dns lookup failed"));
+
+    assert_eq!(
+        settled_status(&result, TuiAutoupdateStatus::UpToDate),
+        TuiAutoupdateStatus::Failed
+    );
+}
+
+#[test]
+fn failed_check_preserves_pending_restart_status() {
+    let result: anyhow::Result<UpdateOutcome> = Err(anyhow::anyhow!("dns lookup failed"));
+
+    assert_eq!(
+        settled_status(&result, TuiAutoupdateStatus::PendingRestart),
+        TuiAutoupdateStatus::PendingRestart
+    );
 }
 
 #[test]
@@ -144,6 +165,29 @@ fn detects_managed_install_layout() {
         Path::new("/home/user/.warp/tui/versions/v0.2026.01.01.00.00.dev_00")
     );
     assert_eq!(layout.binary_name, BINARY_NAME);
+}
+
+/// `Path::canonicalize` hands back `\\?\C:\...` on Windows. Passing that
+/// through to Inno Setup makes it reject `/DIR` and exit with code 3, so the
+/// prefix has to be stripped before the installer sees it.
+#[cfg(windows)]
+#[test]
+fn installer_dir_argument_strips_verbatim_prefix() {
+    assert_eq!(
+        installer_dir_argument(Path::new(r"\\?\C:\Users\dev\AppData\Local\Warp\tui-dev"))
+            .to_string_lossy(),
+        r"/DIR=C:\Users\dev\AppData\Local\Warp\tui-dev"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn installer_dir_argument_preserves_plain_paths() {
+    assert_eq!(
+        installer_dir_argument(Path::new(r"C:\Users\dev\AppData\Local\Warp\tui-dev"))
+            .to_string_lossy(),
+        r"/DIR=C:\Users\dev\AppData\Local\Warp\tui-dev"
+    );
 }
 
 #[test]

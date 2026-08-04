@@ -79,6 +79,29 @@ type AIConversationFormat {
   hasTaskList: Boolean!
 }
 
+type AICreditAvailability {
+  available: Boolean!
+  creditSource: AICreditAvailabilitySource
+  denialReason: AICreditAvailabilityDenialReason!
+}
+
+enum AICreditAvailabilityDenialReason {
+  DELINQUENT
+  ENTERPRISE_PER_USER_SPEND_LIMIT_HIT
+  ENTERPRISE_TEAM_SPEND_LIMIT_HIT
+  ENTERPRISE_WORKSPACE_SPEND_LIMIT_HIT
+  NONE
+  OUT_OF_CREDITS
+}
+
+enum AICreditAvailabilitySource {
+  AMBIENT_BONUS_GRANT
+  BASE_LIMIT
+  BONUS_GRANT
+  OVERAGE
+  PAYG
+}
+
 enum AICreditsUsageAndCostSubjectType {
   SERVICE_ACCOUNT
   TEAM
@@ -855,6 +878,8 @@ type ConversationUsageMetadata {
 
   """The total number of platform credits spent so far in the conversation."""
   platformCreditsSpent: Float!
+  """The cumulative provider cost in US cents, when available."""
+  totalProviderCostInCents: Float
   summarized: Boolean!
 
   """
@@ -2403,6 +2428,10 @@ type MultiAdminPolicy {
   enabled: Boolean!
 }
 
+type NativeWorkspacesPolicy {
+  enabled: Boolean!
+}
+
 scalar NodeHash
 
 type Notebook {
@@ -3820,6 +3849,7 @@ type Tier {
   managedByokByoePolicy: ManagedByokByoePolicy
   multiAdminPolicy: MultiAdminPolicy
   name: String!
+  nativeWorkspacesPolicy: NativeWorkspacesPolicy
   pricing: TierPricing
   purchaseAddOnCreditsPolicy: PurchaseAddOnCreditsPolicy
   sessionSharingPolicy: SessionSharingPolicy
@@ -4343,6 +4373,7 @@ The User type is the primary way of interacting with our graph.
 Nearly all data is scoped to the currently logged-in user.
 """
 type User {
+  aiCreditAvailability: AICreditAvailability!
   anonymousUserInfo: AnonymousUserInfo
   availableHarnesses: AvailableHarnesses!
   billingMetadata: BillingMetadata

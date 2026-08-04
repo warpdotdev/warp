@@ -1,39 +1,27 @@
 use super::*;
 
-#[cfg(unix)]
-#[test]
-fn writes_background_query_and_da1_sentinel() {
-    let mut output = Vec::new();
-    write_terminal_background_query(&mut output).unwrap();
-    assert_eq!(output, b"\x1b]11;?\x07\x1b[c");
-}
-
 #[test]
 fn parses_bel_terminated_replies() {
-    let replies = b"\x1b]11;rgb:0000/0000/0000\x07\x1b[?6c";
-    assert_eq!(parse_reply(replies), Some(ProbedRgb { r: 0, g: 0, b: 0 }));
-}
-
-#[test]
-fn complete_background_reply_does_not_require_da1() {
-    let replies = b"\x1b]11;rgb:eeee/eeee/eeee\x07";
+    let replies = b"\x1b]10;rgb:ffff/ffff/ffff\x07\x1b]11;rgb:0000/0000/0000\x07\x1b[?6c";
+    let colors = parse_replies(replies);
     assert_eq!(
-        parse_complete_reply(replies),
+        colors.fg,
         Some(ProbedRgb {
-            r: 238,
-            g: 238,
-            b: 238,
+            r: 255,
+            g: 255,
+            b: 255
         })
     );
-    assert!(!contains_da1_reply(replies));
-    assert_eq!(parse_complete_reply(b"\x1b]11;rgb:eeee/eeee/eeee"), None);
+    assert_eq!(colors.bg, Some(ProbedRgb { r: 0, g: 0, b: 0 }));
 }
 
 #[test]
 fn parses_st_terminated_replies() {
     let replies = b"\x1b]11;rgb:fdfd/e3e3/d2d2\x1b\\";
+    let colors = parse_replies(replies);
+    assert_eq!(colors.fg, None);
     assert_eq!(
-        parse_reply(replies),
+        colors.bg,
         Some(ProbedRgb {
             r: 253,
             g: 227,
@@ -46,7 +34,7 @@ fn parses_st_terminated_replies() {
 fn parses_two_digit_components() {
     let replies = b"\x1b]11;rgb:28/2a/36\x07";
     assert_eq!(
-        parse_reply(replies),
+        parse_replies(replies).bg,
         Some(ProbedRgb {
             r: 40,
             g: 42,
@@ -59,7 +47,7 @@ fn parses_two_digit_components() {
 fn parses_rgba_payload_ignoring_alpha() {
     let replies = b"\x1b]11;rgba:ffff/0000/8080/cccc\x07";
     assert_eq!(
-        parse_reply(replies),
+        parse_replies(replies).bg,
         Some(ProbedRgb {
             r: 255,
             g: 0,
@@ -82,10 +70,10 @@ fn scales_single_and_mixed_width_components() {
 
 #[test]
 fn ignores_malformed_payloads() {
-    assert_eq!(parse_reply(b"\x1b]11;?\x07"), None);
-    assert_eq!(parse_reply(b"\x1b]11;rgb:ff/ff\x07"), None);
-    assert_eq!(parse_reply(b"\x1b]11;#282a36\x07"), None);
-    assert_eq!(parse_reply(b""), None);
+    assert_eq!(parse_replies(b"\x1b]11;?\x07").bg, None);
+    assert_eq!(parse_replies(b"\x1b]11;rgb:ff/ff\x07").bg, None);
+    assert_eq!(parse_replies(b"\x1b]11;#282a36\x07").bg, None);
+    assert_eq!(parse_replies(b"").bg, None);
 }
 
 #[test]
@@ -108,19 +96,25 @@ fn classifies_luminance_with_rec601_luma() {
 
 #[test]
 fn background_luminance_prefers_probed_background() {
-    let light = Some(ProbedRgb {
-        r: 253,
-        g: 246,
-        b: 227,
-    });
-    assert_eq!(background_luminance(light), BackgroundLuminance::Light);
+    let light = ProbedTerminalColors {
+        fg: None,
+        bg: Some(ProbedRgb {
+            r: 253,
+            g: 246,
+            b: 227,
+        }),
+    };
+    assert_eq!(light.background_luminance(), BackgroundLuminance::Light);
 
-    let dark = Some(ProbedRgb {
-        r: 40,
-        g: 42,
-        b: 54,
-    });
-    assert_eq!(background_luminance(dark), BackgroundLuminance::Dark);
+    let dark = ProbedTerminalColors {
+        fg: None,
+        bg: Some(ProbedRgb {
+            r: 40,
+            g: 42,
+            b: 54,
+        }),
+    };
+    assert_eq!(dark.background_luminance(), BackgroundLuminance::Dark);
 }
 
 #[test]

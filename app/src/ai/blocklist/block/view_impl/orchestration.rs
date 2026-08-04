@@ -2,12 +2,15 @@
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
 use warp_errors::report_error;
 use warpui::elements::{
-    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, FormattedTextElement,
-    Hoverable, ParentElement, Radius, Shrinkable, Text,
+    ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex,
+    FormattedTextElement, Hoverable, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, Shrinkable, Stack, Text,
 };
 use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
 use warpui::{AppContext, Element, SingletonEntity};
 
 use super::WithContentItemSpacing;
@@ -21,7 +24,9 @@ use crate::ai::agent::{
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::action_model::AIActionStatus;
 use crate::ai::blocklist::agent_view::orchestration_avatar::OrchestrationAvatar;
-use crate::ai::blocklist::agent_view::orchestration_conversation_links::dispatch_focus_or_open_child_agent_pane;
+use crate::ai::blocklist::agent_view::orchestration_conversation_links::{
+    dispatch_focus_or_open_child_agent_pane, is_conversation_open_in_other_visible_view,
+};
 use crate::ai::blocklist::block::model::AIBlockModelHelper;
 use crate::ai::blocklist::block::{
     AIBlockAction, CollapsibleExpansionState, received_message_collapsible_id,
@@ -160,6 +165,20 @@ fn transcript_metadata(recipients: &[OrchestrationParticipant], subject: &str) -
     }
 }
 
+/// Hover tooltip copy for the clickable child-agent avatar in an
+/// orchestration transcript row. The avatar is a bare letter disc, so
+/// without this the click affordance (open/focus the child's pane) is
+/// undiscoverable. Wording mirrors the pill bar's overflow-menu copy
+/// ("Open in new pane" / "Focus pane") so the same navigation reads the
+/// same way everywhere.
+fn transcript_avatar_tooltip(display_name: &str, is_open_in_other_pane: bool) -> String {
+    if is_open_in_other_pane {
+        format!("Focus {display_name}'s pane")
+    } else {
+        format!("Open {display_name} in a new pane")
+    }
+}
+
 struct TranscriptRowData<'a> {
     participant: &'a OrchestrationParticipant,
     recipients: &'a [OrchestrationParticipant],
@@ -293,17 +312,40 @@ fn render_transcript_row(
         // open a new pane.
         let mouse_state = mouse_state.clone();
         let self_terminal_view_id = props.terminal_view_id;
-        Hoverable::new(mouse_state, move |_| avatar)
-            .with_cursor(Cursor::PointingHand)
-            .on_click(move |ctx, app, _| {
-                dispatch_focus_or_open_child_agent_pane(
-                    conversation_id,
-                    self_terminal_view_id,
-                    ctx,
-                    app,
+        let tooltip_label = transcript_avatar_tooltip(
+            &data.participant.display_name,
+            is_conversation_open_in_other_visible_view(conversation_id, self_terminal_view_id, app),
+        );
+        let ui_builder = appearance.ui_builder().clone();
+        Hoverable::new(mouse_state, move |state| {
+            // Tooltip overlay, positioned above the avatar on hover. Same
+            // pattern as `render_force_refresh_inline` in `common.rs`; the
+            // overlay layer keeps it from being clipped by the scrollable
+            // transcript content.
+            let mut stack = Stack::new().with_child(avatar);
+            if state.is_hovered() {
+                stack.add_positioned_overlay_child(
+                    ui_builder.tool_tip(tooltip_label).build().finish(),
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., -4.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::TopLeft,
+                        ChildAnchor::BottomLeft,
+                    ),
                 );
-            })
-            .finish()
+            }
+            stack.finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, app, _| {
+            dispatch_focus_or_open_child_agent_pane(
+                conversation_id,
+                self_terminal_view_id,
+                ctx,
+                app,
+            );
+        })
+        .finish()
     } else {
         avatar
     };

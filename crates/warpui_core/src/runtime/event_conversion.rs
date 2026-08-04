@@ -21,11 +21,9 @@ pub fn crossterm_event_to_tui_event(event: CrosstermEvent) -> Option<TuiEvent> {
         CrosstermEvent::Key(key_event) => key_event_to_tui_event(key_event),
         CrosstermEvent::Mouse(mouse_event) => TuiEvent::try_from(mouse_event).ok(),
         CrosstermEvent::Paste(text) => Some(TuiEvent::Paste { text }),
-        // TODO: FocusGained and FocusLost have no TUI equivalents yet.
-        // If these are needed in the future, consider adding matching TuiEvent variants.
-        CrosstermEvent::FocusGained | CrosstermEvent::FocusLost | CrosstermEvent::Resize(_, _) => {
-            None
-        }
+        CrosstermEvent::FocusGained => Some(TuiEvent::FocusGained),
+        CrosstermEvent::FocusLost => Some(TuiEvent::FocusLost),
+        CrosstermEvent::Resize(_, _) => None,
     }
 }
 

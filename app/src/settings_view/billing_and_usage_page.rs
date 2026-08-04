@@ -836,8 +836,11 @@ impl TypedActionView for BillingAndUsagePageView {
                     user_workspaces.generate_stripe_billing_portal_link(*team_uid, ctx);
                 });
             }
-            BillingAndUsagePageAction::OpenAdminPanel { team_uid } => {
+            BillingAndUsagePageAction::OpenTeamAdminPanel { team_uid } => {
                 AdminActions::open_admin_panel(*team_uid, ctx);
+            }
+            BillingAndUsagePageAction::OpenWorkspaceAdminPanel => {
+                AdminActions::open_workspace_admin_panel(ctx);
             }
             BillingAndUsagePageAction::ContactSupport => {
                 AdminActions::contact_support(ctx);
@@ -1071,9 +1074,10 @@ pub enum BillingAndUsagePageAction {
     GenerateStripeBillingPortalLink {
         team_uid: ServerId,
     },
-    OpenAdminPanel {
+    OpenTeamAdminPanel {
         team_uid: ServerId,
     },
+    OpenWorkspaceAdminPanel,
     ContactSupport,
     SignupAnonymousUser,
     AttemptLoginGatedUpgrade,
@@ -3594,7 +3598,7 @@ impl BillingAndUsagePageView {
                 )
                 .build()
                 .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(BillingAndUsagePageAction::OpenAdminPanel {
+                    ctx.dispatch_typed_action(BillingAndUsagePageAction::OpenTeamAdminPanel {
                         team_uid,
                     });
                 })

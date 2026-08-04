@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::FairMutex;
 use warp::tui_export::{
@@ -17,9 +18,10 @@ use warpui::{
     AddWindowOptions, App, AppContext, Entity, EntityId, EntityIdSet, TuiView, TypedActionView,
     ViewContext, ViewHandle, WindowInvalidation,
 };
+use warpui_core::elements::animation::AnimationClock;
 use warpui_core::elements::tui::{
-    TuiClipped, TuiElement, TuiRect, TuiViewportPosition, TuiViewportVerticalAlignment,
-    TuiViewportedList, TuiViewportedListState,
+    TuiClipped, TuiElement, TuiRect, TuiSize, TuiStyle, TuiText, TuiViewportPosition,
+    TuiViewportVerticalAlignment, TuiViewportedList, TuiViewportedListState,
 };
 use warpui_core::presenter::tui::TuiPresenter;
 
@@ -27,9 +29,162 @@ use crate::agent_block::TuiAIBlock;
 use crate::terminal_block::{TerminalBlockElement, block_content_rows};
 use crate::test_fixtures::add_test_action_model_and_events;
 use crate::tui_block_list_viewport_source::{
-    AgentBlockRegistry, CLISubagentBlockRegistry, HandoffBlockRegistry, TuiBlockListViewportSource,
+    AgentBlockRegistry, CLISubagentBlockRegistry, HandoffBlockRegistry, TranscriptNoticeRegistry,
+    TuiBlockListViewportSource,
 };
 use crate::tui_builder::TuiUiBuilder;
+use crate::zero_state::build_zero_state_layout;
+use crate::zero_state_animation::{
+    LogoProjector, WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationElement,
+    ZeroStateInteractionHandle, ZeroStateStarfieldElement, benchmark_logo_projection,
+};
+
+const ZERO_STATE_COPY_COLS: u16 = 48;
+const ZERO_STATE_ANIMATION_COLS: u16 = 32;
+
+#[derive(Clone, Copy, Debug)]
+pub enum ZeroStateBenchmarkShape {
+    BuiltIn,
+    Ascii,
+}
+
+impl ZeroStateBenchmarkShape {
+    fn config(self) -> ZeroStateAnimationConfig {
+        match self {
+            Self::BuiltIn => ZeroStateAnimationConfig::default(),
+            Self::Ascii => ZeroStateAnimationConfig::benchmark_ascii(),
+        }
+    }
+}
+
+pub struct ZeroStateBenchmark {
+    app: App,
+    root: ViewHandle<BenchmarkZeroStateView>,
+    presenter: TuiPresenter,
+    area: TuiRect,
+}
+
+impl ZeroStateBenchmark {
+    pub fn new(shape: ZeroStateBenchmarkShape, width: u16, height: u16) -> Self {
+        let config = Arc::new(shape.config());
+        App::test((), move |mut app| async move {
+            let (_, root) = app.update(|ctx| {
+                ctx.add_tui_window(
+                    AddWindowOptions {
+                        window_style: WindowStyle::NotStealFocus,
+                        ..Default::default()
+                    },
+                    move |_| BenchmarkZeroStateView {
+                        clock: AnimationClock::starting_at(Duration::ZERO),
+                        config,
+                        interaction: ZeroStateInteractionHandle::default(),
+                    },
+                )
+            });
+            let mut benchmark = Self {
+                app,
+                root,
+                presenter: TuiPresenter::new(),
+                area: TuiRect::new(0, 0, width, height),
+            };
+            benchmark.invalidate();
+            benchmark.present();
+            benchmark
+        })
+    }
+
+    pub fn present(&mut self) -> u64 {
+        let frame = self
+            .app
+            .update(|ctx| self.presenter.present(ctx, &self.root, self.area));
+        frame.buffer.content.iter().fold(0u64, |checksum, cell| {
+            checksum.wrapping_add(cell.symbol().len() as u64)
+        })
+    }
+
+    fn invalidate(&mut self) {
+        let invalidation = WindowInvalidation {
+            updated: EntityIdSet::from_iter([self.root.id()]),
+            ..Default::default()
+        };
+        self.app.read(|ctx| {
+            self.presenter
+                .invalidate(&invalidation, ctx, self.root.window_id(ctx));
+        });
+    }
+}
+
+struct BenchmarkZeroStateView {
+    clock: AnimationClock,
+    config: Arc<ZeroStateAnimationConfig>,
+    interaction: ZeroStateInteractionHandle,
+}
+
+impl Entity for BenchmarkZeroStateView {
+    type Event = ();
+}
+
+impl TypedActionView for BenchmarkZeroStateView {
+    type Action = ();
+}
+
+impl TuiView for BenchmarkZeroStateView {
+    fn ui_name() -> &'static str {
+        "BenchmarkZeroStateView"
+    }
+
+    fn render(&self, _app: &AppContext) -> Box<dyn TuiElement> {
+        let style = TuiStyle::default();
+        let starfield = ZeroStateStarfieldElement::new(
+            self.clock,
+            style,
+            ZERO_STATE_COPY_COLS,
+            ZERO_STATE_ANIMATION_COLS,
+        )
+        .finish();
+        let animation = ZeroStateAnimationElement::new(
+            self.clock,
+            self.config.clone(),
+            self.interaction.clone(),
+            WarpLogoStyles {
+                front: style,
+                back: style,
+                side: style,
+                background: style,
+            },
+        )
+        .without_background_stars()
+        .finish();
+        let overlay = TuiText::new(
+            "Warp Agent\nv0.0.0\n\nWhat's new\n• benchmark\n\nProject\nbenchmark fixture",
+        )
+        .finish();
+        build_zero_state_layout(starfield, animation, overlay)
+    }
+}
+
+pub struct ZeroStateProjectionBenchmark {
+    elapsed: Duration,
+    size: TuiSize,
+    config: ZeroStateAnimationConfig,
+    projector: LogoProjector,
+}
+
+impl ZeroStateProjectionBenchmark {
+    pub fn new(shape: ZeroStateBenchmarkShape, width: u16, height: u16) -> Self {
+        Self {
+            elapsed: Duration::ZERO,
+            size: TuiSize::new(width, height),
+            config: shape.config(),
+            projector: LogoProjector::default(),
+        }
+    }
+
+    pub fn project(&mut self) -> u64 {
+        self.elapsed += Duration::from_millis(66);
+        benchmark_logo_projection(self.elapsed, self.size, &self.config, &mut self.projector)
+    }
+}
 
 /// Shape of the retained transcript fixture.
 #[derive(Clone, Copy, Debug)]
@@ -134,10 +289,12 @@ impl TranscriptBenchmark {
             let agent_blocks = AgentBlockRegistry::new(RefCell::new(HashMap::new()));
             let cli_subagent_blocks = CLISubagentBlockRegistry::new(RefCell::new(HashMap::new()));
             let handoff_blocks = HandoffBlockRegistry::new(RefCell::new(HashMap::new()));
+            let notices = TranscriptNoticeRegistry::new(RefCell::new(HashMap::new()));
             let model_for_root = terminal_model.clone();
             let agent_blocks_for_root = agent_blocks.clone();
             let cli_subagent_blocks_for_root = cli_subagent_blocks.clone();
             let handoff_blocks_for_root = handoff_blocks.clone();
+            let notices_for_root = notices.clone();
             let (window_id, root) = app.update(|ctx| {
                 ctx.add_tui_window(
                     AddWindowOptions {
@@ -149,6 +306,7 @@ impl TranscriptBenchmark {
                         agent_blocks: agent_blocks_for_root,
                         cli_subagent_blocks: cli_subagent_blocks_for_root,
                         handoff_blocks: handoff_blocks_for_root,
+                        notices: notices_for_root,
                         viewport: TuiViewportedListState::new_at_end(),
                     },
                 )
@@ -266,6 +424,7 @@ struct BenchmarkTranscriptView {
     agent_blocks: AgentBlockRegistry,
     cli_subagent_blocks: CLISubagentBlockRegistry,
     handoff_blocks: HandoffBlockRegistry,
+    notices: TranscriptNoticeRegistry,
     viewport: TuiViewportedListState,
 }
 
@@ -292,6 +451,7 @@ impl TuiView for BenchmarkTranscriptView {
             self.agent_blocks.clone(),
             self.cli_subagent_blocks.clone(),
             self.handoff_blocks.clone(),
+            self.notices.clone(),
         );
         TuiViewportedList::new(
             self.viewport.clone(),

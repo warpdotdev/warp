@@ -51,10 +51,43 @@ fn test_keystroke_to_c0_control_code() {
         (Keystroke::parse("ctrl-6").unwrap(), vec![C0::RS]),
         (Keystroke::parse("ctrl-7").unwrap(), vec![C0::US]),
         (Keystroke::parse("ctrl-8").unwrap(), vec![C0::DEL]),
+        // `ctrl-/` is an xterm-era addition to the VT220 table. GH#4620.
+        (Keystroke::parse("ctrl-/").unwrap(), vec![C0::US]),
     ];
 
     let terminal_model_mock = TerminalModelMock::new();
     validate_keystroke_test_cases(test_cases, &terminal_model_mock);
+}
+
+#[test]
+fn test_ctrl_slash_emits_us_control_code() {
+    // Regression test for GH#4620: `ctrl-/` must reach the pty as US (0x1f), which is what
+    // Vim/Neovim's `<C-/>` mappings listen for. No platform keyboard layer folds `ctrl-/` into a
+    // control byte, so without an explicit mapping a bare `/` was sent instead.
+    let terminal_model_mock = TerminalModelMock::new();
+    let ctrl_slash = Keystroke::parse("ctrl-/").unwrap();
+
+    assert_eq!(
+        Some(vec![0x1f]),
+        KeystrokeWithDetails {
+            keystroke: &ctrl_slash,
+            key_without_modifiers: Some("/"),
+            chars: Some("/"),
+        }
+        .to_escape_sequence(&terminal_model_mock)
+    );
+
+    // An unmodified `/` is still ordinary text.
+    let slash = Keystroke::parse("/").unwrap();
+    assert_eq!(
+        None,
+        KeystrokeWithDetails {
+            keystroke: &slash,
+            key_without_modifiers: Some("/"),
+            chars: Some("/"),
+        }
+        .to_escape_sequence(&terminal_model_mock)
+    );
 }
 
 #[test]

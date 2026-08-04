@@ -3,7 +3,8 @@
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
     LLMId, LLMPreferences, LLMPreferencesEvent, ModelPickerChoice, query_model_picker_choices,
-    should_show_key_icon_for_model,
+    should_show_bedrock_icon_for_model,
+    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
@@ -22,6 +23,7 @@ struct TuiModelMenuRow {
     title: String,
     is_selectable: bool,
     is_key_connected: bool,
+    discount_percentage: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -86,6 +88,7 @@ impl TuiModelMenuModel {
                     id,
                     is_selectable,
                     is_key_connected: false,
+                    discount_percentage: None,
                 })
                 .collect(),
             false,
@@ -245,9 +248,16 @@ impl TuiModelMenuModel {
 }
 
 fn model_menu_row(choice: ModelPickerChoice, app: &AppContext) -> TuiModelMenuRow {
+    let uses_external_inference = should_show_key_icon_for_model(&choice.llm, app)
+        || should_show_bedrock_icon_for_model(&choice.llm, app)
+        || should_show_gemini_enterprise_agent_platform_icon_for_model(&choice.llm, app);
     TuiModelMenuRow {
         is_selectable: choice.is_selectable(),
         is_key_connected: should_show_key_icon_for_model(&choice.llm, app),
+        discount_percentage: choice
+            .llm
+            .discount_percentage
+            .filter(|_| !uses_external_inference),
         id: choice.llm.id,
         title: choice.llm.display_name,
     }
@@ -259,9 +269,16 @@ fn snapshot_row(row: &TuiModelMenuRow) -> TuiInlineMenuRow {
         prefix: None,
         description: (!row.is_selectable).then(|| "disabled".to_owned()),
         state_suffix: row.is_key_connected.then(|| "(key connected)".to_owned()),
+        promotional_suffix: discount_label(row.discount_percentage),
         is_selectable: row.is_selectable,
         style: TuiInlineMenuRowStyle::Default,
     }
+}
+
+fn discount_label(discount_percentage: Option<f32>) -> Option<String> {
+    discount_percentage
+        .filter(|percentage| *percentage > 0.)
+        .map(|percentage| format!("{}% off", percentage.round() as u32))
 }
 
 fn preferred_selection_index(

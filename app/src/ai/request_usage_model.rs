@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ai::api_keys::ApiKeyManager;
+use ai::api_keys::{ApiKeyManager, AwsCredentialsState};
 use anyhow::Context as _;
 use chrono::{DateTime, Local, Utc};
 use futures::channel::oneshot::{self, Receiver};
@@ -15,6 +15,7 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::credit_availability::{AICreditAvailability, AICreditDenialReason, AICreditSource};
 use crate::auth::AuthStateProvider;
 use crate::pricing::PricingInfoModel;
 use crate::server::server_api::ai::AIClient;
@@ -184,6 +185,15 @@ fn get_cached_ambient_credits_banner_dismissed(app_mut: &mut AppContext) -> bool
         .unwrap_or_default()
 }
 
+#[derive(Default)]
+struct ServerAvailabilityState {
+    /// Last successful decision; retained across transient refresh failures.
+    latest: Option<AICreditAvailability>,
+    last_success_time: Option<Instant>,
+    refresh_in_flight: bool,
+    last_error: Option<String>,
+}
+
 pub struct AIRequestUsageModel {
     ai_client: Arc<dyn AIClient>,
 
@@ -193,6 +203,8 @@ pub struct AIRequestUsageModel {
     request_limit_info: RequestLimitInfo,
 
     bonus_grants: Vec<BonusGrant>,
+
+    server_availability: ServerAvailabilityState,
 
     /// Whether the buy credits banner has been dismissed by the user.
     buy_addon_credits_banner_dismissed: bool,
@@ -207,6 +219,8 @@ impl Entity for AIRequestUsageModel {
 
 pub enum AIRequestUsageModelEvent {
     RequestUsageUpdated,
+    /// The server-authoritative credit availability decision was updated.
+    CreditAvailabilityUpdated,
     AmbientCreditsBannerDismissed,
     RequestBonusRefunded {
         requests_refunded: i32,
@@ -228,6 +242,7 @@ impl AIRequestUsageModel {
             request_limit_info,
             last_update_time: None,
             bonus_grants: vec![],
+            server_availability: ServerAvailabilityState::default(),
             buy_addon_credits_banner_dismissed: false,
             ambient_credits_banner_dismissed,
         }
@@ -240,6 +255,7 @@ impl AIRequestUsageModel {
             last_update_time: None,
             request_limit_info: RequestLimitInfo::default(),
             bonus_grants: vec![],
+            server_availability: ServerAvailabilityState::default(),
             buy_addon_credits_banner_dismissed: false,
             ambient_credits_banner_dismissed: get_cached_ambient_credits_banner_dismissed(ctx),
         }
@@ -308,6 +324,59 @@ impl AIRequestUsageModel {
         });
 
         ctx.emit(AIRequestUsageModelEvent::RequestUsageUpdated);
+    }
+
+    /// The server-authoritative availability decision, if one has been
+    /// successfully fetched this session (last-known-good on refresh failure).
+    pub fn server_availability(&self) -> Option<AICreditAvailability> {
+        self.server_availability.latest
+    }
+
+    /// Applies an availability fetch result, keeping last-known-good on failure.
+    pub fn apply_server_availability(
+        &mut self,
+        result: Result<AICreditAvailability, anyhow::Error>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match result {
+            Ok(availability) => {
+                self.server_availability.latest = Some(availability);
+                self.server_availability.last_success_time = Some(Instant::now());
+                self.server_availability.last_error = None;
+                ctx.emit(AIRequestUsageModelEvent::CreditAvailabilityUpdated);
+                ctx.notify();
+            }
+            Err(e) => {
+                log::warn!("Failed to refresh AI credit availability: {e:#}");
+                self.server_availability.last_error = Some(format!("{e:#}"));
+            }
+        }
+    }
+
+    pub fn request_availability_refresh(&mut self, ctx: &mut ModelContext<Self>) {
+        if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
+            return;
+        }
+        if self.server_availability.refresh_in_flight {
+            return;
+        }
+        self.server_availability.refresh_in_flight = true;
+
+        let ai_client = self.ai_client.clone();
+        ctx.spawn(
+            async move { ai_client.get_ai_credit_availability().await },
+            |model, result, ctx| {
+                model.server_availability.refresh_in_flight = false;
+                model.apply_server_availability(result, ctx);
+            },
+        );
+    }
+
+    /// Clears the server-authoritative availability state, e.g. on logout.
+    pub fn reset_server_availability(&mut self, ctx: &mut ModelContext<Self>) {
+        self.server_availability = ServerAvailabilityState::default();
+        ctx.emit(AIRequestUsageModelEvent::CreditAvailabilityUpdated);
+        ctx.notify();
     }
 
     pub fn provide_negative_feedback_response_for_ai_conversation(
@@ -412,29 +481,54 @@ impl AIRequestUsageModel {
         }
     }
 
-    /// Returns `true` if the user has at least one request remaining before hitting the AI request
-    /// limit.
-    ///
-    /// WARNING: This method doesn't account for add-on credits. Consider if you want
-    /// [`Self::has_any_ai_remaining`] instead.
-    pub fn has_requests_remaining(&self) -> bool {
+    /// Whether unused base-plan request quota remains.
+    pub(crate) fn has_base_plan_requests_remaining(&self) -> bool {
         self.requests_remaining() > 0
     }
 
-    /// Returns `true` if the user meets one of the following conditions:
-    /// 1. user has ai credits from the plan base limit
-    /// 2. user has overage enabled
-    /// 3. user has bonus grants (either team grants or user grants)
-    /// 4. user's team plan has pay-as-you-go enabled (enterprise only)
-    /// 5. user's team has enterprise bonus grants auto-reload enabled (enterprise only)
-    /// 6. user's team has self-serve auto-reload enabled within its monthly spend limit
-    /// 7. user has BYOK enabled and has either provided at least one API key or
-    ///    connected a Grok subscription
-    /// Use this method as the starting point for AI availability checking.
+    /// Returns `true` if the user can start an interactive AI request.
+    /// Prefers the server decision when present; otherwise uses the pre-fetch fallback.
     pub fn has_any_ai_remaining(&self, ctx: &AppContext) -> bool {
+        if let Some(availability) = self.server_availability.latest {
+            return Self::server_availability_permits_ai(availability, ctx);
+        }
+        self.has_any_ai_remaining_before_server_decision(ctx)
+    }
+
+    /// Trusts `available`; only `OutOfCredits` may be refined by local BYO credentials.
+    fn server_availability_permits_ai(
+        availability: AICreditAvailability,
+        ctx: &AppContext,
+    ) -> bool {
+        if availability.available {
+            return true;
+        }
+        matches!(
+            availability.denial_reason,
+            AICreditDenialReason::OutOfCredits
+        ) && Self::has_usable_byo_inference_path(ctx)
+    }
+
+    /// Whether a local BYO path is usable: stored API key/endpoint/Grok when
+    /// BYOK is allowed, or loaded AWS credentials for an enabled Bedrock host.
+    fn has_usable_byo_inference_path(ctx: &AppContext) -> bool {
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        let api_keys = ApiKeyManager::as_ref(ctx);
+        if user_workspaces.is_byo_api_key_enabled(ctx) && api_keys.has_any_key() {
+            return true;
+        }
+        user_workspaces.is_aws_bedrock_credentials_enabled(ctx)
+            && matches!(
+                api_keys.aws_credentials_state(),
+                AwsCredentialsState::Loaded { .. }
+            )
+    }
+
+    /// Prefetch fallback used only before any successful server availability decision this session.
+    fn has_any_ai_remaining_before_server_decision(&self, ctx: &AppContext) -> bool {
         let current_workspace = UserWorkspaces::as_ref(ctx).current_workspace();
 
-        let has_base_plan_ai_requests = self.has_requests_remaining();
+        let has_base_plan_ai_requests = self.has_base_plan_requests_remaining();
 
         let user_bonus_credits = self.total_user_interactive_bonus_credits_remaining() > 0;
         let workspace_bonus_credits = current_workspace
@@ -594,7 +688,6 @@ impl AIRequestUsageModel {
     }
 
     /// Computes the current banner state based on live conditions.
-    /// This is called on-demand and always returns fresh state.
     pub fn compute_buy_addon_credits_banner_display_state(
         &self,
         ctx: &AppContext,
@@ -608,6 +701,10 @@ impl AIRequestUsageModel {
         let policy_allows_purchasing = user_workspaces
             .purchase_policy()
             .is_some_and(|policy| policy.allows_purchases());
+
+        if !policy_allows_purchasing {
+            return BuyCreditsBannerDisplayState::Hidden;
+        }
 
         // TODO: we might want to suggest credits purchase if request_remain/bonus credits is below certain threshold
         // something to consider after launch
@@ -625,10 +722,19 @@ impl AIRequestUsageModel {
                     current_workspace.is_some_and(|workspace| workspace.uid == uid)
                 }
             });
-        if !policy_allows_purchasing
-            || self.has_requests_remaining()
-            || has_non_ambient_bonus_credits
-        {
+
+        if let Some(availability) = self.server_availability.latest {
+            let only_ambient_server_source = availability.available
+                && matches!(
+                    availability.credit_source,
+                    Some(AICreditSource::AmbientBonusGrant)
+                );
+            // Hide when interactive AI is permitted, except ambient-only sources
+            // which do not fund interactive requests.
+            if self.has_any_ai_remaining(ctx) && !only_ambient_server_source {
+                return BuyCreditsBannerDisplayState::Hidden;
+            }
+        } else if self.has_base_plan_requests_remaining() || has_non_ambient_bonus_credits {
             return BuyCreditsBannerDisplayState::Hidden;
         }
 

@@ -95,6 +95,13 @@ impl Workspace {
             .is_some_and(|member| member.role.is_admin_or_owner())
     }
 
+    pub fn is_native_workspaces_enabled(&self) -> bool {
+        self.billing_metadata
+            .tier
+            .native_workspaces_policy
+            .is_some_and(|policy| policy.enabled)
+    }
+
     pub fn resolve_usage_visibility(&self, is_admin: bool) -> UsageVisibility {
         let Some(policy) = self.billing_metadata.tier.usage_visibility_policy else {
             return UsageVisibility::default();
@@ -438,6 +445,11 @@ pub struct MultiAdminPolicy {
 }
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
+pub struct NativeWorkspacesPolicy {
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Copy, Serialize, Deserialize)]
 pub struct AmbientAgentsPolicy {
     pub max_concurrent_agents: i32,
     pub instance_shape: Option<InstanceShape>,
@@ -521,6 +533,7 @@ pub struct Tier {
     pub enterprise_pay_as_you_go_policy: Option<EnterprisePayAsYouGoPolicy>,
     pub enterprise_credits_auto_reload_policy: Option<EnterpriseCreditsAutoReloadPolicy>,
     pub multi_admin_policy: Option<MultiAdminPolicy>,
+    pub native_workspaces_policy: Option<NativeWorkspacesPolicy>,
     pub ambient_agents_policy: Option<AmbientAgentsPolicy>,
     pub usage_visibility_policy: Option<UsageVisibilityPolicy>,
 }

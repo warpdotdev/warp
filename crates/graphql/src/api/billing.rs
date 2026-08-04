@@ -112,6 +112,7 @@ pub struct Tier {
     pub enterprise_pay_as_you_go_policy: Option<EnterprisePayAsYouGoPolicy>,
     pub enterprise_credits_auto_reload_policy: Option<EnterpriseCreditsAutoReloadPolicy>,
     pub multi_admin_policy: Option<MultiAdminPolicy>,
+    pub native_workspaces_policy: Option<NativeWorkspacesPolicy>,
     pub ambient_agents_policy: Option<AmbientAgentsPolicy>,
     pub usage_visibility_policy: Option<UsageVisibilityPolicy>,
 }
@@ -219,6 +220,11 @@ pub struct EnterpriseCreditsAutoReloadPolicy {
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct MultiAdminPolicy {
+    pub enabled: bool,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct NativeWorkspacesPolicy {
     pub enabled: bool,
 }
 

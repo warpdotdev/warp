@@ -136,12 +136,12 @@ fn is_meaningful_action_group_true_for_real_interactions() {
 }
 
 #[test]
-fn is_meaningful_action_group_false_for_wait_only_or_empty() {
+fn is_meaningful_action_group_keeps_nonzero_waits_but_not_no_ops() {
     let zero_wait = [screen(Action::Wait(Duration::ZERO))];
     assert!(!is_meaningful_action_group(&zero_wait));
 
     let nonzero_wait = [screen(Action::Wait(Duration::from_millis(500)))];
-    assert!(!is_meaningful_action_group(&nonzero_wait));
+    assert!(is_meaningful_action_group(&nonzero_wait));
 
     assert!(!is_meaningful_action_group(&[]));
 }
