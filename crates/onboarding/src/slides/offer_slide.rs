@@ -274,6 +274,24 @@ impl OfferSlide {
         self.onboarding_state.as_ref(app).credit_purchase_state()
     }
 
+    /// Whether the pack at `index` renders as selected. Which pack is selected
+    /// is a choice made *inside* the buy-credits option, so it is only shown
+    /// while that option is the chosen one — otherwise the default pack index
+    /// would accent a tile inside a card the user hasn't picked.
+    fn credit_pack_is_selected(
+        &self,
+        variant: OfferVariant,
+        index: usize,
+        ctx: &AppContext,
+    ) -> bool {
+        self.effective_choice(variant, ctx) == OfferChoice::BuyCredits
+            && index
+                == self
+                    .onboarding_state
+                    .as_ref(ctx)
+                    .selected_credit_pack_index()
+    }
+
     fn render_content(
         &self,
         appearance: &Appearance,
@@ -435,10 +453,6 @@ impl OfferSlide {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let packs = self.credit_packs(variant, app);
-        let selected_index = self
-            .onboarding_state
-            .as_ref(app)
-            .selected_credit_pack_index();
         let mut row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -450,7 +464,7 @@ impl OfferSlide {
                     Self::render_credit_pack_tile(
                         appearance,
                         *pack,
-                        index == selected_index,
+                        self.credit_pack_is_selected(variant, index, app),
                         self.credit_pack_mouse_states[index].clone(),
                         index,
                     ),

@@ -365,6 +365,70 @@ fn set_up_later_still_works_while_checkout_is_pending() {
     });
 }
 
+/// Regression test for REV-1940: the pack selection lives inside the
+/// buy-credits card, so no pack may render as selected while another option is
+/// chosen. The model keeps a default pack index for the purchase, which must
+/// not accent the smallest pack on the slide's initial state.
+#[test]
+fn packs_only_render_as_selected_while_the_credit_option_is_chosen() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.update(MockTelemetryContextProvider::register);
+        let onboarding_state = add_onboarding_state(&mut app);
+        let (_, slide) = app.add_window(WindowStyle::NotStealFocus, {
+            let onboarding_state = onboarding_state.clone();
+            move |_| OfferSlide::new(onboarding_state)
+        });
+        onboarding_state.update(&mut app, |model, ctx| {
+            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
+            model.set_credit_pack_options(credit_packs(4), ctx);
+        });
+
+        let selected_packs = |app: &App| {
+            app.read(|ctx| {
+                (0..4)
+                    .filter(|index| {
+                        slide.as_ref(ctx).credit_pack_is_selected(
+                            OfferVariant::ChooseHowToStart,
+                            *index,
+                            ctx,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        // Subscribe is selected by default, so the packs show no selection.
+        assert_eq!(selected_packs(&app), Vec::<usize>::new());
+
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::SelectSetUpLater, ctx)
+        });
+        assert_eq!(selected_packs(&app), Vec::<usize>::new());
+
+        // Choosing the credit option surfaces the pack the purchase would use.
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::SelectBuyCredits, ctx)
+        });
+        assert_eq!(selected_packs(&app), vec![0]);
+
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::SelectCreditPack(2), ctx)
+        });
+        assert_eq!(selected_packs(&app), vec![2]);
+
+        // Moving back off the credit option clears the selection again, even
+        // though the model still remembers the chosen pack.
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::SelectPrimary, ctx)
+        });
+        assert_eq!(selected_packs(&app), Vec::<usize>::new());
+        onboarding_state.read(&app, |model, _| {
+            assert_eq!(model.selected_credit_pack_index(), 2);
+        });
+    });
+}
+
 /// The pack rows draw from a fixed pool of hover handles, so an unexpectedly
 /// long server list must be truncated rather than panic.
 #[test]
