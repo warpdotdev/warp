@@ -261,7 +261,8 @@ pub use crate::tui_test_support::{
     add_tui_history_test_models, append_tui_history_test_command,
     blocklist_ai_history_model_with_queries, forkable_tui_conversation_for_test,
     queue_tui_permission_action, register_tui_input_mode_test_settings,
-    register_tui_session_view_test_singletons,
+    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test,
+    set_tui_settings_mode_for_test,
 };
 pub use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 pub use crate::util::image::{

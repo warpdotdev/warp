@@ -4457,6 +4457,22 @@ impl TuiTerminalSessionView {
                 self.api_keys_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
+            SlashCommandKind::ManageBilling => {
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                let Some(url) = self
+                    .slash_commands_source
+                    .as_ref(ctx)
+                    .manage_billing_url(ctx)
+                else {
+                    self.show_error_hint(
+                        "Billing management is only available to team admins".to_owned(),
+                        ctx,
+                    );
+                    return;
+                };
+                ctx.open_url(&url);
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
             SlashCommandKind::Cost => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 ctx.dispatch_typed_action_deferred(

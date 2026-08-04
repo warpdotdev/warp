@@ -48,7 +48,7 @@ use crate::system::SystemStats;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
 use crate::workspaces::gql_convert::PLACEHOLDER_WORKSPACE_UID;
-use crate::workspaces::team::Team;
+use crate::workspaces::team::{Team, TeamMember};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -821,6 +821,59 @@ fn test_window_team_assignment_inherits_from_source_or_default_team() {
             assert_eq!(
                 user_workspaces.team_uid_for_window(fallback_window_id),
                 Some(first_team.uid)
+            );
+        });
+    })
+}
+
+#[test]
+fn admin_billing_link_for_default_team_targets_the_first_admin_team() {
+    let email = "admin@example.com";
+    let mut first_team = team_for_test();
+    first_team.members.push(TeamMember {
+        uid: UserUid::new("admin"),
+        email: email.to_owned(),
+        role: MembershipRole::Owner,
+    });
+    let mut second_team = first_team.clone();
+    second_team.uid = 456.into();
+    let first_team_uid = first_team.uid;
+    let mut workspace = workspace_for_test(&first_team);
+    workspace.teams.push(second_team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).admin_billing_link_for_default_team(email),
+                Some(format!(
+                    "{}/admin/{first_team_uid}/billing",
+                    ChannelState::server_root_url().trim_end_matches('/'),
+                ))
+            );
+        });
+    })
+}
+
+#[test]
+fn admin_billing_link_for_default_team_rejects_regular_members() {
+    let email = "member@example.com";
+    let mut team = team_for_test();
+    team.members.push(TeamMember {
+        uid: UserUid::new("member"),
+        email: email.to_owned(),
+        role: MembershipRole::User,
+    });
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).admin_billing_link_for_default_team(email),
+                None
             );
         });
     })

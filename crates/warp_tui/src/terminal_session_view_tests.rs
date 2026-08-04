@@ -21,13 +21,15 @@ use warp::tui_export::{
     AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin, BlockPadding,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatus, ConversationUsageTotals,
     Harness, InputTypeAutoDetectionSource, LLMPreferences, LinkedWorkflowData,
-    LongRunningCommandControlState, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate,
-    SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope, TuiMcpAction,
-    TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers, TuiUpArrowHistoryItemKind,
-    UserTakeOverReason, WarpConfig, WarpConfigUpdateEvent, export_conversation_markdown,
-    forkable_tui_conversation_for_test, register_tui_session_view_test_singletons, slash_commands,
+    LongRunningCommandControlState, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, SizeInfo,
+    SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope,
+    TuiMcpAction, TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers,
+    TuiUpArrowHistoryItemKind, UserTakeOverReason, WarpConfig, WarpConfigUpdateEvent,
+    export_conversation_markdown, forkable_tui_conversation_for_test,
+    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test,
+    set_tui_settings_mode_for_test, slash_commands,
 };
-use warp_core::channel::Channel;
+use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting as _;
 use warp_editor::model::CoreEditorModel;
@@ -240,6 +242,79 @@ fn out_of_credits_ctrl_o_binding_opens_upgrade() {
         assert_eq!(
             opened_urls.borrow().as_slice(),
             &["https://app.warp.dev/upgrade?source=warp-agent-cli".to_owned()]
+        );
+    });
+}
+
+#[test]
+fn manage_billing_slash_command_opens_the_default_team_billing_page_for_admins() {
+    set_tui_settings_mode_for_test();
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        app.update(set_tui_default_team_admin_for_test);
+        let opened_urls = Rc::new(RefCell::new(Vec::new()));
+        let opened_urls_for_callback = opened_urls.clone();
+        app.update(|ctx| {
+            ctx.set_before_open_url(move |url, _| {
+                opened_urls_for_callback.borrow_mut().push(url.to_owned());
+                url.to_owned()
+            });
+        });
+
+        view.update(&mut app, |view, ctx| {
+            assert!(matches!(
+                view.slash_commands_source
+                    .as_ref(ctx)
+                    .parse_input("/manage-billing", ctx),
+                ParsedSlashCommandInput::SlashCommand(_)
+            ));
+            view.execute_tui_slash_command(&slash_commands::MANAGE_BILLING, None, ctx);
+        });
+
+        assert_eq!(
+            opened_urls.borrow().as_slice(),
+            &[format!(
+                "{}/admin/test_uid00000000000123/billing",
+                ChannelState::server_root_url().trim_end_matches('/')
+            )]
+        );
+    });
+}
+
+#[test]
+fn manage_billing_slash_command_rejects_users_without_an_admin_team() {
+    set_tui_settings_mode_for_test();
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let opened_urls = Rc::new(RefCell::new(Vec::new()));
+        let opened_urls_for_callback = opened_urls.clone();
+        app.update(|ctx| {
+            ctx.set_before_open_url(move |url, _| {
+                opened_urls_for_callback.borrow_mut().push(url.to_owned());
+                url.to_owned()
+            });
+        });
+
+        view.update(&mut app, |view, ctx| {
+            assert!(!matches!(
+                view.slash_commands_source
+                    .as_ref(ctx)
+                    .parse_input("/manage-billing", ctx),
+                ParsedSlashCommandInput::SlashCommand(_)
+            ));
+            view.execute_tui_slash_command(&slash_commands::MANAGE_BILLING, None, ctx);
+        });
+
+        assert!(opened_urls.borrow().is_empty());
+        assert_eq!(
+            view.read(&app, |view, _| {
+                view.transient_hint
+                    .current()
+                    .map(|(text, _)| text.to_owned())
+            }),
+            Some("Billing management is only available to team admins".to_owned())
         );
     });
 }

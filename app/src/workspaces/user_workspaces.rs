@@ -237,6 +237,19 @@ impl UserWorkspaces {
             team_uid
         )
     }
+    pub fn admin_billing_link_for_team(team_uid: ServerId) -> String {
+        format!(
+            "{}/admin/{team_uid}/billing",
+            ChannelState::server_root_url().trim_end_matches('/')
+        )
+    }
+
+    pub fn admin_billing_link_for_default_team(&self, user_email: &str) -> Option<String> {
+        let team_uid = self.inherited_or_default_team_uid(None)?;
+        self.team_from_uid(team_uid)
+            .filter(|team| team.has_admin_permissions(user_email))
+            .map(|_| Self::admin_billing_link_for_team(team_uid))
+    }
 
     pub fn team_from_uid(&self, team_uid: ServerId) -> Option<&Team> {
         self.current_workspace()
