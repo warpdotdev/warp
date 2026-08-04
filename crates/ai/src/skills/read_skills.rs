@@ -16,9 +16,10 @@ pub const WARP_SKILL_DIRS_ENV: &str = "WARP_SKILL_DIRS";
 /// Splits on commas, trims leading/trailing whitespace from each entry, and
 /// drops blank entries. Returns an empty vec when the variable is unset or empty.
 ///
-/// Entries are returned verbatim — callers resolve relative paths against the
-/// environment working directory (see [`resolve_skills_dirs`]) rather than
-/// letting them depend on the process's current working directory.
+/// A leading `~` is expanded to the home directory. Entries are otherwise
+/// returned verbatim — callers resolve relative paths against the environment
+/// working directory (see [`resolve_skills_dirs`]) rather than letting them
+/// depend on the process's current working directory.
 pub fn parse_skills_dirs_env() -> Vec<PathBuf> {
     let Ok(val) = std::env::var(WARP_SKILL_DIRS_ENV) else {
         return Vec::new();
@@ -26,7 +27,7 @@ pub fn parse_skills_dirs_env() -> Vec<PathBuf> {
     val.split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|entry| PathBuf::from(shellexpand::tilde(entry).as_ref()))
+        .map(|entry| PathBuf::from(shellexpand::tilde(entry).into_owned()))
         .collect()
 }
 
