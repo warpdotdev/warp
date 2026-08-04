@@ -27,6 +27,33 @@ impl AdminActions {
         ctx.open_url(&url);
     }
 
+    /// Picks the admin panel URL for the current context: native workspaces
+    /// administer settings and spend limits at the workspace level, so they
+    /// get the workspace-scoped page; everyone else administers per team.
+    /// Returns `None` when a team-scoped panel is called for but no team is
+    /// known.
+    pub fn admin_panel_link(
+        native_workspaces_enabled: bool,
+        team_uid: Option<ServerId>,
+    ) -> Option<String> {
+        if native_workspaces_enabled {
+            Some(Self::admin_panel_link_for_workspace())
+        } else {
+            team_uid.map(Self::admin_panel_link_for_team)
+        }
+    }
+
+    /// Open the admin panel scoped to the current workspace/team context.
+    pub fn open_resolved_admin_panel(
+        native_workspaces_enabled: bool,
+        team_uid: Option<ServerId>,
+        ctx: &mut AppContext,
+    ) {
+        if let Some(url) = Self::admin_panel_link(native_workspaces_enabled, team_uid) {
+            ctx.open_url(&url);
+        }
+    }
+
     /// Open the support email link
     pub fn contact_support(ctx: &mut AppContext) {
         ctx.open_url("mailto:support@warp.dev");

@@ -211,11 +211,12 @@ impl TypedActionView for BillingCycleUsageSectionView {
                 }
             }
             BillingCycleUsageAction::OpenAdminPanel => {
-                if let Some(team_uid) =
-                    UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id())
-                {
-                    AdminActions::open_admin_panel(team_uid, ctx);
-                }
+                let workspaces = UserWorkspaces::as_ref(ctx);
+                let native_workspaces_enabled = workspaces
+                    .current_workspace()
+                    .is_some_and(|workspace| workspace.is_native_workspaces_enabled());
+                let team_uid = workspaces.team_uid_for_window(ctx.window_id());
+                AdminActions::open_resolved_admin_panel(native_workspaces_enabled, team_uid, ctx);
             }
         }
     }
