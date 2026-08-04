@@ -618,11 +618,6 @@ impl OrchestrationPillBar {
         // Use the shared canonical pill ordering so the visible row and
         // keyboard navigation cannot drift.
         let children: Vec<_> = descendant_conversations_in_pill_order(history, orchestrator_id);
-        log::info!(
-            "[ORCH-D:pill] pill_specs active_id={active_id:?} orchestrator_id={orchestrator_id:?} \
-             children_count={}",
-            children.len()
-        );
         let children: Vec<_> = children
             .into_iter()
             .filter_map(|descendant| history.conversation(&descendant.conversation_id))

@@ -199,10 +199,6 @@ impl OrchestrationViewerModel {
 
         let parent_task_id = self.parent_task_id;
         let consumer_id = ctx.model_id();
-        log::info!(
-            "[ORCH-D:ovm] registering viewer-mode consumer parent_task_id={parent_task_id} \
-             parent_conversation_id={parent_conversation_id:?} consumer_id={consumer_id:?}"
-        );
         OrchestrationEventStreamer::handle(ctx).update(ctx, move |streamer, ctx| {
             streamer.register_viewer_mode_consumer(
                 parent_task_id,
@@ -249,10 +245,8 @@ impl OrchestrationViewerModel {
         };
         if self.children.contains_key(&task_id) {
             // Already materialized (e.g. re-registered after reconnect).
-            log::info!("[ORCH-D:ovm] ChildSpawned task_id={task_id} already materialized; skipping");
             return;
         }
-        log::info!("[ORCH-D:ovm] ChildSpawned task_id={task_id} — fetching metadata");
         self.spawn_task_metadata_fetch(task_id, "ChildSpawned", ctx);
     }
 
@@ -423,12 +417,6 @@ impl OrchestrationViewerModel {
             );
             return;
         };
-        log::info!(
-            "[ORCH-D:ovm] register_child task_id={task_id} parent_task_id={} \
-             parent_conversation_id={parent_conversation_id:?} terminal_view_id={:?}",
-            self.parent_task_id, self.terminal_view_id
-        );
-
         let name = task.display_name().to_string();
         // Trim to stay in sync with `display_name()`, which also trims;
         // the descriptive title flows through `set_fallback_display_title`
