@@ -438,6 +438,15 @@ fn up(offset_ms: u64, x: i32, y: i32) -> PointerEvent {
     }
 }
 
+fn scroll(offset_ms: u64, x: i32, y: i32) -> PointerEvent {
+    PointerEvent {
+        offset: Duration::from_millis(offset_ms),
+        kind: PointerEventKind::Scroll,
+        button: None,
+        point: Vector2I::new(x, y),
+    }
+}
+
 fn pointer_entry(
     start_ms: u64,
     finish_ms: u64,
@@ -452,9 +461,17 @@ fn pointer_entry(
     }
 }
 
+// Gesture drawings (rings, trails, anchors, held dots) render on layer 1;
+// the synthetic cursor glyph renders above them on layer 2.
 fn cursor_dialogues(ass: &str) -> Vec<&str> {
     ass.lines()
-        .filter(|line| line.starts_with("Dialogue:") && line.contains(",Cursor,"))
+        .filter(|line| line.starts_with("Dialogue: 1,") && line.contains(",Cursor,"))
+        .collect()
+}
+
+fn cursor_glyph_dialogues(ass: &str) -> Vec<&str> {
+    ass.lines()
+        .filter(|line| line.starts_with("Dialogue: 2,") && line.contains(",Cursor,"))
         .collect()
 }
 
@@ -548,12 +565,27 @@ fn drag_emits_trail_anchor_held_and_no_ring() {
         .find(|line| line.contains("\\1a&H87&"))
         .expect("anchor dialogue");
     assert!(anchor.contains("\\an7\\pos(100,100)"), "{ass}");
-    // Held dot moves press -> release over the hold [1000, 1400] -> [250, 650].
-    let held = cursor
+    // Held dot follows the same eased motion as the cursor glyph: a glide of
+    // four 50 ms pieces into the move point ([1000, 1200] -> [250, 450]), then
+    // a hold at the release point until the release at 650 ms.
+    let held: Vec<_> = cursor
         .iter()
-        .find(|line| line.contains("\\1a&H4B&"))
-        .expect("held dialogue");
-    assert!(held.contains("\\move(100,100,300,400,0,400)"), "{ass}");
+        .filter(|line| line.contains("\\1a&H4B&"))
+        .collect();
+    assert_eq!(held.len(), 5, "{ass}");
+    assert!(
+        held[0].contains("\\an7\\move(100,100,131,147,0,50)"),
+        "{ass}"
+    );
+    assert!(
+        held[3].contains("\\an7\\move(269,353,300,400,0,50)"),
+        "{ass}"
+    );
+    assert!(
+        held[4].contains("Dialogue: 1,0:00:00.45,0:00:00.65,Cursor,"),
+        "{ass}"
+    );
+    assert!(held[4].contains("\\an7\\pos(300,400)"), "{ass}");
 }
 
 #[test]
@@ -584,11 +616,13 @@ fn press_held_at_end_renders_held_indicator_without_ring() {
     let held_press = pointer_entry(1000, 2000, &[], vec![down(1000, 50, 50)]);
     let ass = build_overlay_ass(&[held_press], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
     assert!(ring_dialogues(&ass).is_empty(), "{ass}");
+    // A lone held press has a single stationary waypoint: the dot rests at
+    // the press point (no `\move` schedule).
     let held = cursor_dialogues(&ass)
         .into_iter()
         .find(|line| line.contains("\\1a&H4B&"))
         .expect("held dialogue");
-    assert!(held.contains("\\move(50,50,50,50,0,"), "{ass}");
+    assert!(held.contains("\\an7\\pos(50,50)"), "{ass}");
 }
 
 #[test]
@@ -740,11 +774,18 @@ fn click_ring_and_drag_circles_center_via_an7() {
         .find(|line| line.contains("\\1a&H87&"))
         .expect("anchor dialogue");
     assert!(anchor.contains("\\an7\\pos(50,60)"), "{anchor}");
-    let held = cursor
+    let held: Vec<_> = cursor
         .iter()
-        .find(|line| line.contains("\\1a&H4B&"))
-        .expect("held dialogue");
-    assert!(held.contains("\\an7\\move(50,60,70,80,"), "{held}");
+        .filter(|line| line.contains("\\1a&H4B&"))
+        .collect();
+    assert!(
+        held.iter().any(|line| line.contains("\\an7\\move(50,60,")),
+        "{ass}"
+    );
+    assert!(
+        held.iter().any(|line| line.contains("\\an7\\pos(70,80)")),
+        "{ass}"
+    );
     // Clipping is retained on every pointer dialogue.
     for line in &cursor {
         assert!(line.contains("\\clip(0,0,1280,720)"), "{line}");
@@ -785,9 +826,10 @@ fn split_call_drag_renders_one_trail_like_a_canonical_drag() {
         cursor_dialogues(&canonical_ass),
         "split:\n{split_ass}\ncanonical:\n{canonical_ass}"
     );
-    // Sanity: that is one trail, one anchor, one held indicator.
+    // Sanity: one trail, one anchor, and the held dot's eased motion (four
+    // glide pieces plus the hold at the release point).
     let cursor = cursor_dialogues(&split_ass);
-    assert_eq!(cursor.len(), 3, "{split_ass}");
+    assert_eq!(cursor.len(), 7, "{split_ass}");
     assert!(
         cursor.iter().any(|l| l.contains("\\1a&H73&")),
         "{split_ass}"
@@ -916,7 +958,8 @@ fn unmatched_release_for_a_different_button_does_not_close_a_drag() {
     let ass = build_overlay_ass(&[entry], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
     assert!(ring_dialogues(&ass).is_empty(), "{ass}");
     let cursor = cursor_dialogues(&ass);
-    // One drag: a single trail, anchor, and held indicator.
+    // One drag: a single trail and anchor; the held dot renders as its eased
+    // motion dialogues (four glide pieces plus the hold at the release point).
     assert_eq!(
         cursor.iter().filter(|l| l.contains("\\1a&H73&")).count(),
         1,
@@ -929,15 +972,361 @@ fn unmatched_release_for_a_different_button_does_not_close_a_drag() {
     );
     assert_eq!(
         cursor.iter().filter(|l| l.contains("\\1a&H4B&")).count(),
-        1,
+        5,
         "{ass}"
     );
-    // The held dot ends at the Left release point (200, 200).
-    let held = cursor
+    // The held dot glides to and then rests at the Left release point.
+    assert!(
+        cursor
+            .iter()
+            .any(|l| l.contains("\\1a&H4B&") && l.contains("\\an7\\pos(200,200)")),
+        "{ass}"
+    );
+}
+
+// --- Synthetic cursor glyph ---------------------------------------------------
+
+#[test]
+fn cursor_glyph_holds_at_click_point_through_retained_footage() {
+    let click = pointer_entry(
+        1000,
+        2000,
+        &[],
+        vec![down(1000, 100, 200), up(1000, 100, 200)],
+    );
+    let ass = build_overlay_ass(&[click], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    let glyphs = cursor_glyph_dialogues(&ass);
+    // The zero-length down->up hold renders nothing; the release holds from
+    // 1000 ms through the end of the retained segment [750, 3000] -> [250, 2250].
+    assert_eq!(glyphs.len(), 1, "{ass}");
+    assert!(
+        glyphs[0].contains("Dialogue: 2,0:00:00.25,0:00:02.25,Cursor,"),
+        "{ass}"
+    );
+    // The arrow's tip (the drawing origin) lands on the pointer position.
+    assert!(glyphs[0].contains("\\an7\\pos(100,200)"), "{ass}");
+    // The first cursor dialogue fades in instead of popping into existence.
+    assert!(glyphs[0].contains("\\fad(150,0)"), "{ass}");
+    // White fill, black outline, frame clip: legible on any background and
+    // never addressing outside the frame.
+    assert!(glyphs[0].contains("\\1c&HFFFFFF&"), "{ass}");
+    assert!(glyphs[0].contains("\\3c&H000000&"), "{ass}");
+    assert!(glyphs[0].contains("\\clip(0,0,1280,720)"), "{ass}");
+    // The glyph path starts at the origin (tip hotspot).
+    assert!(glyphs[0].contains("}m 0 0 l "), "{ass}");
+}
+
+#[test]
+fn cursor_glyph_glides_eased_into_each_drag_point() {
+    let drag = pointer_entry(
+        1000,
+        2000,
+        &[],
+        vec![down(1000, 100, 100), mv(1200, 300, 400), up(1400, 300, 400)],
+    );
+    let ass = build_overlay_ass(&[drag], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    let glyphs = cursor_glyph_dialogues(&ass);
+    // Segment [750, 3000]: the press-to-move gap ([250, 450] on the output
+    // timeline) is shorter than the max glide, so the whole gap is one eased
+    // glide of four 50 ms `\move` pieces arriving exactly at the move event;
+    // the move-to-release gap is stationary ([450, 650]); the release holds
+    // through the end of the retained footage ([650, 2250]).
+    assert_eq!(glyphs.len(), 6, "{ass}");
+    assert!(
+        glyphs[0].contains("2,0:00:00.25,0:00:00.30,Cursor,"),
+        "{ass}"
+    );
+    assert!(glyphs[0].contains("\\move(100,100,131,147,0,50)"), "{ass}");
+    // The fade-in clamps to the first (50 ms) piece.
+    assert!(glyphs[0].contains("\\fad(50,0)"), "{ass}");
+    // Ease-in-out: the middle pieces cover more distance than the ends.
+    assert!(glyphs[1].contains("\\move(131,147,200,250,0,50)"), "{ass}");
+    assert!(glyphs[2].contains("\\move(200,250,269,353,0,50)"), "{ass}");
+    assert!(
+        glyphs[3].contains("2,0:00:00.40,0:00:00.45,Cursor,"),
+        "{ass}"
+    );
+    assert!(glyphs[3].contains("\\move(269,353,300,400,0,50)"), "{ass}");
+    assert!(
+        glyphs[4].contains("2,0:00:00.45,0:00:00.65,Cursor,"),
+        "{ass}"
+    );
+    assert!(glyphs[4].contains("\\pos(300,400)"), "{ass}");
+    assert!(
+        glyphs[5].contains("2,0:00:00.65,0:00:02.25,Cursor,"),
+        "{ass}"
+    );
+    assert!(glyphs[5].contains("\\pos(300,400)"), "{ass}");
+}
+
+#[test]
+fn cursor_glide_bridges_a_removed_gap_smoothly() {
+    // Click in group A, then a later click in group B with a removed gap
+    // between them. The cursor holds at A's point, then glides into B's click
+    // over the max glide window on the *output* timeline — the glide starts in
+    // A's retained tail and finishes in B's lead-in, bridging the cut seam
+    // (output 2250 ms) smoothly instead of being swallowed by the removed gap.
+    let a = pointer_entry(1000, 2000, &[], vec![down(1000, 10, 10), up(1000, 10, 10)]);
+    let b = pointer_entry(5000, 6000, &[], vec![down(5000, 20, 20), up(5000, 20, 20)]);
+    let ass = build_overlay_ass(&[a, b], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    let glyphs = cursor_glyph_dialogues(&ass);
+    // Segments [750,3000]->0 and [4750,7000]->2250; B's click lands at output
+    // 2500 ms. Hold [250, 2000], ten 50 ms glide pieces [2000, 2500], and the
+    // final hold [2500, 4500].
+    assert_eq!(glyphs.len(), 12, "{ass}");
+    assert!(
+        glyphs[0].contains("2,0:00:00.25,0:00:02.00,Cursor,"),
+        "{ass}"
+    );
+    assert!(glyphs[0].contains("\\pos(10,10)"), "{ass}");
+    // The glide is continuous across the seam: the piece beginning at the
+    // seam picks up exactly where the previous piece left off.
+    assert!(
+        glyphs[6].contains("2,0:00:02.25,0:00:02.30,Cursor,"),
+        "{ass}"
+    );
+    assert!(glyphs[6].contains("\\move(15,15,16,16,0,50)"), "{ass}");
+    assert!(
+        glyphs[11].contains("2,0:00:02.50,0:00:04.50,Cursor,"),
+        "{ass}"
+    );
+    assert!(glyphs[11].contains("\\pos(20,20)"), "{ass}");
+}
+
+#[test]
+fn cursor_glide_is_clamped_by_the_previous_event() {
+    // Two clicks 300 ms apart — closer than the 500 ms max glide. The glide
+    // starts at the previous event (no intermediate hold) and spans the whole
+    // gap, still arriving exactly at the second click.
+    let entry = pointer_entry(
+        1000,
+        2000,
+        &[],
+        vec![
+            down(1000, 10, 10),
+            up(1000, 10, 10),
+            down(1300, 200, 200),
+            up(1300, 200, 200),
+        ],
+    );
+    let ass = build_overlay_ass(&[entry], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    let glyphs = cursor_glyph_dialogues(&ass);
+    // Glide [250, 550] in six 50 ms pieces, then the final hold [550, 2250].
+    assert_eq!(glyphs.len(), 7, "{ass}");
+    assert!(
+        glyphs[0].contains("2,0:00:00.25,0:00:00.30,Cursor,"),
+        "{ass}"
+    );
+    assert!(glyphs[0].contains("\\move(10,10,"), "{ass}");
+    assert!(glyphs[5].contains(",0:00:00.55,Cursor,"), "{ass}");
+    assert!(glyphs[5].contains(",200,200,0,50)"), "{ass}");
+    assert!(
+        glyphs[6].contains("2,0:00:00.55,0:00:02.25,Cursor,"),
+        "{ass}"
+    );
+    assert!(glyphs[6].contains("\\pos(200,200)"), "{ass}");
+}
+
+fn move_tags(lines: &[&str]) -> Vec<String> {
+    lines
         .iter()
-        .find(|l| l.contains("\\1a&H4B&"))
-        .expect("held dialogue");
-    assert!(held.contains("\\move(100,100,200,200,"), "{held}");
+        .filter_map(|line| {
+            let start = line.find("\\move(")?;
+            let end = line[start..].find(')')? + start;
+            Some(line[start..=end].to_string())
+        })
+        .collect()
+}
+
+#[test]
+fn held_dot_and_cursor_glide_along_the_same_path() {
+    // During a drag the held dot and the cursor glyph must stay glued
+    // together: they emit identical `\move` schedules (same coordinates and
+    // timing), differing only in styling and layer — including through a
+    // multi-waypoint path.
+    let drag = pointer_entry(
+        1000,
+        2000,
+        &[],
+        vec![
+            down(1000, 100, 100),
+            mv(1200, 300, 400),
+            mv(1400, 500, 200),
+            up(1600, 500, 200),
+        ],
+    );
+    let ass = build_overlay_ass(&[drag], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    let dot_lines: Vec<&str> = cursor_dialogues(&ass)
+        .into_iter()
+        .filter(|line| line.contains("\\1a&H4B&"))
+        .collect();
+    let dot_moves = move_tags(&dot_lines);
+    let glyph_moves = move_tags(&cursor_glyph_dialogues(&ass));
+    assert!(!dot_moves.is_empty(), "{ass}");
+    assert_eq!(dot_moves, glyph_moves, "{ass}");
+}
+
+#[test]
+fn drag_cursor_moves_continuously_through_waypoints() {
+    // A multi-waypoint drag must not pause at sampled waypoints: the first
+    // moving leg eases in, intermediate legs are linear (one exact `\move`
+    // filling the whole gap), the last leg eases out, and the only stationary
+    // dialogues are the real dwell at the end point before the release and
+    // the post-release hold.
+    let drag = pointer_entry(
+        1000,
+        2200,
+        &[],
+        vec![
+            down(1000, 0, 0),
+            mv(1300, 90, 0),
+            mv(1600, 180, 0),
+            mv(1900, 270, 0),
+            up(2100, 270, 0),
+        ],
+    );
+    let ass = build_overlay_ass(&[drag], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    let glyphs = cursor_glyph_dialogues(&ass);
+    // Segment [750, 3200] -> output = source - 750. Legs [250,550] (ease-in,
+    // six pieces), [550,850] (linear, one piece), [850,1150] (ease-out, six
+    // pieces), dwell [1150,1350], final hold [1350,2450].
+    assert_eq!(glyphs.len(), 15, "{ass}");
+    // Ease-in: the first piece covers little distance (accelerating from rest).
+    assert!(
+        glyphs[0].contains("2,0:00:00.25,0:00:00.30,Cursor,"),
+        "{ass}"
+    );
+    assert!(glyphs[0].contains("\\move(0,0,3,0,0,50)"), "{ass}");
+    // The intermediate leg is one linear `\move` spanning its whole gap.
+    assert!(
+        glyphs[6].contains("2,0:00:00.55,0:00:00.85,Cursor,"),
+        "{ass}"
+    );
+    assert!(glyphs[6].contains("\\move(90,0,180,0,0,300)"), "{ass}");
+    // Ease-out: the last leg starts fast and settles into the final point.
+    assert!(glyphs[7].contains("\\move(180,0,208,0,0,50)"), "{ass}");
+    assert!(glyphs[12].contains(",0:00:01.15,Cursor,"), "{ass}");
+    assert!(glyphs[12].contains(",270,0,0,50)"), "{ass}");
+    // No stationary cursor anywhere along the path: the only `\pos` holds are
+    // the pre-release dwell and the post-release hold.
+    let holds: Vec<_> = glyphs
+        .iter()
+        .filter(|line| line.contains("\\pos("))
+        .collect();
+    assert_eq!(holds.len(), 2, "{ass}");
+    assert!(
+        holds[0].contains("2,0:00:01.15,0:00:01.35,Cursor,"),
+        "{ass}"
+    );
+    assert!(holds[0].contains("\\pos(270,0)"), "{ass}");
+    assert!(
+        holds[1].contains("2,0:00:01.35,0:00:02.45,Cursor,"),
+        "{ass}"
+    );
+}
+
+#[test]
+fn split_call_drag_glides_across_removed_gaps_without_stopping() {
+    // A drag split across three calls with multi-second thinking gaps: the
+    // cut compresses the gaps, and the drag leg fills the whole compressed
+    // gap — the cursor starts moving at the press and never holds mid-path,
+    // even across the removed-gap seams. The held dot follows identically.
+    let split = vec![
+        pointer_entry(1000, 1100, &[], vec![down(1000, 100, 100)]),
+        pointer_entry(5000, 5100, &[], vec![mv(5000, 300, 400)]),
+        pointer_entry(9000, 9100, &[], vec![up(9000, 300, 400)]),
+    ];
+    let ass = build_overlay_ass(&split, (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    let glyphs = cursor_glyph_dialogues(&ass);
+    // Segments [750,2100]->0, [4750,6100]->1350, [8750,10000]->2700. The leg
+    // spans [250, 1600] (sixteen pieces), dwell [1600, 2950], final hold
+    // [2950, 3950].
+    assert_eq!(glyphs.len(), 18, "{ass}");
+    // Motion starts at the press itself — no hold at the press point.
+    assert!(glyphs[0].contains("2,0:00:00.25,"), "{ass}");
+    assert!(glyphs[0].contains("\\move(100,100,"), "{ass}");
+    // The lone moving leg is eased in-out: its midpoint passes (200, 250).
+    assert!(ass.contains(",200,250,0,"), "{ass}");
+    // The first stationary dialogue is the dwell at the move point.
+    let first_hold = glyphs
+        .iter()
+        .find(|line| line.contains("\\pos("))
+        .expect("dwell dialogue");
+    assert!(
+        first_hold.contains("2,0:00:01.60,0:00:02.95,Cursor,"),
+        "{ass}"
+    );
+    assert!(first_hold.contains("\\pos(300,400)"), "{ass}");
+    // The held dot's motion schedule matches the cursor's exactly.
+    let dot_lines: Vec<&str> = cursor_dialogues(&ass)
+        .into_iter()
+        .filter(|line| line.contains("\\1a&H4B&"))
+        .collect();
+    assert_eq!(move_tags(&dot_lines), move_tags(&glyphs), "{ass}");
+}
+
+#[test]
+fn scroll_only_group_renders_cursor_but_no_gesture() {
+    let entry = pointer_entry(1000, 2000, &[], vec![scroll(1000, 50, 60)]);
+    let ass = build_overlay_ass(&[entry], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    // A scroll sample carries no click/drag gesture...
+    assert!(cursor_dialogues(&ass).is_empty(), "{ass}");
+    // ...but the cursor glyph tracks the wheel position.
+    let glyphs = cursor_glyph_dialogues(&ass);
+    assert_eq!(glyphs.len(), 1, "{ass}");
+    assert!(glyphs[0].contains("\\pos(50,60)"), "{ass}");
+}
+
+#[test]
+fn scroll_sample_between_press_and_release_keeps_the_click() {
+    // A scroll between a press and its matching release is position-only: the
+    // gesture stays a click (one ring, no trail), while the cursor glyph
+    // tracks the wheel position.
+    let entry = pointer_entry(
+        1000,
+        2000,
+        &[],
+        vec![
+            down(1000, 100, 100),
+            scroll(1200, 300, 300),
+            up(1400, 300, 300),
+        ],
+    );
+    let ass = build_overlay_ass(&[entry], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    assert_eq!(ring_dialogues(&ass).len(), 1, "{ass}");
+    assert!(
+        !cursor_dialogues(&ass)
+            .iter()
+            .any(|line| line.contains("\\1a&H73&")),
+        "a scroll sample must not create a drag trail: {ass}"
+    );
+    // The glyph glides into the wheel position (four pieces over [250, 450])
+    // and rests there through the release and the retained tail.
+    let glyphs = cursor_glyph_dialogues(&ass);
+    assert_eq!(glyphs.len(), 6, "{ass}");
+    assert!(glyphs[3].contains("\\move(269,269,300,300,0,50)"), "{ass}");
+    assert!(glyphs[4].contains("\\pos(300,300)"), "{ass}");
+}
+
+#[test]
+fn keyboard_only_entry_renders_no_cursor_glyph() {
+    // No pointer events -> no cursor: its position is unknown.
+    let ass = build_overlay_ass(
+        &[entry(1000, 2000, &["Return"])],
+        (1280, 720),
+        SOURCE_TEN_SECS,
+        FRAME_RATE_15,
+    );
+    assert!(cursor_glyph_dialogues(&ass).is_empty(), "{ass}");
+}
+
+#[test]
+fn cursor_glyph_point_is_clamped_into_frame() {
+    let entry = pointer_entry(1000, 2000, &[], vec![scroll(1000, 5000, -20)]);
+    let ass = build_overlay_ass(&[entry], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
+    let glyphs = cursor_glyph_dialogues(&ass);
+    assert_eq!(glyphs.len(), 1, "{ass}");
+    assert!(glyphs[0].contains("\\an7\\pos(1279,0)"), "{ass}");
 }
 
 #[test]

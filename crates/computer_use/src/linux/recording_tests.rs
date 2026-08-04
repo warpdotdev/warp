@@ -386,6 +386,36 @@ fn linux_capture_command_captures_at_1x_without_setpts() {
     );
 }
 
+/// The capture composites no X11 cursor: XFixes only reports the user's core
+/// pointer (never the background agent seat's), so the post-stop burn-in
+/// synthesizes the cursor from recorded pointer events instead — identically
+/// for screen and window scopes.
+#[test]
+fn capture_command_disables_cursor_compositing_for_screen_and_window() {
+    let config = RecordingConfig::default();
+    for window in [None, Some(0x0060_0011)] {
+        let command = super::new_ffmpeg_capture_command(&config, ":99", 1920, 1080, window);
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let index = args
+            .iter()
+            .position(|arg| arg == "-draw_mouse")
+            .expect("argv should contain -draw_mouse");
+        assert_eq!(args.get(index + 1), Some(&"0".to_string()), "{args:?}");
+        let i_index = args
+            .iter()
+            .position(|arg| arg == "-i")
+            .expect("argv should contain -i");
+        assert!(
+            index < i_index,
+            "-draw_mouse must be an x11grab input option (before -i), got {args:?}"
+        );
+    }
+}
+
 /// The cut-only filtergraph emits one `trim`+`setpts=PTS-STARTPTS` branch per
 /// retained segment, concatenates them video-only, and maps the result to
 /// `[vout]`. It contains no overlay/subtitles logic, which is handled in a

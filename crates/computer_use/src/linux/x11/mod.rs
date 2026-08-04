@@ -250,7 +250,7 @@ impl crate::Actor for Actor {
                         screen_mouse.focus_window_under_pointer()?;
                         screen_mouse.button_down(button)?;
                         last_mouse_position = Some(*at);
-                        record_down_move(
+                        record_positioned_event(
                             pointer_sink.as_ref(),
                             PointerEventKind::Down,
                             Some(*button),
@@ -266,7 +266,7 @@ impl crate::Actor for Actor {
                     Action::MouseMove { to } => {
                         screen_mouse.move_to(*to)?;
                         last_mouse_position = Some(*to);
-                        record_down_move(
+                        record_positioned_event(
                             pointer_sink.as_ref(),
                             PointerEventKind::Move,
                             None,
@@ -283,6 +283,14 @@ impl crate::Actor for Actor {
                         screen_mouse.move_to(*at)?;
                         screen_mouse.scroll(direction, distance)?;
                         last_mouse_position = Some(*at);
+                        record_positioned_event(
+                            pointer_sink.as_ref(),
+                            PointerEventKind::Scroll,
+                            None,
+                            target,
+                            *at,
+                            *at,
+                        );
                     }
                     Action::TypeText { text } => {
                         screen_keyboard.type_text(text)?;
@@ -316,7 +324,7 @@ impl crate::Actor for Actor {
                             agent_mouse.move_to(at)?;
                             agent_mouse.button_down(button)?;
                             last_mouse_position = Some(at);
-                            record_down_move(
+                            record_positioned_event(
                                 pointer_sink.as_ref(),
                                 PointerEventKind::Down,
                                 Some(*button),
@@ -335,7 +343,7 @@ impl crate::Actor for Actor {
                                 windows::window_local_to_root(&self.conn, root, window_id, *to)?;
                             agent_mouse.move_to(to)?;
                             last_mouse_position = Some(to);
-                            record_down_move(
+                            record_positioned_event(
                                 pointer_sink.as_ref(),
                                 PointerEventKind::Move,
                                 None,
@@ -349,6 +357,7 @@ impl crate::Actor for Actor {
                             direction,
                             distance,
                         } => {
+                            let local = *at;
                             let at =
                                 windows::window_local_to_root(&self.conn, root, window_id, *at)?;
                             // Scroll events are delivered by pointer position just like button
@@ -357,6 +366,14 @@ impl crate::Actor for Actor {
                             agent_mouse.move_to(at)?;
                             agent_mouse.scroll(direction, distance)?;
                             last_mouse_position = Some(at);
+                            record_positioned_event(
+                                pointer_sink.as_ref(),
+                                PointerEventKind::Scroll,
+                                None,
+                                target,
+                                local,
+                                at,
+                            );
                         }
                         Action::TypeText { text } => {
                             agent_seat.focus_window(window_id)?;
@@ -452,13 +469,14 @@ fn resolve_capture_point(
     }
 }
 
-/// Records a resolved press/move into the pointer sink, updating the recording-
+/// Records a resolved coordinate-carrying pointer event (a press, move, or
+/// scroll position sample) into the pointer sink, updating the recording-
 /// scoped pointer session so a later release (which carries no coordinate) can
 /// reuse the last point — even when that release arrives in a later
-/// `UseComputer` call. A down or move whose surface does not match the
-/// recording clears the session so a following release is not recorded at a
-/// stale coordinate.
-fn record_down_move(
+/// `UseComputer` call. An event whose surface does not match the recording
+/// clears the session so a following release is not recorded at a stale
+/// coordinate.
+fn record_positioned_event(
     pointer_sink: Option<&PointerSink>,
     kind: PointerEventKind,
     button: Option<MouseButton>,
@@ -475,9 +493,9 @@ fn record_down_move(
             push_pointer_event(sink, point, kind, button);
         }
         None => {
-            // Any unmatched down or move (a surface that isn't the recorded
-            // one) invalidates the active pointer state, so a following release
-            // is not recorded at a stale in-frame coordinate.
+            // Any unmatched coordinate-carrying event (a surface that isn't
+            // the recorded one) invalidates the active pointer state, so a
+            // following release is not recorded at a stale in-frame coordinate.
             sink.session.clear();
         }
     }

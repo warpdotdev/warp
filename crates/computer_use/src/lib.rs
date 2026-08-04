@@ -689,10 +689,12 @@ impl PointerSession {
         }
     }
 
-    /// Records a press or move resolved at `point`. A press (`Down`) sets the
-    /// active button and last point; a move updates the last point while a
-    /// button is held. A new press while a button is already active replaces it
-    /// (the prior incomplete press is closed as a held drag by the classifier).
+    /// Records a press or coordinate-carrying pointer sample resolved at
+    /// `point`. A press (`Down`) sets the active button and last point; a move
+    /// or scroll sample updates the last point (the pointer physically warped
+    /// there before the wheel turned) without touching the active button. A
+    /// new press while a button is already active replaces it (the prior
+    /// incomplete press is closed as a held drag by the classifier).
     pub fn record_press_or_move(
         &self,
         kind: PointerEventKind,
