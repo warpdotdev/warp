@@ -1,4 +1,3 @@
-use std::any::TypeId;
 use std::borrow::Cow;
 
 use itertools::Itertools;
@@ -6,7 +5,7 @@ use lazy_static::lazy_static;
 use memo_map::MemoMap;
 use rand::Rng;
 use warp_core::session_id::SessionId;
-use warpui::{AppContext, AssetProvider, SingletonEntity};
+use warpui::{AppContext, AssetCacheKey, AssetProvider, SingletonEntity};
 
 #[cfg(feature = "local_fs")]
 use super::{
@@ -22,7 +21,7 @@ lazy_static! {
     /// shell.  We store the full version here as an optimization so that we
     /// don't have to regenerate it every time we spawn a shell.
     ///
-    /// The key includes the concrete `AssetProvider`'s `TypeId` alongside the
+    /// The key includes the provider's [`AssetCacheKey`] alongside the
     /// `ShellType`: `script_for_shell` is memoized process-wide, so without
     /// the provider identity in the key, the first caller to populate a given
     /// `ShellType` entry (e.g. production code using `crate::ASSETS`) would
@@ -30,7 +29,7 @@ lazy_static! {
     /// `AssetProvider` for the same shell (e.g. a test fixture) to
     /// incorrectly receive the first provider's cached script instead of its
     /// own.
-    static ref BOOTSTRAP_CACHE: MemoMap<(ShellType, TypeId), Vec<u8>> = Default::default();
+    static ref BOOTSTRAP_CACHE: MemoMap<(ShellType, AssetCacheKey), Vec<u8>> = Default::default();
 }
 
 /// This can sometimes appear in the beginning of files. If it gets written into the PTY, it causes
@@ -136,7 +135,7 @@ pub fn script_for_shell(shell_type: ShellType, assets: &dyn AssetProvider) -> Co
         ShellType::PowerShell => "pwsh.ps1",
     };
 
-    let cache_key = (shell_type, assets.type_id());
+    let cache_key = (shell_type, assets.cache_key());
     BOOTSTRAP_CACHE
         .get_or_insert(&cache_key, || {
             let file_path = format!("bundled/bootstrap/{file}");
