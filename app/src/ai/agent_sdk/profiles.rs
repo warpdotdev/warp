@@ -40,7 +40,7 @@ impl ProfilesCommandRunner {
 
             let profiles: Vec<_> = profile_ids
                 .iter()
-                .flat_map(|id| profiles_model.get_profile_by_id(*id, ctx))
+                .flat_map(|id| profiles_model.get_profile_by_id(id, ctx))
                 .map(|profile| {
                     let name = profile.data().display_name().to_string();
                     let id = match profile.sync_id() {

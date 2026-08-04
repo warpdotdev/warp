@@ -231,6 +231,7 @@ impl AgentMessageBar {
             if matches!(
                 event,
                 AIRequestUsageModelEvent::RequestUsageUpdated
+                    | AIRequestUsageModelEvent::CreditAvailabilityUpdated
                     | AIRequestUsageModelEvent::AmbientCreditsBannerDismissed
             ) {
                 ctx.notify();
@@ -778,10 +779,11 @@ fn should_fork_from_last_known_good_state(
         | RenderableAIError::ServerOverloaded
         | RenderableAIError::ContextWindowExceeded(_)
         | RenderableAIError::InvalidApiKey { .. }
-        | RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid { .. } => false,
+        | RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid { .. }
+        | RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid => false,
         // A shell-exit failure can't resume in this (now-dead) pane, but the user
         // can fork from the last known good state to continue in a fresh one.
-        RenderableAIError::InternalWarpError | RenderableAIError::AgentExitedShell => true,
+        RenderableAIError::InternalWarpError | RenderableAIError::AgentExitedShell { .. } => true,
         RenderableAIError::Other {
             will_attempt_resume,
             ..
@@ -790,6 +792,9 @@ fn should_fork_from_last_known_good_state(
             will_attempt_resume,
             ..
         } => !will_attempt_resume,
+        // Cloud startup failures mean the agent never started; there is no prior
+        // successful state to fork from.
+        RenderableAIError::CloudStartupFailed(_) => false,
     }
 }
 

@@ -5,14 +5,17 @@ use ai::agent::orchestration_config::{
     OrchestrationConfig, OrchestrationConfigStatus, OrchestrationExecutionMode,
 };
 use warp::tui_export::{
-    AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, Appearance,
-    AuthSecretSelection, OptionRow, OptionSnapshot, OptionSourceStatus, OrchestrationConfigState,
-    OrchestrationEditState, RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest,
-    TaskId,
+    AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId,
+    Appearance, AuthSecretSelection, OptionRow, OptionSnapshot, OptionSourceStatus,
+    OrchestrationConfigState, OrchestrationEditState, RunAgentsAgentRunConfig,
+    RunAgentsExecutionMode, RunAgentsRequest, TaskId,
 };
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, App, ViewHandle};
-use warpui_core::TypedActionView as _;
+use warpui_core::elements::tui::TuiRect;
+use warpui_core::keymap::Keystroke;
+use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::{TuiView as _, TypedActionView as _, WindowInvalidation};
 
 use super::{
     CardMode, ConfigPage, OrchestrationBlockController, TuiOrchestrationBlock,
@@ -35,6 +38,7 @@ fn request(harness: &str, execution_mode: RunAgentsExecutionMode) -> RunAgentsRe
             prompt: "research".to_string(),
             title: "Researcher".to_string(),
             agent_identity_uid: String::new(),
+            model_id: String::new(),
         }],
         plan_id: "plan-1".to_string(),
         harness_auth_secret_name: None,
@@ -42,14 +46,30 @@ fn request(harness: &str, execution_mode: RunAgentsExecutionMode) -> RunAgentsRe
 }
 
 #[test]
-fn only_the_model_page_is_searchable() {
+fn environment_selector_is_searchable() {
+    App::test((), |mut app| async move {
+        let (block, _) = test_block(&mut app, &request("oz", remote("env-1", "warp")));
+        block.update(&mut app, |block, ctx| {
+            block.open_page(ConfigPage::Environment, ctx);
+        });
+        let selector = app.read(|ctx| block.as_ref(ctx).selector.clone());
+        assert!(
+            selector
+                .read(&app, |selector, _| selector.search_field_for_test())
+                .is_some()
+        );
+    });
+}
+
+#[test]
+fn environment_and_model_pages_are_searchable() {
+    assert!(ConfigPage::Environment.is_searchable());
     assert!(ConfigPage::Model.is_searchable());
     for page in [
         ConfigPage::Location,
         ConfigPage::Harness,
         ConfigPage::ApiKey,
         ConfigPage::Host,
-        ConfigPage::Environment,
     ] {
         assert!(!page.is_searchable(), "{page:?}");
     }
@@ -293,18 +313,21 @@ impl OrchestrationBlockController for TestController {
         }
     }
 
+    fn accept_disabled_reason(
+        &self,
+        _state: &OrchestrationConfigState,
+        _ctx: &warpui::AppContext,
+    ) -> Option<String> {
+        self.accept_error.borrow().clone()
+    }
+
     fn accept(
         &self,
         _action_id: &AIAgentActionId,
         request: RunAgentsRequest,
-        _state: &OrchestrationConfigState,
         _ctx: &mut warpui::AppContext,
-    ) -> Result<(), String> {
-        if let Some(reason) = self.accept_error.borrow().clone() {
-            return Err(reason);
-        }
+    ) {
         self.executed_requests.borrow_mut().push(request);
-        Ok(())
     }
 }
 
@@ -325,6 +348,7 @@ fn test_block(
     request: &RunAgentsRequest,
 ) -> (ViewHandle<TuiOrchestrationBlock>, Rc<TestController>) {
     app.add_singleton_model(|_| Appearance::mock());
+    app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
     let action = AIAgentAction {
         id: AIAgentActionId::from("run-agents-1".to_string()),
         task_id: TaskId::new("task-1".to_string()),
@@ -344,6 +368,7 @@ fn test_block(
         );
         ctx.add_typed_action_tui_view(window_id, move |ctx| {
             TuiOrchestrationBlock::from_parts(
+                AIConversationId::new(),
                 action,
                 &request,
                 None,
@@ -398,6 +423,7 @@ fn selector_actions_commit_edits_and_follow_the_dynamic_page_sequence() {
         let (block, _) = test_block(&mut app, &request("oz", remote("env-1", "warp")));
         act(&mut app, &block, TuiOrchestrationBlockAction::Configure);
         let selector = app.read(|ctx| block.as_ref(ctx).selector.clone());
+        assert!(app.read(|ctx| selector.is_focused(ctx)));
 
         selector.update(&mut app, |selector, ctx| {
             selector.handle_action(&TuiOptionSelectorAction::MoveDown, ctx);
@@ -450,6 +476,103 @@ fn selector_actions_commit_edits_and_follow_the_dynamic_page_sequence() {
         });
     });
 }
+#[test]
+fn focusing_a_configuring_card_delegates_to_the_selector() {
+    App::test((), |mut app| async move {
+        let (block, _) = test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+        act(&mut app, &block, TuiOrchestrationBlockAction::Configure);
+        let selector = app.read(|ctx| block.as_ref(ctx).selector.clone());
+        assert!(app.read(|ctx| selector.is_focused(ctx)));
+
+        block.update(&mut app, |_, ctx| ctx.focus_self());
+
+        assert!(app.read(|ctx| selector.is_focused(ctx)));
+    });
+}
+
+#[test]
+fn opening_configuration_only_invalidates_layout() {
+    App::test((), |mut app| async move {
+        let (block, _) = test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let captured_events = events.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| {
+                captured_events.borrow_mut().push(event.clone());
+            });
+        });
+
+        act(&mut app, &block, TuiOrchestrationBlockAction::Configure);
+
+        assert!(
+            events
+                .borrow()
+                .iter()
+                .any(|event| matches!(event, TuiOrchestrationBlockEvent::LayoutInvalidated))
+        );
+        assert!(
+            !events
+                .borrow()
+                .iter()
+                .any(|event| matches!(event, TuiOrchestrationBlockEvent::BlockingStateChanged))
+        );
+    });
+}
+
+#[test]
+fn model_selector_arrows_navigate_after_search_takes_focus() {
+    App::test((), |mut app| async move {
+        app.update(crate::option_selector::init);
+        let (block, _) = test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+        block.update(&mut app, |block, ctx| {
+            block.open_page(ConfigPage::Model, ctx);
+        });
+        let selector = app.read(|ctx| block.as_ref(ctx).selector.clone());
+        let mut presenter = TuiPresenter::new();
+        app.update(|ctx| {
+            let mut invalidation = WindowInvalidation::default();
+            invalidation.updated.insert(block.id());
+            invalidation.updated.insert(selector.id());
+            invalidation
+                .updated
+                .extend(selector.as_ref(ctx).child_view_ids(ctx));
+            presenter.invalidate(&invalidation, ctx, block.window_id(ctx));
+            presenter.present(ctx, &block, TuiRect::new(0, 0, 80, 20));
+        });
+
+        let window_id = app.read(|ctx| block.window_id(ctx));
+        let up_handled = app
+            .dispatch_keystroke(
+                window_id,
+                &[block.id(), selector.id()],
+                &Keystroke::parse("up").expect("valid keystroke"),
+                false,
+            )
+            .expect("keystroke dispatch succeeds");
+        assert!(up_handled);
+        let search_field = app.read(|ctx| {
+            selector
+                .as_ref(ctx)
+                .search_field_for_test()
+                .expect("model page has a search field")
+        });
+        assert!(app.read(|ctx| search_field.as_ref(ctx).is_focused()));
+
+        let down_handled = app
+            .dispatch_keystroke(
+                window_id,
+                &[block.id(), selector.id(), search_field.id()],
+                &Keystroke::parse("down").expect("valid keystroke"),
+                false,
+            )
+            .expect("keystroke dispatch succeeds");
+        assert!(down_handled);
+        app.read(|ctx| {
+            assert!(selector.is_focused(ctx));
+            assert_eq!(selector.as_ref(ctx).highlighted_index(), Some(0));
+        });
+    });
+}
 
 #[test]
 fn blocked_accept_invalidates_card_layout() {
@@ -457,21 +580,27 @@ fn blocked_accept_invalidates_card_layout() {
         let (block, controller) =
             test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
         *controller.accept_error.borrow_mut() = Some("Choose a model.".to_string());
-        let invalidations = Rc::new(Cell::new(0));
-        let invalidations_for_subscription = invalidations.clone();
+        let layout_invalidations = Rc::new(Cell::new(0));
+        let blocking_state_changes = Rc::new(Cell::new(0));
+        let layout_invalidations_for_subscription = layout_invalidations.clone();
+        let blocking_state_changes_for_subscription = blocking_state_changes.clone();
         app.update(|ctx| {
             ctx.subscribe_to_view(&block, move |_, event, _| match event {
                 TuiOrchestrationBlockEvent::BlockingStateChanged => {
-                    invalidations_for_subscription.set(invalidations_for_subscription.get() + 1);
+                    blocking_state_changes_for_subscription
+                        .set(blocking_state_changes_for_subscription.get() + 1);
                 }
                 TuiOrchestrationBlockEvent::RejectRequested => {}
-                TuiOrchestrationBlockEvent::LayoutInvalidated => {}
+                TuiOrchestrationBlockEvent::LayoutInvalidated => {
+                    layout_invalidations_for_subscription
+                        .set(layout_invalidations_for_subscription.get() + 1);
+                }
             });
         });
 
         act(&mut app, &block, TuiOrchestrationBlockAction::Accept);
-
-        assert_eq!(invalidations.get(), 1);
+        assert_eq!(layout_invalidations.get(), 1);
+        assert_eq!(blocking_state_changes.get(), 0);
         assert_eq!(
             block.read(&app, |block, _| block.accept_error.clone()),
             Some("Choose a model.".to_string())

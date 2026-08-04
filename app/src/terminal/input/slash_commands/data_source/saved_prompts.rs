@@ -106,7 +106,7 @@ pub(crate) fn fuzzy_match_saved_prompts(
                             action: AcceptSlashCommandOrSavedPrompt::SavedPrompt {
                                 id: candidate.id,
                             },
-                            icon_path: "bundled/svg/prompt.svg",
+                            icon_path: Some("bundled/svg/prompt.svg"),
                             name: candidate.model.data.name().to_owned(),
                             description: None,
                             font_family: snapshot.font_family,
@@ -136,7 +136,7 @@ pub(crate) fn fuzzy_match_saved_prompts(
                             action: AcceptSlashCommandOrSavedPrompt::SavedPrompt {
                                 id: candidate.id,
                             },
-                            icon_path: "bundled/svg/prompt.svg",
+                            icon_path: Some("bundled/svg/prompt.svg"),
                             name: candidate.model.data.name().to_owned(),
                             description: None,
                             font_family: snapshot.font_family,

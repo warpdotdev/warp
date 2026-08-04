@@ -29,6 +29,7 @@ use crate::ai::agent_tips::AITipModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
+use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::facts::manager::AIFactManager;
@@ -104,6 +105,7 @@ pub(crate) fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| SystemStats::new());
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(CloudEnvironmentCatalog::new);
     app.add_singleton_model(UserWorkspaces::default_mock);
     app.add_singleton_model(|_ctx| UserProfiles::new(Vec::new()));
     app.add_singleton_model(TeamTesterStatus::mock);
@@ -266,6 +268,59 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
     workspace
 }
 
+#[test]
+fn test_open_new_window_for_team_reuses_existing_team_window() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let source_workspace = mock_workspace(&mut app);
+        let existing_team_workspace = mock_workspace(&mut app);
+        let existing_team_window_id =
+            existing_team_workspace.update(&mut app, |_, ctx| ctx.window_id());
+        let team_uid: ServerId = 123.into();
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                user_workspaces.register_window(existing_team_window_id, Some(team_uid), ctx);
+            });
+        });
+        let initial_window_count = app.window_ids().len();
+
+        source_workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::OpenNewWindowForTeam { team_uid }, ctx);
+        });
+
+        assert_eq!(app.window_ids().len(), initial_window_count);
+    });
+}
+
+#[test]
+fn test_open_new_window_for_team_creates_window_when_team_has_none() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let source_workspace = mock_workspace(&mut app);
+        let team_uid: ServerId = 123.into();
+        let initial_window_count = app.window_ids().len();
+
+        source_workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::OpenNewWindowForTeam { team_uid }, ctx);
+        });
+
+        assert_eq!(app.window_ids().len(), initial_window_count + 1);
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.window_ids()
+                    .filter(|window_id| {
+                        UserWorkspaces::as_ref(ctx).team_uid_for_window(*window_id)
+                            == Some(team_uid)
+                    })
+                    .count(),
+                1
+            );
+        });
+    });
+}
+
 fn restored_workspace(
     app: &mut App,
     window_snapshot: crate::app_state::WindowSnapshot,
@@ -295,6 +350,7 @@ fn transferred_tab_workspace(
             global_resource_handles,
             None,
             NewWorkspaceSource::TransferredTab {
+                source_window_id: ctx.window_id(),
                 tab_color: None,
                 custom_title: None,
                 left_panel_open: false,
@@ -352,6 +408,203 @@ fn test_theme_chooser_does_not_suppress_tab_bar_traffic_light_padding() {
                 workspace.compute_tab_bar_left_padding(ctx),
                 closed_padding,
                 "Open tools panel should still reserve tab bar traffic light padding"
+            );
+        });
+    });
+}
+
+/// Regression for account-first onboarding users who select Warp Drive and
+/// conversation history, skip signup, and create an account later. The stored
+/// preferences should remain true while unavailable, then take effect
+/// automatically as account and AI availability change—without an off/on
+/// toggle.
+#[test]
+fn test_tools_panel_preferences_activate_after_signup_and_ai_enablement() {
+    let _skip_anon_guard = FeatureFlag::SkipFirebaseAnonymousUser.override_enabled(true);
+    let _conversation_list_guard =
+        FeatureFlag::AgentViewConversationListView.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        // Preserve the user's onboarding intent while starting logged out with
+        // AI disabled (the account-skipped account-first completion state).
+        app.update(|ctx| {
+            WarpDriveSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .enable_warp_drive
+                    .set_value(true, ctx)
+                    .expect("remember Warp Drive preference");
+            });
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .show_conversation_history
+                    .set_value(true, ctx)
+                    .expect("remember conversation-history preference");
+                settings
+                    .is_any_ai_enabled
+                    .set_value(false, ctx)
+                    .expect("AI remains disabled after skipped signup");
+            });
+            let auth_state = AuthStateProvider::as_ref(ctx).get();
+            auth_state.set_user(None);
+            auth_state.set_credentials(None);
+        });
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::WarpDrive),
+                "the stored preference should keep the locked Warp Drive entry visible"
+            );
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::ConversationListView),
+                "the stored preference should keep the locked conversations entry visible"
+            );
+            workspace.left_panel_view.update(ctx, |left_panel, ctx| {
+                left_panel.handle_action_with_force_open(&LeftPanelAction::WarpDrive, false, ctx);
+                assert_eq!(
+                    left_panel.active_view_availability(ctx),
+                    left_panel::ToolPanelAvailability::RequiresAccount
+                );
+                drop(left_panel.render(ctx));
+
+                left_panel.handle_action_with_force_open(
+                    &LeftPanelAction::ConversationListView,
+                    false,
+                    ctx,
+                );
+                assert_eq!(
+                    left_panel.active_view_availability(ctx),
+                    left_panel::ToolPanelAvailability::RequiresAccount
+                );
+                drop(left_panel.render(ctx));
+            });
+            workspace.handle_left_panel_event(&LeftPanelEvent::SignInRequested, ctx);
+            assert!(
+                workspace
+                    .current_workspace_state
+                    .is_require_login_modal_open,
+                "locked-panel Sign in should open the existing auth modal"
+            );
+            // Keep the remainder of this state-transition test focused on the
+            // tool panel rather than modal rendering.
+            workspace
+                .current_workspace_state
+                .is_require_login_modal_open = false;
+        });
+        app.read(|ctx| {
+            // Availability must not erase the raw onboarding preferences.
+            assert!(*WarpDriveSettings::as_ref(ctx).enable_warp_drive);
+            assert!(*AISettings::as_ref(ctx).show_conversation_history);
+            assert!(!WarpDriveSettings::is_warp_drive_available(ctx));
+            assert!(!WarpDriveSettings::is_warp_drive_enabled(ctx));
+            assert!(!AISettings::as_ref(ctx).is_conversation_history_available(ctx));
+            assert!(!AISettings::as_ref(ctx).is_conversation_history_enabled(ctx));
+        });
+
+        // Signing up makes account-backed features available. AuthComplete
+        // must refresh the existing workspace even though no setting changed.
+        app.update(|ctx| {
+            AuthStateProvider::as_ref(ctx)
+                .get()
+                .apply_remote_server_auth_context(
+                    "test-token".to_string(),
+                    "test-user".to_string(),
+                    "test@warp.dev".to_string(),
+                );
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_auth_manager_event(
+                AuthManager::handle(ctx),
+                &AuthManagerEvent::AuthComplete,
+                ctx,
+            );
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::WarpDrive),
+                "Drive entry remains visible and unlocks after signup"
+            );
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::ConversationListView),
+                "conversation entry remains visible while waiting for AI"
+            );
+            assert!(!workspace.auth_state.is_anonymous_or_logged_out());
+            assert!(WarpDriveSettings::is_warp_drive_enabled(ctx));
+            assert!(!AISettings::as_ref(ctx).is_conversation_history_enabled(ctx));
+            workspace.left_panel_view.update(ctx, |left_panel, ctx| {
+                left_panel.handle_action_with_force_open(&LeftPanelAction::WarpDrive, false, ctx);
+                assert_eq!(
+                    left_panel.active_view_availability(ctx),
+                    left_panel::ToolPanelAvailability::Available
+                );
+
+                left_panel.handle_action_with_force_open(
+                    &LeftPanelAction::ConversationListView,
+                    false,
+                    ctx,
+                );
+                assert_eq!(
+                    left_panel.active_view_availability(ctx),
+                    left_panel::ToolPanelAvailability::RequiresAi
+                );
+                drop(left_panel.render(ctx));
+            });
+        });
+
+        // Enabling AI later should make the preserved conversation-history
+        // preference effective through the existing AI-settings subscription.
+        app.update(|ctx| {
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .is_any_ai_enabled
+                    .set_value(true, ctx)
+                    .expect("enable AI");
+            });
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::ConversationListView)
+            );
+            workspace.left_panel_view.update(ctx, |left_panel, ctx| {
+                left_panel.handle_action_with_force_open(
+                    &LeftPanelAction::ConversationListView,
+                    false,
+                    ctx,
+                );
+                assert_eq!(
+                    left_panel.active_view_availability(ctx),
+                    left_panel::ToolPanelAvailability::Available
+                );
+            });
+        });
+        app.read(|ctx| {
+            assert!(AISettings::as_ref(ctx).is_conversation_history_enabled(ctx));
+        });
+
+        // The raw setting still controls whether the toolbelt entry exists.
+        app.update(|ctx| {
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .show_conversation_history
+                    .set_value(false, ctx)
+                    .expect("hide conversation history");
+            });
+        });
+        workspace.read(&app, |workspace, _| {
+            assert!(
+                !workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::ConversationListView)
             );
         });
     });
@@ -460,9 +713,9 @@ fn copy_model_and_profile_preserves_explicit_model_over_source_profile_default()
             let profiles = AIExecutionProfilesModel::handle(ctx);
             let default_profile_id = profiles.read(ctx, |p, _| p.default_profile_id());
             profiles.update(ctx, |p, ctx| {
-                p.set_base_model(default_profile_id, Some(m.clone()), ctx);
+                p.set_base_model(&default_profile_id, Some(m.clone()), ctx);
                 let source_profile_id = p.create_profile(ctx).expect("create source profile");
-                p.set_base_model(source_profile_id, Some(d.clone()), ctx);
+                p.set_base_model(&source_profile_id, Some(d.clone()), ctx);
                 p.set_active_profile(source_id, source_profile_id, ctx);
             });
 
@@ -754,6 +1007,107 @@ fn test_open_file_notebook_focuses_existing_markdown_pane() {
             let pane_group = workspace.active_tab_pane_group().as_ref(ctx);
             assert_eq!(pane_group.file_notebook_panes(ctx).count(), 1);
             assert_eq!(pane_group.focused_pane_id(ctx), markdown_pane_id);
+        });
+    });
+}
+
+/// Regression test for the agent file-range preview's "Open file" button: the
+/// handler used to zero out `range_start`, so consumers that read the jump
+/// target off the `CodeSource` opened the file at the top.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_open_file_with_target_event_preserves_requested_line() {
+    use crate::code::editor_management::CodeManager;
+    use crate::code::global_buffer_model::GlobalBufferModel;
+    use crate::terminal::local_shell::LocalShellState;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| CodeManager::default());
+        app.add_singleton_model(|_| LocalShellState::NotLoaded);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let workspace = mock_workspace(&mut app);
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let code_path = temp_dir.path().join("main.rs");
+        let contents: String = (1..=80).map(|line| format!("// line {line}\n")).collect();
+        std::fs::write(&code_path, contents).expect("failed to write code file");
+
+        let range_start = LineAndColumnArg {
+            line_num: 42,
+            column_num: None,
+        };
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().clone();
+            workspace.handle_file_tree_event(
+                pane_group,
+                &crate::pane_group::Event::OpenFileWithTarget {
+                    path: code_path.clone(),
+                    target: FileTarget::CodeEditor(EditorLayout::SplitPane),
+                    line_col: Some(range_start),
+                },
+                ctx,
+            );
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().as_ref(ctx);
+            let code_panes = pane_group.code_panes(ctx).collect_vec();
+            assert_eq!(code_panes.len(), 1);
+            assert_eq!(
+                *code_panes[0].1.as_ref(ctx).source(),
+                CodeSource::Link {
+                    path: code_path.clone(),
+                    range_start: Some(range_start),
+                    range_end: None,
+                }
+            );
+        });
+    });
+}
+
+/// Regression test for the raw-code toggle: the notebook-viewer target used to
+/// drop the `CodeSource` outright, so the raw view always started at line 1.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_open_markdown_viewer_target_preserves_requested_line() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let markdown_path = temp_dir.path().join("README.md");
+        std::fs::write(&markdown_path, "# Test\n").expect("failed to write markdown file");
+
+        let range_start = LineAndColumnArg {
+            line_num: 12,
+            column_num: None,
+        };
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().clone();
+            workspace.handle_file_tree_event(
+                pane_group,
+                &crate::pane_group::Event::OpenFileWithTarget {
+                    path: markdown_path.clone(),
+                    target: FileTarget::MarkdownViewer(EditorLayout::SplitPane),
+                    line_col: Some(range_start),
+                },
+                ctx,
+            );
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().as_ref(ctx);
+            let markdown_panes = pane_group.file_notebook_panes(ctx).collect_vec();
+            assert_eq!(markdown_panes.len(), 1);
+            assert_eq!(
+                markdown_panes[0].1.as_ref(ctx).code_source(),
+                Some(&CodeSource::Link {
+                    path: markdown_path.clone(),
+                    range_start: Some(range_start),
+                    range_end: None,
+                })
+            );
         });
     });
 }

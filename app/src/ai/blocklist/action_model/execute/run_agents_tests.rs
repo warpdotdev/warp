@@ -102,6 +102,7 @@ fn should_autoexecute_duplicate_launched_agent_denial() {
                 state.conversation_id,
                 &[RunAgentsAgentOutcome {
                     name: "child".to_string(),
+                    resolved_model_id: String::new(),
                     kind: RunAgentsAgentOutcomeKind::Launched {
                         agent_id: "agent-123".to_string(),
                     },
@@ -133,6 +134,7 @@ fn execute_denies_duplicate_launched_agent() {
                 state.conversation_id,
                 &[RunAgentsAgentOutcome {
                     name: "child".to_string(),
+                    resolved_model_id: String::new(),
                     kind: RunAgentsAgentOutcomeKind::Launched {
                         agent_id: "agent-123".to_string(),
                     },
@@ -166,6 +168,7 @@ fn execute_denies_duplicate_launched_agent() {
 
 fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTestState {
     initialize_settings_for_tests_with_mode(app, mode, false);
+    app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
     let global_resource_handles = GlobalResourceHandles::mock(app);
     app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
     let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
@@ -239,6 +242,7 @@ fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
                 prompt: "Help".to_string(),
                 title: String::new(),
                 agent_identity_uid: String::new(),
+                model_id: String::new(),
             }],
             plan_id: String::new(),
             harness_auth_secret_name: None,
@@ -262,6 +266,7 @@ fn local_codex_run_agents_maps_to_local_harness_mode_when_flag_enabled() {
         prompt: "Investigate the failure".to_string(),
         title: String::new(),
         agent_identity_uid: String::new(),
+        model_id: String::new(),
     };
 
     let mode = run_agents_to_start_agent_mode(
@@ -595,8 +600,8 @@ fn cancel_during_plan_publication_does_not_dispatch_children() {
 
 fn set_run_agents_permission(app: &mut App, permission: RunAgentsPermission) {
     AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
-        let profile_id = *profiles.active_profile(None, ctx).id();
-        profiles.set_run_agents(profile_id, permission, ctx);
+        let profile_id = profiles.active_profile(None, ctx).id().clone();
+        profiles.set_run_agents(&profile_id, permission, ctx);
     });
 }
 

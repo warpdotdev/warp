@@ -564,7 +564,7 @@ impl LocalRepoMetadataModel {
                 watcher.update(ctx, |watcher, _ctx| {
                     std::mem::drop(watcher.register_path(
                         target_dir,
-                        repo_watch_filter(Vec::new(), Vec::new()),
+                        repo_watch_filter(target_dir.clone(), Vec::new(), Vec::new()),
                         RecursiveMode::NonRecursive,
                     ));
                 });
@@ -971,7 +971,7 @@ impl LocalRepoMetadataModel {
                     }
                     std::mem::drop(watcher.register_path(
                         &watch_path,
-                        repo_watch_filter(gitignores, force_included_paths),
+                        repo_watch_filter(watch_path.clone(), gitignores, force_included_paths),
                         recursive_mode,
                     ));
                 });
@@ -1415,7 +1415,7 @@ impl LocalRepoMetadataModel {
             watcher.update(ctx, |watcher, _ctx| {
                 std::mem::drop(watcher.register_path(
                     &local_path,
-                    repo_watch_filter(gitignores, force_included_paths),
+                    repo_watch_filter(local_path.clone(), gitignores, force_included_paths),
                     RecursiveMode::NonRecursive,
                 ));
             });

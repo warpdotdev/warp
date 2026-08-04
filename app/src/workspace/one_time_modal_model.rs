@@ -762,7 +762,13 @@ impl OneTimeModalModel {
 
         // Check if current workspace has sunsetted_to_build_ts set
         let user_workspaces = UserWorkspaces::as_ref(ctx);
-        let Some(current_team) = user_workspaces.current_team() else {
+        let Some(target_window_id) = self
+            .target_window_id
+            .or_else(|| ctx.windows().active_window())
+        else {
+            return false;
+        };
+        let Some(current_team) = user_workspaces.team_for_window(target_window_id) else {
             return false;
         };
 
@@ -776,17 +782,17 @@ impl OneTimeModalModel {
         }
 
         // Check if service agreement has sunsetted_to_build_ts set
-        let has_sunsetted_to_build = current_team
-            .billing_metadata
-            .service_agreements
-            .first()
-            .is_some_and(|sa| sa.sunsetted_to_build_ts.is_some());
+        let has_sunsetted_to_build = user_workspaces
+            .current_workspace()
+            .and_then(|workspace| workspace.billing_metadata.service_agreements.first())
+            .is_some_and(|agreement| agreement.sunsetted_to_build_ts.is_some());
 
         if !has_sunsetted_to_build {
             return false;
         }
 
         // All conditions met, show the modal
+        self.target_window_id = Some(target_window_id);
         self.set_build_plan_migration_modal_open(true, ctx)
     }
 }

@@ -16,6 +16,8 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
+use warp_core::telemetry::TelemetryEvent as _;
+use warp_core::{send_telemetry_from_app_ctx, send_telemetry_from_ctx};
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::start_agent::{StartAgentExecutor, StartAgentOutcome};
@@ -24,6 +26,9 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentInput,
     StartAgentExecutionMode,
+};
+use crate::ai::blocklist::telemetry::{
+    BlocklistOrchestrationTelemetryEvent, run_agents_completed_event,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::document::plan_publication::{
@@ -335,6 +340,10 @@ impl RunAgentsExecutor {
                     .map(|(cfg, kind)| RunAgentsAgentOutcome {
                         name: cfg.name.clone(),
                         kind,
+                        // resolved_model_id is populated by the server in the
+                        // RunAgentsResult proto; the client fills it as empty here
+                        // and the real value arrives via convert_conversation.
+                        resolved_model_id: String::new(),
                     })
                     .collect();
                 me.record_launched_agents(parent_conversation_id_for_result, &agents);
@@ -386,21 +395,33 @@ impl RunAgentsExecutor {
             &self.launched_agents,
             ctx,
         ) {
-            return ActionExecution::Sync(AIAgentActionResultType::RunAgents(
-                RunAgentsResult::Denied { reason },
-            ));
+            let result = RunAgentsResult::Denied { reason };
+            send_telemetry_from_ctx!(
+                BlocklistOrchestrationTelemetryEvent::RunAgentsCompleted(
+                    run_agents_completed_event(parent_conversation_id, &request, &result)
+                ),
+                ctx
+            );
+            return ActionExecution::Sync(AIAgentActionResultType::RunAgents(result));
         }
+        let telemetry_request = request.clone();
 
         let receiver =
             self.dispatch_prepared_run_agents(action_id, request, parent_conversation_id, ctx);
 
-        ActionExecution::new_async(
-            async move { receiver.recv().await },
-            |result, _| match result {
-                Ok(r) => AIAgentActionResultType::RunAgents(r),
-                Err(_) => AIAgentActionResultType::RunAgents(RunAgentsResult::Cancelled),
-            },
-        )
+        ActionExecution::new_async(async move { receiver.recv().await }, move |result, ctx| {
+            let result = match result {
+                Ok(result) => result,
+                Err(_) => RunAgentsResult::Cancelled,
+            };
+            send_telemetry_from_app_ctx!(
+                BlocklistOrchestrationTelemetryEvent::RunAgentsCompleted(
+                    run_agents_completed_event(parent_conversation_id, &telemetry_request, &result,)
+                ),
+                ctx
+            );
+            AIAgentActionResultType::RunAgents(result)
+        })
     }
 
     pub(super) fn should_autoexecute(
@@ -691,9 +712,13 @@ pub fn run_agents_to_start_agent_mode(
                 );
             }
             let trimmed = run_harness_type.trim();
-            // Propagate run-wide model selection for local launches.
-            let trimmed_model_id = run_model_id.trim();
-            let model_id = (!trimmed_model_id.is_empty()).then(|| trimmed_model_id.to_string());
+            // Per-agent model_id overrides the batch-level run_model_id when set.
+            let effective_model_id = if !cfg.model_id.trim().is_empty() {
+                cfg.model_id.trim()
+            } else {
+                run_model_id.trim()
+            };
+            let model_id = (!effective_model_id.is_empty()).then(|| effective_model_id.to_string());
             if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("oz") {
                 Ok(StartAgentExecutionMode::Local {
                     harness_type: None,
@@ -723,10 +748,16 @@ pub fn run_agents_to_start_agent_mode(
                     "Remote child agents do not support the opencode harness yet.".to_string(),
                 );
             }
+            // Per-agent model_id overrides the batch-level run_model_id when set.
+            let effective_model_id = if !cfg.model_id.trim().is_empty() {
+                cfg.model_id.clone()
+            } else {
+                run_model_id.to_string()
+            };
             Ok(StartAgentExecutionMode::Remote {
                 environment_id: environment_id.clone(),
                 skill_references: run_skills.to_vec(),
-                model_id: run_model_id.to_string(),
+                model_id: effective_model_id,
                 computer_use_enabled: *computer_use_enabled,
                 worker_host: worker_host.clone(),
                 harness_type: run_harness_type.to_string(),

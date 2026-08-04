@@ -60,7 +60,8 @@ use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentMod
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, InputConfig, SerializedBlockListItem};
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
-use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
+use crate::ai::execution_profiles::ExecutionProfileId;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::LLMId;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai_assistant::AskAIType;
@@ -724,7 +725,7 @@ pub enum Event {
         path: PathBuf,
     },
     OpenAgentProfileEditor {
-        profile_id: ClientProfileId,
+        profile_id: ExecutionProfileId,
     },
     RepoChanged,
     AttachPathAsContext {
@@ -1715,10 +1716,14 @@ impl PaneGroup {
                     let profiles_model = AIExecutionProfilesModel::as_ref(ctx);
 
                     if let Some(profile_id) =
-                        profiles_model.get_profile_id_by_sync_id(active_profile_sync_id)
+                        profiles_model.get_profile_id_by_sync_id(active_profile_sync_id, ctx)
                     {
                         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                            profiles_model.set_active_profile(terminal_view_id, profile_id, ctx);
+                            profiles_model.set_active_profile(
+                                terminal_view_id,
+                                profile_id.clone(),
+                                ctx,
+                            );
                         });
                         log::info!(
                             "Restored active profile {profile_id:?} for terminal {terminal_view_id:?}"
@@ -2470,9 +2475,10 @@ impl PaneGroup {
     }
 
     /// Returns the path to copy for the currently focused pane: the open file's display path
-    /// if the focused pane is the rendered file viewer (`FilePane`), otherwise the focused
-    /// terminal session's working directory (raw pwd, falling back to the user-friendly
-    /// display form). `None` if the focused pane is neither, or yields no path.
+    /// if the focused pane is the rendered file viewer (`FilePane`) or code editor
+    /// (`CodePane`), otherwise the focused terminal session's working directory (raw pwd,
+    /// falling back to the user-friendly display form). `None` if the focused pane is none of
+    /// those, or yields no path.
     pub fn path_from_focused_pane(&self, ctx: &AppContext) -> Option<String> {
         let focused_pane_id = self.focused_pane_id(ctx);
 
@@ -2481,6 +2487,15 @@ impl PaneGroup {
                 .file_view(ctx)
                 .as_ref(ctx)
                 .path()
+                .map(|path| path.display_path());
+        }
+
+        if let Some(code_pane) = self.downcast_pane_by_id::<CodePane>(focused_pane_id) {
+            let code_view = code_pane.file_view(ctx);
+            let code_view = code_view.as_ref(ctx);
+            return code_view
+                .tab_at(code_view.active_tab_index())
+                .and_then(|tab| tab.location())
                 .map(|path| path.display_path());
         }
 

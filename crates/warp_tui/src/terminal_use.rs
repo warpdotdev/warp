@@ -69,8 +69,9 @@ fn tui_input_target_for_state(
     startup_script_visible: bool,
     bootstrap_precmd_done: bool,
     inline_process_owns_input: bool,
+    agent_owns_alt_screen_input: bool,
 ) -> TuiInputTarget {
-    if alt_screen_active
+    if (alt_screen_active && !agent_owns_alt_screen_input)
         || (script_execution && startup_script_visible)
         || inline_process_owns_input
     {
@@ -84,14 +85,14 @@ fn tui_input_target_for_state(
 
 pub(super) fn tui_input_target(terminal_model: &TerminalModel) -> TuiInputTarget {
     let block_list = terminal_model.block_list();
+    let active_block = block_list.active_block();
     tui_input_target_for_state(
         terminal_model.is_alt_screen_active(),
         block_list.is_script_execution(),
-        block_list
-            .active_block()
-            .is_visible(block_list.transcript_scope()),
+        active_block.is_visible(block_list.transcript_scope()),
         block_list.is_bootstrapping_precmd_done(),
         inline_process_owns_input(terminal_model),
+        active_block.is_agent_in_control() || active_block.is_agent_tagged_in(),
     )
 }
 
@@ -126,8 +127,9 @@ pub(super) fn terminal_use_conversation_to_resume(
     .then_some(*metadata.conversation_id())
 }
 
-/// Whether a running inline command, rather than Warp's editor or agent, owns
-/// keyboard input.
+/// Whether a running command block is user-controlled. This block-local
+/// predicate supports command affordances; input and cursor ownership must use
+/// [`user_controlled_running_command`] so only the active block can qualify.
 pub(super) fn user_controls_running_command(block: &Block) -> bool {
     block.is_active_and_long_running()
         && block.is_bootstrapped()
@@ -136,8 +138,15 @@ pub(super) fn user_controls_running_command(block: &Block) -> bool {
         && !block.is_agent_tagged_in()
 }
 
+/// Returns the active running command when it, rather than Warp's editor or
+/// agent, owns inline terminal input.
+pub(super) fn user_controlled_running_command(terminal_model: &TerminalModel) -> Option<&Block> {
+    let active_block = terminal_model.block_list().active_block();
+    user_controls_running_command(active_block).then_some(active_block)
+}
+
 pub(super) fn inline_process_owns_input(terminal_model: &TerminalModel) -> bool {
-    user_controls_running_command(terminal_model.block_list().active_block())
+    user_controlled_running_command(terminal_model).is_some()
 }
 
 #[cfg(test)]

@@ -62,9 +62,10 @@ pub fn inherit_child_agent_settings(
     child_surface_id: EntityId,
     ctx: &mut AppContext,
 ) {
-    let parent_profile_id = *AIExecutionProfilesModel::as_ref(ctx)
+    let parent_profile_id = AIExecutionProfilesModel::as_ref(ctx)
         .active_profile(Some(parent_surface_id), ctx)
-        .id();
+        .id()
+        .clone();
     AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
         profiles.set_active_profile(child_surface_id, parent_profile_id, ctx);
     });

@@ -10,12 +10,11 @@ use warpui::{AppContext, SingletonEntity};
 use crate::LLMPreferences;
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::connected_self_hosted_workers::WARP_WORKER_HOST;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::llms::LLMInfo;
 use crate::ai::orchestration::config_state::AuthSecretSelection;
-use crate::cloud_object::CloudObjectLookup as _;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Env var override for the workspace default host (developer testing).
@@ -144,31 +143,13 @@ pub fn harness_save_key(harness_type: &str) -> &str {
     }
 }
 
-/// Resolves a default environment ID using the same logic as the
-/// `/cloud-agent` environment selector: first tries the user's
-/// last-selected environment from settings, then falls back to the
-/// most recently used environment.
+/// Resolves the orchestration GUI's default environment: first tries the
+/// user's last-selected environment, then preserves its existing
+/// most-recent-use and case-sensitive-name fallback.
 pub fn resolve_default_environment_id(ctx: &AppContext) -> Option<String> {
-    if let Some(env_id) = *CloudAgentSettings::as_ref(ctx)
-        .last_selected_environment_id
-        .value()
-        && CloudAmbientAgentEnvironment::get_by_id(&env_id, ctx).is_some()
-    {
-        return Some(env_id.uid());
-    }
-    let mut envs = CloudAmbientAgentEnvironment::get_all(ctx);
-    envs.sort_by(|a, b| {
-        b.metadata
-            .last_task_run_ts
-            .cmp(&a.metadata.last_task_run_ts)
-            .then_with(|| {
-                a.model()
-                    .string_model
-                    .name
-                    .cmp(&b.model().string_model.name)
-            })
-    });
-    envs.first().map(|e| e.id.uid())
+    CloudEnvironmentCatalog::as_ref(ctx)
+        .orchestration_default_environment_id(ctx)
+        .map(|id| id.uid())
 }
 
 /// Persists the user's environment selection to settings so it can
@@ -178,16 +159,15 @@ pub fn persist_environment_selection(environment_id: &str, ctx: &mut AppContext)
     if environment_id.is_empty() {
         return;
     }
-    let all_envs = CloudAmbientAgentEnvironment::get_all(ctx);
-    if let Some(env) = all_envs.iter().find(|e| e.id.uid() == environment_id) {
-        let sync_id = env.id;
-        CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
-            if let Err(e) = settings
-                .last_selected_environment_id
-                .set_value(Some(sync_id), ctx)
-            {
-                log::warn!("Failed to persist environment selection: {e:?}");
-            }
+    let catalog = CloudEnvironmentCatalog::handle(ctx);
+    let environment_id = catalog
+        .as_ref(ctx)
+        .environments()
+        .iter()
+        .find_map(|environment| (environment.id.uid() == environment_id).then_some(environment.id));
+    if let Some(environment_id) = environment_id {
+        catalog.update(ctx, |catalog, ctx| {
+            catalog.persist_selection(environment_id, ctx);
         });
     }
 }

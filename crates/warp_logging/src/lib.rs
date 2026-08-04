@@ -7,12 +7,24 @@ pub enum LogDestination {
     Stderr,
 }
 
+/// Frontend that owns a logging session.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LogFrontend {
+    /// The desktop GUI frontend.
+    #[default]
+    Gui,
+    /// The headless terminal frontend.
+    Tui,
+    /// CLI and remote server processes.
+    Cli,
+}
+
 /// Configuration for initializing the logger.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LogConfig {
-    /// Whether the caller is the CLI. When true, logs are written to a separate subdirectory
-    /// with a higher rotation limit so that CLI invocations don't evict GUI application logs.
-    pub is_cli: bool,
+    /// Frontend-specific directory and rotation policy. Filenames continue to come from the
+    /// active channel configuration.
+    pub frontend: LogFrontend,
     /// The destination for log output. If `None`, the destination is inferred from the environment.
     pub log_destination: Option<LogDestination>,
     /// Optional in-session size threshold for `warp.log`. When `Some(n)` and the active

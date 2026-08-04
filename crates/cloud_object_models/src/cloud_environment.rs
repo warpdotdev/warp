@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{JsonModel, JsonSerializer};
 
 /// Source-control provider hosting an environment's repositories.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum CodeForge {
     #[default]
     #[serde(rename = "GITHUB")]
@@ -68,6 +68,11 @@ pub struct SourceRepo {
     pub code_forge: Option<CodeForge>,
     pub owner: String,
     pub repo: String,
+    /// Ref to check out after cloning this repository (commit SHA, branch, or
+    /// tag). Absent leaves the clone on the default branch. Benchmark trials
+    /// use it to start from a pinned base commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout_ref: Option<String>,
 }
 
 impl SourceRepo {
@@ -76,14 +81,21 @@ impl SourceRepo {
             code_forge: Some(code_forge),
             owner,
             repo,
+            checkout_ref: None,
         }
     }
     pub fn with_default_code_forge(&self, code_forge: CodeForge) -> Self {
-        Self::new(
-            self.code_forge.unwrap_or(code_forge),
-            self.owner.clone(),
-            self.repo.clone(),
-        )
+        Self {
+            code_forge: Some(self.code_forge.unwrap_or(code_forge)),
+            owner: self.owner.clone(),
+            repo: self.repo.clone(),
+            checkout_ref: self.checkout_ref.clone(),
+        }
+    }
+    /// Returns a copy of this repository pinned to `checkout_ref`.
+    pub fn with_checkout_ref(mut self, checkout_ref: Option<String>) -> Self {
+        self.checkout_ref = checkout_ref;
+        self
     }
 
     pub fn https_clone_url(&self) -> String {

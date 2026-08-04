@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect only GUI settings explicitly supported by both GUI and TUI."""
+"""Inspect only GUI settings explicitly supported by both GUI and Warp Agent CLI."""
 
 from __future__ import annotations
 
@@ -173,7 +173,7 @@ def inspect_settings(
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Inspect GUI settings declared for both Warp GUI and TUI."
+        description="Inspect GUI settings declared for both Warp GUI and Warp Agent CLI."
     )
     parser.add_argument("--schema", required=True)
     parser.add_argument("--source", required=True)

@@ -23,9 +23,10 @@ cfg_if::cfg_if! {
 
 pub use ai::skills::SkillReference;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub enum SkillManagerEvent {
-    HomeSkillsChanged,
+    SkillsChanged { home_skills_changed: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

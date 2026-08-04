@@ -46,7 +46,9 @@ pub(crate) use action_model::recording_finalize::{
 };
 // Consumed by `tui_export` for the `warp_tui` frontend.
 #[cfg(feature = "tui")]
-pub use action_model::{AskUserQuestionExecutor, RequestFileEditsExecutor};
+pub use action_model::{
+    AskUserQuestionExecutor, NewConversationDecision, RequestFileEditsExecutor,
+};
 pub use action_model::{
     BlocklistAIActionEvent, BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent,
 };
@@ -84,8 +86,10 @@ pub use context_model::PendingAttachmentSummary;
 pub(crate) use context_model::block_context_from_terminal_model;
 #[cfg(feature = "tui")]
 pub use context_model::block_context_from_terminal_model;
-pub use context_model::{AttachmentType, BlocklistAIContextEvent, BlocklistAIContextModel};
-pub(crate) use context_model::{PendingAttachment, PendingFile};
+pub use context_model::{
+    AttachmentType, BlocklistAIContextEvent, BlocklistAIContextModel, PendingAttachment,
+    PendingFile,
+};
 pub use controller::BlocklistAIController;
 pub use controller::input_context::{
     BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
@@ -119,11 +123,14 @@ pub(crate) use passive_suggestions::{
 pub use permissions::{BlocklistAIPermissions, CommandExecutionPermissionAllowedReason};
 #[cfg_attr(target_family = "wasm", allow(unused))]
 pub(crate) use persistence::PersistedAIInputType;
+#[cfg_attr(target_family = "wasm", allow(unused))]
+pub use persistence::maybe_build_ai_query_upsert_event;
 pub(crate) use persistence::{PersistedAIInput, SerializedBlockListItem};
 pub(crate) use queued_query::{
-    AutofireAction, QueuedQuery, QueuedQueryEvent, QueuedQueryId, QueuedQueryModel,
-    QueuedQueryOrigin, is_lrc_auto_queue_active,
+    AutofireAction, QueuedQuery, QueuedQueryId, QueuedQueryOrigin, is_lrc_auto_queue_active,
 };
+#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
+pub use queued_query::{QueuedQueryEvent, QueuedQueryModel};
 pub use suggestion_chip_view::*;
 pub use view_util::error_color;
 pub(crate) use view_util::{

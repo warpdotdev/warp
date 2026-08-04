@@ -23,6 +23,7 @@ use super::{
 };
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::drive::settings::WarpDriveSettings;
 
 #[derive(Debug, Clone)]
@@ -65,7 +66,12 @@ pub struct WarpDriveSettingsPageView {
 }
 
 impl WarpDriveSettingsPageView {
-    pub fn new(_ctx: &mut ViewContext<Self>) -> Self {
+    pub fn new(ctx: &mut ViewContext<Self>) -> Self {
+        ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, AuthManagerEvent::AuthComplete) {
+                ctx.notify();
+            }
+        });
         Self {
             page: PageType::new_uncategorized(
                 vec![
@@ -236,6 +242,10 @@ impl SettingsWidget for WarpDriveToggleWidget {
         "warp drive tools panel command palette search workflows prompts notebooks environment variables"
     }
 
+    fn should_render(&self, app: &AppContext) -> bool {
+        WarpDriveSettings::is_warp_drive_available(app)
+    }
+
     fn render(
         &self,
         _view: &Self::View,
@@ -243,10 +253,6 @@ impl SettingsWidget for WarpDriveToggleWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let settings = WarpDriveSettings::as_ref(app);
-        let is_anonymous_or_logged_out = FeatureFlag::SkipFirebaseAnonymousUser.is_enabled()
-            && AuthStateProvider::as_ref(app)
-                .get()
-                .is_anonymous_or_logged_out();
 
         render_body_item::<WarpDriveSettingsPageAction>(
             "Warp Drive".into(),
@@ -259,24 +265,15 @@ impl SettingsWidget for WarpDriveToggleWidget {
                 tooltip_override_text: None,
             }),
             LocalOnlyIconState::Hidden,
-            if is_anonymous_or_logged_out {
-                ToggleState::Disabled
-            } else {
-                ToggleState::Enabled
-            },
+            ToggleState::Enabled,
             appearance,
             appearance
                 .ui_builder()
                 .switch(self.switch_state.clone())
-                .check(*settings.enable_warp_drive && !is_anonymous_or_logged_out)
-                .with_disabled(is_anonymous_or_logged_out)
+                .check(*settings.enable_warp_drive)
                 .build()
-                .on_click(move |ctx, _, _| {
-                    if !is_anonymous_or_logged_out {
-                        ctx.dispatch_typed_action(
-                            WarpDriveSettingsPageAction::ToggleShowWarpDrive,
-                        );
-                    }
+                .on_click(|ctx, _, _| {
+                    ctx.dispatch_typed_action(WarpDriveSettingsPageAction::ToggleShowWarpDrive);
                 })
                 .finish(),
             Some("Warp Drive is a workspace in your terminal where you can save Workflows, Notebooks, Prompts, and Environment Variables for personal use or to share with a team.".into()),

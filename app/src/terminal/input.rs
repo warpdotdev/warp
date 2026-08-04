@@ -157,8 +157,6 @@ use crate::ai::agent_conversations_model::{
 use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::attachment_utils::MAX_ATTACHMENT_SIZE_BYTES;
 use crate::ai::block_context::BlockContext;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::agent_view::agent_input_footer::sort_environments_by_recency;
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
 use crate::ai::blocklist::agent_view::{
     AgentInputFooter, AgentInputFooterEvent, AgentViewController, AgentViewEntryOrigin,
@@ -168,11 +166,9 @@ use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISuba
 use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBar;
 use crate::ai::blocklist::conversation_selection::ConversationSelectionHandle;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::touched_repos::{
-    TouchedWorkspace, pick_handoff_overlap_env, resolve_repo_for_path,
+use crate::ai::blocklist::handoff::{
+    HandoffLaunchAttachments, PendingCloudLaunch, suggest_handoff_environment,
 };
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::ai::blocklist::{
@@ -187,6 +183,9 @@ use crate::ai::blocklist::{
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::connected_self_hosted_workers::{
+    ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
+};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::conversation_export::export_conversation_markdown;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
@@ -254,9 +253,9 @@ use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::SyncId;
 use crate::server::server_api::ServerApi;
-use crate::server::server_api::ai::AttachmentFileInfo;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::server::server_api::ai::AttachmentInput;
+use crate::server::server_api::ai::{AIClient, AttachmentFileInfo};
 use crate::server::telemetry::{
     AICommandSearchEntrypoint, AgentModeAutoDetectionFalsePositivePayload,
     AgentModeAutoDetectionSettingOrigin, AnonymousUserSignupEntrypoint, CommandXRayTrigger,
@@ -1819,6 +1818,124 @@ impl DeferredRemoteOperations {
     }
 }
 
+/// Per-attachment outcome from [`upload_pending_attachments_to_task`].
+enum TaskAttachmentUploadOutcome {
+    /// Successfully uploaded to the task's storage bucket. `attachment_id` is the
+    /// server-assigned identifier the new VM downloads at startup.
+    Uploaded {
+        attachment_id: String,
+        file_name: String,
+    },
+    /// Could not be uploaded — decode error, size limit exceeded, or HTTP failure.
+    /// `error` is a human-readable message suitable for display.
+    Failed { file_name: String, error: String },
+}
+
+/// Decode, size-check, and upload `pending_attachments` to the given task's storage
+/// bucket via presigned URLs obtained from the server. Returns one [`TaskAttachmentUploadOutcome`]
+/// per input attachment in the same order.
+///
+/// The outer `Err` is returned only when [`AIClient::prepare_attachments_for_upload`] fails
+/// (meaning no individual uploads were attempted). Decode errors, size-limit violations,
+/// and individual HTTP failures are surfaced as [`TaskAttachmentUploadOutcome::Failed`]
+/// entries so each caller can choose its own error-handling policy (fail-fast vs. best-effort).
+async fn upload_pending_attachments_to_task(
+    ai_client: Arc<dyn AIClient>,
+    server_api: Arc<ServerApi>,
+    task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+    pending_attachments: Vec<PendingAttachment>,
+) -> anyhow::Result<Vec<TaskAttachmentUploadOutcome>> {
+    let n = pending_attachments.len();
+    // Reserve a slot for each input attachment; filled below in original order.
+    let mut outcomes: Vec<Option<TaskAttachmentUploadOutcome>> =
+        std::iter::repeat_with(|| None).take(n).collect();
+    // Collect successfully decoded files together with their original index so we can
+    // zip the prepare-upload response back to the correct outcome slot.
+    let mut files_to_upload: Vec<(usize, String, String, Vec<u8>)> = Vec::new();
+
+    for (i, attachment) in pending_attachments.into_iter().enumerate() {
+        let decoded = match attachment {
+            PendingAttachment::File(file) => std::fs::read(&file.file_path)
+                .map(|bytes| (file.file_name.clone(), file.mime_type.clone(), bytes))
+                .map_err(|e| (file.file_name, format!("Failed to read attachment: {e}"))),
+            PendingAttachment::Image(image) => base64::engine::general_purpose::STANDARD
+                .decode(&image.data)
+                .map(|bytes| (image.file_name.clone(), image.mime_type.clone(), bytes))
+                .map_err(|e| (image.file_name, format!("Failed to decode attachment: {e}"))),
+        };
+        match decoded {
+            Ok((file_name, mime_type, bytes)) => {
+                if bytes.len() > MAX_ATTACHMENT_SIZE_BYTES {
+                    outcomes[i] = Some(TaskAttachmentUploadOutcome::Failed {
+                        file_name: file_name.clone(),
+                        error: format!("{file_name} exceeds the 10 MB attachment limit"),
+                    });
+                } else {
+                    files_to_upload.push((i, file_name, mime_type, bytes));
+                }
+            }
+            Err((file_name, error)) => {
+                outcomes[i] = Some(TaskAttachmentUploadOutcome::Failed { file_name, error });
+            }
+        }
+    }
+
+    if !files_to_upload.is_empty() {
+        let file_infos: Vec<AttachmentFileInfo> = files_to_upload
+            .iter()
+            .map(|(_, name, mime, _)| AttachmentFileInfo {
+                filename: name.clone(),
+                mime_type: mime.clone(),
+            })
+            .collect();
+
+        let prepare_response = ai_client
+            .prepare_attachments_for_upload(&task_id, &file_infos)
+            .await?;
+
+        if prepare_response.attachments.len() != files_to_upload.len() {
+            anyhow::bail!(
+                "Attachment upload preparation returned {} targets for {} files",
+                prepare_response.attachments.len(),
+                files_to_upload.len()
+            );
+        }
+
+        for ((orig_idx, file_name, mime_type, file_bytes), upload_info) in files_to_upload
+            .iter()
+            .zip(prepare_response.attachments.iter())
+        {
+            let result = server_api
+                .http_client()
+                .put(&upload_info.upload_url)
+                .header("Content-Type", mime_type.as_str())
+                .body(file_bytes.clone())
+                .send()
+                .await;
+
+            outcomes[*orig_idx] = Some(match result {
+                Ok(resp) if resp.status().is_success() => TaskAttachmentUploadOutcome::Uploaded {
+                    attachment_id: upload_info.attachment_id.clone(),
+                    file_name: file_name.clone(),
+                },
+                Ok(resp) => TaskAttachmentUploadOutcome::Failed {
+                    file_name: file_name.clone(),
+                    error: format!("HTTP {}", resp.status()),
+                },
+                Err(e) => TaskAttachmentUploadOutcome::Failed {
+                    file_name: file_name.clone(),
+                    error: e.to_string(),
+                },
+            });
+        }
+    }
+
+    Ok(outcomes
+        .into_iter()
+        .map(|o| o.expect("all slots filled during upload_pending_attachments_to_task"))
+        .collect())
+}
+
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
 
@@ -2463,6 +2580,16 @@ impl Input {
                 self.menu_positioning_provider.clone(),
                 ctx,
             );
+            // Re-render when connected workers change so the host selector shows/hides
+            // (it isn't mounted while hidden to drive this itself).
+            ctx.subscribe_to_model(
+                &ConnectedSelfHostedWorkersModel::handle(ctx),
+                |_me, _, event, ctx| {
+                    if matches!(event, ConnectedSelfHostedWorkersEvent::Changed) {
+                        ctx.notify();
+                    }
+                },
+            );
             let (auth_secret_selector, auth_secret_ftux_view) = Self::build_auth_secret_selector(
                 view_model.clone(),
                 self.menu_positioning_provider.clone(),
@@ -2659,6 +2786,7 @@ impl Input {
                 // The UseAgentToolbar shares this same AgentInputFooter instance,
                 // so its subscriber always fires alongside ours for every chip click.
                 AgentInputFooterEvent::WriteToPty(_)
+                | AgentInputFooterEvent::InsertIntoCLIPty(_)
                 | AgentInputFooterEvent::InsertIntoCLIRichInput(_)
                 | AgentInputFooterEvent::ToggleCodeReviewPane(_)
                 | AgentInputFooterEvent::ToggleFileExplorer(_)
@@ -4115,10 +4243,30 @@ impl Input {
                 }
                 true
             }
-            AIQueryRouting::NewCloudVm { .. } => {
+            AIQueryRouting::NewCloudVm { task_id } => {
                 if FeatureFlag::HandoffCloudCloud.is_enabled() {
                     let prompt = self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned();
-                    ctx.emit(Event::SubmitCloudFollowup { prompt });
+                    let pending_attachments = self
+                        .ai_context_model
+                        .as_ref(ctx)
+                        .pending_attachments()
+                        .to_vec();
+                    if Self::should_upload_cloud_followup_attachments(&pending_attachments) {
+                        self.freeze_input_in_loading_state(ctx);
+                        self.upload_files_then_submit_cloud_followup(
+                            task_id,
+                            prompt,
+                            pending_attachments,
+                            ctx,
+                        );
+                    } else {
+                        if !pending_attachments.is_empty() {
+                            log::warn!(
+                                "Cannot upload cloud follow-up attachments: CloudModeImageContext is disabled"
+                            );
+                        }
+                        ctx.emit(Event::SubmitCloudFollowup { prompt });
+                    }
                 } else {
                     // Cloud-to-cloud follow-up is unavailable; block rather than run locally.
                     self.show_ephemeral_error_toast(
@@ -4136,6 +4284,10 @@ impl Input {
                 true
             }
         }
+    }
+
+    fn should_upload_cloud_followup_attachments(pending_attachments: &[PendingAttachment]) -> bool {
+        !pending_attachments.is_empty() && FeatureFlag::CloudModeImageContext.is_enabled()
     }
 
     /// Primary entry point for submitting the input buffer as an AI query. Routes to the correct
@@ -4295,29 +4447,19 @@ impl Input {
         };
 
         let handoff_compose_state = self.handoff_compose_state.clone();
+        let suggestion = suggest_handoff_environment(pwd, ctx);
         ctx.spawn(
             async move {
-                resolve_repo_for_path(&pwd)
+                suggestion
                     .with_timeout(Duration::from_secs(5))
                     .await
                     .ok()
                     .flatten()
             },
-            move |_input, touched_repo, ctx| {
-                use crate::cloud_object::CloudObjectLookup as _;
-
-                let Some(touched_repo) = touched_repo else {
-                    return;
-                };
-                let workspace = TouchedWorkspace {
-                    repos: vec![touched_repo],
-                    orphan_files: vec![],
-                };
-                let mut envs = CloudAmbientAgentEnvironment::get_all(ctx);
-                sort_environments_by_recency(&mut envs);
-                if let Some(overlap_env) = pick_handoff_overlap_env(&workspace, envs) {
+            move |_input, environment_id, ctx| {
+                if let Some(environment_id) = environment_id {
                     handoff_compose_state.update(ctx, |state, ctx| {
-                        state.set_environment_id(Some(overlap_env), false, ctx);
+                        state.set_environment_id(Some(environment_id), false, ctx);
                     });
                 }
             },
@@ -4330,13 +4472,13 @@ impl Input {
     }
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    pub(crate) fn exit_cloud_handoff_compose_and_clear(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn exit_cloud_handoff_compose_and_clear_prompt(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
         self.exit_cloud_handoff_compose(ctx);
         self.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
-        });
-        self.ai_context_model.update(ctx, |context_model, ctx| {
-            context_model.clear_pending_attachments(ctx);
         });
     }
 
@@ -4580,7 +4722,7 @@ impl Input {
                 .selected_environment_id()
                 .cloned();
             let entry_point = self.handoff_compose_state.as_ref(ctx).entry_point();
-            self.exit_cloud_handoff_compose_and_clear(ctx);
+            self.exit_cloud_handoff_compose_and_clear_prompt(ctx);
             ctx.dispatch_typed_action_deferred(WorkspaceAction::OpenLocalToCloudHandoffPane {
                 launch: None,
                 environment_id,
@@ -4606,7 +4748,7 @@ impl Input {
             attachments,
         };
 
-        self.exit_cloud_handoff_compose_and_clear(ctx);
+        self.exit_cloud_handoff_compose_and_clear_prompt(ctx);
 
         ctx.dispatch_typed_action_deferred(WorkspaceAction::OpenLocalToCloudHandoffPane {
             launch: Some(launch),
@@ -5001,9 +5143,10 @@ impl Input {
                 selected_tab,
                 set_as_default,
             } => {
-                let profile_id = *AIExecutionProfilesModel::as_ref(ctx)
+                let profile_id = AIExecutionProfilesModel::as_ref(ctx)
                     .active_profile(Some(self.terminal_view_id), ctx)
-                    .id();
+                    .id()
+                    .clone();
 
                 match selected_tab {
                     InlineModelSelectorTab::BaseAgent => {
@@ -5016,13 +5159,13 @@ impl Input {
                         });
                         if *set_as_default {
                             AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
-                                profiles.set_base_model(profile_id, Some(id.clone()), ctx);
+                                profiles.set_base_model(&profile_id, Some(id.clone()), ctx);
                             });
                         }
                     }
                     InlineModelSelectorTab::FullTerminalUse => {
                         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
-                            profiles.set_cli_agent_model(profile_id, Some(id.clone()), ctx);
+                            profiles.set_cli_agent_model(&profile_id, Some(id.clone()), ctx);
                         });
                     }
                 }
@@ -5082,7 +5225,11 @@ impl Input {
         match event {
             InlineProfileSelectorEvent::SelectedProfile { profile_id } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_active_profile(self.terminal_view_id, *profile_id, ctx);
+                    profiles_model.set_active_profile(
+                        self.terminal_view_id,
+                        profile_id.clone(),
+                        ctx,
+                    );
                 });
 
                 // Remove any LLM override when switching profiles
@@ -7651,6 +7798,23 @@ impl Input {
                 editor.set_text_colors(TextColors::from_appearance(appearance), ctx);
             });
         }
+    }
+
+    /// Restores a VM-down cloud follow-up after an attachment upload fails. Unlike
+    /// [`Self::unfreeze_agent_input`], this path runs on a disconnected cloud pane rather than an
+    /// active shared-session viewer, so it must restore the visible prompt and editable state
+    /// directly.
+    fn restore_cloud_followup_input_after_upload_failure(
+        &mut self,
+        prompt: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.editor.update(ctx, |editor, ctx| {
+            editor.set_buffer_text(prompt, ctx);
+            editor.set_interaction_state(InteractionState::Editable, ctx);
+            let appearance: &Appearance = Appearance::as_ref(ctx);
+            editor.set_text_colors(TextColors::from_appearance(appearance), ctx);
+        });
     }
 
     pub fn reset_after_cloud_followup_submission(&mut self, ctx: &mut ViewContext<Self>) {
@@ -10465,6 +10629,19 @@ impl Input {
                 // e.g., we don't want to sync EditorEvent::CmdUpOnFirstRow.
                 self.send_input_sync_event(edit_origin, ctx);
 
+                // Distinguish edits the completion system applied itself (accepting or
+                // cycling through a candidate) from edits the user made (typing,
+                // backspacing, pasting). System-applied edits are allowed to diverge from
+                // the original completion query so that classic cycling keeps working;
+                // user edits still have to be revalidated against that query.
+                let is_user_edit = !matches!(
+                    self.editor.as_ref(ctx).get_last_action(ctx),
+                    Some(
+                        PlainTextEditorViewAction::AcceptCompletionSuggestion
+                            | PlainTextEditorViewAction::CycleCompletionSuggestion
+                    )
+                );
+
                 let mode = self.suggestions_mode_model.as_ref(ctx).mode().clone();
                 match &mode {
                     InputSuggestionsMode::CompletionSuggestions {
@@ -10538,6 +10715,7 @@ impl Input {
                                 replacement_start,
                                 buffer_text_original.as_str(),
                                 &completion_results,
+                                is_user_edit,
                                 ctx,
                             );
                             if should_close {
@@ -10706,10 +10884,13 @@ impl Input {
                             let replacement_start = *replacement_start;
                             let buffer_text_original = buffer_text_original.clone();
                             let completion_results = completion_results.clone();
+                            // A selection change is a cursor move, not a buffer edit, so it
+                            // never counts as a user edit for invalidation purposes.
                             let should_close = self.update_tab_completion_menu(
                                 replacement_start,
                                 buffer_text_original.as_str(),
                                 &completion_results,
+                                /*is_user_edit=*/ false,
                                 ctx,
                             );
 
@@ -11623,6 +11804,7 @@ impl Input {
         replacement_start: usize,
         buffer_text_original: &str,
         completion_results: &SuggestionResults,
+        is_user_edit: bool,
         ctx: &mut ViewContext<Input>,
     ) -> bool {
         let editor_text = self.editor.as_ref(ctx).buffer_text(ctx);
@@ -11639,13 +11821,18 @@ impl Input {
         // then we should close the completion menu because the result set
         // was based on a different query.
         //
-        // For classic completions, this is a poor heuristic: when you cycle
-        // through fuzzy matches, the text up to the cursor might not start
-        // with the original buffer text anymore.
-        // TODO: there's a bug here where if you hit tab and backspace,
-        // the result set won't go away (stale).
+        // Classic completions get an exemption from this check, but only for
+        // system-applied edits: when the completion system cycles through fuzzy
+        // matches it rewrites the buffer to each candidate, and the text up to the
+        // cursor may no longer start with the original buffer text. Keeping the
+        // result set alive in that case is what lets cycling work.
+        //
+        // A user edit (typing, backspacing, pasting) that diverges from the original
+        // query must still invalidate the result set. Otherwise a Tab followed by
+        // Backspace past the replacement boundary would leave stale suggestions on
+        // screen (and an empty prefix would re-show the entire original result set).
         if !text_up_to_cursor.starts_with(buffer_text_original)
-            && !self.is_classic_completions_enabled(ctx)
+            && (!self.is_classic_completions_enabled(ctx) || is_user_edit)
         {
             // Close the input suggestions since the buffer was edited to no longer
             // contain the text that triggered tab completion.
@@ -11817,7 +12004,7 @@ impl Input {
         let input_config = self.ai_input_model.as_ref(ctx).input_config();
         let config = UpArrowHistoryConfig::for_input_config(&input_config);
 
-        History::as_ref(ctx).up_arrow_suggestions_for_terminal_view(
+        History::as_ref(ctx).up_arrow_suggestions_for_terminal_surface(
             self.terminal_view_id,
             self.active_block_session_id(),
             config,
@@ -13402,34 +13589,6 @@ impl Input {
                 #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
                 let attachments = vec![];
 
-                // For local-to-cloud handoff panes, gate the buffer clear on the
-                // async `derive_touched_workspace` derivation having completed and
-                // no orchestrator already being in flight. If we cleared early and
-                // then bailed inside `submit_handoff`, the user's prompt and
-                // pending attachments would be silently dropped. Surface a toast
-                // so the user gets some feedback instead of seeing the submit do
-                // nothing — the prompt and attachments are intentionally left
-                // intact so the next submit picks them back up.
-                if let Some(ambient_agent_view_model) = self.ambient_agent_view_model().cloned() {
-                    let is_handoff_not_ready = {
-                        let model = ambient_agent_view_model.as_ref(ctx);
-                        model.is_local_to_cloud_handoff() && !model.is_handoff_ready_to_submit()
-                    };
-                    if is_handoff_not_ready {
-                        let window_id = ctx.window_id();
-                        ToastStack::handle(ctx).update(ctx, |ts, ctx| {
-                            ts.add_ephemeral_toast(
-                                DismissibleToast::default(
-                                    "Preparing handoff — try again in a moment.".to_owned(),
-                                )
-                                .with_object_id("local-to-cloud-handoff-not-ready".to_owned()),
-                                window_id,
-                                ctx,
-                            );
-                        });
-                        return;
-                    }
-                }
                 self.emit_input_buffer_submitted_telemetry(ctx);
 
                 // Clear the buffer and pending attachments after collecting them.
@@ -13442,11 +13601,7 @@ impl Input {
 
                 if let Some(ambient_agent_view_model) = self.ambient_agent_view_model() {
                     ambient_agent_view_model.update(ctx, |state, ctx| {
-                        if state.is_local_to_cloud_handoff() {
-                            state.submit_handoff(prompt, attachments, ctx);
-                        } else {
-                            state.spawn_agent(prompt, attachments, ctx);
-                        }
+                        state.spawn_agent(prompt, attachments, ctx);
                     });
                 }
                 return;
@@ -14431,6 +14586,62 @@ impl Input {
         true
     }
 
+    /// Upload pending attachments to the task definition before emitting the text-only cloud
+    /// follow-up event. `SubmitCloudFollowup` only carries the prompt text, so this helper owns
+    /// the prompt and attachment payloads until the async upload either succeeds and submits the
+    /// prompt or fails and restores the input. A new VM execution downloads these task attachments
+    /// during startup.
+    fn upload_files_then_submit_cloud_followup(
+        &mut self,
+        task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        prompt: String,
+        pending_attachments: Vec<PendingAttachment>,
+        ctx: &mut ViewContext<Self>,
+    ) -> SpawnedFutureHandle {
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let server_api = ServerApiProvider::as_ref(ctx).get();
+
+        ctx.spawn(
+            async move {
+                // Fail fast: any per-attachment failure (decode, size-limit, or HTTP) is fatal
+                // on the VM-down follow-up path; the user can fix the attachment and retry.
+                let outcomes = upload_pending_attachments_to_task(
+                    ai_client,
+                    server_api,
+                    task_id,
+                    pending_attachments,
+                )
+                .await
+                .map_err(|e| format!("Failed to prepare attachment uploads: {e:#}"))?;
+                for outcome in &outcomes {
+                    if let TaskAttachmentUploadOutcome::Failed { error, .. } = outcome {
+                        return Err(error.clone());
+                    }
+                }
+                Ok::<(), String>(())
+            },
+            move |input, result, ctx| {
+                if let Err(error) = result {
+                    input.restore_cloud_followup_input_after_upload_failure(&prompt, ctx);
+                    let window_id = ctx.window_id();
+                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!("Couldn't upload attachment: {error}")),
+                            window_id,
+                            ctx,
+                        );
+                    });
+                    return;
+                }
+
+                input.ai_context_model.update(ctx, |context_model, ctx| {
+                    context_model.clear_pending_attachments(ctx);
+                });
+                ctx.emit(Event::SubmitCloudFollowup { prompt });
+            },
+        )
+    }
+
     fn emit_input_buffer_submitted_telemetry(&self, ctx: &mut ViewContext<Self>) {
         let input_model = self.ai_input_model.as_ref(ctx);
         let block_id = self.model.lock().active_block_id().clone();
@@ -14509,59 +14720,30 @@ impl Input {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let server_api = ServerApiProvider::as_ref(ctx).get();
 
-        // Decode all images upfront; drop any that fail so that file_infos
-        // and files_to_upload stay in sync (they're zipped later).
-        let mut files_to_upload: Vec<(String, String, Vec<u8>)> = pending_images
+        // Combine images and files into a unified list so
+        // `upload_pending_attachments_to_task` can handle both kinds uniformly.
+        let pending_attachments: Vec<PendingAttachment> = pending_images
             .iter()
-            .filter_map(|img| {
-                base64::engine::general_purpose::STANDARD
-                    .decode(&img.data)
-                    .map(|bytes| (img.file_name.clone(), img.mime_type.clone(), bytes))
-                    .map_err(|e| {
-                        report_error!(
-                            anyhow::Error::new(e).context("Failed to decode base64 image"),
-                            extra: { "file_name" => %img.file_name }
-                        )
-                    })
-                    .ok()
-            })
+            .cloned()
+            .map(PendingAttachment::Image)
+            .chain(pending_files.iter().cloned().map(PendingAttachment::File))
             .collect();
-
-        // Also read non-image files from disk and add them to the upload list.
-        for file in pending_files {
-            match std::fs::read(&file.file_path) {
-                Ok(bytes) => {
-                    if bytes.len() > MAX_ATTACHMENT_SIZE_BYTES {
-                        log::warn!(
-                            "Skipping file {} ({} bytes) — exceeds 10MB limit",
-                            file.file_name,
-                            bytes.len()
-                        );
-                        continue;
-                    }
-                    files_to_upload.push((file.file_name.clone(), file.mime_type.clone(), bytes));
-                }
-                Err(e) => {
-                    log::warn!("Failed to read file {}: {e}", file.file_path.display());
-                }
-            }
-        }
-
-        let file_infos: Vec<AttachmentFileInfo> = files_to_upload
-            .iter()
-            .map(|(name, mime, _)| AttachmentFileInfo {
-                filename: name.clone(),
-                mime_type: mime.clone(),
-            })
-            .collect();
+        let pending_count = pending_attachments.len();
 
         ctx.spawn(
             async move {
-                let response = match ai_client
-                    .prepare_attachments_for_upload(&task_id, &file_infos)
-                    .await
+                // Best-effort: continue with successful uploads even when individual
+                // attachments fail (decode / size-limit / HTTP). Return `None` only when
+                // the prepare call fails entirely (maps to the "too many attachments" toast).
+                let outcomes = match upload_pending_attachments_to_task(
+                    ai_client,
+                    server_api,
+                    task_id,
+                    pending_attachments,
+                )
+                .await
                 {
-                    Ok(resp) => resp,
+                    Ok(outcomes) => outcomes,
                     Err(e) => {
                         log::error!(
                             "Failed to prepare attachment uploads for task {task_id}: {e:#}"
@@ -14571,41 +14753,28 @@ impl Input {
                 };
 
                 let mut uploaded = Vec::new();
-                for ((file_name, mime_type, file_bytes), upload_info) in
-                    files_to_upload.iter().zip(response.attachments.iter())
-                {
-                    let result = server_api
-                        .http_client()
-                        .put(&upload_info.upload_url)
-                        .header("Content-Type", mime_type.as_str())
-                        .body(file_bytes.clone())
-                        .send()
-                        .await;
-
-                    match result {
-                        Ok(resp) if resp.status().is_success() => {
+                for outcome in outcomes {
+                    match outcome {
+                        TaskAttachmentUploadOutcome::Uploaded {
+                            attachment_id,
+                            file_name,
+                        } => {
                             uploaded.push(AgentAttachment::FileReference {
-                                attachment_id: upload_info.attachment_id.clone(),
-                                file_name: file_name.clone(),
+                                attachment_id,
+                                file_name,
                             });
                         }
-                        Ok(resp) => {
-                            log::warn!(
-                                "Failed to upload attachment {file_name}: unexpected HTTP status {}",
-                                resp.status()
-                            );
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to upload attachment {file_name}: {e}");
+                        TaskAttachmentUploadOutcome::Failed { file_name, error } => {
+                            log::warn!("Failed to upload attachment {file_name}: {error}");
                         }
                     }
                 }
 
-                if uploaded.len() < files_to_upload.len() {
+                if uploaded.len() < pending_count {
                     log::warn!(
                         "Only {}/{} attachments uploaded successfully",
                         uploaded.len(),
-                        files_to_upload.len()
+                        pending_count
                     );
                 }
 

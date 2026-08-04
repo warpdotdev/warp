@@ -6,20 +6,43 @@
 
 use warpui_core::{Entity, ModelContext};
 
+use crate::read_only_menu::TuiReadOnlyMenuKind;
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TuiInputSuggestionsMode {
     #[default]
     Closed,
     SlashCommands,
+    ApiKeys,
     ConversationMenu,
     ModelSelector,
     SkillMenu,
     Mcp,
+    McpInstall,
+    PromptAndCommandHistory,
+    CompletionSuggestions,
+    ReadOnlyMenu(TuiReadOnlyMenuKind),
 }
 
 impl TuiInputSuggestionsMode {
     pub(crate) fn is_visible(self) -> bool {
         self != Self::Closed
+    }
+
+    pub(crate) fn read_only_menu(self) -> Option<TuiReadOnlyMenuKind> {
+        match self {
+            Self::ReadOnlyMenu(kind) => Some(kind),
+            Self::Closed
+            | Self::SlashCommands
+            | Self::ApiKeys
+            | Self::ConversationMenu
+            | Self::ModelSelector
+            | Self::SkillMenu
+            | Self::Mcp
+            | Self::McpInstall
+            | Self::PromptAndCommandHistory
+            | Self::CompletionSuggestions => None,
+        }
     }
 }
 
@@ -68,10 +91,15 @@ impl TuiInputSuggestionsModeModel {
             }
             active_mode if active_mode == mode => true,
             TuiInputSuggestionsMode::SlashCommands
+            | TuiInputSuggestionsMode::ApiKeys
             | TuiInputSuggestionsMode::ConversationMenu
             | TuiInputSuggestionsMode::ModelSelector
             | TuiInputSuggestionsMode::SkillMenu
-            | TuiInputSuggestionsMode::Mcp => false,
+            | TuiInputSuggestionsMode::Mcp
+            | TuiInputSuggestionsMode::McpInstall
+            | TuiInputSuggestionsMode::PromptAndCommandHistory
+            | TuiInputSuggestionsMode::CompletionSuggestions
+            | TuiInputSuggestionsMode::ReadOnlyMenu(_) => false,
         }
     }
 

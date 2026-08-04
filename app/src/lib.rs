@@ -86,6 +86,8 @@ mod tracing;
 mod tui;
 #[cfg(feature = "tui")]
 pub mod tui_export;
+#[cfg(feature = "tui")]
+mod tui_onboarding_markers;
 #[cfg(all(feature = "tui", any(test, feature = "test-util")))]
 mod tui_test_support;
 mod ui_components;
@@ -230,7 +232,7 @@ pub use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
 use warp_errors::{report_error, report_if_error};
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
-use warp_logging::LogDestination;
+use warp_logging::{LogDestination, LogFrontend};
 use warp_managed_secrets::ManagedSecretManager;
 use warp_server_client::iap::{IapManager, IapManagerEvent, IapState, ManagedIapMint};
 use warp_server_client::network_logging::NetworkLogModel;
@@ -260,6 +262,8 @@ use crate::ai::mcp::{MCPGalleryManager, TemplatableMCPServerManager};
 use crate::ai::outline::RepoOutlines;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::tui_api_keys::TuiApiKeyRefresher;
 use crate::antivirus::AntivirusInfo;
 use crate::app_state::AppState;
 use crate::autoupdate::{AutoupdateState, RelaunchModel};
@@ -314,7 +318,7 @@ use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::{AudibleBell, CustomSecretRegexUpdater, History};
 #[cfg(feature = "tui")]
-pub use crate::tui::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
+pub use crate::tui::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase, log_out_tui};
 use crate::undo_close::UndoCloseStack;
 use crate::user_config::WarpConfig;
 use crate::util::bindings::is_binding_cross_platform;
@@ -383,7 +387,6 @@ pub(crate) enum LaunchMode {
     App {
         args: warp_cli::AppArgs,
         /// API key for server authentication, if provided via `--api-key` or `WARP_API_KEY`.
-        /// Only used on dogfood channels.
         api_key: Option<String>,
     },
 
@@ -417,25 +420,25 @@ pub(crate) enum LaunchMode {
         identity_key: String,
     },
 
-    /// Run the headless TUI front-end (the `warp-tui` binary in the `warp_tui`
-    /// crate). Boots the real headless app so shared auth/agent infrastructure can be reused,
-    /// then renders an editor-backed input UI to the terminal (via `mount`)
-    /// instead of opening a GUI window.
+    /// Run the headless TUI front-end or a one-shot command using its settings
+    /// and secure-storage namespace.
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
-    Tui {
-        /// Builds the root TUI view and starts the TUI driver. Runs after
-        /// `initialize_app`; supplied by [`run_tui`]. Carried in the variant
-        /// (rather than as a `run_internal` parameter) so it stays scoped to
-        /// this mode.
-        mount: TuiMountFn,
-        /// API key for server authentication, if provided via `--api-key` or
-        /// `WARP_API_KEY`. Parsed by the TUI front-end and only used on dogfood
-        /// channels (mirrors `App`); lets the TUI log in non-interactively
-        /// instead of the device-auth flow.
-        api_key: Option<String>,
-    },
+    Tui { entrypoint: TuiEntryPoint },
 }
 
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+enum TuiEntryPoint {
+    /// Build the root TUI view, initialize login, and start the TUI driver.
+    Interactive {
+        mount: TuiMountFn,
+        /// API key for non-interactive Warp authentication.
+        api_key: Option<String>,
+    },
+    /// Execute a CLI command after TUI-scoped app initialization, then exit.
+    CliCommand {
+        execute: Box<dyn FnOnce(&mut warpui::AppContext)>,
+    },
+}
 impl LaunchMode {
     fn args(&self) -> Cow<'_, warp_cli::AppArgs> {
         match self {
@@ -445,6 +448,42 @@ impl LaunchMode {
             | LaunchMode::RemoteServerProxy
             | LaunchMode::RemoteServerDaemon { .. }
             | LaunchMode::Tui { .. } => Cow::Owned(warp_cli::AppArgs::default()),
+        }
+    }
+
+    fn api_key(&self) -> Option<String> {
+        match self {
+            LaunchMode::CommandLine { global_options, .. } => global_options.api_key.clone(),
+            LaunchMode::App { api_key, .. }
+            | LaunchMode::Tui {
+                entrypoint: TuiEntryPoint::Interactive { api_key, .. },
+            } => api_key.clone(),
+            LaunchMode::Test { .. }
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::RemoteServerDaemon { .. }
+            | LaunchMode::Tui {
+                entrypoint: TuiEntryPoint::CliCommand { .. },
+            } => None,
+        }
+    }
+
+    /// Returns whether a startup API key should be installed before its user is fetched.
+    ///
+    /// The interactive TUI defers the key so its UI cannot treat credential presence as a
+    /// validated identity. Other launch modes retain their existing initialization behavior.
+    fn should_initialize_api_key_eagerly(&self) -> bool {
+        match self {
+            LaunchMode::Tui {
+                entrypoint: TuiEntryPoint::Interactive { .. },
+            } => false,
+            LaunchMode::App { .. }
+            | LaunchMode::CommandLine { .. }
+            | LaunchMode::Test { .. }
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::RemoteServerDaemon { .. }
+            | LaunchMode::Tui {
+                entrypoint: TuiEntryPoint::CliCommand { .. },
+            } => true,
         }
     }
 
@@ -639,6 +678,16 @@ impl LaunchMode {
         }
     }
 
+    fn log_frontend(&self) -> LogFrontend {
+        match self {
+            LaunchMode::Tui { .. } => LogFrontend::Tui,
+            LaunchMode::App { .. } | LaunchMode::Test { .. } => LogFrontend::Gui,
+            LaunchMode::CommandLine { .. }
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::RemoteServerDaemon { .. } => LogFrontend::Cli,
+        }
+    }
+
     fn as_str_for_tracing(&self) -> &'static str {
         match self {
             LaunchMode::App { .. } => "app",
@@ -824,7 +873,7 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
             let launch_mode = LaunchMode::RemoteServerProxy;
             let mut tracing_initialization = tracing::init()?;
             warp_logging::init(warp_logging::LogConfig {
-                is_cli: true,
+                frontend: launch_mode.log_frontend(),
                 log_destination: launch_mode.log_destination(),
                 ..Default::default()
             })?;
@@ -887,7 +936,17 @@ pub fn run_integration_test(driver: TestDriver) -> Result<()> {
 /// `warp_tui`.
 #[cfg(feature = "tui")]
 pub fn run_tui(api_key: Option<String>, mount: TuiMountFn) -> Result<()> {
-    run_internal(LaunchMode::Tui { mount, api_key })
+    run_internal(LaunchMode::Tui {
+        entrypoint: TuiEntryPoint::Interactive { mount, api_key },
+    })
+}
+
+/// Executes a CLI command after initializing TUI-scoped settings and secure storage.
+#[cfg(feature = "tui")]
+pub fn run_tui_cli_command(execute: Box<dyn FnOnce(&mut warpui::AppContext)>) -> Result<()> {
+    run_internal(LaunchMode::Tui {
+        entrypoint: TuiEntryPoint::CliCommand { execute },
+    })
 }
 
 /// Dispatches a worker command when the current executable was re-invoked for one.
@@ -917,9 +976,8 @@ pub fn run_tui_worker_if_requested() -> Option<Result<()>> {
 /// `initialize_app` to build the root TUI view and start the TUI driver.
 pub type TuiMountFn = Box<dyn FnOnce(&mut warpui::AppContext)>;
 
-/// Runs the app (or CLI / daemon). For [`LaunchMode::Tui`] it runs the mount
-/// carried by the variant after `initialize_app` (building the root TUI view and
-/// starting the driver) in place of the GUI/CLI `launch()` path.
+/// Runs the app (or CLI / daemon). TUI entry points run after `initialize_app`
+/// in place of the GUI/CLI `launch()` path.
 fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     let mut timer = IntervalTimer::new();
 
@@ -962,7 +1020,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     let _enter = span.enter();
 
     let log_destination = launch_mode.log_destination();
-    let is_cli = log_destination.is_some();
 
     cfg_if::cfg_if! {
         if #[cfg(enable_crash_recovery)] {
@@ -970,14 +1027,14 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
                 warp_logging::init_for_crash_recovery_process()?;
             } else {
                 warp_logging::init(warp_logging::LogConfig {
-                    is_cli,
+                    frontend: launch_mode.log_frontend(),
                     log_destination,
                     ..Default::default()
                 })?;
             }
         } else {
             warp_logging::init(warp_logging::LogConfig {
-                is_cli,
+                frontend: launch_mode.log_frontend(),
                 log_destination,
                 ..Default::default()
             })?;
@@ -1155,6 +1212,10 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         )
     };
 
+    if matches!(launch_mode, LaunchMode::Tui { .. }) {
+        app_builder.enable_headless_microphone_access_query();
+    }
+
     #[cfg(target_os = "macos")]
     {
         use warpui::AssetProvider as _;
@@ -1279,7 +1340,10 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         // GUI/CLI `launch()` path.
         match launch_mode {
             #[cfg(feature = "tui")]
-            LaunchMode::Tui { mount, .. } => crate::tui::init(mount, ctx),
+            LaunchMode::Tui { entrypoint } => match entrypoint {
+                TuiEntryPoint::Interactive { mount, .. } => crate::tui::init(mount, ctx),
+                TuiEntryPoint::CliCommand { execute } => execute(ctx),
+            },
             #[cfg(not(feature = "tui"))]
             LaunchMode::Tui { .. } => {
                 unreachable!("the `tui` launch mode requires the `tui` feature")
@@ -1291,6 +1355,51 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
 pub struct UpdateQuakeModeEventArg {
     active_window_id: Option<WindowId>,
+}
+
+enum StartupUserAuthentication {
+    RefreshUser,
+    ApiKey(String),
+}
+
+impl StartupUserAuthentication {
+    fn start(self, ctx: &mut AppContext) {
+        AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| match self {
+            Self::RefreshUser => auth_manager.refresh_user(ctx),
+            Self::ApiKey(api_key) => auth_manager.authenticate_api_key(api_key, ctx),
+        });
+    }
+}
+
+fn authenticate_user_after_iap_access(
+    authentication: StartupUserAuthentication,
+    ctx: &mut AppContext,
+) {
+    let iap_manager = IapManager::handle(ctx);
+    if !iap_manager.as_ref(ctx).is_enabled() || iap_manager.as_ref(ctx).has_valid_token() {
+        authentication.start(ctx);
+        return;
+    }
+
+    let mut pending_authentication = Some(authentication);
+    ctx.subscribe_to_model(&iap_manager, move |iap_manager, event, ctx| match event {
+        IapManagerEvent::StateChanged => {
+            if !iap_manager.as_ref(ctx).has_valid_token() {
+                return;
+            }
+            if let Some(authentication) = pending_authentication.take() {
+                authentication.start(ctx);
+            }
+        }
+        IapManagerEvent::AccessUnavailable => {
+            report_error!("Staging IAP access unavailable before startup user authentication");
+        }
+        IapManagerEvent::RefreshFailed {
+            message: _,
+            is_first_failure_of_streak: _,
+        } => {}
+    });
+    iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
 }
 
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
@@ -1346,41 +1455,16 @@ pub(crate) fn initialize_app(
         ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());
     }
 
-    // Extract API key from command line options, if applicable.
-    let api_key = match launch_mode {
-        LaunchMode::CommandLine { global_options, .. } => global_options.api_key.clone(),
-        LaunchMode::App { api_key, .. } if ChannelState::channel().is_dogfood() => api_key.clone(),
-        LaunchMode::Tui { api_key, .. } if ChannelState::channel().is_dogfood() => api_key.clone(),
-        _ => None,
-    };
-    let api_key = if FeatureFlag::APIKeyAuthentication.is_enabled() {
-        api_key
+    let (api_key, pending_api_key) = if launch_mode.should_initialize_api_key_eagerly() {
+        (launch_mode.api_key(), None)
     } else {
-        None
+        (None, launch_mode.api_key())
     };
-
-    // A key supplied to an App launch but dropped here means Warp will start logged out
-    // (non-dogfood channel or feature disabled). Surface this loudly so it isn't silent.
-    if api_key.is_none()
-        && matches!(
-            launch_mode,
-            LaunchMode::App {
-                api_key: Some(_),
-                ..
-            } | LaunchMode::Tui {
-                api_key: Some(_),
-                ..
-            }
-        )
-    {
-        let channel = ChannelState::channel();
-        let warning = format!(
-            "WARNING: --api-key/WARP_API_KEY was provided but IGNORED on the '{channel}' channel — Warp is starting LOGGED OUT. API-key auth is only available on internal (dogfood) builds."
-        );
-        eprintln!("{warning}");
-    }
-
-    let auth_state = Arc::new(AuthState::initialize(ctx, api_key));
+    let auth_state = Arc::new(if pending_api_key.is_some() {
+        AuthState::initialize_for_credential_validation(ctx)
+    } else {
+        AuthState::initialize(ctx, api_key)
+    });
     timer.mark_interval_end("AUTH_MANAGER_SET_USER");
 
     let agent_source = determine_agent_source(launch_mode);
@@ -1607,6 +1691,10 @@ pub(crate) fn initialize_app(
         #[cfg_attr(target_family = "wasm", allow(unused_mut))]
         let mut manager = ::ai::api_keys::ApiKeyManager::new(ctx);
         #[cfg(not(target_family = "wasm"))]
+        if matches!(launch_mode, LaunchMode::Tui { .. }) {
+            manager.subscribe_to_tui_api_key_changes(ctx);
+        }
+        #[cfg(not(target_family = "wasm"))]
         manager.subscribe_to_settings_changes(ctx);
         // Gemini Enterprise (GEAP) credential refresh triggers: workspace
         // settings saves / team changes and the member's enablement toggle.
@@ -1633,6 +1721,28 @@ pub(crate) fn initialize_app(
         }
         manager
     });
+
+    ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |_, event, ctx| {
+        if matches!(
+            event,
+            UserWorkspacesEvent::CurrentWorkspaceChanged
+                | UserWorkspacesEvent::AiOveragesUpdated
+                | UserWorkspacesEvent::PurchaseAddonCreditsSuccess
+        ) {
+            AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
+                usage_model.request_availability_refresh(ctx);
+            });
+        }
+    });
+    ctx.subscribe_to_model(
+        &::ai::api_keys::ApiKeyManager::handle(ctx),
+        |_, event, ctx| {
+            let ::ai::api_keys::ApiKeyManagerEvent::KeysUpdated = event;
+            AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
+                usage_model.request_availability_refresh(ctx);
+            });
+        },
+    );
 
     ctx.add_singleton_model(AntivirusInfo::new);
 
@@ -1751,15 +1861,6 @@ pub(crate) fn initialize_app(
     let user_is_logged_in = auth_state.is_logged_in();
 
     if user_is_logged_in {
-        // Skip refresh_user for CLI mode — the CLI handles auth refresh in
-        // ensure_auth_state so it can detect invalid credentials before running
-        // a command.
-        if !matches!(launch_mode, LaunchMode::CommandLine { .. }) {
-            AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
-                auth_manager.refresh_user(ctx);
-            });
-        }
-
         // Set the first frame callback to record the app's startup time.
         // This is only sent for logged-in users so that new users don't skew performance metrics.
         let is_screen_reader_enabled = ctx.is_screen_reader_enabled();
@@ -2013,6 +2114,7 @@ pub(crate) fn initialize_app(
             time_of_next_force_object_refresh,
         )
     });
+    ctx.add_singleton_model(ai::cloud_environments::CloudEnvironmentCatalog::new);
 
     let unsynced_actions: Vec<(CloudObjectTypeAndId, ObjectAction)> = object_actions
         .iter()
@@ -2262,6 +2364,19 @@ pub(crate) fn initialize_app(
             _ => {}
         };
     });
+
+    // CLI commands establish IAP access and refresh auth in their dispatch path so they can
+    // surface failures synchronously. Interactive clients wait for IAP here before authenticating
+    // their startup user, since the request itself calls the IAP-gated warp-server.
+    let startup_authentication = pending_api_key
+        .map(StartupUserAuthentication::ApiKey)
+        .or_else(|| {
+            (user_is_logged_in && !matches!(launch_mode, LaunchMode::CommandLine { .. }))
+                .then_some(StartupUserAuthentication::RefreshUser)
+        });
+    if let Some(authentication) = startup_authentication {
+        authenticate_user_after_iap_access(authentication, ctx);
+    }
 
     // Add a singleton model that holds the current prompt configuration.
     ctx.add_singleton_model(Prompt::new);

@@ -96,9 +96,9 @@ fn test_materialized_default_worktree_config_renders_full_worktree_path() {
         assert_eq!(commands.len(), 2);
         assert_eq!(
             commands[0].exec,
-            format!("git worktree add -b my-feature {expected_worktree_path}")
+            format!("git worktree add -b my-feature \"{expected_worktree_path}\"")
         );
-        assert_eq!(commands[1].exec, format!("cd {expected_worktree_path}"));
+        assert_eq!(commands[1].exec, format!("cd \"{expected_worktree_path}\""));
     } else {
         panic!("expected terminal pane template");
     }

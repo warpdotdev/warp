@@ -419,6 +419,125 @@ fn test_clean_path() {
     );
 }
 
+/// The single predicate every WSL UNC host check in this module goes through, so its casing and
+/// host-spelling table is asserted here rather than repeated at each call site.
+#[test]
+fn test_is_wsl_unc_host() {
+    for host in [
+        "wsl$",
+        "WSL$",
+        "Wsl$",
+        "wsl.localhost",
+        "WSL.localhost",
+        "Wsl.Localhost",
+    ] {
+        assert!(
+            is_wsl_unc_host(host),
+            "{host} should be recognized as a WSL UNC host"
+        );
+    }
+
+    for host in [
+        "",
+        "wsl",
+        "wsl$$",
+        "wsl.localhost.example.com",
+        "localhost",
+        "server",
+    ] {
+        assert!(
+            !is_wsl_unc_host(host),
+            "{host} should not be recognized as a WSL UNC host"
+        );
+    }
+}
+
+/// Covers the prefix-kind dispatch — only UNC and verbatim UNC prefixes carry a host to check.
+#[test]
+fn test_is_wsl_unc_prefix() {
+    fn is_wsl_unc_path_prefix(path: &str) -> bool {
+        let typed_path = TypedPath::from(path);
+        match typed_path.components().next() {
+            Some(TypedComponent::Windows(WindowsComponent::Prefix(prefix))) => {
+                is_wsl_unc_prefix(&prefix)
+            }
+            _ => panic!("{path} should be inferred as a Windows path with a prefix"),
+        }
+    }
+
+    for path in [
+        "//wsl$/Ubuntu/home",
+        "//WSL.localhost/Ubuntu/home",
+        r"\\wsl$\Ubuntu\home",
+        r"\\?\UNC\WSL.localhost\Ubuntu\home",
+    ] {
+        assert!(
+            is_wsl_unc_path_prefix(path),
+            "{path} should be recognized as a WSL UNC prefix"
+        );
+    }
+
+    for path in [
+        r"\\server\share\file",
+        r"\\?\UNC\server\share",
+        r"\\.\COM42",
+        r"\\?\pictures",
+        r"C:\Users",
+        r"\\?\C:\Users",
+    ] {
+        assert!(
+            !is_wsl_unc_path_prefix(path),
+            "{path} should not be recognized as a WSL UNC prefix"
+        );
+    }
+}
+
+/// WSL is exposed over UNC but served locally, so no spelling or casing of its host may be
+/// classified as a network resource — that would make `is_path_valid` reject valid WSL file links.
+#[test]
+#[cfg(windows)]
+fn test_is_network_resource_wsl_hosts_are_local() {
+    for path in [
+        r"\\WSL$\Ubuntu\home\user\file.rs",
+        r"\\wsl$\Ubuntu\home\user\file.rs",
+        r"\\Wsl$\Ubuntu\home\user\file.rs",
+        r"\\wsl.localhost\Ubuntu\home\user\file.rs",
+        r"\\WSL.localhost\Ubuntu\home\user\file.rs",
+        r"\\Wsl.Localhost\Ubuntu\home\user\file.rs",
+        r"\\?\UNC\wsl$\Ubuntu\home\user\file.rs",
+        r"\\?\UNC\WSL$\Ubuntu\home\user\file.rs",
+        r"\\?\UNC\wsl.localhost\Ubuntu\home\user\file.rs",
+        r"\\?\UNC\WSL.localhost\Ubuntu\home\user\file.rs",
+    ] {
+        assert!(
+            !is_network_resource(Path::new(path)),
+            "{path} should not be treated as a network resource"
+        );
+    }
+}
+
+#[test]
+#[cfg(windows)]
+fn test_is_network_resource_non_wsl_paths() {
+    for path in [
+        r"\\server\share\file",
+        r"\\?\UNC\server\share\file",
+        r"\\wsl\Ubuntu\home",
+    ] {
+        assert!(
+            is_network_resource(Path::new(path)),
+            "{path} should be treated as a network resource"
+        );
+    }
+
+    for path in [r"C:\Users\x", r"\\?\C:\Users\x", r"relative\path"] {
+        assert!(
+            !is_network_resource(Path::new(path)),
+            "{path} should not be treated as a network resource"
+        );
+    }
+}
+
 #[test]
 #[cfg(windows)]
 fn test_msys2_exe_to_root() {
@@ -503,15 +622,36 @@ fn test_convert_git_bash_to_windows_native_path() {
         .unwrap(),
         PathBuf::from(r"\\WSL.localhost\Ubuntu\home")
     );
-    // This path might get auto-inferred by typed-path to be a Windows path, even if it looks like
-    // UNIX with forward slashes.
+    // These paths might get auto-inferred by typed-path to be Windows paths, even if they look
+    // like UNIX with forward slashes. Every casing of both WSL UNC hosts must be accepted.
+    for path in [
+        "//wsl$/Ubuntu/home",
+        "//WSL$/Ubuntu/home",
+        "//Wsl$/Ubuntu/home",
+        "//wsl.localhost/Ubuntu/home",
+        "//WSL.localhost/Ubuntu/home",
+        "//Wsl.Localhost/Ubuntu/home",
+    ] {
+        assert_eq!(
+            convert_msys2_to_windows_native_path(&TypedPath::from(path), &GIT_BASH_ROOT)
+                .unwrap_or_else(|err| panic!("{path} should be convertible, got {err:?}")),
+            PathBuf::from(path.replace('/', "\\"))
+        );
+    }
+    // A Windows-encoded UNC path to an actual remote host is still rejected.
+    assert!(matches!(
+        convert_msys2_to_windows_native_path(&TypedPath::from("//server/share"), &GIT_BASH_ROOT),
+        Err(MSYS2PathConversionError::NonUnixPath)
+    ));
+    // Windows drive letters are case-insensitive, so an uppercase MSYS2 drive prefix resolves the
+    // same as a lowercase one.
     assert_eq!(
         convert_msys2_to_windows_native_path(
-            &TypedPath::from("//wsl$/Ubuntu/home"),
+            &TypedPathBuf::from_unix("/C/foo/bar").to_path(),
             &GIT_BASH_ROOT
         )
         .unwrap(),
-        PathBuf::from(r"\\wsl$\Ubuntu\home")
+        PathBuf::from(r"C:\foo\bar")
     );
     assert_eq!(
         convert_msys2_to_windows_native_path(
@@ -579,6 +719,16 @@ fn test_convert_wsl_to_windows_host_path() {
             .unwrap(),
         PathBuf::from(r"Z:\")
     );
+    // Windows drive letters are case-insensitive, so an uppercase mount resolves the same as a
+    // lowercase one.
+    assert_eq!(
+        convert_wsl_to_windows_host_path(
+            &TypedPathBuf::from_unix("/mnt/C/foo").to_path(),
+            "Ubuntu"
+        )
+        .unwrap(),
+        PathBuf::from(r"C:\foo")
+    );
     assert_eq!(
         convert_wsl_to_windows_host_path(
             &TypedPathBuf::from_unix("/home/andy").to_path(),
@@ -625,6 +775,61 @@ fn test_convert_wsl_to_windows_host_path() {
         ),
         Err(WSLPathConversionError::NonUnixPath)
     ));
+}
+
+/// Asserts that `input` parses into the given distribution and Linux path.
+fn assert_parses_wsl_unc(input: &str, distro: &str, linux_path: &str) {
+    assert_eq!(
+        parse_wsl_unc_path(Path::new(input)),
+        Some(WslUncPath {
+            distro: distro.to_string(),
+            linux_path: linux_path.to_string(),
+        }),
+        "input: {input:?}"
+    );
+}
+
+#[test]
+fn test_parse_wsl_unc_path() {
+    assert_parses_wsl_unc(r"\\wsl$\Ubuntu\home\user", "Ubuntu", "/home/user");
+    assert_parses_wsl_unc(r"\\wsl.localhost\Ubuntu\home", "Ubuntu", "/home");
+    assert_parses_wsl_unc(r"\\?\UNC\wsl$\Ubuntu\home\user", "Ubuntu", "/home/user");
+    assert_parses_wsl_unc(
+        r"\\?\UNC\wsl.localhost\Ubuntu\srv\repo",
+        "Ubuntu",
+        "/srv/repo",
+    );
+    assert_parses_wsl_unc("//wsl$/Ubuntu/home/user", "Ubuntu", "/home/user");
+    // The host is matched case-insensitively.
+    assert_parses_wsl_unc(r"\\WSL$\Ubuntu\src", "Ubuntu", "/src");
+    assert_parses_wsl_unc(r"\\Wsl.LocalHost\Ubuntu\src", "Ubuntu", "/src");
+    // Trailing separators are dropped.
+    assert_parses_wsl_unc(r"\\wsl$\Ubuntu\home\user\", "Ubuntu", "/home/user");
+    assert_parses_wsl_unc("//wsl$/Ubuntu/home/user/", "Ubuntu", "/home/user");
+    // Distribution names may contain dots and dashes.
+    assert_parses_wsl_unc(
+        r"\\wsl.localhost\Ubuntu-24.04\home\krag",
+        "Ubuntu-24.04",
+        "/home/krag",
+    );
+    // The distribution root maps to `/`.
+    assert_parses_wsl_unc(r"\\wsl$\Ubuntu", "Ubuntu", "/");
+    assert_parses_wsl_unc(r"\\wsl$\Ubuntu\", "Ubuntu", "/");
+    assert_parses_wsl_unc("//wsl$/archlinux", "archlinux", "/");
+}
+
+#[test]
+fn test_parse_wsl_unc_path_rejects_other_paths() {
+    // Non-WSL UNC share.
+    assert_eq!(parse_wsl_unc_path(Path::new(r"\\server\share\dir")), None);
+    // Drive-letter path.
+    assert_eq!(parse_wsl_unc_path(Path::new(r"C:\Users\foo")), None);
+    // Relative paths.
+    assert_eq!(parse_wsl_unc_path(Path::new(r"foo\bar")), None);
+    assert_eq!(parse_wsl_unc_path(Path::new("foo/bar")), None);
+    // WSL host without a distribution name.
+    assert_eq!(parse_wsl_unc_path(Path::new(r"\\wsl$")), None);
+    assert_eq!(parse_wsl_unc_path(Path::new(r"\\wsl$\")), None);
 }
 
 #[test]
