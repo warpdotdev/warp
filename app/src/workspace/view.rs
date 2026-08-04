@@ -431,7 +431,7 @@ use crate::terminal::view::{
 };
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::{self, BlockListSettings, SizeInfo, TerminalModel, TerminalView};
-use crate::themes::theme::{AnsiColorIdentifier, Blend, RespectSystemTheme, ThemeKind};
+use crate::themes::theme::{AnsiColorIdentifier, RespectSystemTheme, ThemeKind};
 use crate::themes::theme_chooser::{ThemeChooser, ThemeChooserEvent, ThemeChooserMode};
 use crate::themes::theme_creator_modal::{ThemeCreatorModal, ThemeCreatorModalEvent};
 use crate::themes::theme_deletion_modal::{ThemeDeletionModal, ThemeDeletionModalEvent};
@@ -21344,17 +21344,7 @@ impl Workspace {
                 color.a = TEAM_HEADER_TINT_ALPHA;
                 color
             });
-        let background = if FeatureFlag::NewTabStyling.is_enabled() {
-            let base = internal_colors::fg_overlay_1(appearance.theme());
-            Some(
-                team_color
-                    .map(|color| base.blend(&Fill::Solid(color)))
-                    .unwrap_or(base),
-            )
-        } else {
-            team_color.map(Fill::Solid)
-        };
-        if let Some(background) = background {
+        if let Some(background) = Self::tab_bar_background_fill(team_color) {
             tab_bar_container = tab_bar_container.with_background(background);
         }
         let tab_bar_element = tab_bar_container.finish();
@@ -21372,6 +21362,23 @@ impl Workspace {
             TAB_BAR_POSITION_ID,
         )
         .finish()
+    }
+
+    /// The fill painted behind the horizontal tab bar, or `None` to inherit the
+    /// workspace's terminal background.
+    ///
+    /// The chrome deliberately paints no base fill of its own: the workspace already
+    /// paints [`util::get_terminal_background_fill`] behind the whole column, so
+    /// inheriting it keeps the bar and the terminal a single continuous surface.
+    /// Painting an `fg_overlay_1` base here instead rendered the bar as a visibly
+    /// lighter strip sitting above the terminal. The bottom border is what separates
+    /// the two areas.
+    ///
+    /// A multi-team tint is still painted over that inherited background; it is
+    /// translucent ([`TEAM_HEADER_TINT_ALPHA`]) so the terminal background shows
+    /// through.
+    fn tab_bar_background_fill(team_color: Option<ColorU>) -> Option<Fill> {
+        team_color.map(Fill::Solid)
     }
 
     // Render traffic lights, if appropriate for the current platform.

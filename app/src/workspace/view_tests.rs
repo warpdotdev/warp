@@ -366,6 +366,31 @@ fn transferred_tab_workspace(
 }
 
 #[test]
+fn test_tab_bar_chrome_inherits_terminal_background() {
+    // Regression for APP-5163: the tab bar used to paint an `fg_overlay_1` base,
+    // which rendered it as a lighter strip than the terminal background below it.
+    assert_eq!(
+        Workspace::tab_bar_background_fill(None),
+        None,
+        "Tab bar chrome must paint no base fill so it inherits the terminal background"
+    );
+}
+
+#[test]
+fn test_tab_bar_chrome_keeps_translucent_team_tint() {
+    let team_color = ColorU::new(12, 34, 56, TEAM_HEADER_TINT_ALPHA);
+
+    let Some(Fill::Solid(painted)) = Workspace::tab_bar_background_fill(Some(team_color)) else {
+        panic!("Multi-team tint must still be painted on the tab bar");
+    };
+    assert_eq!(painted, team_color);
+    assert!(
+        painted.a < u8::MAX,
+        "Team tint must stay translucent so the terminal background shows through"
+    );
+}
+
+#[test]
 fn test_tab_bar_traffic_light_space_regression_for_resource_center_overlap() {
     // Regression for #10139: the Resource Center/right panel can be open on
     // Windows/Linux, but vertical-tabs and right-panel state should not decide
