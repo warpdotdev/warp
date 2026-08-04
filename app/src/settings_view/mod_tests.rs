@@ -122,10 +122,6 @@ fn ai_subpages_map_to_ai_backing_page() {
         SettingsSection::AgentProfiles.parent_page_section(),
         SettingsSection::AI
     );
-    assert_eq!(
-        SettingsSection::ThirdPartyCLIAgents.parent_page_section(),
-        SettingsSection::AI
-    );
 }
 
 #[test]
@@ -133,6 +129,14 @@ fn knowledge_maps_to_its_own_backing_page() {
     assert_eq!(
         SettingsSection::Knowledge.parent_page_section(),
         SettingsSection::Knowledge
+    );
+}
+
+#[test]
+fn third_party_cli_agents_maps_to_its_own_backing_page() {
+    assert_eq!(
+        SettingsSection::ThirdPartyCLIAgents.parent_page_section(),
+        SettingsSection::ThirdPartyCLIAgents
     );
 }
 

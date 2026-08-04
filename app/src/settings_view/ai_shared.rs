@@ -13,16 +13,41 @@ use std::collections::HashMap;
 
 use settings::Setting;
 use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{Container, Element, Fill, HyperlinkUrl, MouseStateHandle};
+use warpui::elements::{
+    ChildView, Container, Element, Fill, Flex, HyperlinkUrl, MouseStateHandle, ParentElement,
+};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
-use warpui::{Action, AppContext, SingletonEntity, View, ViewContext};
+use warpui::{Action, AppContext, SingletonEntity, View, ViewContext, ViewHandle};
 
 use super::SettingsAction;
 use super::settings_page::{
-    HEADER_PADDING, LocalOnlyIconState, ToggleState, build_toggle_element, render_body_item_label,
+    CONTENT_FONT_SIZE, HEADER_PADDING, LocalOnlyIconState, ToggleState, build_toggle_element,
+    render_body_item_label,
 };
+use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarInlineEditor;
 use crate::appearance::Appearance;
+use crate::editor::{EditorView, InteractionState};
+
+/// Enables or disables an editor embedded in a settings row.
+///
+/// Several pages under the Agents umbrella gate their text inputs on a
+/// setting, so this is generic over the owning view.
+pub fn update_editor_interaction_state<V: View>(
+    editor: ViewHandle<EditorView>,
+    is_enabled: bool,
+    ctx: &mut ViewContext<V>,
+) {
+    editor.update(ctx, |editor, ctx| {
+        let interaction_state = if is_enabled {
+            InteractionState::Editable
+        } else {
+            InteractionState::Disabled
+        };
+        editor.set_interaction_state(interaction_state, ctx);
+        ctx.notify();
+    })
+}
 
 /// Opens a documentation link from a settings description.
 ///
@@ -31,6 +56,33 @@ use crate::appearance::Appearance;
 pub fn open_hyperlink<V: View>(hyperlink: &HyperlinkUrl, ctx: &mut ViewContext<V>) {
     ctx.notify();
     ctx.open_url(&hyperlink.url);
+}
+
+/// The "Toolbar layout" chip editor. Shared by the Warp Agent toolbar and the
+/// third-party coding agent toolbar, which are separate settings backed by the
+/// same editor view.
+pub fn render_toolbar_layout_editor(
+    editor: &ViewHandle<AgentToolbarInlineEditor>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let label = Container::new(
+        appearance
+            .ui_builder()
+            .span("Toolbar layout".to_string())
+            .with_style(UiComponentStyles {
+                font_size: Some(CONTENT_FONT_SIZE),
+                ..Default::default()
+            })
+            .build()
+            .finish(),
+    )
+    .with_margin_bottom(4.)
+    .finish();
+    let editor = Container::new(ChildView::new(editor).finish())
+        .with_margin_bottom(16.)
+        .finish();
+
+    Flex::column().with_child(label).with_child(editor).finish()
 }
 
 /// A settings row: label on the left, switch on the right.

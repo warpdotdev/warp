@@ -2,7 +2,6 @@ use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys, CustomEndpointP
 #[cfg(not(target_family = "wasm"))]
 use ::ai::grok_subscription::oauth::{self, ManualCodeExchange};
 use chrono::{DateTime, Local};
-use enum_iterator::all;
 use itertools::Itertools;
 use pathfinder_geometry::vector::vec2f;
 use regex::Regex;
@@ -37,7 +36,8 @@ use warpui::{
 
 use super::ai_shared::{
     render_ai_feature_switch, render_ai_setting_description, render_ai_setting_label,
-    render_ai_setting_toggle, styles,
+    render_ai_setting_toggle, render_toolbar_layout_editor, styles,
+    update_editor_interaction_state,
 };
 use super::custom_inference_modal::{
     CustomEndpointModal, CustomEndpointModalEvent, CustomEndpointModalViewState,
@@ -88,8 +88,7 @@ use crate::cloud_object::GenericStringObjectFormat::Json;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::{JsonObjectType, ObjectType};
 use crate::editor::{
-    EditorOptions, InteractionState, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-    TextColors,
+    EditorOptions, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextColors,
 };
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::settings::{
@@ -101,11 +100,10 @@ use crate::settings::{
     GeminiEnterpriseCredentialsEnabled, GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory,
     InputSettings, IntelligentAutosuggestionsEnabled, LongRunningCommandSubmissionMode,
     NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode,
-    PromptSubmissionMode, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
+    PromptSubmissionMode, SharedBlockTitleGenerationEnabled,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
     ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
 };
-use crate::terminal::CLIAgent;
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, DangerSecondaryTheme, SecondaryTheme,
@@ -127,8 +125,6 @@ pub enum AISubpage {
     WarpAgent,
     /// Agent profiles and permissions.
     Profiles,
-    /// Third-party CLI agent settings.
-    ThirdPartyCLIAgents,
 }
 
 impl AISubpage {
@@ -136,8 +132,8 @@ impl AISubpage {
         match section {
             SettingsSection::WarpAgent => Some(Self::WarpAgent),
             SettingsSection::AgentProfiles => Some(Self::Profiles),
-            SettingsSection::ThirdPartyCLIAgents => Some(Self::ThirdPartyCLIAgents),
-            // AgentMCPServers and Knowledge render their own standalone pages.
+            // AgentMCPServers, Knowledge and ThirdPartyCLIAgents render their
+            // own standalone pages.
             _ => None,
         }
     }
@@ -155,7 +151,6 @@ use warp_errors::{report_error, report_if_error};
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::editor::{EditorView, Event as EditorEvent, TextOptions};
-use crate::menu::{MenuItem, MenuItemFields};
 use crate::server::telemetry::{
     AgentModeAutoDetectionSettingOrigin, AutonomySettingToggleSource,
     ToggleCodeSuggestionsSettingSource,
@@ -587,15 +582,6 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 flags::SHOW_BASE_MODEL_PICKER_IN_PROMPT_FLAG,
             )
             .with_group(bindings::BindingGroup::WarpAi),
-            ToggleSettingActionPair::new(
-                "coding agent toolbar",
-                builder(SettingsAction::AI(
-                    AISettingsPageAction::ToggleCLIAgentToolbar,
-                )),
-                context,
-                flags::CLI_AGENT_FOOTER_ENABLED,
-            )
-            .with_group(bindings::BindingGroup::WarpAi),
         ],
         app,
     );
@@ -631,36 +617,6 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app)
                     || UserWorkspaces::as_ref(app).is_custom_inference_enabled(app),
             ),
-            ToggleSettingActionPair::new(
-                "auto show or hide Rich Input based on agent status",
-                builder(SettingsAction::AI(
-                    AISettingsPageAction::ToggleAutoToggleRichInput,
-                )),
-                &(context.clone() & id!(flags::CLI_AGENT_FOOTER_ENABLED)),
-                flags::AUTO_TOGGLE_RICH_INPUT_FLAG,
-            )
-            .with_group(bindings::BindingGroup::WarpAi)
-            .with_enabled(|| FeatureFlag::CLIAgentRichInput.is_enabled()),
-            ToggleSettingActionPair::new(
-                "auto open Rich Input when a coding agent session starts",
-                builder(SettingsAction::AI(
-                    AISettingsPageAction::ToggleAutoOpenRichInputOnCLIAgentStart,
-                )),
-                &(context.clone() & id!(flags::CLI_AGENT_FOOTER_ENABLED)),
-                flags::AUTO_OPEN_RICH_INPUT_ON_CLI_AGENT_START_FLAG,
-            )
-            .with_group(bindings::BindingGroup::WarpAi)
-            .with_enabled(|| FeatureFlag::CLIAgentRichInput.is_enabled()),
-            ToggleSettingActionPair::new(
-                "auto dismiss Rich Input after prompt submission",
-                builder(SettingsAction::AI(
-                    AISettingsPageAction::ToggleAutoDismissRichInputAfterSubmit,
-                )),
-                &(context.clone() & id!(flags::CLI_AGENT_FOOTER_ENABLED)),
-                flags::AUTO_DISMISS_RICH_INPUT_AFTER_SUBMIT_FLAG,
-            )
-            .with_group(bindings::BindingGroup::WarpAi)
-            .with_enabled(|| FeatureFlag::CLIAgentRichInput.is_enabled()),
         ],
         app,
     );
@@ -697,11 +653,7 @@ pub struct AISettingsPageView {
     command_execution_allowlist_mouse_state_handles: Vec<MouseStateHandle>,
     command_execution_denylist_editor: ViewHandle<SubmittableTextInput>,
     command_execution_denylist_mouse_state_handles: Vec<MouseStateHandle>,
-    cli_agent_footer_command_editor: ViewHandle<SubmittableTextInput>,
-    cli_agent_footer_command_mouse_state_handles: Vec<MouseStateHandle>,
-    cli_agent_footer_command_agent_dropdowns: Vec<ViewHandle<Dropdown<AISettingsPageAction>>>,
     agent_toolbar_inline_editor: ViewHandle<AgentToolbarInlineEditor>,
-    cli_agent_toolbar_inline_editor: ViewHandle<AgentToolbarInlineEditor>,
 
     apply_code_diffs_dropdown_menu: ViewHandle<Dropdown<AISettingsPageAction>>,
     read_files_dropdown_menu: ViewHandle<Dropdown<AISettingsPageAction>>,
@@ -790,20 +742,20 @@ impl AISettingsPageView {
                 let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
                 let ai_autonomy_settings = workspace.as_ref(ctx).ai_autonomy_settings();
 
-                Self::update_editor_interaction_state(
+                update_editor_interaction_state(
                     me.command_denylist_editor.as_ref(ctx).editor().clone(),
                     is_any_ai_enabled,
                     ctx,
                 );
 
-                Self::update_editor_interaction_state(
+                update_editor_interaction_state(
                     me.command_allowlist_editor.as_ref(ctx).editor().clone(),
                     is_any_ai_enabled
                         && !ai_autonomy_settings.has_override_for_execute_commands_allowlist(),
                     ctx,
                 );
 
-                Self::update_editor_interaction_state(
+                update_editor_interaction_state(
                     me.directory_allowlist_editor.as_ref(ctx).editor().clone(),
                     is_any_ai_enabled
                         && !ai_autonomy_settings.has_override_for_read_files_allowlist(),
@@ -998,7 +950,7 @@ impl AISettingsPageView {
             input.set_placeholder_text("e.g. ~/code-repos/repo", ctx);
             input
         });
-        Self::update_editor_interaction_state(
+        update_editor_interaction_state(
             code_read_allowlist_editor.as_ref(ctx).editor().clone(),
             is_any_ai_enabled,
             ctx,
@@ -1043,7 +995,7 @@ impl AISettingsPageView {
             editor.set_buffer_text(current_value.as_str(), ctx);
             editor
         });
-        Self::update_editor_interaction_state(
+        update_editor_interaction_state(
             autodetection_denylist_editor.clone(),
             is_any_ai_enabled,
             ctx,
@@ -1059,7 +1011,7 @@ impl AISettingsPageView {
             input.set_placeholder_text("e.g. ls .*", ctx);
             input
         });
-        Self::update_editor_interaction_state(
+        update_editor_interaction_state(
             command_execution_allowlist_editor
                 .as_ref(ctx)
                 .editor()
@@ -1091,7 +1043,7 @@ impl AISettingsPageView {
             input.set_placeholder_text("e.g. rm .*", ctx);
             input
         });
-        Self::update_editor_interaction_state(
+        update_editor_interaction_state(
             command_execution_denylist_editor
                 .as_ref(ctx)
                 .editor()
@@ -1116,32 +1068,6 @@ impl AISettingsPageView {
                 })
             }
         });
-
-        let cli_agent_footer_command_editor = ctx.add_typed_action_view(|ctx| {
-            let mut input =
-                SubmittableTextInput::new(ctx).validate_on_edit(|s| Regex::new(s).is_ok());
-            input.set_placeholder_text("command (supports regex)", ctx);
-            input
-        });
-        // The coding agent footer command editor is always enabled,
-        // independent of the global AI toggle, because it controls
-        // third-party coding agents rather than Warp's own AI.
-        Self::update_editor_interaction_state(
-            cli_agent_footer_command_editor.as_ref(ctx).editor().clone(),
-            true,
-            ctx,
-        );
-        ctx.subscribe_to_view(
-            &cli_agent_footer_command_editor,
-            |_, _, event, ctx| match event {
-                SubmittableTextInputEvent::Submit(command) => {
-                    AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                        settings.add_cli_agent_footer_enabled_command(command, ctx);
-                    });
-                }
-                SubmittableTextInputEvent::Escape => ctx.emit(AISettingsPageEvent::FocusModal),
-            },
-        );
 
         let request_usage_model = AIRequestUsageModel::handle(ctx);
         ctx.subscribe_to_model(&request_usage_model, |_, _, _, ctx| {
@@ -1246,12 +1172,12 @@ impl AISettingsPageView {
                     let is_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
                     let ai_autonomy_settings = UserWorkspaces::as_ref(ctx).ai_autonomy_settings();
 
-                    Self::update_editor_interaction_state(
+                    update_editor_interaction_state(
                         me.autodetection_denylist_editor.clone(),
                         is_enabled,
                         ctx,
                     );
-                    Self::update_editor_interaction_state(
+                    update_editor_interaction_state(
                         me.command_execution_allowlist_editor
                             .as_ref(ctx)
                             .editor()
@@ -1259,7 +1185,7 @@ impl AISettingsPageView {
                         is_enabled,
                         ctx,
                     );
-                    Self::update_editor_interaction_state(
+                    update_editor_interaction_state(
                         me.command_execution_denylist_editor
                             .as_ref(ctx)
                             .editor()
@@ -1267,25 +1193,25 @@ impl AISettingsPageView {
                         is_enabled,
                         ctx,
                     );
-                    Self::update_editor_interaction_state(
+                    update_editor_interaction_state(
                         me.code_read_allowlist_editor.as_ref(ctx).editor().clone(),
                         is_enabled,
                         ctx,
                     );
 
-                    Self::update_editor_interaction_state(
+                    update_editor_interaction_state(
                         me.directory_allowlist_editor.as_ref(ctx).editor().clone(),
                         is_enabled && !ai_autonomy_settings.has_override_for_read_files_allowlist(),
                         ctx,
                     );
 
-                    Self::update_editor_interaction_state(
+                    update_editor_interaction_state(
                         me.command_denylist_editor.as_ref(ctx).editor().clone(),
                         is_enabled,
                         ctx,
                     );
 
-                    Self::update_editor_interaction_state(
+                    update_editor_interaction_state(
                         me.command_allowlist_editor.as_ref(ctx).editor().clone(),
                         is_enabled
                             && !ai_autonomy_settings.has_override_for_execute_commands_allowlist(),
@@ -1370,16 +1296,6 @@ impl AISettingsPageView {
                         .iter()
                         .map(|_| Default::default())
                         .collect();
-                }
-                AISettingsChangedEvent::CLIAgentToolbarEnabledCommands { .. } => {
-                    me.cli_agent_footer_command_mouse_state_handles = AISettings::as_ref(ctx)
-                        .cli_agent_footer_enabled_commands
-                        .value()
-                        .keys()
-                        .map(|_| Default::default())
-                        .collect();
-                    me.cli_agent_footer_command_agent_dropdowns =
-                        Self::create_cli_agent_dropdowns(ctx);
                 }
                 AISettingsChangedEvent::ThinkingDisplayMode { .. } => {
                     let current_mode = *AISettings::as_ref(ctx).thinking_display_mode.value();
@@ -1635,13 +1551,6 @@ impl AISettingsPageView {
             .iter()
             .map(|_| Default::default())
             .collect();
-        let cli_agent_footer_command_mouse_state_handles = AISettings::as_ref(ctx)
-            .cli_agent_footer_enabled_commands
-            .value()
-            .keys()
-            .map(|_| Default::default())
-            .collect();
-
         let code_read_allowlist_mouse_state_handles = AISettings::as_ref(ctx)
             .agent_mode_coding_file_read_allowlist
             .value()
@@ -1664,7 +1573,7 @@ impl AISettingsPageView {
             input
         });
 
-        Self::update_editor_interaction_state(
+        update_editor_interaction_state(
             directory_allowlist_editor.as_ref(ctx).editor().clone(),
             is_any_ai_enabled,
             ctx,
@@ -1698,7 +1607,7 @@ impl AISettingsPageView {
             input.set_placeholder_text("e.g. rm .*", ctx);
             input
         });
-        Self::update_editor_interaction_state(
+        update_editor_interaction_state(
             command_denylist_editor.as_ref(ctx).editor().clone(),
             is_any_ai_enabled && !ai_autonomy_settings.has_override_for_execute_commands_denylist(),
             ctx,
@@ -1736,7 +1645,7 @@ impl AISettingsPageView {
             input.set_placeholder_text("e.g. ls .*", ctx);
             input
         });
-        Self::update_editor_interaction_state(
+        update_editor_interaction_state(
             command_allowlist_editor.as_ref(ctx).editor().clone(),
             is_any_ai_enabled
                 && !ai_autonomy_settings.has_override_for_execute_commands_allowlist(),
@@ -1923,9 +1832,6 @@ impl AISettingsPageView {
         let agent_toolbar_inline_editor = ctx.add_typed_action_view(|ctx| {
             AgentToolbarInlineEditor::new(AgentToolbarEditorMode::AgentView, ctx)
         });
-        let cli_agent_toolbar_inline_editor = ctx.add_typed_action_view(|ctx| {
-            AgentToolbarInlineEditor::new(AgentToolbarEditorMode::CLIAgent, ctx)
-        });
 
         #[cfg(feature = "local_fs")]
         let conversation_layout_dropdown = ctx.add_typed_action_view(|ctx| {
@@ -2007,11 +1913,7 @@ impl AISettingsPageView {
             command_execution_denylist_editor,
             command_execution_allowlist_mouse_state_handles,
             command_execution_denylist_mouse_state_handles,
-            cli_agent_footer_command_editor,
-            cli_agent_footer_command_mouse_state_handles,
-            cli_agent_footer_command_agent_dropdowns: Self::create_cli_agent_dropdowns(ctx),
             agent_toolbar_inline_editor,
-            cli_agent_toolbar_inline_editor,
             base_model_dropdown,
             coding_model_dropdown,
             context_window_slider_state,
@@ -2881,20 +2783,12 @@ impl AISettingsPageView {
                 }
                 widgets.push(Box::new(AgentsWidget::default()));
             }
-            AISubpage::ThirdPartyCLIAgents => {
-                widgets.extend(cli_agent_widgets());
-            }
         }
 
-        // Multi-section subpages (Warp Agent, Profiles) render their own subheader-sized
-        // section titles inside each widget, so they get no page-level title here.
-        // Single-topic subpages follow the Account-page convention and render their title as
-        // page chrome, so filtering their setting widgets never removes the title.
-        let title = match subpage {
-            AISubpage::ThirdPartyCLIAgents => Some("Third party CLI agents"),
-            AISubpage::WarpAgent | AISubpage::Profiles => None,
-        };
-        PageType::new_uncategorized(widgets, title)
+        // Both remaining subpages are multi-section: they render their own
+        // subheader-sized section titles inside each widget, so they get no
+        // page-level title here.
+        PageType::new_uncategorized(widgets, None)
     }
 
     fn handle_context_window_editor_event(
@@ -3024,22 +2918,6 @@ impl AISettingsPageView {
             EditorEvent::Escape => ctx.emit(AISettingsPageEvent::FocusModal),
             _ => {}
         }
-    }
-
-    fn update_editor_interaction_state(
-        editor: ViewHandle<EditorView>,
-        is_enabled: bool,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        editor.update(ctx, |editor, ctx| {
-            let interaction_state = if is_enabled {
-                InteractionState::Editable
-            } else {
-                InteractionState::Disabled
-            };
-            editor.set_interaction_state(interaction_state, ctx);
-            ctx.notify();
-        })
     }
 
     pub fn refresh_base_model_menu(
@@ -3478,81 +3356,6 @@ impl AISettingsPageView {
     ) {
         Self::refresh_menu_dropdown(menu, AISettingsPageAction::AddToMCPDenylist, ctx);
     }
-
-    fn create_cli_agent_dropdowns(
-        ctx: &mut ViewContext<Self>,
-    ) -> Vec<ViewHandle<Dropdown<AISettingsPageAction>>> {
-        let entries: Vec<(String, CLIAgent)> = AISettings::as_ref(ctx)
-            .cli_agent_footer_enabled_commands
-            .value()
-            .iter()
-            .map(|(pattern, agent_value)| {
-                (pattern.clone(), CLIAgent::from_serialized_name(agent_value))
-            })
-            .collect();
-
-        entries
-            .into_iter()
-            .map(|(pattern_clone, current_agent)| {
-                ctx.add_typed_action_view(move |ctx| {
-                    let mut dropdown = Dropdown::new(ctx);
-                    dropdown.set_top_bar_max_width(160.);
-                    dropdown.set_menu_width(180., ctx);
-                    dropdown.set_main_axis_size(MainAxisSize::Min, ctx);
-
-                    let mut items: Vec<MenuItem<DropdownAction>> = Vec::new();
-
-                    for agent in all::<CLIAgent>() {
-                        if matches!(agent, CLIAgent::Unknown) {
-                            continue;
-                        }
-                        let icon = agent.icon();
-                        let mut fields = MenuItemFields::new(agent.display_name())
-                            .with_on_select_action(DropdownAction::select_action_and_close(
-                                AISettingsPageAction::SetCLIAgentForCommand {
-                                    pattern: pattern_clone.clone(),
-                                    agent: Some(agent),
-                                },
-                            ));
-                        if let Some(icon) = icon {
-                            fields = fields.with_icon(icon);
-                        }
-                        items.push(fields.into_item());
-                    }
-
-                    items.push(
-                        MenuItemFields::new("Other")
-                            .with_on_select_action(DropdownAction::select_action_and_close(
-                                AISettingsPageAction::SetCLIAgentForCommand {
-                                    pattern: pattern_clone.clone(),
-                                    agent: None,
-                                },
-                            ))
-                            .into_item(),
-                    );
-
-                    dropdown.set_rich_items(items, ctx);
-
-                    dropdown.set_menu_header_text_override(|label| {
-                        if label == "Other" {
-                            "Select coding agent".to_string()
-                        } else {
-                            label.to_string()
-                        }
-                    });
-
-                    let selected_name = if matches!(current_agent, CLIAgent::Unknown) {
-                        "Other"
-                    } else {
-                        current_agent.display_name()
-                    };
-                    dropdown.set_selected_by_name(selected_name, ctx);
-
-                    dropdown
-                })
-            })
-            .collect()
-    }
 }
 
 impl View for AISettingsPageView {
@@ -3598,7 +3401,6 @@ pub enum AISettingsPageAction {
     ToggleGitOperationsAutogen,
     ToggleAIInputAutoDetection,
     ToggleNLDInTerminal,
-    ToggleCLIAgentToolbar,
     ToggleUseAgentToolbar,
     ToggleVoiceInput,
     ToggleCanUseWarpCreditsForFallback,
@@ -3612,7 +3414,6 @@ pub enum AISettingsPageAction {
     SetPromptSubmissionMode(PromptSubmissionMode),
     SetLongRunningCommandSubmissionMode(LongRunningCommandSubmissionMode),
     AttemptLoginGatedUpgrade,
-    RemoveCLIAgentToolbarEnabledCommand(String),
     RemoveFromCommandExecutionAllowlist(AgentModeCommandExecutionPredicate),
     RemoveFromCommandExecutionDenylist(AgentModeCommandExecutionPredicate),
     OpenMCPServerCollection,
@@ -3670,14 +3471,6 @@ pub enum AISettingsPageAction {
     ToggleAmpersandHandoff,
     ToggleAutoHandoffOnSleep,
     ToggleShowConversationHistory,
-    ToggleAutoToggleRichInput,
-    ToggleAutoOpenRichInputOnCLIAgentStart,
-    ToggleAutoDismissRichInputAfterSubmit,
-    ToggleSubmitRichInputOnCtrlEnter,
-    SetCLIAgentForCommand {
-        pattern: String,
-        agent: Option<CLIAgent>,
-    },
 }
 
 impl From<&AISettingsPageAction> for LoginGatedFeature {
@@ -3919,58 +3712,6 @@ impl TypedActionView for AISettingsPageView {
                 }
                 ctx.notify();
             }
-            AISettingsPageAction::ToggleCLIAgentToolbar => {
-                match AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    settings
-                        .should_render_cli_agent_footer
-                        .toggle_and_save_value(ctx)
-                }) {
-                    Ok(new_value) => {
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::ToggleCLIAgentToolbarSetting {
-                                is_enabled: new_value,
-                            },
-                            ctx
-                        );
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to set value for CLI Agent Footer setting: {e:?}");
-                    }
-                }
-                ctx.notify();
-            }
-            AISettingsPageAction::ToggleAutoToggleRichInput => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings.auto_toggle_rich_input.toggle_and_save_value(ctx));
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::ToggleAutoOpenRichInputOnCLIAgentStart => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(
-                        settings
-                            .auto_open_rich_input_on_cli_agent_start
-                            .toggle_and_save_value(ctx)
-                    );
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::ToggleAutoDismissRichInputAfterSubmit => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(
-                        settings
-                            .auto_dismiss_rich_input_after_submit
-                            .toggle_and_save_value(ctx)
-                    );
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::ToggleSubmitRichInputOnCtrlEnter => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings.submit_on_ctrl_enter.toggle_and_save_value(ctx));
-                });
-                ctx.notify();
-            }
             AISettingsPageAction::ToggleUseAgentToolbar => {
                 match AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings
@@ -4128,16 +3869,6 @@ impl TypedActionView for AISettingsPageView {
                         AuthViewVariant::RequireLoginCloseable,
                         ctx,
                     )
-                });
-            }
-            AISettingsPageAction::RemoveCLIAgentToolbarEnabledCommand(command) => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    settings.remove_cli_agent_footer_enabled_command(command, ctx);
-                });
-            }
-            AISettingsPageAction::SetCLIAgentForCommand { pattern, agent } => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    settings.set_cli_agent_for_command(pattern, *agent, ctx);
                 });
             }
             AISettingsPageAction::RemoveFromCommandExecutionAllowlist(cmd) => {
@@ -4590,30 +4321,6 @@ impl From<ViewHandle<AISettingsPageView>> for SettingsPageViewHandle {
     fn from(view_handle: ViewHandle<AISettingsPageView>) -> Self {
         SettingsPageViewHandle::AI(view_handle)
     }
-}
-
-fn render_toolbar_layout_editor(
-    editor: &ViewHandle<AgentToolbarInlineEditor>,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let label = Container::new(
-        appearance
-            .ui_builder()
-            .span("Toolbar layout".to_string())
-            .with_style(UiComponentStyles {
-                font_size: Some(CONTENT_FONT_SIZE),
-                ..Default::default()
-            })
-            .build()
-            .finish(),
-    )
-    .with_margin_bottom(4.)
-    .finish();
-    let editor = Container::new(ChildView::new(editor).finish())
-        .with_margin_bottom(16.)
-        .finish();
-
-    Flex::column().with_child(label).with_child(editor).finish()
 }
 
 fn render_ai_list(
@@ -7198,442 +6905,6 @@ impl SettingsWidget for OtherAIWidget {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
-pub fn cli_agent_settings_widget_id() -> &'static str {
-    CLIAgentWidget::static_widget_id()
-}
-fn cli_agent_widgets() -> Vec<Box<dyn SettingsWidget<View = AISettingsPageView>>> {
-    vec![
-        Box::new(CLIAgentWidget::default()),
-        Box::new(CLIAgentAutoToggleRichInputWidget::default()),
-        Box::new(CLIAgentAutoOpenRichInputWidget::default()),
-        Box::new(CLIAgentAutoDismissRichInputWidget::default()),
-        Box::new(CLIAgentSubmitRichInputWidget::default()),
-        Box::new(CLIAgentCommandsWidget),
-        Box::new(CLIAgentToolbarLayoutWidget),
-    ]
-}
-
-#[derive(Default)]
-struct CLIAgentWidget {
-    cli_agent_footer_toggle: SwitchStateHandle,
-}
-
-impl SettingsWidget for CLIAgentWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "third party cli coding agent claude codex gemini toolbar footer quick actions show"
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let ai_settings = AISettings::as_ref(app);
-
-        // The Coding Agents section is always enabled, independent of the
-        // global AI toggle, because these settings control third-party coding
-        // agents (Claude Code, Codex, Gemini CLI) rather than Warp's own AI.
-        let cli_agent_footer_toggle = render_ai_setting_toggle::<ShouldRenderCLIAgentToolbar>(
-            "Show coding agent toolbar",
-            AISettingsPageAction::ToggleCLIAgentToolbar,
-            *ai_settings.should_render_cli_agent_footer,
-            true,
-            self.cli_agent_footer_toggle.clone(),
-            &view.local_only_icon_tooltip_states,
-            app,
-        );
-
-        let description_fragments = vec![
-            FormattedTextFragment::plain_text(
-                "Show a toolbar with quick actions when running coding agents like ",
-            ),
-            FormattedTextFragment::inline_code("claude"),
-            FormattedTextFragment::plain_text(", "),
-            FormattedTextFragment::inline_code("codex"),
-            FormattedTextFragment::plain_text(", or "),
-            FormattedTextFragment::inline_code("gemini"),
-            FormattedTextFragment::plain_text("."),
-        ];
-
-        let description = FormattedTextElement::new(
-            FormattedText::new([FormattedTextLine::Line(description_fragments)]),
-            appearance.ui_font_size(),
-            appearance.ui_font_family(),
-            appearance.monospace_font_family(),
-            styles::description_font_color(true, app).into(),
-            HighlightedHyperlink::default(),
-        );
-
-        Flex::column()
-            .with_child(cli_agent_footer_toggle)
-            .with_child(
-                Container::new(description.finish())
-                    .with_margin_top(styles::DESCRIPTION_NEGATIVE_MARGIN_OFFSET)
-                    .with_margin_bottom(styles::DESCRIPTION_MARGIN_BOTTOM)
-                    .with_margin_right(styles::TOGGLE_WIDTH_MARGIN)
-                    .finish(),
-            )
-            .finish()
-    }
-}
-
-fn should_render_cli_agent_detail(app: &AppContext) -> bool {
-    *AISettings::as_ref(app).should_render_cli_agent_footer
-}
-
-fn should_render_cli_agent_rich_input(app: &AppContext) -> bool {
-    should_render_cli_agent_detail(app) && FeatureFlag::CLIAgentRichInput.is_enabled()
-}
-
-#[derive(Default)]
-struct CLIAgentAutoToggleRichInputWidget {
-    toggle: SwitchStateHandle,
-    info_tooltip: MouseStateHandle,
-}
-
-impl SettingsWidget for CLIAgentAutoToggleRichInputWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "third party cli coding agent rich input auto show hide status plugin"
-    }
-
-    fn should_render(&self, app: &AppContext) -> bool {
-        should_render_cli_agent_rich_input(app)
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        use super::settings_page::AdditionalInfo;
-        use crate::settings::AutoToggleRichInput;
-
-        if !self.should_render(app) {
-            return Empty::new().finish();
-        }
-
-        let label = render_body_item_label::<AISettingsPageAction>(
-            "Auto show/hide Rich Input based on agent status".into(),
-            Some(styles::header_font_color(true, app)),
-            Some(AdditionalInfo {
-                mouse_state: self.info_tooltip.clone(),
-                on_click_action: None,
-                secondary_text: None,
-                tooltip_override_text: Some(
-                    "Requires the Warp plugin for your coding agent".to_owned(),
-                ),
-            }),
-            LocalOnlyIconState::for_setting(
-                AutoToggleRichInput::storage_key(),
-                AutoToggleRichInput::sync_to_cloud(),
-                &mut view.local_only_icon_tooltip_states.borrow_mut(),
-                app,
-            ),
-            ToggleState::Enabled,
-            appearance,
-        );
-
-        build_toggle_element(
-            label,
-            render_ai_feature_switch(
-                self.toggle.clone(),
-                *AISettings::as_ref(app).auto_toggle_rich_input,
-                true,
-                AISettingsPageAction::ToggleAutoToggleRichInput,
-                app,
-            ),
-            appearance,
-            None,
-        )
-    }
-}
-
-#[derive(Default)]
-struct CLIAgentAutoOpenRichInputWidget {
-    toggle: SwitchStateHandle,
-}
-
-impl SettingsWidget for CLIAgentAutoOpenRichInputWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "third party cli coding agent rich input auto open session start"
-    }
-
-    fn should_render(&self, app: &AppContext) -> bool {
-        should_render_cli_agent_rich_input(app)
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        _appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        use crate::settings::AutoOpenRichInputOnCLIAgentStart;
-
-        if !self.should_render(app) {
-            return Empty::new().finish();
-        }
-
-        render_ai_setting_toggle::<AutoOpenRichInputOnCLIAgentStart>(
-            "Auto open Rich Input when a coding agent session starts",
-            AISettingsPageAction::ToggleAutoOpenRichInputOnCLIAgentStart,
-            *AISettings::as_ref(app).auto_open_rich_input_on_cli_agent_start,
-            true,
-            self.toggle.clone(),
-            &view.local_only_icon_tooltip_states,
-            app,
-        )
-    }
-}
-
-#[derive(Default)]
-struct CLIAgentAutoDismissRichInputWidget {
-    toggle: SwitchStateHandle,
-}
-
-impl SettingsWidget for CLIAgentAutoDismissRichInputWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "third party cli coding agent rich input auto dismiss prompt submission"
-    }
-
-    fn should_render(&self, app: &AppContext) -> bool {
-        should_render_cli_agent_rich_input(app)
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        _appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        use crate::settings::AutoDismissRichInputAfterSubmit;
-
-        if !self.should_render(app) {
-            return Empty::new().finish();
-        }
-
-        render_ai_setting_toggle::<AutoDismissRichInputAfterSubmit>(
-            "Auto dismiss Rich Input after prompt submission",
-            AISettingsPageAction::ToggleAutoDismissRichInputAfterSubmit,
-            *AISettings::as_ref(app).auto_dismiss_rich_input_after_submit,
-            true,
-            self.toggle.clone(),
-            &view.local_only_icon_tooltip_states,
-            app,
-        )
-    }
-}
-
-#[derive(Default)]
-struct CLIAgentSubmitRichInputWidget {
-    toggle: SwitchStateHandle,
-}
-
-impl SettingsWidget for CLIAgentSubmitRichInputWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "third party cli coding agent rich input submit ctrl enter newline"
-    }
-
-    fn should_render(&self, app: &AppContext) -> bool {
-        should_render_cli_agent_rich_input(app)
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        _appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        use crate::settings::SubmitRichInputOnCtrlEnter;
-
-        if !self.should_render(app) {
-            return Empty::new().finish();
-        }
-
-        render_ai_setting_toggle::<SubmitRichInputOnCtrlEnter>(
-            "Submit Rich Input with Ctrl+Enter",
-            AISettingsPageAction::ToggleSubmitRichInputOnCtrlEnter,
-            *AISettings::as_ref(app).submit_on_ctrl_enter,
-            true,
-            self.toggle.clone(),
-            &view.local_only_icon_tooltip_states,
-            app,
-        )
-    }
-}
-
-struct CLIAgentCommandsWidget;
-
-impl SettingsWidget for CLIAgentCommandsWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "third party cli coding agent claude codex gemini toolbar commands regex patterns"
-    }
-
-    fn should_render(&self, app: &AppContext) -> bool {
-        should_render_cli_agent_detail(app)
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        if !self.should_render(app) {
-            return Empty::new().finish();
-        }
-
-        let mut list_column = Flex::column();
-        list_column.add_child(
-            appearance
-                .ui_builder()
-                .span("Commands that enable the toolbar".to_string())
-                .with_style(UiComponentStyles {
-                    font_size: Some(CONTENT_FONT_SIZE),
-                    ..Default::default()
-                })
-                .build()
-                .finish(),
-        );
-        list_column.add_child(ChildView::new(&view.cli_agent_footer_command_editor).finish());
-
-        let background = appearance.theme().surface_1();
-        let font_color = appearance.theme().foreground();
-        let items: Vec<_> = AISettings::as_ref(app)
-            .cli_agent_footer_enabled_commands
-            .value()
-            .keys()
-            .cloned()
-            .collect();
-        let len = items.len();
-        for (rev_i, pattern) in items.iter().rev().enumerate() {
-            let original_i = len - 1 - rev_i;
-            let remove_action =
-                AISettingsPageAction::RemoveCLIAgentToolbarEnabledCommand(pattern.clone());
-            let mouse_state = view
-                .cli_agent_footer_command_mouse_state_handles
-                .get(original_i)
-                .cloned()
-                .unwrap_or_default();
-
-            let remove_button = appearance
-                .ui_builder()
-                .close_button(16., mouse_state)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(remove_action.clone());
-                })
-                .finish();
-
-            let label = appearance
-                .ui_builder()
-                .wrappable_text(pattern.clone(), true)
-                .with_style(UiComponentStyles {
-                    font_color: Some(font_color.into_solid()),
-                    font_family_id: Some(appearance.monospace_font_family()),
-                    font_size: Some(appearance.ui_font_size()),
-                    ..Default::default()
-                })
-                .build()
-                .finish();
-
-            let mut right_side = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-            if let Some(dropdown_handle) = view
-                .cli_agent_footer_command_agent_dropdowns
-                .get(original_i)
-            {
-                right_side.add_child(
-                    Container::new(ChildView::new(dropdown_handle).finish())
-                        .with_margin_right(8.)
-                        .finish(),
-                );
-            }
-            right_side.add_child(remove_button);
-
-            let row = Container::new(
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                    .with_children([Shrinkable::new(1., label).finish(), right_side.finish()])
-                    .finish(),
-            )
-            .with_background(background)
-            .with_horizontal_padding(8.)
-            .with_vertical_padding(4.)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-            .with_margin_bottom(4.)
-            .finish();
-
-            list_column.add_child(row);
-        }
-
-        let description = appearance
-            .ui_builder()
-            .paragraph("Add regex patterns to show the coding agent toolbar for matching commands.")
-            .with_style(UiComponentStyles {
-                font_size: Some(appearance.ui_font_size()),
-                font_color: Some(styles::description_font_color(true, app).into()),
-                margin: Some(
-                    Coords::default()
-                        .top(4.)
-                        .bottom(styles::DESCRIPTION_MARGIN_BOTTOM)
-                        .right(styles::TOGGLE_WIDTH_MARGIN),
-                ),
-                ..Default::default()
-            })
-            .build()
-            .finish();
-
-        Flex::column()
-            .with_child(list_column.finish())
-            .with_child(description)
-            .finish()
-    }
-}
-
-struct CLIAgentToolbarLayoutWidget;
-
-impl SettingsWidget for CLIAgentToolbarLayoutWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "third party cli coding agent toolbar layout chip chips rearrange re-arrange"
-    }
-
-    fn should_render(&self, app: &AppContext) -> bool {
-        should_render_cli_agent_detail(app) && FeatureFlag::AgentToolbarEditor.is_enabled()
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        if !self.should_render(app) {
-            return Empty::new().finish();
-        }
-
-        render_toolbar_layout_editor(&view.cli_agent_toolbar_inline_editor, appearance)
-    }
-}
-
 /// The presentation state of the agent attribution toggle, derived from the
 /// org-level [`AdminEnablementSetting`], the user's stored preference, and
 /// whether AI is globally enabled.
@@ -8100,7 +7371,7 @@ impl ApiKeysWidget {
                     }
                     editor
                 });
-                AISettingsPageView::update_editor_interaction_state(
+                update_editor_interaction_state(
                     editor.clone(),
                     is_any_ai_enabled && is_byo_enabled && member_byo_keys_allowed,
                     ctx,
@@ -8132,7 +7403,7 @@ impl ApiKeysWidget {
                                 manager.set_provider_key(provider, None, ctx);
                             });
                         }
-                        AISettingsPageView::update_editor_interaction_state(
+                        update_editor_interaction_state(
                             editor_clone.clone(),
                             is_enabled && member_byo_keys_allowed,
                             ctx,
@@ -9169,7 +8440,7 @@ impl AwsBedrockWidget {
             editor.set_buffer_text(&aws_auth_refresh_command, ctx);
             editor
         });
-        AISettingsPageView::update_editor_interaction_state(
+        update_editor_interaction_state(
             aws_auth_refresh_command_editor.clone(),
             is_usage_enabled,
             ctx,
@@ -9217,7 +8488,7 @@ impl AwsBedrockWidget {
             editor.set_buffer_text(&aws_auth_refresh_profile, ctx);
             editor
         });
-        AISettingsPageView::update_editor_interaction_state(
+        update_editor_interaction_state(
             aws_auth_refresh_profile_editor.clone(),
             is_usage_enabled,
             ctx,
@@ -9268,12 +8539,12 @@ impl AwsBedrockWidget {
                 let is_usage_enabled = is_any_ai_enabled
                     && UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx);
 
-                AISettingsPageView::update_editor_interaction_state(
+                update_editor_interaction_state(
                     aws_auth_refresh_command_editor_clone.clone(),
                     is_usage_enabled,
                     ctx,
                 );
-                AISettingsPageView::update_editor_interaction_state(
+                update_editor_interaction_state(
                     aws_auth_refresh_profile_editor_clone.clone(),
                     is_usage_enabled,
                     ctx,
@@ -9299,12 +8570,12 @@ impl AwsBedrockWidget {
                             .as_ref(ctx)
                             .is_aws_bedrock_credentials_enabled(ctx);
 
-                    AISettingsPageView::update_editor_interaction_state(
+                    update_editor_interaction_state(
                         aws_auth_refresh_command_editor_clone.clone(),
                         is_usage_enabled,
                         ctx,
                     );
-                    AISettingsPageView::update_editor_interaction_state(
+                    update_editor_interaction_state(
                         aws_auth_refresh_profile_editor_clone.clone(),
                         is_usage_enabled,
                         ctx,

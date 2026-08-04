@@ -7,6 +7,7 @@ use ai_page::{AISettingsPageAction, AISettingsPageEvent, AISettingsPageView, AIS
 use appearance_page::{AppearancePageAction, AppearanceSettingsPageView};
 use billing_and_usage_dispatch::BillingAndUsageDispatchView;
 use billing_and_usage_page::BillingAndUsagePageEvent;
+use cli_agents_page::{CLIAgentsPageAction, CLIAgentsPageEvent, CLIAgentsPageView};
 use code_editor_review_page::{EditorAndCodeReviewPageAction, EditorAndCodeReviewPageView};
 use code_indexing_page::{CodeIndexingPageAction, CodeIndexingPageEvent};
 use environments_page::EnvironmentsPageView;
@@ -85,6 +86,7 @@ mod billing_and_usage;
 mod billing_and_usage_dispatch;
 mod billing_and_usage_page;
 mod billing_and_usage_page_v2;
+mod cli_agents_page;
 mod code_editor_review_page;
 mod code_indexing_page;
 pub(crate) mod custom_inference_modal;
@@ -122,10 +124,10 @@ pub mod update_environment_form;
 mod warp_drive_page;
 mod warpify_page;
 
-#[cfg(not(target_family = "wasm"))]
-pub use ai_page::cli_agent_settings_widget_id;
 pub(crate) use ai_page::custom_model_routers_widget_id;
 pub use billing_and_usage_page::create_discount_badge;
+#[cfg(not(target_family = "wasm"))]
+pub use cli_agents_page::cli_agent_settings_widget_id;
 pub use code_indexing_page::CodeIndexingPageView;
 pub use features_page::FeaturesPageAction;
 pub use main_page::handle_experiment_change;
@@ -403,6 +405,7 @@ impl SettingsSection {
             // Agents children that render their own standalone page.
             Self::AgentMCPServers => Self::MCPServers,
             Self::Knowledge => Self::Knowledge,
+            Self::ThirdPartyCLIAgents => Self::ThirdPartyCLIAgents,
             // The remaining Agents children share the AI page.
             s if s.is_ai_subpage() => Self::AI,
             // Code and Cloud platform subpages ARE their own backing pages
@@ -705,6 +708,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     privacy_page::init_actions_from_parent_view(app, context, builder);
     ai_page::init_actions_from_parent_view(app, context, builder);
     knowledge_page::init_actions_from_parent_view(app, context, builder);
+    cli_agents_page::init_actions_from_parent_view(app, context, builder);
     code_indexing_page::init_actions_from_parent_view(app, context, builder);
     code_editor_review_page::init_actions_from_parent_view(app, context, builder);
     warp_drive_page::init_actions_from_parent_view(app, context, builder);
@@ -1011,6 +1015,7 @@ pub enum SettingsAction {
     PrivacyPageToggle(PrivacyPageAction),
     AI(AISettingsPageAction),
     Knowledge(KnowledgePageAction),
+    CLIAgents(CLIAgentsPageAction),
     CodeIndexing(CodeIndexingPageAction),
     EditorAndCodeReview(EditorAndCodeReviewPageAction),
     WarpDrive(warp_drive_page::WarpDriveSettingsPageAction),
@@ -1167,6 +1172,7 @@ macro_rules! update_page {
             SettingsPageViewHandle::Scripting(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::AI(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Knowledge(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::CLIAgents(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::CloudEnvironments(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::About(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::CodeIndexing(handle) => $ctx.update_view(handle, $update),
@@ -1265,6 +1271,12 @@ impl SettingsView {
         let knowledge_page_handle = ctx.add_typed_action_view(KnowledgePageView::new);
         ctx.subscribe_to_view(&knowledge_page_handle, |me, _, event, ctx| {
             me.handle_knowledge_page_event(event, ctx);
+        });
+
+        // Third party CLI agents page, under the Agents umbrella
+        let cli_agents_page_handle = ctx.add_typed_action_view(CLIAgentsPageView::new);
+        ctx.subscribe_to_view(&cli_agents_page_handle, |me, _, event, ctx| {
+            me.handle_cli_agents_page_event(event, ctx);
         });
 
         // Environments page
@@ -1377,6 +1389,7 @@ impl SettingsView {
             SettingsPage::new(main_page_handle),
             SettingsPage::new(ai_page_handle),
             SettingsPage::new(knowledge_page_handle),
+            SettingsPage::new(cli_agents_page_handle),
             billing_and_usage_page,
             SettingsPage::new(code_indexing_page_handle),
             SettingsPage::new(editor_review_page_handle),
@@ -2087,6 +2100,16 @@ impl SettingsView {
         }
     }
 
+    fn handle_cli_agents_page_event(
+        &mut self,
+        event: &CLIAgentsPageEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            CLIAgentsPageEvent::FocusModal => ctx.focus(&self.search_editor),
+        }
+    }
+
     fn handle_code_indexing_page_event(
         &mut self,
         event: &CodeIndexingPageEvent,
@@ -2248,6 +2271,7 @@ impl SettingsView {
             SettingsPageViewHandle::Scripting(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::AI(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Knowledge(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::CLIAgents(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::CloudEnvironments(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::MCPServers(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::CodeIndexing(v) => v.as_ref(app).should_render(app),
@@ -2936,6 +2960,15 @@ impl TypedActionView for SettingsView {
                 {
                     view.update(ctx, |view, ctx| {
                         view.handle_action(knowledge_action, ctx);
+                    })
+                }
+            }
+            SettingsAction::CLIAgents(cli_agents_action) => {
+                if let Some(page) = self.settings_page(SettingsSection::ThirdPartyCLIAgents)
+                    && let SettingsPageViewHandle::CLIAgents(view) = &page.view_handle
+                {
+                    view.update(ctx, |view, ctx| {
+                        view.handle_action(cli_agents_action, ctx);
                     })
                 }
             }
