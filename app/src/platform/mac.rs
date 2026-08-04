@@ -1,29 +1,8 @@
 //! macOS process-level setup that must happen before any AppKit work.
 
 use anyhow::{Result, bail};
-
-/// `kCurrentProcess` from `<CoreServices/MacTypes.h>` — the
-/// `ProcessSerialNumber` low word that refers to the calling process. Using it
-/// directly avoids the deprecated `GetCurrentProcess`.
-const K_CURRENT_PROCESS: u32 = 2;
-
-/// `kProcessTransformToBackgroundApplication` from `ApplicationServices`.
-/// Converts the process into a background-only application: no Dock tile, no
-/// menu bar, and it can never be activated. This is the runtime equivalent of
-/// `LSBackgroundOnly` in an `Info.plist`.
-const K_PROCESS_TRANSFORM_TO_BACKGROUND_APPLICATION: u32 = 2;
-
-/// Mirrors `ProcessSerialNumber` from `<CoreServices/MacTypes.h>`.
-#[repr(C)]
-struct ProcessSerialNumber {
-    high_long_of_psn: u32,
-    low_long_of_psn: u32,
-}
-
-unsafe extern "C" {
-    /// `TransformProcessType` from `ApplicationServices` (HIServices).
-    fn TransformProcessType(psn: *const ProcessSerialNumber, transform_state: u32) -> i32;
-}
+use objc2::MainThreadMarker;
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 
 /// Tells macOS to treat this process as a background-only application, so it
 /// never gets a Dock tile (and therefore never shows the perpetual Dock bounce
@@ -46,20 +25,47 @@ unsafe extern "C" {
 /// the bundled wrapper has no `Info.plist` of its own to opt into that, so the
 /// equivalent has to be applied at runtime instead.
 ///
+/// # Why `setActivationPolicy` and not `TransformProcessType`
+///
+/// [`NSApplicationActivationPolicy::Prohibited`] is the documented AppKit way
+/// to say "this process is not a UI app": it gets no Dock tile, no menu bar,
+/// and cannot be activated. The deprecated `TransformProcessType` Carbon call
+/// reaches the same end state, but has no binding we can use — the
+/// `objc2-application-services` crate keeps `ProcessSerialNumber` private, so
+/// using it means hand-writing an `extern "C"` declaration and mirroring an
+/// Apple struct by hand. `setActivationPolicy` needs no new dependency
+/// (`objc2-app-kit` is already a dependency of this crate) and no hand-written
+/// binding.
+///
+/// The obvious objection is that reaching `setActivationPolicy` requires
+/// `NSApplication::sharedApplication`, which Apple documents as connecting to
+/// the window server — seemingly the very AppKit initialization the headless
+/// path exists to avoid. That was measured on macOS 26.3.1 (arm64) rather than
+/// assumed, by A/B-ing the mechanisms against the bundled CLI inside an
+/// installed `Warp.app`, and the objection does not hold:
+///
+/// - Doing nothing leaves the CLI registered as `Foreground`, and a Warp icon
+///   appears in the Dock.
+/// - `sharedApplication` on its own does register the process with Launch
+///   Services — but so does the untouched control roughly 0.15 s later, of its
+///   own accord. `sharedApplication` only makes that registration happen
+///   sooner; it does not introduce one that would not otherwise occur.
+/// - Setting the policy to `Prohibited` immediately afterwards (~1 ms later)
+///   lands the process on the same `BackgroundOnly` Launch Services type that
+///   `TransformProcessType` produces, and no Dock tile is ever created.
+///
 /// See APP-2946.
 pub(crate) fn mark_process_as_background_only() -> Result<()> {
-    let psn = ProcessSerialNumber {
-        high_long_of_psn: 0,
-        low_long_of_psn: K_CURRENT_PROCESS,
+    // `run_internal` calls this from the process's main thread, before the
+    // platform event loop starts.
+    let Some(mtm) = MainThreadMarker::new() else {
+        bail!("must be called on the main thread");
     };
 
-    // SAFETY: `psn` is a correctly-shaped `ProcessSerialNumber` that outlives
-    // the call, and `TransformProcessType` only reads through the pointer.
-    let status =
-        unsafe { TransformProcessType(&psn, K_PROCESS_TRANSFORM_TO_BACKGROUND_APPLICATION) };
-
-    if status != 0 {
-        bail!("TransformProcessType returned OSStatus {status}");
+    let app = NSApplication::sharedApplication(mtm);
+    if !app.setActivationPolicy(NSApplicationActivationPolicy::Prohibited) {
+        bail!("NSApplication::setActivationPolicy(.prohibited) returned false");
     }
+
     Ok(())
 }
