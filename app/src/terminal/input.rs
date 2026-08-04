@@ -1134,9 +1134,9 @@ pub enum InputAction {
     CtrlR,
     CtrlD,
     Up,
-    /// Defers `Up` until the current view update completes, avoiding re-entrant updates from
-    /// synchronous platform menu callbacks.
-    DeferredUp,
+    // Dispatch these actions deferred to avoid re-entering an active inline history view update.
+    SelectPreviousInlineHistoryItem,
+    SelectNextInlineHistoryItem,
     PageUp,
     PageDown,
     ClearScreen,
@@ -1838,7 +1838,7 @@ pub fn init(app: &mut AppContext) {
         FixedBinding::new("ctrl-d", InputAction::CtrlD, id!("Input")),
         FixedBinding::custom(
             CustomAction::History,
-            InputAction::DeferredUp,
+            InputAction::Up,
             "Show History",
             // We need to ensure the workflow info box is not open as the "up" arrow
             // key is used to navigate the environment variables dropdown.
@@ -8973,6 +8973,44 @@ impl Input {
         ctx.notify();
     }
 
+    fn select_previous_inline_history_item(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self
+            .suggestions_mode_model
+            .as_ref(ctx)
+            .is_inline_history_menu()
+        {
+            return;
+        }
+
+        if self.is_cloud_mode_input_v2_composing(ctx) {
+            if let Some(view) = self.cloud_mode_v2_history_menu_view.clone() {
+                view.update(ctx, |view, ctx| view.select_up(ctx));
+            }
+        } else {
+            self.inline_history_menu_view
+                .update(ctx, |view, ctx| view.select_up(ctx));
+        }
+    }
+
+    fn select_next_inline_history_item(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self
+            .suggestions_mode_model
+            .as_ref(ctx)
+            .is_inline_history_menu()
+        {
+            return;
+        }
+
+        if self.is_cloud_mode_input_v2_composing(ctx) {
+            if let Some(view) = self.cloud_mode_v2_history_menu_view.clone() {
+                view.update(ctx, |view, ctx| view.select_down(ctx));
+            }
+        } else {
+            self.inline_history_menu_view
+                .update(ctx, |view, ctx| view.select_down(ctx));
+        }
+    }
+
     fn editor_up(&mut self, ctx: &mut ViewContext<Self>) {
         if self.should_show_auth_secret_ftux(ctx) {
             if let Some(ftux_view) = self.auth_secret_ftux_view().cloned() {
@@ -9078,17 +9116,7 @@ impl Input {
                 true
             }
             InputSuggestionsMode::InlineHistoryMenu { .. } => {
-                if self.is_cloud_mode_input_v2_composing(ctx) {
-                    if let Some(view) = self.cloud_mode_v2_history_menu_view.clone() {
-                        view.update(ctx, |view, ctx| {
-                            view.select_up(ctx);
-                        });
-                    }
-                } else {
-                    self.inline_history_menu_view.update(ctx, |view, ctx| {
-                        view.select_up(ctx);
-                    });
-                }
+                ctx.dispatch_typed_action_deferred(InputAction::SelectPreviousInlineHistoryItem);
                 true
             }
             InputSuggestionsMode::IndexedReposMenu => {
@@ -9472,17 +9500,7 @@ impl Input {
             .as_ref(ctx)
             .is_inline_history_menu()
         {
-            if self.is_cloud_mode_input_v2_composing(ctx) {
-                if let Some(view) = self.cloud_mode_v2_history_menu_view.clone() {
-                    view.update(ctx, |view, ctx| {
-                        view.select_down(ctx);
-                    });
-                }
-            } else {
-                self.inline_history_menu_view.update(ctx, |view, ctx| {
-                    view.select_down(ctx);
-                });
-            }
+            ctx.dispatch_typed_action_deferred(InputAction::SelectNextInlineHistoryItem);
             return;
         }
 
@@ -15849,7 +15867,10 @@ impl TypedActionView for Input {
         match action {
             InputAction::FocusInputBox => self.focus_input_box(ctx),
             InputAction::Up => self.editor_up(ctx),
-            InputAction::DeferredUp => ctx.dispatch_typed_action_deferred(InputAction::Up),
+            InputAction::SelectPreviousInlineHistoryItem => {
+                self.select_previous_inline_history_item(ctx)
+            }
+            InputAction::SelectNextInlineHistoryItem => self.select_next_inline_history_item(ctx),
             InputAction::PageUp => self.editor_page_up(ctx),
             InputAction::PageDown => self.editor_page_down(ctx),
             InputAction::CtrlD => self.ctrl_d(ctx),
