@@ -509,11 +509,6 @@ fn keystroke_to_c0_control_code(
 /// The xterm/Kitty numeric modifier parameter for a keystroke: `1 + bitmask`, where
 /// shift=1, alt=2, ctrl=4, super(cmd)=8. Meta ("Option as Meta" on macOS) maps to the alt
 /// bit, matching `keystroke_to_csi_u`. Returns 1 when no modifiers are held.
-///
-/// Used by the functional keys that keep their legacy `CSI …` / `CSI …~` encoding under the
-/// Kitty keyboard protocol (arrows, Home/End, Delete, function keys) rather than switching to
-/// CSI u. It encodes Super (Cmd) and can exceed a single digit (e.g. Cmd+Left → modifier 9 →
-/// `CSI 1;9D`).
 fn modifier_param(keystroke: &Keystroke) -> u32 {
     let mut modifier = 1;
     if keystroke.shift {

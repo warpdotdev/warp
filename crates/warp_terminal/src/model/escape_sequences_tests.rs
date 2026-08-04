@@ -1122,13 +1122,10 @@ fn test_keyboard_enhancement_event_types() {
 
 /// Regression test for macOS editing keys under the Kitty keyboard protocol (GH#9159).
 ///
-/// Before the fix, the CSI-u gate never checked `keystroke.cmd` and blanket-excluded `alt`
-/// on macOS, so Cmd/Option + Backspace/Delete/arrows silently dropped their modifier. Each
-/// case asserts the exact bytes Kitty/Ghostty emit under `DISAMBIGUATE_ESCAPE`:
+/// Each case asserts the exact bytes Kitty/Ghostty emit under `DISAMBIGUATE_ESCAPE`:
 /// - Backspace (codepoint 127, no legacy code) → CSI u.
 /// - Arrows, Home/End & Delete (own legacy codes) → the legacy `CSI 1;<mods><letter>` /
-///   `CSI 3;<mods>~` forms, now carrying the full modifier value (Super = bit 8 →
-///   e.g. Cmd → `9`).
+///   `CSI 3;<mods>~` forms.
 #[test]
 fn test_kitty_protocol_cmd_and_option_editing_keys() {
     // `Keystroke::parse` has no portable `cmd-` token in these tests, so build Cmd combos
@@ -1177,9 +1174,8 @@ fn test_kitty_protocol_cmd_and_option_editing_keys() {
     validate_keystroke_test_cases(os_independent, &mock);
 }
 
-/// On macOS, Option+Space composes a non-breaking space via the IME. Its key name is "space"
-/// (multi-character), which the original key-length heuristic misclassified as non-composing,
-/// wrongly forcing it to CSI u. Composition is now detected from the OS-provided `chars`.
+/// On macOS, Option+Space composes a non-breaking space via the IME. Composition is detected
+/// from the OS-provided `chars`.
 #[test]
 fn test_kitty_protocol_mac_option_space_composition_is_not_disambiguated() {
     if !warpui_core::platform::OperatingSystem::get().is_mac() {
@@ -1221,8 +1217,7 @@ fn test_kitty_protocol_mac_option_space_composition_is_not_disambiguated() {
     );
 }
 
-/// Cmd (Super) had no arm in the legacy single-byte modifier, so Cmd+Fn silently dropped the
-/// modifier. Function keys now use `modifier_param`, which encodes Super and multi-digit values
+/// Function keys use `modifier_param`, which encodes Super and multi-digit values
 /// (Cmd = 9, Cmd+Shift = 10).
 #[test]
 fn test_fn_keystroke_with_cmd_modifier() {
@@ -1250,7 +1245,7 @@ fn test_fn_keystroke_with_cmd_modifier() {
         // F5+ use the `CSI <n>;<mods> ~` form.
         (cmd("f5"), b"\x1b[15;9~".to_vec()),
         (cmd("f12"), b"\x1b[24;9~".to_vec()),
-        // Cmd+Shift = 1 + 1 + 8 = 10 (multi-digit, unrepresentable by the old single byte).
+        // Cmd+Shift = 1 + 1 + 8 = 10.
         (cmd_shift("f5"), b"\x1b[15;10~".to_vec()),
     ];
     validate_keystroke_test_cases(cases, &mock);
