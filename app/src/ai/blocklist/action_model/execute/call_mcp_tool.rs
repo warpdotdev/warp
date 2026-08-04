@@ -20,6 +20,8 @@ use crate::{
     },
     send_telemetry_from_app_ctx,
 };
+#[cfg(not(target_family = "wasm"))]
+use uuid::Uuid;
 
 pub struct CallMCPToolExecutor {
     _active_session: ModelHandle<ActiveSession>,
@@ -126,30 +128,42 @@ impl CallMCPToolExecutor {
                 coerce_integer_args(&mut arguments, &schema);
             }
 
-            let templatable_peer = if let Some(installation_id) = server_id {
-                templatable_mcp_manager
-                    .server_with_installation_id_and_tool_name(*installation_id, name.to_owned())
-            } else {
-                templatable_mcp_manager.server_with_tool_name(name.to_owned())
-            };
-
-            let Some(reconnecting_peer) = templatable_peer else {
+            let Some((installation_uuid, reconnecting_peer)) = templatable_mcp_manager
+                .server_and_installation_with_tool(*server_id, name.as_str())
+            else {
                 return ActionExecution::Sync(AIAgentActionResultType::CallMCPTool(
                     CallMCPToolResult::Error("MCP server for tool not found".to_owned()),
                 ));
             };
 
+            // Mock-backed servers receive the scenario instructions plus the
+            // rolling session state as `_meta`; ordinary servers get none.
+            let outbound_meta = build_outbound_meta(
+                templatable_mcp_manager
+                    .mock_config(installation_uuid)
+                    .as_ref(),
+                templatable_mcp_manager
+                    .last_meta(installation_uuid)
+                    .as_ref(),
+            );
+
             let name_owned_inner = name_owned.clone();
             ActionExecution::new_async(
                 async move {
-                    reconnecting_peer
-                        .call_tool(
-                            rmcp::model::CallToolRequestParams::new(name_owned_inner)
-                                .with_arguments(arguments),
-                        )
-                        .await
+                    let mut params = rmcp::model::CallToolRequestParams::new(name_owned_inner)
+                        .with_arguments(arguments);
+                    params.meta = outbound_meta;
+                    reconnecting_peer.call_tool(params).await
                 },
-                move |res, ctx| handle_call_tool_result(res, server_output_id, name_clone, ctx),
+                move |res, ctx| {
+                    handle_call_tool_result(
+                        res,
+                        server_output_id,
+                        name_clone,
+                        installation_uuid,
+                        ctx,
+                    )
+                },
             )
         }
     }
@@ -290,14 +304,55 @@ fn coerce_value_against_schema(value: &mut serde_json::Value, schema: &serde_jso
 #[path = "call_mcp_tool_tests.rs"]
 mod tests;
 
+/// Builds the outbound `_meta` payload for a `tools/call`.
+///
+/// Mock-backed servers receive the scenario `mock_instructions` on every call
+/// plus the rolling `session_state` captured from the previous result (absent on
+/// the first call). Ordinary servers get no `_meta`.
+#[cfg(not(target_family = "wasm"))]
+fn build_outbound_meta(
+    mock: Option<&cloud_object_models::mcp::MCPMockConfigRef>,
+    last_meta: Option<&serde_json::Value>,
+) -> Option<rmcp::model::Meta> {
+    let mock = mock?;
+    let mut meta_map = serde_json::Map::new();
+    meta_map.insert(
+        "mock_instructions".to_owned(),
+        serde_json::Value::String(mock.instructions.clone()),
+    );
+    if let Some(last) = last_meta {
+        meta_map.insert("session_state".to_owned(), last.clone());
+    }
+    Some(rmcp::model::Meta(meta_map))
+}
+
+/// Extracts the `session_state` entry from a tool result's `_meta`, if present,
+/// so it can be forwarded on the next call to a mock-backed server.
+#[cfg(not(target_family = "wasm"))]
+fn capture_session_state(result_meta: Option<&rmcp::model::Meta>) -> Option<serde_json::Value> {
+    result_meta.and_then(|meta| meta.0.get("session_state").cloned())
+}
+
 /// Handles the result of a call_tool request, converting it to an AIAgentActionResultType.
 #[cfg(not(target_family = "wasm"))]
 fn handle_call_tool_result(
     res: Result<rmcp::model::CallToolResult, rmcp::ServiceError>,
     server_output_id: Option<crate::ai::blocklist::action_model::execute::ServerOutputId>,
     tool_name: String,
-    ctx: &warpui::AppContext,
+    installation_uuid: Uuid,
+    ctx: &mut warpui::AppContext,
 ) -> AIAgentActionResultType {
+    // Persist the rolling `_meta` session state from a mock-backed server so it is
+    // forwarded on the next tools/call. No-op for ordinary servers, which do not
+    // return a `session_state`.
+    if let Ok(result) = &res
+        && let Some(state) = capture_session_state(result.meta.as_ref())
+    {
+        TemplatableMCPServerManager::handle(ctx).update(ctx, |manager, _ctx| {
+            manager.set_last_meta(installation_uuid, Some(state));
+        });
+    }
+
     let action_result = match res {
         Ok(result) => {
             // Even if the call was successful, the response could still be an error so we need to check.

@@ -331,6 +331,7 @@ pub async fn spawn_server(
         installation_id: uuid,
         description,
         is_authenticated_transport,
+        last_meta: None,
     })
 }
 

@@ -110,6 +110,18 @@ impl TemplatableMCPServerManager {
         log::warn!("Ephemeral MCP server spawning not supported in WASM");
     }
 
+    /// Stores the resolved mock-backend configuration for an installation.
+    ///
+    /// This is a no-op in WASM, as MCP servers are not supported in WASM.
+    #[allow(dead_code)]
+    pub fn set_mock_config(
+        &mut self,
+        _installation_uuid: Uuid,
+        _mock: cloud_object_models::mcp::MCPMockConfigRef,
+    ) {
+        log::warn!("Mock MCP config storage not supported in WASM");
+    }
+
     /// Shuts down a running MCP server.
     ///
     /// This is a no-op in WASM, as MCP servers are not supported in WASM.

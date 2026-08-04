@@ -1,4 +1,6 @@
-use super::{CLIServer, MCPServer, ServerSentEvents, StaticEnvVar, TransportType};
+use super::{
+    CLIServer, MCPMockConfigRef, MCPServer, ServerSentEvents, StaticEnvVar, TransportType,
+};
 
 #[test]
 fn test_mcp_server_config_serialization_excludes_secret_env_values() {
@@ -115,4 +117,34 @@ fn test_sse_server_serialization() {
         serialized.contains("sse-server"),
         "Serialized SSE server should contain name: {serialized}",
     );
+}
+
+#[test]
+fn test_mock_config_ref_omits_absent_model_id() {
+    let mock = MCPMockConfigRef {
+        template: "linear".to_string(),
+        instructions: "The project has 5 open bugs.".to_string(),
+        model_id: None,
+    };
+
+    let serialized = serde_json::to_string(&mock).expect("Failed to serialize mock config ref");
+
+    assert!(serialized.contains("linear"));
+    // An absent model_id should be omitted from the serialized output entirely.
+    assert!(
+        !serialized.contains("model_id"),
+        "model_id should be omitted when None: {serialized}",
+    );
+}
+
+#[test]
+fn test_mock_config_ref_round_trips() {
+    let json = r#"{"template": "linear", "instructions": "ctx", "model_id": "claude-3-5-haiku"}"#;
+
+    let mock: MCPMockConfigRef =
+        serde_json::from_str(json).expect("Failed to deserialize mock config ref");
+
+    assert_eq!(mock.template, "linear");
+    assert_eq!(mock.instructions, "ctx");
+    assert_eq!(mock.model_id.as_deref(), Some("claude-3-5-haiku"));
 }

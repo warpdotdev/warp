@@ -1018,6 +1018,17 @@ type CreateManagedMcpClientConfigOutput implements Response {
 
 union CreateManagedMcpClientConfigResult = CreateManagedMcpClientConfigOutput | UserFacingError
 
+input CreateMockMCPClientConfigInput {
+  template: String!
+  modelId: String
+}
+
+type MockMCPClientConfig {
+  mcpUrl: String!
+  token: String!
+  expiresAt: Time!
+}
+
 input CreateNotebookInput {
   aiDocumentId: String
   conversationId: String
@@ -3112,6 +3123,7 @@ type RootMutation {
   createGenericStringObject(input: CreateGenericStringObjectInput!, requestContext: RequestContext!): CreateGenericStringObjectResult!
   createManagedMcpClientConfig(input: CreateManagedMcpClientConfigInput!, requestContext: RequestContext!): CreateManagedMcpClientConfigResult!
   createManagedSecret(input: CreateManagedSecretInput!, requestContext: RequestContext!): CreateManagedSecretResult!
+  createMockMCPClientConfig(input: CreateMockMCPClientConfigInput!): MockMCPClientConfig!
   createNotebook(input: CreateNotebookInput!, requestContext: RequestContext!): CreateNotebookResult!
   createSimpleIntegration(input: CreateSimpleIntegrationInput!, requestContext: RequestContext!): CreateSimpleIntegrationResult!
   createTeam(input: CreateTeamInput!, requestContext: RequestContext!): CreateTeamResult!

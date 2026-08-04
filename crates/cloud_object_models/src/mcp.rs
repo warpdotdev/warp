@@ -98,6 +98,20 @@ pub struct ServerSentEvents {
     pub headers: Vec<StaticHeader>,
 }
 
+/// Reference to a mock MCP backend, resolved server-side to an LLM-backed
+/// endpoint that stands in for a real integration during an agent run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MCPMockConfigRef {
+    /// warp_id or well-known integration name (e.g. "linear") whose stored tool
+    /// catalog the mock endpoint mirrors.
+    pub template: String,
+    /// Scenario context injected in `_meta.mock_instructions` on every tools/call.
+    pub instructions: String,
+    /// User-facing model alias (e.g. "claude-3-5-haiku"). Defaults server-side when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+}
+
 impl JsonModel for MCPServer {
     fn json_object_type() -> JsonObjectType {
         JsonObjectType::MCPServer

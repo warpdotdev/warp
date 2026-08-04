@@ -318,3 +318,81 @@ fn already_integer_value_is_unchanged() {
     assert_eq!(args["x"].as_i64(), Some(5));
     assert_eq!(serde_json::to_string(&args["x"]).unwrap(), "5");
 }
+
+// Tests for outbound `_meta` injection and inbound `session_state` capture used
+// by mock-backed MCP servers.
+#[cfg(not(target_family = "wasm"))]
+mod meta {
+    use cloud_object_models::mcp::MCPMockConfigRef;
+    use serde_json::{Value, json};
+
+    use super::super::{build_outbound_meta, capture_session_state};
+
+    fn mock_cfg(instructions: &str) -> MCPMockConfigRef {
+        MCPMockConfigRef {
+            template: "linear".to_owned(),
+            instructions: instructions.to_owned(),
+            model_id: None,
+        }
+    }
+
+    #[test]
+    fn mock_server_injects_mock_instructions() {
+        let cfg = mock_cfg("5 open bugs");
+        let meta = build_outbound_meta(Some(&cfg), None).expect("mock server produces _meta");
+        assert_eq!(
+            meta.0.get("mock_instructions"),
+            Some(&Value::String("5 open bugs".to_owned()))
+        );
+    }
+
+    #[test]
+    fn non_mock_server_produces_no_meta() {
+        assert!(build_outbound_meta(None, None).is_none());
+        // A stored session state without a mock config still yields no `_meta`.
+        assert!(build_outbound_meta(None, Some(&json!({ "turns": 1 }))).is_none());
+    }
+
+    #[test]
+    fn last_meta_is_forwarded_as_session_state() {
+        let cfg = mock_cfg("instructions");
+        let state = json!({ "history": ["turn one"] });
+        let meta =
+            build_outbound_meta(Some(&cfg), Some(&state)).expect("mock server produces _meta");
+        assert_eq!(meta.0.get("session_state"), Some(&state));
+        assert_eq!(
+            meta.0.get("mock_instructions"),
+            Some(&Value::String("instructions".to_owned()))
+        );
+    }
+
+    #[test]
+    fn absent_last_meta_omits_session_state() {
+        let cfg = mock_cfg("instructions");
+        let meta = build_outbound_meta(Some(&cfg), None).expect("mock server produces _meta");
+        assert!(!meta.0.contains_key("session_state"));
+        assert!(meta.0.contains_key("mock_instructions"));
+    }
+
+    #[test]
+    fn capture_reads_session_state_from_result_meta() {
+        let mut map = serde_json::Map::new();
+        map.insert("session_state".to_owned(), Value::String("abc".to_owned()));
+        let meta = rmcp::model::Meta(map);
+        assert_eq!(
+            capture_session_state(Some(&meta)),
+            Some(Value::String("abc".to_owned()))
+        );
+    }
+
+    #[test]
+    fn capture_returns_none_without_meta_or_session_state() {
+        // Absent `_meta` entirely.
+        assert_eq!(capture_session_state(None), None);
+        // Present `_meta` but no `session_state` key.
+        let mut map = serde_json::Map::new();
+        map.insert("other".to_owned(), Value::Bool(true));
+        let meta = rmcp::model::Meta(map);
+        assert_eq!(capture_session_state(Some(&meta)), None);
+    }
+}

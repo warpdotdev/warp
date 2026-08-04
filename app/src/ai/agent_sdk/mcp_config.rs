@@ -140,11 +140,15 @@ fn validate_server_config(server_name: &str, config: &Value) -> anyhow::Result<(
     let has_warp_id = obj.contains_key("warp_id");
     let has_command = obj.contains_key("command");
     let has_url = obj.contains_key("url");
+    let has_mock = obj.contains_key("mock");
 
-    let kind_count = usize::from(has_warp_id) + usize::from(has_command) + usize::from(has_url);
+    let kind_count = usize::from(has_warp_id)
+        + usize::from(has_command)
+        + usize::from(has_url)
+        + usize::from(has_mock);
     if kind_count != 1 {
         anyhow::bail!(
-            "MCP server '{server_name}' must have exactly one of: 'warp_id', 'command', or 'url'"
+            "MCP server '{server_name}' must have exactly one of: 'warp_id', 'command', 'url', or 'mock'"
         );
     }
 
@@ -197,6 +201,25 @@ fn validate_server_config(server_name: &str, config: &Value) -> anyhow::Result<(
 
         if url.is_empty() {
             anyhow::bail!("MCP server '{server_name}' field 'url' must be non-empty");
+        }
+    }
+
+    // The `mock` backend is resolved server-side to a URL-backed connection, so
+    // `headers`, `env`, and `args` are allowed alongside it and passed through.
+    if has_mock {
+        let mock = obj.get("mock").and_then(Value::as_object).ok_or_else(|| {
+            anyhow::anyhow!("MCP server '{server_name}' field 'mock' must be an object")
+        })?;
+
+        let template = mock
+            .get("template")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                anyhow::anyhow!("MCP server '{server_name}' field 'mock.template' must be a string")
+            })?;
+
+        if template.trim().is_empty() {
+            anyhow::bail!("MCP server '{server_name}' field 'mock.template' must be non-empty");
         }
     }
 

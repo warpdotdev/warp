@@ -398,6 +398,7 @@ impl TemplatableMCPServerManager {
             cloud_templatable_mcp_servers: Default::default(),
             server_states: Default::default(),
             active_servers: Default::default(),
+            mock_configs: Default::default(),
             spawned_servers: Default::default(),
             server_credentials: Default::default(),
             file_based_server_credentials: Default::default(),
@@ -1915,42 +1916,73 @@ impl TemplatableMCPServerManager {
         }
     }
 
-    /// Returns a reconnecting peer for a server that has the given tool.
+    /// Resolves the installation providing a tool along with a reconnecting peer
+    /// for it.
     ///
-    /// The returned peer will automatically reconnect if the underlying transport is closed.
-    pub fn server_with_tool_name(
+    /// When `installation_id` is `Some`, only that server is considered; otherwise
+    /// the first active server offering the tool wins. The returned peer
+    /// automatically reconnects if the underlying transport is closed, and the
+    /// returned UUID lets the caller look up per-connection state such as the mock
+    /// backend config and the rolling `_meta` session state.
+    pub fn server_and_installation_with_tool(
         &self,
-        tool_name: String,
-    ) -> Option<crate::ai::mcp::reconnecting_peer::ReconnectingPeer> {
+        installation_id: Option<Uuid>,
+        tool_name: &str,
+    ) -> Option<(Uuid, crate::ai::mcp::reconnecting_peer::ReconnectingPeer)> {
         let spawner = self.spawner.as_ref()?;
-        self.active_servers
-            .iter()
-            .find(|(_, server)| server.has_tool(&tool_name))
-            .map(|(installation_uuid, _)| {
-                crate::ai::mcp::reconnecting_peer::ReconnectingPeer::new(
-                    *installation_uuid,
-                    spawner.clone(),
-                )
-            })
+        let installation_uuid = match installation_id {
+            Some(uuid) => self
+                .active_servers
+                .get(&uuid)
+                .filter(|server| server.has_tool(tool_name))
+                .map(|_| uuid)?,
+            None => self
+                .active_servers
+                .iter()
+                .find(|(_, server)| server.has_tool(tool_name))
+                .map(|(uuid, _)| *uuid)?,
+        };
+        Some((
+            installation_uuid,
+            crate::ai::mcp::reconnecting_peer::ReconnectingPeer::new(
+                installation_uuid,
+                spawner.clone(),
+            ),
+        ))
     }
 
-    /// Returns a reconnecting peer for a server with the given installation ID and tool.
-    ///
-    /// The returned peer will automatically reconnect if the underlying transport is closed.
-    pub fn server_with_installation_id_and_tool_name(
+    /// Returns the resolved mock-backend configuration for an installation, if the
+    /// server is mock-backed.
+    pub fn mock_config(
         &self,
-        installation_id: Uuid,
-        tool_name: String,
-    ) -> Option<crate::ai::mcp::reconnecting_peer::ReconnectingPeer> {
-        let spawner = self.spawner.as_ref()?;
-        let server = self.active_servers.get(&installation_id)?;
-        if server.has_tool(&tool_name) {
-            Some(crate::ai::mcp::reconnecting_peer::ReconnectingPeer::new(
-                installation_id,
-                spawner.clone(),
-            ))
-        } else {
-            None
+        installation_uuid: Uuid,
+    ) -> Option<cloud_object_models::mcp::MCPMockConfigRef> {
+        self.mock_configs.get(&installation_uuid).cloned()
+    }
+
+    /// Stores the resolved mock-backend configuration for an installation. Invoked
+    /// when a mock-backed server connection is established.
+    pub fn set_mock_config(
+        &mut self,
+        installation_uuid: Uuid,
+        mock: cloud_object_models::mcp::MCPMockConfigRef,
+    ) {
+        self.mock_configs.insert(installation_uuid, mock);
+    }
+
+    /// Returns the most recent `_meta` session state round-tripped from a mock
+    /// backend for the given installation, if any.
+    pub fn last_meta(&self, installation_uuid: Uuid) -> Option<serde_json::Value> {
+        self.active_servers
+            .get(&installation_uuid)
+            .and_then(|server| server.last_meta.clone())
+    }
+
+    /// Stores the `_meta` session state captured from a mock backend's tool result
+    /// so it is forwarded on the next tools/call for the same connection.
+    pub fn set_last_meta(&mut self, installation_uuid: Uuid, meta: Option<serde_json::Value>) {
+        if let Some(server) = self.active_servers.get_mut(&installation_uuid) {
+            server.last_meta = meta;
         }
     }
 

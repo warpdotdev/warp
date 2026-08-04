@@ -24,6 +24,10 @@ pub struct TemplatableMCPServerInfo {
     /// to provide a "log out" button.
     #[allow(dead_code)]
     is_authenticated_transport: bool,
+    /// Most recent `_meta` state round-tripped from a mock MCP backend's tool
+    /// results, forwarded on the next tool call to preserve conversation history.
+    /// In-memory only; reset on reconnect since the mock is ephemeral per run.
+    pub last_meta: Option<serde_json::Value>,
 }
 
 impl TemplatableMCPServerInfo {

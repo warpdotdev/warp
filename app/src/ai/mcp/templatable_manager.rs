@@ -48,6 +48,11 @@ pub struct TemplatableMCPServerManager {
     locally_installed_servers: HashMap<Uuid, TemplatableMCPServerInstallation>,
     server_states: HashMap<Uuid, MCPServerState>,
     active_servers: HashMap<Uuid, TemplatableMCPServerInfo>,
+    /// Resolved mock-backend configuration for mock-backed servers, keyed by
+    /// installation UUID. Populated when a mock server connection is established
+    /// and consumed by the tool executor to inject `_meta` on each tools/call.
+    #[cfg(not(target_family = "wasm"))]
+    mock_configs: HashMap<Uuid, cloud_object_models::mcp::MCPMockConfigRef>,
 
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     spawned_servers: HashMap<Uuid, SpawnedServerInfo>,
@@ -266,8 +271,8 @@ impl TemplatableMCPServerManager {
     /// Returns the JSON Schema `input_schema` for a named tool across active MCP servers.
     ///
     /// If `installation_id` is `Some`, only that server is considered; otherwise, the
-    /// first active server providing a matching tool name wins (matching the existing
-    /// `server_with_tool_name` lookup behavior).
+    /// first active server providing a matching tool name wins (matching the
+    /// `server_and_installation_with_tool` lookup behavior).
     ///
     /// Used by the MCP tool executor to coerce integer-typed args before dispatch, since
     /// `structpb.NumberValue` on the wire cannot preserve the integer/float distinction.

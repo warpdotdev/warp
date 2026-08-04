@@ -14,6 +14,7 @@ const clientMutations = [
   'createGenericStringObject',
   'createManagedMcpClientConfig',
   'createManagedSecret',
+  'createMockMCPClientConfig',
   'createNotebook',
   'createTeam',
   'createWorkflow',

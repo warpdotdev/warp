@@ -249,7 +249,7 @@ fn validation_rejects_invalid_entries() {
     let err = build_mcp_servers_from_specs(&[MCPSpec::Json(spec)]).unwrap_err();
     assert!(
         err.to_string()
-            .contains("must have exactly one of: 'warp_id', 'command', or 'url'")
+            .contains("must have exactly one of: 'warp_id', 'command', 'url', or 'mock'")
     );
 
     // warp_id must be a non-empty string (UUID or, behind WellKnownMcpIds,
@@ -294,6 +294,90 @@ fn validation_rejects_invalid_entries() {
     let spec = json!({ "mcpServers": { "bad": 1 } }).to_string();
     let err = build_mcp_servers_from_specs(&[MCPSpec::Json(spec)]).unwrap_err();
     assert!(err.to_string().contains("config must be a JSON object"));
+}
+
+#[test]
+fn mock_backend_is_accepted() {
+    let spec = json!({
+        "mcpServers": {
+            "linear": { "mock": { "template": "linear", "instructions": "5 open bugs" } }
+        }
+    })
+    .to_string();
+
+    let servers = build(vec![MCPSpec::Json(spec)]);
+
+    assert_eq!(
+        servers["linear"]["mock"]["template"].as_str(),
+        Some("linear")
+    );
+}
+
+#[test]
+fn mock_with_empty_instructions_is_accepted() {
+    let spec = json!({
+        "mcpServers": {
+            "linear": { "mock": { "template": "linear", "instructions": "" } }
+        }
+    })
+    .to_string();
+
+    let servers = build(vec![MCPSpec::Json(spec)]);
+
+    assert_eq!(
+        servers["linear"]["mock"]["template"].as_str(),
+        Some("linear")
+    );
+}
+
+#[test]
+fn mock_with_headers_is_accepted() {
+    // Headers may be set alongside mock; they pass through to the resolved connection.
+    let spec = json!({
+        "mcpServers": {
+            "linear": {
+                "mock": { "template": "linear", "instructions": "ctx" },
+                "headers": { "Authorization": "Bearer x" }
+            }
+        }
+    })
+    .to_string();
+
+    let servers = build(vec![MCPSpec::Json(spec)]);
+
+    assert_eq!(
+        servers["linear"]["headers"]["Authorization"].as_str(),
+        Some("Bearer x")
+    );
+}
+
+#[test]
+fn mock_and_url_together_fails_validation() {
+    let spec = json!({
+        "mcpServers": {
+            "bad": {
+                "mock": { "template": "linear", "instructions": "ctx" },
+                "url": "https://example.com/mcp"
+            }
+        }
+    })
+    .to_string();
+
+    let err = build_mcp_servers_from_specs(&[MCPSpec::Json(spec)]).unwrap_err();
+    assert!(err.to_string().contains("must have exactly one"));
+}
+
+#[test]
+fn mock_with_empty_template_fails_validation() {
+    let spec = json!({
+        "mcpServers": {
+            "bad": { "mock": { "template": "", "instructions": "ctx" } }
+        }
+    })
+    .to_string();
+
+    let err = build_mcp_servers_from_specs(&[MCPSpec::Json(spec)]).unwrap_err();
+    assert!(err.to_string().contains("template"));
 }
 
 #[test]

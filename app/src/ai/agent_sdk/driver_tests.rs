@@ -22,7 +22,9 @@ use warp_core::features::FeatureFlag;
 use warp_graphql::mutations::create_managed_mcp_client_config::{
     CreateManagedMcpClientConfigOutput, ManagedMcpTransportKind,
 };
+use warp_graphql::mutations::create_mock_mcp_client_config::MockMcpClientConfig;
 use warp_graphql::response_context::ResponseContext;
+use warp_graphql::scalars::Time;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{App, SingletonEntity as _};
@@ -45,6 +47,7 @@ use crate::ai::mcp::JSONTransportType;
 use crate::ai::mcp::parsing::normalize_mcp_json;
 use crate::ai::skills::SkillManager;
 use crate::server::server_api::managed_mcp::MockManagedMcpClient;
+use crate::server::server_api::mock_mcp::MockMockMcpClient;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 #[test]
@@ -157,6 +160,20 @@ fn raw_secret(value: &str) -> ManagedSecretValue {
     }
 }
 
+fn mock_client_config(mcp_url: &str, token: &str) -> MockMcpClientConfig {
+    MockMcpClientConfig {
+        mcp_url: mcp_url.to_string(),
+        token: token.to_string(),
+        expires_at: Time::from_unix_timestamp_micros(0).unwrap(),
+    }
+}
+
+/// A `MockMcpClient` that fails the test if `create_mock_mcp_client_config` is
+/// ever called. Used to assert the mock path is not taken for non-mock specs.
+fn unused_mock_mcp_client() -> Arc<MockMockMcpClient> {
+    Arc::new(MockMockMcpClient::new())
+}
+
 fn render_installations(
     installations: Vec<crate::ai::mcp::TemplatableMCPServerInstallation>,
     secrets: HashMap<String, ManagedSecretValue>,
@@ -174,6 +191,7 @@ fn managed_resolver_local_uuid_does_not_call_managed_client() {
         &[MCPSpec::Uuid(uuid)],
         &local_installed_uuids,
         Arc::new(mock),
+        unused_mock_mcp_client(),
     ))
     .unwrap();
 
@@ -198,6 +216,7 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
         &[MCPSpec::Uuid(uuid)],
         &HashSet::new(),
         Arc::new(mock),
+        unused_mock_mcp_client(),
     ))
     .unwrap();
 
@@ -221,6 +240,7 @@ fn well_known_spec_resolves_via_managed_client() {
         &[MCPSpec::WellKnown("linear".to_string())],
         &HashSet::new(),
         Arc::new(mock),
+        unused_mock_mcp_client(),
     ))
     .unwrap();
 
@@ -242,6 +262,7 @@ fn well_known_resolution_failure_skips_server() {
         &[MCPSpec::WellKnown("linear".to_string())],
         &HashSet::new(),
         Arc::new(mock),
+        unused_mock_mcp_client(),
     ))
     .unwrap();
 
@@ -274,6 +295,7 @@ fn well_known_resolution_failure_does_not_drop_other_specs() {
         ],
         &HashSet::new(),
         Arc::new(mock),
+        unused_mock_mcp_client(),
     ))
     .unwrap();
 
@@ -291,6 +313,7 @@ fn well_known_spec_is_skipped_when_flag_disabled() {
         &[MCPSpec::WellKnown("linear".to_string())],
         &HashSet::new(),
         Arc::new(mock),
+        unused_mock_mcp_client(),
     ))
     .unwrap();
 
@@ -450,6 +473,7 @@ fn managed_resolution_failure_includes_uid_and_message() {
         &[MCPSpec::Uuid(uuid)],
         &HashSet::new(),
         Arc::new(mock),
+        unused_mock_mcp_client(),
     ))
     .unwrap_err();
 
@@ -459,6 +483,124 @@ fn managed_resolution_failure_includes_uid_and_message() {
             assert!(message.contains("not active"));
         }
         other => panic!("expected managed MCP resolution failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn mock_spec_resolves_to_url_with_bearer_token() {
+    let mut mock_client = MockMockMcpClient::new();
+    mock_client
+        .expect_create_mock_mcp_client_config()
+        .times(1)
+        .returning(|template, model_id| {
+            assert_eq!(template, "linear");
+            assert_eq!(model_id, None);
+            Ok(mock_client_config(
+                "http://localhost:8089/mcp-mock/abc",
+                "tok_123",
+            ))
+        });
+
+    let json = r#"{"linear":{"mock":{"template":"linear","instructions":"you are a mock linear server"}}}"#;
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Json(json.to_string())],
+        &HashSet::new(),
+        Arc::new(MockManagedMcpClient::new()),
+        Arc::new(mock_client),
+    ))
+    .unwrap();
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    assert_eq!(resolved.mock_configs.len(), 1);
+
+    let rendered = render_installations(resolved.ephemeral_installations, HashMap::new());
+    match &rendered["linear"].transport_type {
+        JSONTransportType::SSEServer { url, headers } => {
+            assert_eq!(url, "http://localhost:8089/mcp-mock/abc");
+            assert_eq!(
+                headers.get("Authorization").map(String::as_str),
+                Some("Bearer tok_123")
+            );
+        }
+        other => panic!("expected SSE server, got {other:?}"),
+    }
+}
+
+#[test]
+fn mock_spec_merges_extra_headers_with_authorization() {
+    let mut mock_client = MockMockMcpClient::new();
+    mock_client
+        .expect_create_mock_mcp_client_config()
+        .times(1)
+        .returning(|_, _| {
+            Ok(mock_client_config(
+                "http://localhost:8089/mcp-mock/abc",
+                "tok_123",
+            ))
+        });
+
+    let json = r#"{"linear":{"mock":{"template":"linear","instructions":"ctx"},"headers":{"X-Custom":"val"}}}"#;
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Json(json.to_string())],
+        &HashSet::new(),
+        Arc::new(MockManagedMcpClient::new()),
+        Arc::new(mock_client),
+    ))
+    .unwrap();
+
+    let rendered = render_installations(resolved.ephemeral_installations, HashMap::new());
+    match &rendered["linear"].transport_type {
+        JSONTransportType::SSEServer { headers, .. } => {
+            assert_eq!(
+                headers.get("Authorization").map(String::as_str),
+                Some("Bearer tok_123")
+            );
+            assert_eq!(headers.get("X-Custom").map(String::as_str), Some("val"));
+        }
+        other => panic!("expected SSE server, got {other:?}"),
+    }
+}
+
+#[test]
+fn non_mock_json_spec_does_not_call_mock_client() {
+    // A plain URL-backed JSON spec must not trigger the mock resolution path.
+    // `unused_mock_mcp_client` sets no expectations, so any call would panic.
+    let json = r#"{"my-server":{"url":"http://localhost:3000/mcp"}}"#;
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Json(json.to_string())],
+        &HashSet::new(),
+        Arc::new(MockManagedMcpClient::new()),
+        unused_mock_mcp_client(),
+    ))
+    .unwrap();
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+    assert!(resolved.mock_configs.is_empty());
+}
+
+#[test]
+fn mock_resolution_failure_propagates() {
+    let mut mock_client = MockMockMcpClient::new();
+    mock_client
+        .expect_create_mock_mcp_client_config()
+        .times(1)
+        .returning(|_, _| Err(anyhow::anyhow!("template not found")));
+
+    let json = r#"{"linear":{"mock":{"template":"linear","instructions":"ctx"}}}"#;
+    let err = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::Json(json.to_string())],
+        &HashSet::new(),
+        Arc::new(MockManagedMcpClient::new()),
+        Arc::new(mock_client),
+    ))
+    .unwrap_err();
+
+    match err {
+        AgentDriverError::MockMcpResolutionFailed { template, message } => {
+            assert_eq!(template, "linear");
+            assert!(message.contains("template not found"));
+        }
+        other => panic!("expected mock MCP resolution failure, got {other:?}"),
     }
 }
 
