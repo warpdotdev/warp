@@ -35,6 +35,7 @@ fn cloud() -> RunAgentsExecutionMode {
         environment_id: "env-1".to_string(),
         worker_host: "warp".to_string(),
         computer_use_enabled: false,
+        runner_id: String::new(),
     }
 }
 

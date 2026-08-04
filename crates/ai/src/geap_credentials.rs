@@ -1,11 +1,33 @@
+//! Gemini Enterprise (GEAP) credential state and its lifecycle on the shared
+//! [`ApiKeyManager`].
+//!
+//! The credential itself lives in [`ApiKeyManager`] (the request-building
+//! source of truth). This module owns the GEAP-specific value types plus the
+//! state transitions, request-time single-flight coordination, and mint-failure
+//! cooldown that operate on them, mirroring how [`crate::grok_subscription`]
+//! keeps the Grok lifecycle out of [`crate::api_keys`].
+//!
+//! The network-facing mint lives in the app layer, which has the workspace
+//! settings and Warp OIDC access this crate cannot see. It drives this state
+//! machine through [`ApiKeyManager::install_geap_refresh_waiter`] and
+//! [`ApiKeyManager::take_geap_refresh_waiters`].
+
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Local};
+#[cfg(not(target_family = "wasm"))]
+use futures::channel::oneshot;
 use warp_core::ui::Icon;
 use warp_multi_agent_api as api;
+use warpui_core::ModelContext;
+
+use crate::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 
 /// Refresh the access token this long before its hard expiry
 pub const GEAP_REFRESH_LEAD_TIME: Duration = Duration::from_secs(5 * 60);
+
+/// How long a failed mint suppresses the request-time blocking refresh.
+pub const GEAP_MINT_FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct GeapCredentials {
@@ -44,6 +66,13 @@ impl GeapCredentials {
             None => false,
         }
     }
+
+    pub fn is_expired(&self) -> bool {
+        match self.expires_at {
+            Some(expires_at) => expires_at <= SystemTime::now(),
+            None => false,
+        }
+    }
 }
 
 impl From<GeapCredentials> for api::request::settings::api_keys::GoogleCloudCredentials {
@@ -52,6 +81,16 @@ impl From<GeapCredentials> for api::request::settings::api_keys::GoogleCloudCred
             access_token: credentials.access_token,
         }
     }
+}
+
+/// Outcome of a Gemini Enterprise credential mint, delivered to requests
+/// waiting for an expired credential to be replaced before sending.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeapRefreshOutcome {
+    Refreshed,
+    /// The mint failed; the stored credential is unchanged.
+    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,6 +274,134 @@ impl GeapCredentialsState {
 
     pub fn requires_admin_action(&self) -> bool {
         self.recovery_action() == Some(GeapRecoveryAction::ContactAdmin)
+    }
+}
+
+impl ApiKeyManager {
+    pub fn set_geap_credentials_state(
+        &mut self,
+        state: GeapCredentialsState,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.geap_credentials_state == state {
+            return;
+        }
+        self.geap_credentials_state = state;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+    }
+
+    pub fn geap_credentials_state(&self) -> &GeapCredentialsState {
+        &self.geap_credentials_state
+    }
+
+    /// The Gemini Enterprise credential to attach to an outgoing request, or
+    /// `None` when there is nothing attachable.
+    ///
+    /// A credential attaches only when it was minted for this same
+    /// (user, audience, service account). A re-mint in flight keeps
+    /// serving the previous credential, and possibly-expired credentials are
+    /// still attached.
+    pub fn geap_credentials_for_request(
+        &self,
+        binding: &GeapMintBinding,
+    ) -> Option<api::request::settings::api_keys::GoogleCloudCredentials> {
+        match self.geap_credentials_state {
+            GeapCredentialsState::Loaded {
+                ref credentials,
+                ref minted_for,
+                ..
+            } if minted_for == binding => credentials
+                .access_token_for_request()
+                .map(|_| credentials.clone().into()),
+            GeapCredentialsState::Refreshing {
+                previous: Some((ref credentials, ref minted_for)),
+            } if minted_for == binding => credentials
+                .access_token_for_request()
+                .map(|_| credentials.clone().into()),
+            _ => None,
+        }
+    }
+
+    /// Whether a request whose model may route to Gemini Enterprise should
+    /// block on a mint before sending.
+    ///
+    /// True only when the stored credential was minted for this same binding
+    /// and is at or past hard expiry, and no mint has failed recently.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn geap_expired_refresh_eligibility(&self, binding: &GeapMintBinding) -> bool {
+        if self.geap_mint_recently_failed() {
+            return false;
+        }
+        match self.geap_credentials_state() {
+            GeapCredentialsState::Loaded {
+                credentials,
+                minted_for,
+                ..
+            } if minted_for == binding => credentials.is_expired(),
+            GeapCredentialsState::Refreshing {
+                previous: Some((credentials, minted_for)),
+            } if minted_for == binding => credentials.is_expired(),
+            _ => false,
+        }
+    }
+
+    /// Ensures one mint is in flight for an expired GEAP credential and returns
+    /// a receiver for its completion, or `None` when no wait is warranted.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn begin_expired_geap_refresh<F>(
+        &mut self,
+        binding: &GeapMintBinding,
+        ctx: &mut ModelContext<Self>,
+        start_refresh: F,
+    ) -> Option<oneshot::Receiver<GeapRefreshOutcome>>
+    where
+        F: FnOnce(&mut Self, oneshot::Sender<GeapRefreshOutcome>, &mut ModelContext<Self>),
+    {
+        if !self.geap_expired_refresh_eligibility(binding) {
+            return None;
+        }
+
+        let (tx, rx) = oneshot::channel();
+        match self.geap_refresh_waiters.as_mut() {
+            // A mint is genuinely in flight, since the waiter list is installed
+            // by the mint itself. Attach to it.
+            Some(waiters) => waiters.push(tx),
+            None => start_refresh(self, tx, ctx),
+        }
+        Some(rx)
+    }
+
+    /// Opens the single-flight window for a mint that is about to start.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn install_geap_refresh_waiter(
+        &mut self,
+        waiter: Option<oneshot::Sender<GeapRefreshOutcome>>,
+    ) {
+        self.geap_refresh_waiters = Some(waiter.into_iter().collect());
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub fn take_geap_refresh_waiters(&mut self) -> Vec<oneshot::Sender<GeapRefreshOutcome>> {
+        self.geap_refresh_waiters.take().unwrap_or_default()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub fn record_geap_mint_failure(&mut self) {
+        self.geap_last_mint_failure = Some(SystemTime::now());
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub fn clear_geap_mint_failure(&mut self) {
+        self.geap_last_mint_failure = None;
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn geap_mint_recently_failed(&self) -> bool {
+        self.geap_last_mint_failure.is_some_and(|failed_at| {
+            SystemTime::now()
+                .duration_since(failed_at)
+                .is_ok_and(|elapsed| elapsed < GEAP_MINT_FAILURE_COOLDOWN)
+        })
     }
 }
 

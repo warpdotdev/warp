@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use cfg_if::cfg_if;
 use directories::BaseDirs;
 
-use crate::channel::{Channel, ChannelState};
 use crate::AppId;
+use crate::channel::{Channel, ChannelState};
 
 /// The name of the directory in which to put non-global Warp-specific files.
 ///
@@ -43,6 +43,7 @@ fn base_warp_config_dir_name() -> String {
         Channel::Local => format!("{WARP_CONFIG_DIR}-local"),
     }
 }
+
 /// Returns the home-relative Warp config directory name for the current channel and data profile.
 ///
 /// This preserves the historical `.warp*` directory shape while still isolating dev, local,
@@ -74,22 +75,40 @@ pub fn warp_home_mcp_config_file_path() -> Option<PathBuf> {
     warp_home_config_dir().map(|warp_config_dir| warp_config_dir.join(".mcp.json"))
 }
 
-/// Returns the macOS config directory name for the current channel.
+/// Returns the macOS config directory name for the current channel and data
+/// profile.
 ///
 /// Stable uses `.warp`, while other channels include a channel suffix
 /// (e.g., `.warp-dev`, `.warp-local`).
+///
+/// Development data profiles append a further `-{profile}` suffix. Without it,
+/// every profile of a channel would share this directory — and with it the
+/// public settings in `settings.toml` — defeating the isolation that profiles
+/// already provide for UserDefaults, Application Support, and the keychain.
 ///
 /// These suffixes are persisted on disk as directory names and must not be
 /// changed once established, or existing user data will be orphaned.
 #[cfg(target_os = "macos")]
 fn macos_config_dir_name() -> String {
-    match ChannelState::channel() {
+    macos_config_dir_name_for(
+        ChannelState::channel(),
+        ChannelState::data_profile().as_deref(),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn macos_config_dir_name_for(channel: Channel, data_profile: Option<&str>) -> String {
+    let base_dir_name = match channel {
         Channel::Stable => WARP_CONFIG_DIR.to_owned(),
         Channel::Preview => format!("{WARP_CONFIG_DIR}-preview"),
         Channel::Oss => format!("{WARP_CONFIG_DIR}-oss"),
         Channel::Dev => format!("{WARP_CONFIG_DIR}-dev"),
         Channel::Integration => format!("{WARP_CONFIG_DIR}-integration"),
         Channel::Local => format!("{WARP_CONFIG_DIR}-local"),
+    };
+    match data_profile {
+        Some(profile) => format!("{base_dir_name}-{profile}"),
+        None => base_dir_name,
     }
 }
 
@@ -109,6 +128,28 @@ pub fn data_dir() -> PathBuf {
     }
 }
 
+/// Returns the GUI application ID for the current channel.
+///
+/// Most TUI channel binaries use the same application ID as the GUI. The OSS
+/// TUI is the exception: it uses `WarpTui`, while the corresponding GUI uses
+/// `WarpOss`.
+#[cfg(any(not(target_os = "macos"), test))]
+fn gui_app_id_for_channel(channel: Channel, current_app_id: AppId) -> AppId {
+    match channel {
+        Channel::Oss => AppId::new("dev", "warp", "WarpOss"),
+        Channel::Stable
+        | Channel::Preview
+        | Channel::Dev
+        | Channel::Integration
+        | Channel::Local => current_app_id,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn gui_app_id() -> AppId {
+    gui_app_id_for_channel(ChannelState::channel(), ChannelState::app_id())
+}
+
 /// Returns the path to the directory where non-portable configuration files
 /// should be stored.
 pub fn config_local_dir() -> PathBuf {
@@ -123,6 +164,43 @@ pub fn config_local_dir() -> PathBuf {
                 .unwrap_or_default()
         }
     }
+}
+
+/// Resolves the GUI's non-portable configuration directory from any frontend.
+///
+/// This differs from [`config_local_dir`] when the active process uses a
+/// frontend-specific application ID, as the OSS TUI does on Linux and Windows.
+/// On macOS, development data profiles do not have an unambiguous corresponding
+/// GUI `.warp*` directory, so this fails closed instead of selecting a source
+/// profile implicitly.
+pub fn gui_config_local_dir() -> Option<PathBuf> {
+    cfg_if! {
+        if #[cfg(target_os = "macos")] {
+            if ChannelState::data_profile().is_some() {
+                return None;
+            }
+            dirs::home_dir().map(|home_dir| home_dir.join(macos_config_dir_name()))
+        } else {
+            project_dirs_for_app_id(
+                gui_app_id(),
+                ChannelState::data_profile().as_deref(),
+            )
+            .map(|dirs| dirs.config_local_dir().to_owned())
+        }
+    }
+}
+
+/// Resolves the GUI's global file-based MCP configuration from any frontend.
+///
+/// As with [`gui_config_local_dir`], macOS development data profiles fail
+/// closed because the matching GUI source profile is ambiguous.
+pub fn gui_mcp_config_file_path() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    if ChannelState::data_profile().is_some() {
+        return None;
+    }
+
+    warp_home_mcp_config_file_path()
 }
 
 /// Returns the macOS config directory name for the TUI front-end (`warp-tui`)
@@ -259,10 +337,10 @@ pub fn cache_dir() -> PathBuf {
 /// home-dir-relative manner, if appropriate.
 pub fn home_relative_path(path: &Path) -> String {
     #[cfg(unix)]
-    if let Some(base_dirs) = directories::BaseDirs::new() {
-        if let Ok(relative_path) = path.strip_prefix(base_dirs.home_dir()) {
-            return format!("~/{}", relative_path.display());
-        }
+    if let Some(base_dirs) = directories::BaseDirs::new()
+        && let Ok(relative_path) = path.strip_prefix(base_dirs.home_dir())
+    {
+        return format!("~/{}", relative_path.display());
     };
 
     path.display().to_string()
@@ -332,12 +410,12 @@ pub fn app_group_container_path() -> Option<PathBuf> {
         // We have to double-check that the path points to a directory we can actually use. In addition to
         // macOS returning a path that may not exist, processes may list the container directory without
         // having permissions to read to or write from it.
-        if let Some(url) = fm.containerURLForSecurityApplicationGroupIdentifier(&group_id) {
-            if let Some(ns_path) = url.path() {
-                let path = PathBuf::from(ns_path.to_string());
-                if tempfile::tempfile_in(&path).is_ok() {
-                    return Some(path);
-                }
+        if let Some(url) = fm.containerURLForSecurityApplicationGroupIdentifier(&group_id)
+            && let Some(ns_path) = url.path()
+        {
+            let path = PathBuf::from(ns_path.to_string());
+            if tempfile::tempfile_in(&path).is_ok() {
+                return Some(path);
             }
         }
 

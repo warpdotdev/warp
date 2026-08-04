@@ -1,6 +1,6 @@
 use crate::object::ObjectMetadata;
 use crate::object_permissions::ObjectPermissions;
-use crate::queries::get_conversation_usage::{convert_token_usage, TokenUsage, ToolUsageMetadata};
+use crate::queries::get_conversation_usage::{TokenUsage, ToolUsageMetadata, convert_token_usage};
 use crate::scalars::Time;
 use crate::schema;
 use crate::user::PublicUserProfile;
@@ -10,6 +10,36 @@ pub enum RequestLimitRefreshDuration {
     Monthly,
     Weekly,
     EveryTwoWeeks,
+}
+
+#[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]
+pub enum AICreditAvailabilityDenialReason {
+    None,
+    OutOfCredits,
+    Delinquent,
+    EnterpriseTeamSpendLimitHit,
+    EnterprisePerUserSpendLimitHit,
+    EnterpriseWorkspaceSpendLimitHit,
+    #[cynic(fallback)]
+    Other(String),
+}
+
+#[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]
+pub enum AICreditAvailabilitySource {
+    BaseLimit,
+    BonusGrant,
+    Payg,
+    Overage,
+    AmbientBonusGrant,
+    #[cynic(fallback)]
+    Other(String),
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct AICreditAvailability {
+    pub available: bool,
+    pub denial_reason: AICreditAvailabilityDenialReason,
+    pub credit_source: Option<AICreditAvailabilitySource>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
@@ -171,6 +201,7 @@ pub struct ConversationUsageMetadata {
     pub context_window_segments: Vec<ContextWindowSegment>,
     pub credits_spent: f64,
     pub platform_credits_spent: f64,
+    pub total_provider_cost_in_cents: Option<f64>,
     pub summarized: bool,
     pub warp_token_usage: Vec<TokenUsage>,
     pub byok_token_usage: Vec<TokenUsage>,
@@ -184,6 +215,7 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
             context_window_usage: gql.context_window_usage as f32,
             credits_spent: gql.credits_spent as f32,
             platform_credits_spent: gql.platform_credits_spent as f32,
+            total_provider_cost_in_cents: gql.total_provider_cost_in_cents.map(|cost| cost as f32),
             credits_spent_for_last_block: None,
             token_usage: convert_token_usage(&gql.warp_token_usage, &gql.byok_token_usage),
             tool_usage_metadata: (&gql.tool_usage_metadata).into(),

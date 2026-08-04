@@ -5,8 +5,8 @@ use std::pin::Pin;
 use std::sync::LazyLock;
 
 use async_channel::Sender;
-use futures::stream::AbortHandle;
 use futures::Future;
+use futures::stream::AbortHandle;
 use regex::Regex;
 use repo_metadata::repositories::{
     DetectedRepositories, DetectedRepositoriesEvent, RepoDetectionSource,
@@ -18,12 +18,12 @@ use warp_core::safe_warn;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::HomeDirectoryWatcherEvent;
 
-use crate::ai::mcp::parsing::normalize_codex_toml_to_json;
-use crate::ai::mcp::{home_config_file_path, MCPProvider, ParsedTemplatableMCPServerResult};
-use crate::warp_managed_paths_watcher::{
-    warp_managed_mcp_config_path, WarpManagedPathsWatcher, WarpManagedPathsWatcherEvent,
-};
 use crate::HomeDirectoryWatcher;
+use crate::ai::mcp::parsing::normalize_codex_toml_to_json;
+use crate::ai::mcp::{MCPProvider, ParsedTemplatableMCPServerResult, home_config_file_path};
+use crate::warp_managed_paths_watcher::{
+    WarpManagedPathsWatcher, WarpManagedPathsWatcherEvent, warp_managed_mcp_config_path,
+};
 
 static ENV_VAR_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\$\{([^}]+)\}").expect("Regex is valid"));
@@ -139,7 +139,7 @@ pub struct FileMCPWatcher {
 impl FileMCPWatcher {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let (file_mcp_tx, file_mcp_rx) = async_channel::unbounded::<FileMCPDetectionMessage>();
-        let is_tui = settings::settings_mode() == settings::SettingsMode::Tui;
+        let settings_mode = settings::settings_mode();
 
         ctx.spawn_stream_local(
             file_mcp_rx,
@@ -149,32 +149,24 @@ impl FileMCPWatcher {
             |_, _| {},
         );
 
-        if !is_tui {
-            // TODO: Extend TUI discovery to project and third-party provider
-            // configs in a later phase.
-            ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), {
-                let file_mcp_tx = file_mcp_tx.clone();
-                move |me, _, event, ctx| {
-                    let DetectedRepositoriesEvent::DetectedGitRepo { repository, source } = event;
-                    if matches!(
-                        source,
-                        RepoDetectionSource::TerminalNavigation
-                            | RepoDetectionSource::CloudEnvironmentPrep
-                    ) {
-                        let repo_path = repository.as_ref(ctx).root_dir().to_local_path_lossy();
-                        if matches!(source, RepoDetectionSource::CloudEnvironmentPrep) {
-                            let count =
-                                providers_in_scope(repo_path.clone(), repo_path.clone()).count();
-                            me.cloud_env_pending.insert(repo_path.clone(), count);
-                        }
-                        me.register_repo_for_file_mcp_watching(repo_path, ctx, file_mcp_tx.clone());
+        ctx.subscribe_to_model(&DetectedRepositories::handle(ctx), {
+            let file_mcp_tx = file_mcp_tx.clone();
+            move |me, _, event, ctx| {
+                let DetectedRepositoriesEvent::DetectedGitRepo { repository, source } = event;
+                if should_watch_repository(*source, settings_mode) {
+                    let repo_path = repository.as_ref(ctx).root_dir().to_local_path_lossy();
+                    if matches!(source, RepoDetectionSource::CloudEnvironmentPrep) {
+                        let count =
+                            providers_in_scope(repo_path.clone(), repo_path.clone()).count();
+                        me.cloud_env_pending.insert(repo_path.clone(), count);
                     }
+                    me.register_repo_for_file_mcp_watching(repo_path, ctx, file_mcp_tx.clone());
                 }
-            });
-            ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _, event, ctx| {
-                me.handle_home_directory_watcher_event(event, ctx);
-            });
-        }
+            }
+        });
+        ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _, event, ctx| {
+            me.handle_home_directory_watcher_event(event, ctx);
+        });
         ctx.subscribe_to_model(
             &WarpManagedPathsWatcher::handle(ctx),
             |me, _, event, ctx| {
@@ -192,35 +184,33 @@ impl FileMCPWatcher {
             ));
         }
 
-        if !is_tui {
-            if let Some(home_dir) = dirs::home_dir() {
-                for provider in MCPProvider::iter() {
-                    if provider == MCPProvider::Warp {
-                        continue;
+        if let Some(home_dir) = dirs::home_dir() {
+            for provider in MCPProvider::iter() {
+                if provider == MCPProvider::Warp {
+                    continue;
+                }
+                match home_subdir_to_watch(provider) {
+                    None => {
+                        // Initial scan of config files for providers whose config lives directly in
+                        // home (i.e. ~/.claude.json). HomeDirectoryWatcher handles incremental updates.
+                        let Some(config_path) = home_config_file_path(provider) else {
+                            continue;
+                        };
+                        initial_config_parses.push((config_path, home_dir.clone(), provider));
                     }
-                    match home_subdir_to_watch(provider) {
-                        None => {
-                            // Initial scan of config files for providers whose config lives directly in
-                            // home (i.e. ~/.claude.json). HomeDirectoryWatcher handles incremental updates.
-                            let Some(config_path) = home_config_file_path(provider) else {
-                                continue;
-                            };
-                            initial_config_parses.push((config_path, home_dir.clone(), provider));
-                        }
-                        Some(subdir) => {
-                            // For providers whose home config lives in a subdir (e.g. ~/.codex for Codex)
-                            // start watching the subdir for file-based MCP servers, if it exists.
-                            let subdir_path = home_dir.join(&subdir);
-                            // Note: this will fail if the subdir doesn't exist yet.
-                            // We register upon creation of the subdir via HomeDirectoryWatcher.
-                            Self::watch_home_provider_dir(
-                                &subdir_path,
-                                home_dir.clone(),
-                                file_mcp_tx.clone(),
-                                &mut home_provider_watchers,
-                                ctx,
-                            );
-                        }
+                    Some(subdir) => {
+                        // For providers whose home config lives in a subdir (e.g. ~/.codex for Codex)
+                        // start watching the subdir for file-based MCP servers, if it exists.
+                        let subdir_path = home_dir.join(&subdir);
+                        // Note: this will fail if the subdir doesn't exist yet.
+                        // We register upon creation of the subdir via HomeDirectoryWatcher.
+                        Self::watch_home_provider_dir(
+                            &subdir_path,
+                            home_dir.clone(),
+                            file_mcp_tx.clone(),
+                            &mut home_provider_watchers,
+                            ctx,
+                        );
                     }
                 }
             }
@@ -520,10 +510,7 @@ impl FileMCPWatcher {
         let mut configs_to_update = Vec::new();
 
         for (provider, config_path) in providers_in_scope(root_path.clone(), watched_dir.clone()) {
-            let was_deleted = update.deleted.iter().any(|f| f.path == config_path)
-                || update.moved.values().any(|f| f.path == config_path);
-            let was_added = update.added_or_modified().any(|f| f.path == config_path)
-                || update.moved.keys().any(|f| f.path == config_path);
+            let (was_deleted, was_added) = config_change_flags(&update, &config_path);
             configs_to_update.push((provider, config_path, was_deleted, was_added));
         }
 
@@ -608,6 +595,36 @@ impl FileMCPWatcher {
     }
 }
 
+fn should_watch_repository(
+    source: RepoDetectionSource,
+    settings_mode: settings::SettingsMode,
+) -> bool {
+    match settings_mode {
+        settings::SettingsMode::Gui => match source {
+            RepoDetectionSource::TerminalNavigation | RepoDetectionSource::CloudEnvironmentPrep => {
+                true
+            }
+            RepoDetectionSource::ProjectRulesIndexing
+            | RepoDetectionSource::CodeReviewInitialization => false,
+        },
+        settings::SettingsMode::Tui => match source {
+            RepoDetectionSource::TerminalNavigation => true,
+            RepoDetectionSource::ProjectRulesIndexing
+            | RepoDetectionSource::CodeReviewInitialization
+            | RepoDetectionSource::CloudEnvironmentPrep => false,
+        },
+    }
+}
+
+fn config_change_flags(update: &RepositoryUpdate, config_path: &Path) -> (bool, bool) {
+    let was_deleted = update.deleted.iter().any(|file| file.path == config_path)
+        || update.moved.values().any(|file| file.path == config_path);
+    let was_added = update
+        .added_or_modified()
+        .any(|file| file.path == config_path)
+        || update.moved.keys().any(|file| file.path == config_path);
+    (was_deleted, was_added)
+}
 /// Returns an iterator of `(provider, config_path)` pairs for MCP providers whose configuration file
 /// paths fall within the watched directory.
 fn providers_in_scope(

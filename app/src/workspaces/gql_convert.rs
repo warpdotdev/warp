@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use warp_errors::report_error;
 use warp_graphql::billing::{
@@ -12,6 +12,7 @@ use warp_graphql::billing::{
     EnterpriseCreditsAutoReloadPolicy as GqlEnterpriseCreditsAutoReloadPolicy,
     EnterprisePayAsYouGoPolicy as GqlEnterprisePayAsYouGoPolicy, InstanceShape as GqlInstanceShape,
     ManagedByokByoePolicy as GqlManagedByokByoePolicy, MultiAdminPolicy as GqlMultiAdminPolicy,
+    NativeWorkspacesPolicy as GqlNativeWorkspacesPolicy,
     PurchaseAddOnCreditsPolicy as GqlPurchaseAddOnCreditsPolicy, ServiceAgreementType,
     SessionSharingPolicy as GqlSessionSharingPolicy,
     SharedNotebooksPolicy as GqlSharedNotebooksPolicy,
@@ -76,7 +77,8 @@ use crate::settings::AgentModeCommandExecutionPredicate;
 use crate::workspaces::workspace::{
     AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, ByoEndpointPolicy, CodebaseContextPolicy,
     EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy, ManagedByokByoePolicy,
-    MultiAdminPolicy, PurchaseAddOnCreditsPolicy, UsageBasedPricingSettings,
+    MultiAdminPolicy, NativeWorkspacesPolicy, PurchaseAddOnCreditsPolicy,
+    UsageBasedPricingSettings,
 };
 
 pub const PLACEHOLDER_WORKSPACE_UID: &str = "NOT_A_REAL_WORKSPACE_UID";
@@ -89,6 +91,14 @@ impl From<GqlTeamMember> for TeamMember {
             role: gql_team_member.role.into(),
         }
     }
+}
+
+fn order_authenticated_teams_first(workspace: &mut Workspace, user_uid: UserUid) {
+    let (member_teams, non_member_teams): (Vec<_>, Vec<_>) = workspace
+        .teams
+        .drain(..)
+        .partition(|team| team.members.iter().any(|member| member.uid == user_uid));
+    workspace.teams = member_teams.into_iter().chain(non_member_teams).collect();
 }
 
 impl From<GqlManagedByokByoePolicy> for ManagedByokByoePolicy {
@@ -468,6 +478,8 @@ impl From<GqlPurchaseAddOnCreditsPolicy> for PurchaseAddOnCreditsPolicy {
     ) -> PurchaseAddOnCreditsPolicy {
         Self {
             enabled: gql_purchase_add_on_credits_policy.enabled,
+            premium_enabled: gql_purchase_add_on_credits_policy.premium_enabled,
+            price_premium_bps: gql_purchase_add_on_credits_policy.price_premium_bps,
         }
     }
 }
@@ -490,6 +502,14 @@ impl From<GqlEnterpriseCreditsAutoReloadPolicy> for EnterpriseCreditsAutoReloadP
 
 impl From<GqlMultiAdminPolicy> for MultiAdminPolicy {
     fn from(gql_policy: GqlMultiAdminPolicy) -> MultiAdminPolicy {
+        Self {
+            enabled: gql_policy.enabled,
+        }
+    }
+}
+
+impl From<GqlNativeWorkspacesPolicy> for NativeWorkspacesPolicy {
+    fn from(gql_policy: GqlNativeWorkspacesPolicy) -> NativeWorkspacesPolicy {
         Self {
             enabled: gql_policy.enabled,
         }
@@ -621,6 +641,7 @@ impl From<GqlTier> for Tier {
                 .enterprise_credits_auto_reload_policy
                 .map(From::from),
             multi_admin_policy: gql_tier.multi_admin_policy.map(From::from),
+            native_workspaces_policy: gql_tier.native_workspaces_policy.map(From::from),
             ambient_agents_policy: gql_tier.ambient_agents_policy.map(From::from),
             usage_visibility_policy: gql_tier.usage_visibility_policy.map(From::from),
         }
@@ -1017,6 +1038,7 @@ impl Team {
             // rolling out workspaces.
             uid: ServerId::from_string_lossy(gql_team.uid.inner()),
             name: gql_team.name.clone(),
+            color: gql_team.color.clone(),
             members: gql_team
                 .members
                 .clone()
@@ -1116,6 +1138,7 @@ impl From<GqlWorkspace> for Workspace {
 
 impl From<GqlUser> for WorkspacesMetadataResponse {
     fn from(gql_user: GqlUser) -> WorkspacesMetadataResponse {
+        let user_uid = UserUid::new(&gql_user.profile.uid);
         let feature_model_choices = gql_user
             .workspaces
             .first()
@@ -1130,7 +1153,14 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
                 // a workspace, and the server no longer returns a placeholder workspace.
                 gql_workspace.uid != PLACEHOLDER_WORKSPACE_UID.into()
             })
-            .map(|gql_workspace| gql_workspace.into())
+            .map(|gql_workspace| {
+                let mut workspace = gql_workspace.into();
+                // TODO(isaiah): this is a temporary measure while the client doesn't support many teams per user.
+                // Workspace admins technically have access to every team in their workspace, but when they're on the
+                // client, they should only see the 1 team they're formally a part of.
+                order_authenticated_teams_first(&mut workspace, user_uid);
+                workspace
+            })
             .collect();
 
         let joinable_teams = gql_user
@@ -1144,15 +1174,31 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
             .experiments
             .and_then(|experiments| convert_to_server_experiment!(experiments));
 
+        // A teamless user's only workspace is the placeholder filtered out
+        // above, so the user-level policy is the only place their add-on
+        // credits purchase policy — gating and premium pricing alike —
+        // survives (see
+        // [`crate::workspaces::user_workspaces::UserWorkspaces::purchase_policy`]).
+        let user_purchase_policy = gql_user
+            .billing_metadata
+            .and_then(|billing_metadata| billing_metadata.tier.purchase_add_on_credits_policy)
+            .map(Into::into);
+
         // TODO(skambashi) refactor to return back workspaces, and not teams
         WorkspacesMetadataResponse {
             workspaces,
             joinable_teams,
             experiments,
             feature_model_choices,
+            ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
+            user_purchase_policy,
         }
     }
 }
+
+#[cfg(test)]
+#[path = "gql_convert_tests.rs"]
+mod tests;
 
 pub fn object_update_message_from_gql(value: WarpDriveUpdate) -> Result<ObjectUpdateMessage> {
     match value {

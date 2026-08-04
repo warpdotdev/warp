@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use ratatui::buffer::CellWidth;
 
-use super::super::{TuiBuffer, TuiGridPoint};
+use super::super::{TuiBuffer, TuiGridPoint, TuiStyle};
 
 /// A half-open linear span in selectable content.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -18,6 +18,7 @@ pub struct TuiRowGlyph {
     pub end_col: u16,
     pub byte_range: Range<usize>,
     pub text: String,
+    pub style: TuiStyle,
 }
 
 /// Builds rendered glyphs for one buffer row.
@@ -39,11 +40,22 @@ pub(crate) fn row_glyphs(buffer: &TuiBuffer, row: u16, width: u16) -> Vec<TuiRow
             end_col,
             byte_range: byte_offset..byte_end,
             text,
+            style: cell.style(),
         });
         byte_offset = byte_end;
         col = end_col;
     }
     glyphs
+}
+
+/// Removes whitespace-only glyphs from the end of one rendered row.
+pub(crate) fn trim_trailing_whitespace(glyphs: &mut Vec<TuiRowGlyph>) {
+    while glyphs
+        .last()
+        .is_some_and(|glyph| glyph.text.chars().all(char::is_whitespace))
+    {
+        glyphs.pop();
+    }
 }
 
 /// Returns the character cell span at `point`.

@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rmcp::model::{ErrorCode, ErrorData, Resource, ServerCapabilities, Tool};
 

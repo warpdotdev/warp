@@ -1,9 +1,15 @@
-use warp::tui_export::register_tui_session_view_test_singletons;
-use warpui::platform::WindowStyle;
-use warpui::{AddWindowOptions, UpdateModel};
-use warpui_core::{App, TuiView as _, WindowId};
+use std::cell::RefCell;
+use std::rc::Rc;
 
-use super::RootTuiView;
+use anyhow::Result;
+use warp::tui_export::register_tui_session_view_test_singletons;
+use warp::{TuiLoginModel, TuiLoginPhase};
+use warpui::platform::WindowStyle;
+use warpui::{AddWindowOptions, SingletonEntity, UpdateModel};
+use warpui_core::{App, TuiView as _, TypedActionView as _, WindowId};
+
+use super::{RootTuiAction, RootTuiView};
+use crate::cloud_run::TuiCloudRunState;
 use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_session};
 
@@ -17,6 +23,148 @@ fn add_root(app: &mut App) -> (WindowId, warpui_core::ViewHandle<RootTuiView>) {
             |_| RootTuiView::new(),
         )
     })
+}
+#[test]
+fn start_device_login_action_retries_from_failure() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        app.add_singleton_model(|_| {
+            TuiLoginModel::failed_for_test("Failed to generate device code")
+        });
+        let (_, root) = add_root(&mut app);
+
+        root.update(&mut app, |root, ctx| {
+            root.login_copy_hint.show_success(
+                "Login URL copied to clipboard".to_owned(),
+                ctx,
+                |view| &mut view.login_copy_hint,
+            );
+            root.handle_action(&RootTuiAction::StartDeviceLogin, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(matches!(
+                TuiLoginModel::as_ref(ctx).phase(),
+                TuiLoginPhase::AwaitingLogin { browser_url: None }
+            ));
+            assert!(!root.as_ref(ctx).copy_login_url_when_available);
+            assert!(root.as_ref(ctx).login_copy_hint.current().is_none());
+        });
+    });
+}
+#[test]
+fn pending_copy_clears_on_failure_before_url_generation() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        app.add_singleton_model(|_| {
+            TuiLoginModel::failed_for_test("Failed to generate device code")
+        });
+        let (_, root) = add_root(&mut app);
+
+        root.update(&mut app, |root, ctx| {
+            root.copy_login_url_when_available = true;
+            root.handle_login_phase_changed(ctx, |_| -> Result<()> {
+                panic!("failure has no URL to copy")
+            });
+        });
+        app.read(|ctx| {
+            assert!(!root.as_ref(ctx).copy_login_url_when_available);
+        });
+    });
+}
+
+#[test]
+fn start_and_copy_action_waits_for_generated_url() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        app.add_singleton_model(|_| TuiLoginModel::signed_out_for_test());
+        let (_, root) = add_root(&mut app);
+
+        root.update(&mut app, |root, ctx| {
+            root.handle_action(&RootTuiAction::StartDeviceLoginAndCopyUrl, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(matches!(
+                TuiLoginModel::as_ref(ctx).phase(),
+                TuiLoginPhase::AwaitingLogin { browser_url: None }
+            ));
+            assert!(root.as_ref(ctx).copy_login_url_when_available);
+        });
+    });
+}
+
+#[test]
+fn pending_copy_consumes_exact_generated_url_once() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        let browser_url =
+            "https://app.warp.dev/device?user_code=ABCD-EFGH&source=warp-agent-cli".to_owned();
+        app.add_singleton_model({
+            let browser_url = browser_url.clone();
+            move |_| TuiLoginModel::awaiting_login_for_test(Some(browser_url))
+        });
+        let (_, root) = add_root(&mut app);
+        let copied = Rc::new(RefCell::new(None));
+        let copied_for_action = copied.clone();
+
+        root.update(&mut app, |root, ctx| {
+            root.copy_login_url_when_available = true;
+            root.handle_login_phase_changed(ctx, move |url| {
+                copied_for_action.replace(Some(url.to_owned()));
+                Ok(())
+            });
+        });
+
+        assert_eq!(copied.borrow().as_deref(), Some(browser_url.as_str()));
+        app.read(|ctx| {
+            assert!(!root.as_ref(ctx).copy_login_url_when_available);
+        });
+        root.update(&mut app, |root, ctx| {
+            root.handle_login_phase_changed(ctx, |_| -> Result<()> {
+                panic!("generated URL must only be copied once")
+            });
+        });
+    });
+}
+
+#[test]
+fn pending_copy_waits_without_url() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        app.add_singleton_model(|_| TuiLoginModel::awaiting_login_for_test(None));
+        let (_, root) = add_root(&mut app);
+
+        root.update(&mut app, |root, ctx| {
+            root.copy_login_url_when_available = true;
+            root.handle_login_phase_changed(ctx, |_| -> Result<()> {
+                panic!("copy must wait until an exact URL exists")
+            });
+        });
+        app.read(|ctx| {
+            assert!(root.as_ref(ctx).copy_login_url_when_available);
+        });
+    });
+}
+
+#[test]
+fn start_device_login_action_transitions_from_welcome() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        app.add_singleton_model(|_| TuiLoginModel::signed_out_for_test());
+        let (_, root) = add_root(&mut app);
+
+        root.update(&mut app, |root, ctx| {
+            root.handle_action(&RootTuiAction::StartDeviceLogin, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(matches!(
+                TuiLoginModel::as_ref(ctx).phase(),
+                TuiLoginPhase::AwaitingLogin { browser_url: None }
+            ));
+        });
+    });
 }
 
 #[test]
@@ -77,6 +225,23 @@ fn root_projects_only_the_focused_retained_session_view() {
             assert_eq!(root.as_ref(ctx).child_view_ids(ctx), vec![first_view_id]);
             assert!(ctx.check_view_or_child_focused(window_id, &first_view_id));
             assert_eq!(ctx.focused_view_id(window_id), focused_window_view);
+        });
+
+        let cloud_state = app.add_model(|_| TuiCloudRunState::new());
+        let (cloud_id, cloud_view) = app.update(|ctx| {
+            TuiSessions::create_cloud_run_session(&sessions, window_id, cloud_state, false, ctx)
+        });
+        app.update_model(&sessions, |sessions, ctx| {
+            sessions.focus_session(cloud_id, ctx);
+        });
+        app.read(|ctx| {
+            assert_eq!(root.as_ref(ctx).child_view_ids(ctx), vec![cloud_view.id()]);
+            assert!(ctx.check_view_or_child_focused(window_id, &cloud_view.id()));
+        });
+        root.update(&mut app, |root, ctx| root.show_auth(ctx));
+        app.read(|ctx| {
+            assert!(root.as_ref(ctx).child_view_ids(ctx).is_empty());
+            assert!(ctx.check_view_or_child_focused(window_id, &root.id()));
         });
     });
 }

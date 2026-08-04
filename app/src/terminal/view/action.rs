@@ -9,10 +9,10 @@ use pathfinder_geometry::vector::Vector2F;
 use session_sharing_protocol::common::Role;
 use session_sharing_protocol::sharer::RoleUpdateReason;
 use warp_util::user_input::UserInput;
+use warpui::EntityId;
 use warpui::elements::HyperlinkUrl;
 use warpui::event::ModifiersState;
 use warpui::units::Lines;
-use warpui::EntityId;
 
 use super::inline_banner::{
     AnonymousUserLoginBannerAction, AwsBedrockLoginBannerAction, AwsCliNotInstalledBannerAction,
@@ -23,8 +23,8 @@ use super::{
     NotificationsDiscoveryBannerAction, NotificationsErrorBannerAction, RichContentLink,
     TerminalEditor,
 };
-use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::codebase_index_speedbump_banner::CodebaseIndexSpeedbumpBannerAction;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
@@ -35,16 +35,16 @@ use crate::terminal::block_list_element::{
     BlockHoverAction, BlockListMenuSource, BlockSelectAction, BlockTextSelectAction,
 };
 use crate::terminal::block_list_viewport::OverhangingBlock;
+use crate::terminal::model::SecretHandle;
 use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::mouse::MouseState;
 use crate::terminal::model::selection::{SelectAction, SelectionDirection};
 use crate::terminal::model::terminal_model::{BlockIndex, WithinModel};
-use crate::terminal::model::SecretHandle;
 use crate::terminal::shared_session::SharedSessionActionSource;
+use crate::terminal::view::RichContentSecretTooltipInfo;
 use crate::terminal::view::inline_banner::AgentModeSetupSpeedbumpBannerAction;
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
-use crate::terminal::view::RichContentSecretTooltipInfo;
 use crate::workflows::workflow::Workflow;
 
 /// Version of the agent onboarding flow (non-legacy).

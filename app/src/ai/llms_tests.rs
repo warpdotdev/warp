@@ -6,8 +6,8 @@ use warpui::App;
 use super::*;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::TemplatableMCPServerManager;
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -17,7 +17,7 @@ use crate::terminal::input::models::query_model_picker_choices;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::LaunchMode;
+use crate::{LaunchMode, TuiEntryPoint};
 
 // -- DisableReason::should_clear_preference tests --
 
@@ -180,6 +180,112 @@ fn host_icon_visibility_requires_enabled_credentials_and_model_host() {
     ));
 }
 
+#[test]
+fn auto_models_show_the_agent_glyph_instead_of_a_host_logo() {
+    // The server reports host availability for auto models from host-level org
+    // settings, without checking whether the auto variant's routing table can
+    // actually reach that host. Badging the row with a host logo would promise a
+    // destination the classifier may never pick, so auto models stay generic.
+    let llm = server_llm("auto-open", None);
+
+    for flags in [
+        ModelIconFlags {
+            is_auto: true,
+            is_using_bedrock: true,
+            ..Default::default()
+        },
+        ModelIconFlags {
+            is_auto: true,
+            is_using_gemini_enterprise: true,
+            ..Default::default()
+        },
+        ModelIconFlags {
+            is_auto: true,
+            is_using_bedrock: true,
+            is_using_gemini_enterprise: true,
+            ..Default::default()
+        },
+    ] {
+        assert_eq!(model_leading_icon(&llm, flags), Icon::Agent);
+    }
+}
+
+#[test]
+fn non_auto_models_keep_their_host_logo() {
+    let llm = server_llm("claude-test", None);
+
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_bedrock: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Aws
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_gemini_enterprise: true,
+                ..Default::default()
+            }
+        ),
+        Icon::GeminiEnterpriseAgentPlatform
+    );
+    // Bedrock wins when both hosts are available, matching the server's
+    // AWS_BEDROCK -> GEMINI_ENTERPRISE fallback priority.
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_bedrock: true,
+                is_using_gemini_enterprise: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Aws
+    );
+}
+
+#[test]
+fn custom_routers_keep_the_dataflow_icon() {
+    // `is_auto` is a name/id substring match, so a router called "Auto Router"
+    // trips it. The custom-router branch is checked first so those rows keep
+    // their own icon.
+    let llm = server_llm("Auto Router", None);
+
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_custom_router: true,
+                is_auto: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Dataflow
+    );
+}
+
+#[test]
+fn models_without_a_host_fall_back_to_the_provider_icon() {
+    let mut llm = server_llm("gpt-test", None);
+    llm.provider = LLMProvider::OpenAI;
+    assert_eq!(
+        model_leading_icon(&llm, ModelIconFlags::default()),
+        Icon::OpenAILogo
+    );
+
+    // Providers with no logo of their own land on the agent glyph.
+    llm.provider = LLMProvider::Unknown;
+    assert_eq!(
+        model_leading_icon(&llm, ModelIconFlags::default()),
+        Icon::Agent
+    );
+}
+
 // -- build_custom_llm_infos / display label tests --
 
 fn endpoint(
@@ -192,6 +298,7 @@ fn endpoint(
         name: name.into(),
         url: url.into(),
         api_key: api_key.into(),
+        schema: Default::default(),
         models,
     }
 }
@@ -284,6 +391,7 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
     };
     let preferences = LLMPreferences {
         models_by_feature: ModelsByFeature::default(),
+        agent_mode_models_unavailable: false,
         last_update: None,
         base_llm_for_terminal_view: HashMap::new(),
         custom_llms: build_custom_llm_infos(&keys),
@@ -426,6 +534,7 @@ fn is_cloud_runnable_oz_model_id_classifies_ids() {
     };
     let preferences = LLMPreferences {
         models_by_feature: ModelsByFeature::default(),
+        agent_mode_models_unavailable: false,
         last_update: None,
         base_llm_for_terminal_view: HashMap::new(),
         custom_llms: build_custom_llm_infos(&keys),
@@ -433,8 +542,10 @@ fn is_cloud_runnable_oz_model_id_classifies_ids() {
     };
 
     // Custom-endpoint (BYOK) UUID id — not cloud-runnable.
-    assert!(!preferences
-        .is_cloud_runnable_oz_model_id(&LLMId::from("52941f14-1b74-4afa-8f02-cdd5243b5aa9")));
+    assert!(
+        !preferences
+            .is_cloud_runnable_oz_model_id(&LLMId::from("52941f14-1b74-4afa-8f02-cdd5243b5aa9"))
+    );
     // Local custom router — not cloud-runnable.
     assert!(
         !preferences.is_cloud_runnable_oz_model_id(&LLMId::from("custom-router:local:my-router"))
@@ -524,14 +635,17 @@ fn active_models_fall_back_to_usable_choice_or_custom_endpoint_when_default_disa
         let custom_model_id = LLMId::from("custom-config-key");
         ApiKeyManager::handle(&app).update(&mut app, |api_key_manager, ctx| {
             api_key_manager.add_custom_endpoint(
-                "local".to_string(),
-                "https://example.com/v1".to_string(),
-                "test-key".to_string(),
-                vec![(
-                    "custom-model".to_string(),
-                    None,
-                    Some(custom_model_id.to_string()),
-                )],
+                ai::api_keys::CustomEndpointParams {
+                    name: "local".to_string(),
+                    url: "https://example.com/v1".to_string(),
+                    api_key: "test-key".to_string(),
+                    models: vec![(
+                        "custom-model".to_string(),
+                        None,
+                        Some(custom_model_id.to_string()),
+                    )],
+                    schema: ai::api_keys::CustomEndpointSchema::default(),
+                },
                 ctx,
             );
         });
@@ -607,6 +721,7 @@ fn with_model_picker_query_test_context(f: impl FnOnce(&LLMPreferences, &AppCont
                     agent_mode,
                     ..Default::default()
                 },
+                agent_mode_models_unavailable: false,
                 last_update: None,
                 base_llm_for_terminal_view: HashMap::new(),
                 custom_llms: Vec::new(),
@@ -692,14 +807,17 @@ fn reconcile_preserves_custom_models_saved_on_execution_profile() {
         let custom_model_id = LLMId::from("custom-model-config-key");
         ApiKeyManager::handle(&app).update(&mut app, |api_key_manager, ctx| {
             api_key_manager.add_custom_endpoint(
-                "local".to_string(),
-                "https://example.com/v1".to_string(),
-                "test-key".to_string(),
-                vec![(
-                    "custom-model".to_string(),
-                    Some("Custom Model".to_string()),
-                    Some(custom_model_id.to_string()),
-                )],
+                ai::api_keys::CustomEndpointParams {
+                    name: "local".to_string(),
+                    url: "https://example.com/v1".to_string(),
+                    api_key: "test-key".to_string(),
+                    models: vec![(
+                        "custom-model".to_string(),
+                        Some("Custom Model".to_string()),
+                        Some(custom_model_id.to_string()),
+                    )],
+                    schema: ai::api_keys::CustomEndpointSchema::default(),
+                },
                 ctx,
             );
         });
@@ -707,9 +825,9 @@ fn reconcile_preserves_custom_models_saved_on_execution_profile() {
         let default_profile_id =
             profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
         profiles_model.update(&mut app, |profiles, ctx| {
-            profiles.set_base_model(default_profile_id, Some(custom_model_id.clone()), ctx);
-            profiles.set_coding_model(default_profile_id, Some(custom_model_id.clone()), ctx);
-            profiles.set_cli_agent_model(default_profile_id, Some(custom_model_id.clone()), ctx);
+            profiles.set_base_model(&default_profile_id, Some(custom_model_id.clone()), ctx);
+            profiles.set_coding_model(&default_profile_id, Some(custom_model_id.clone()), ctx);
+            profiles.set_cli_agent_model(&default_profile_id, Some(custom_model_id.clone()), ctx);
         });
 
         llm_preferences.update(&mut app, |preferences, ctx| {
@@ -773,22 +891,22 @@ fn reconcile_preserves_custom_endpoint_models_not_configured_locally() {
         let preserved_context_window_limit: u32 = 200_000;
         profiles_model.update(&mut app, |profiles, ctx| {
             profiles.set_base_model(
-                default_profile_id,
+                &default_profile_id,
                 Some(remote_custom_model_id.clone()),
                 ctx,
             );
             profiles.set_coding_model(
-                default_profile_id,
+                &default_profile_id,
                 Some(remote_custom_model_id.clone()),
                 ctx,
             );
             profiles.set_cli_agent_model(
-                default_profile_id,
+                &default_profile_id,
                 Some(remote_custom_model_id.clone()),
                 ctx,
             );
             profiles.set_context_window_limit(
-                default_profile_id,
+                &default_profile_id,
                 Some(preserved_context_window_limit),
                 ctx,
             );
@@ -827,7 +945,74 @@ fn reconcile_preserves_custom_endpoint_models_not_configured_locally() {
     });
 }
 
-// -- tui_agent_model_info tests --
+#[test]
+fn reconcile_preserves_custom_router_models_not_configured_locally() {
+    // Regression test for QUALITY-1308: a profile whose model was set to a local
+    // custom router on device A should NOT be reset when device B syncs that profile
+    // but does not have the corresponding router configured locally.
+    //
+    // Before the fix, `reconcile_stale_custom_router_selection` called
+    // `set_base_model(None)` / `set_coding_model(None)` for any
+    // `custom-router:local:…` id absent from the loaded registry, causing the
+    // preference to be cleared and synced back — wiping device A's setting.
+    //
+    // The fix: profile (persisted/synced) preferences are never cleared for
+    // unrecognized local router ids. The display fallback already handles
+    // rendering the default model when the router cannot be resolved locally.
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+
+        let profiles_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        // Simulate a local custom-router id from another device.
+        // This device (device B) has NO local routers configured in its registry.
+        let remote_router_id = LLMId::from("custom-router:local:my-special-router");
+
+        let default_profile_id =
+            profiles_model.read(&app, |profiles, _| profiles.default_profile_id());
+        profiles_model.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(&default_profile_id, Some(remote_router_id.clone()), ctx);
+            profiles.set_coding_model(&default_profile_id, Some(remote_router_id.clone()), ctx);
+        });
+
+        // Call reconcile_stale_custom_router_selection directly.
+        // self.custom_model_routers is empty (device B has no local routers),
+        // so valid_local = {} and the old code would have cleared both fields.
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.reconcile_stale_custom_router_selection(ctx);
+        });
+
+        // The model IDs must be PRESERVED — no profile clear should be synced back.
+        profiles_model.read(&app, |profiles, ctx| {
+            let profile = profiles.default_profile(ctx);
+            assert_eq!(
+                profile.data().base_model.as_ref(),
+                Some(&remote_router_id),
+                "base_model must be preserved for unknown custom-router:local:* IDs (cross-device sync)"
+            );
+            assert_eq!(
+                profile.data().coding_model.as_ref(),
+                Some(&remote_router_id),
+                "coding_model must be preserved for unknown custom-router:local:* IDs (cross-device sync)"
+            );
+        });
+    });
+}
+
+// -- execution-profile model selection tests --
 
 fn agent_llm(id: &str, display_name: &str) -> LLMInfo {
     LLMInfo {
@@ -852,7 +1037,7 @@ fn agent_llm(id: &str, display_name: &str) -> LLMInfo {
 
 /// Preferences whose agent-mode models are a server-style list with an
 /// `"auto"` default plus one concrete model.
-fn preferences_for_tui_tests() -> LLMPreferences {
+fn preferences_for_profile_model_tests() -> LLMPreferences {
     let agent_mode = AvailableLLMs::new(
         "auto".into(),
         vec![
@@ -867,31 +1052,12 @@ fn preferences_for_tui_tests() -> LLMPreferences {
             agent_mode,
             ..Default::default()
         },
+        agent_mode_models_unavailable: false,
         last_update: None,
         base_llm_for_terminal_view: HashMap::new(),
         custom_llms: Vec::new(),
         custom_model_routers: Vec::new(),
     }
-}
-
-/// Runs `f` against a test app with the singletons the shared model
-/// resolution path (`model_info_for_id`) consults for custom-endpoint gating.
-fn tui_agent_model_test(f: impl FnOnce(&LLMPreferences, &AppContext) + 'static) {
-    App::test((), |app| async move {
-        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
-        app.add_singleton_model(UserWorkspaces::default_mock);
-        app.read(|app_ctx| f(&preferences_for_tui_tests(), app_ctx));
-    });
-}
-
-#[test]
-fn tui_agent_model_auto_resolves_to_the_default_model() {
-    tui_agent_model_test(|preferences, app| {
-        assert_eq!(
-            preferences.tui_agent_model_info("auto", app).id.as_str(),
-            "auto"
-        );
-    });
 }
 
 #[test]
@@ -927,33 +1093,66 @@ fn shared_model_picker_query_orders_filters_and_marks_disabled_choices() {
 }
 
 #[test]
-fn tui_agent_model_known_id_resolves_to_that_model() {
-    tui_agent_model_test(|preferences, app| {
-        let info = preferences.tui_agent_model_info("claude-opus", app);
-        assert_eq!(info.id.as_str(), "claude-opus");
-        assert_eq!(info.display_name, "Opus");
-    });
-}
-
-#[test]
-fn tui_surface_override_precedes_file_backed_default() {
-    App::test((), |app| async move {
+fn updating_active_profile_base_model_persists_and_updates_resolution() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
         app.add_singleton_model(UserWorkspaces::default_mock);
-        app.read(|app_ctx| {
-            let surface_id = EntityId::new();
-            let mut preferences = preferences_for_tui_tests();
-            preferences
-                .base_llm_for_terminal_view
-                .insert(surface_id, LLMId::from("auto"));
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+        let profiles = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(
+                &LaunchMode::Tui {
+                    entrypoint: TuiEntryPoint::Interactive {
+                        mount: Box::new(|_| {}),
+                        api_key: None,
+                    },
+                },
+                ctx,
+            )
+        });
+        let preferences = app.add_singleton_model(|_| preferences_for_profile_model_tests());
+        let surface_id = EntityId::new();
+        let profile_id = profiles.read(&app, |profiles, ctx| {
+            profiles.active_profile(Some(surface_id), ctx).id().clone()
+        });
+        profiles.update(&mut app, |profiles, ctx| {
+            profiles.set_context_window_limit(&profile_id, Some(123), ctx);
+        });
 
-            let info = preferences.get_preferred_base_model_for_settings_mode(
-                settings::SettingsMode::Tui,
-                app_ctx,
+        let persisted = preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_active_profile_base_model(
+                &LLMId::from("claude-opus"),
                 Some(surface_id),
-            );
+                ctx,
+            )
+        });
 
-            assert_eq!(info.id.as_str(), "auto");
+        assert!(persisted);
+        profiles.read(&app, |profiles, ctx| {
+            let profile = profiles
+                .get_profile_by_id(&profile_id, ctx)
+                .expect("active profile should exist");
+            assert_eq!(
+                profile.data().base_model.as_ref().map(LLMId::as_str),
+                Some("claude-opus")
+            );
+            assert_eq!(profile.data().context_window_limit, None);
+        });
+        preferences.read(&app, |preferences, ctx| {
+            assert_eq!(
+                preferences
+                    .get_active_base_model(ctx, Some(surface_id))
+                    .id
+                    .as_str(),
+                "claude-opus"
+            );
         });
     });
 }
@@ -975,7 +1174,7 @@ fn explicit_child_model_pin_preserves_gui_behavior_and_only_emits_for_effective_
         let profiles = app.add_singleton_model(|ctx| {
             AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
         });
-        let preferences = app.add_singleton_model(|_| preferences_for_tui_tests());
+        let preferences = app.add_singleton_model(|_| preferences_for_profile_model_tests());
         let active_model_events = Rc::new(Cell::new(0));
         let captured_events = active_model_events.clone();
         app.update(|ctx| {
@@ -1009,8 +1208,8 @@ fn explicit_child_model_pin_preserves_gui_behavior_and_only_emits_for_effective_
         });
 
         profiles.update(&mut app, |profiles, ctx| {
-            let profile_id = *profiles.active_profile(Some(surface_id), ctx).id();
-            profiles.set_base_model(profile_id, Some(LLMId::from("claude-opus")), ctx);
+            let profile_id = profiles.active_profile(Some(surface_id), ctx).id().clone();
+            profiles.set_base_model(&profile_id, Some(LLMId::from("claude-opus")), ctx);
         });
         preferences.read(&app, |preferences, ctx| {
             assert_eq!(
@@ -1030,18 +1229,5 @@ fn explicit_child_model_pin_preserves_gui_behavior_and_only_emits_for_effective_
             preferences.set_agent_mode_llm_override(surface_id, LLMId::from("claude-opus"), ctx);
         });
         assert_eq!(active_model_events.get(), 1);
-    });
-}
-
-#[test]
-fn tui_agent_model_unknown_id_falls_back_to_the_default_model() {
-    tui_agent_model_test(|preferences, app| {
-        assert_eq!(
-            preferences
-                .tui_agent_model_info("not-a-model", app)
-                .id
-                .as_str(),
-            "auto"
-        );
     });
 }

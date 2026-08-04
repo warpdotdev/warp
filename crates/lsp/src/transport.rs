@@ -9,8 +9,8 @@ use futures::lock::Mutex;
 use jsonrpc::Transport;
 use simple_logger::SimpleLogger;
 use warp_errors::report_error;
-use warpui_core::r#async::executor::{Background, BackgroundTask};
 use warpui_core::r#async::Timer;
+use warpui_core::r#async::executor::{Background, BackgroundTask};
 
 /// Transport implementation for LSP communication over process stdin/stdout.
 /// Also manages the LSP server process lifecycle with graceful shutdown capabilities.
@@ -186,10 +186,10 @@ impl Transport for ProcessTransport {
         // Wait for the stderr task because it owns the last logger clone.
         // Joining it ensures that clone is dropped before restart so the same
         // log path can be registered again without colliding with a stale entry.
-        if let Some(stderr_task) = self.stderr_task.lock().await.take() {
-            if let Err(e) = stderr_task.await {
-                log::warn!("LSP: Failed to join stderr task: {e}");
-            }
+        if let Some(stderr_task) = self.stderr_task.lock().await.take()
+            && let Err(e) = stderr_task.await
+        {
+            log::warn!("LSP: Failed to join stderr task: {e}");
         }
         log::info!("LSP: Server shut down.");
         Ok(())

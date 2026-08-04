@@ -668,10 +668,10 @@ impl TryFrom<&[&[u8]]> for PromptMarker {
                     let value = &param[eq_index + 1..];
                     // "k" represents the prompt kind; try to parse the value into our
                     // PromptKind enum.
-                    if let b"k" = key {
-                        if let Ok(k) = PromptKind::try_from(value) {
-                            kind = k;
-                        }
+                    if let b"k" = key
+                        && let Ok(k) = PromptKind::try_from(value)
+                    {
+                        kind = k;
                     }
                 }
                 Ok(PromptMarker::StartPrompt { kind })
@@ -806,10 +806,12 @@ impl Hyperlink {
             let value = &pair[eq_idx + 1..];
             // An empty `id=` is equivalent to omitting the param. Oversized or
             // non-UTF-8 ids are dropped rather than rejecting the whole link.
-            if key == b"id" && !value.is_empty() && value.len() <= MAX_ID_BYTES {
-                if let Ok(value) = str::from_utf8(value) {
-                    id = Some(value.to_owned());
-                }
+            if key == b"id"
+                && !value.is_empty()
+                && value.len() <= MAX_ID_BYTES
+                && let Ok(value) = str::from_utf8(value)
+            {
+                id = Some(value.to_owned());
             }
         }
 

@@ -10,18 +10,21 @@ use string_offset::CharOffset;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::search::data_source::QueryResult;
 use warp::search::mixer::SearchMixerEvent;
+use warp::settings::{AISettings, AppEditorSettings, TuiTheme, TuiThemeSettings};
 use warp::tui_export::{
-    should_close_slash_command_menu_for_exact_match, slash_command_query,
-    AcceptSlashCommandOrSavedPrompt, ParsedSlashCommandInput, SlashCommandDataSource as _,
-    SlashCommandMixer, TuiSlashCommandDataSource, UpdatedActiveCommands,
+    AcceptSlashCommandOrSavedPrompt, Appearance, ConversationSelectionHandle,
+    ParsedSlashCommandInput, SlashCommandDataSource as _, SlashCommandMixer, SlashMenuSource,
+    TelemetryEvent, TuiSlashCommandDataSource, UpdatedActiveCommands,
+    should_close_slash_command_menu_for_exact_match, slash_command_query, slash_commands,
 };
 use warp_editor::model::CoreEditorModel;
 use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InputDrivenInlineMenuLifecycle};
+use warpui::SingletonEntity;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle};
 
 use crate::inline_menu::{
-    result_row_capacity, TuiInlineMenuListState, TuiInlineMenuRow, TuiInlineMenuRowStyle,
-    TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
+    MAX_INLINE_MENU_ROWS, TuiInlineMenuListState, TuiInlineMenuRow, TuiInlineMenuRowStyle,
+    TuiInlineMenuSnapshot, TuiInlineMenuStatus, result_row_capacity,
 };
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
@@ -85,8 +88,10 @@ pub(crate) struct TuiSlashCommandModel {
     mixer: ModelHandle<SlashCommandMixer>,
     state: TuiSlashCommandState,
     lifecycle: InputDrivenInlineMenuLifecycle,
+    opened_telemetry_emitted: bool,
     highlighted_prefix_len: Option<usize>,
     argument_hint_text: Option<&'static str>,
+    conversation_selection: ConversationSelectionHandle,
 }
 
 impl TuiSlashCommandModel {
@@ -95,6 +100,7 @@ impl TuiSlashCommandModel {
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
         mixer: ModelHandle<SlashCommandMixer>,
+        conversation_selection: ConversationSelectionHandle,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&input_editor, |me, _, event, ctx| {
@@ -121,8 +127,10 @@ impl TuiSlashCommandModel {
             mixer,
             state: TuiSlashCommandState::Closed,
             lifecycle: InputDrivenInlineMenuLifecycle::default(),
+            opened_telemetry_emitted: false,
             highlighted_prefix_len: None,
             argument_hint_text: None,
+            conversation_selection,
         };
         model.update_from_input(false, ctx);
         model
@@ -133,6 +141,7 @@ impl TuiSlashCommandModel {
         input_editor: ModelHandle<CodeEditorModel>,
         suggestions_mode: ModelHandle<TuiInputSuggestionsModeModel>,
         mixer: ModelHandle<SlashCommandMixer>,
+        conversation_selection: ConversationSelectionHandle,
         rows: Vec<TuiSlashCommandRow>,
         selected_index: usize,
     ) -> Self {
@@ -150,8 +159,10 @@ impl TuiSlashCommandModel {
                 list,
             },
             lifecycle: InputDrivenInlineMenuLifecycle::default(),
+            opened_telemetry_emitted: false,
             highlighted_prefix_len: None,
             argument_hint_text: None,
+            conversation_selection,
         }
     }
 
@@ -217,6 +228,31 @@ impl TuiSlashCommandModel {
         ctx.emit(TuiSlashCommandModelEvent);
     }
 
+    /// Selects the row at absolute snapshot index `index` (for mouse click).
+    /// Returns `true` when the row was actually selected, `false` when the
+    /// index is out of bounds or the menu is not open.
+    pub(crate) fn select_at_snapshot_index(
+        &mut self,
+        index: usize,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let TuiSlashCommandState::Open { list, .. } = &mut self.state else {
+            return false;
+        };
+        let selected = list.select_absolute(index, MAX_VISIBLE_ROWS, |_| true);
+        ctx.emit(TuiSlashCommandModelEvent);
+        selected
+    }
+
+    /// Scrolls the viewport by `delta` rows without changing the selection.
+    pub(crate) fn scroll_by_delta(&mut self, delta: isize, ctx: &mut ModelContext<Self>) {
+        let TuiSlashCommandState::Open { list, .. } = &mut self.state else {
+            return;
+        };
+        list.scroll_by(delta, MAX_VISIBLE_ROWS);
+        ctx.emit(TuiSlashCommandModelEvent);
+    }
+
     pub(crate) fn dismiss(&mut self, ctx: &mut ModelContext<Self>) {
         if !self.is_open(ctx) {
             return;
@@ -258,26 +294,73 @@ impl TuiSlashCommandModel {
                 .iter()
                 .map(|row| TuiInlineMenuRow {
                     title: row.title.clone(),
+                    prefix: None,
                     description: row.description.clone(),
+                    state_suffix: self.state_suffix(&row.title, ctx),
+                    promotional_suffix: None,
                     is_selectable: true,
                     style: TuiInlineMenuRowStyle::InlineMenuItem,
                 })
                 .collect(),
             selected_index: list.selected_index(),
             scroll_offset: list.scroll_offset(),
+            scroll_anchor: list.scroll_anchor(),
             max_visible_rows: MAX_VISIBLE_ROWS,
             status,
         })
     }
 
+    fn auto_approve_enabled(&self, ctx: &AppContext) -> bool {
+        self.conversation_selection
+            .as_ref(ctx)
+            .pending_query_autoexecute_override(ctx)
+            .is_autoexecute_any_action()
+    }
+
+    fn state_suffix(&self, title: &str, ctx: &AppContext) -> Option<String> {
+        if title == slash_commands::THEME.name {
+            let selected_theme = TuiThemeSettings::as_ref(ctx).selected_theme();
+            return Some(match selected_theme {
+                TuiTheme::Auto => format!(
+                    "(currently auto: {})",
+                    TuiTheme::from(Appearance::as_ref(ctx).theme()).display_name()
+                ),
+                TuiTheme::Light | TuiTheme::Dark => {
+                    format!("(currently {})", selected_theme.display_name())
+                }
+            });
+        }
+        let enabled = if title == slash_commands::AUTO_APPROVE.name {
+            self.auto_approve_enabled(ctx)
+        } else if title == slash_commands::NATURAL_LANGUAGE_DETECTION.name {
+            AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx)
+        } else if title == slash_commands::VIM_MODE.name {
+            // Guard against contexts where AppEditorSettings is not registered
+            // (e.g. lightweight test fixtures), matching TuiInputView::vim_mode_enabled.
+            ctx.has_singleton_model::<AppEditorSettings>()
+                && AppEditorSettings::as_ref(ctx).vim_mode_enabled()
+        } else {
+            return None;
+        };
+        Some(format!(
+            "(currently {})",
+            if enabled { "on" } else { "off" }
+        ))
+    }
+
     fn update_from_input(&mut self, force_query: bool, ctx: &mut ModelContext<Self>) {
         let input = input_text(&self.input_editor, ctx);
+        if input.is_empty() || !input.starts_with('/') {
+            self.opened_telemetry_emitted = false;
+        }
         if matches!(
             self.suggestions_mode.as_ref(ctx).mode(),
-            TuiInputSuggestionsMode::ConversationMenu
+            TuiInputSuggestionsMode::ApiKeys
+                | TuiInputSuggestionsMode::ConversationMenu
                 | TuiInputSuggestionsMode::ModelSelector
                 | TuiInputSuggestionsMode::SkillMenu
                 | TuiInputSuggestionsMode::Mcp
+                | TuiInputSuggestionsMode::McpInstall
         ) {
             self.set_highlighted_prefix_len(None, ctx);
             self.set_argument_hint_text(None, ctx);
@@ -343,6 +426,17 @@ impl TuiSlashCommandModel {
                     query: query.clone(),
                     list,
                 };
+                if !self.opened_telemetry_emitted {
+                    self.opened_telemetry_emitted = true;
+                    warp::send_telemetry_from_ctx!(
+                        TelemetryEvent::OpenSlashMenu {
+                            source: SlashMenuSource::UserTyped,
+                            is_inline_ui_enabled: true,
+                            is_in_agent_view: true,
+                        },
+                        ctx
+                    );
+                }
             }
             TuiSlashCommandState::Open {
                 query: current_query,

@@ -10,13 +10,13 @@ use markdown_parser::{
     FormattedTextLine, Hyperlink,
 };
 use unicode_width::UnicodeWidthStr;
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
     Modifier, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiParentElement, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition,
     TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::elements::{CrossAxisAlignment, ListNumbering};
-use warpui_core::AppContext;
 
 use crate::tui_builder::TuiUiBuilder;
 mod table;
@@ -81,7 +81,7 @@ pub(crate) fn render_formatted_text(
     let mut column = TuiFlex::column();
     let mut code_index = 0;
     let mut list_numbering = ListNumbering::new();
-    for line in &formatted.lines {
+    for (line_index, line) in formatted.lines.iter().enumerate() {
         let element = match line {
             FormattedTextLine::Heading(header) => {
                 inline_text(&header.text, palette.heading, palette)
@@ -143,8 +143,51 @@ pub(crate) fn render_formatted_text(
             list_numbering.reset();
         }
         column.add_child(element);
+        if should_insert_blank_row(line, formatted.lines.get(line_index + 1)) {
+            column.add_child(blank_row());
+        }
     }
     column.finish()
+}
+fn should_insert_blank_row(line: &FormattedTextLine, next: Option<&FormattedTextLine>) -> bool {
+    let Some(next) = next else {
+        return false;
+    };
+    match line {
+        // Structural blocks (headings, code blocks, tables, and images) always
+        // get a following blank row unless the next line is itself structural
+        // whitespace or a visual rule. This matches the block-boundary spacing
+        // parity targeted for glamour/codex-style rendering.
+        FormattedTextLine::Heading(_)
+        | FormattedTextLine::CodeBlock(_)
+        | FormattedTextLine::Table(_)
+        | FormattedTextLine::Image(_) => !matches!(
+            next,
+            FormattedTextLine::LineBreak | FormattedTextLine::HorizontalRule
+        ),
+        // Adjacent `Line` values are soft-wrapped lines from one paragraph.
+        FormattedTextLine::Line(_) => !matches!(
+            next,
+            FormattedTextLine::Line(_)
+                | FormattedTextLine::LineBreak
+                | FormattedTextLine::HorizontalRule
+        ),
+        // List items only separate from the following block at the list
+        // boundary: consecutive list items (including mixed list kinds) stay
+        // contiguous, and a trailing blank is skipped when the source already
+        // separated the block with a line break or rule.
+        FormattedTextLine::UnorderedList(_)
+        | FormattedTextLine::OrderedList(_)
+        | FormattedTextLine::TaskList(_) => !matches!(
+            next,
+            FormattedTextLine::UnorderedList(_)
+                | FormattedTextLine::OrderedList(_)
+                | FormattedTextLine::TaskList(_)
+                | FormattedTextLine::LineBreak
+                | FormattedTextLine::HorizontalRule
+        ),
+        _ => false,
+    }
 }
 
 fn inline_text(
@@ -220,10 +263,10 @@ fn finish_link(
     link: Option<(String, String)>,
     style: TuiStyle,
 ) {
-    if let Some((url, display)) = link {
-        if url != display {
-            push_span(spans, format!(" ({url})"), style);
-        }
+    if let Some((url, display)) = link
+        && url != display
+    {
+        push_span(spans, format!(" ({url})"), style);
     }
 }
 
@@ -262,11 +305,11 @@ fn push_span(spans: &mut Vec<(String, TuiStyle)>, text: String, style: TuiStyle)
     if text.is_empty() {
         return;
     }
-    if let Some((previous, previous_style)) = spans.last_mut() {
-        if *previous_style == style {
-            previous.push_str(&text);
-            return;
-        }
+    if let Some((previous, previous_style)) = spans.last_mut()
+        && *previous_style == style
+    {
+        previous.push_str(&text);
+        return;
     }
     spans.push((text, style));
 }

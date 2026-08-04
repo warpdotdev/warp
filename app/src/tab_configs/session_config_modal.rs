@@ -15,7 +15,7 @@ use warpui::{
     ViewHandle,
 };
 
-use super::session_config::{is_git_repo, SessionConfigSelection, SessionType};
+use super::session_config::{SessionConfigSelection, SessionType, is_git_repo};
 use super::session_config_rendering;
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;

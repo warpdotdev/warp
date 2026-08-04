@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::{intensity_at, shimmer_center, shimmer_color_at, ShimmerConfig};
+use super::{ShimmerConfig, intensity_at, shimmer_center, shimmer_color_at};
 use crate::color::ColorU;
 
 fn config() -> ShimmerConfig {

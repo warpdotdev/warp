@@ -11,12 +11,12 @@ use std::error::Error;
 use std::fmt;
 
 use unicode_segmentation::UnicodeSegmentation;
-use warpui_core::elements::tui::{
-    text_width, Color, Modifier, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex,
-    TuiHoverable, TuiParentElement, TuiSizeConstraintCondition, TuiSizeConstraintSwitch, TuiStyle,
-    TuiText,
-};
 use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::tui::{
+    Color, Modifier, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiHoverable,
+    TuiParentElement, TuiSizeConstraintCondition, TuiSizeConstraintSwitch, TuiStyle, TuiText,
+    text_width,
+};
 use warpui_core::{AppContext, Entity, TuiView, TypedActionView, ViewContext};
 const DIVIDER: &str = "|";
 const DIVIDER_PADDING_LEFT: u16 = 1;
@@ -308,6 +308,14 @@ impl TuiTabBarView {
         }
         .map(|tab| tab.key.clone())
     }
+
+    /// Returns the configured main-tab's stable key, if any.
+    ///
+    /// Callers (e.g. the terminal-session Escape binding) use this to return
+    /// focus to the root/main agent without duplicating tab-bar configuration.
+    pub(crate) fn main_tab_key(&self) -> Option<String> {
+        self.config.main_tab.as_ref().map(|tab| tab.key.clone())
+    }
 }
 
 /// Validates tab identities and label widths, returning the live key set.
@@ -502,9 +510,8 @@ fn render_tab(
         tab_style
     };
 
-    let leading_and_label_are_present = tab.leading.is_some() && !tab.label.is_empty();
-    let mut content = TuiFlex::row().with_spacing(u16::from(leading_and_label_are_present));
-
+    let content_count = usize::from(tab.leading.is_some()) + usize::from(!tab.label.is_empty());
+    let mut content = TuiFlex::row().with_spacing(u16::from(content_count > 1));
     if let Some(leading) = &tab.leading {
         content.add_child(
             TuiText::new(leading.text.clone())
@@ -807,10 +814,11 @@ fn tab_fixed_columns(tab: &TuiTab, padding_columns: u16) -> u16 {
         .as_ref()
         .map(|leading| text_width(&leading.text))
         .unwrap_or_default();
+    let content_count = usize::from(tab.leading.is_some()) + usize::from(!tab.label.is_empty());
     padding_columns
         .saturating_mul(2)
         .saturating_add(leading_columns)
-        .saturating_add(u16::from(tab.leading.is_some() && !tab.label.is_empty()))
+        .saturating_add(u16::try_from(content_count.saturating_sub(1)).unwrap_or(u16::MAX))
 }
 
 #[cfg(test)]

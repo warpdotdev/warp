@@ -1,15 +1,18 @@
 use settings::Setting as _;
-use voice_input::{StartListeningError, VoiceInput, VoiceSessionResult};
+use voice_input::{
+    StartListeningError, VoiceInput, VoiceInputLifecycle, VoiceInputLifecycleState,
+    VoiceSessionResult,
+};
 use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::AnsiColorIdentifier;
+use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_error;
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::elements::{Container, CornerRadius, Icon, Radius};
 use warpui::platform::Cursor;
-use warpui::r#async::SpawnedFutureHandle;
 use warpui::ui_components::button::ButtonTooltipPosition;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{elements, AppContext, Element, SingletonEntity, ViewContext, ViewHandle};
+use warpui::{AppContext, Element, SingletonEntity, ViewContext, ViewHandle, elements};
 
 use super::{EditorAction, EditorView, VoiceTranscriber, VoiceTranscriptionOptions};
 use crate::ai::blocklist::InputType;
@@ -29,33 +32,22 @@ const MICROPHONE_ACCESS_ERROR_ID: &str = "MICROPHONE_ACCESS_ERROR";
 const NUM_TIMES_TO_SHOW_VOICE_NEW_FEATURE_POPUP: usize = 4;
 
 #[derive(Debug, Default, Clone)]
-pub(super) enum VoiceInputState {
-    #[default]
-    Stopped,
-
-    /// We are listening for voice input. This is happening in the singleton voice transcriber.
-    Listening,
-
-    /// We are done listening and are transcribing voice input.
-    Transcribing {
-        /// The handle to the future that is spawned for voice input while transcribing is taking place.
-        handle: SpawnedFutureHandle,
-    },
+pub(super) struct VoiceInputState {
+    lifecycle: VoiceInputLifecycle,
+    recording_handle: Option<SpawnedFutureHandle>,
+    transcription_handle: Option<SpawnedFutureHandle>,
 }
 
 impl VoiceInputState {
     pub(super) fn is_active(&self) -> bool {
-        matches!(
-            self,
-            VoiceInputState::Listening | VoiceInputState::Transcribing { .. }
-        )
+        self.lifecycle.is_active()
     }
 
     pub(super) fn icon(&self) -> Option<icons::Icon> {
-        match self {
-            VoiceInputState::Listening => Some(icons::Icon::Microphone),
-            VoiceInputState::Transcribing { .. } => Some(icons::Icon::DotsHorizontal),
-            VoiceInputState::Stopped => None,
+        match self.lifecycle.state() {
+            VoiceInputLifecycleState::Listening => Some(icons::Icon::Microphone),
+            VoiceInputLifecycleState::Transcribing => Some(icons::Icon::DotsHorizontal),
+            VoiceInputLifecycleState::Idle => None,
         }
     }
 }
@@ -80,9 +72,11 @@ impl EditorView {
                 crate::view_components::NewFeaturePopupEvent::Dismissed
             ) {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    warp_errors::report_if_error!(settings
-                        .dismissed_voice_input_new_feature_popup
-                        .set_value(true, ctx));
+                    warp_errors::report_if_error!(
+                        settings
+                            .dismissed_voice_input_new_feature_popup
+                            .set_value(true, ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -161,31 +155,41 @@ impl EditorView {
         if !UserWorkspaces::handle(ctx).as_ref(ctx).is_voice_enabled() {
             return;
         }
+        if cancel_transcription {
+            self.stop_transcribing_voice_input(ctx);
+            return;
+        }
 
         let voice_input = voice_input::VoiceInput::handle(ctx);
         if voice_input.as_ref(ctx).is_listening() {
             log::debug!("Stopping voice input, cancelling transcription: {cancel_transcription}");
             voice_input.update(ctx, |voice_input, ctx| {
-                if cancel_transcription {
-                    voice_input.abort_listening();
-                } else if let Err(e) = voice_input.stop_listening(ctx) {
+                if let Err(e) = voice_input.stop_listening(ctx) {
                     report_error!(e.context("Failed to stop voice input"));
                 }
             });
-        }
-        if cancel_transcription {
-            self.stop_transcribing_voice_input(ctx);
         }
         ctx.notify();
     }
 
     pub(super) fn stop_transcribing_voice_input(&mut self, ctx: &mut ViewContext<Self>) {
-        VoiceInput::handle(ctx).update(ctx, |voice, _| voice.set_transcribing_active(false));
-        if let VoiceInputState::Transcribing { handle, .. } = &self.voice_input_state {
+        let mut state = self.voice_input_state.clone();
+        if let Some(handle) = state.recording_handle.take() {
+            log::debug!("Aborting voice input recording callback");
+            handle.abort();
+        }
+        if let Some(handle) = state.transcription_handle.take() {
             log::debug!("Aborting voice input transcription");
             handle.abort();
         }
-        self.set_voice_input_state(VoiceInputState::Stopped, ctx);
+        state.lifecycle.cancel();
+        self.set_voice_input_state(state, ctx);
+        VoiceInput::handle(ctx).update(ctx, |voice, _| {
+            if voice.is_listening() {
+                voice.abort_listening();
+            }
+            voice.set_transcribing_active(false);
+        });
         ctx.notify();
     }
 
@@ -232,10 +236,10 @@ impl EditorView {
                 }
 
                 // If the keypress is not valid in the current state, we ignore it.
-                match &self.voice_input_state {
+                match self.voice_input_state.lifecycle.state() {
                     // For example, the user could press Fn in a different app, then switch focus
                     // to Warp and let it go - we should NOT activate voice input in this case.
-                    VoiceInputState::Stopped => {
+                    VoiceInputLifecycleState::Idle => {
                         if matches!(state, warpui::event::KeyState::Released) {
                             return false;
                         }
@@ -244,18 +248,18 @@ impl EditorView {
                     // if the user is not focused on Warp (since we lose the ability to listen to modifier
                     // key events). Thus, the user cannot enter a state where we're listening for voice input
                     // but the key is not held already.
-                    VoiceInputState::Listening => {
+                    VoiceInputLifecycleState::Listening => {
                         if matches!(state, warpui::event::KeyState::Pressed) {
                             return false;
                         }
                     }
-                    _ => {}
+                    VoiceInputLifecycleState::Transcribing => {}
                 }
             }
         }
 
-        match &self.voice_input_state {
-            VoiceInputState::Stopped => {
+        match self.voice_input_state.lifecycle.state() {
+            VoiceInputLifecycleState::Idle => {
                 if !self.voice_transcription_options.is_enabled() {
                     return false;
                 }
@@ -284,8 +288,10 @@ impl EditorView {
                                     Self::show_microphone_access_toast(ctx);
                                 }
                                 _ => {
-                                    report_error!(anyhow::Error::new(e)
-                                        .context("Failed to start voice input"));
+                                    report_error!(
+                                        anyhow::Error::new(e)
+                                            .context("Failed to start voice input")
+                                    );
                                 }
                             }
                             ctx.notify();
@@ -293,8 +299,15 @@ impl EditorView {
                         }
                     };
 
-                    // Immediately transition to Listening state
-                    self.set_voice_input_state(VoiceInputState::Listening, ctx);
+                    let mut state = self.voice_input_state.clone();
+                    if !state.lifecycle.start() {
+                        return false;
+                    }
+                    state.recording_handle = Some(ctx.spawn(
+                        async move { session.await_result().await },
+                        EditorView::handle_voice_session_result,
+                    ));
+                    self.set_voice_input_state(state, ctx);
 
                     // Send telemetry for start
                     let is_udi_enabled = crate::settings::InputSettings::handle(ctx)
@@ -313,12 +326,6 @@ impl EditorView {
                             current_input_mode,
                         },
                         ctx
-                    );
-
-                    // Spawn future to await the session result
-                    ctx.spawn(
-                        async move { session.await_result().await },
-                        Self::handle_voice_session_result,
                     );
 
                     if matches!(*source, voice_input::VoiceInputToggledFrom::Button) {
@@ -343,10 +350,10 @@ impl EditorView {
                     return true;
                 }
             }
-            VoiceInputState::Listening => {
+            VoiceInputLifecycleState::Listening => {
                 self.stop_voice_input(false, ctx);
             }
-            VoiceInputState::Transcribing { .. } => {
+            VoiceInputLifecycleState::Transcribing => {
                 // Do nothing, we're already transcribing. We don't allow switching states while this is happening.
                 // TODO(zach): We may want to show some sort of progress indicator when in this state.
             }
@@ -373,13 +380,15 @@ impl EditorView {
         ctx: &mut ViewContext<Self>,
     ) {
         let was_active = self.is_voice_input_active();
-        let is_listening = matches!(voice_input_state, VoiceInputState::Listening);
-        let is_transcribing = matches!(voice_input_state, VoiceInputState::Transcribing { .. });
-
-        let will_be_active = matches!(
-            voice_input_state,
-            VoiceInputState::Listening | VoiceInputState::Transcribing { .. }
+        let is_listening = matches!(
+            voice_input_state.lifecycle.state(),
+            VoiceInputLifecycleState::Listening
         );
+        let is_transcribing = matches!(
+            voice_input_state.lifecycle.state(),
+            VoiceInputLifecycleState::Transcribing
+        );
+        let will_be_active = voice_input_state.is_active();
 
         if !was_active && will_be_active {
             // Lock before marking active, so set_interaction_state applies normally.
@@ -410,7 +419,12 @@ impl EditorView {
         result: VoiceSessionResult,
         ctx: &mut ViewContext<Self>,
     ) {
+        let mut state = self.voice_input_state.clone();
+        state.recording_handle = None;
         if !UserWorkspaces::handle(ctx).as_ref(ctx).is_voice_enabled() {
+            if state.lifecycle.fail() {
+                self.set_voice_input_state(state, ctx);
+            }
             return;
         }
 
@@ -442,22 +456,24 @@ impl EditorView {
                 let voice_transcriber = VoiceTranscriber::handle(ctx).as_ref(ctx);
                 if let Some(transcriber) = voice_transcriber.transcriber() {
                     let transcriber = transcriber.clone();
+                    let language = AISettings::as_ref(ctx)
+                        .voice_input_language_code()
+                        .map(str::to_owned);
+                    if !state.lifecycle.begin_transcribing() {
+                        return;
+                    }
 
                     VoiceInput::handle(ctx).update(ctx, |voice, _| {
                         voice.set_transcribing_active(true);
                     });
 
-                    self.set_voice_input_state(
-                        VoiceInputState::Transcribing {
-                            handle: ctx.spawn(
-                                async move { transcriber.transcribe(wav_base64).await },
-                                Self::apply_transcribed_voice_input,
-                            ),
-                        },
-                        ctx,
-                    );
-                } else {
-                    self.set_voice_input_state(VoiceInputState::Stopped, ctx);
+                    state.transcription_handle = Some(ctx.spawn(
+                        async move { transcriber.transcribe(wav_base64, language).await },
+                        EditorView::apply_transcribed_voice_input,
+                    ));
+                    self.set_voice_input_state(state, ctx);
+                } else if state.lifecycle.fail() {
+                    self.set_voice_input_state(state, ctx);
                 }
             }
             VoiceSessionResult::Aborted {
@@ -475,7 +491,9 @@ impl EditorView {
                     ctx
                 );
 
-                self.set_voice_input_state(VoiceInputState::Stopped, ctx);
+                if state.lifecycle.fail() {
+                    self.set_voice_input_state(state, ctx);
+                }
             }
         }
         ctx.notify();
@@ -491,7 +509,13 @@ impl EditorView {
             return;
         }
 
-        self.stop_transcribing_voice_input(ctx);
+        let mut state = self.voice_input_state.clone();
+        if !state.lifecycle.complete() {
+            return;
+        }
+        state.transcription_handle = None;
+        VoiceInput::handle(ctx).update(ctx, |voice, _| voice.set_transcribing_active(false));
+        self.set_voice_input_state(state, ctx);
         match result {
             Ok(transcribe_response) => {
                 log::debug!("Transcribed voice input: {transcribe_response:?}");
@@ -502,7 +526,9 @@ impl EditorView {
                     self.voice_error_toast(super::VOICE_LIMIT_HIT_TOAST_TEXT, ctx)
                 }
                 _ => {
-                    report_error!(anyhow::Error::new(e).context("Failed to transcribe voice input"));
+                    report_error!(
+                        anyhow::Error::new(e).context("Failed to transcribe voice input")
+                    );
                     self.voice_error_toast(super::VOICE_ERROR_TOAST_TEXT, ctx)
                 }
             },
@@ -578,8 +604,10 @@ impl EditorView {
                 ),
             )
         } else {
-            let is_transcribing =
-                matches!(self.voice_input_state, VoiceInputState::Transcribing { .. });
+            let is_transcribing = matches!(
+                self.voice_input_state.lifecycle.state(),
+                VoiceInputLifecycleState::Transcribing
+            );
             icon_button(
                 appearance,
                 icons::Icon::Microphone,
@@ -601,7 +629,10 @@ impl EditorView {
                 .with_tooltip(self.render_voice_transcription_button_tooltip(appearance, app));
         }
 
-        if matches!(self.voice_input_state, VoiceInputState::Transcribing { .. }) {
+        if matches!(
+            self.voice_input_state.lifecycle.state(),
+            VoiceInputLifecycleState::Transcribing
+        ) {
             button = button.disabled();
         }
 

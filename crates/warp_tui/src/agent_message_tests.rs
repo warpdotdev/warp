@@ -1,6 +1,6 @@
 use warp::tui_export::{
-    register_tui_session_view_test_singletons, AIConversationId, BlocklistAIHistoryModel,
-    ConversationStatus, ReceivedMessageDisplay,
+    AIConversationId, BlocklistAIHistoryModel, ConversationStatus, ReceivedMessageDisplay,
+    register_tui_session_view_test_singletons,
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{Modifier, TuiBufferExt, TuiRect};
@@ -238,9 +238,11 @@ fn message_preview_wraps_with_a_hanging_indent_and_falls_back_to_subject() {
                 .filter(|line| !line.is_empty())
                 .collect::<Vec<_>>();
             assert!(wrapped_lines[0].starts_with("✓ "));
-            assert!(wrapped_lines[1..]
-                .iter()
-                .all(|line| line.starts_with("    ")));
+            assert!(
+                wrapped_lines[1..]
+                    .iter()
+                    .all(|line| line.starts_with("    "))
+            );
 
             let fallback = presenter.present_element(
                 render_agent_message(

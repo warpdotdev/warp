@@ -13,11 +13,9 @@
 
 use std::io::{self, Write};
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-
-const ESC: char = '\x1b';
-const BEL: char = '\x07';
+use base64::engine::general_purpose::STANDARD;
+use warp_terminal::model::escape_sequences::{C0, C1, tmux_passthrough};
 
 /// Copies `text` to the clipboard, selecting the transport from the environment.
 ///
@@ -92,6 +90,20 @@ fn set_native_text(text: &str) -> anyhow::Result<()> {
     anyhow::bail!("native OS clipboard is not supported on this platform")
 }
 
+/// Reads the OS clipboard's plain text for a local paste (`cmd-v`).
+///
+/// This reuses the shared native clipboard backend (`arboard` via
+/// `warpui::platform::create_system_clipboard`). Unlike [`copy_to_clipboard`],
+/// there is no OSC 52 fallback: terminals do not reliably answer OSC 52 read
+/// requests, so a remote/SSH `cmd-v` still relies on the terminal's own
+/// bracketed-paste path (`TuiEditorAction::PasteText`). Returns an error only
+/// when the native backend is unavailable.
+pub(crate) fn read_from_clipboard() -> anyhow::Result<String> {
+    let mut clipboard = warpui::platform::create_system_clipboard()
+        .map_err(|error| error.context("native OS clipboard is unavailable"))?;
+    Ok(clipboard.read().plain_text)
+}
+
 fn write_osc52_sequences(text: &str, in_tmux: bool, writer: &mut impl Write) -> io::Result<()> {
     let sequence = osc52_sequences(text, in_tmux);
     writer.write_all(sequence.as_bytes())?;
@@ -104,7 +116,9 @@ fn osc52_sequences(text: &str, in_tmux: bool) -> String {
     ["c", "p"]
         .into_iter()
         .map(|target| {
-            let sequence = format!("{ESC}]52;{target};{payload}{BEL}");
+            let osc = C1::to_utf8(C1::OSC);
+            let bell = char::from(C0::BEL);
+            let sequence = format!("{osc}52;{target};{payload}{bell}");
             if in_tmux {
                 tmux_passthrough(&sequence)
             } else {
@@ -112,12 +126,6 @@ fn osc52_sequences(text: &str, in_tmux: bool) -> String {
             }
         })
         .collect()
-}
-
-/// Wraps an escape sequence in tmux DCS passthrough, doubling inner escapes.
-fn tmux_passthrough(sequence: &str) -> String {
-    let escaped = sequence.replace(ESC, "\x1b\x1b");
-    format!("{ESC}Ptmux;{escaped}{ESC}\\")
 }
 
 #[cfg(test)]

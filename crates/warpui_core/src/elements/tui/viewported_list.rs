@@ -9,14 +9,20 @@ use std::cmp::{max, min};
 use std::ops::Range;
 use std::rc::Rc;
 
-use super::selectable::{row_glyphs, row_text, TuiSelectionHandle};
+use super::selectable::{TuiSelectionHandle, row_glyphs, row_text, trim_trailing_whitespace};
 use super::{
     TuiBuffer, TuiClipped, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiGridPoint,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiRect,
     TuiRowResize, TuiScreenPoint, TuiScreenPosition, TuiScrollableElement, TuiSelectableElement,
-    TuiSelectionSpan, TuiSize,
+    TuiSelectionSpan, TuiSize, TuiStyle,
 };
 use crate::AppContext;
+
+fn trimmed_selection_row_end(buffer: &TuiBuffer, row: u16, width: u16) -> Option<u16> {
+    let mut glyphs = row_glyphs(buffer, row, width);
+    trim_trailing_whitespace(&mut glyphs);
+    glyphs.last().map(|glyph| glyph.end_col)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TuiViewportPosition {
@@ -141,6 +147,12 @@ where
         let Some(resolved) = self.state.resolved_viewport() else {
             return;
         };
+        let selection_is_valid = selection.validate_width(size.width);
+        let selection_range = selection_is_valid.then(|| selection.range()).flatten();
+        if selection_range.is_none() && !self.trim_selection_line_ends {
+            self.selection_snapshot.borrow_mut().take();
+            return;
+        }
         let visible_height = size.height.saturating_sub(resolved.screen_offset).min(
             resolved
                 .content_height
@@ -159,11 +171,13 @@ where
                 }
             }
         }
+        let selection_line_ends = self.trim_selection_line_ends.then(|| {
+            (0..visible_height)
+                .map(|row| trimmed_selection_row_end(&snapshot, row, size.width))
+                .collect::<Vec<_>>()
+        });
         *self.selection_snapshot.borrow_mut() = Some((resolved, snapshot));
-        if !selection.validate_width(size.width) {
-            return;
-        }
-        let Some(range) = selection.range() else {
+        let Some(range) = selection_range else {
             return;
         };
         let viewport_bottom = resolved.window.scroll_top.saturating_add(usize::from(
@@ -186,11 +200,21 @@ where
             } else {
                 0
             };
-            let end_col = if row == range.end.row {
+            let mut end_col = if row == range.end.row {
                 range.end.col
             } else {
                 size.width
             };
+            if let Some(selection_line_ends) = &selection_line_ends {
+                let row_in_view = row.saturating_sub(resolved.window.scroll_top);
+                end_col = end_col.min(
+                    selection_line_ends
+                        .get(row_in_view)
+                        .copied()
+                        .flatten()
+                        .unwrap_or_default(),
+                );
+            }
             if start_col < end_col {
                 selection_rects.push((
                     origin.offset(i32::from(start_col), i32::from(y)),
@@ -199,7 +223,7 @@ where
             }
         }
         for (origin, size) in selection_rects {
-            toggle_selection_reverse(surface, origin, size);
+            surface.set_style(origin, size, self.selection_style);
         }
     }
 
@@ -401,26 +425,6 @@ fn render_viewport_content(
     buffer
 }
 
-/// Toggles reverse video over selected absolute bounds.
-fn toggle_selection_reverse(
-    surface: &mut TuiPaintSurface<'_>,
-    origin: TuiScreenPosition,
-    size: TuiSize,
-) {
-    for row in 0..size.height {
-        for col in 0..size.width {
-            let Some(cell) = surface.cell_mut(origin.offset(i32::from(col), i32::from(row))) else {
-                continue;
-            };
-            if cell.modifier.contains(super::Modifier::REVERSED) {
-                cell.modifier.remove(super::Modifier::REVERSED);
-            } else {
-                cell.modifier.insert(super::Modifier::REVERSED);
-            }
-        }
-    }
-}
-
 /// A variable-height viewport that delegates content slicing to its source.
 pub struct TuiViewportedList<Content>
 where
@@ -433,6 +437,8 @@ where
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
     vertical_alignment: TuiViewportVerticalAlignment,
+    selection_style: TuiStyle,
+    trim_selection_line_ends: bool,
     selection_snapshot: RefCell<Option<(TuiResolvedViewport, TuiBuffer)>>,
 }
 
@@ -441,7 +447,7 @@ where
     Content: TuiViewportedElement,
 {
     /// Creates a generalized viewport over `content`.
-    pub fn new(state: TuiViewportedListState, content: Content) -> Self {
+    pub fn new(state: TuiViewportedListState, content: Content, selection_style: TuiStyle) -> Self {
         Self {
             state,
             content,
@@ -450,8 +456,30 @@ where
             size: None,
             origin: None,
             vertical_alignment: TuiViewportVerticalAlignment::Top,
+            selection_style,
+            trim_selection_line_ends: false,
             selection_snapshot: RefCell::new(None),
         }
+    }
+
+    /// Prevents selection from extending through blank cells after row content.
+    pub fn with_trimmed_selection_line_ends(mut self) -> Self {
+        self.trim_selection_line_ends = true;
+        self
+    }
+
+    fn selection_snapshot_row_glyphs(
+        &self,
+        row: usize,
+        width: u16,
+    ) -> Option<Vec<super::TuiRowGlyph>> {
+        let snapshot = self.selection_snapshot.borrow();
+        let (resolved, buffer) = snapshot.as_ref()?;
+        let row_in_snapshot = row.checked_sub(resolved.window.scroll_top)?;
+        if row_in_snapshot >= usize::from(buffer.area.height) {
+            return None;
+        }
+        Some(row_glyphs(buffer, row_in_snapshot as u16, width))
     }
 
     pub fn with_vertical_alignment(
@@ -654,7 +682,7 @@ where
             }
             usize::try_from(position.y - content_top).ok()?
         };
-        Some(TuiGridPoint {
+        let mut point = TuiGridPoint {
             row: resolved
                 .window
                 .scroll_top
@@ -662,7 +690,19 @@ where
                 .min(resolved.content_height.saturating_sub(1)),
             col: u16::try_from(position.x.clamp(0, i32::from(size.width.saturating_sub(1))))
                 .unwrap_or_default(),
-        })
+        };
+        if self.trim_selection_line_ends {
+            let mut glyphs = self.selection_snapshot_row_glyphs(point.row, size.width)?;
+            trim_trailing_whitespace(&mut glyphs);
+            let content_end = glyphs.last()?.end_col;
+            if point.col >= content_end {
+                if !clamp_outside {
+                    return None;
+                }
+                point.col = content_end.saturating_sub(1);
+            }
+        }
+        Some(point)
     }
 
     /// Materializes selectable rows using the content's direct hook.
@@ -689,17 +729,17 @@ where
         ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> Vec<super::TuiRowGlyph> {
-        if let Some((resolved, snapshot)) = self.selection_snapshot.borrow().as_ref() {
-            let row_in_snapshot = row.saturating_sub(resolved.window.scroll_top);
-            if row >= resolved.window.scroll_top
-                && row_in_snapshot < usize::from(snapshot.area.height)
-            {
-                return row_glyphs(snapshot, row_in_snapshot as u16, width);
-            }
+        let mut glyphs = self
+            .selection_snapshot_row_glyphs(row, width)
+            .or_else(|| {
+                self.selection_rows(row..row.saturating_add(1), width, ctx, app)
+                    .map(|buffer| row_glyphs(&buffer, 0, width))
+            })
+            .unwrap_or_default();
+        if self.trim_selection_line_ends {
+            trim_trailing_whitespace(&mut glyphs);
         }
-        self.selection_rows(row..row.saturating_add(1), width, ctx, app)
-            .map(|buffer| row_glyphs(&buffer, 0, width))
-            .unwrap_or_default()
+        glyphs
     }
 
     /// Extracts selected text from current read-only content rows.
@@ -743,11 +783,17 @@ where
                 } else {
                     0
                 };
-                let end_col = if row == selection.end.row {
+                let mut end_col = if row == selection.end.row {
                     selection.end.col
                 } else {
                     size.width
                 };
+                if self.trim_selection_line_ends {
+                    end_col = end_col.min(
+                        trimmed_selection_row_end(&buffer, buffer_row, size.width)
+                            .unwrap_or_default(),
+                    );
+                }
                 lines.push(row_text(&buffer, buffer_row, start_col..end_col));
             }
             chunk_start = chunk_end;

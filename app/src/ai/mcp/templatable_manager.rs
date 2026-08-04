@@ -10,13 +10,15 @@ use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use diesel::SqliteConnection;
 use futures_util::stream::AbortHandle;
+use mcp::TemplatableMCPServerInfo;
 #[cfg(not(target_family = "wasm"))]
 use mcp::oauth;
-use mcp::TemplatableMCPServerInfo;
 #[cfg(not(target_family = "wasm"))]
 pub use native::McpIntegration;
 #[cfg(not(target_family = "wasm"))]
 use parking_lot::Mutex;
+#[cfg(not(target_family = "wasm"))]
+use simple_logger::SimpleLogger;
 use uuid::Uuid;
 #[cfg(not(target_family = "wasm"))]
 use warpui::ModelSpawner;
@@ -87,6 +89,27 @@ pub struct TemplatableMCPServerManager {
     /// UUIDs of MCP servers started via the Oz CLI. We track these so they can be distinguished from
     /// file-based ephemeral MCP servers, which are directory-scoped.
     cli_spawned_server_uuids: HashSet<Uuid>,
+    /// UUIDs of built-in Warp-hosted servers (e.g. the Factory MCP), which are
+    /// spawned automatically from in-code definitions and authenticated with
+    /// the logged-in user's session credentials.
+    builtin_server_uuids: HashSet<Uuid>,
+    /// The bearer credential the current built-in server spawn was created
+    /// with. Compared on credential-rotation events so back-to-back auth
+    /// events with the same token (common at startup) don't respawn the
+    /// server and open redundant server-side MCP sessions. Native-only like
+    /// the spawn path that reads it; on wasm the built-in server is never
+    /// spawned, so the field would be dead code there.
+    #[cfg(not(target_family = "wasm"))]
+    builtin_server_token: Option<String>,
+    /// Log-file handles for spawned server instances, keyed by installation
+    /// UUID. `LogManager` reserves one log path per template UUID and rejects
+    /// re-registration while an unclosed logger holds it, so shutdown paths
+    /// close the outgoing instance's logger eagerly instead of waiting for
+    /// async teardown to drop the remaining clones. Without this, an
+    /// immediate respawn (e.g. the built-in Factory MCP picking up a rotated
+    /// token) loses the race and fails to spawn.
+    #[cfg(not(target_family = "wasm"))]
+    server_loggers: HashMap<Uuid, SimpleLogger>,
 }
 
 /// Information about a spawned server task.
@@ -231,6 +254,14 @@ impl TemplatableMCPServerManager {
         self.get_template_uuid(installation_uuid)
             .is_some_and(|uuid| self.server_credentials.contains_key(&uuid))
     }
+    #[cfg(all(not(target_family = "wasm"), feature = "tui"))]
+    pub fn can_log_out(&self, installation_uuid: Uuid, app: &warpui::AppContext) -> bool {
+        self.has_credentials(installation_uuid, app)
+            || self
+                .active_servers
+                .get(&installation_uuid)
+                .is_some_and(TemplatableMCPServerInfo::is_authenticated_transport)
+    }
 
     /// Returns the JSON Schema `input_schema` for a named tool across active MCP servers.
     ///
@@ -301,6 +332,15 @@ impl TemplatableMCPServerManager {
     /// Returns CLI-spawned ephemeral servers (started via `oz agent run --mcp`) that are currently active.
     pub fn get_active_cli_spawned_servers(&self) -> HashMap<Uuid, &TemplatableMCPServerInfo> {
         self.cli_spawned_server_uuids
+            .iter()
+            .filter_map(|uuid| self.active_servers.get(uuid).map(|info| (*uuid, info)))
+            .collect()
+    }
+
+    /// Returns built-in Warp-hosted servers (e.g. the Factory MCP) that are
+    /// currently active.
+    pub fn get_active_builtin_servers(&self) -> HashMap<Uuid, &TemplatableMCPServerInfo> {
+        self.builtin_server_uuids
             .iter()
             .filter_map(|uuid| self.active_servers.get(uuid).map(|info| (*uuid, info)))
             .collect()

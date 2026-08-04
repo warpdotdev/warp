@@ -6,8 +6,8 @@ use warpui::{AppContext, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::cloud_object::CloudObject;
-use crate::notebooks::manager::NotebookManager;
 use crate::notebooks::CloudNotebook;
+use crate::notebooks::manager::NotebookManager;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::server::ids::SyncId;
 

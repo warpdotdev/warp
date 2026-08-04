@@ -1,12 +1,12 @@
 use std::path::Path;
 
-use command::r#async::Command;
 use command::Stdio;
+use command::r#async::Command;
 use tempfile::TempDir;
 
 use super::{
-    detect_current_branch, detect_current_branch_display, get_pr_for_branch, is_gh_auth_error,
-    is_gh_missing_error, RepositoryInfo,
+    RepositoryInfo, detect_current_branch, detect_current_branch_display, get_pr_for_branch,
+    is_gh_auth_error, is_gh_missing_error,
 };
 
 /// Helper: run a git command inside the given repo directory.
@@ -25,6 +25,7 @@ async fn git(repo: &Path, args: &[&str]) -> String {
 #[cfg(feature = "local_fs")]
 #[test]
 fn repository_info_from_gh_output_parses_name_and_owner() {
+    // No url in the output => host is absent.
     assert_eq!(
         super::repository_info_from_gh_output(
             r#"{"name":"warp-internal","owner":{"login":"warpdotdev"}}"#
@@ -33,6 +34,23 @@ fn repository_info_from_gh_output_parses_name_and_owner() {
         RepositoryInfo {
             name: "warp-internal".to_owned(),
             owner: Some("warpdotdev".to_owned()),
+            host: None,
+        }
+    );
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn repository_info_from_gh_output_parses_host_from_url() {
+    assert_eq!(
+        super::repository_info_from_gh_output(
+            r#"{"name":"warp-internal","owner":{"login":"warpdotdev"},"url":"https://github.com/warpdotdev/warp-internal"}"#
+        )
+        .unwrap(),
+        RepositoryInfo {
+            name: "warp-internal".to_owned(),
+            owner: Some("warpdotdev".to_owned()),
+            host: Some("github.com".to_owned()),
         }
     );
 }
@@ -90,10 +108,10 @@ fn repository_info_from_gh_output_rejects_empty_fields() {
         super::repository_info_from_gh_output(r#"{"name":"","owner":{"login":"warpdotdev"}}"#)
             .is_err()
     );
-    assert!(super::repository_info_from_gh_output(
-        r#"{"name":"warp-internal","owner":{"login":""}}"#
-    )
-    .is_err());
+    assert!(
+        super::repository_info_from_gh_output(r#"{"name":"warp-internal","owner":{"login":""}}"#)
+            .is_err()
+    );
 }
 
 #[cfg(feature = "local_fs")]
@@ -146,6 +164,7 @@ async fn get_repository_info_reads_gh_repo_view() {
         Some(RepositoryInfo {
             name: "warp-internal".to_owned(),
             owner: Some("warpdotdev".to_owned()),
+            host: None,
         })
     );
 }

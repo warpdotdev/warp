@@ -631,12 +631,12 @@ impl Element for Hoverable {
         // If there's a mouse-down event outside of the element,
         // there's nothing to do except reset the hover state
         // (because there might have been a hover delay in-progress).
-        if let Some(position) = event.raw_event().mouse_down_position() {
-            if !self.is_mouse_over_element(ctx, position) {
-                self.state().is_hovered = false;
-                self.state().is_mouse_over_element = false;
-                return handled;
-            }
+        if let Some(position) = event.raw_event().mouse_down_position()
+            && !self.is_mouse_over_element(ctx, position)
+        {
+            self.state().is_hovered = false;
+            self.state().is_mouse_over_element = false;
+            return handled;
         }
 
         match event.raw_event() {

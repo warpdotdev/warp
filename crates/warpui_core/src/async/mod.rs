@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use futures::{pin_mut, FutureExt as _};
+use futures::{FutureExt as _, pin_mut};
 use futures_util::stream::AbortHandle;
 
 cfg_if::cfg_if! {
@@ -17,7 +17,7 @@ cfg_if::cfg_if! {
 
 pub use futures_util::future::LocalBoxFuture;
 // Re-export a variety of symbols from the internal implementation modules.
-pub use imp::{block_on, BoxFuture, Spawnable, SpawnableOutput, Stream, Timer, TransportStream};
+pub use imp::{BoxFuture, Spawnable, SpawnableOutput, Stream, Timer, TransportStream, block_on};
 use thiserror::Error;
 
 pub mod executor {

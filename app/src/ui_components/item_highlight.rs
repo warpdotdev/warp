@@ -1,8 +1,8 @@
 use pathfinder_color::ColorU;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
-use warpui::elements::{CornerRadius, MouseState, Radius};
+use warp_core::ui::theme::color::internal_colors;
 use warpui::Element;
+use warpui::elements::{CornerRadius, MouseState, Radius};
 
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;

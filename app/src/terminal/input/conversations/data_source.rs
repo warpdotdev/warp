@@ -4,18 +4,18 @@ use std::collections::HashSet;
 use ordered_float::OrderedFloat;
 use warpui::{AppContext, Entity, ModelHandle, SingletonEntity};
 
+use crate::AgentConversationsModel;
 use crate::ai::agent_conversations_model::{
-    query_conversation_entries, AgentConversationEntry, AgentConversationListEntryState,
-    AgentManagementFilters,
+    AgentConversationEntry, AgentConversationListEntryState, AgentManagementFilters,
+    query_conversation_entries,
 };
 use crate::ai::blocklist::conversation_selection::ConversationSelectionHandle;
+use crate::search::SyncDataSource;
 use crate::search::data_source::{Query, QueryFilter, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
-use crate::search::SyncDataSource;
-use crate::terminal::input::conversations::search_item::ConversationSearchItem;
 use crate::terminal::input::conversations::AcceptConversation;
+use crate::terminal::input::conversations::search_item::ConversationSearchItem;
 use crate::terminal::model::session::active_session::ActiveSession;
-use crate::AgentConversationsModel;
 
 pub struct ConversationMenuDataSource {
     conversation_selection: ConversationSelectionHandle,

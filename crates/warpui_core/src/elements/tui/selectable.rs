@@ -18,16 +18,16 @@ use super::{
     TuiLocalPoint, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiPresentationContext,
     TuiScreenPoint, TuiScreenPosition, TuiScrollableElement, TuiSize, TuiViewMapContext, TuiZIndex,
 };
+use crate::AppContext;
 use crate::elements::SmartSelectFn;
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{SelectionDirection, SelectionType, TextBuffer};
-use crate::AppContext;
 
 mod cells;
 mod state;
 
-pub(crate) use cells::{cell_span, row_glyphs, row_text};
-pub use cells::{point_after_col, TuiRowGlyph, TuiSelectionSpan};
+pub use cells::{TuiRowGlyph, TuiSelectionSpan, point_after_col};
+pub(crate) use cells::{cell_span, row_glyphs, row_text, trim_trailing_whitespace};
 pub use state::TuiSelectionHandle;
 
 type SelectionCallback = Box<dyn FnMut(&mut TuiEventContext, &AppContext)>;
@@ -92,6 +92,7 @@ pub struct TuiSelectable<Child> {
     child: Child,
     word_boundaries_policy: WordBoundariesPolicy,
     smart_select_fn: Option<SmartSelectFn>,
+    semantic_selection_by_style: bool,
     on_selection_start: Option<SelectionCallback>,
     on_copy: Option<CopyCallback>,
     child_max_z_index: Option<TuiZIndex>,
@@ -108,6 +109,7 @@ where
             child,
             word_boundaries_policy: WordBoundariesPolicy::Default,
             smart_select_fn: None,
+            semantic_selection_by_style: false,
             on_selection_start: None,
             on_copy: None,
             child_max_z_index: None,
@@ -123,6 +125,12 @@ where
     /// Uses `smart_select_fn` before falling back to word-boundary expansion.
     pub fn with_smart_select_fn(mut self, smart_select_fn: Option<SmartSelectFn>) -> Self {
         self.smart_select_fn = smart_select_fn;
+        self
+    }
+
+    /// Expands semantic selections to a contiguous rendered style run.
+    pub fn with_semantic_selection_by_style(mut self) -> Self {
+        self.semantic_selection_by_style = true;
         self
     }
 
@@ -167,6 +175,11 @@ where
                 .unwrap_or_else(|| cell_span(point, width)),
             SelectionType::Semantic => {
                 let glyphs = self.child.selection_row_glyphs(point.row, width, ctx, app);
+                if self.semantic_selection_by_style
+                    && let Some(span) = style_span(point, width, &glyphs)
+                {
+                    return span;
+                }
                 word_span(
                     point,
                     width,
@@ -407,17 +420,51 @@ where
                 event_ctx.notify();
                 true
             }
-            TuiEvent::LeftMouseDown { .. }
+            TuiEvent::FocusGained
+            | TuiEvent::FocusLost
+            | TuiEvent::LeftMouseDown { .. }
             | TuiEvent::LeftMouseDragged { .. }
             | TuiEvent::LeftMouseUp { .. }
             | TuiEvent::ScrollWheel { .. }
             | TuiEvent::KeyDown { .. }
+            | TuiEvent::ModifierKeyChanged { .. }
             | TuiEvent::Paste { .. }
             | TuiEvent::MiddleMouseDown { .. }
             | TuiEvent::RightMouseDown { .. }
             | TuiEvent::MouseMoved { .. } => false,
         }
     }
+}
+
+/// Resolves a semantic span from contiguous glyphs with the clicked style.
+fn style_span(point: TuiGridPoint, width: u16, glyphs: &[TuiRowGlyph]) -> Option<TuiSelectionSpan> {
+    let clicked = glyphs
+        .iter()
+        .position(|glyph| point.col >= glyph.start_col && point.col < glyph.end_col)?;
+    let style = glyphs[clicked].style;
+    let mut start = clicked;
+    while start > 0 && glyphs[start - 1].style == style {
+        start -= 1;
+    }
+    let mut end = clicked.saturating_add(1);
+    while end < glyphs.len() && glyphs[end].style == style {
+        end += 1;
+    }
+    while start < end && glyphs[start].text.chars().all(char::is_whitespace) {
+        start += 1;
+    }
+    while start < end && glyphs[end - 1].text.chars().all(char::is_whitespace) {
+        end -= 1;
+    }
+    let start_glyph = glyphs.get(start)?;
+    let end_glyph = glyphs.get(end.saturating_sub(1))?;
+    Some(TuiSelectionSpan {
+        start: TuiGridPoint {
+            row: point.row,
+            col: start_glyph.start_col,
+        },
+        end: point_after_col(point.row, end_glyph.end_col, width),
+    })
 }
 
 /// Resolves a semantic word span from rendered row glyphs.

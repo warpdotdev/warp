@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use chrono::Utc;
 use warp_multi_agent_api as api;
 
-use crate::ai::agent::api::convert_conversation::*;
 use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::api::convert_conversation::*;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversationId, ServerAIConversationMetadata,
 };
@@ -27,6 +27,7 @@ fn test_server_metadata(
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
+            total_provider_cost_in_cents: Some(3.2),
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
@@ -106,6 +107,117 @@ fn test_convert_conversation_data_to_ai_conversation_sets_restored_run_id() {
         conversation.run_id(),
         Some(ambient_agent_task_id.to_string())
     );
+    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
+    assert!(conversation.usage_totals().has_usage);
+}
+
+/// A later server-metadata snapshot without the provider-cost field (legacy
+/// server or conversation) must not erase a known baseline, and usage
+/// evidence must be derived from the metadata's contents.
+#[test]
+#[allow(deprecated)]
+fn set_server_metadata_keeps_known_baseline_when_cost_field_is_absent() {
+    let conversation_data = api::ConversationData {
+        tasks: vec![api::Task {
+            id: "root".to_string(),
+            messages: vec![],
+            dependencies: None,
+            description: String::new(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+        ordered_message_ids: vec![],
+    };
+    let mut conversation = convert_conversation_data_to_ai_conversation(
+        AIConversationId::new(),
+        &conversation_data,
+        test_server_metadata("server-token", None),
+        RestorationMode::Continue,
+    )
+    .expect("conversation should restore");
+    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
+
+    let mut legacy_snapshot = test_server_metadata("server-token", None);
+    legacy_snapshot.usage.total_provider_cost_in_cents = None;
+    legacy_snapshot.usage.credits_spent = 2.0;
+    conversation.set_server_metadata(legacy_snapshot);
+
+    let totals = conversation.usage_totals();
+    assert_eq!(totals.cost_in_cents, Some(3.2));
+    assert!(totals.has_usage);
+}
+
+/// Asynchronous GraphQL metadata snapshots can be stale relative to live
+/// stream accounting: a snapshot may seed or advance the known total but
+/// never regress it.
+#[test]
+#[allow(deprecated)]
+fn stale_server_metadata_snapshot_never_regresses_known_total() {
+    let conversation_data = api::ConversationData {
+        tasks: vec![api::Task {
+            id: "root".to_string(),
+            messages: vec![],
+            dependencies: None,
+            description: String::new(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+        ordered_message_ids: vec![],
+    };
+    let mut conversation = convert_conversation_data_to_ai_conversation(
+        AIConversationId::new(),
+        &conversation_data,
+        test_server_metadata("server-token", None),
+        RestorationMode::Continue,
+    )
+    .expect("conversation should restore");
+    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
+
+    let mut newer_snapshot = test_server_metadata("server-token", None);
+    newer_snapshot.usage.total_provider_cost_in_cents = Some(4.4);
+    conversation.set_server_metadata(newer_snapshot);
+    assert_eq!(conversation.usage_totals().cost_in_cents, Some(4.4));
+
+    let mut stale_snapshot = test_server_metadata("server-token", None);
+    stale_snapshot.usage.total_provider_cost_in_cents = Some(3.2);
+    conversation.set_server_metadata(stale_snapshot);
+    assert_eq!(
+        conversation.usage_totals().cost_in_cents,
+        Some(4.4),
+        "a stale snapshot must never regress the displayed total"
+    );
+}
+
+/// A server-metadata snapshot whose usage contents are all-default carries no
+/// usage evidence, so the footer's usage entry stays hidden.
+#[test]
+#[allow(deprecated)]
+fn set_server_metadata_with_zero_usage_keeps_footer_usage_hidden() {
+    let conversation_data = api::ConversationData {
+        tasks: vec![api::Task {
+            id: "root".to_string(),
+            messages: vec![],
+            dependencies: None,
+            description: String::new(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+        ordered_message_ids: vec![],
+    };
+    let mut zero_usage_metadata = test_server_metadata("server-token", None);
+    zero_usage_metadata.usage.total_provider_cost_in_cents = None;
+
+    let conversation = convert_conversation_data_to_ai_conversation(
+        AIConversationId::new(),
+        &conversation_data,
+        zero_usage_metadata,
+        RestorationMode::Continue,
+    )
+    .expect("conversation should restore");
+
+    let totals = conversation.usage_totals();
+    assert!(!totals.has_usage);
+    assert_eq!(totals.cost_in_cents, None);
 }
 
 #[test]
@@ -243,74 +355,6 @@ fn test_convert_tool_call_result_to_input_upload_artifact_missing_result_is_erro
             other => panic!("Expected upload-artifact error result, got {other:?}"),
         },
         other => panic!("Expected action-result input, got {other:?}"),
-    }
-}
-
-#[test]
-fn test_convert_tool_call_result_to_input_start_agent_v2_results() {
-    let task_id = crate::ai::agent::task::TaskId::new("task".to_string());
-
-    let cases = [
-        (
-            "success",
-            Some(api::start_agent_v2_result::Result::Success(
-                api::start_agent_v2_result::Success {
-                    agent_id: "agent-123".to_string(),
-                },
-            )),
-        ),
-        (
-            "error",
-            Some(api::start_agent_v2_result::Result::Error(
-                api::start_agent_v2_result::Error {
-                    error: "child failed".to_string(),
-                },
-            )),
-        ),
-        ("cancelled", None),
-    ];
-
-    for (name, result) in cases {
-        let mut document_versions = HashMap::new();
-        let tool_call_result = api::message::ToolCallResult {
-            tool_call_id: format!("tool_call_{name}"),
-            context: None,
-            result: Some(api::message::tool_call_result::Result::StartAgentV2(
-                api::StartAgentV2Result { result },
-            )),
-        };
-
-        let input = convert_tool_call_result_to_input(
-            &task_id,
-            &tool_call_result,
-            &HashMap::new(),
-            &mut document_versions,
-        )
-        .unwrap();
-
-        match input {
-            AIAgentInput::ActionResult { result, .. } => match result.result {
-                crate::ai::agent::AIAgentActionResultType::StartAgent(
-                    crate::ai::agent::StartAgentResult::Success { agent_id, version },
-                ) if name == "success" => {
-                    assert_eq!(agent_id, "agent-123");
-                    assert_eq!(version, ai::agent::action_result::StartAgentVersion::V2);
-                }
-                crate::ai::agent::AIAgentActionResultType::StartAgent(
-                    crate::ai::agent::StartAgentResult::Error { error, version },
-                ) if name == "error" => {
-                    assert_eq!(error, "child failed");
-                    assert_eq!(version, ai::agent::action_result::StartAgentVersion::V2);
-                }
-                crate::ai::agent::AIAgentActionResultType::StartAgent(
-                    crate::ai::agent::StartAgentResult::Cancelled { version },
-                ) if name == "cancelled" => {
-                    assert_eq!(version, ai::agent::action_result::StartAgentVersion::V2);
-                }
-                other => panic!("Unexpected start-agent-v2 result for {name}: {other:?}"),
-            },
-            other => panic!("Expected action-result input for {name}, got {other:?}"),
-        }
     }
 }
 
@@ -886,19 +930,18 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
     let mut found_successful = 0;
 
     for input in &second_exchange.input {
-        if let crate::ai::agent::AIAgentInput::ActionResult { result, .. } = input {
-            if let crate::ai::agent::AIAgentActionResultType::RequestCommandOutput(command_result) =
+        if let crate::ai::agent::AIAgentInput::ActionResult { result, .. } = input
+            && let crate::ai::agent::AIAgentActionResultType::RequestCommandOutput(command_result) =
                 &result.result
-            {
-                match command_result {
-                    crate::ai::agent::RequestCommandOutputResult::CancelledBeforeExecution => {
-                        found_cancelled = true;
-                    }
-                    crate::ai::agent::RequestCommandOutputResult::Completed { .. } => {
-                        found_successful += 1;
-                    }
-                    _ => {}
+        {
+            match command_result {
+                crate::ai::agent::RequestCommandOutputResult::CancelledBeforeExecution => {
+                    found_cancelled = true;
                 }
+                crate::ai::agent::RequestCommandOutputResult::Completed { .. } => {
+                    found_successful += 1;
+                }
+                _ => {}
             }
         }
     }

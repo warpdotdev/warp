@@ -3,16 +3,16 @@
 use std::collections::VecDeque;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "local_fs")]
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures_lite::StreamExt;
 use ignore::gitignore::Gitignore;
 #[cfg(feature = "local_fs")]
 use notify_debouncer_full::notify::WatchFilter;
 use thiserror::Error;
-use warp_errors::report_error;
+use warp_errors::{ErrorExt, register_error, report_error};
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::standing_queries::{StandingQueryDefinitions, StandingQueryResults};
@@ -36,6 +36,14 @@ pub enum BuildTreeError {
     #[error("Maximum directory depth exceeded")]
     MaxDepthExceeded,
 }
+
+impl ErrorExt for BuildTreeError {
+    fn is_actionable(&self) -> bool {
+        false
+    }
+}
+
+register_error!(BuildTreeError);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IgnoredPathStrategy {
@@ -607,10 +615,10 @@ fn evaluate_entry(
         match options.ignored_path_strategy {
             IgnoredPathStrategy::Exclude => return Err(BuildTreeError::Ignored),
             IgnoredPathStrategy::IncludeOnly(patterns) => {
-                if let Some(file_name) = curr_path.file_name().and_then(|n| n.to_str()) {
-                    if !patterns.iter().any(|pattern| file_name == pattern) {
-                        return Err(BuildTreeError::Ignored);
-                    }
+                if let Some(file_name) = curr_path.file_name().and_then(|n| n.to_str())
+                    && !patterns.iter().any(|pattern| file_name == pattern)
+                {
+                    return Err(BuildTreeError::Ignored);
                 }
             }
             IgnoredPathStrategy::IncludeLazy => {
@@ -992,20 +1000,31 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
 /// a watch on) the directory at `path`.
 ///
 /// Directories inside `.git/` follow the watcher allowlist, force-included
-/// paths are always watched even when gitignored, and any other gitignored
-/// directory is pruned so we don't register watches on `node_modules`, build
-/// output, vendored deps, etc.
+/// paths are always watched even when gitignored, directory symlinks are
+/// pruned to avoid following trees outside the repository, and any other
+/// gitignored directory is pruned so we don't register watches on
+/// `node_modules`, build output, vendored deps, etc.
 pub fn should_watch_repo_directory(
     path: &Path,
+    repo_root: &Path,
     gitignores: &[Gitignore],
     force_included_paths: &[PathBuf],
 ) -> bool {
-    if is_git_internal_path(path) {
-        return should_watch_directory_in_git_path(path);
-    }
-
+    // Do not follow directory symlinks while recursively registering watches.
+    // A repository symlink such as `result -> /nix/store/...` can otherwise
+    // make the watcher traverse a large tree outside the repository. Keep
+    // explicitly force-included paths working for project-skill providers,
+    // which intentionally support symlinked skill directories.
     if matches_force_included_path(path, force_included_paths) {
         return true;
+    }
+
+    if is_within_symlink(path, repo_root) {
+        return false;
+    }
+
+    if is_git_internal_path(path) {
+        return should_watch_directory_in_git_path(path);
     }
 
     !matches_gitignores(
@@ -1014,6 +1033,25 @@ pub fn should_watch_repo_directory(
         gitignores,
         /* check_ancestors */ true,
     )
+}
+
+/// Returns whether `path` is a symlink or is below one.
+///
+/// The recursive watcher requires this check to be monotonic: if a symlinked
+/// directory is rejected, its descendants must be rejected as well even
+/// though their individual paths are not themselves symlinks.
+fn is_within_symlink(path: &Path, repo_root: &Path) -> bool {
+    // A valid path beneath a symlink can only be reached through a directory
+    // symlink, so avoid a second `metadata` syscall to resolve its target.
+    path.ancestors()
+        // The watched root itself may be a symlink (for example, a workspace
+        // opened through a user-created alias). It is the boundary of this
+        // check, not a symlinked directory to prune.
+        .take_while(|ancestor| *ancestor != repo_root && ancestor.starts_with(repo_root))
+        .any(|ancestor| {
+            std::fs::symlink_metadata(ancestor)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        })
 }
 
 /// Returns the [`WatchFilter`] used by repository file watchers.
@@ -1038,11 +1076,13 @@ pub fn should_watch_repo_directory(
 /// over-watch, never to miss events.
 #[cfg(feature = "local_fs")]
 pub fn repo_watch_filter(
+    repo_root: PathBuf,
     gitignores: Vec<Gitignore>,
     force_included_paths: Vec<PathBuf>,
 ) -> WatchFilter {
-    let should_watch =
-        move |path: &Path| should_watch_repo_directory(path, &gitignores, &force_included_paths);
+    let should_watch = move |path: &Path| {
+        should_watch_repo_directory(path, &repo_root, &gitignores, &force_included_paths)
+    };
     WatchFilter::with_filter(
         Arc::new(should_watch),
         Arc::new(|path: &Path| !should_ignore_git_path(path)),

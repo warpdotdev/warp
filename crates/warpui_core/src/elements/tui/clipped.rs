@@ -6,9 +6,9 @@
 //! the child rows before the first visible row.
 
 use super::{
-    TuiBuffer, TuiClipBounds, TuiConstraint, TuiElement, TuiEvent, TuiEventContext,
-    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiRect,
-    TuiScreenPoint, TuiScreenPosition, TuiScreenRect, TuiSize,
+    TuiClipBounds, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
+    TuiPaintContext, TuiPaintSurface, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition,
+    TuiScreenRect, TuiSize,
 };
 use crate::AppContext;
 
@@ -52,7 +52,7 @@ impl TuiClipped {
     /// Sets the child row rendered at the top of the clipped viewport.
     ///
     /// The child still lays out and renders from its own logical row 0. The
-    /// clipped viewport then copies a window out of that rendered child buffer:
+    /// clipped viewport translates its paint origin so that
     /// `viewport_origin_y` is the child row that appears at viewport y=0.
     ///
     /// ```text
@@ -119,33 +119,16 @@ impl TuiElement for TuiClipped {
         if size.width == 0 || size.height == 0 {
             return;
         }
-        let child_size = self
-            .child
+        self.child
             .size()
             .expect("TuiClipped child size must be retained after layout");
-        let child_area = TuiRect::new(
-            0,
-            0,
-            size.width.max(child_size.width),
-            self.child_height(size.height).max(child_size.height),
-        );
-        let mut child_buffer = TuiBuffer::empty(child_area);
         let clip = TuiScreenRect::new(screen_origin, size);
         let child_origin = origin.offset(0, -i32::from(self.viewport_origin_y));
         ctx.with_scene_layer(TuiClipBounds::BoundedByActiveLayerAnd(clip), |ctx| {
-            let mut child_surface = TuiPaintSurface::mapped(&mut child_buffer, child_origin);
-            self.child.render(child_origin, &mut child_surface, ctx);
+            surface.with_clip(origin, size, |surface| {
+                self.child.render(child_origin, surface, ctx);
+            });
         });
-
-        for y in 0..size.height {
-            let source_y = y.saturating_add(self.viewport_origin_y);
-            for x in 0..size.width {
-                surface.set_cell(
-                    origin.offset(i32::from(x), i32::from(y)),
-                    child_buffer[(x, source_y)].clone(),
-                );
-            }
-        }
     }
 
     fn size(&self) -> Option<TuiSize> {

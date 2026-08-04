@@ -1,13 +1,13 @@
 use pathfinder_color::ColorU;
-use warp_core::ui::theme::phenomenon::PhenomenonStyle;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::phenomenon::PhenomenonStyle;
+use warpui::Element;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, Stack,
 };
 use warpui::ui_components::checkbox::Checkbox;
 use warpui::ui_components::components::UiComponentStyles;
-use warpui::Element;
 
 use crate::appearance::Appearance;
 use crate::ui_components::icons::Icon;

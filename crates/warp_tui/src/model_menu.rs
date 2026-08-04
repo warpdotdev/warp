@@ -1,13 +1,17 @@
 //! Searchable TUI model picker state.
 
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
-use warp::tui_export::{query_model_picker_choices, LLMId, LLMPreferences, LLMPreferencesEvent};
+use warp::tui_export::{
+    LLMId, LLMPreferences, LLMPreferencesEvent, ModelPickerChoice, query_model_picker_choices,
+    should_show_bedrock_icon_for_model,
+    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
+};
 use warp_editor::model::CoreEditorModel;
 use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::inline_menu::{
-    result_row_capacity, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
-    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
+    MAX_INLINE_MENU_ROWS, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
+    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, result_row_capacity,
 };
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
@@ -18,6 +22,8 @@ struct TuiModelMenuRow {
     id: LLMId,
     title: String,
     is_selectable: bool,
+    is_key_connected: bool,
+    discount_percentage: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -81,6 +87,8 @@ impl TuiModelMenuModel {
                     title: id.to_string(),
                     id,
                     is_selectable,
+                    is_key_connected: false,
+                    discount_percentage: None,
                 })
                 .collect(),
             false,
@@ -151,6 +159,32 @@ impl TuiModelMenuModel {
         ctx.emit(TuiModelMenuEvent);
     }
 
+    /// Selects the row at absolute snapshot index `index` (for mouse click).
+    /// Returns `true` when the row was actually selected, `false` when the
+    /// index is out of bounds, the menu is not open, or the row is not
+    /// selectable.
+    pub(crate) fn select_at_snapshot_index(
+        &mut self,
+        index: usize,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let TuiModelMenuState::Open { list } = &mut self.state else {
+            return false;
+        };
+        let selected = list.select_absolute(index, MAX_VISIBLE_ROWS, |row| row.is_selectable);
+        ctx.emit(TuiModelMenuEvent);
+        selected
+    }
+
+    /// Scrolls the viewport by `delta` rows without changing the selection.
+    pub(crate) fn scroll_by_delta(&mut self, delta: isize, ctx: &mut ModelContext<Self>) {
+        let TuiModelMenuState::Open { list } = &mut self.state else {
+            return;
+        };
+        list.scroll_by(delta, MAX_VISIBLE_ROWS);
+        ctx.emit(TuiModelMenuEvent);
+    }
+
     pub(crate) fn accept_selected(&self, ctx: &AppContext) -> Option<LLMId> {
         if !self.is_open(ctx) {
             return None;
@@ -173,18 +207,10 @@ impl TuiModelMenuModel {
                 title: Some("Models".to_owned()),
                 tabs: Vec::new(),
             }),
-            rows: list
-                .rows()
-                .iter()
-                .map(|row| TuiInlineMenuRow {
-                    title: row.title.clone(),
-                    description: (!row.is_selectable).then(|| "disabled".to_owned()),
-                    is_selectable: row.is_selectable,
-                    style: TuiInlineMenuRowStyle::Default,
-                })
-                .collect(),
+            rows: list.rows().iter().map(snapshot_row).collect(),
             selected_index: list.selected_index(),
             scroll_offset: list.scroll_offset(),
+            scroll_anchor: list.scroll_anchor(),
             max_visible_rows: MAX_VISIBLE_ROWS,
             status: list
                 .rows()
@@ -208,14 +234,7 @@ impl TuiModelMenuModel {
         );
         let rows = choices
             .into_iter()
-            .map(|choice| {
-                let is_selectable = choice.is_selectable();
-                TuiModelMenuRow {
-                    id: choice.llm.id,
-                    title: choice.llm.display_name,
-                    is_selectable,
-                }
-            })
+            .map(|choice| model_menu_row(choice, ctx))
             .collect::<Vec<_>>();
         let preferred_index = preferred_selection_index(&rows, &active_id, query.trim().is_empty());
         let TuiModelMenuState::Open { list } = &mut self.state else {
@@ -226,6 +245,40 @@ impl TuiModelMenuModel {
         });
         ctx.emit(TuiModelMenuEvent);
     }
+}
+
+fn model_menu_row(choice: ModelPickerChoice, app: &AppContext) -> TuiModelMenuRow {
+    let uses_external_inference = should_show_key_icon_for_model(&choice.llm, app)
+        || should_show_bedrock_icon_for_model(&choice.llm, app)
+        || should_show_gemini_enterprise_agent_platform_icon_for_model(&choice.llm, app);
+    TuiModelMenuRow {
+        is_selectable: choice.is_selectable(),
+        is_key_connected: should_show_key_icon_for_model(&choice.llm, app),
+        discount_percentage: choice
+            .llm
+            .discount_percentage
+            .filter(|_| !uses_external_inference),
+        id: choice.llm.id,
+        title: choice.llm.display_name,
+    }
+}
+
+fn snapshot_row(row: &TuiModelMenuRow) -> TuiInlineMenuRow {
+    TuiInlineMenuRow {
+        title: row.title.clone(),
+        prefix: None,
+        description: (!row.is_selectable).then(|| "disabled".to_owned()),
+        state_suffix: row.is_key_connected.then(|| "(key connected)".to_owned()),
+        promotional_suffix: discount_label(row.discount_percentage),
+        is_selectable: row.is_selectable,
+        style: TuiInlineMenuRowStyle::Default,
+    }
+}
+
+fn discount_label(discount_percentage: Option<f32>) -> Option<String> {
+    discount_percentage
+        .filter(|percentage| *percentage > 0.)
+        .map(|percentage| format!("{}% off", percentage.round() as u32))
 }
 
 fn preferred_selection_index(

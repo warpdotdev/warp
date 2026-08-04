@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
+use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Empty, Fill, Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Radius, SavePosition, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    DEFAULT_UI_LINE_HEIGHT_RATIO, Empty, Fill, Flex, Hoverable, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
+    Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -320,10 +321,10 @@ impl PlanAndTodoListView {
             return None;
         }
 
-        if let Some(todo_list) = todo_list {
-            if !todo_list.is_empty() {
-                return Some(todo_list.clone());
-            }
+        if let Some(todo_list) = todo_list
+            && !todo_list.is_empty()
+        {
+            return Some(todo_list.clone());
         }
 
         None
@@ -483,16 +484,16 @@ impl View for PlanAndTodoListView {
 
         let mut row = Flex::row();
         // Only show plan chip when AgentView is not enabled
-        if !FeatureFlag::AgentView.is_enabled() {
-            if let Some(ai_document_id) = ai_document_id {
-                row.add_child(self.render_plan_button(
-                    ai_document_id,
-                    todo_list.is_some(),
-                    icon_size,
-                    appearance,
-                    app,
-                ));
-            }
+        if !FeatureFlag::AgentView.is_enabled()
+            && let Some(ai_document_id) = ai_document_id
+        {
+            row.add_child(self.render_plan_button(
+                ai_document_id,
+                todo_list.is_some(),
+                icon_size,
+                appearance,
+                app,
+            ));
         }
         if let Some(todo_list) = todo_list {
             row.add_child(self.render_todo_button(

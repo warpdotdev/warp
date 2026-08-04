@@ -2,7 +2,7 @@
 
 ## Summary
 
-When the agent edits files in the TUI, each edited file renders as its own transcript section: a header row (`✓ Updated components.js +31 −12 ▾`) followed by a read-only, hunk-only inline diff — line-number gutter, dim context lines, removed lines in red, added lines in green. When a tool call edits multiple files, the per-file sections nest, indented, under one collapsible summary header (`✓ Edited 3 files +34 −15 ▾`). The diff appears as soon as the edits are resolved (before execution completes) so the user can see what the agent is changing. It is not editable and has no approval affordances.
+When the agent edits files in the TUI, each edited file renders as its own transcript section: a collapsed header row (`✓ Updated components.js +31 −12 ▸`) that expands to a read-only, hunk-only inline diff — line-number gutter, dim context lines, removed lines in red, added lines in green. When a tool call edits multiple files, the per-file sections nest, indented, under one collapsed summary header (`✓ Edited 3 files +34 −15 ▸`). The diff is available as soon as the edits are resolved (before execution completes) so the user can inspect what the agent is changing. It is not editable and has no approval affordances.
 
 ## Figma
 
@@ -56,7 +56,7 @@ Figma: https://www.figma.com/design/yg5nbPZuGoAszHS3Rhvehu/TUI?node-id=323-17499
 
 ### Collapse
 
-15. The body is expanded by default when it appears.
+15. The body is collapsed by default when it appears.
 
 16. Clicking the header row toggles that file's body between expanded and collapsed (same interaction as the thinking-section toggle, including hover affordance). The caret shows `▾` expanded, `▸` collapsed. Each file's collapse state is independent.
 
@@ -76,4 +76,4 @@ Figma: https://www.figma.com/design/yg5nbPZuGoAszHS3Rhvehu/TUI?node-id=323-17499
 
 22. The summary counts are the sums across all files and appear only once every file's diff has computed, so the totals never tick up incrementally. The caret is always shown.
 
-23. Clicking the summary header collapses or expands the whole group, with the same interaction as file headers (caret `▾` expanded, `▸` collapsed; expanded by default). Collapsing hides all per-file sections; each file's own collapse state is independent and is preserved and restored when the group is re-expanded.
+23. Clicking the summary header collapses or expands the whole group, with the same interaction as file headers (caret `▾` expanded, `▸` collapsed; collapsed by default). Collapsing hides all per-file sections; each file's own collapse state is independent and is preserved and restored when the group is re-expanded.

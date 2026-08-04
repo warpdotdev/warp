@@ -8,7 +8,7 @@ use super::config_state::{AuthSecretSelection, OrchestrationConfigState};
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::local_harness_setup::{
-    local_harness_is_product_enabled, local_harness_setup_state, LocalHarnessSetupState,
+    LocalHarnessSetupState, local_harness_is_product_enabled, local_harness_setup_state,
 };
 use crate::ai::orchestration::providers::ORCHESTRATION_WARP_WORKER_HOST;
 use crate::cloud_object::CloudObjectLookup as _;
@@ -86,17 +86,17 @@ pub fn accept_disabled_reason_with_auth(
     if let Some(reason) = state.accept_disabled_reason() {
         return Some(reason.to_string());
     }
-    if matches!(state.execution_mode, RunAgentsExecutionMode::Local) {
-        if let Some(harness) = Harness::parse_local_child_harness(&state.harness_type) {
-            match local_harness_setup_state(harness) {
-                LocalHarnessSetupState::MissingHarness { tooltip } => {
-                    return Some(tooltip.to_string());
-                }
-                LocalHarnessSetupState::ProductDisabled { message } => {
-                    return Some(message.to_string());
-                }
-                LocalHarnessSetupState::Ready => {}
+    if matches!(state.execution_mode, RunAgentsExecutionMode::Local)
+        && let Some(harness) = Harness::parse_local_child_harness(&state.harness_type)
+    {
+        match local_harness_setup_state(harness) {
+            LocalHarnessSetupState::MissingHarness { tooltip } => {
+                return Some(tooltip.to_string());
             }
+            LocalHarnessSetupState::ProductDisabled { message } => {
+                return Some(message.to_string());
+            }
+            LocalHarnessSetupState::Ready => {}
         }
     }
     if auth_secret_selection_required(state, ctx) {
