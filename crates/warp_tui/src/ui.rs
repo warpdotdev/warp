@@ -137,6 +137,40 @@ pub(crate) fn centered_in_viewport(content: Box<dyn TuiElement>) -> Box<dyn TuiE
         .finish()
 }
 
+pub(crate) fn render_welcome_title(builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
+    TuiText::new("Welcome to Warp")
+        .with_style(builder.brand_primary_style().add_modifier(Modifier::BOLD))
+        .truncate()
+        .finish()
+}
+
+pub(crate) fn append_welcome_capability_section(
+    mut column: TuiFlex,
+    builder: &TuiUiBuilder,
+) -> TuiFlex {
+    column = column.child(
+        TuiText::new("What’s different about Warp")
+            .with_style(builder.muted_text_style())
+            .truncate()
+            .finish(),
+    );
+    for description in [
+        "State of the art coding agents",
+        "Frontier and open-weight models",
+        "Fully customizable model routers",
+        "Orchestration for fleets of agents",
+        "Better shell command support",
+    ] {
+        column = column.child(capability_row(
+            "✶",
+            description,
+            builder.brand_accent_style(),
+            builder.primary_text_style(),
+        ));
+    }
+    column
+}
+
 /// Signed-out welcome shown before browser device authorization begins.
 pub(crate) fn signed_out_welcome(
     clock: AnimationClock,
@@ -150,7 +184,6 @@ pub(crate) fn signed_out_welcome(
     let builder = TuiUiBuilder::from_app(app);
     let primary = builder.primary_text_style();
     let muted = builder.muted_text_style();
-    let title = builder.brand_primary_style().add_modifier(Modifier::BOLD);
     let brand_accent = builder.brand_accent_style();
     let login_style = if login_mouse.lock().is_ok_and(|state| state.is_hovered()) {
         primary
@@ -167,12 +200,7 @@ pub(crate) fn signed_out_welcome(
     let mut on_login_key = on_login.clone();
     let mut on_copy_key = on_copy.clone();
     let content = TuiFlex::column()
-        .child(
-            TuiText::new("Welcome to Warp")
-                .with_style(title)
-                .truncate()
-                .finish(),
-        )
+        .child(render_welcome_title(&builder))
         .child(
             TuiText::from_spans([
                 ("> ".to_owned(), brand_accent),
@@ -208,43 +236,8 @@ pub(crate) fn signed_out_welcome(
             .finish(),
         )
         .child(blank_row())
-        .child(blank_row())
-        .child(
-            TuiText::new("What’s different about Warp")
-                .with_style(muted)
-                .finish(),
-        )
-        .child(capability_row(
-            "⟡",
-            "Prompts or shell commands autodetected",
-            builder.brand_primary_style(),
-            primary,
-        ))
-        .child(capability_row(
-            "⊹",
-            "Set up custom model routers",
-            builder.link_text_style(),
-            primary,
-        ))
-        .child(capability_row(
-            "✶",
-            "Orchestrate fleets of agents",
-            brand_accent,
-            primary,
-        ))
-        .child(capability_row(
-            "*",
-            "Run full-screen terminal apps",
-            builder.credential_entry_accent_style(),
-            primary,
-        ))
-        .child(capability_row(
-            "◊",
-            "Persist sessions through state changes",
-            builder.attention_glyph_style(),
-            primary,
-        ))
-        .finish();
+        .child(blank_row());
+    let content = append_welcome_capability_section(content, &builder).finish();
     TuiEventHandler::new(auth_layout(clock, animation_config, content, &builder))
         .on_key("enter", move |_, event_ctx, app| {
             on_login_key(event_ctx, app);

@@ -35,7 +35,9 @@ use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
 use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::tui_builder::TuiUiBuilder;
-use crate::ui::abbreviate_home_prefix;
+use crate::ui::{
+    abbreviate_home_prefix, append_welcome_capability_section, render_welcome_title,
+};
 use crate::zero_state_animation::{
     WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent,
     ZeroStateAnimationElement, ZeroStateInteractionHandle, ZeroStateStarfieldElement,
@@ -686,45 +688,15 @@ fn render_first_run_top_section(
     visibility: ZeroStateSectionVisibility,
     app: &AppContext,
 ) -> TuiFlex {
-    let title_style = builder.brand_primary_style().add_modifier(Modifier::BOLD);
-    let muted = builder.muted_text_style();
     let mut column = TuiFlex::column()
-        .child(
-            TuiText::new("Welcome to Warp")
-                .with_style(title_style)
-                .truncate()
-                .finish(),
-        )
+        .child(render_welcome_title(builder))
         .child(render_version_line(builder, app));
     if visibility.signed_in_user {
         column = column.child(render_login_line_with_prefix("logged in as", builder, app));
     }
-    column = column.child(blank_row()).child(blank_row()).child(
-        TuiText::new("What’s different about Warp")
-            .with_style(muted)
-            .truncate()
-            .finish(),
-    );
-    for description in [
-        "State of the art coding agents",
-        "Frontier and open-weight models",
-        "Fully customizable model routers",
-        "Orchestration for fleets of agents",
-        "Better shell command support",
-    ] {
-        column = column.child(render_first_run_capability(description, builder));
-    }
+    column = column.child(blank_row()).child(blank_row());
+    column = append_welcome_capability_section(column, builder);
     column.child(blank_row())
-}
-
-fn render_first_run_capability(description: &str, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
-    let highlight = builder.brand_accent_style();
-    let primary = builder.primary_text_style();
-    let spans = vec![
-        ("✶ ".to_owned(), highlight),
-        (description.to_owned(), primary),
-    ];
-    TuiText::from_spans(spans).finish()
 }
 
 /// Bottom section of the overlay column: project context body (rules / skills / placeholder)

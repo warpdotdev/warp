@@ -242,11 +242,11 @@ fn signed_out_welcome_matches_designed_copy_and_layout() {
                 "Log in with Warp",
                 "Copy login URL (c)",
                 "What’s different about Warp",
-                "Prompts or shell commands autodetected",
-                "Set up custom model routers",
-                "Orchestrate fleets of agents",
-                "Run full-screen terminal apps",
-                "Persist sessions through state changes",
+                "✶ State of the art coding agents",
+                "✶ Frontier and open-weight models",
+                "✶ Fully customizable model routers",
+                "✶ Orchestration for fleets of agents",
+                "✶ Better shell command support",
             ] {
                 assert!(
                     lines.iter().any(|line| line.contains(expected)),
@@ -324,11 +324,11 @@ fn signed_out_welcome_uses_figma_brand_colors_in_dark_and_light_themes() {
                 assert_eq!(cell_color("> Press enter to get started", 0), brand_accent);
                 assert_eq!(cell_color("> Press enter to get started", 8), brand_accent);
                 assert_eq!(
-                    cell_color("⟡ Prompts or shell commands autodetected", 0),
-                    brand_primary
+                    cell_color("✶ State of the art coding agents", 0),
+                    brand_accent
                 );
                 assert_eq!(
-                    cell_color("✶ Orchestrate fleets of agents", 0),
+                    cell_color("✶ Better shell command support", 0),
                     brand_accent
                 );
             });
