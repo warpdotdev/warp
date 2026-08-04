@@ -1,5 +1,8 @@
 FROM ubuntu:24.04
 
+# Opt into the agent entrypoint's non-root rollout gate (see warp-agent-docker's README).
+ENV WARP_AGENT_NONROOT=1
+
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV TFENV_ROOT=/usr/local/tfenv
