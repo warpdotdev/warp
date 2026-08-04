@@ -21344,8 +21344,13 @@ impl Workspace {
                 color.a = TEAM_HEADER_TINT_ALPHA;
                 color
             });
-        if let Some(background) = Self::tab_bar_background_fill(team_color) {
-            tab_bar_container = tab_bar_container.with_background(background);
+        // The bar paints no base fill of its own so it inherits the terminal background
+        // (`util::get_terminal_background_fill`) the workspace paints behind the whole
+        // column, keeping the bar and the terminal one continuous surface; the bottom
+        // border is what separates them. Only the multi-team tint paints over it, and it
+        // stays translucent so that inherited background still shows through.
+        if let Some(team_color) = team_color {
+            tab_bar_container = tab_bar_container.with_background(Fill::Solid(team_color));
         }
         let tab_bar_element = tab_bar_container.finish();
 
@@ -21362,23 +21367,6 @@ impl Workspace {
             TAB_BAR_POSITION_ID,
         )
         .finish()
-    }
-
-    /// The fill painted behind the horizontal tab bar, or `None` to inherit the
-    /// workspace's terminal background.
-    ///
-    /// The chrome deliberately paints no base fill of its own: the workspace already
-    /// paints [`util::get_terminal_background_fill`] behind the whole column, so
-    /// inheriting it keeps the bar and the terminal a single continuous surface.
-    /// Painting an `fg_overlay_1` base here instead rendered the bar as a visibly
-    /// lighter strip sitting above the terminal. The bottom border is what separates
-    /// the two areas.
-    ///
-    /// A multi-team tint is still painted over that inherited background; it is
-    /// translucent ([`TEAM_HEADER_TINT_ALPHA`]) so the terminal background shows
-    /// through.
-    fn tab_bar_background_fill(team_color: Option<ColorU>) -> Option<Fill> {
-        team_color.map(Fill::Solid)
     }
 
     // Render traffic lights, if appropriate for the current platform.
