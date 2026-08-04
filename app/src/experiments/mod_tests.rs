@@ -1,5 +1,3 @@
-use serial_test::serial;
-
 use super::*;
 
 lazy_static! {
@@ -146,29 +144,28 @@ fn test_from_group_id_errors_if_incorrect_experiment() {
     assert!(res.is_err())
 }
 
-// `EXPERIMENT_LAYER_MAPPINGS` is a process-global, append-only cache. Other
-// tests that call `experiments::init` (e.g. via `test_util::terminal`) leave
-// the real layers mapped in it for the rest of the process, so this test
-// must reset the map before asserting its contents, and must run `#[serial]`
-// so a concurrently-running `experiments::init` can't repopulate it mid-test.
+// Builds into a local map rather than the process-global
+// `EXPERIMENT_LAYER_MAPPINGS`: any concurrently-running test that calls
+// `experiments::init` (e.g. via `test_util::terminal`) writes the real layers
+// into that global, so its exact contents are not assertable in a shared
+// process regardless of clearing or serialization.
 #[test]
-#[serial]
 fn test_create_experiment_layer_mappings() {
-    EXPERIMENT_LAYER_MAPPINGS.clear();
+    let mappings = DashMap::new();
 
     let layers = vec![&*TEST_LAYER];
-    create_experiment_layer_mappings(&layers);
+    build_experiment_layer_mappings(&layers, &mappings);
 
-    assert_eq!(EXPERIMENT_LAYER_MAPPINGS.len(), 2);
+    assert_eq!(mappings.len(), 2);
     assert_eq!(
-        EXPERIMENT_LAYER_MAPPINGS
+        mappings
             .get(TestExperiment::name())
             .expect("Layer mapping should have been created for TestExperiment.")
             .name(),
         TEST_LAYER.name()
     );
     assert_eq!(
-        EXPERIMENT_LAYER_MAPPINGS
+        mappings
             .get(FooExperiment::name())
             .expect("Layer mapping should have been created for FooExperiment.")
             .name(),
