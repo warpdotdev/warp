@@ -1014,10 +1014,10 @@ impl TerminalManager {
             }
             NetworkEvent::FailedToJoin { reason } => {
                 let session_id = network.as_ref(ctx).session_id();
-                log::warn!(
-                    "viewer TerminalManager: NetworkEvent::FailedToJoin \
-                     session_id={session_id} reason={reason:?}; pane stays in ViewPending \
-                     until manual retry or a fresh ensure_shared_session_viewer_child_pane"
+                log::debug!(
+                    "[shared-session] viewer TerminalManager: NetworkEvent::FailedToJoin \
+                     session_id={session_id} reason={reason:?} \
+                     orchestration_child_conversation_id={orchestration_child_conversation_id:?}"
                 );
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;

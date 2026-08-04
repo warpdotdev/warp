@@ -537,7 +537,6 @@ impl BlocklistAIHistoryModel {
         let children = self.children_by_parent.entry(parent_id).or_default();
         if !children.contains(&child_id) {
             children.push(child_id);
-            log::info!("[ORCH-D:history] indexed child {child_id:?} under parent {parent_id:?} (total children: {})", children.len());
         }
     }
 
@@ -619,18 +618,10 @@ impl BlocklistAIHistoryModel {
                 .get(&conversation_id)
                 .and_then(|c| c.parent_conversation_id());
             if current_parent != Some(parent_conversation_id) {
-                log::info!(
-                    "[ORCH-D:history] ensure_remote_child run_id={run_id} \
-                     re-indexing under new parent {parent_conversation_id:?} \
-                     (was {current_parent:?})"
-                );
                 self.set_parent_for_conversation(conversation_id, parent_conversation_id);
-            } else {
-                log::info!("[ORCH-D:history] ensure_remote_child run_id={run_id} already exists → {conversation_id:?}");
             }
             return conversation_id;
         }
-        log::info!("[ORCH-D:history] ensure_remote_child run_id={run_id} creating new child under parent={parent_conversation_id:?}");
 
         let conversation_id = self.start_new_child_conversation(
             terminal_surface_id,

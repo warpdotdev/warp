@@ -141,15 +141,9 @@ impl PaneGroup {
                 Some(WorkspaceAction::RestoreOrNavigateToConversation {
                     conversation_id, ..
                 }) => {
-                    let already_open_surface = BlocklistAIHistoryModel::as_ref(ctx)
-                        .terminal_surface_id_for_conversation(&conversation_id);
-                    let already_open = already_open_surface.is_some();
-                    log::info!(
-                        "[ORCH-D:restore] RestoreOrNavigateToConversation task_id={task_id} \
-                         conversation_id={conversation_id:?} already_open={already_open} \
-                         surface={already_open_surface:?} task_conversation_id={:?}",
-                        task.conversation_id()
-                    );
+                    let already_open = BlocklistAIHistoryModel::as_ref(ctx)
+                        .terminal_surface_id_for_conversation(&conversation_id)
+                        .is_some();
                     if already_open {
                         self.replace_pane_with_new_cloud_conversation(pane_id, ctx);
                     } else {
@@ -239,14 +233,6 @@ impl PaneGroup {
         });
         ctx.spawn(future, move |group, conversation, ctx| {
             if let Some(conversation) = conversation {
-                let exchange_count = match &conversation {
-                    CloudConversationData::Oz(c) => c.all_exchanges().len(),
-                    CloudConversationData::CLIAgent(_) => 0,
-                };
-                log::info!(
-                    "[ORCH-D:restore] fetch_and_load_transcript callback: conversation loaded \
-                     exchange_count={exchange_count} ambient_agent_task_id={ambient_agent_task_id:?}"
-                );
                 group.load_data_into_transcript_viewer(
                     target_view,
                     conversation,
@@ -254,7 +240,6 @@ impl PaneGroup {
                     ctx,
                 );
             } else {
-                log::info!("[ORCH-D:restore] fetch_and_load_transcript callback: conversation is None — replacing with compose pane");
                 if let Some(pane_id) =
                     group.find_pane_id_for_terminal_view(target_view.id(), ctx)
                 {

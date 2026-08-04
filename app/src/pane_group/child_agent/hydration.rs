@@ -260,7 +260,6 @@ impl PaneGroup {
             );
             return;
         };
-
         let fallback_was_swapped_anchor = if let Some(prior_pane_id) = self
             .child_agent_panes
             .get(&child_id)
