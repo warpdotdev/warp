@@ -585,6 +585,11 @@ fn keystroke_to_c0_control_code(
             ("6", C0::RS),
             ("7", C0::US),
             ("8", C0::DEL),
+            // Not in the VT-220 table, but xterm and every terminal since encode `ctrl-/` as US,
+            // and editors bind against it (Vim/Neovim's `<C-/>`). Unlike the other control-code
+            // punctuation (`ctrl-[`, `ctrl-\`, `ctrl-]`, ...), no platform keyboard layer folds
+            // `ctrl-/` into a control byte for us, so it has to be mapped here. See GH#4620.
+            ("/", C0::US),
         ]);
     }
 
