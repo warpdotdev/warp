@@ -1012,9 +1012,8 @@ fn test_open_file_notebook_focuses_existing_markdown_pane() {
 }
 
 /// Regression test for the agent file-range preview's "Open file" button: the
-/// workspace's `OpenFileWithTarget` handler used to build its `CodeSource` with
-/// `range_start: None`, dropping the requested line so consumers that read the
-/// source for the jump target opened the file at the top instead.
+/// handler used to zero out `range_start`, so consumers that read the jump
+/// target off the `CodeSource` opened the file at the top.
 #[cfg(feature = "local_fs")]
 #[test]
 fn test_open_file_with_target_event_preserves_requested_line() {
@@ -1067,9 +1066,8 @@ fn test_open_file_with_target_event_preserves_requested_line() {
     });
 }
 
-/// The notebook viewer renders markdown instead of raw lines, but it hands its
-/// `CodeSource` back when the user toggles to the raw code view, so the
-/// requested line has to survive the notebook-viewer target too.
+/// Regression test for the raw-code toggle: the notebook-viewer target used to
+/// drop the `CodeSource` outright, so the raw view always started at line 1.
 #[cfg(feature = "local_fs")]
 #[test]
 fn test_open_markdown_viewer_target_preserves_requested_line() {

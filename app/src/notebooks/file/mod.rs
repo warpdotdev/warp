@@ -314,7 +314,6 @@ impl FileNotebookView {
         self.code_source = source;
     }
 
-    /// The `CodeSource` this file was opened with, if any.
     #[cfg(feature = "local_fs")]
     pub fn code_source(&self) -> Option<&CodeSource> {
         self.code_source.as_ref()
