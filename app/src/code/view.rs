@@ -781,6 +781,26 @@ impl CodeView {
         });
     }
 
+    /// Seed a pending scroll fraction on the active tab, restoring scroll after a markdown
+    /// rendered->raw toggle. Applied on the next `ViewportUpdated` (after layout), overriding the
+    /// default top-of-file scroll. The fraction is used rather than a line/column because the
+    /// rendered and raw documents differ.
+    pub(crate) fn set_pending_scroll_fraction(&self, fraction: f32, ctx: &mut ViewContext<Self>) {
+        let Some(tab) = self.tab_group.get(self.active_tab_index) else {
+            return;
+        };
+        tab.editor_view.update(ctx, |editor, ctx| {
+            editor.set_pending_scroll(ScrollPosition::Fraction(fraction), ctx);
+        });
+    }
+
+    /// The current vertical scroll fraction of the active tab's editor, in `0..=1`.
+    #[cfg(feature = "local_fs")]
+    fn scroll_fraction(&self, ctx: &AppContext) -> Option<f32> {
+        let tab = self.tab_group.get(self.active_tab_index)?;
+        Some(tab.editor_view.as_ref(ctx).scroll_fraction(ctx))
+    }
+
     fn open_new_tab(
         &mut self,
         location: Option<LocalOrRemotePath>,
@@ -2343,6 +2363,8 @@ impl TypedActionView for CodeView {
 
                 if let Some(lor_path) = lor_path {
                     let source = self.source.clone();
+                    let scroll_fraction =
+                        self.scroll_fraction(ctx).map(ordered_float::OrderedFloat);
                     if self.active_tab_has_unsaved_changes(ctx) {
                         self.save_local(
                             self.active_tab_index,
@@ -2351,6 +2373,7 @@ impl TypedActionView for CodeView {
                                     ctx.emit(CodeViewEvent::Pane(PaneEvent::ReplaceWithFilePane {
                                         path: lor_path.clone(),
                                         source: Some(source.clone()),
+                                        scroll_fraction,
                                     }));
                                 }
                             })),
@@ -2360,6 +2383,7 @@ impl TypedActionView for CodeView {
                         ctx.emit(CodeViewEvent::Pane(PaneEvent::ReplaceWithFilePane {
                             path: lor_path,
                             source: Some(source),
+                            scroll_fraction,
                         }));
                     }
                 }
