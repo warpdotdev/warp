@@ -26,7 +26,7 @@ pub fn parse_skills_dirs_env() -> Vec<PathBuf> {
     val.split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
+        .map(|entry| PathBuf::from(shellexpand::tilde(entry).as_ref()))
         .collect()
 }
 
