@@ -3548,12 +3548,16 @@ impl AIConversation {
         &mut self,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        // Don't persist viewer conversations (e.g. shared sessions) or
-        // remote-child placeholders. Remote children are always rediscovered
-        // on restore via the ancestor-list seed
-        // (`PaneGroup::seed_child_conversations_from_task`), so a persisted
-        // row would only risk going stale relative to the server.
-        if self.is_viewing_shared_session || self.is_remote_child {
+        // Don't persist viewer conversations (e.g. shared sessions).
+        // Under the unified stack, remote child placeholder conversations are
+        // also not persisted — they are rediscovered on restore via the
+        // ancestor-list seed, so a persisted row would only risk going stale.
+        // Under the flag-off path, remote children must be persisted so they
+        // survive restarts.
+        if self.is_viewing_shared_session
+            || (self.is_remote_child
+                && crate::features::FeatureFlag::OrchestrationUnifiedStack.is_enabled())
+        {
             return;
         }
 
