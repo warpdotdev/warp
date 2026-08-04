@@ -35,9 +35,7 @@ use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
 use crate::autoupdate::{TuiAutoupdateStatus, TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::tui_builder::TuiUiBuilder;
-use crate::ui::{
-    abbreviate_home_prefix, append_welcome_capability_section, render_welcome_title,
-};
+use crate::ui::{abbreviate_home_prefix, append_welcome_capability_section, render_welcome_title};
 use crate::zero_state_animation::{
     WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent,
     ZeroStateAnimationElement, ZeroStateInteractionHandle, ZeroStateStarfieldElement,
