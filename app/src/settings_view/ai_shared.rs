@@ -12,6 +12,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use settings::Setting;
+use warp_core::context_flag::ContextFlag;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     ChildView, Container, Element, Fill, Flex, HyperlinkUrl, MouseStateHandle, ParentElement,
@@ -28,6 +30,15 @@ use super::settings_page::{
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarInlineEditor;
 use crate::appearance::Appearance;
 use crate::editor::{EditorView, InteractionState};
+
+/// Whether MCP servers are surfaced in the UI at all.
+///
+/// Both the Warp Agent page's MCP section and the Profiles page's MCP
+/// permission controls key off this, so it lives here rather than on either
+/// page's widgets.
+pub fn should_show_mcp_servers() -> bool {
+    FeatureFlag::McpServer.is_enabled() && ContextFlag::ShowMCPServers.is_enabled()
+}
 
 /// Enables or disables an editor embedded in a settings row.
 ///

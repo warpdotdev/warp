@@ -113,14 +113,14 @@ fn is_subpage_covers_all_umbrella_types() {
 // ── parent_page_section mapping ─────────────────────────────────────────────
 
 #[test]
-fn ai_subpages_map_to_ai_backing_page() {
+fn ai_subpages_map_to_their_own_backing_pages() {
     assert_eq!(
         SettingsSection::WarpAgent.parent_page_section(),
-        SettingsSection::AI
+        SettingsSection::WarpAgent
     );
     assert_eq!(
         SettingsSection::AgentProfiles.parent_page_section(),
-        SettingsSection::AI
+        SettingsSection::AgentProfiles
     );
 }
 
@@ -1107,17 +1107,15 @@ fn arrow_down_collapsed_umbrella_respects_search_filter() {
     assert_eq!(next, SettingsSection::AgentMCPServers);
 }
 
-// ── Active subpage filter reapply after rebuild (APP-4922) ───────────────────
-// Searching on an AI/Code subpage rebuilds the subpage's PageType (via
-// set_active_subpage), which resets its widget filter to every widget; the
-// active query must be reapplied so only matching widgets render. These tests
-// exercise the real PageType::Uncategorized filter lifecycle and the real
-// search_terms_match predicate. The production reapply call sites in mod.rs
-// (handle_search_editor_event/cycle_pages/SelectAndRefresh) need a full
-// ViewContext<SettingsView>, so they are verified via computer-use screenshots.
+// ── PageType filter lifecycle across a rebuild (APP-4922) ────────────────────
+// Rebuilding a page's PageType resets its widget filter to every widget, so an
+// active query has to be reapplied for only matching widgets to render. No page
+// rebuilds itself on navigation any more (each subpage owns its own view), but
+// these tests still pin the underlying PageType::Uncategorized filter lifecycle
+// and the real search_terms_match predicate that the invariant rests on.
 
 /// Minimal View so PageType<V> can be instantiated in a unit test without the
-/// full SettingsView/ViewContext the production reapply call sites require.
+/// full SettingsView/ViewContext a real settings page requires.
 struct TestSettingsView;
 
 impl Entity for TestSettingsView {
@@ -1152,8 +1150,8 @@ impl SettingsWidget for StubWidget {
     }
 }
 
-/// A fresh Uncategorized page mirroring set_active_subpage -> build_page ->
-/// new_uncategorized: every widget index visible by default.
+/// A fresh Uncategorized page mirroring build_page -> new_uncategorized: every
+/// widget index visible by default.
 fn stub_widgets_page() -> PageType<TestSettingsView> {
     let widgets: Vec<Box<dyn SettingsWidget<View = TestSettingsView>>> = vec![
         Box::new(StubWidget {
@@ -1214,9 +1212,9 @@ fn search_terms_match_direct_unit_checks() {
 #[test]
 fn rebuild_resets_filter_to_all_widgets() {
     // Searching "file search" matches exactly one widget. A freshly built page
-    // (mirroring set_active_subpage -> build_page -> new_uncategorized) resets
-    // the filter to every widget, so without reapplying update_filter the
-    // subpage would show all widgets.
+    // (mirroring build_page -> new_uncategorized) resets the filter to every
+    // widget, so without reapplying update_filter the page would show all
+    // widgets.
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let mut page = stub_widgets_page();

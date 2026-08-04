@@ -28,7 +28,7 @@ use warpui::{Action, AppContext, SingletonEntity, ViewContext, ViewHandle};
 
 use super::SettingsSection;
 use super::about_page::AboutPageView;
-use super::ai_page::AISettingsPageView;
+use super::agent_profiles_page::AgentProfilesPageView;
 use super::appearance_page::AppearanceSettingsPageView;
 use super::billing_and_usage_dispatch::BillingAndUsageDispatchView;
 use super::cli_agents_page::CLIAgentsPageView;
@@ -45,6 +45,7 @@ use super::referrals_page::ReferralsPageView;
 use super::scripting_page::ScriptingSettingsPageView;
 use super::show_blocks_view::ShowBlocksView;
 use super::teams_page::TeamsPageView;
+use super::warp_agent_page::WarpAgentPageView;
 use super::warp_drive_page::WarpDriveSettingsPageView;
 use super::warpify_page::WarpifyPageView;
 use crate::appearance::Appearance;
@@ -119,7 +120,8 @@ pub enum SettingsPageViewHandle {
     Warpify(ViewHandle<WarpifyPageView>),
     Referrals(ViewHandle<ReferralsPageView>),
     Scripting(ViewHandle<ScriptingSettingsPageView>),
-    AI(ViewHandle<AISettingsPageView>),
+    WarpAgent(ViewHandle<WarpAgentPageView>),
+    AgentProfiles(ViewHandle<AgentProfilesPageView>),
     Knowledge(ViewHandle<KnowledgePageView>),
     CLIAgents(ViewHandle<CLIAgentsPageView>),
     CloudEnvironments(ViewHandle<EnvironmentsPageView>),
@@ -146,7 +148,8 @@ impl SettingsPageViewHandle {
             Warpify(view_handle) => ChildView::new(view_handle).finish(),
             Referrals(view_handle) => ChildView::new(view_handle).finish(),
             Scripting(view_handle) => ChildView::new(view_handle).finish(),
-            AI(view_handle) => ChildView::new(view_handle).finish(),
+            WarpAgent(view_handle) => ChildView::new(view_handle).finish(),
+            AgentProfiles(view_handle) => ChildView::new(view_handle).finish(),
             Knowledge(view_handle) => ChildView::new(view_handle).finish(),
             CLIAgents(view_handle) => ChildView::new(view_handle).finish(),
             CloudEnvironments(view_handle) => ChildView::new(view_handle).finish(),
