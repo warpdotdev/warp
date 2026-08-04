@@ -21344,11 +21344,6 @@ impl Workspace {
                 color.a = TEAM_HEADER_TINT_ALPHA;
                 color
             });
-        // The bar paints no base fill of its own so it inherits the terminal background
-        // (`util::get_terminal_background_fill`) the workspace paints behind the whole
-        // column, keeping the bar and the terminal one continuous surface; the bottom
-        // border is what separates them. Only the multi-team tint paints over it, and it
-        // stays translucent so that inherited background still shows through.
         if let Some(team_color) = team_color {
             tab_bar_container = tab_bar_container.with_background(Fill::Solid(team_color));
         }
