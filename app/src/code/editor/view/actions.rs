@@ -1265,11 +1265,8 @@ impl RichTextAction<CodeEditorView> for CodeEditorViewAction {
 
         if view.as_ref(ctx).is_selecting {
             actions_to_dispatch.push(CodeEditorViewAction::SelectionEnd);
-        } else if cmd {
-            if let Location::Text { char_offset, .. } = location {
-                actions_to_dispatch
-                    .push(CodeEditorViewAction::MaybeClickOnHoveredLink(char_offset));
-            }
+        } else if cmd && let Location::Text { char_offset, .. } = location {
+            actions_to_dispatch.push(CodeEditorViewAction::MaybeClickOnHoveredLink(char_offset));
         }
         actions_to_dispatch
     }

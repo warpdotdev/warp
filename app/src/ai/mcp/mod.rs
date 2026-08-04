@@ -12,8 +12,8 @@ use strum_macros::EnumIter;
 #[cfg(not(target_family = "wasm"))]
 pub use templatable_manager::McpIntegration;
 pub use templatable_manager::TemplatableMCPServerManager;
-use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
 
 use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::cloud_object::model::json_model::JsonModel;
@@ -21,9 +21,9 @@ use crate::cloud_object::{
     CloudObjectUuid, GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType,
     Revision,
 };
-use crate::drive::items::mcp_server::WarpDriveMCPServer;
-use crate::drive::items::WarpDriveItem;
 use crate::drive::CloudObjectTypeAndId;
+use crate::drive::items::WarpDriveItem;
+use crate::drive::items::mcp_server::WarpDriveMCPServer;
 #[cfg(not(target_family = "wasm"))]
 use crate::persistence::model::MCPEnvironmentVariables;
 use crate::server::ids::SyncId;
@@ -49,6 +49,8 @@ cfg_if::cfg_if! {
 
 pub mod gallery;
 pub use gallery::MCPGalleryManager;
+#[cfg(not(target_family = "wasm"))]
+pub mod builtin;
 pub mod templatable;
 #[cfg(not(target_family = "wasm"))]
 pub use cloud_object_models::{
@@ -291,12 +293,11 @@ fn find_server_map(
 
     let pointers = ["/mcp/servers", "/servers", "/mcpServers"];
     for pointer in pointers.into_iter() {
-        if let Some(value) = config.pointer(pointer) {
-            if let Ok(servers) =
+        if let Some(value) = config.pointer(pointer)
+            && let Ok(servers) =
                 serde_json::from_value::<HashMap<String, JSONMCPServer>>(value.clone())
-            {
-                return Ok(servers);
-            }
+        {
+            return Ok(servers);
         }
     }
     serde_json::from_value::<HashMap<String, JSONMCPServer>>(config)
@@ -518,10 +519,15 @@ impl MCPProvider {
 
     pub fn icon(&self) -> Icon {
         match self {
-            MCPProvider::Warp => Icon::Warp,
+            // Warp's own agent MCP config — use the Warp agent brand mark.
+            MCPProvider::Warp => Icon::Agent,
             MCPProvider::Claude => Icon::ClaudeLogo,
             MCPProvider::Codex => Icon::OpenAILogo,
-            MCPProvider::Agents => Icon::Warp,
+            // "Other Agents" is the cross-tool .agents/.mcp.json convention for
+            // third-party agent tooling (not Warp-branded). Use a neutral AI
+            // icon so this row never carries the Warp agent mark, and the two
+            // rows remain visually distinct once Icon::Agent gets its own asset.
+            MCPProvider::Agents => Icon::AiAssistant,
         }
     }
 

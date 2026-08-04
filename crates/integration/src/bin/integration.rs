@@ -3,11 +3,11 @@ use std::env;
 
 use anyhow::Result;
 use clap::Parser;
-use integration::test::*;
 use integration::Builder;
+use integration::test::*;
 use warp_cli::WorkerCommand;
-use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
 use warp_core::AppId;
+use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
 
 /// The Warp integration test runner.
 #[derive(Debug, Default, Parser, Clone)]
@@ -404,6 +404,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_latest_buffer_operations);
 
     register_test!(test_pass_control_sequences_to_long_running_block);
+    register_test!(test_execution_profiles_load_from_settings_file);
+    register_test!(test_execution_profile_model_persists_and_hot_reloads_settings_file);
     register_test!(test_settings_file_migration_from_native_store);
     register_test!(test_settings_file_hot_reload_applies_new_values);
 
@@ -460,6 +462,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     // Copy current path command-palette action
     register_test!(test_copy_current_path_copies_terminal_pwd);
+    register_test!(test_copy_current_path_copies_code_editor_file_path);
 
     // Go to Line tests
     register_test!(test_goto_line_dialog_open_close);

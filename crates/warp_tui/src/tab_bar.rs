@@ -11,12 +11,12 @@ use std::error::Error;
 use std::fmt;
 
 use unicode_segmentation::UnicodeSegmentation;
-use warpui_core::elements::tui::{
-    text_width, Color, Modifier, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex,
-    TuiHoverable, TuiParentElement, TuiSizeConstraintCondition, TuiSizeConstraintSwitch, TuiStyle,
-    TuiText,
-};
 use warpui_core::elements::MouseStateHandle;
+use warpui_core::elements::tui::{
+    Color, Modifier, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiHoverable,
+    TuiParentElement, TuiSizeConstraintCondition, TuiSizeConstraintSwitch, TuiStyle, TuiText,
+    text_width,
+};
 use warpui_core::{AppContext, Entity, TuiView, TypedActionView, ViewContext};
 const DIVIDER: &str = "|";
 const DIVIDER_PADDING_LEFT: u16 = 1;
@@ -24,7 +24,7 @@ const DIVIDER_PADDING_RIGHT: u16 = 2;
 const ELLIPSIS: &str = "...";
 
 /// Stable tab data rendered by [`TuiTabBarView`].
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct TuiTab {
     pub key: String,
     pub label: String,
@@ -32,7 +32,7 @@ pub struct TuiTab {
 }
 
 /// Styled text rendered before a tab label.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct TuiTabLeading {
     text: String,
     style: TuiStyle,
@@ -59,7 +59,7 @@ impl TuiTab {
 }
 
 /// Caller-supplied styles for the tab bar and its semantic states.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TuiTabBarStyles {
     pub background: Option<Color>,
     pub leading: TuiStyle,
@@ -70,7 +70,7 @@ pub struct TuiTabBarStyles {
 }
 
 /// Caller-owned semantic state and presentation options for a tab bar.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct TuiTabBarConfig {
     pub leading: Option<String>,
     pub main_tab: Option<TuiTab>,
@@ -104,6 +104,54 @@ impl TuiTabBarConfig {
     }
 }
 
+/// Caller-owned responsive paging intent for a tab bar.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TuiTabBarPagingState<K> {
+    explicit_anchor: Option<K>,
+}
+impl<K> Default for TuiTabBarPagingState<K> {
+    fn default() -> Self {
+        Self {
+            explicit_anchor: None,
+        }
+    }
+}
+
+impl<K> TuiTabBarPagingState<K> {
+    /// Preserves the page beginning at `anchor` instead of revealing selection.
+    pub(crate) fn set_explicit_anchor(&mut self, anchor: K) {
+        self.explicit_anchor = Some(anchor);
+    }
+
+    /// Resumes automatic selected-tab reveal.
+    pub(crate) fn clear_explicit_anchor(&mut self) {
+        self.explicit_anchor = None;
+    }
+}
+
+impl<K: Clone> TuiTabBarPagingState<K> {
+    /// Resolves paging intent against the owner's current ordered keys.
+    pub(crate) fn resolve(
+        &self,
+        default_anchor: Option<K>,
+        explicit_anchor_is_valid: impl FnOnce(&K) -> bool,
+    ) -> TuiTabBarResolvedPage<K> {
+        let explicit_anchor = self
+            .explicit_anchor
+            .as_ref()
+            .and_then(|anchor| explicit_anchor_is_valid(anchor).then_some(anchor));
+        TuiTabBarResolvedPage {
+            page_anchor: explicit_anchor.cloned().or(default_anchor),
+            reveal_selected: explicit_anchor.is_none(),
+        }
+    }
+}
+
+/// Effective paging inputs resolved from [`TuiTabBarPagingState`].
+pub(crate) struct TuiTabBarResolvedPage<K> {
+    pub(crate) page_anchor: Option<K>,
+    pub(crate) reveal_selected: bool,
+}
 /// Invalid caller-supplied tab-bar configuration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TuiTabBarConfigError {
@@ -210,6 +258,9 @@ impl TuiTabBarView {
         config: TuiTabBarConfig,
         ctx: &mut ViewContext<Self>,
     ) -> Result<(), TuiTabBarConfigError> {
+        if self.config == config {
+            return Ok(());
+        }
         let live_keys = validated_live_keys(&config)?;
         self.config = config;
         self.reconcile_mouse_states(live_keys);
@@ -223,6 +274,10 @@ impl TuiTabBarView {
         for key in live_keys {
             self.mouse_states.entry(key).or_default();
         }
+    }
+    /// Whether the current configuration contains any main or secondary tabs.
+    pub(crate) fn has_tabs(&self) -> bool {
+        self.config.main_tab.is_some() || !self.config.tabs.is_empty()
     }
 
     /// Resolves the adjacent tab in semantic order, wrapping at either end.
@@ -252,6 +307,14 @@ impl TuiTabBarView {
             TuiTabBarSecondaryEdge::Last => self.config.tabs.last(),
         }
         .map(|tab| tab.key.clone())
+    }
+
+    /// Returns the configured main-tab's stable key, if any.
+    ///
+    /// Callers (e.g. the terminal-session Escape binding) use this to return
+    /// focus to the root/main agent without duplicating tab-bar configuration.
+    pub(crate) fn main_tab_key(&self) -> Option<String> {
+        self.config.main_tab.as_ref().map(|tab| tab.key.clone())
     }
 }
 
@@ -447,9 +510,8 @@ fn render_tab(
         tab_style
     };
 
-    let leading_and_label_are_present = tab.leading.is_some() && !tab.label.is_empty();
-    let mut content = TuiFlex::row().with_spacing(u16::from(leading_and_label_are_present));
-
+    let content_count = usize::from(tab.leading.is_some()) + usize::from(!tab.label.is_empty());
+    let mut content = TuiFlex::row().with_spacing(u16::from(content_count > 1));
     if let Some(leading) = &tab.leading {
         content.add_child(
             TuiText::new(leading.text.clone())
@@ -752,10 +814,11 @@ fn tab_fixed_columns(tab: &TuiTab, padding_columns: u16) -> u16 {
         .as_ref()
         .map(|leading| text_width(&leading.text))
         .unwrap_or_default();
+    let content_count = usize::from(tab.leading.is_some()) + usize::from(!tab.label.is_empty());
     padding_columns
         .saturating_mul(2)
         .saturating_add(leading_columns)
-        .saturating_add(u16::from(tab.leading.is_some() && !tab.label.is_empty()))
+        .saturating_add(u16::try_from(content_count.saturating_sub(1)).unwrap_or(u16::MAX))
 }
 
 #[cfg(test)]

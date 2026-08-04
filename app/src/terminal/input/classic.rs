@@ -7,7 +7,7 @@ use warpui::elements::{
 };
 use warpui::{AppContext, SingletonEntity};
 
-use super::{should_render_prompt_using_editor_decorator_elements, Input, SubshellRenderState};
+use super::{Input, SubshellRenderState, should_render_prompt_using_editor_decorator_elements};
 use crate::ai::blocklist::InputType;
 use crate::appearance::Appearance;
 use crate::context_chips::spacing;
@@ -20,7 +20,7 @@ use crate::terminal::input::common::{
     add_voltron_overlay, add_workflow_info_overlay, should_show_terminal_input_message_bar,
     wrap_input_with_terminal_padding_and_focus_handler,
 };
-use crate::terminal::input::{get_input_box_top_border_width, InputDropTargetData};
+use crate::terminal::input::{InputDropTargetData, get_input_box_top_border_width};
 use crate::terminal::settings::{SpacingMode, TerminalSettings};
 use crate::terminal::view::TerminalAction;
 use crate::terminal::warpify::render::{render_subshell_flag, render_subshell_flag_pole};
@@ -102,12 +102,11 @@ impl Input {
         );
         let mut column = Flex::column();
 
-        if matches!(input_mode, InputMode::PinnedToBottom | InputMode::Waterfall) {
-            if let Some(banner) =
+        if matches!(input_mode, InputMode::PinnedToBottom | InputMode::Waterfall)
+            && let Some(banner) =
                 self.render_input_banner(appearance, app, input_mode, is_compact_mode)
-            {
-                column.add_child(banner);
-            }
+        {
+            column.add_child(banner);
         }
 
         column.add_children([prompt_top_padding_row.finish(), prompt_row.finish()]);
@@ -117,14 +116,13 @@ impl Input {
         if FeatureFlag::ImageAsContext.is_enabled()
             && matches!(ai_input_model.input_type(), InputType::AI)
             && !FeatureFlag::AgentView.is_enabled()
+            && let Some(images) = self.render_attachment_chips(appearance)
         {
-            if let Some(images) = self.render_attachment_chips(appearance) {
-                column.add_child(
-                    Container::new(images)
-                        .with_padding_bottom(spacing::CLASSIC_PROMPT_ATTACH_IMAGES_BOTTOM_PADDING)
-                        .finish(),
-                );
-            }
+            column.add_child(
+                Container::new(images)
+                    .with_padding_bottom(spacing::CLASSIC_PROMPT_ATTACH_IMAGES_BOTTOM_PADDING)
+                    .finish(),
+            );
         }
 
         column.add_child(self.render_input_box(show_vim_status, appearance, app));
@@ -146,12 +144,11 @@ impl Input {
             );
         }
 
-        if matches!(input_mode, InputMode::PinnedToTop) {
-            if let Some(banner) =
+        if matches!(input_mode, InputMode::PinnedToTop)
+            && let Some(banner) =
                 self.render_input_banner(appearance, app, input_mode, is_compact_mode)
-            {
-                column.add_child(banner);
-            }
+        {
+            column.add_child(banner);
         }
 
         let subshell_flag = self.get_subshell_flag_render_state(&model, is_compact_mode, app);
@@ -189,15 +186,14 @@ impl Input {
             );
         }
 
-        if !FeatureFlag::AgentView.is_enabled() {
-            if let Some(vim_state) = vim_state.as_ref() {
-                if show_vim_status {
-                    add_vim_status_to_stack(
-                        &mut stack, vim_state, appearance,
-                        false, // legacy doesn't use adjusted padding for vim status
-                    );
-                }
-            }
+        if !FeatureFlag::AgentView.is_enabled()
+            && let Some(vim_state) = vim_state.as_ref()
+            && show_vim_status
+        {
+            add_vim_status_to_stack(
+                &mut stack, vim_state, appearance,
+                false, // legacy doesn't use adjusted padding for vim status
+            );
         }
 
         stack.add_child(wrap_input_with_terminal_padding_and_focus_handler(
@@ -207,15 +203,14 @@ impl Input {
         ));
 
         if let Some(selected_workflow_state) = self.workflows_state.selected_workflow_state.as_ref()
+            && selected_workflow_state.should_show_more_info_view
         {
-            if selected_workflow_state.should_show_more_info_view {
-                add_workflow_info_overlay(
-                    &mut stack,
-                    selected_workflow_state,
-                    self.size_info(app).pane_height_px().as_f32(),
-                    menu_positioning,
-                );
-            }
+            add_workflow_info_overlay(
+                &mut stack,
+                selected_workflow_state,
+                self.size_info(app).pane_height_px().as_f32(),
+                menu_positioning,
+            );
         }
 
         if self.is_voltron_open && self.is_pane_focused(app) {

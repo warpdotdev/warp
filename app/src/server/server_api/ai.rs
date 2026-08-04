@@ -76,6 +76,10 @@ use warp_graphql::queries::free_available_models::{
     FreeAvailableModels, FreeAvailableModelsInput, FreeAvailableModelsResult,
     FreeAvailableModelsVariables,
 };
+#[cfg(not(feature = "agent_mode_evals"))]
+use warp_graphql::queries::get_ai_credit_availability::{
+    GetAICreditAvailability, GetAICreditAvailabilityVariables,
+};
 use warp_graphql::queries::get_available_harnesses::{
     GetAvailableHarnesses, GetAvailableHarnessesVariables,
 };
@@ -111,21 +115,24 @@ use warp_graphql::queries::task_git_credentials::{
 };
 use warp_multi_agent_api::ConversationData;
 
+use super::ServerApi;
 #[cfg(not(target_family = "wasm"))]
 use super::download::write_response_body_to_path;
 use super::harness_support::{UploadField, UploadFieldValue, UploadTarget};
-use super::ServerApi;
+#[cfg(not(feature = "agent_mode_evals"))]
+use crate::ai::BonusGrant;
+pub use crate::ai::agent::UserQueryMode;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentConversationFormat, AIAgentHarness, AIAgentSerializedBlockFormat,
     ServerAIConversationMetadata,
 };
-pub use crate::ai::agent::UserQueryMode;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 // Re-export ambient agent types for backwards compatibility
 pub use crate::ai::ambient_agents::{
+    AgentConfigSnapshot, AgentSource, AmbientAgentTask, AmbientAgentTaskState, ExecutionLocation,
+    TaskStatusMessage,
     task::{AttachmentInput, TaskAttachment},
-    AgentConfigSnapshot, AgentSource, AmbientAgentTask, AmbientAgentTaskState, TaskStatusMessage,
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::generate_code_review_content::api::{
@@ -133,14 +140,12 @@ use crate::ai::generate_code_review_content::api::{
 };
 use crate::ai::harness_availability::HarnessAvailability;
 use crate::ai::llms::{
-    AvailableLLMs, DisableReason, LLMContextWindow, LLMInfo, LLMModelHost, LLMProvider, LLMSpec,
+    AvailableLLMs, DisableReason, LLMContextWindow, LLMInfo, LLMModelHost, LLMSpec,
     LLMUsageMetadata, ModelsByFeature, RoutingHostConfig,
 };
 #[cfg(feature = "agent_mode_evals")]
 use crate::ai::request_usage_model::RequestLimitInfo;
-#[cfg(not(feature = "agent_mode_evals"))]
-use crate::ai::BonusGrant;
-use crate::ai::RequestUsageInfo;
+use crate::ai::{AICreditAvailability, RequestUsageInfo};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::ai_assistant::requests::GenerateDialogueResult;
 use crate::ai_assistant::utils::TranscriptPart;
@@ -635,6 +640,8 @@ pub struct CreateFileArtifactUploadRequest {
     pub conversation_id: Option<String>,
     pub run_id: Option<String>,
     pub filepath: String,
+    /// Short badge-visible title for the artifact (e.g. a recording title).
+    pub title: Option<String>,
     pub description: Option<String>,
     pub mime_type: Option<String>,
     pub size_bytes: Option<i32>,
@@ -704,22 +711,6 @@ pub struct TaskListFilter {
     pub sort_by: Option<RunSortBy>,
     pub sort_order: Option<RunSortOrder>,
     pub cursor: Option<String>,
-}
-
-/// Execution location filter values accepted by the public API.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExecutionLocation {
-    Local,
-    Remote,
-}
-
-impl ExecutionLocation {
-    pub fn as_query_param(&self) -> &'static str {
-        match self {
-            ExecutionLocation::Local => "LOCAL",
-            ExecutionLocation::Remote => "REMOTE",
-        }
-    }
 }
 
 /// Artifact type filter values accepted by the public API.
@@ -948,6 +939,9 @@ pub struct CreateAgentRequest {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Optional base prompt for this agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretRef>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -959,12 +953,21 @@ pub struct CreateAgentRequest {
 }
 
 /// JSON payload sent to `PUT /agent/identities/{uid}`.
+///
+/// Each field uses the public API's PATCH semantics: `None` omits the field
+/// (leave unchanged), while `Some(String::new())` sends an empty value to clear
+/// it. See `CreateAgentRequest`/`UpdateAgentRequest` in
+/// `warp-server/public_api/openapi.yaml`.
 #[derive(Clone, Default, serde::Serialize, Debug, PartialEq, Eq)]
 pub struct UpdateAgentRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Replacement prompt. `None` leaves it unchanged; `Some(String::new())`
+    /// clears it via the public API's PATCH clear-via-empty semantics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Vec<SecretRef>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -981,6 +984,9 @@ pub struct AgentResponse {
     pub uid: String,
     pub name: String,
     pub description: Option<String>,
+    /// Optional base prompt for this agent.
+    #[serde(default)]
+    pub prompt: Option<String>,
     pub available: bool,
     pub created_at: DateTime<Utc>,
     pub secrets: Vec<SecretRef>,
@@ -1139,6 +1145,10 @@ pub trait AIClient: 'static + Send + Sync {
     ) -> Result<GeneratedCommandMetadata, GeneratedCommandMetadataError>;
 
     async fn get_request_limit_info(&self) -> Result<RequestUsageInfo, anyhow::Error>;
+
+    /// Fetches the server-authoritative decision on whether the authenticated
+    /// user can start an interactive AI request.
+    async fn get_ai_credit_availability(&self) -> Result<AICreditAvailability, anyhow::Error>;
 
     /// Returns conversation usage history for the current user over the requested number of days.
     ///
@@ -1789,6 +1799,34 @@ impl AIClient for ServerApi {
             }
             warp_graphql::queries::get_request_limit_info::UserResult::Unknown => {
                 Err(anyhow!("failed to get request limit info"))
+            }
+        }
+    }
+
+    #[cfg(feature = "agent_mode_evals")]
+    async fn get_ai_credit_availability(&self) -> Result<AICreditAvailability, anyhow::Error> {
+        Ok(AICreditAvailability::available_with_source(Some(
+            crate::ai::AICreditSource::BaseLimit,
+        )))
+    }
+
+    #[cfg(not(feature = "agent_mode_evals"))]
+    async fn get_ai_credit_availability(&self) -> Result<AICreditAvailability, anyhow::Error> {
+        let variables = GetAICreditAvailabilityVariables {
+            request_context: get_request_context(),
+        };
+        let operation = GetAICreditAvailability::build(variables);
+        let response = self.send_graphql_request(operation, None).await?;
+
+        match response.user {
+            warp_graphql::queries::get_ai_credit_availability::UserResult::UserOutput(output) => {
+                Ok(output.user.ai_credit_availability.into())
+            }
+            warp_graphql::queries::get_ai_credit_availability::UserResult::UserFacingError(e) => {
+                Err(anyhow!(get_user_facing_error_message(e)))
+            }
+            warp_graphql::queries::get_ai_credit_availability::UserResult::Unknown => {
+                Err(anyhow!("failed to get AI credit availability"))
             }
         }
     }
@@ -2659,6 +2697,7 @@ impl AIClient for ServerApi {
                 conversation_id: request.conversation_id.map(cynic::Id::new),
                 run_id: request.run_id.map(cynic::Id::new),
                 filepath: request.filepath,
+                title: request.title,
                 description: request.description,
                 mime_type: request.mime_type,
                 size_bytes: request.size_bytes,
@@ -3114,54 +3153,6 @@ impl From<warp_graphql::queries::get_feature_model_choices::LlmModelHost> for LL
                     "Unknown LlmModelHost '{value}'. Make sure to update client GraphQL types!"
                 );
                 LLMModelHost::Unknown
-            }
-        }
-    }
-}
-
-impl From<warp_graphql::queries::get_feature_model_choices::LlmProvider> for LLMProvider {
-    fn from(value: warp_graphql::queries::get_feature_model_choices::LlmProvider) -> Self {
-        match value {
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Openai => {
-                LLMProvider::OpenAI
-            }
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Anthropic => {
-                LLMProvider::Anthropic
-            }
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Google => {
-                LLMProvider::Google
-            }
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Xai => LLMProvider::Xai,
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Unknown => {
-                LLMProvider::Unknown
-            }
-            warp_graphql::queries::get_feature_model_choices::LlmProvider::Other(value) => {
-                report_error!(
-                    "Invalid LlmProvider; update client GraphQL types",
-                    extra: { "provider" => %value },
-                    warp_errors::ReportErrorLogMode::OncePerRun
-                );
-                LLMProvider::Unknown
-            }
-        }
-    }
-}
-
-impl From<warp_graphql::workspace::LlmProvider> for LLMProvider {
-    fn from(value: warp_graphql::workspace::LlmProvider) -> Self {
-        match value {
-            warp_graphql::workspace::LlmProvider::Openai => LLMProvider::OpenAI,
-            warp_graphql::workspace::LlmProvider::Anthropic => LLMProvider::Anthropic,
-            warp_graphql::workspace::LlmProvider::Google => LLMProvider::Google,
-            warp_graphql::workspace::LlmProvider::Xai => LLMProvider::Xai,
-            warp_graphql::workspace::LlmProvider::Unknown => LLMProvider::Unknown,
-            warp_graphql::workspace::LlmProvider::Other(value) => {
-                report_error!(
-                    "Invalid LlmProvider; update client GraphQL types",
-                    extra: { "provider" => %value },
-                    warp_errors::ReportErrorLogMode::OncePerRun
-                );
-                LLMProvider::Unknown
             }
         }
     }

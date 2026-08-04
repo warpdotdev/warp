@@ -1,5 +1,5 @@
 use warpui::integration::{AssertionCallback, AssertionOutcome, TestStep};
-use warpui::{async_assert, App, ViewHandle, WindowId};
+use warpui::{App, ViewHandle, WindowId, async_assert};
 
 use crate::code_review::code_review_view::{CodeReviewView, CodeReviewVisibleAnchorForTest};
 
@@ -140,13 +140,13 @@ fn assert_anchor(
             anchor.line_text
         ));
     }
-    if let Some(expected_line_number) = expected_line_number {
-        if anchor.line_number != expected_line_number {
-            return AssertionOutcome::failure(format!(
-                "expected anchor line number to be {expected_line_number}, got {}",
-                anchor.line_number
-            ));
-        }
+    if let Some(expected_line_number) = expected_line_number
+        && anchor.line_number != expected_line_number
+    {
+        return AssertionOutcome::failure(format!(
+            "expected anchor line number to be {expected_line_number}, got {}",
+            anchor.line_number
+        ));
     }
 
     AssertionOutcome::Success

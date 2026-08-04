@@ -3,7 +3,7 @@
 use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl};
 
 use super::sqlite::init_db;
-use super::{schema, PersistenceScope};
+use super::{PersistenceScope, schema};
 
 /// Updates the 'user' and 'host' columns for stored blocks to the given values.
 ///

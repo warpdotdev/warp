@@ -1,6 +1,6 @@
 use super::*;
 use crate::util::git::{
-    parse_range, parse_unified_diff_header, sort_branches_main_first, BranchEntry,
+    BranchEntry, parse_range, parse_unified_diff_header, sort_branches_main_first,
 };
 
 #[test]

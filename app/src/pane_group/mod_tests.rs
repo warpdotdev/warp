@@ -7,29 +7,30 @@ use pathfinder_geometry::rect::RectF;
 use persistence::model::{
     AgentConversation, AgentConversationData, AgentConversationRecord, ConversationUsageMetadata,
 };
-use repo_metadata::repositories::DetectedRepositories;
-use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
 use session_sharing_protocol::common::SessionId;
 use shared_session::permissions_manager::SessionPermissionsManager;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_server_client::iap::IapManager;
 use warpui::platform::{WindowBounds, WindowStyle};
-use warpui::windowing::state::ApplicationStage;
 use warpui::windowing::WindowManager;
+use warpui::windowing::state::ApplicationStage;
 use warpui::{App, ModelHandle};
 use watcher::HomeDirectoryWatcher;
 
 use super::child_agent::hydration::{
-    decide_remote_child_hydration_action, RemoteChildHydrationAction,
+    RemoteChildHydrationAction, decide_remote_child_hydration_action,
 };
 use super::child_agent::{
-    create_hidden_child_agent_conversation, HiddenChildAgentConversationRequest,
-    HiddenChildAgentTaskContext,
+    HiddenChildAgentConversationRequest, HiddenChildAgentTaskContext,
+    create_hidden_child_agent_conversation,
 };
 use super::*;
+use crate::ai::AIRequestUsageModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
@@ -49,6 +50,7 @@ use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStream
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQueryModel};
+use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -59,7 +61,6 @@ use crate::ai::outline::RepoOutlines;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
-use crate::ai::AIRequestUsageModel;
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::user::TEST_USER_UID;
 use crate::changelog_model::ChangelogModel;
@@ -87,8 +88,8 @@ use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::history::History;
 use crate::terminal::keys::TerminalKeybindings;
-use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::local_tty::TerminalManager;
+use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::{
@@ -106,7 +107,7 @@ use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    experiments, AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
+    AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, experiments,
 };
 
 fn initialize_app(app: &mut App) {
@@ -132,6 +133,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| SystemStats::new());
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(CloudEnvironmentCatalog::new);
     app.add_singleton_model(UserWorkspaces::default_mock);
     app.add_singleton_model(TeamTesterStatus::mock);
     app.add_singleton_model(TeamUpdateManager::mock);
@@ -297,6 +299,7 @@ fn ambient_agent_task_for_current_user(task_id: AmbientAgentTaskId) -> AmbientAg
         run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: Some(AgentSource::CloudMode),
+        execution_location: None,
         session_id: None,
         session_link: None,
         executor: None,
@@ -350,6 +353,7 @@ fn test_server_conversation_metadata(
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
+            total_provider_cost_in_cents: None,
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
@@ -762,6 +766,7 @@ fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
 
             assert_eq!(panes.pane_count(), initial_tree_pane_count);
             assert_eq!(panes.pane_ids().count(), initial_content_pane_count + 1);
+            assert_eq!(panes.terminal_pane_ids().count(), 2);
             assert_eq!(panes.visible_pane_count(), initial_visible_count);
             assert!(panes.has_pane_id(child_pane_id.into()));
             assert!(!panes.panes.is_pane_in_tree(child_pane_id.into()));
@@ -769,6 +774,15 @@ fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
             // The new child pane should remain off-tree and not affect visible ordering.
             assert_eq!(panes.pane_id_by_index(0), Some(parent_pane_id));
             assert_eq!(panes.pane_id_by_index(1), None);
+            let visible_terminal_views = panes.visible_terminal_views(ctx);
+            assert_eq!(visible_terminal_views.len(), 1);
+            assert_eq!(
+                visible_terminal_views[0].id(),
+                panes
+                    .terminal_view_from_pane_id(parent_pane_id, ctx)
+                    .unwrap()
+                    .id()
+            );
 
             // Creating a hidden child pane should not steal focus or active session.
             assert_eq!(panes.focused_pane_id(ctx), parent_pane_id);
@@ -1541,9 +1555,11 @@ fn test_entering_remote_parent_agent_view_lazily_restores_local_hidden_child_pan
             let initial_pane_count = panes.pane_count();
             let initial_visible_pane_count = panes.visible_pane_count();
 
-            assert!(!panes
-                .child_agent_panes
-                .contains_key(&local_child_conversation_id));
+            assert!(
+                !panes
+                    .child_agent_panes
+                    .contains_key(&local_child_conversation_id)
+            );
 
             enter_agent_view_for_conversation(
                 panes,
@@ -1621,9 +1637,11 @@ fn test_entering_remote_parent_agent_view_lazily_restores_remote_hidden_child_pa
             let initial_pane_count = panes.pane_count();
             let initial_visible_pane_count = panes.visible_pane_count();
 
-            assert!(!panes
-                .child_agent_panes
-                .contains_key(&remote_child_conversation_id));
+            assert!(
+                !panes
+                    .child_agent_panes
+                    .contains_key(&remote_child_conversation_id)
+            );
 
             enter_agent_view_for_conversation(
                 panes,
@@ -1871,8 +1889,8 @@ fn test_ensure_hidden_child_agent_pane_materializes_missing_child_pane() {
 }
 
 #[test]
-fn test_ensure_hidden_child_agent_pane_materializes_restored_remote_child_linked_by_parent_agent_id(
-) {
+fn test_ensure_hidden_child_agent_pane_materializes_restored_remote_child_linked_by_parent_agent_id()
+ {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -2649,12 +2667,14 @@ fn test_start_shared_session_from_modal() {
             assert_eq!(shared_views[0].id(), terminal_view.id());
 
             let terminal_pane = pane_group.terminal_session_by_pane_index(0).unwrap();
-            assert!(terminal_pane
-                .pane_view()
-                .as_ref(ctx)
-                .header()
-                .as_ref(ctx)
-                .has_shareable_object(ctx));
+            assert!(
+                terminal_pane
+                    .pane_view()
+                    .as_ref(ctx)
+                    .header()
+                    .as_ref(ctx)
+                    .has_shareable_object(ctx)
+            );
         });
     });
 }
@@ -2730,12 +2750,14 @@ fn test_stop_shared_session() {
             let shared_views = manager.shared_views(ctx).collect_vec();
             assert!(shared_views.is_empty());
 
-            assert!(!terminal_pane
-                .pane_view()
-                .as_ref(ctx)
-                .header()
-                .as_ref(ctx)
-                .has_shareable_object(ctx));
+            assert!(
+                !terminal_pane
+                    .pane_view()
+                    .as_ref(ctx)
+                    .header()
+                    .as_ref(ctx)
+                    .has_shareable_object(ctx)
+            );
         });
     });
 }
@@ -2865,11 +2887,13 @@ fn test_terminal_pane_headers() {
 
             for terminal_pane in terminal_panes {
                 let pane_view = terminal_pane.pane_view();
-                assert!(pane_view
-                    .as_ref(ctx)
-                    .header()
-                    .as_ref(ctx)
-                    .is_visible_in_pane_group());
+                assert!(
+                    pane_view
+                        .as_ref(ctx)
+                        .header()
+                        .as_ref(ctx)
+                        .is_visible_in_pane_group()
+                );
             }
         });
 
@@ -2885,11 +2909,13 @@ fn test_terminal_pane_headers() {
             assert_eq!(terminal_panes.len(), 1);
 
             let pane_view = terminal_panes[0].pane_view();
-            assert!(pane_view
-                .as_ref(ctx)
-                .header()
-                .as_ref(ctx)
-                .is_visible_in_pane_group());
+            assert!(
+                pane_view
+                    .as_ref(ctx)
+                    .header()
+                    .as_ref(ctx)
+                    .is_visible_in_pane_group()
+            );
         });
 
         // Create a non-terminal split pane. Terminal pane header remains visible.
@@ -2909,11 +2935,13 @@ fn test_terminal_pane_headers() {
             assert_eq!(terminal_panes.len(), 1);
 
             let pane_view = terminal_panes[0].pane_view();
-            assert!(pane_view
-                .as_ref(ctx)
-                .header()
-                .as_ref(ctx)
-                .is_visible_in_pane_group());
+            assert!(
+                pane_view
+                    .as_ref(ctx)
+                    .header()
+                    .as_ref(ctx)
+                    .is_visible_in_pane_group()
+            );
         });
     });
 }

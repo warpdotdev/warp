@@ -1,6 +1,6 @@
 use pathfinder_color::ColorU;
-use warpui_core::elements::Align;
 use warpui_core::Element;
+use warpui_core::elements::Align;
 
 use super::onboarding_visual::{OnboardingVisual, Pill, RectPct};
 

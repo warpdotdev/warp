@@ -2,8 +2,8 @@ use std::borrow::Cow;
 use std::ops::RangeInclusive;
 
 use regex::escape;
-use regex_automata::hybrid::dfa::{Cache, DFA};
 use regex_automata::hybrid::BuildError;
+use regex_automata::hybrid::dfa::{Cache, DFA};
 use regex_automata::nfa::thompson;
 use regex_automata::util::pool::Pool;
 use regex_automata::util::syntax::Config;
@@ -315,12 +315,11 @@ impl RegexDFAs {
         }
 
         // Make sure the match point is at the "far" end of any wide character.
-        if let Some(match_point) = &mut regex_match {
-            if direction == Direction::Right
-                && matches!(grid.cell_type(*match_point), Some(CellType::WideChar))
-            {
-                match_point.col += 1;
-            }
+        if let Some(match_point) = &mut regex_match
+            && direction == Direction::Right
+            && matches!(grid.cell_type(*match_point), Some(CellType::WideChar))
+        {
+            match_point.col += 1;
         }
 
         regex_match

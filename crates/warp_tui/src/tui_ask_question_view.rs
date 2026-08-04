@@ -7,25 +7,27 @@ use warp::tui_export::{
     AIActionStatus, AIAgentActionId, AIAgentActionResultType, AIConversationId,
     AskUserQuestionAction, AskUserQuestionAnswerItem, AskUserQuestionEffect, AskUserQuestionItem,
     AskUserQuestionPhase, AskUserQuestionResult, AskUserQuestionSession, BlocklistAIActionEvent,
-    BlocklistAIActionModel, BlocklistAIHistoryModel, OptionFooter, OptionRow, OptionSnapshot,
-    OptionSourceStatus,
+    BlocklistAIActionModel, BlocklistAIHistoryModel, OptionBadge, OptionFooter, OptionRow,
+    OptionSnapshot, OptionSourceStatus,
 };
 use warpui::SingletonEntity;
+use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::elements::tui::{
     Modifier, TuiChildView, TuiContainer, TuiElement, TuiFlex, TuiParentElement, TuiText,
 };
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{EditableBinding, FixedBinding};
-use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::{
-    AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
+    AppContext, Entity, EntityId, FocusContext, ModelHandle, TuiView, TypedActionView, ViewContext,
+    ViewHandle,
 };
 
-use crate::keybindings::{is_tui_owned_binding, TUI_BINDING_GROUP};
+use crate::keybindings::{TUI_BINDING_GROUP, is_tui_owned_binding};
 use crate::option_selector::{OptionSelectorPage, TuiOptionSelector, TuiOptionSelectorEvent};
 use crate::tui_builder::TuiUiBuilder;
 
 const ASK_QUESTION_ACTIVE: &str = "TuiAskQuestionActive";
+const ASK_QUESTION_MULTISELECT_ACTIVE: &str = "TuiAskQuestionMultiselectActive";
 const AUTO_ADVANCE_DELAY: Duration = Duration::from_millis(300);
 
 /// Registers controls that must win over the surrounding terminal session
@@ -48,9 +50,17 @@ pub(crate) fn init(app: &mut AppContext) {
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("enter"),
         EditableBinding::new(
+            "tui:ask-question:advance-multiselect",
+            "Advance after selecting multiple answers",
+            TuiAskQuestionViewAction::AdvanceMultiselect,
+        )
+        .with_context_predicate(predicate.clone() & id!(ASK_QUESTION_MULTISELECT_ACTIVE))
+        .with_group(TUI_BINDING_GROUP)
+        .with_key_binding("shift-enter"),
+        EditableBinding::new(
             "tui:ask-question:previous",
             "Show the previous question",
-            TuiAskQuestionViewAction::Previous,
+            TuiAskQuestionViewAction::Navigate(PageNavigationDirection::Previous),
         )
         .with_context_predicate(predicate.clone())
         .with_group(TUI_BINDING_GROUP)
@@ -58,7 +68,7 @@ pub(crate) fn init(app: &mut AppContext) {
         EditableBinding::new(
             "tui:ask-question:next",
             "Show the next question",
-            TuiAskQuestionViewAction::Next,
+            TuiAskQuestionViewAction::Navigate(PageNavigationDirection::Next),
         )
         .with_context_predicate(predicate.clone())
         .with_group(TUI_BINDING_GROUP)
@@ -66,7 +76,7 @@ pub(crate) fn init(app: &mut AppContext) {
         EditableBinding::new(
             "tui:ask-question:next",
             "Show the next question",
-            TuiAskQuestionViewAction::Next,
+            TuiAskQuestionViewAction::Navigate(PageNavigationDirection::Next),
         )
         .with_context_predicate(predicate)
         .with_group(TUI_BINDING_GROUP)
@@ -75,11 +85,18 @@ pub(crate) fn init(app: &mut AppContext) {
     app.register_tui_binding_validator::<TuiAskQuestionView>(is_tui_owned_binding);
 }
 
+/// Direction through a sequence of interactive card pages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PageNavigationDirection {
+    Previous,
+    Next,
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum TuiAskQuestionViewAction {
     Enter,
-    Previous,
-    Next,
+    AdvanceMultiselect,
+    Navigate(PageNavigationDirection),
     SkipAll,
 }
 
@@ -151,6 +168,10 @@ impl TuiAskQuestionView {
             .is_some_and(|status| status.is_blocked())
     }
 
+    pub(super) fn is_awaiting_answers(&self, app: &AppContext) -> bool {
+        self.session.is_editing() && self.is_waiting_on_answers(app)
+    }
+
     pub(super) fn matches_action(
         &self,
         action_id: &AIAgentActionId,
@@ -186,7 +207,7 @@ impl TuiAskQuestionView {
                 id: index.to_string(),
                 label: option.label.clone(),
                 harness: None,
-                badge: None,
+                badge: option.recommended.then_some(OptionBadge::Recommended),
                 disabled_reason: None,
             })
             .collect();
@@ -228,6 +249,7 @@ impl TuiAskQuestionView {
                     header: None,
                     snapshot,
                     searchable: false,
+                    row_shortcuts: Default::default(),
                 },
                 ctx,
             );
@@ -266,25 +288,59 @@ impl TuiAskQuestionView {
                     return;
                 };
                 self.abort_auto_advance();
+                let is_multiselect = self
+                    .session
+                    .current()
+                    .is_some_and(|current| current.question.is_multiselect());
                 let effect = self
                     .session
                     .apply(AskUserQuestionAction::ToggleOption { option_index });
-                self.handle_effect(effect, ctx);
+                if is_multiselect {
+                    self.handle_effect(AskUserQuestionEffect::RefreshCurrent, ctx);
+                } else {
+                    self.handle_effect(effect, ctx);
+                }
             }
             TuiOptionSelectorEvent::CustomTextSubmitted { value } => {
                 self.abort_auto_advance();
                 let effect = self.session.apply(AskUserQuestionAction::SaveOtherText {
                     text: Some(value.clone()),
                 });
+                if self
+                    .session
+                    .current()
+                    .is_some_and(|current| current.question.is_multiselect())
+                {
+                    self.handle_effect(AskUserQuestionEffect::RefreshCurrent, ctx);
+                } else {
+                    self.handle_effect(effect, ctx);
+                }
+            }
+            TuiOptionSelectorEvent::CustomTextCleared => {
+                self.abort_auto_advance();
+                let effect = self
+                    .session
+                    .apply(AskUserQuestionAction::SaveOtherText { text: None });
                 self.handle_effect(effect, ctx);
             }
             TuiOptionSelectorEvent::CustomTextOpened => {
                 self.abort_auto_advance();
-                let _ = self.session.apply(AskUserQuestionAction::OpenOtherInput);
+                let _ = self
+                    .session
+                    .apply(AskUserQuestionAction::EnterCustomAnswerEditing);
                 self.invalidate_layout(ctx);
             }
+            TuiOptionSelectorEvent::CustomTextClosed => {
+                self.abort_auto_advance();
+                let effect = self
+                    .session
+                    .apply(AskUserQuestionAction::ExitCustomAnswerEditing);
+                self.handle_effect(effect, ctx);
+            }
             TuiOptionSelectorEvent::LayoutInvalidated => self.invalidate_layout(ctx),
-            TuiOptionSelectorEvent::RetryRequested | TuiOptionSelectorEvent::Dismissed => {}
+            TuiOptionSelectorEvent::RetryRequested
+            | TuiOptionSelectorEvent::Dismissed
+            | TuiOptionSelectorEvent::RowsReordered { .. } => {}
         }
     }
 
@@ -336,7 +392,7 @@ impl TuiAskQuestionView {
         match effect {
             AskUserQuestionEffect::Noop => {}
             AskUserQuestionEffect::RefreshCurrent => self.refresh_selection(ctx),
-            AskUserQuestionEffect::FocusOtherInput => {
+            AskUserQuestionEffect::FocusCustomAnswerInput => {
                 self.selector
                     .update(ctx, |selector, ctx| selector.confirm_selected(ctx));
             }
@@ -403,6 +459,29 @@ impl TuiAskQuestionView {
         if current.question.is_multiselect() {
             question.push_str(" (select all that apply)");
         }
+        let footer = if current.question.is_multiselect() {
+            TuiText::from_spans([
+                ("Shift + Enter ".to_owned(), builder.primary_text_style()),
+                ("to advance ".to_owned(), builder.muted_text_style()),
+                ("Enter or number ".to_owned(), builder.primary_text_style()),
+                ("to select ".to_owned(), builder.muted_text_style()),
+                ("Ctrl + C ".to_owned(), builder.primary_text_style()),
+                ("to cancel question".to_owned(), builder.muted_text_style()),
+            ])
+            .truncate()
+            .finish()
+        } else {
+            TuiText::from_spans([
+                ("Enter or number ".to_owned(), builder.primary_text_style()),
+                ("to select ".to_owned(), builder.muted_text_style()),
+                ("Tab or ← → ".to_owned(), builder.primary_text_style()),
+                ("to navigate ".to_owned(), builder.muted_text_style()),
+                ("Ctrl + C ".to_owned(), builder.primary_text_style()),
+                ("to cancel question".to_owned(), builder.muted_text_style()),
+            ])
+            .truncate()
+            .finish()
+        };
         let body = TuiFlex::column()
             .child(header)
             .child(TuiText::new(" ").finish())
@@ -413,18 +492,7 @@ impl TuiAskQuestionView {
             )
             .child(TuiChildView::new(&self.selector).finish())
             .child(TuiText::new(" ").finish())
-            .child(
-                TuiText::from_spans([
-                    ("Enter or number ".to_owned(), builder.primary_text_style()),
-                    ("to select  ".to_owned(), builder.muted_text_style()),
-                    ("Tab or ← → ".to_owned(), builder.primary_text_style()),
-                    ("to navigate  ".to_owned(), builder.muted_text_style()),
-                    ("Ctrl + C ".to_owned(), builder.primary_text_style()),
-                    ("to skip all".to_owned(), builder.muted_text_style()),
-                ])
-                .truncate()
-                .finish(),
-            )
+            .child(footer)
             .finish();
         TuiContainer::new(body)
             .with_padding(1)
@@ -550,6 +618,12 @@ impl TuiView for TuiAskQuestionView {
         vec![self.selector.id()]
     }
 
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() && self.is_awaiting_answers(ctx) {
+            ctx.focus(&self.selector);
+        }
+    }
+
     fn keymap_context(&self, app: &AppContext) -> warpui_core::keymap::Context {
         let mut context = Self::default_keymap_context();
         if self.session.is_editing()
@@ -557,6 +631,13 @@ impl TuiView for TuiAskQuestionView {
             && self.is_waiting_on_answers(app)
         {
             context.set.insert(ASK_QUESTION_ACTIVE);
+            if self
+                .session
+                .current()
+                .is_some_and(|current| current.question.is_multiselect())
+            {
+                context.set.insert(ASK_QUESTION_MULTISELECT_ACTIVE);
+            }
         }
         context
     }
@@ -602,6 +683,15 @@ impl TypedActionView for TuiAskQuestionView {
         self.abort_auto_advance();
         match action {
             TuiAskQuestionViewAction::Enter => {
+                if self
+                    .session
+                    .current()
+                    .is_some_and(|current| current.question.is_multiselect())
+                {
+                    self.selector
+                        .update(ctx, |selector, ctx| selector.confirm_selected(ctx));
+                    return;
+                }
                 let (highlighted_index, active_other_text) =
                     self.selector.read(ctx, |selector, ctx| {
                         (
@@ -615,14 +705,25 @@ impl TypedActionView for TuiAskQuestionView {
                 });
                 self.handle_effect(effect, ctx);
             }
-            TuiAskQuestionViewAction::Previous => {
+            TuiAskQuestionViewAction::AdvanceMultiselect => {
+                if !self
+                    .session
+                    .current()
+                    .is_some_and(|current| current.question.is_multiselect())
+                {
+                    return;
+                }
                 self.commit_active_other_text(ctx);
-                let effect = self.session.apply(AskUserQuestionAction::NavigatePrev);
+                let effect = self.session.apply(AskUserQuestionAction::Confirm);
                 self.handle_effect(effect, ctx);
             }
-            TuiAskQuestionViewAction::Next => {
+            TuiAskQuestionViewAction::Navigate(direction) => {
                 self.commit_active_other_text(ctx);
-                let effect = self.session.apply(AskUserQuestionAction::NavigateNext);
+                let action = match direction {
+                    PageNavigationDirection::Previous => AskUserQuestionAction::NavigatePrev,
+                    PageNavigationDirection::Next => AskUserQuestionAction::NavigateNext,
+                };
+                let effect = self.session.apply(action);
                 self.handle_effect(effect, ctx);
             }
             TuiAskQuestionViewAction::SkipAll => {

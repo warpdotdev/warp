@@ -14,8 +14,8 @@ use super::history_model::{
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentOutputStatus, FinishedAIAgentOutput, RenderableAIError};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::server::server_api::ai::{AIClient, TaskStatusUpdate};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::{AIClient, TaskStatusUpdate};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
@@ -501,6 +501,13 @@ pub(crate) fn classify_renderable_error(
                 PlatformErrorCode::AuthenticationRequired,
             )),
         ),
+        RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid => (
+            AgentTaskState::Failed,
+            Some(TaskStatusUpdate::with_error_code(
+                "Gemini Enterprise credentials expired or invalid.",
+                PlatformErrorCode::AuthenticationRequired,
+            )),
+        ),
         RenderableAIError::TransientNetworkError { .. } => (
             AgentTaskState::Error,
             Some(TaskStatusUpdate::with_error_code(
@@ -531,11 +538,18 @@ pub(crate) fn classify_renderable_error(
                 )
             }
         }
-        RenderableAIError::AgentExitedShell => (
+        RenderableAIError::AgentExitedShell { .. } => (
             AgentTaskState::Failed,
             Some(TaskStatusUpdate::with_error_code(
                 error.to_string(),
                 PlatformErrorCode::InvalidRequest,
+            )),
+        ),
+        RenderableAIError::CloudStartupFailed(msg) => (
+            AgentTaskState::Error,
+            Some(TaskStatusUpdate::with_error_code(
+                msg,
+                PlatformErrorCode::InternalError,
             )),
         ),
     }

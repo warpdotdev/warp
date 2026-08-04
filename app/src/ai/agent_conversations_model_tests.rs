@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::{DateTime, Duration, Utc};
 use instant::Instant;
@@ -15,12 +15,11 @@ use super::entry::{
 };
 use super::query::{DEFAULT_RESULT_COUNT, MAX_SEARCH_RESULTS};
 use super::{
-    query_conversation_entries, record_earliest_rtc_task_refresh_timestamp,
     AgentConversationsModel, AgentConversationsModelEvent, AgentManagementFilters,
-    AgentRunDisplayStatus, ArtifactFilter, CloudConversationMetadataLoadState,
-    ConversationMetadata, ConversationUpdateKind, EnvironmentFilter, HarnessFilter, OwnerFilter,
-    RtcTaskRefreshThrottleState, StatusFilter, TaskFetchError, TaskFetchState, MAX_PERSONAL_TASKS,
-    MAX_TEAM_TASKS,
+    AgentRunDisplayStatus, ArtifactFilter, ConversationMetadata, ConversationUpdateKind,
+    EnvironmentFilter, HarnessFilter, InitialConversationLoadState, MAX_PERSONAL_TASKS,
+    MAX_TEAM_TASKS, OwnerFilter, RtcTaskRefreshThrottleState, StatusFilter, TaskFetchError,
+    TaskFetchState, query_conversation_entries, record_earliest_rtc_task_refresh_timestamp,
 };
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::api::ServerConversationToken;
@@ -31,6 +30,7 @@ use crate::ai::agent::conversation::{
 use crate::ai::ambient_agents::task::{HarnessConfig, TaskPrincipalInfo, TaskStatusMessage};
 use crate::ai::ambient_agents::{
     AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
+    ExecutionLocation,
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::history_model::{
@@ -43,7 +43,7 @@ use crate::server::ids::ServerId;
 use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
 use crate::test_util::settings::initialize_history_persistence_for_tests;
-use crate::workspace::WorkspaceAction;
+use crate::workspace::{WorkspaceAction, WorkspaceRegistry};
 
 /// Creates a test task with specified creator UID and updated_at time
 fn create_test_task(
@@ -63,6 +63,7 @@ fn create_test_task(
         run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: None,
+        execution_location: None,
         session_id: None,
         session_link: None,
         creator: Some(TaskPrincipalInfo {
@@ -665,8 +666,7 @@ fn create_test_model() -> AgentConversationsModel {
         in_flight_poll_abort_handle: None,
         next_poll_abort_handle: None,
         active_data_consumers_per_window: HashMap::new(),
-        has_finished_initial_load: false,
-        cloud_conversation_metadata_load_state: CloudConversationMetadataLoadState::Available,
+        initial_load_state: InitialConversationLoadState::LoadingLocal,
         task_fetch_state: Default::default(),
         rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
         dirty_since: None,
@@ -674,11 +674,31 @@ fn create_test_model() -> AgentConversationsModel {
 }
 
 #[test]
+fn local_conversation_sync_finishes_initial_load_without_starting_cloud_load() {
+    App::test((), |mut app| async move {
+        let _interactive_management_guard =
+            FeatureFlag::InteractiveConversationManagementView.override_enabled(true);
+        add_entry_projection_test_models(&mut app);
+        let model = app.add_singleton_model(|_| create_test_model());
+
+        model.update(&mut app, |model, ctx| model.sync_conversations(ctx));
+
+        model.read(&app, |model, _| {
+            assert!(!model.is_loading());
+            assert_eq!(
+                model.initial_load_state,
+                InitialConversationLoadState::WaitingForCloud
+            );
+        });
+    });
+}
+
+#[test]
 fn cloud_conversation_metadata_reports_failed_load() {
     let mut model = create_test_model();
     assert!(!model.cloud_conversation_metadata_load_failed());
 
-    model.cloud_conversation_metadata_load_state = CloudConversationMetadataLoadState::Failed;
+    model.initial_load_state = InitialConversationLoadState::CloudFailed;
     assert!(model.cloud_conversation_metadata_load_failed());
 }
 
@@ -713,9 +733,11 @@ fn conversation_query_caps_recent_entries_and_places_newest_last() {
                     .map(|result| result.entry.display.title.as_str()),
                 Some("Conversation 0")
             );
-            assert!(!results
-                .iter()
-                .any(|result| result.entry.display.title == "Conversation 50"));
+            assert!(
+                !results
+                    .iter()
+                    .any(|result| result.entry.display.title == "Conversation 50")
+            );
         });
     });
 }
@@ -743,9 +765,11 @@ fn conversation_query_filters_titles_and_caps_best_fuzzy_results() {
             let results = query_conversation_entries(entries, "deploy");
 
             assert_eq!(results.len(), MAX_SEARCH_RESULTS);
-            assert!(results
-                .iter()
-                .all(|result| result.entry.display.title.contains("Deploy")));
+            assert!(
+                results
+                    .iter()
+                    .all(|result| result.entry.display.title.contains("Deploy"))
+            );
             assert!(results.windows(2).all(|window| {
                 window[0].title_match.as_ref().unwrap().score
                     <= window[1].title_match.as_ref().unwrap().score
@@ -862,6 +886,7 @@ fn add_entry_projection_test_models(app: &mut App) {
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
+    app.add_singleton_model(|_| WorkspaceRegistry::new());
 }
 
 fn mock_server_metadata() -> ServerMetadata {
@@ -901,6 +926,7 @@ fn create_server_conversation_metadata(
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
+            total_provider_cost_in_cents: None,
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
@@ -937,8 +963,82 @@ fn test_get_entries_includes_task_only_entry() {
             assert_eq!(entry.identity.local_conversation_id, None);
             assert_eq!(entry.provenance, AgentConversationProvenance::AmbientRun);
             assert_eq!(entry.display.run_time.as_deref(), Some("2.00 min"));
+            assert_eq!(entry.execution_location, None);
             assert!(entry.backing.has_ambient_run);
             assert!(!entry.backing.has_loaded_conversation);
+            assert!(entry.is_cloud_agent_run());
+        });
+    });
+}
+
+#[test]
+fn test_task_entry_preserves_execution_location_independently_of_task_backing() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let mut model = create_test_model();
+        let mut local_task = create_test_task(&make_uuid(8101), "user-a", Utc::now());
+        local_task.execution_location = Some(ExecutionLocation::Local);
+        let mut remote_task = create_test_task(&make_uuid(8102), "user-a", Utc::now());
+        remote_task.execution_location = Some(ExecutionLocation::Remote);
+        model.tasks.insert(local_task.task_id, local_task);
+        model.tasks.insert(remote_task.task_id, remote_task);
+
+        app.update(|ctx| {
+            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let local_entry = entries
+                .iter()
+                .find(|entry| entry.execution_location == Some(ExecutionLocation::Local))
+                .expect("local task entry");
+            let remote_entry = entries
+                .iter()
+                .find(|entry| entry.execution_location == Some(ExecutionLocation::Remote))
+                .expect("remote task entry");
+
+            assert!(local_entry.backing.has_ambient_run);
+            assert!(local_entry.identity.ambient_agent_task_id.is_some());
+            assert!(!local_entry.is_cloud_agent_run());
+            assert!(remote_entry.backing.has_ambient_run);
+            assert!(remote_entry.identity.ambient_agent_task_id.is_some());
+            assert!(remote_entry.is_cloud_agent_run());
+        });
+    });
+}
+
+#[test]
+fn test_ambient_conversation_without_task_preserves_cloud_classification() {
+    App::test((), |mut app| async move {
+        let ambient_task_id = make_uuid(8103).parse().unwrap();
+        let server_token = "ambient-conversation-token";
+        add_entry_projection_test_models(&mut app);
+        let mut conversation = AIConversation::new(false, false);
+        let conversation_id = conversation.id();
+        conversation.set_server_conversation_token(server_token.to_string());
+        let server_metadata = create_server_conversation_metadata(
+            "Ambient conversation",
+            server_token,
+            Some(ambient_task_id),
+        );
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.restore_conversations(EntityId::new(), vec![conversation], ctx);
+            model.merge_cloud_conversation_metadata(vec![server_metadata]);
+        });
+
+        let mut model = create_test_model();
+        model.conversations.insert(
+            conversation_id,
+            create_test_conversation_metadata(conversation_id, "Ambient conversation"),
+        );
+
+        app.update(|ctx| {
+            let entries = model.get_entries(&all_owner_filters(), ctx);
+
+            assert_eq!(entries.len(), 1);
+            let entry = &entries[0];
+            assert_eq!(entry.identity.ambient_agent_task_id, Some(ambient_task_id));
+            assert_eq!(entry.execution_location, None);
+            assert!(entry.backing.has_ambient_run);
+            assert!(entry.is_cloud_agent_run());
         });
     });
 }
@@ -1294,9 +1394,11 @@ fn test_get_entries_keeps_unrelated_task_and_conversation_entries() {
             let entries = model.get_entries(&all_owner_filters(), ctx);
 
             assert_eq!(entries.len(), 2);
-            assert!(entries
-                .iter()
-                .any(|entry| entry.id == AgentConversationEntryId::AmbientRun(task.task_id)));
+            assert!(
+                entries
+                    .iter()
+                    .any(|entry| entry.id == AgentConversationEntryId::AmbientRun(task.task_id))
+            );
             assert!(entries.iter().any(|entry| {
                 entry.id == AgentConversationEntryId::Conversation(conversation_id)
             }));
@@ -2123,9 +2225,11 @@ fn test_environment_none_filter_includes_conversations() {
         app.update(|ctx| {
             let entries = model.get_entries(&filters, ctx);
 
-            assert!(entries
-                .iter()
-                .any(|entry| entry.id == AgentConversationEntryId::Conversation(conversation_id)));
+            assert!(
+                entries.iter().any(
+                    |entry| entry.id == AgentConversationEntryId::Conversation(conversation_id)
+                )
+            );
             assert!(
                 entries
                     .iter()
@@ -2335,9 +2439,11 @@ fn test_get_entries_keeps_unrelated_tasks_and_conversations() {
             let entries = model.get_entries(&all_owner_filters(), ctx);
 
             assert_eq!(entries.len(), 2);
-            assert!(entries
-                .iter()
-                .any(|entry| entry.id == AgentConversationEntryId::AmbientRun(task.task_id)));
+            assert!(
+                entries
+                    .iter()
+                    .any(|entry| entry.id == AgentConversationEntryId::AmbientRun(task.task_id))
+            );
             assert!(entries.iter().any(|entry| {
                 entry.id == AgentConversationEntryId::Conversation(conversation_id)
             }));

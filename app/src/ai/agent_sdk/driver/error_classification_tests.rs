@@ -1,8 +1,8 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::classify_driver_error;
-use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 use crate::ai::agent_sdk::driver::AgentDriverError;
+use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 
 fn assert_state_and_code(
     error: AgentDriverError,
@@ -142,12 +142,16 @@ fn mcp_startup_failed_is_failed_with_env_setup_and_per_server_details() {
         Some(PlatformErrorCode::EnvironmentSetupFailed)
     );
     // Each unavailable server is rendered as its own bullet line.
-    assert!(update
-        .message
-        .contains("- 'devin' failed to start: connection refused"));
-    assert!(update
-        .message
-        .contains("- 'datadog' did not start within 20s"));
+    assert!(
+        update
+            .message
+            .contains("- 'devin' failed to start: connection refused")
+    );
+    assert!(
+        update
+            .message
+            .contains("- 'datadog' did not start within 20s")
+    );
 }
 
 #[test]
@@ -156,6 +160,28 @@ fn environment_setup_failed_is_failed() {
         AgentDriverError::EnvironmentSetupFailed("bad repo".into()),
         AgentTaskState::Failed,
         Some(PlatformErrorCode::EnvironmentSetupFailed),
+    );
+}
+
+#[test]
+fn setup_command_exited_shell_is_failed_with_env_setup_and_names_command() {
+    let (state, update) = classify_driver_error(&AgentDriverError::SetupCommandExitedShell {
+        command: "./setup.sh".into(),
+    });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+    // The message must name the setup command that exited the shell and
+    // point the user at the environment's setup commands.
+    assert!(update.message.contains("./setup.sh"), "{}", update.message);
+    assert!(
+        update
+            .message
+            .contains("Check the setup commands for this environment"),
+        "{}",
+        update.message
     );
 }
 

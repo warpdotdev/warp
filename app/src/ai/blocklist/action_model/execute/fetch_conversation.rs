@@ -1,15 +1,15 @@
 use ai::agent::action_result::FetchConversationResult;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversation;
-use crate::ai::agent::{conversation_yaml, AIAgentActionResultType, AIAgentActionType};
+use crate::ai::agent::{AIAgentActionResultType, AIAgentActionType, conversation_yaml};
 use crate::ai::blocklist::history_model::CloudConversationData;
-use crate::BlocklistAIHistoryModel;
 
 pub struct FetchConversationExecutor;
 
@@ -30,7 +30,7 @@ impl FetchConversationExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let ExecuteActionInput { action, .. } = input;
         let AIAgentActionType::FetchConversation { conversation_id } = &action.action else {
             return ActionExecution::<Option<CloudConversationData>>::InvalidAction;

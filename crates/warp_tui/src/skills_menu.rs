@@ -2,15 +2,15 @@
 
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::{
-    query_selectable_skills, AcceptSkill, ActiveSession, ActiveSessionEvent, SkillReference,
-    TuiSlashCommandDataSource,
+    AcceptSkill, ActiveSession, ActiveSessionEvent, SkillReference, TuiSlashCommandDataSource,
+    query_selectable_skills,
 };
 use warp_editor::model::CoreEditorModel;
 use warpui_core::{AppContext, Entity, EntityId, ModelContext, ModelHandle};
 
 use crate::inline_menu::{
-    result_row_capacity, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
-    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, MAX_INLINE_MENU_ROWS,
+    MAX_INLINE_MENU_ROWS, TuiInlineMenuHeader, TuiInlineMenuListState, TuiInlineMenuRow,
+    TuiInlineMenuRowStyle, TuiInlineMenuSnapshot, TuiInlineMenuStatus, result_row_capacity,
 };
 use crate::input_suggestions_mode::{TuiInputSuggestionsMode, TuiInputSuggestionsModeModel};
 
@@ -133,6 +133,31 @@ impl TuiSkillMenuModel {
         ctx.emit(TuiSkillMenuEvent);
     }
 
+    /// Selects the row at absolute snapshot index `index` (for mouse click).
+    /// Returns `true` when the row was actually selected, `false` when the
+    /// index is out of bounds or the menu is not open.
+    pub(crate) fn select_at_snapshot_index(
+        &mut self,
+        index: usize,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let TuiSkillMenuState::Open { list } = &mut self.state else {
+            return false;
+        };
+        let selected = list.select_absolute(index, MAX_VISIBLE_ROWS, |_| true);
+        ctx.emit(TuiSkillMenuEvent);
+        selected
+    }
+
+    /// Scrolls the viewport by `delta` rows without changing the selection.
+    pub(crate) fn scroll_by_delta(&mut self, delta: isize, ctx: &mut ModelContext<Self>) {
+        let TuiSkillMenuState::Open { list } = &mut self.state else {
+            return;
+        };
+        list.scroll_by(delta, MAX_VISIBLE_ROWS);
+        ctx.emit(TuiSkillMenuEvent);
+    }
+
     pub(crate) fn accept_selected(&mut self, ctx: &mut ModelContext<Self>) -> Option<AcceptSkill> {
         if !self.is_open(ctx) {
             return None;
@@ -169,13 +194,17 @@ impl TuiSkillMenuModel {
                 .iter()
                 .map(|row| TuiInlineMenuRow {
                     title: format!("/{}", row.name),
+                    prefix: None,
                     description: (!row.description.is_empty()).then(|| row.description.clone()),
+                    state_suffix: None,
+                    promotional_suffix: None,
                     is_selectable: true,
                     style: TuiInlineMenuRowStyle::InlineMenuItem,
                 })
                 .collect(),
             selected_index: list.selected_index(),
             scroll_offset: list.scroll_offset(),
+            scroll_anchor: list.scroll_anchor(),
             max_visible_rows: MAX_VISIBLE_ROWS,
             status: list
                 .rows()

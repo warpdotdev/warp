@@ -18,6 +18,8 @@ use warpui_core::{App, ModelHandle};
 #[cfg(feature = "local_fs")]
 use watcher::BulkFilesystemWatcherEvent;
 
+#[cfg(all(unix, feature = "local_fs"))]
+use crate::StandingQueryResults;
 use crate::entry::{
     BudgetExceededBehavior, BuildTreeOptions, DirectoryEntry, Entry, FileMetadata,
     IgnoredPathStrategy,
@@ -29,8 +31,6 @@ use crate::local_model::{
 };
 use crate::repositories::DetectedRepositories;
 use crate::watcher::DirectoryWatcher;
-#[cfg(all(unix, feature = "local_fs"))]
-use crate::StandingQueryResults;
 use crate::{RepoMetadataError, StandingQueryContent, StandingQueryDefinitions};
 
 impl LocalRepoMetadataModel {
@@ -283,9 +283,11 @@ fn remove_repository_aborts_and_drops_build_tasks() {
         });
 
         model_handle.read(&app, |model, _ctx| {
-            assert!(model
-                .build_tasks
-                .contains_key(&build_task_key(&repo_path, &repo_path)));
+            assert!(
+                model
+                    .build_tasks
+                    .contains_key(&build_task_key(&repo_path, &repo_path))
+            );
         });
 
         model_handle.update(&mut app, |model, ctx| {
@@ -299,9 +301,11 @@ fn remove_repository_aborts_and_drops_build_tasks() {
             .await;
 
         model_handle.read(&app, |model, _ctx| {
-            assert!(!model
-                .build_tasks
-                .contains_key(&build_task_key(&repo_path, &repo_path)));
+            assert!(
+                !model
+                    .build_tasks
+                    .contains_key(&build_task_key(&repo_path, &repo_path))
+            );
         });
     });
 }
@@ -516,9 +520,11 @@ fn stale_build_future_id_does_not_finish_newer_task() {
             let new_future_id = new_handle.future_id();
             model.track_build_task(task_key.clone(), BuildTaskKind::Index, new_handle);
 
-            assert!(model
-                .finish_build_task(&task_key, Some(old_future_id))
-                .is_none());
+            assert!(
+                model
+                    .finish_build_task(&task_key, Some(old_future_id))
+                    .is_none()
+            );
             let task = model
                 .build_tasks
                 .get(&task_key)
@@ -812,9 +818,11 @@ fn test_lazy_loaded_path_does_not_build_standing_rule_results_below_shallow_tree
                 let results = model
                     .standing_query_results(&workspace_path)
                     .expect("lazy indexed paths should retain standing results");
-                assert!(!results
-                    .project_rules()
-                    .any(|content| content.path == rule_path));
+                assert!(
+                    !results
+                        .project_rules()
+                        .any(|content| content.path == rule_path)
+                );
             });
         });
     });
@@ -884,16 +892,13 @@ fn test_lazy_loaded_path_discovers_force_included_skills_and_emits_watcher_delta
                 ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
                     if let RepositoryMetadataEvent::StandingQueryResultsUpdated { path, delta } =
                         event
+                        && path == &workspace_path_for_event
+                        && delta.upserted_project_skills.iter().any(|content| {
+                            content.path == skill_path_for_event && !content.is_directory
+                        })
+                        && let Some(tx) = received_delta_for_event.borrow_mut().take()
                     {
-                        if path == &workspace_path_for_event
-                            && delta.upserted_project_skills.iter().any(|content| {
-                                content.path == skill_path_for_event && !content.is_directory
-                            })
-                        {
-                            if let Some(tx) = received_delta_for_event.borrow_mut().take() {
-                                let _ = tx.send(());
-                            }
-                        }
+                        let _ = tx.send(());
                     }
                 });
             });
@@ -951,12 +956,16 @@ fn test_index_directory_path_upgrades_lazy_loaded_non_git_path() {
                 else {
                     panic!("expected indexed lazy-loaded path");
                 };
-                assert!(state
-                    .entry
-                    .contains(&StandardizedPath::try_from_local(&src_dir).unwrap()));
-                assert!(!state
-                    .entry
-                    .contains(&StandardizedPath::try_from_local(&source_file).unwrap()));
+                assert!(
+                    state
+                        .entry
+                        .contains(&StandardizedPath::try_from_local(&src_dir).unwrap())
+                );
+                assert!(
+                    !state
+                        .entry
+                        .contains(&StandardizedPath::try_from_local(&source_file).unwrap())
+                );
             });
             let (tx, rx) = oneshot::channel();
             let repo_root_for_event = repo_root_for_index.clone();
@@ -968,10 +977,9 @@ fn test_index_directory_path_upgrades_lazy_loaded_non_git_path() {
                         event,
                         RepositoryMetadataEvent::RepositoryUpdated { path }
                             if path == &repo_root_for_event
-                    ) {
-                        if let Some(tx) = upgrade_completed_for_event.borrow_mut().take() {
-                            let _ = tx.send(());
-                        }
+                    ) && let Some(tx) = upgrade_completed_for_event.borrow_mut().take()
+                    {
+                        let _ = tx.send(());
                     }
                 });
             });
@@ -993,9 +1001,11 @@ fn test_index_directory_path_upgrades_lazy_loaded_non_git_path() {
                 else {
                     panic!("expected fully indexed directory after upgrade");
                 };
-                assert!(state
-                    .entry
-                    .contains(&StandardizedPath::try_from_local(&source_file).unwrap()));
+                assert!(
+                    state
+                        .entry
+                        .contains(&StandardizedPath::try_from_local(&source_file).unwrap())
+                );
             });
         });
     });
@@ -1052,9 +1062,12 @@ fn test_index_directory_path_upgrades_pending_lazy_loaded_non_git_path() {
                         model.repository_state(&repo_root_for_index),
                         Some(IndexedRepoState::Pending(_))
                     ));
-                    assert!(model
-                        .build_tasks
-                        .contains_key(&build_task_key(&repo_root_for_index, &repo_root_for_index)));
+                    assert!(
+                        model.build_tasks.contains_key(&build_task_key(
+                            &repo_root_for_index,
+                            &repo_root_for_index
+                        ))
+                    );
                 });
 
                 model_handle.update(&mut app, |model, ctx| {
@@ -1074,12 +1087,17 @@ fn test_index_directory_path_upgrades_pending_lazy_loaded_non_git_path() {
                     else {
                         panic!("expected fully indexed directory after pending lazy upgrade");
                     };
-                    assert!(state
-                        .entry
-                        .contains(&StandardizedPath::try_from_local(&source_file).unwrap()));
-                    assert!(!model
-                        .build_tasks
-                        .contains_key(&build_task_key(&repo_root_for_index, &repo_root_for_index)));
+                    assert!(
+                        state
+                            .entry
+                            .contains(&StandardizedPath::try_from_local(&source_file).unwrap())
+                    );
+                    assert!(
+                        !model.build_tasks.contains_key(&build_task_key(
+                            &repo_root_for_index,
+                            &repo_root_for_index
+                        ))
+                    );
                 });
             });
         },
@@ -1380,20 +1398,24 @@ fn test_update_file_tree_entry_respects_gitignore() {
         assert!(all_paths.contains(&target_std));
 
         // Make sure that the ignored files and folders are marked as ignored.
-        assert!(root
-            .get(&StandardizedPath::try_from_local(&log_file).unwrap())
-            .unwrap()
-            .ignored());
-        assert!(root
-            .get(&StandardizedPath::try_from_local(&target_dir).unwrap())
-            .unwrap()
-            .ignored());
+        assert!(
+            root.get(&StandardizedPath::try_from_local(&log_file).unwrap())
+                .unwrap()
+                .ignored()
+        );
+        assert!(
+            root.get(&StandardizedPath::try_from_local(&target_dir).unwrap())
+                .unwrap()
+                .ignored()
+        );
 
         // Make sure that the ignored folder is not eagerly loaded.
-        assert!(!root
-            .get(&StandardizedPath::try_from_local(&target_dir).unwrap())
-            .unwrap()
-            .loaded());
+        assert!(
+            !root
+                .get(&StandardizedPath::try_from_local(&target_dir).unwrap())
+                .unwrap()
+                .loaded()
+        );
     });
 }
 
@@ -1618,9 +1640,13 @@ fn test_ensure_parent_directories_exist() {
     assert!(all_paths.contains(&StandardizedPath::try_new("/test_repo").unwrap()));
     assert!(all_paths.contains(&StandardizedPath::try_new("/test_repo/src").unwrap()));
     assert!(all_paths.contains(&StandardizedPath::try_new("/test_repo/src/components").unwrap()));
-    assert!(all_paths.contains(&StandardizedPath::try_new("/test_repo/src/components/ui").unwrap()));
-    assert!(all_paths
-        .contains(&StandardizedPath::try_new("/test_repo/src/components/ui/forms").unwrap()));
+    assert!(
+        all_paths.contains(&StandardizedPath::try_new("/test_repo/src/components/ui").unwrap())
+    );
+    assert!(
+        all_paths
+            .contains(&StandardizedPath::try_new("/test_repo/src/components/ui/forms").unwrap())
+    );
 
     // Test case 2: Existing directories should not be recreated
     let initial_count = all_paths.len();
@@ -1671,10 +1697,15 @@ fn test_ensure_parent_directories_exist() {
         conflict_paths.contains(&StandardizedPath::try_new("/test_repo/conflicting_path").unwrap())
     );
     // Should NOT have created nested directories beyond the conflict
-    assert!(!conflict_paths
-        .contains(&StandardizedPath::try_new("/test_repo/conflicting_path/nested").unwrap()));
-    assert!(!conflict_paths
-        .contains(&StandardizedPath::try_new("/test_repo/conflicting_path/nested/deep").unwrap()));
+    assert!(
+        !conflict_paths
+            .contains(&StandardizedPath::try_new("/test_repo/conflicting_path/nested").unwrap())
+    );
+    assert!(
+        !conflict_paths.contains(
+            &StandardizedPath::try_new("/test_repo/conflicting_path/nested/deep").unwrap()
+        )
+    );
 
     // Verify the conflicting entry is still a file, not a directory
     let conflicting_entry = root_with_file_conflict
@@ -1721,14 +1752,21 @@ fn test_ensure_parent_directories_exist() {
         );
 
         // Should still have the original file at components level
-        assert!(intermediate_conflict_paths
-            .contains(&StandardizedPath::try_new("/test_repo/src/components").unwrap()));
+        assert!(
+            intermediate_conflict_paths
+                .contains(&StandardizedPath::try_new("/test_repo/src/components").unwrap())
+        );
 
         // Should NOT have created deeper nested directories beyond the conflict
-        assert!(!intermediate_conflict_paths
-            .contains(&StandardizedPath::try_new("/test_repo/src/components/ui").unwrap()));
-        assert!(!intermediate_conflict_paths
-            .contains(&StandardizedPath::try_new("/test_repo/src/components/ui/forms").unwrap()));
+        assert!(
+            !intermediate_conflict_paths
+                .contains(&StandardizedPath::try_new("/test_repo/src/components/ui").unwrap())
+        );
+        assert!(
+            !intermediate_conflict_paths.contains(
+                &StandardizedPath::try_new("/test_repo/src/components/ui/forms").unwrap()
+            )
+        );
 
         // Verify the conflicting entry is still a file, not a directory
         let conflicting_entry = root_with_intermediate_conflict
@@ -1964,20 +2002,16 @@ fn added_external_target_skill_symlink_routes_to_lexical_repository() {
                             path,
                             delta,
                         } = event
-                        {
-                            if path == &repo_path_for_event
+                            && path == &repo_path_for_event
                                 && delta.upserted_project_skills.iter().any(|content| {
                                     content
                                         == &StandingQueryContent::directory(
                                             provider_path_for_event.clone(),
                                         )
                                 })
-                            {
-                                if let Some(tx) = received_delta_for_event.borrow_mut().take() {
+                                && let Some(tx) = received_delta_for_event.borrow_mut().take() {
                                     let _ = tx.send(());
                                 }
-                            }
-                        }
                     });
                 });
 
@@ -1996,12 +2030,14 @@ fn added_external_target_skill_symlink_routes_to_lexical_repository() {
                     .expect("standing project-skill update sender dropped");
 
                 model_handle.read(&app, |model, _ctx| {
-                    assert!(model
-                        .standing_query_results(&repo_path)
-                        .expect("standing results should be retained for the repository")
-                        .project_skills()
-                        .any(|content| content
-                            == &StandingQueryContent::directory(provider_path.clone())));
+                    assert!(
+                        model
+                            .standing_query_results(&repo_path)
+                            .expect("standing results should be retained for the repository")
+                            .project_skills()
+                            .any(|content| content
+                                == &StandingQueryContent::directory(provider_path.clone()))
+                    );
                 });
             });
         },
@@ -2056,8 +2092,8 @@ fn modified_external_symlink_target_upserts_lexical_project_skill() {
                 let logical_skill_path_for_event = logical_skill_path.clone();
                 app.update(|ctx| {
                     ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
-                        if let RepositoryMetadataEvent::IncrementalUpdateReady { update } = event {
-                            if update
+                        if let RepositoryMetadataEvent::IncrementalUpdateReady { update } = event
+                            && update
                                 .standing_results_delta
                                 .upserted_project_skills
                                 .iter()
@@ -2067,11 +2103,9 @@ fn modified_external_symlink_target_upserts_lexical_project_skill() {
                                             logical_skill_path_for_event.clone(),
                                         )
                                 })
-                            {
-                                if let Some(tx) = received_delta_for_event.borrow_mut().take() {
-                                    let _ = tx.send(());
-                                }
-                            }
+                            && let Some(tx) = received_delta_for_event.borrow_mut().take()
+                        {
+                            let _ = tx.send(());
                         }
                     });
                 });
@@ -2147,17 +2181,15 @@ fn removed_then_recreated_external_symlink_target_refreshes_lexical_project_skil
                         if let RepositoryMetadataEvent::StandingQueryResultsUpdated {
                             delta, ..
                         } = event
-                        {
-                            if delta.removed_project_skills.iter().any(|content| {
+                            && delta.removed_project_skills.iter().any(|content| {
                                 content
                                     == &StandingQueryContent::file(
                                         logical_skill_path_for_event.clone(),
                                     )
-                            }) {
-                                if let Some(tx) = received_delta_for_event.borrow_mut().take() {
-                                    let _ = tx.send(());
-                                }
-                            }
+                            })
+                            && let Some(tx) = received_delta_for_event.borrow_mut().take()
+                        {
+                            let _ = tx.send(());
                         }
                     });
                 });
@@ -2178,12 +2210,14 @@ fn removed_then_recreated_external_symlink_target_refreshes_lexical_project_skil
                     .expect("timed out waiting for symlink target removal")
                     .expect("symlink target removal sender dropped");
                 model_handle.read(&app, |model, _ctx| {
-                    assert!(model
-                        .standing_query_results(&repo_path)
-                        .expect("standing results should remain tracked")
-                        .project_skills()
-                        .all(|content| content
-                            != &StandingQueryContent::file(logical_skill_path.clone())));
+                    assert!(
+                        model
+                            .standing_query_results(&repo_path)
+                            .expect("standing results should remain tracked")
+                            .project_skills()
+                            .all(|content| content
+                                != &StandingQueryContent::file(logical_skill_path.clone()))
+                    );
                 });
 
                 let (tx, rx) = oneshot::channel();
@@ -2195,17 +2229,15 @@ fn removed_then_recreated_external_symlink_target_refreshes_lexical_project_skil
                         if let RepositoryMetadataEvent::StandingQueryResultsUpdated {
                             delta, ..
                         } = event
-                        {
-                            if delta.upserted_project_skills.iter().any(|content| {
+                            && delta.upserted_project_skills.iter().any(|content| {
                                 content
                                     == &StandingQueryContent::file(
                                         logical_skill_path_for_event.clone(),
                                     )
-                            }) {
-                                if let Some(tx) = received_delta_for_event.borrow_mut().take() {
-                                    let _ = tx.send(());
-                                }
-                            }
+                            })
+                            && let Some(tx) = received_delta_for_event.borrow_mut().take()
+                        {
+                            let _ = tx.send(());
                         }
                     });
                 });
@@ -3535,12 +3567,11 @@ fn deleted_subdir_drops_its_tracked_watch() {
             let root_for_event = root.clone();
             app.update(|ctx| {
                 ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
-                    if let RepositoryMetadataEvent::FileTreeEntryUpdated { path, .. } = event {
-                        if path == &root_for_event {
-                            if let Some(tx) = sender.borrow_mut().take() {
-                                let _ = tx.send(());
-                            }
-                        }
+                    if let RepositoryMetadataEvent::FileTreeEntryUpdated { path, .. } = event
+                        && path == &root_for_event
+                        && let Some(tx) = sender.borrow_mut().take()
+                    {
+                        let _ = tx.send(());
                     }
                 });
             });

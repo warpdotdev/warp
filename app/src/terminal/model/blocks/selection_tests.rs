@@ -688,9 +688,11 @@ fn test_selection_is_removed_if_contained_within_active_truncated_block() {
         blocks.linefeed();
     }
 
-    assert!(blocks
-        .renderable_selection(&semantic_selection, false)
-        .is_none());
+    assert!(
+        blocks
+            .renderable_selection(&semantic_selection, false)
+            .is_none()
+    );
 }
 
 #[test]

@@ -4,17 +4,20 @@ use std::io::{self, Write};
 use std::rc::Rc;
 use std::time::Duration;
 
-use ratatui::crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
+    MouseEvent, MouseEventKind,
+};
 
 use super::*;
+use crate::elements::MouseStateHandle;
 use crate::elements::tui::{
     TuiChildView, TuiConstraint, TuiElement, TuiEventHandler, TuiFlex, TuiHoverable,
     TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiScreenPoint,
     TuiScreenPosition, TuiText,
 };
-use crate::elements::MouseStateHandle;
-use crate::keymap::macros::*;
 use crate::keymap::FixedBinding;
+use crate::keymap::macros::*;
 use crate::platform::WindowStyle;
 use crate::{AddWindowOptions, AppContext, Entity, TypedActionView, ViewContext};
 
@@ -23,6 +26,133 @@ struct TextElement {
     text: String,
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
+}
+
+#[test]
+fn blocking_runtime_continues_repaint_deadlines_while_unfocused_by_default() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| RepaintingView));
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut runtime = TuiRuntime::with_terminal(&app, window_id, root, terminal);
+
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(runtime.pending_repaint.is_some());
+
+        runtime
+            .screen
+            .terminal
+            .events
+            .push_back(CrosstermEvent::FocusLost);
+        runtime.poll_and_dispatch(&mut app, Duration::ZERO).unwrap();
+        assert!(!runtime.focused);
+        assert!(
+            runtime.pending_repaint.is_some(),
+            "unfocused repaint suspension should be opt-in"
+        );
+
+        runtime.dirty.set(true);
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(runtime.pending_repaint.is_some());
+    });
+}
+
+#[test]
+fn blocking_runtime_suspends_and_resumes_repaint_deadlines_when_enabled() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| RepaintingView));
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut runtime = TuiRuntime::with_terminal(&app, window_id, root, terminal);
+        runtime.freeze_repaints_when_unfocused = true;
+
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(runtime.pending_repaint.is_some());
+
+        runtime
+            .screen
+            .terminal
+            .events
+            .push_back(CrosstermEvent::FocusLost);
+        runtime.poll_and_dispatch(&mut app, Duration::ZERO).unwrap();
+        assert!(!runtime.focused);
+        assert!(runtime.pending_repaint.is_none());
+
+        runtime.dirty.set(true);
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(
+            runtime.pending_repaint.is_none(),
+            "ordinary invalidations may draw while blurred but must not restart animation"
+        );
+
+        runtime
+            .screen
+            .terminal
+            .events
+            .push_back(CrosstermEvent::FocusGained);
+        runtime.poll_and_dispatch(&mut app, Duration::ZERO).unwrap();
+        assert!(runtime.focused);
+        assert!(runtime.dirty.get());
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(runtime.pending_repaint.is_some());
+    });
+}
+
+#[test]
+fn invalidation_driver_does_not_schedule_repaints_while_unfocused() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| RepaintingView));
+        let screen = Rc::new(RefCell::new(TuiScreen::new(
+            window_id,
+            root,
+            TestTerminal::new(TuiSize::new(20, 3)),
+        )));
+        let timer = Rc::new(RefCell::new(None));
+        let focused = Rc::new(Cell::new(true));
+        let freeze_repaints_when_unfocused = Rc::new(Cell::new(true));
+
+        app.update(|ctx| {
+            draw_and_schedule_repaint(
+                &screen,
+                &timer,
+                &focused,
+                &freeze_repaints_when_unfocused,
+                ctx,
+            )
+        })
+        .unwrap();
+        assert!(timer.borrow().is_some());
+
+        focused.set(false);
+        app.update(|ctx| {
+            draw_and_schedule_repaint(
+                &screen,
+                &timer,
+                &focused,
+                &freeze_repaints_when_unfocused,
+                ctx,
+            )
+        })
+        .unwrap();
+        assert!(timer.borrow().is_none());
+
+        freeze_repaints_when_unfocused.set(false);
+        app.update(|ctx| {
+            draw_and_schedule_repaint(
+                &screen,
+                &timer,
+                &focused,
+                &freeze_repaints_when_unfocused,
+                ctx,
+            )
+        })
+        .unwrap();
+        assert!(
+            timer.borrow().is_some(),
+            "disabling the opt-in should resume repaint scheduling while unfocused"
+        );
+    });
 }
 
 impl TuiElement for TextElement {
@@ -86,6 +216,59 @@ impl TuiView for TextView {
 }
 
 impl TypedActionView for TextView {
+    type Action = ();
+}
+
+struct RepaintingElement {
+    size: Option<TuiSize>,
+}
+
+impl TuiElement for RepaintingElement {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        let size = constraint.clamp(TuiSize::new(1, 1));
+        self.size = Some(size);
+        size
+    }
+
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        if let Some(cell) = surface.cell_mut(origin) {
+            cell.set_char('*');
+        }
+        ctx.repaint_after(Duration::from_secs(1));
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+}
+
+struct RepaintingView;
+
+impl Entity for RepaintingView {
+    type Event = ();
+}
+
+impl TuiView for RepaintingView {
+    fn ui_name() -> &'static str {
+        "RepaintingView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
+        Box::new(RepaintingElement { size: None })
+    }
+}
+
+impl TypedActionView for RepaintingView {
     type Action = ();
 }
 
@@ -248,6 +431,199 @@ fn keymap_binding_dispatches_typed_action_to_tui_view() {
     });
 }
 
+#[test]
+fn repeats_dispatch_keymaps_while_modifier_events_bypass_them() {
+    App::test((), |mut app| async move {
+        let (window_id, root) = app.update(|ctx| {
+            ctx.register_fixed_bindings([FixedBinding::new("ctrl-c", Bump, id!("BumpParentView"))]);
+            ctx.add_tui_window(window_options(), |view_ctx| {
+                let child = view_ctx.add_tui_view(|_| BumpChildView);
+                BumpParentView { child, bumps: 0 }
+            })
+        });
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut screen = TuiScreen::new(window_id, root.clone(), terminal);
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+
+        let modifier = screen
+            .convert_event(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Modifier(ModifierKeyCode::LeftControl),
+                KeyModifiers::CONTROL,
+            )))
+            .expect("modifier event");
+        assert!(!app.update(|ctx| screen.dispatch_event(ctx, &modifier)));
+        assert_eq!(root.read(&app, |view, _| view.bumps), 0);
+
+        let repeat = screen
+            .convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+                KeyEventKind::Repeat,
+            )))
+            .expect("repeat event");
+        assert!(app.update(|ctx| screen.dispatch_event(ctx, &repeat)));
+        assert_eq!(root.read(&app, |view, _| view.bumps), 1);
+    });
+}
+
+#[test]
+fn shift_lifecycle_restores_shift_and_normalizes_symbol_keystrokes() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
+
+        screen
+            .convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Modifier(ModifierKeyCode::LeftShift),
+                KeyModifiers::SHIFT,
+                KeyEventKind::Press,
+            )))
+            .expect("shift press");
+
+        // A letter keeps Shift because lowercasing recovers its base key; a
+        // symbol is spelled as the produced character with no Shift, since its
+        // base key cannot be derived from it.
+        for (char, expected_shift, expected_base) in [('A', true, Some("a")), ('!', false, None)] {
+            let Some(TuiEvent::KeyDown {
+                keystroke,
+                chars,
+                details,
+                ..
+            }) = screen.convert_event(CrosstermEvent::Key(KeyEvent::new(
+                KeyCode::Char(char),
+                KeyModifiers::CONTROL,
+            )))
+            else {
+                panic!("expected KeyDown");
+            };
+            assert!(keystroke.ctrl);
+            assert_eq!(keystroke.shift, expected_shift);
+            assert_eq!(keystroke.key, char.to_string());
+            assert_eq!(chars, char.to_string());
+            assert_eq!(details.key_without_modifiers.as_deref(), expected_base);
+        }
+
+        screen
+            .convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Modifier(ModifierKeyCode::LeftShift),
+                KeyModifiers::SHIFT,
+                KeyEventKind::Release,
+            )))
+            .expect("shift release");
+
+        let Some(TuiEvent::KeyDown { keystroke, .. }) = screen.convert_event(CrosstermEvent::Key(
+            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::CONTROL),
+        )) else {
+            panic!("expected KeyDown");
+        };
+        assert!(keystroke.ctrl);
+        assert!(!keystroke.shift);
+        assert_eq!(keystroke.key, "!");
+    });
+}
+
+#[test]
+fn shift_remains_active_until_both_shift_keys_are_released() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
+
+        for modifier in [ModifierKeyCode::LeftShift, ModifierKeyCode::RightShift] {
+            screen.convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Modifier(modifier),
+                KeyModifiers::SHIFT,
+                KeyEventKind::Press,
+            )));
+        }
+        screen.convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+            KeyCode::Modifier(ModifierKeyCode::LeftShift),
+            KeyModifiers::SHIFT,
+            KeyEventKind::Release,
+        )));
+
+        // A letter probes the tracked state directly, since a restored Shift
+        // survives on letters but is normalized away on symbols.
+        let Some(TuiEvent::KeyDown { keystroke, .. }) = screen.convert_event(CrosstermEvent::Key(
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::empty()),
+        )) else {
+            panic!("expected KeyDown");
+        };
+        assert!(keystroke.shift);
+
+        screen.convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
+            KeyCode::Modifier(ModifierKeyCode::RightShift),
+            KeyModifiers::SHIFT,
+            KeyEventKind::Release,
+        )));
+        let Some(TuiEvent::KeyDown { keystroke, .. }) = screen.convert_event(CrosstermEvent::Key(
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::empty()),
+        )) else {
+            panic!("expected KeyDown");
+        };
+        assert!(!keystroke.shift);
+    });
+}
+
+/// A dropped Shift release would otherwise latch Shift on forever, so every
+/// event that reports Shift accurately re-syncs the tracked state.
+#[test]
+fn stale_shift_state_is_cleared_by_events_that_report_shift_accurately() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
+
+        let shift_press = || {
+            CrosstermEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Modifier(ModifierKeyCode::LeftShift),
+                KeyModifiers::SHIFT,
+                KeyEventKind::Press,
+            ))
+        };
+        let letter =
+            || CrosstermEvent::Key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::empty()));
+        let mouse_move = |modifiers| {
+            CrosstermEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: 1,
+                row: 1,
+                modifiers,
+            })
+        };
+
+        for clearing_event in [
+            CrosstermEvent::FocusLost,
+            CrosstermEvent::FocusGained,
+            CrosstermEvent::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty())),
+            mouse_move(KeyModifiers::empty()),
+        ] {
+            screen.convert_event(shift_press());
+            screen.convert_event(clearing_event);
+            let Some(TuiEvent::KeyDown { keystroke, .. }) = screen.convert_event(letter()) else {
+                panic!("expected KeyDown");
+            };
+            assert!(!keystroke.shift);
+        }
+
+        // Shift reported on such an event instead confirms it is still held.
+        screen.convert_event(shift_press());
+        for confirming_event in [
+            CrosstermEvent::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT)),
+            mouse_move(KeyModifiers::SHIFT),
+        ] {
+            screen.convert_event(confirming_event);
+            let Some(TuiEvent::KeyDown { keystroke, .. }) = screen.convert_event(letter()) else {
+                panic!("expected KeyDown");
+            };
+            assert!(keystroke.shift);
+        }
+    });
+}
 /// End-to-end regression for the Shift+Enter fix: a Shift+Enter key event —
 /// the distinct event a terminal only sends once the Kitty keyboard protocol
 /// is enabled (see `terminal_screen_lifecycle_toggles_keyboard_enhancement`) —
@@ -493,7 +869,7 @@ impl TerminalModeControl for RecordingControl {
 #[test]
 fn terminal_screen_lifecycle_toggles_bracketed_paste() {
     let mut enter_output = Vec::new();
-    enter_terminal_screen(&mut enter_output, true).unwrap();
+    enter_terminal_screen(&mut enter_output, true, true).unwrap();
     assert!(
         enter_output
             .windows(b"\x1b[?2004h".len())
@@ -502,7 +878,7 @@ fn terminal_screen_lifecycle_toggles_bracketed_paste() {
     );
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, true).unwrap();
+    leave_terminal_screen(&mut leave_output).unwrap();
     assert!(
         leave_output
             .windows(b"\x1b[?2004l".len())
@@ -511,10 +887,30 @@ fn terminal_screen_lifecycle_toggles_bracketed_paste() {
     );
 }
 
-/// Regression test for Shift+Enter not inserting a newline in terminals that
-/// require the Kitty keyboard protocol (e.g. Ghostty): entering the TUI must
-/// push the `DISAMBIGUATE_ESCAPE_CODES` enhancement flag (CSI `>1u`) so modified
-/// keys are reported distinctly, and leaving must pop it (CSI `<1u`).
+#[test]
+fn terminal_screen_lifecycle_toggles_focus_reporting() {
+    let mut enter_output = Vec::new();
+    enter_terminal_screen(&mut enter_output, true, true).unwrap();
+    assert!(
+        enter_output
+            .windows(b"\x1b[?1004h".len())
+            .any(|window| window == b"\x1b[?1004h"),
+        "entering the TUI should enable focus reporting"
+    );
+
+    let mut leave_output = Vec::new();
+    leave_terminal_screen(&mut leave_output).unwrap();
+    assert!(
+        leave_output
+            .windows(b"\x1b[?1004l".len())
+            .any(|window| window == b"\x1b[?1004l"),
+        "leaving the TUI should disable focus reporting"
+    );
+}
+
+/// Enhancement-capable terminals report standalone modifier event types while
+/// preserving shifted text through Crossterm's alternate-key decoding (CSI
+/// `>15u`), then restore the previous protocol on exit.
 ///
 /// Crossterm hard-routes these commands to the unsupported legacy Windows
 /// console API, so the ANSI sequences are only emitted off Windows. The
@@ -524,18 +920,18 @@ fn terminal_screen_lifecycle_toggles_bracketed_paste() {
 #[test]
 fn terminal_screen_lifecycle_toggles_keyboard_enhancement() {
     let mut enter_output = Vec::new();
-    enter_terminal_screen(&mut enter_output, true).unwrap();
+    enter_terminal_screen(&mut enter_output, true, true).unwrap();
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, true).unwrap();
+    leave_terminal_screen(&mut leave_output).unwrap();
 
     #[cfg(not(windows))]
     {
         assert!(
             enter_output
-                .windows(b"\x1b[>1u".len())
-                .any(|window| window == b"\x1b[>1u"),
-            "entering the TUI should push the DISAMBIGUATE_ESCAPE_CODES keyboard enhancement flag"
+                .windows(b"\x1b[>15u".len())
+                .any(|window| window == b"\x1b[>15u"),
+            "entering the TUI should request modifier lifecycle support"
         );
         assert!(
             leave_output
@@ -547,18 +943,96 @@ fn terminal_screen_lifecycle_toggles_keyboard_enhancement() {
 }
 
 #[test]
-fn terminal_screen_lifecycle_skips_unsupported_keyboard_enhancement() {
+fn terminal_screen_lifecycle_can_skip_all_key_reporting() {
     let mut enter_output = Vec::new();
-    enter_terminal_screen(&mut enter_output, false).unwrap();
-    assert!(!enter_output
-        .windows(b"\x1b[>1u".len())
-        .any(|window| window == b"\x1b[>1u"));
+    enter_terminal_screen(&mut enter_output, true, false).unwrap();
+
+    #[cfg(not(windows))]
+    {
+        assert!(
+            enter_output
+                .windows(b"\x1b[>3u".len())
+                .any(|window| window == b"\x1b[>3u"),
+            "compatibility mode should retain safe keyboard enhancements"
+        );
+        assert!(
+            !enter_output
+                .windows(b"\x1b[>15u".len())
+                .any(|window| window == b"\x1b[>15u"),
+            "compatibility mode should not request all-key reporting"
+        );
+    }
+}
+
+#[test]
+fn terminal_screen_lifecycle_reconfigures_modifier_reporting() {
+    let mut output = Vec::new();
+    set_terminal_keyboard_enhancement_flags(&mut output, false).unwrap();
+    assert_eq!(output, b"\x1b[=3;1u");
+
+    output.clear();
+    set_terminal_keyboard_enhancement_flags(&mut output, true).unwrap();
+    assert_eq!(output, b"\x1b[=15;1u");
+}
+
+#[test]
+fn terminal_screen_lifecycle_uses_baseline_keyboard_enhancement_when_unconfirmed() {
+    let mut enter_output = Vec::new();
+    enter_terminal_screen(&mut enter_output, false, true).unwrap();
+
+    #[cfg(not(windows))]
+    {
+        assert!(
+            enter_output
+                .windows(b"\x1b[>3u".len())
+                .any(|window| window == b"\x1b[>3u"),
+            "unconfirmed terminals should still receive safe baseline keyboard enhancements"
+        );
+        assert!(
+            !enter_output
+                .windows(b"\x1b[>15u".len())
+                .any(|window| window == b"\x1b[>15u"),
+            "unconfirmed terminals should not receive all-key reporting"
+        );
+    }
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, false).unwrap();
-    assert!(!leave_output
-        .windows(b"\x1b[<1u".len())
-        .any(|window| window == b"\x1b[<1u"));
+    leave_terminal_screen(&mut leave_output).unwrap();
+    #[cfg(not(windows))]
+    assert!(
+        leave_output
+            .windows(b"\x1b[<1u".len())
+            .any(|window| window == b"\x1b[<1u"),
+        "leaving should pop the baseline keyboard enhancement request"
+    );
+}
+
+#[test]
+fn keyboard_enhancement_probe_retries_a_negative_result_once() {
+    let mut results = VecDeque::from([Ok(false), Ok(true)]);
+    assert!(probe_keyboard_enhancement_support(|| {
+        results.pop_front().expect("probe should run at most twice")
+    }));
+    assert!(results.is_empty());
+}
+
+#[test]
+fn keyboard_enhancement_probe_does_not_retry_success_or_error() {
+    let mut successful_results = VecDeque::from([Ok(true), Ok(false)]);
+    assert!(probe_keyboard_enhancement_support(|| {
+        successful_results
+            .pop_front()
+            .expect("successful probe should run once")
+    }));
+    assert_eq!(successful_results.len(), 1);
+
+    let mut failed_results = VecDeque::from([Err(io::Error::other("probe failed")), Ok(true)]);
+    assert!(!probe_keyboard_enhancement_support(|| {
+        failed_results
+            .pop_front()
+            .expect("failed probe should run once")
+    }));
+    assert_eq!(failed_results.len(), 1);
 }
 #[test]
 fn raw_mode_guard_restores_on_drop() {

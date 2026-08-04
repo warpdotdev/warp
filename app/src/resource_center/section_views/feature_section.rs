@@ -11,14 +11,14 @@ use warpui::{
 };
 
 use super::{
-    SectionAction, SectionView, CHEVRON_ICON_SIZE, DESCRIPTION_FONT_SIZE, ELLIPSE_ICON_SIZE,
-    ELLIPSE_SVG_PATH, ICON_PADDING, ITEM_PADDING_BOTTOM, SCROLLBAR_OFFSET, SECTION_SPACING,
+    CHEVRON_ICON_SIZE, DESCRIPTION_FONT_SIZE, ELLIPSE_ICON_SIZE, ELLIPSE_SVG_PATH, ICON_PADDING,
+    ITEM_PADDING_BOTTOM, SCROLLBAR_OFFSET, SECTION_SPACING, SectionAction, SectionView,
 };
 use crate::appearance::Appearance;
 use crate::resource_center::main_page::ActionTarget;
 use crate::resource_center::{
-    complete_tips_and_write_to_user_defaults, skip_tips_and_write_to_user_defaults, FeatureItem,
-    FeatureSectionData, Tip, TipsCompleted,
+    FeatureItem, FeatureSectionData, Tip, TipsCompleted, complete_tips_and_write_to_user_defaults,
+    skip_tips_and_write_to_user_defaults,
 };
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;

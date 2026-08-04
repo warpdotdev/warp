@@ -3,8 +3,8 @@
 use chrono::Local;
 use warp_util::path::user_friendly_path;
 
-use super::context_chip::{GeneratorContext, ShellCommand, ShellCommandGenerator};
 use super::ChipValue;
+use super::context_chip::{GeneratorContext, ShellCommand, ShellCommandGenerator};
 use crate::terminal::shell::ShellType;
 
 #[cfg(test)]

@@ -14,14 +14,13 @@ use std::thread::{self, JoinHandle};
 use log::error;
 use mio::{self, Events, Interest};
 use parking_lot::{FairMutex, FairMutexGuard};
-use warp_errors::report_error;
 
 use super::mio_channel::Receiver;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi;
 use crate::terminal::model::terminal_model::ExitReason;
 use crate::terminal::writeable_pty::Message;
-use crate::terminal::{local_tty, TerminalModel};
+use crate::terminal::{TerminalModel, local_tty};
 
 /// The size of the buffer to read data into from the PTY.
 const READ_BUFFER_SIZE: usize = 0x4_0000;
@@ -167,7 +166,7 @@ where
                 Message::Shutdown => {
                     return ChannelResult::TerminateLoop {
                         child_exited: false,
-                    }
+                    };
                 }
                 Message::Resize(size) => self.pty.on_resize(&size),
                 Message::ChildExited => return ChannelResult::TerminateLoop { child_exited: true },
@@ -466,11 +465,12 @@ where
                             }
                         }
 
-                        if state.needs_write() && can_write {
-                            if let Err(err) = self.pty_write(&mut state, &mut can_write) {
-                                error!("Error writing to PTY in event loop: {err}");
-                                break 'event_loop;
-                            }
+                        if state.needs_write()
+                            && can_write
+                            && let Err(err) = self.pty_write(&mut state, &mut can_write)
+                        {
+                            error!("Error writing to PTY in event loop: {err}");
+                            break 'event_loop;
                         }
                     }
                 }
@@ -483,7 +483,7 @@ where
                 if !child_exited {
                     let res = self.pty.kill();
                     if let Err(err) = res {
-                        report_error!(err.context("Failed to kill PTY process"));
+                        log::warn!("Failed to kill PTY process: {err:#}");
                     }
                 }
                 // Notify the terminal model that the PTY process has exited.

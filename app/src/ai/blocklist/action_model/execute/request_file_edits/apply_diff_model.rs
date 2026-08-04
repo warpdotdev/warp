@@ -14,7 +14,7 @@ use vec1::Vec1;
 use warpui::r#async::BoxFuture;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
-use super::diff_application::{apply_edits, DiffApplicationError, FileReadResult};
+use super::diff_application::{DiffApplicationError, FileReadResult, apply_edits};
 use crate::ai::agent::{AIIdentifiers, FileEdit};
 use crate::ai::blocklist::SessionContext;
 use crate::auth::AuthStateProvider;

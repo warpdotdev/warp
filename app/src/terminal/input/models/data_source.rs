@@ -1,11 +1,11 @@
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use fuzzy_match::{FuzzyMatchResult, match_indices_case_insensitive};
 use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use ordered_float::OrderedFloat;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, FormattedTextElement, Highlight, HighlightedHyperlink,
     MouseStateHandle, Radius, Text,
@@ -18,19 +18,21 @@ use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
     AppContext, Element, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _,
+    WindowId,
 };
 
 use super::model_spec_scores::{
-    render_model_spec_header, render_model_spec_scores, CostRow, CostRowTooltip,
-    ModelSpecScoresLayout, CUSTOM_MODEL_ROUTER_DESCRIPTION, CUSTOM_MODEL_ROUTER_TITLE,
-    MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
+    CUSTOM_MODEL_ROUTER_DESCRIPTION, CUSTOM_MODEL_ROUTER_TITLE, CostRow, MODEL_SPECS_DESCRIPTION,
+    MODEL_SPECS_TITLE, ModelSpecScoresLayout, REASONING_LEVEL_DESCRIPTION, REASONING_LEVEL_TITLE,
+    render_model_spec_header, render_model_spec_scores,
 };
 use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
-    byo_key_source_for_model, should_show_bedrock_icon_for_model,
-    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
     ByoKeySource, DisableReason, LLMId, LLMInfo, LLMPreferences, LLMProvider, LLMSpec,
+    ModelIconFlags, byo_key_source_for_model, model_leading_icon,
+    should_show_bedrock_icon_for_model,
+    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
 };
 use crate::auth::AuthStateProvider;
 use crate::features::FeatureFlag;
@@ -40,16 +42,17 @@ use crate::search::result_renderer::ItemHighlightState;
 use crate::search::{SearchItem, SyncDataSource};
 use crate::settings_view::SettingsSection;
 use crate::terminal::input::inline_menu::{
-    default_navigation_message_items, styles as inline_styles, DetailsRenderConfig,
-    InlineMenuAction, InlineMenuMessageArgs, InlineMenuType,
+    DetailsRenderConfig, InlineMenuAction, InlineMenuMessageArgs, InlineMenuType,
+    default_navigation_message_items, styles as inline_styles,
 };
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
-const AUTO_BEDROCK_TOOLTIP: &str = "Warp uses Bedrock when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
-const AUTO_GEMINI_ENTERPRISE_AGENT_PLATFORM_TOOLTIP: &str = "Warp uses Gemini Enterprise Agent Platform when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
+/// Auto models pick their concrete model server-side, so the cost line names the
+/// class of inference rather than a host the request may never reach.
+const AUTO_HOSTED_INFERENCE_LABEL: &str = "Inference may use your hosted inference";
 
 #[derive(Clone, Debug)]
 pub struct AcceptModel {
@@ -150,11 +153,7 @@ impl ModelPickerChoice {
     }
 
     fn priority_tier(&self) -> u8 {
-        if self.is_selectable() {
-            0
-        } else {
-            1
-        }
+        if self.is_selectable() { 0 } else { 1 }
     }
 }
 
@@ -210,16 +209,19 @@ pub fn query_model_picker_choices<'a>(
 
 pub struct ModelSelectorDataSource {
     terminal_view_id: EntityId,
+    window_id: WindowId,
     ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
 }
 
 impl ModelSelectorDataSource {
     pub fn new(
         terminal_view_id: EntityId,
+        window_id: WindowId,
         ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
     ) -> Self {
         Self {
             terminal_view_id,
+            window_id,
             ambient_agent_view_model,
         }
     }
@@ -324,7 +326,14 @@ impl SyncDataSource for ModelSelectorDataSource {
         Ok(
             query_model_picker_choices(llm_preferences, choices, &query.text, app)
                 .into_iter()
-                .map(|choice| QueryResult::from(ModelSearchItem::new(choice, &active_llm_id, app)))
+                .map(|choice| {
+                    QueryResult::from(ModelSearchItem::new(
+                        choice,
+                        &active_llm_id,
+                        self.window_id,
+                        app,
+                    ))
+                })
                 .collect(),
         )
     }
@@ -337,6 +346,7 @@ impl Entity for ModelSelectorDataSource {
 #[derive(Clone)]
 struct ModelSearchItem {
     id: LLMId,
+    window_id: WindowId,
     provider: LLMProvider,
     spec: Option<LLMSpec>,
     leading_icon: Icon,
@@ -354,13 +364,17 @@ struct ModelSearchItem {
     name_match_result: Option<FuzzyMatchResult>,
     score: OrderedFloat<f64>,
     manage_api_key_mouse_state: MouseStateHandle,
-    cost_row_tooltip_mouse_state: MouseStateHandle,
     reasoning_level: Option<String>,
     discount_percentage: Option<f32>,
 }
 
 impl ModelSearchItem {
-    fn new(choice: ModelPickerChoice, active_llm_id: &LLMId, app: &AppContext) -> Self {
+    fn new(
+        choice: ModelPickerChoice,
+        active_llm_id: &LLMId,
+        window_id: WindowId,
+        app: &AppContext,
+    ) -> Self {
         let llm = &choice.llm;
         let is_custom_router = is_custom_router_id(llm.id.as_str());
         let is_auto = is_auto(llm);
@@ -368,21 +382,22 @@ impl ModelSearchItem {
         let is_using_gemini_enterprise_agent_platform =
             should_show_gemini_enterprise_agent_platform_icon_for_model(llm, app);
         let byo_key_source = byo_key_source_for_model(llm, app);
-        let leading_icon = if is_using_bedrock {
-            Icon::Aws
-        } else if is_using_gemini_enterprise_agent_platform {
-            Icon::GeminiEnterpriseAgentPlatform
-        } else if is_custom_router {
-            Icon::Dataflow
-        } else {
-            llm.provider.icon().unwrap_or(Icon::Oz)
-        };
+        let leading_icon = model_leading_icon(
+            llm,
+            ModelIconFlags {
+                is_custom_router,
+                is_auto,
+                is_using_bedrock,
+                is_using_gemini_enterprise: is_using_gemini_enterprise_agent_platform,
+            },
+        );
         let is_using_cloud_host = is_using_bedrock || is_using_gemini_enterprise_agent_platform;
         let credential_icon =
             (!is_using_cloud_host && byo_key_source.is_some()).then_some(Icon::Key);
         Self {
             id: llm.id.clone(),
-            provider: llm.provider.clone(),
+            window_id,
+            provider: llm.provider,
             spec: llm.spec.clone(),
             leading_icon,
             credential_icon,
@@ -398,7 +413,6 @@ impl ModelSearchItem {
             name_match_result: choice.name_match_result,
             score: choice.score,
             manage_api_key_mouse_state: Default::default(),
-            cost_row_tooltip_mouse_state: Default::default(),
             reasoning_level: llm.reasoning_level(),
             discount_percentage: llm.discount_percentage,
         }
@@ -459,13 +473,13 @@ impl SearchItem for ModelSearchItem {
         .with_color(name_text_color.into())
         .with_clip(ClipConfig::ellipsis());
 
-        if let Some(name_match) = &self.name_match_result {
-            if !name_match.matched_indices.is_empty() {
-                text = text.with_single_highlight(
-                    Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
-                    name_match.matched_indices.clone(),
-                );
-            }
+        if let Some(name_match) = &self.name_match_result
+            && !name_match.matched_indices.is_empty()
+        {
+            text = text.with_single_highlight(
+                Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+                name_match.matched_indices.clone(),
+            );
         }
 
         let mut row = Flex::row()
@@ -635,31 +649,18 @@ impl SearchItem for ModelSearchItem {
                 })
                 .finish();
             CostRow::BilledToProvider {
-                label: if self.is_using_bedrock && self.is_auto {
-                    "Inference may use Bedrock"
+                label: if self.is_auto
+                    && (self.is_using_bedrock || self.is_using_gemini_enterprise_agent_platform)
+                {
+                    AUTO_HOSTED_INFERENCE_LABEL
                 } else if self.is_using_bedrock {
                     "Inference via Bedrock"
-                } else if self.is_using_gemini_enterprise_agent_platform && self.is_auto {
-                    "Inference may use Gemini Enterprise Agent Platform"
                 } else if self.is_using_gemini_enterprise_agent_platform {
                     "Inference via Gemini Enterprise Agent Platform"
                 } else if let Some(source) = self.byo_key_source {
                     source.inference_label()
                 } else {
                     "Inference via API key"
-                },
-                tooltip: if self.is_using_bedrock && self.is_auto {
-                    Some(CostRowTooltip {
-                        text: AUTO_BEDROCK_TOOLTIP,
-                        mouse_state: self.cost_row_tooltip_mouse_state.clone(),
-                    })
-                } else if self.is_using_gemini_enterprise_agent_platform && self.is_auto {
-                    Some(CostRowTooltip {
-                        text: AUTO_GEMINI_ENTERPRISE_AGENT_PLATFORM_TOOLTIP,
-                        mouse_state: self.cost_row_tooltip_mouse_state.clone(),
-                    })
-                } else {
-                    None
                 },
                 manage_button: Container::new(manage_button).finish(),
             }
@@ -683,15 +684,16 @@ impl SearchItem for ModelSearchItem {
             .with_child(scores);
 
         if self.disable_reason.as_ref() == Some(&DisableReason::RequiresUpgrade) {
-            let upgrade_url = if let Some(team) = UserWorkspaces::as_ref(app).current_team() {
-                UserWorkspaces::upgrade_link_for_team(team.uid)
-            } else {
-                let user_id = AuthStateProvider::as_ref(app)
-                    .get()
-                    .user_id()
-                    .unwrap_or_default();
-                UserWorkspaces::upgrade_link(user_id)
-            };
+            let upgrade_url =
+                if let Some(team) = UserWorkspaces::as_ref(app).team_for_window(self.window_id) {
+                    UserWorkspaces::upgrade_link_for_team(team.uid)
+                } else {
+                    let user_id = AuthStateProvider::as_ref(app)
+                        .get()
+                        .user_id()
+                        .unwrap_or_default();
+                    UserWorkspaces::upgrade_link(user_id)
+                };
 
             let mut display_name = self.display_text.clone();
             if let Some(first) = display_name.get_mut(..1) {
@@ -759,11 +761,7 @@ impl SearchItem for ModelSearchItem {
     }
 
     fn priority_tier(&self) -> u8 {
-        if self.is_disabled() {
-            1
-        } else {
-            0
-        }
+        if self.is_disabled() { 1 } else { 0 }
     }
 
     fn score(&self) -> OrderedFloat<f64> {

@@ -1,10 +1,10 @@
 use warp_cli::agent::Harness;
 
 use super::{
-    build_api_key_snapshot, build_environment_snapshot, build_harness_snapshot,
-    build_host_snapshot, build_non_oz_model_snapshot, build_oz_model_snapshot,
-    AuthSecretNamesInput, HarnessEntryInput, ModelChoiceInput, OptionBadge, OptionFooter,
-    OptionSourceStatus, AUTH_SECRET_INHERIT_LABEL, DEFAULT_MODEL_LABEL,
+    AUTH_SECRET_INHERIT_LABEL, AuthSecretNamesInput, DEFAULT_MODEL_LABEL, HarnessEntryInput,
+    ModelChoiceInput, OptionBadge, OptionFooter, OptionSourceStatus, build_api_key_snapshot,
+    build_environment_snapshot, build_harness_snapshot, build_host_snapshot,
+    build_non_oz_model_snapshot, build_oz_model_snapshot, build_runner_snapshot,
 };
 use crate::ai::local_harness_setup::LocalHarnessSetupState;
 use crate::ai::orchestration::config_state::AuthSecretSelection;
@@ -276,4 +276,34 @@ fn environment_snapshot_puts_empty_option_first() {
     assert_eq!(snapshot.rows[0].id, "");
     assert_eq!(snapshot.rows[0].label, super::ORCHESTRATION_ENV_NONE_LABEL);
     assert_eq!(snapshot.selected_id.as_deref(), Some("env-b"));
+}
+
+// ── Runner ──────────────────────────────────────────────────────
+
+#[test]
+fn runner_snapshot_puts_use_default_first_and_selects() {
+    let snapshot = build_runner_snapshot(
+        vec![
+            ("r-a".to_string(), "Alpha".to_string()),
+            ("r-b".to_string(), "Beta".to_string()),
+        ],
+        "r-b",
+        false,
+    );
+
+    assert_eq!(snapshot.rows[0].id, "");
+    assert_eq!(
+        snapshot.rows[0].label,
+        super::ORCHESTRATION_RUNNER_NONE_LABEL
+    );
+    assert_eq!(snapshot.selected_id.as_deref(), Some("r-b"));
+    assert_eq!(snapshot.status, OptionSourceStatus::Ready);
+}
+
+#[test]
+fn runner_snapshot_loading_reports_loading_status() {
+    let snapshot = build_runner_snapshot(vec![], "", true);
+    assert_eq!(snapshot.status, OptionSourceStatus::Loading);
+    // Empty selection maps to the "use environment default" row.
+    assert_eq!(snapshot.selected_id.as_deref(), Some(""));
 }

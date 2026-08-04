@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use enum_iterator::{cardinality, Sequence};
+use enum_iterator::{Sequence, cardinality};
 #[cfg(feature = "test-util")]
 pub use overrides::{get_overrides, set_overrides};
 
@@ -112,6 +112,11 @@ pub enum FeatureFlag {
 
     /// Enables the settings file feature.
     SettingsFile,
+
+    /// Stores GUI execution profiles in the shared settings collection.
+    ///
+    /// TUI builds use the collection on every channel independently of this flag.
+    FileBackedExecutionProfiles,
 
     /// Enables rect selection.
     RectSelection,
@@ -413,9 +418,6 @@ pub enum FeatureFlag {
     /// Enables the one-time modal on app startup for existing users for the Code launch.
     CodeLaunchModal,
 
-    /// Enables API key authentication for Agent SDK
-    APIKeyAuthentication,
-
     /// Enables API key management UI in settings
     APIKeyManagement,
 
@@ -517,8 +519,8 @@ pub enum FeatureFlag {
     /// Enables v2 of the context window usage UI.
     ContextWindowUsageV2,
 
-    /// Dev-only: enables the expandable per-segment context window usage
-    /// breakdown in the conversation usage card.
+    /// Enables the expandable per-segment context window usage breakdown in
+    /// the conversation usage card.
     ContextWindowUsageBreakdown,
 
     /// Enables global search
@@ -910,9 +912,33 @@ pub enum FeatureFlag {
     /// eliminating seams between adjacent box-drawing cells in the terminal.
     BoxDrawingGlyphs,
 
-    /// Enables the `oz runner` CRUD commands for managing cloud agent runners
-    /// via the CLI.
-    CloudAgentRunnerCLICommands,
+    /// Enables cloud agent runner selection: the `oz runner` CRUD commands
+    /// for managing runners via the CLI, and the Runner dropdown in the
+    /// orchestration (`run_agents`) confirmation card and plan-card config
+    /// block for choosing a runner when starting remote child agents.
+    CloudAgentRunners,
+
+    /// Gates the account-first onboarding flow, including the reordered
+    /// pre-auth slides and post-auth account offer.
+    AccountFirstOnboarding,
+
+    /// Accepts well-known non-UUID managed MCP ids (e.g. `"linear"`) as
+    /// `warp_id` values in MCP configs and as bare identifiers in CLI
+    /// `--mcp` arguments, resolved server-side at run setup.
+    WellKnownMcpIds,
+
+    /// Automatically attaches the Warp-hosted Factory MCP server
+    /// (`/api/v1/mcp/factory`) to agents as a built-in MCP server,
+    /// authenticated with the logged-in user's session token. No manual MCP
+    /// setup or API key required.
+    FactoryMcp,
+
+    /// Gates the TUI cost footer's credits⇄dollars toggle. When enabled (dogfood
+    /// / staging and local/dev builds), the footer usage entry follows the
+    /// persisted `agents.usage_display_mode` setting and is click-to-toggleable
+    /// between credits and dollars. When disabled (prod/stable), the footer
+    /// falls back to a static, non-interactive credits total.
+    TuiCostTransparency,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -947,7 +973,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::LazySceneBuilding,
     FeatureFlag::SshDragAndDrop,
     FeatureFlag::MultiWorkspace,
-    FeatureFlag::OscHyperlinks,
     FeatureFlag::ImeMarkedText,
     FeatureFlag::MSYS2Shells,
     FeatureFlag::RetryTruncatedCodeResponses,
@@ -982,15 +1007,13 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WarpControlCli,
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
-    FeatureFlag::BackgroundComputerUse,
-    FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::JupyterNotebookRendering,
-    FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
-    FeatureFlag::GeminiEnterprise,
     FeatureFlag::BoxDrawingGlyphs,
-    FeatureFlag::CloudAgentRunnerCLICommands,
+    FeatureFlag::WellKnownMcpIds,
+    FeatureFlag::FactoryMcp,
+    FeatureFlag::TuiCostTransparency,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
@@ -1004,6 +1027,7 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::Autoupdate,
     FeatureFlag::Changelog,
     FeatureFlag::CrashReporting,
+    FeatureFlag::VideoRecording,
     // Marked text is currently only supported on MacOS.
     #[cfg(target_os = "macos")]
     FeatureFlag::ImeMarkedText,

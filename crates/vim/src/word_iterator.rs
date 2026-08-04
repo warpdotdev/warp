@@ -1,10 +1,10 @@
 use std::iter::Peekable;
 
 use anyhow::Result;
-use itertools::{peek_nth, Either, PeekNth};
+use itertools::{Either, PeekNth, peek_nth};
 use string_offset::CharOffset;
-use warpui_core::text::words::is_default_word_boundary;
 use warpui_core::text::TextBuffer;
+use warpui_core::text::words::is_default_word_boundary;
 
 use crate::vim::{Direction, WordBound, WordType};
 

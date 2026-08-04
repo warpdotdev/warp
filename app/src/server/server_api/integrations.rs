@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cynic::{MutationBuilder, QueryBuilder};
 #[cfg(test)]
@@ -291,20 +291,20 @@ impl IntegrationsClient for ServerApi {
         //
         // Important: this runs after the network request completes so the UI can still
         // show the loading state.
-        if FeatureFlag::SimulateGithubUnauthed.is_enabled() {
-            if let UserGithubInfoResult::GithubConnectedOutput(connected) = &result {
-                let auth_url = format!("{}/oauth/connect/github", ChannelState::server_root_url());
-                return Ok(UserGithubInfoResult::GithubAuthRequiredOutput(
-                    GithubAuthRequiredOutput {
-                        auth_url,
-                        // This value is unused by the app UI; it exists in the schema for
-                        // tx-bound flows. We intentionally omit txId from the auth URL so
-                        // the web flow can proceed without a server-created tx.
-                        tx_id: cynic::Id::new("simulated"),
-                        app_install_link: connected.app_install_link.clone(),
-                    },
-                ));
-            }
+        if FeatureFlag::SimulateGithubUnauthed.is_enabled()
+            && let UserGithubInfoResult::GithubConnectedOutput(connected) = &result
+        {
+            let auth_url = format!("{}/oauth/connect/github", ChannelState::server_root_url());
+            return Ok(UserGithubInfoResult::GithubAuthRequiredOutput(
+                GithubAuthRequiredOutput {
+                    auth_url,
+                    // This value is unused by the app UI; it exists in the schema for
+                    // tx-bound flows. We intentionally omit txId from the auth URL so
+                    // the web flow can proceed without a server-created tx.
+                    tx_id: cynic::Id::new("simulated"),
+                    app_install_link: connected.app_install_link.clone(),
+                },
+            ));
         }
 
         Ok(result)

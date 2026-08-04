@@ -13,7 +13,7 @@ mod resize;
 mod secrets;
 
 use std::borrow::Cow;
-use std::cmp::{max, min, Ordering};
+use std::cmp::{Ordering, max, min};
 use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::num::NonZeroUsize;
@@ -24,15 +24,15 @@ use filtering::FilterState;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use string_offset::ByteOffset;
-use unicode_general_category::{get_general_category, GeneralCategory};
+use unicode_general_category::{GeneralCategory, get_general_category};
 use unicode_width::UnicodeWidthChar;
 use urlocator::{UrlLocation, UrlLocator};
 use warp_core::features::FeatureFlag;
-use warp_core::semantic_selection::{SemanticSelection, SMART_SELECT_MATCH_WINDOW_LIMIT};
+use warp_core::semantic_selection::{SMART_SELECT_MATCH_WINDOW_LIMIT, SemanticSelection};
 use warp_core::{safe_assert, safe_assert_eq};
 use warp_errors::report_error;
-use warp_terminal::model::grid::{CellType, FlatStorage, HyperlinkId, HyperlinkRegistry};
 pub use warp_terminal::model::TermMode;
+use warp_terminal::model::grid::{CellType, FlatStorage, HyperlinkId, HyperlinkRegistry};
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warp_util::path::CleanPathResult;
 use warpui::color::ColorU;
@@ -41,9 +41,10 @@ use super::displayed_output::DisplayedOutput;
 use super::grapheme_cursor::{self, GraphemeCursor};
 use super::row::Row;
 use super::{ConvertToAbsolute as _, Cursor, SelectionCursor};
+use crate::terminal::SizeInfo;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{self, Color, CursorStyle, Handler, NamedColor};
-use crate::terminal::model::cell::{Cell, Flags, LineLength, DEFAULT_CHAR};
+use crate::terminal::model::cell::{Cell, DEFAULT_CHAR, Flags, LineLength};
 use crate::terminal::model::char_or_str::{CharOrStr, PushCharOrStr};
 use crate::terminal::model::find::{Match, RegexDFAs};
 use crate::terminal::model::grid::{Dimensions, GridStorage, RespectDisplayedOutput};
@@ -52,7 +53,6 @@ use crate::terminal::model::index::{Direction, IndexRange, Point, VisibleRow};
 use crate::terminal::model::secrets::{ObfuscateSecrets, RespectObfuscatedSecrets, SecretMap};
 use crate::terminal::model::terminal_model::RangeInModel;
 use crate::terminal::model::{Secret, SecretHandle};
-use crate::terminal::SizeInfo;
 use crate::util::extensions::TrimStringExt;
 
 /// Used to match equal brackets, when performing a bracket-pair selection.
@@ -559,7 +559,7 @@ impl GridHandler {
         )
     }
 
-    pub(in crate::terminal::model) fn ansi_handler(&mut self) -> &mut impl ansi::Handler {
+    pub(in crate::terminal::model) fn ansi_handler(&mut self) -> &mut (impl ansi::Handler + use<>) {
         self
     }
 
@@ -1050,7 +1050,9 @@ impl GridHandler {
 
         match (color_sequence, style_sequence) {
             (Some(color_sequence), Some(style_sequence)) => {
-                format!("{CSI_START}{color_sequence};{style_sequence}m{cell_content}{SGR_RESET_ATTRIBUTES}")
+                format!(
+                    "{CSI_START}{color_sequence};{style_sequence}m{cell_content}{SGR_RESET_ATTRIBUTES}"
+                )
             }
             (color_sequence, style_sequence) => {
                 let color_sequence = color_sequence.unwrap_or_default();
@@ -1123,16 +1125,14 @@ impl GridHandler {
             {
                 // If this cell is part of an obfuscated secret, push the placeholder char '*'
                 let mut obfuscated_char = false;
-                if should_show_secrets {
-                    if let Some((handle, _)) = self.secret_at_original_point(Point::new(row, col)) {
-                        if self
-                            .secret_by_handle(handle)
-                            .is_some_and(Secret::is_obfuscated)
-                        {
-                            text.push('*');
-                            obfuscated_char = true;
-                        }
-                    }
+                if should_show_secrets
+                    && let Some((handle, _)) = self.secret_at_original_point(Point::new(row, col))
+                    && self
+                        .secret_by_handle(handle)
+                        .is_some_and(Secret::is_obfuscated)
+                {
+                    text.push('*');
+                    obfuscated_char = true;
                 }
 
                 // If it's not obfuscated, push cell's primary character.
@@ -1170,12 +1170,10 @@ impl GridHandler {
                 .get(row_length - 1)
                 .is_some_and(|cell| cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER))
             && include_wrapped_wide
+            && let Some(row) = self.row(row - 1)
+            && let Some(cell) = row.get(0)
         {
-            if let Some(row) = self.row(row - 1) {
-                if let Some(cell) = row.get(0) {
-                    text.push(cell.c);
-                }
-            }
+            text.push(cell.c);
         }
 
         Some(text)

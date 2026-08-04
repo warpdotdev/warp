@@ -5,7 +5,7 @@ use warp_core::ui::theme::AnsiColorIdentifier;
 use warpui::elements::{ChildView, Element, Empty, ParentElement, Wrap};
 use warpui::{AppContext, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
-use super::{file_button_label, Artifact};
+use super::{Artifact, file_button_label};
 use crate::notebooks::NotebookId;
 use crate::terminal::input::MenuPositioning;
 use crate::view_components::action_button::{
@@ -189,6 +189,9 @@ fn collect_buttons(
                     make_file_button(button_text, artifact_uid.clone(), theme)
                 }));
             }
+            // External references are reported for reverse-lookup and have no
+            // actionable button in the artifact row.
+            Artifact::ExternalReference { .. } => {}
         }
     }
 

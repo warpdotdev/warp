@@ -14,8 +14,8 @@ use crate::ai::blocklist::inline_action::inline_action_header::HeaderConfig;
 use crate::ai::blocklist::{
     BlocklistAIActionModel, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
 };
-use crate::terminal::model::session::Sessions;
 use crate::terminal::TerminalModel;
+use crate::terminal::model::session::Sessions;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 
@@ -119,7 +119,7 @@ impl View for InlineAgentViewHeader {
         };
         if is_agent_tagged_in {
             let header_background = appearance.theme().surface_2();
-            let icon = Icon::Oz.to_warpui_icon(
+            let icon = Icon::Agent.to_warpui_icon(
                 blended_colors::text_main(appearance.theme(), header_background).into(),
             );
             let message = if let Some(command) = top_level_command.as_deref() {
