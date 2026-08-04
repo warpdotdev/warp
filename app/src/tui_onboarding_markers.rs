@@ -121,7 +121,7 @@ impl TuiOnboardingMarkers {
     }
 
     /// Starts a fresh, account-scoped load. Terminal creation never waits for
-    /// this request; consumers reconcile provisional one-time UI on
+    /// this request; consumers keep one-time UI hidden until
     /// [`TuiOnboardingMarkersEvent::Ready`].
     pub fn load_current_account(&mut self, ctx: &mut ModelContext<Self>) {
         self.state = TuiOnboardingMarkersState::Loading;

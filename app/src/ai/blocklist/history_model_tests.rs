@@ -10,8 +10,8 @@ use warpui::{App, EntityId, ModelHandle};
 
 use super::{
     AIConversationMetadata, AIQueryHistoryOutputStatus, BeginConversationRenameError,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PersistedAIInput, PersistedAIInputType,
-    convert_persisted_conversation_to_ai_conversation_with_metadata,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ForkConversationError, PersistedAIInput,
+    PersistedAIInputType, convert_persisted_conversation_to_ai_conversation_with_metadata,
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
@@ -1273,6 +1273,7 @@ fn create_server_metadata(
         context_window_usage: 0.0,
         credits_spent,
         platform_credits_spent: 0.0,
+        total_provider_cost_in_cents: None,
         credits_spent_for_last_block: None,
         token_usage: vec![],
         tool_usage_metadata: Default::default(),
@@ -3424,6 +3425,25 @@ fn test_set_server_conversation_token_rebinds_reverse_index() {
     });
 }
 
+#[test]
+fn test_fork_conversation_rejects_an_empty_source() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let source = AIConversation::new(false, false);
+
+        let error = history_model.update(&mut app, |model, ctx| {
+            model
+                .fork_conversation(&source, "[Fork] ", false, None, ctx)
+                .expect_err("forking an empty conversation should fail")
+        });
+
+        assert_eq!(
+            error.downcast_ref::<ForkConversationError>(),
+            Some(&ForkConversationError::EmptyConversation),
+        );
+    });
+}
 /// REMOTE-1519 fork-on-chip-click flow.
 /// Forking the local conversation must:
 /// 1. carry the source's server token forward as `forked_from_*` (so the

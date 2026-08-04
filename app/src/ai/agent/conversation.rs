@@ -183,11 +183,33 @@ pub struct ConversationUsageTotals {
     /// shows as "Credits spent (total)" and the conversation details panel
     /// shows as "Credits used".
     pub credits_spent: f32,
-    /// Total provider cost across all models, in US cents. Fractional —
-    /// per-request provider costs are routinely sub-cent — and `f32` to match
-    /// both the upstream `TokenUsage.cost_in_cents` proto float it sums and
-    /// `credits_spent` above.
-    pub cost_in_cents: f32,
+    /// Total provider cost across all models, in US cents. `None` means the
+    /// server did not provide a historical baseline; it must not be rendered
+    /// as `$0.00` or as an incremental-only total.
+    pub cost_in_cents: Option<f32>,
+    /// Whether the conversation has reported any usage. Derived from the
+    /// contents of the usage metadata (not its mere presence), so a restored
+    /// conversation that never ran a request keeps the footer entry hidden,
+    /// while a restored legacy conversation with real usage but an unknown
+    /// historical cost still shows it.
+    pub has_usage: bool,
+}
+
+/// Whether persisted or server usage metadata carries evidence that the
+/// conversation actually incurred usage. Metadata presence alone is not
+/// enough: the local persistence path always writes a (possibly all-default)
+/// metadata blob, and a restored conversation that never ran a request must
+/// keep the footer's usage entry hidden.
+fn usage_metadata_indicates_usage(metadata: &ConversationUsageMetadata) -> bool {
+    // A present provider cost counts even at 0.0: the server only records a
+    // cost once a turn has completed accounting, so `Some(0.0)` is a known
+    // zero baseline (rendered as $0.00), unlike `None` (unknown).
+    metadata.credits_spent != 0.0
+        || metadata.platform_credits_spent != 0.0
+        || metadata.total_provider_cost_in_cents.is_some()
+        || !metadata.token_usage.is_empty()
+        || metadata.context_window_usage != 0.0
+        || metadata.was_summarized
 }
 
 // basic info for creating a dummy command block based on an exchange's inputs
@@ -315,6 +337,14 @@ pub struct AIConversation {
 
     total_request_cost: RequestCost,
     total_token_usage_by_model: HashMap<String, TokenUsage>,
+    /// Server-authoritative cumulative provider cost in US cents. New
+    /// conversations start at a known zero; restored legacy conversations can
+    /// remain `None` until a server snapshot is available.
+    total_provider_cost_in_cents: Option<f32>,
+    /// True once hydrated usage metadata shows evidence of usage (see
+    /// [`usage_metadata_indicates_usage`]) or a live response reports usage
+    /// (even when its numeric totals are zero).
+    has_usage_metadata: bool,
 
     /// Fallback title used when no task description or initial query exists.
     fallback_display_title: Option<String>,
@@ -404,6 +434,8 @@ impl AIConversation {
             dismissed_suggestion_ids: Default::default(),
             total_request_cost: RequestCost::new(0.),
             total_token_usage_by_model: Default::default(),
+            total_provider_cost_in_cents: Some(0.),
+            has_usage_metadata: false,
             fallback_display_title: None,
             artifacts: Vec::new(),
             parent_agent_id: None,
@@ -537,6 +569,7 @@ impl AIConversation {
         let (
             server_conversation_token,
             forked_from_server_conversation_token,
+            has_usage_metadata,
             conversation_usage_metadata,
             reverted_action_ids,
             artifacts,
@@ -553,6 +586,10 @@ impl AIConversation {
             let server_conversation_token = data
                 .server_conversation_token
                 .map(ServerConversationToken::new);
+            let has_usage_metadata = data
+                .conversation_usage_metadata
+                .as_ref()
+                .is_some_and(usage_metadata_indicates_usage);
             let conversation_usage_metadata = data.conversation_usage_metadata.unwrap_or_default();
             let reverted_action_ids: HashSet<AIAgentActionId> = data
                 .reverted_action_ids
@@ -588,6 +625,7 @@ impl AIConversation {
             (
                 server_conversation_token,
                 forked_from_server_conversation_token,
+                has_usage_metadata,
                 conversation_usage_metadata,
                 reverted_action_ids,
                 artifacts,
@@ -605,6 +643,7 @@ impl AIConversation {
             (
                 None,
                 None,
+                false,
                 ConversationUsageMetadata::default(),
                 HashSet::new(),
                 Vec::new(),
@@ -619,6 +658,7 @@ impl AIConversation {
                 false,
             )
         };
+        let total_provider_cost_in_cents = conversation_usage_metadata.total_provider_cost_in_cents;
 
         Ok(Self {
             id,
@@ -645,6 +685,8 @@ impl AIConversation {
             dismissed_suggestion_ids: Default::default(),
             total_request_cost: RequestCost::new(0.),
             total_token_usage_by_model: Default::default(),
+            total_provider_cost_in_cents,
+            has_usage_metadata,
             optimistic_cli_subagent_subtask_id: None,
             fallback_display_title: None,
             artifacts,
@@ -1085,6 +1127,24 @@ impl AIConversation {
     }
 
     pub fn set_server_metadata(&mut self, metadata: ServerAIConversationMetadata) {
+        // An absent field (legacy server or conversation) must not erase a
+        // known baseline. Asynchronous metadata snapshots can also be stale
+        // relative to live per-request cost accounting, so a snapshot may
+        // only seed or advance the displayed total — never regress it or
+        // re-add costs the client already counted.
+        if let Some(total_provider_cost_in_cents) = metadata.usage.total_provider_cost_in_cents
+            && self
+                .total_provider_cost_in_cents
+                .is_none_or(|current| total_provider_cost_in_cents >= current)
+        {
+            self.total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
+            self.conversation_usage_metadata
+                .total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
+        }
+        // Usage evidence is derived from the metadata's contents (not its
+        // presence) so a zero-usage conversation keeps the footer entry
+        // hidden.
+        self.has_usage_metadata |= usage_metadata_indicates_usage(&metadata.usage);
         self.server_metadata = Some(metadata);
     }
 
@@ -2143,7 +2203,12 @@ impl AIConversation {
         was_user_initiated_request: bool,
         ctx: &AppContext,
     ) -> Result<(), UpdateConversationError> {
+        self.has_usage_metadata |=
+            request_cost.is_some() || usage_metadata.is_some() || !token_usage.is_empty();
         for usage in token_usage.into_iter() {
+            if let Some(total_provider_cost_in_cents) = self.total_provider_cost_in_cents.as_mut() {
+                *total_provider_cost_in_cents += usage.cost_in_cents;
+            }
             let entry = self
                 .total_token_usage_by_model
                 .entry(usage.model_id.clone())
@@ -2208,6 +2273,8 @@ impl AIConversation {
                 self.conversation_usage_metadata.was_summarized = usage_metadata.summarized;
             }
         }
+        self.conversation_usage_metadata
+            .total_provider_cost_in_cents = self.total_provider_cost_in_cents;
         Ok(())
     }
 
@@ -3684,17 +3751,14 @@ impl AIConversation {
     }
 
     /// Compact usage totals for lightweight displays (e.g. the TUI footer's
-    /// usage entry): the GUI-consistent credits total plus the accumulated
-    /// provider dollar cost from the per-request `StreamFinished` usage rows.
+    /// usage entry): the GUI-consistent credits total plus the server-seeded
+    /// provider cost and any permitted live per-request deltas.
     pub fn usage_totals(&self) -> ConversationUsageTotals {
-        let mut totals = ConversationUsageTotals {
+        ConversationUsageTotals {
             credits_spent: self.inference_credits_spent() + self.platform_credits_spent(),
-            cost_in_cents: 0.0,
-        };
-        for usage in self.total_token_usage_by_model.values() {
-            totals.cost_in_cents += usage.cost_in_cents;
+            cost_in_cents: self.total_provider_cost_in_cents,
+            has_usage: self.has_usage_metadata,
         }
-        totals
     }
 
     /// Normalize all newlines to CRLF so restored blocks render lines starting at column 0,

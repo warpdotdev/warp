@@ -59,7 +59,7 @@ use crate::tui_markdown::{
 };
 use crate::tui_plan_view::{TuiPlanView, TuiPlanViewEvent};
 use crate::tui_review_comments::render_review_comments_tool_call;
-pub(crate) const OUT_OF_CREDITS_URL: &str = "https://www.warp.dev/pricing";
+pub(crate) const OUT_OF_CREDITS_URL: &str = "https://app.warp.dev/upgrade?source=warp-agent-cli";
 const OUT_OF_CREDITS_TITLE: &str = "I’m sorry, I couldn’t complete that request.";
 const OUT_OF_CREDITS_DETAIL: &str =
     "In order to use Warp’s AI features, subscribe to a Warp plan or buy packs of credits.";

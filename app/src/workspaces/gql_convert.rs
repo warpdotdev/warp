@@ -12,6 +12,7 @@ use warp_graphql::billing::{
     EnterpriseCreditsAutoReloadPolicy as GqlEnterpriseCreditsAutoReloadPolicy,
     EnterprisePayAsYouGoPolicy as GqlEnterprisePayAsYouGoPolicy, InstanceShape as GqlInstanceShape,
     ManagedByokByoePolicy as GqlManagedByokByoePolicy, MultiAdminPolicy as GqlMultiAdminPolicy,
+    NativeWorkspacesPolicy as GqlNativeWorkspacesPolicy,
     PurchaseAddOnCreditsPolicy as GqlPurchaseAddOnCreditsPolicy, ServiceAgreementType,
     SessionSharingPolicy as GqlSessionSharingPolicy,
     SharedNotebooksPolicy as GqlSharedNotebooksPolicy,
@@ -76,7 +77,8 @@ use crate::settings::AgentModeCommandExecutionPredicate;
 use crate::workspaces::workspace::{
     AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, ByoEndpointPolicy, CodebaseContextPolicy,
     EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy, ManagedByokByoePolicy,
-    MultiAdminPolicy, PurchaseAddOnCreditsPolicy, UsageBasedPricingSettings,
+    MultiAdminPolicy, NativeWorkspacesPolicy, PurchaseAddOnCreditsPolicy,
+    UsageBasedPricingSettings,
 };
 
 pub const PLACEHOLDER_WORKSPACE_UID: &str = "NOT_A_REAL_WORKSPACE_UID";
@@ -506,6 +508,14 @@ impl From<GqlMultiAdminPolicy> for MultiAdminPolicy {
     }
 }
 
+impl From<GqlNativeWorkspacesPolicy> for NativeWorkspacesPolicy {
+    fn from(gql_policy: GqlNativeWorkspacesPolicy) -> NativeWorkspacesPolicy {
+        Self {
+            enabled: gql_policy.enabled,
+        }
+    }
+}
+
 impl From<GqlInstanceShape> for InstanceShape {
     fn from(gql_instance_shape: GqlInstanceShape) -> InstanceShape {
         Self {
@@ -631,6 +641,7 @@ impl From<GqlTier> for Tier {
                 .enterprise_credits_auto_reload_policy
                 .map(From::from),
             multi_admin_policy: gql_tier.multi_admin_policy.map(From::from),
+            native_workspaces_policy: gql_tier.native_workspaces_policy.map(From::from),
             ambient_agents_policy: gql_tier.ambient_agents_policy.map(From::from),
             usage_visibility_policy: gql_tier.usage_visibility_policy.map(From::from),
         }
@@ -1179,6 +1190,7 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
             joinable_teams,
             experiments,
             feature_model_choices,
+            ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
             user_purchase_policy,
         }
     }

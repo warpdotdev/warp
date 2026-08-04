@@ -146,12 +146,6 @@ runs:
           echo "::error::Missing logic to install build dependencies for OS \"${{ inputs.target_os }}\""
           exit 1
         fi
-    - name: Install warp-channel-config for Windows releases
-      if: ${{ github.repository == 'warpdotdev/warp-internal' && inputs.target_os == 'windows' && inputs.install_release_deps == 'true' && inputs.ssh_key != '' }}
-      shell: bash
-      run: |
-        cd "${{ steps.repo-root.outputs.path }}"
-        ./script/install_channel_config
 
     - name: Install Node
       uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0

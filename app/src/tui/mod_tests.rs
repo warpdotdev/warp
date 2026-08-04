@@ -2,30 +2,72 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use warp_core::channel::ChannelState;
+use warp_core::telemetry::testing::MockTelemetryContextProvider;
 use warpui::{App, SingletonEntity};
 
+use super::telemetry::TuiOnboardingTelemetry;
 use super::{
     TuiAuthBrowserFlow, TuiLoginEvent, TuiLoginModel, TuiLoginPhase, handle_auth_manager_event,
-    set_logged_out_phase, set_login_phase, start_tui_device_login,
-    tui_verification_url_with_return, validated_tui_focus_url,
+    has_validated_identity, initial_login_phase, set_logged_out_phase, set_login_phase,
+    start_tui_device_login, tui_verification_url,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
+use crate::auth::auth_state::AuthState;
+use crate::auth::credentials::Credentials;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::auth::UserAuthenticationError;
 fn login_model(phase: TuiLoginPhase) -> TuiLoginModel {
+    let logged_in = matches!(phase, TuiLoginPhase::LoggedIn);
     TuiLoginModel {
         phase,
         browser_flow: TuiAuthBrowserFlow::DirectDeviceAuthorization,
+        telemetry: TuiOnboardingTelemetry::new(logged_in),
     }
 }
 
 #[test]
+fn credential_only_auth_stays_on_signed_out_welcome() {
+    let auth_state = AuthState::new_logged_out_for_test();
+    auth_state.set_credentials(Some(Credentials::ApiKey {
+        key: "wk-api-test".to_owned(),
+        owner_type: None,
+    }));
+
+    assert!(!has_validated_identity(&auth_state));
+    assert!(matches!(
+        initial_login_phase(&auth_state),
+        TuiLoginPhase::SignedOutWelcome
+    ));
+}
+
+#[test]
+fn credentials_with_user_identity_start_logged_in() {
+    let auth_state = AuthState::new_for_test();
+
+    assert!(has_validated_identity(&auth_state));
+    assert!(matches!(
+        initial_login_phase(&auth_state),
+        TuiLoginPhase::LoggedIn
+    ));
+}
+
+#[test]
+fn missing_credentials_and_identity_start_signed_out() {
+    let auth_state = AuthState::new_logged_out_for_test();
+
+    assert!(!has_validated_identity(&auth_state));
+    assert!(matches!(
+        initial_login_phase(&auth_state),
+        TuiLoginPhase::SignedOutWelcome
+    ));
+}
+
+#[test]
 fn tags_tui_verification_url_without_losing_existing_query_parameters() {
-    let url = tui_verification_url_with_return(
+    let url = tui_verification_url(
         "https://app.warp.dev/device?user_code=ABCD-EFGH&existing=value#fragment",
         "ABCD-EFGH",
-        None,
     );
     let url = url::Url::parse(&url).unwrap();
 
@@ -43,14 +85,14 @@ fn tags_tui_verification_url_without_losing_existing_query_parameters() {
 #[test]
 fn leaves_invalid_verification_url_unchanged() {
     assert_eq!(
-        tui_verification_url_with_return("not a URL", "ABCD-EFGH", None),
+        tui_verification_url("not a URL", "ABCD-EFGH"),
         "not a URL".to_owned()
     );
 }
 
 #[test]
 fn adds_user_code_when_complete_verification_url_is_unavailable() {
-    let url = tui_verification_url_with_return("https://app.warp.dev/device", "ABCD-EFGH", None);
+    let url = tui_verification_url("https://app.warp.dev/device", "ABCD-EFGH");
     let url = url::Url::parse(&url).unwrap();
 
     assert_eq!(
@@ -59,44 +101,13 @@ fn adds_user_code_when_complete_verification_url_is_unavailable() {
             .map(|(_, value)| value.into_owned()),
         Some("ABCD-EFGH".to_owned())
     );
-}
-
-#[test]
-fn adds_valid_focus_url_to_tui_verification_url() {
-    let focus_url = format!(
-        "{}://session/0123456789ABCDEF0123456789ABCDEF",
-        ChannelState::url_scheme()
-    );
-    let verification_url = tui_verification_url_with_return(
-        "https://app.warp.dev/device?user_code=CODE",
-        "CODE",
-        Some(&focus_url),
-    );
-    let verification_url = url::Url::parse(&verification_url).unwrap();
 
     assert_eq!(
-        verification_url
-            .query_pairs()
-            .find(|(key, _)| key == "return_to")
-            .map(|(_, value)| value.into_owned()),
-        Some(format!(
-            "{}://session/0123456789abcdef0123456789abcdef",
-            ChannelState::url_scheme()
-        ))
+        url.query_pairs()
+            .filter(|(key, _)| key == "return_to")
+            .count(),
+        0
     );
-}
-
-#[test]
-fn rejects_invalid_focus_urls() {
-    let scheme = ChannelState::url_scheme();
-    for focus_url in [
-        "https://app.warp.dev/session/0123456789abcdef0123456789abcdef".to_owned(),
-        format!("{scheme}://action/0123456789abcdef0123456789abcdef"),
-        format!("{scheme}://session/not-a-session-id"),
-        format!("{scheme}://session/0123456789abcdef0123456789abcdef?extra=value"),
-    ] {
-        assert_eq!(validated_tui_focus_url(Some(&focus_url)), None);
-    }
 }
 
 #[test]
@@ -106,6 +117,7 @@ fn explicit_start_device_login_preserves_pending_logout_on_retry() {
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
         app.add_singleton_model(AuthManager::new_for_test);
         app.add_singleton_model(|_| TuiLoginModel::signed_out_for_test());
+        app.update(MockTelemetryContextProvider::register);
 
         let phase_changed_events = Rc::new(Cell::new(0));
         let phase_changed_events_for_subscription = phase_changed_events.clone();
@@ -232,6 +244,7 @@ fn post_logout_device_auth_opens_logout_with_device_continuation() {
         app.add_singleton_model(|_| TuiLoginModel {
             phase: TuiLoginPhase::AwaitingLogin { browser_url: None },
             browser_flow: TuiAuthBrowserFlow::LogoutThenDeviceAuthorizationPending,
+            telemetry: TuiOnboardingTelemetry::new(true),
         });
 
         app.update(|ctx| {
@@ -299,12 +312,36 @@ fn renders_device_code_request_timeout_without_id_token_prefix() {
         });
     });
 }
+
+#[test]
+fn credential_validation_failure_stays_on_auth_flow() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| TuiLoginModel::signed_out_for_test());
+
+        app.update(|ctx| {
+            handle_auth_manager_event(
+                &AuthManagerEvent::AuthFailed(UserAuthenticationError::Unexpected(
+                    anyhow::anyhow!("API key rejected"),
+                )),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            assert!(matches!(
+                TuiLoginModel::as_ref(ctx).phase(),
+                TuiLoginPhase::Failed { message } if message.contains("API key rejected")
+            ));
+        });
+    });
+}
 #[test]
 fn post_logout_device_code_failure_still_opens_web_logout() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| TuiLoginModel {
             phase: TuiLoginPhase::AwaitingLogin { browser_url: None },
             browser_flow: TuiAuthBrowserFlow::LogoutThenDeviceAuthorizationPending,
+            telemetry: TuiOnboardingTelemetry::new(true),
         });
         let browser_opened = Rc::new(Cell::new(false));
         let browser_opened_for_callback = browser_opened.clone();
@@ -380,6 +417,7 @@ fn emits_logged_in_event_when_login_completes() {
 fn emits_logged_out_event_and_resets_login_details() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| login_model(TuiLoginPhase::LoggedIn));
+        app.update(MockTelemetryContextProvider::register);
 
         let logged_out_events = Rc::new(Cell::new(0));
         let logged_out_events_for_subscription = logged_out_events.clone();

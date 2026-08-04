@@ -208,6 +208,7 @@ impl TuiMcpMenuModel {
                     prefix: None,
                     description: row.description.clone(),
                     state_suffix: None,
+                    promotional_suffix: None,
                     is_selectable: row_is_selectable(row),
                     style: TuiInlineMenuRowStyle::Default,
                 })

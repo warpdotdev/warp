@@ -675,19 +675,18 @@ impl TuiElement for ZeroStateStarfieldElement {
     ) {
         self.origin = Some(ctx.scene_point(origin));
         let Some(size) = self.size else { return };
-        let mut frame = LogoFrame::new(size);
-        draw_background_stars_from(
-            &mut frame,
+        for_each_background_star(
+            size,
             self.clock.elapsed(),
             starfield_emitter_x(size, self.leading_reserved_cols, self.logo_panel_cols),
+            |x, y, cell| {
+                if let Some(destination) = surface.cell_mut(origin.offset(x as i32, y as i32)) {
+                    destination
+                        .set_symbol(cell.glyph.as_str())
+                        .set_style(self.style);
+                }
+            },
         );
-        for (x, y, cell) in frame.iter_cells() {
-            if let Some(destination) = surface.cell_mut(origin.offset(x as i32, y as i32)) {
-                destination
-                    .set_symbol(cell.glyph.as_str())
-                    .set_style(self.style);
-            }
-        }
         ctx.repaint_after(REPAINT_INTERVAL);
     }
 
@@ -711,7 +710,7 @@ struct ProjectedSample {
     cell: LogoCell,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LogoFrame {
     size: TuiSize,
     cells: Vec<Option<LogoCell>>,
@@ -727,6 +726,13 @@ impl LogoFrame {
 
     fn set(&mut self, x: usize, y: usize, cell: LogoCell) {
         self.cells[y * usize::from(self.size.width) + x] = Some(cell);
+    }
+
+    fn clear_and_resize(&mut self, size: TuiSize) {
+        self.size = size;
+        self.cells.clear();
+        self.cells
+            .resize(usize::from(size.width) * usize::from(size.height), None);
     }
 
     fn iter_cells(&self) -> impl Iterator<Item = (usize, usize, LogoCell)> + '_ {
@@ -780,6 +786,7 @@ pub struct ZeroStateAnimationElement {
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
     object_bounds: Option<ObjectBounds>,
+    projector: LogoProjector,
 }
 
 impl ZeroStateAnimationElement {
@@ -798,6 +805,7 @@ impl ZeroStateAnimationElement {
             size: None,
             origin: None,
             object_bounds: None,
+            projector: LogoProjector::default(),
         }
     }
 
@@ -839,7 +847,7 @@ impl TuiElement for ZeroStateAnimationElement {
             .interaction
             .resolve_at(elapsed, idle_velocity, Instant::now());
         debug_assert!(resolved.velocity.is_finite());
-        let Some(frame) = object_frame_at_angle_with_background(
+        let Some(frame) = self.projector.project(
             elapsed,
             size,
             &self.config,
@@ -956,6 +964,184 @@ fn object_frame_at_with_background(
     )
 }
 
+#[derive(Clone, Copy)]
+struct CachedSourceSample {
+    model_x: f64,
+    model_y: f64,
+    normal_x: f64,
+    normal_y: f64,
+    is_side_stitch: bool,
+}
+
+struct CachedLogoGeometry {
+    shape: Arc<ZeroStateShape>,
+    logo_cols: u16,
+    logo_rows: u16,
+    samples: Vec<CachedSourceSample>,
+}
+
+impl CachedLogoGeometry {
+    fn new(shape: Arc<ZeroStateShape>, logo_cols: u16, logo_rows: u16) -> Self {
+        let source_cols = usize::from(logo_cols) * SURFACE_SAMPLES;
+        let source_rows = usize::from(logo_rows) * SURFACE_SAMPLES;
+        let dx = 2.0 / source_cols as f64;
+        let dy = 2.0 / source_rows as f64;
+        let mut samples = Vec::new();
+        for source_y in 0..source_rows {
+            let model_y = sample_coordinate(source_y, source_rows);
+            for source_x in 0..source_cols {
+                let model_x = sample_coordinate(source_x, source_cols);
+                if !shape.contains(model_x, model_y) {
+                    continue;
+                }
+                let left = shape.contains(model_x - dx, model_y);
+                let right = shape.contains(model_x + dx, model_y);
+                let above = shape.contains(model_x, model_y - dy);
+                let below = shape.contains(model_x, model_y + dy);
+                samples.push(CachedSourceSample {
+                    model_x,
+                    model_y,
+                    normal_x: bool_as_scalar(left) - bool_as_scalar(right),
+                    normal_y: bool_as_scalar(above) - bool_as_scalar(below),
+                    is_side_stitch: (source_x * 13 + source_y * 7) % SIDE_STITCH_MODULUS == 0,
+                });
+            }
+        }
+        Self {
+            shape,
+            logo_cols,
+            logo_rows,
+            samples,
+        }
+    }
+
+    fn matches(&self, shape: &Arc<ZeroStateShape>, logo_cols: u16, logo_rows: u16) -> bool {
+        Arc::ptr_eq(&self.shape, shape)
+            && self.logo_cols == logo_cols
+            && self.logo_rows == logo_rows
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct LogoProjector {
+    geometry: Option<CachedLogoGeometry>,
+    frame: Option<LogoFrame>,
+    z_buffer: Vec<Option<ProjectedSample>>,
+}
+
+impl LogoProjector {
+    fn project(
+        &mut self,
+        elapsed: Duration,
+        size: TuiSize,
+        config: &ZeroStateAnimationConfig,
+        angle: f64,
+        draw_stars: bool,
+    ) -> Option<&LogoFrame> {
+        let cell_aspect_ratio = config.shape.cell_aspect_ratio();
+        let (logo_cols, logo_rows) = fitted_logo_size(size, cell_aspect_ratio)?;
+        if self
+            .geometry
+            .as_ref()
+            .is_none_or(|geometry| !geometry.matches(&config.shape, logo_cols, logo_rows))
+        {
+            self.geometry = Some(CachedLogoGeometry::new(
+                config.shape.clone(),
+                logo_cols,
+                logo_rows,
+            ));
+        }
+        let geometry = self
+            .geometry
+            .as_ref()
+            .expect("logo geometry was initialized above");
+
+        let angle = face_linger_angle(angle);
+        let (sin, cos) = angle.sin_cos();
+        let frame = self.frame.get_or_insert_with(|| LogoFrame::new(size));
+        frame.clear_and_resize(size);
+        if draw_stars {
+            draw_background_stars(frame, elapsed);
+        }
+        self.z_buffer.clear();
+        self.z_buffer
+            .resize(usize::from(size.width) * usize::from(size.height), None);
+
+        let center_x = (f64::from(size.width) - 1.0) / 2.0;
+        let center_y = (f64::from(size.height) - 1.0) / 2.0;
+        let scale_x = (f64::from(logo_cols) - 1.0) / 2.0;
+        let scale_y = (f64::from(logo_rows) - 1.0) / 2.0;
+
+        for source in &geometry.samples {
+            let outline_glyph =
+                glyph_for_tangent(-source.normal_y * cos * cell_aspect_ratio, source.normal_x);
+            for depth_index in 0..=DEPTH_SAMPLES {
+                let is_face = depth_index == 0 || depth_index == DEPTH_SAMPLES;
+                if !is_face && (outline_glyph.is_none() || !source.is_side_stitch) {
+                    continue;
+                }
+                let model_z = -config.extrusion_depth
+                    + 2.0 * config.extrusion_depth * depth_index as f64 / DEPTH_SAMPLES as f64;
+                let rotated_x = source.model_x * cos + model_z * sin;
+                let rotated_depth = -source.model_x * sin + model_z * cos;
+                let projected_x = (center_x + rotated_x * scale_x).round() as i32;
+                let projected_y = (center_y + source.model_y * scale_y).round() as i32;
+                if projected_x < 0
+                    || projected_y < 0
+                    || projected_x >= i32::from(size.width)
+                    || projected_y >= i32::from(size.height)
+                {
+                    continue;
+                }
+                if is_face
+                    && outline_glyph.is_none()
+                    && !is_ghost_stipple_cell(projected_x as usize, projected_y as usize)
+                {
+                    continue;
+                }
+
+                let cell = if !is_face {
+                    LogoCell {
+                        surface: LogoSurface::Side,
+                        glyph: LogoGlyph::Dot,
+                    }
+                } else if let Some(glyph) = outline_glyph {
+                    let surface = if depth_index == DEPTH_SAMPLES {
+                        LogoSurface::Front
+                    } else {
+                        LogoSurface::Back
+                    };
+                    LogoCell { surface, glyph }
+                } else {
+                    LogoCell {
+                        surface: LogoSurface::Ghost,
+                        glyph: LogoGlyph::Dot,
+                    }
+                };
+                let index = projected_y as usize * usize::from(size.width) + projected_x as usize;
+                let sample = ProjectedSample {
+                    depth: rotated_depth,
+                    cell,
+                };
+                if self.z_buffer[index].is_none_or(|current| sample.depth > current.depth) {
+                    self.z_buffer[index] = Some(sample);
+                }
+            }
+        }
+
+        for (index, sample) in self.z_buffer.iter().copied().enumerate() {
+            if let Some(sample) = sample {
+                frame.set(
+                    index % usize::from(size.width),
+                    index / usize::from(size.width),
+                    sample.cell,
+                );
+            }
+        }
+        Some(frame)
+    }
+}
+#[cfg(test)]
 fn object_frame_at_angle_with_background(
     elapsed: Duration,
     size: TuiSize,
@@ -1073,6 +1259,31 @@ fn object_frame_at_angle_with_background(
     Some(frame)
 }
 
+#[cfg(feature = "test-util")]
+pub(crate) fn benchmark_logo_projection(
+    elapsed: Duration,
+    size: TuiSize,
+    config: &ZeroStateAnimationConfig,
+    projector: &mut LogoProjector,
+) -> u64 {
+    projector
+        .project(
+            elapsed,
+            size,
+            config,
+            idle_angle(elapsed, configured_idle_velocity(config)),
+            true,
+        )
+        .map_or(0, |frame| {
+            frame.iter_cells().fold(0u64, |checksum, (x, y, cell)| {
+                checksum
+                    .wrapping_add(x as u64)
+                    .wrapping_add((y as u64).rotate_left(7))
+                    .wrapping_add(cell.glyph.as_str().as_bytes()[0] as u64)
+            })
+        })
+}
+
 /// Eases a rotation phase so the object dwells on its readable front and back
 /// poses. The mapping is strictly increasing and satisfies
 /// `face_linger_angle(phase + PI) == face_linger_angle(phase) + PI`, so it
@@ -1101,10 +1312,22 @@ fn draw_background_stars(frame: &mut LogoFrame, elapsed: Duration) {
 }
 
 fn draw_background_stars_from(frame: &mut LogoFrame, elapsed: Duration, center_x: f64) {
-    let width = usize::from(frame.size.width);
-    let height = usize::from(frame.size.height);
-    let star_count = star_count_for_size(frame.size);
-    let center_y = (f64::from(frame.size.height) - 1.0) / 2.0;
+    let size = frame.size;
+    for_each_background_star(size, elapsed, center_x, |x, y, cell| {
+        frame.set(x, y, cell);
+    });
+}
+
+fn for_each_background_star(
+    size: TuiSize,
+    elapsed: Duration,
+    center_x: f64,
+    mut paint: impl FnMut(usize, usize, LogoCell),
+) {
+    let width = usize::from(size.width);
+    let height = usize::from(size.height);
+    let star_count = star_count_for_size(size);
+    let center_y = (f64::from(size.height) - 1.0) / 2.0;
     let elapsed = elapsed.as_secs_f64();
 
     for index in 0..star_count {
@@ -1132,7 +1355,7 @@ fn draw_background_stars_from(frame: &mut LogoFrame, elapsed: Duration, center_x
         } else {
             LogoGlyph::Star
         };
-        frame.set(
+        paint(
             x,
             y,
             LogoCell {
@@ -1188,6 +1411,7 @@ fn fitted_logo_size(size: TuiSize, cell_aspect_ratio: f64) -> Option<(u16, u16)>
 fn sample_coordinate(index: usize, sample_count: usize) -> f64 {
     ((index as f64 + 0.5) / sample_count as f64) * 2.0 - 1.0
 }
+#[cfg(test)]
 fn logo_outline_glyph(
     shape: &ZeroStateShape,
     x: f64,

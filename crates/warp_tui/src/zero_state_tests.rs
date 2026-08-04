@@ -7,7 +7,8 @@ use chrono::DateTime;
 use uuid::Uuid;
 use warp::tui_export::{
     TuiMcpConfigDiagnostic, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerSource,
-    TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport, register_tui_session_view_test_singletons,
+    TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport, TuiUserInfoSnapshot,
+    register_tui_session_view_test_singletons,
 };
 use warpui::{EntityIdMap, SingletonEntity};
 use warpui_core::elements::animation::AnimationClock;
@@ -18,9 +19,11 @@ use warpui_core::elements::tui::{
 use warpui_core::{App, AppContext};
 
 use super::{
-    ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, build_zero_state_layout, build_zero_state_overlay,
+    ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, ZeroStateSectionVisibility, autoupdate_status_label,
+    build_zero_state_layout, build_zero_state_overlay, build_zero_state_stack_layout,
     changelog_bullets_from_changelog, mcp_status_label, render_first_run_top_section,
 };
+use crate::autoupdate::TuiAutoupdateStatus;
 use crate::tui_builder::TuiUiBuilder;
 use crate::zero_state_animation::{
     WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationElement,
@@ -75,6 +78,14 @@ fn changelog_bullets_are_empty_when_only_other_surfaces_have_updates() {
 }
 
 #[test]
+fn failed_autoupdate_status_has_visible_label() {
+    assert_eq!(
+        autoupdate_status_label(TuiAutoupdateStatus::Failed),
+        Some("automatic update failed")
+    );
+}
+
+#[test]
 fn first_zero_state_matches_welcome_design_copy() {
     App::test((), |mut app| async move {
         register_tui_session_view_test_singletons(&mut app);
@@ -82,7 +93,8 @@ fn first_zero_state_matches_welcome_design_copy() {
         let lines = app.read(|ctx| {
             let builder = TuiUiBuilder::from_app(ctx);
             render_element_lines(
-                render_first_run_top_section(&builder, ctx).finish(),
+                render_first_run_top_section(&builder, ZeroStateSectionVisibility::default(), ctx)
+                    .finish(),
                 ctx,
                 LEFT_COLUMN_COLS,
                 16,
@@ -92,18 +104,28 @@ fn first_zero_state_matches_welcome_design_copy() {
         for expected in [
             "Welcome to Warp",
             "What’s different about Warp",
-            "✶ /natural-language-detection",
-            "to autodetect",
-            "prompts or shell commands",
-            "✶ /modify-settings to set up custom model",
-            "routers",
-            "✶ /orchestrate to spawn fleets of agents",
-            "✶ Run full-screen terminal apps and cd into",
-            "other directories",
+            "✶ State of the art coding agents",
+            "✶ Frontier and open-weight models",
+            "✶ Fully customizable model routers",
+            "✶ Orchestration for fleets of agents",
+            "✶ Better shell command support",
         ] {
             assert!(
                 rendered.contains(expected),
                 "first zero state should contain {expected:?}:\n{rendered}"
+            );
+        }
+        for unexpected in [
+            "/natural-language-detection",
+            "/modify-settings",
+            "/orchestrate",
+            "Run full-screen terminal apps",
+            "Orchestrate fleets of agents",
+            "Work with shell commands like in a native terminal",
+        ] {
+            assert!(
+                !rendered.contains(unexpected),
+                "first zero state should not contain {unexpected:?}:\n{rendered}"
             );
         }
         assert!(!rendered.contains("What's new"));
@@ -231,6 +253,50 @@ fn render_element_lines(
     height: u16,
 ) -> Vec<String> {
     render_to_buffer(element, ctx, width, height).to_lines()
+}
+
+fn static_zero_state_layers(
+    width: u16,
+    height: u16,
+) -> (
+    Box<dyn TuiElement>,
+    Box<dyn TuiElement>,
+    Box<dyn TuiElement>,
+) {
+    let stars = (0..height)
+        .map(|_| "*".repeat(usize::from(width)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (
+        TuiText::new(stars).finish(),
+        TuiText::new("animation").finish(),
+        TuiText::new("copy here\n\nsecond line").finish(),
+    )
+}
+
+#[test]
+fn direct_zero_state_layers_match_scratch_composition() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            for (width, height) in [(60, 12), (80, 24), (120, 40), (240, 80)] {
+                let (stars, animation, overlay) = static_zero_state_layers(width, height);
+                let direct = render_to_buffer(
+                    build_zero_state_layout(stars, animation, overlay),
+                    ctx,
+                    width,
+                    height,
+                );
+                let (stars, animation, overlay) = static_zero_state_layers(width, height);
+                let scratch = render_to_buffer(
+                    build_zero_state_stack_layout(stars, animation, overlay),
+                    ctx,
+                    width,
+                    height,
+                );
+                assert_eq!(direct, scratch, "layout differs at {width}x{height}");
+            }
+        });
+    });
 }
 
 #[test]
@@ -445,6 +511,30 @@ fn login_line_shows_signed_in_account_email() {
             lines.join("\n")
         );
     });
+}
+
+#[test]
+fn login_line_never_claims_signed_in_without_an_identity() {
+    let snapshot = TuiUserInfoSnapshot {
+        is_logged_in: true,
+        ..Default::default()
+    };
+
+    assert_eq!(super::login_line_label("Signed in as", snapshot), None);
+}
+
+#[test]
+fn login_line_falls_back_to_validated_user_id() {
+    let snapshot = TuiUserInfoSnapshot {
+        is_logged_in: true,
+        user_id: Some("user-123".to_owned()),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        super::login_line_label("Signed in as", snapshot),
+        Some("Signed in as user-123".to_owned())
+    );
 }
 
 /// At a narrow terminal the complete displayed path must wrap across rows

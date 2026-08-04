@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use warp_multi_agent_api as api;
 
-use super::{AgentConversation, AgentConversationData, AgentConversationSummary, ModelTokenUsage};
+use super::{
+    AgentConversation, AgentConversationData, AgentConversationSummary, ConversationUsageMetadata,
+    ModelTokenUsage,
+};
 
 fn parentless_task(id: &str, message_count: usize) -> api::Task {
     api::Task {
@@ -100,6 +103,36 @@ fn is_restorable_accepts_single_root_plus_subtasks() {
 fn is_restorable_accepts_empty_and_single_task_conversations() {
     assert!(conversation_with_tasks(vec![]).is_restorable());
     assert!(conversation_with_tasks(vec![parentless_task("root", 0)]).is_restorable());
+}
+
+#[test]
+fn conversation_usage_metadata_defaults_missing_provider_cost_to_unknown() {
+    let metadata: ConversationUsageMetadata = serde_json::from_str(
+        r#"{"was_summarized":false,"context_window_usage":0.0,"credits_spent":0.0}"#,
+    )
+    .unwrap();
+
+    assert_eq!(metadata.total_provider_cost_in_cents, None);
+    assert!(
+        !serde_json::to_string(&metadata)
+            .unwrap()
+            .contains("total_provider_cost_in_cents")
+    );
+}
+
+#[test]
+fn conversation_usage_metadata_preserves_known_zero_provider_cost() {
+    let metadata: ConversationUsageMetadata = serde_json::from_str(
+        r#"{"was_summarized":false,"context_window_usage":0.0,"credits_spent":0.0,"total_provider_cost_in_cents":0.0}"#,
+    )
+    .unwrap();
+
+    assert_eq!(metadata.total_provider_cost_in_cents, Some(0.0));
+    assert!(
+        serde_json::to_string(&metadata)
+            .unwrap()
+            .contains("\"total_provider_cost_in_cents\":0.0")
+    );
 }
 
 fn user_query_message(task_id: &str, query: &str, pwd: Option<&str>) -> api::Message {

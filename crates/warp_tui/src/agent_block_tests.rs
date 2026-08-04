@@ -109,7 +109,7 @@ fn restored_out_of_credits_exchange_does_not_consume_first_credit_gate() {
 }
 
 #[test]
-fn first_credit_gate_matches_design_and_opens_pricing() {
+fn first_credit_gate_matches_design_and_opens_upgrade() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         let opened_urls = Rc::new(RefCell::new(Vec::new()));
@@ -140,7 +140,7 @@ fn first_credit_gate_matches_design_and_opens_pricing() {
                     "You need AI credits in order to use Warp’s agent.",
                     "Start using AI (ctrl+o).",
                     "",
-                    "https://www.warp.dev/pricing",
+                    "https://app.warp.dev/upgrade?source=warp-agent-cli",
                 ]
             );
             let builder = TuiUiBuilder::from_app(ctx);
@@ -167,7 +167,7 @@ fn first_credit_gate_matches_design_and_opens_pricing() {
 
         assert_eq!(
             &*opened_urls.borrow(),
-            &["https://www.warp.dev/pricing".to_owned()]
+            &["https://app.warp.dev/upgrade?source=warp-agent-cli".to_owned()]
         );
     });
 }
@@ -361,7 +361,7 @@ fn agent_block_renders_context_window_failure() {
 }
 
 #[test]
-fn out_of_credits_failure_matches_tui_design_and_opens_pricing() {
+fn out_of_credits_failure_matches_tui_design_and_opens_upgrade() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         let opened_urls = Rc::new(RefCell::new(Vec::new()));
@@ -403,7 +403,7 @@ fn out_of_credits_failure_matches_tui_design_and_opens_pricing() {
                     "",
                     "  Get started with AI (ctrl+o)",
                     "",
-                    "  https://www.warp.dev/pricing",
+                    "  https://app.warp.dev/upgrade?source=warp-agent-cli",
                 ]
             );
             let builder = TuiUiBuilder::from_app(ctx);
@@ -468,7 +468,7 @@ fn out_of_credits_failure_matches_tui_design_and_opens_pricing() {
 
         assert_eq!(
             &*opened_urls.borrow(),
-            &["https://www.warp.dev/pricing".to_owned()]
+            &["https://app.warp.dev/upgrade?source=warp-agent-cli".to_owned()]
         );
     });
 }

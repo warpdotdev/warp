@@ -200,6 +200,7 @@ impl TuiCompletionMenuModel {
                     prefix: None,
                     description: row.description.clone(),
                     state_suffix: None,
+                    promotional_suffix: None,
                     is_selectable: true,
                     style: TuiInlineMenuRowStyle::InlineMenuItem,
                 })

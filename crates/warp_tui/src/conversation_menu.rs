@@ -221,6 +221,7 @@ impl TuiConversationMenuModel {
                     prefix: None,
                     description: None,
                     state_suffix: None,
+                    promotional_suffix: None,
                     is_selectable: true,
                     style: TuiInlineMenuRowStyle::Default,
                 })

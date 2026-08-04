@@ -933,6 +933,10 @@ impl TeamsPageView {
 
                 ctx.emit(TeamsPageViewEvent::TeamsChanged);
             }
+            UserWorkspacesEvent::CurrentWorkspaceChanged => {
+                // A workspace selection change always emits `TeamsChanged` too,
+                // which already refreshes this page.
+            }
             UserWorkspacesEvent::ToggleInviteLinksSuccess => {
                 self.show_success("Toggled invite links", ctx);
                 ctx.notify();

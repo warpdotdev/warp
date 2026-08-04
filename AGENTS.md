@@ -120,8 +120,40 @@ Warp has two front-ends that share the `warp_core`/`warpui` Entity/model core (A
 - Always remove unused parameters completely rather than prefixing them with `_`. Update the function signature and all call sites accordingly.
 - Prefer inline format arguments in macros like `println!`, `eprintln!`, and `format!` (for example, `eprintln!("{message}")` instead of `eprintln!("{}", message)`) to satisfy Clippy's `uninlined_format_args` lint.
 - Do not pass `Itertools::format` results directly to logging macros (`log::*`, `safe_*`, etc.). `Itertools::format` produces a single-use formatter, while logging implementations may format a message more than once. Use a reusable `String` such as `iter.join(", ")` for logging arguments instead. Direct use in `format!` or `write!` is fine.
-- Do not remove existing comments when making unrelated changes. Only remove or modify a comment if the logic it describes has changed.
 - When adding a toggleable setting, also add the matching Command Palette enable/disable entry and any required context flags so the setting is discoverable outside Settings.
+
+**Comments**:
+Comments have a cost. They carry a maintenance burden, because they must be kept in sync
+with the code they describe. It is tempting to assume that more comments is always better,
+but be judicious about when a comment is actually necessary because the code cannot speak
+for itself.
+- **Minimalist Comments**: Assume the reader is a Senior Software Engineer. Never comment
+  to explain WHAT or HOW code works if self-documenting names accomplish that.
+- **Strictly "Why" Only**: Reserve inline comments strictly for non-obvious business
+  rationale, workarounds for third-party bugs, complex algorithms, unidiomatic code, or
+  unexpected edge cases.
+- **No Line-by-Line Narrations**: Never add comments restating the syntax (e.g., omit
+  `# Initialize array`, `# Loop over users`).
+- **Clean Docstrings**: Keep doc comments concise. Document public APIs, arguments, types,
+  and returns. Do not narrate the method's internal implementation steps.
+- **Single-source of documentation**: For items/members that have a doc comment explaining
+  their purpose, you do not need to repeat that explanation anywhere else. A good example
+  is a float const specifying an amount of spacing. You may use a doc comment on the
+  declaration if necessary, but do not repeat that where the const is *referenced*. Another
+  example is function call sites. Function doc comments explain what they do. Do not repeat
+  the explanation at the call site.
+- **Don't enumerate function call sites in doc comments**: Function doc comments should
+  document their behavior and NOT their callers, e.g. it should never say things like,
+  "this is used by [certain callers]" or "this is used when...".
+- **No "transformation comments"**: Do not add comments that explain *your edits*. Comments
+  only need explain the *current state* of the code. Explanations of edits belong in pull
+  request comments instead. You shouldn't add comments with phrases like, "this used to do
+  so-and-so".
+- Do not remove existing comments when making unrelated changes. Only remove or modify a
+  comment if the logic it describes has changed.
+- The formatter (`./script/format`) is configured with a `max_width` (max line length) of
+  100. Flow (reflow) comment line-wrapping to fill that full width rather than wrapping
+  early at a narrower column, so comments span as few lines as possible.
 
 **Terminal Model Locking**:
 - Be extremely careful when calling `model.lock()` on the terminal model (`TerminalModel`). Acquiring multiple locks on the same model from different call sites can cause a deadlock, resulting in a UI freeze (beach ball on macOS).

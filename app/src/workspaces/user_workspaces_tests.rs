@@ -135,6 +135,16 @@ fn initialize_window_team_test_app(app: &mut App, workspaces: Vec<Workspace>) {
     });
 }
 
+fn register_ai_usage_model(app: &mut App) {
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    if app.models_of_type::<PrivatePreferences>().is_empty() {
+        app.update(crate::settings::init_and_register_user_preferences);
+    }
+    app.add_singleton_model(|ctx| {
+        AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
+    });
+}
+
 #[test]
 fn test_loading_all_spaces_after_switching_from_offline() {
     let _flag = FeatureFlag::KnowledgeSidebar.override_enabled(true);
@@ -192,6 +202,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         joinable_teams: vec![],
                         experiments: None,
                         feature_model_choices: None,
+                        ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
                     pricing_info: None,
@@ -210,6 +221,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         joinable_teams: vec![],
                         experiments: None,
                         feature_model_choices: None,
+                        ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
                     pricing_info: None,
@@ -348,6 +360,7 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
                 joinable_teams: vec![],
                 experiments: None,
                 feature_model_choices: None,
+                ai_credit_availability: None,
                 user_purchase_policy: None,
             },
             pricing_info: None,
@@ -405,6 +418,7 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
                 joinable_teams: vec![],
                 experiments: None,
                 feature_model_choices: None,
+                ai_credit_availability: None,
                 user_purchase_policy: None,
             },
             pricing_info: None,
@@ -1600,6 +1614,7 @@ fn gql_tier(purchase_policy: Option<GqlPurchaseAddOnCreditsPolicy>) -> GqlTier {
         enterprise_pay_as_you_go_policy: None,
         enterprise_credits_auto_reload_policy: None,
         multi_admin_policy: None,
+        native_workspaces_policy: None,
         ambient_agents_policy: None,
         usage_visibility_policy: None,
     }
@@ -1720,6 +1735,11 @@ fn gql_user(
         profile: GqlUserProfile {
             uid: "test-user".to_string(),
         },
+        ai_credit_availability: warp_graphql::ai::AICreditAvailability {
+            available: true,
+            denial_reason: warp_graphql::ai::AICreditAvailabilityDenialReason::None,
+            credit_source: None,
+        },
         billing_metadata: user_purchase_policy.map(|policy| UserPurchasePolicyBillingMetadata {
             tier: UserPurchasePolicyTier {
                 purchase_add_on_credits_policy: Some(policy),
@@ -1735,6 +1755,7 @@ fn gql_user(
 fn test_user_level_policy_survives_placeholder_filtering_for_teamless_users() {
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![]);
+        register_ai_usage_model(&mut app);
 
         // The real conversion path: a teamless user's ONLY workspace is the
         // placeholder, which must stay filtered out of `workspaces`, while
@@ -1790,6 +1811,7 @@ fn test_user_level_policy_survives_placeholder_filtering_for_teamless_users() {
 fn test_workspace_policy_wins_over_user_level_policy() {
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![]);
+        register_ai_usage_model(&mut app);
 
         let standard_policy = GqlPurchaseAddOnCreditsPolicy {
             enabled: true,

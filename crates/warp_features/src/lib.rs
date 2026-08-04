@@ -519,8 +519,8 @@ pub enum FeatureFlag {
     /// Enables v2 of the context window usage UI.
     ContextWindowUsageV2,
 
-    /// Dev-only: enables the expandable per-segment context window usage
-    /// breakdown in the conversation usage card.
+    /// Enables the expandable per-segment context window usage breakdown in
+    /// the conversation usage card.
     ContextWindowUsageBreakdown,
 
     /// Enables global search
@@ -932,6 +932,13 @@ pub enum FeatureFlag {
     /// authenticated with the logged-in user's session token. No manual MCP
     /// setup or API key required.
     FactoryMcp,
+
+    /// Gates the TUI cost footer's credits⇄dollars toggle. When enabled (dogfood
+    /// / staging and local/dev builds), the footer usage entry follows the
+    /// persisted `agents.usage_display_mode` setting and is click-to-toggleable
+    /// between credits and dollars. When disabled (prod/stable), the footer
+    /// falls back to a static, non-interactive credits total.
+    TuiCostTransparency,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1000,18 +1007,18 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WarpControlCli,
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
-    FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::JupyterNotebookRendering,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::WellKnownMcpIds,
     FeatureFlag::FactoryMcp,
+    FeatureFlag::TuiCostTransparency,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[FeatureFlag::OscHyperlinks];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely

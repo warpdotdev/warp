@@ -13,11 +13,13 @@ use vim::vim::VimMode;
 use warp::appearance::Appearance;
 use warp::editor::CodeEditorModel;
 use warp::settings::AISettingsChangedEvent;
+#[cfg(feature = "voice_input")]
+use warp::tui_export::VoiceInput;
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIHistoryModel, BlocklistAIInputModel,
     ConversationSelectionEvent, InputConfig, InputModePolicy, InputType, LLMId, PolicyConfigUpdate,
     SlashCommandId, SlashCommandMixer, TuiMcpAction, TuiMcpServerId, TuiUpArrowHistoryItemKind,
-    VoiceInput, add_tui_history_test_models, blocklist_ai_history_model_with_queries,
+    add_tui_history_test_models, blocklist_ai_history_model_with_queries,
     register_tui_input_mode_test_settings, register_tui_session_view_test_singletons,
 };
 use warp_core::features::FeatureFlag;
@@ -57,6 +59,7 @@ use crate::read_only_menu::TuiReadOnlyMenuKind;
 use crate::slash_commands::{TuiSlashCommandModel, TuiSlashCommandRow};
 use crate::test_fixtures::{add_test_conversation_selection, add_test_semantic_selection};
 use crate::tui_builder::TuiUiBuilder;
+#[cfg(feature = "voice_input")]
 use crate::voice_input::{TuiVoiceInputModel, TuiVoiceInputState};
 
 const W: u16 = 80;
@@ -1331,6 +1334,7 @@ fn slash_command_argument_hint_renders_after_menu_closes() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn enter_and_escape_stop_listening_while_escape_cancels_transcribing() {
     App::test((), |mut app| async move {
         let (view, voice_input, submissions) = app.update(|ctx| {
@@ -1822,6 +1826,7 @@ fn typeahead_overwrites_incremental_prefix_and_moves_cursor_to_end() {
         });
     });
 }
+#[cfg(feature = "voice_input")]
 fn build_view_with_voice(
     ctx: &mut AppContext,
 ) -> (ViewHandle<TuiInputView>, ModelHandle<TuiVoiceInputModel>) {
@@ -1852,6 +1857,7 @@ fn build_view_with_voice(
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn listening_voice_input_suppresses_shell_gutter() {
     App::test((), |mut app| async move {
         app.update(|ctx| {

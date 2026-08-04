@@ -33,6 +33,7 @@ use super::{
     AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR, AI_ASSISTANT_SVG_PATH,
     ASK_AI_ASSISTANT_TEXT, AskAIType, PROMPT_CHARACTER_LIMIT,
 };
+use crate::ai::AIRequestUsageModel;
 use crate::appearance::Appearance;
 use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, TextOptions,
@@ -688,10 +689,6 @@ impl AIAssistantPanelView {
         self.requests_model.as_ref(app).request_status()
     }
 
-    fn num_remaining_reqs(&self, app: &AppContext) -> usize {
-        self.requests_model.as_ref(app).num_remaining_reqs()
-    }
-
     #[cfg(feature = "integration_tests")]
     pub fn editor(&self) -> &ViewHandle<EditorView> {
         &self.editor
@@ -916,7 +913,7 @@ impl AIAssistantPanelView {
                 .finish(),
             );
 
-        if self.num_remaining_reqs(app) > 0 {
+        if AIRequestUsageModel::as_ref(app).has_any_ai_remaining(app) {
             column.add_children([
                 Container::new(render_prepared_response_button(
                     appearance,

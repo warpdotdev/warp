@@ -235,7 +235,11 @@ impl CommentListView {
 
         // Keep the stored button state in sync when AI availability changes.
         ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |me, _, event, ctx| {
-            if let AIRequestUsageModelEvent::RequestUsageUpdated = event {
+            if matches!(
+                event,
+                AIRequestUsageModelEvent::RequestUsageUpdated
+                    | AIRequestUsageModelEvent::CreditAvailabilityUpdated
+            ) {
                 me.sync_send_button(ctx);
             }
         });

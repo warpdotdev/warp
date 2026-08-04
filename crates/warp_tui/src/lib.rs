@@ -84,6 +84,7 @@ mod tui_plan_view;
 mod tui_review_comments;
 mod tui_shell_command_view;
 mod usage;
+#[cfg(feature = "voice_input")]
 mod voice_input;
 mod warping_indicator;
 mod zero_state;
