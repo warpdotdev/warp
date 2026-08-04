@@ -314,6 +314,12 @@ impl FileNotebookView {
         self.code_source = source;
     }
 
+    /// The `CodeSource` this file was opened with, if any.
+    #[cfg(feature = "local_fs")]
+    pub fn code_source(&self) -> Option<&CodeSource> {
+        self.code_source.as_ref()
+    }
+
     pub fn title(&self) -> String {
         // Prefer the location name that's been resolved against a Session, but if that's not
         // available yet, fall back to the raw file path.
