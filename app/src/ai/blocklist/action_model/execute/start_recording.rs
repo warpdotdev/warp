@@ -92,19 +92,28 @@ impl StartRecordingExecutor {
                 } else {
                     defaults.frame_rate
                 };
+                let config_auto_zoom = FeatureFlag::ComputerUseAutoZoom.is_enabled();
+                let config_max_zoom = defaults.max_zoom;
                 let config = computer_use::RecordingConfig {
                     frame_rate: resolved_frame_rate,
                     max_duration: max_duration.unwrap_or(defaults.max_duration),
                     max_size_bytes: max_size_bytes.unwrap_or(defaults.max_size_bytes),
                     playback_speed_multiplier,
                     target,
+                    auto_zoom: config_auto_zoom,
+                    max_zoom: config_max_zoom,
                 };
                 // Carry the resolved frame rate to the completion callback so the
                 // controller can store it for the post-stop smart cut's one-frame
                 // minimum, even though it is not echoed back to the server.
-                (recorder.start(config).await, resolved_frame_rate)
+                (
+                    recorder.start(config).await,
+                    resolved_frame_rate,
+                    config_auto_zoom,
+                    config_max_zoom,
+                )
             },
-            move |(result, frame_rate), ctx| match result {
+            move |(result, frame_rate, config_auto_zoom, config_max_zoom), ctx| match result {
                 Ok(handle) => {
                     let recording_id = Uuid::new_v4().to_string();
                     let started_at = SystemTime::now();
@@ -128,6 +137,8 @@ impl StartRecordingExecutor {
                             conversation_id,
                             handle,
                             frame_rate,
+                            config_auto_zoom,
+                            config_max_zoom,
                             summary,
                             description,
                             target,

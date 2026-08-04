@@ -117,6 +117,10 @@ pub(crate) struct ActiveRecording {
     /// The capture frame rate, used by the post-stop smart cut to enforce the
     /// one-source-frame minimum for instantaneous action groups.
     pub(crate) frame_rate: u32,
+    /// Whether the experimental Linux post-stop camera is enabled.
+    pub(crate) auto_zoom: bool,
+    /// Hard upper bound for the experimental camera.
+    pub(crate) max_zoom: f32,
     /// The surface being recorded, used to resolve pointer-event coordinates
     /// into capture space for the post-stop burn-in.
     pub(crate) target: computer_use::Target,
@@ -245,6 +249,8 @@ impl RecordingController {
         conversation_id: AIConversationId,
         handle: computer_use::RecordingHandle,
         frame_rate: u32,
+        auto_zoom: bool,
+        max_zoom: f32,
         summary: Option<String>,
         description: Option<String>,
         target: computer_use::Target,
@@ -261,6 +267,8 @@ impl RecordingController {
                 handle,
                 started_at: Instant::now(),
                 frame_rate,
+                auto_zoom,
+                max_zoom,
                 target,
                 pointer_session: computer_use::PointerSession::new(),
                 actions: Vec::new(),

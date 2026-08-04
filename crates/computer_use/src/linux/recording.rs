@@ -23,6 +23,7 @@ use x11rb::protocol::xproto;
 use x11rb::rust_connection::RustConnection;
 
 use super::x11::windows;
+use crate::camera::{CameraConfig, build_camera_track, build_zoompan_filter};
 use crate::{
     RecordingCompletionStatus, RecordingConfig, RecordingError, RecordingHandle, RecordingOutput,
     Target,
@@ -44,6 +45,58 @@ pub struct Recorder;
 impl Recorder {
     pub fn new() -> Self {
         Self
+    }
+}
+
+/// Renders a camera track with ffmpeg's `zoompan` filter. The annotated input
+/// remains intact so callers can fall back to it if this extra pass fails.
+async fn zoom_cut(
+    input: &Path,
+    track: &crate::camera::CameraTrack,
+    dimensions: (u32, u32),
+    frame_rate: u32,
+) -> Result<PathBuf, RecordingError> {
+    #[cfg(test)]
+    if input
+        .file_name()
+        .is_some_and(|name| name == "force-auto-zoom-failure.mp4")
+    {
+        return Err(RecordingError::Finalize {
+            reason: "test-forced auto-zoom failure".to_string(),
+        });
+    }
+    let output_path = input.with_extension("zoom.mp4");
+    let filter = build_zoompan_filter(track, dimensions, frame_rate);
+    let status = Command::new("ffmpeg")
+        .arg("-y")
+        .arg("-i")
+        .arg(input)
+        .args(["-vf", &filter])
+        .args(["-r", &frame_rate.max(1).to_string()])
+        .args(["-c:v", "libx264"])
+        .args(["-preset", "ultrafast"])
+        .args(["-pix_fmt", "yuv420p"])
+        .args(["-movflags", "+faststart"])
+        .arg(&output_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+    match status {
+        Ok(status) if status.success() => Ok(output_path),
+        Ok(status) => {
+            let _ = std::fs::remove_file(&output_path);
+            Err(RecordingError::Finalize {
+                reason: format!("ffmpeg auto-zoom exited with status {status}"),
+            })
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(&output_path);
+            Err(RecordingError::Finalize {
+                reason: format!("failed to run ffmpeg for auto-zoom: {error}"),
+            })
+        }
     }
 }
 
@@ -480,12 +533,37 @@ async fn burn_overlays_into_cut(
 /// returns an error rather than producing a video; the caller falls back to
 /// uploading the untouched source for an unexpected processing failure after at
 /// least one committed action.
+#[allow(dead_code)]
 pub async fn post_process_recording(
     input: &Path,
     entries: &[crate::ActionLogEntry],
     dimensions: (u32, u32),
     source_duration: Duration,
     frame_rate: u32,
+) -> Result<PathBuf, RecordingError> {
+    post_process_recording_with_config(
+        input,
+        entries,
+        dimensions,
+        source_duration,
+        frame_rate,
+        false,
+        2.5,
+    )
+    .await
+}
+
+/// Post-stop pipeline with the experimental virtual camera. A failed camera
+/// pass deliberately returns the valid annotated input rather than propagating
+/// an error, preserving publication of the unzoomed artifact.
+pub async fn post_process_recording_with_config(
+    input: &Path,
+    entries: &[crate::ActionLogEntry],
+    dimensions: (u32, u32),
+    source_duration: Duration,
+    frame_rate: u32,
+    auto_zoom: bool,
+    max_zoom: f32,
 ) -> Result<PathBuf, RecordingError> {
     let segments = crate::overlay::build_keep_segments(entries, source_duration, frame_rate);
     if segments.is_empty() {
@@ -515,8 +593,39 @@ pub async fn post_process_recording(
     // (or failed); the caller uploads the overlay output or falls back to the
     // original source on any error.
     let _ = std::fs::remove_file(&cut_path);
+    let overlay_path = overlay_result?;
+    if !auto_zoom {
+        return Ok(overlay_path);
+    }
 
-    overlay_result
+    let track = build_camera_track(
+        entries,
+        &segments,
+        dimensions,
+        frame_rate,
+        CameraConfig {
+            enabled: true,
+            max_zoom,
+            ..CameraConfig::default()
+        },
+    );
+    if track.is_at_rest(dimensions) {
+        return Ok(overlay_path);
+    }
+
+    match zoom_cut(&overlay_path, &track, dimensions, frame_rate).await {
+        Ok(path) => {
+            let _ = std::fs::remove_file(&overlay_path);
+            Ok(path)
+        }
+        Err(error) => {
+            // Do not include camera coordinates or action text in this warning:
+            // it is intentionally safe to emit in production logs.
+            log::warn!("Recording auto-zoom pass failed; publishing annotated recording: {error}");
+            let _ = std::fs::remove_file(overlay_path.with_extension("zoom.mp4"));
+            Ok(overlay_path)
+        }
+    }
 }
 
 /// Builds the ffmpeg `filter_complex` for the segment-cut step only (no

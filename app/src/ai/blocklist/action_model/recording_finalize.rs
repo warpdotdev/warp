@@ -130,6 +130,8 @@ async fn finalize_recording(
         handle,
         actions,
         frame_rate,
+        auto_zoom,
+        max_zoom,
         ..
     } = recording;
     let recorder = computer_use::create_recorder();
@@ -147,12 +149,14 @@ async fn finalize_recording(
     // file, when produced, is a sibling of the mp4.
     let mut upload_path = local_path.clone();
     let mut overlay_path: Option<std::path::PathBuf> = None;
-    match computer_use::post_process_recording(
+    match computer_use::post_process_recording_with_config(
         &local_path,
         &actions,
         (output.width, output.height),
         output.duration,
         frame_rate,
+        auto_zoom,
+        max_zoom,
     )
     .await
     {

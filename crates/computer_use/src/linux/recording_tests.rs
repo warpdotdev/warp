@@ -16,8 +16,12 @@ use x11rb::rust_connection::RustConnection;
 
 use super::Recorder;
 // The `Recorder` trait provides `start`/`stop` on the concrete `super::Recorder` struct.
+use crate::camera::{CameraConfig, build_camera_track};
 use crate::overlay::KeepSegment;
-use crate::{Recorder as _, RecordingConfig, Target};
+use crate::{
+    ActionLogEntry, MouseButton, PointerEvent, PointerEventKind, Recorder as _, RecordingConfig,
+    Target, Vector2I,
+};
 
 // 24-bit TrueColor pixel values (0xRRGGBB) for the two solid-color test windows.
 const RED_PIXEL: u32 = 0x00FF_0000;
@@ -386,6 +390,92 @@ fn linux_capture_command_captures_at_1x_without_setpts() {
     );
 }
 
+/// Writes a camera-specific fixture with a high-contrast marker at the
+/// interaction target so decoded output frames can verify zoom and centering.
+async fn write_camera_fixture_source(path: &Path) {
+    const FRAMES: usize = 20;
+    let frame_len = (FIXTURE_W as usize) * (FIXTURE_H as usize) * 3;
+    let mut raw = Vec::with_capacity(FRAMES * frame_len);
+    for _ in 0..FRAMES {
+        for y in 0..FIXTURE_H {
+            for x in 0..FIXTURE_W {
+                let is_marker = (28..36).contains(&x) && (28..36).contains(&y);
+                let (r, g, b) = if is_marker {
+                    (220, 20, 20)
+                } else {
+                    (20, 40, 80)
+                };
+                raw.extend([r, g, b]);
+            }
+        }
+    }
+    let raw_path = path.with_extension("raw");
+    std::fs::write(&raw_path, &raw).expect("write camera fixture");
+    let output = Command::new("ffmpeg")
+        .args(["-y", "-hide_banner", "-f", "rawvideo", "-pix_fmt", "rgb24"])
+        .args(["-video_size", &format!("{}x{}", FIXTURE_W, FIXTURE_H)])
+        .args(["-framerate", &FIXTURE_FRAME_RATE.to_string()])
+        .arg("-i")
+        .arg(&raw_path)
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .arg(path)
+        .output()
+        .await
+        .expect("run ffmpeg camera fixture encode");
+    let _ = std::fs::remove_file(&raw_path);
+    assert!(
+        output.status.success(),
+        "ffmpeg camera fixture encode failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+async fn decode_rgb_frames(path: &Path, width: u32, height: u32) -> Vec<Vec<u8>> {
+    let raw_path = path.with_extension("raw");
+    let output = Command::new("ffmpeg")
+        .args(["-y", "-hide_banner", "-i"])
+        .arg(path)
+        .args(["-f", "rawvideo", "-pix_fmt", "rgb24", "-vsync", "0"])
+        .arg(&raw_path)
+        .output()
+        .await
+        .expect("run ffmpeg camera fixture decode");
+    assert!(
+        output.status.success(),
+        "ffmpeg camera fixture decode failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let data = std::fs::read(&raw_path).expect("read camera fixture raw output");
+    let _ = std::fs::remove_file(&raw_path);
+    let frame_len = width as usize * height as usize * 3;
+    data.chunks_exact(frame_len).map(Vec::from).collect()
+}
+
+fn marker_bounds(frame: &[u8], width: u32, height: u32) -> Option<(usize, usize, usize, usize)> {
+    let mut bounds: Option<(usize, usize, usize, usize)> = None;
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let pixel = &frame[(y * width as usize + x) * 3..][..3];
+            if pixel[0] > 150 && pixel[0] > pixel[1] + 80 {
+                bounds = Some(match bounds {
+                    Some((min_x, min_y, max_x, max_y)) => {
+                        (min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y))
+                    }
+                    None => (x, y, x, y),
+                });
+            }
+        }
+    }
+    bounds
+}
+
 /// The cut-only filtergraph emits one `trim`+`setpts=PTS-STARTPTS` branch per
 /// retained segment, concatenates them video-only, and maps the result to
 /// `[vout]`. It contains no overlay/subtitles logic, which is handled in a
@@ -602,6 +692,163 @@ async fn smart_cut_retains_only_selected_frames_in_order() {
     assert!(
         (duration - 0.6).abs() < 0.08,
         "output duration should be ~0.6s (6 frames at 10fps), got {duration}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A failed zoom pass must return the valid annotated recording and clean up
+/// all camera intermediates rather than blocking publication.
+#[tokio::test]
+async fn auto_zoom_failure_falls_back_to_annotated_recording() {
+    if !ffmpeg_available().await {
+        eprintln!("skipping auto_zoom_failure_falls_back_to_annotated_recording: no ffmpeg");
+        return;
+    }
+
+    let dir = std::env::temp_dir().join(format!(
+        "warp-auto-zoom-fallback-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let source = dir.join("force-auto-zoom-failure.mp4");
+    write_fixture_source(&source).await;
+    let entries = vec![ActionLogEntry {
+        offset: Duration::from_millis(200),
+        finish_offset: Duration::from_millis(300),
+        labels: vec!["Click".to_string()],
+        pointer_events: vec![PointerEvent {
+            offset: Duration::from_millis(200),
+            kind: PointerEventKind::Down,
+            button: Some(MouseButton::Left),
+            point: Vector2I::new(32, 32),
+        }],
+    }];
+
+    let result = super::post_process_recording_with_config(
+        &source,
+        &entries,
+        (FIXTURE_W, FIXTURE_H),
+        Duration::from_secs(1),
+        FIXTURE_FRAME_RATE,
+        true,
+        2.5,
+    )
+    .await;
+
+    let output = result.expect("failed zoom should fall back to annotated recording");
+    assert!(
+        output
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().contains(".overlay.")),
+        "fallback should publish the annotated output, got {}",
+        output.display()
+    );
+    assert!(output.exists(), "fallback output should exist");
+    assert!(
+        !output.with_extension("zoom.mp4").exists(),
+        "failed zoom output should be removed"
+    );
+    assert!(
+        !source.with_extension("cut.mp4").exists(),
+        "cut intermediate should be removed"
+    );
+    assert!(
+        !source.with_extension("ass").exists(),
+        "subtitle intermediate should be removed"
+    );
+    assert_eq!(
+        probe_dimensions(&output).await,
+        (FIXTURE_W, FIXTURE_H),
+        "fallback output should preserve annotated recording geometry"
+    );
+
+    let _ = std::fs::remove_file(&output);
+    let _ = std::fs::remove_file(&source);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Runs the real zoompan pass on a deterministic fixture and asserts that the
+/// camera preserves output geometry and a finite playback duration.
+#[tokio::test]
+async fn auto_zoom_fixture_preserves_geometry_and_duration() {
+    if !ffmpeg_available().await {
+        eprintln!("skipping auto_zoom_fixture_preserves_geometry_and_duration: no ffmpeg");
+        return;
+    }
+
+    let dir = std::env::temp_dir().join(format!("warp-auto-zoom-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let source = dir.join("source.mp4");
+    write_camera_fixture_source(&source).await;
+
+    let entries = vec![ActionLogEntry {
+        offset: Duration::from_millis(200),
+        finish_offset: Duration::from_millis(300),
+        labels: Vec::new(),
+        pointer_events: vec![PointerEvent {
+            offset: Duration::from_millis(200),
+            kind: PointerEventKind::Down,
+            button: Some(MouseButton::Left),
+            point: Vector2I::new(32, 32),
+        }],
+    }];
+    let segments = vec![KeepSegment {
+        source_start: Duration::ZERO,
+        source_end: Duration::from_secs(2),
+        output_start: Duration::ZERO,
+    }];
+    let track = build_camera_track(
+        &entries,
+        &segments,
+        (FIXTURE_W, FIXTURE_H),
+        FIXTURE_FRAME_RATE,
+        CameraConfig {
+            enabled: true,
+            zoom_in: Duration::from_millis(100),
+            zoom_out: Duration::from_millis(100),
+            idle_timeout: Duration::from_millis(400),
+            ..CameraConfig::default()
+        },
+    );
+    let output = super::zoom_cut(&source, &track, (FIXTURE_W, FIXTURE_H), FIXTURE_FRAME_RATE)
+        .await
+        .expect("zoompan fixture render should succeed");
+
+    assert_eq!(
+        probe_dimensions(&output).await,
+        (FIXTURE_W, FIXTURE_H),
+        "zoompan must preserve output dimensions"
+    );
+    let duration = probe_duration(&output).await;
+    assert!(
+        (duration - 2.0).abs() < 0.2,
+        "zoompan must preserve the compacted duration, got {duration}"
+    );
+    let frames = decode_rgb_frames(&output, FIXTURE_W, FIXTURE_H).await;
+    let idle_bounds = marker_bounds(&frames[1], FIXTURE_W, FIXTURE_H)
+        .expect("idle frame should contain the interaction marker");
+    let active_bounds = marker_bounds(&frames[4], FIXTURE_W, FIXTURE_H)
+        .expect("active frame should contain the interaction marker");
+    let idle_width = idle_bounds.2 - idle_bounds.0 + 1;
+    let active_width = active_bounds.2 - active_bounds.0 + 1;
+    let active_center_x = (active_bounds.0 + active_bounds.2) as f32 / 2.0;
+    let active_center_y = (active_bounds.1 + active_bounds.3) as f32 / 2.0;
+    assert!(
+        (active_center_x - (FIXTURE_W as f32 / 2.0)).abs() <= 3.0
+            && (active_center_y - (FIXTURE_H as f32 / 2.0)).abs() <= 3.0,
+        "zoomed interaction marker should remain centered, got ({active_center_x}, {active_center_y})"
+    );
+    assert!(
+        active_width > idle_width + 2,
+        "active frame should be zoomed (idle width {idle_width}, active width {active_width})"
+    );
+    let idle_center_x = (idle_bounds.0 + idle_bounds.2) as f32 / 2.0;
+    let idle_center_y = (idle_bounds.1 + idle_bounds.3) as f32 / 2.0;
+    assert!(
+        (idle_center_x - (FIXTURE_W as f32 / 2.0)).abs() <= 3.0
+            && (idle_center_y - (FIXTURE_H as f32 / 2.0)).abs() <= 3.0,
+        "idle frame should remain full-frame and centered, got ({idle_center_x}, {idle_center_y})"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

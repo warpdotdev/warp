@@ -5,6 +5,8 @@
 mod imp;
 // Env-var-gated mock recorder for exercising the recording UI on macOS,
 // where real capture is unsupported.
+#[cfg(any(linux, test))]
+mod camera;
 #[cfg(macos)]
 mod mock;
 mod noop;
@@ -293,13 +295,54 @@ pub async fn post_process_recording(
     source_duration: Duration,
     frame_rate: u32,
 ) -> Result<PathBuf, RecordingError> {
+    post_process_recording_with_config(
+        input,
+        entries,
+        dimensions,
+        source_duration,
+        frame_rate,
+        false,
+        2.5,
+    )
+    .await
+}
+
+/// Applies platform-specific post-processing with the experimental camera
+/// configuration. The legacy [`post_process_recording`] entry point remains a
+/// disabled-camera compatibility wrapper for callers that do not own runtime
+/// recording configuration.
+pub async fn post_process_recording_with_config(
+    input: &Path,
+    entries: &[ActionLogEntry],
+    dimensions: (u32, u32),
+    source_duration: Duration,
+    frame_rate: u32,
+    auto_zoom: bool,
+    max_zoom: f32,
+) -> Result<PathBuf, RecordingError> {
     #[cfg(all(linux, not(noop)))]
     {
-        imp::post_process_recording(input, entries, dimensions, source_duration, frame_rate).await
+        imp::post_process_recording_with_config(
+            input,
+            entries,
+            dimensions,
+            source_duration,
+            frame_rate,
+            auto_zoom,
+            max_zoom,
+        )
+        .await
     }
     #[cfg(not(all(linux, not(noop))))]
     {
-        let _ = (entries, dimensions, source_duration, frame_rate);
+        let _ = (
+            entries,
+            dimensions,
+            source_duration,
+            frame_rate,
+            auto_zoom,
+            max_zoom,
+        );
         Ok(input.to_path_buf())
     }
 }
@@ -387,6 +430,10 @@ pub struct RecordingConfig {
     /// The surface to capture. `Screen` records the whole X display (legacy behavior);
     /// `Window` records the targeted window after making it foreground-visible when supported.
     pub target: Target,
+    /// Enables the experimental post-stop virtual camera on Linux recordings.
+    pub auto_zoom: bool,
+    /// Hard upper bound for the experimental camera zoom factor.
+    pub max_zoom: f32,
 }
 
 impl Default for RecordingConfig {
@@ -402,6 +449,8 @@ impl Default for RecordingConfig {
             // tool call's playback_speed_multiplier field.
             playback_speed_multiplier: 4.0,
             target: Target::Screen,
+            auto_zoom: false,
+            max_zoom: 2.5,
         }
     }
 }
