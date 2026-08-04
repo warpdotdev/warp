@@ -1925,13 +1925,17 @@ fn launch_remote_child(
     };
 
     let terminal_view_id = new_terminal_view.id();
+    // Under the unified stack, remote children are not persisted to the local DB
+    // (they are re-seeded from the server on restore). Under the flag-off path,
+    // children must be persisted so they survive restarts.
+    let is_remote = crate::features::FeatureFlag::OrchestrationUnifiedStack.is_enabled();
     let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
         let id = history_model.start_new_child_conversation(
             terminal_view_id,
             request_name.clone(),
             request.parent_conversation_id,
             Some(orchestration_harness),
-            true,
+            is_remote,
             ctx,
         );
         // `start_new_child_conversation` already marked this remote above
