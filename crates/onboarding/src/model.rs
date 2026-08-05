@@ -396,9 +396,14 @@ impl OnboardingStateModel {
     /// The `experiment_arm` to report on this offer's telemetry, or `None` when
     /// the current offer isn't the arm-experiment surface (so unrelated events
     /// never gain a spurious `experiment_arm` key).
+    ///
+    /// `offer_variant` is sticky once set, so the step is checked too: backing
+    /// out of the offer (`PostAuthOffer` → `ThemePicker`) must not leak the arm
+    /// onto the non-offer slide views that follow (spec invariant #6).
     pub(crate) fn offer_experiment_arm(&self) -> Option<&'static str> {
-        matches!(self.offer_variant, Some(OfferVariant::ChooseHowToStart))
-            .then(|| self.choose_how_to_start_experiment_arm.telemetry_value())
+        (self.step == OnboardingStep::PostAuthOffer
+            && matches!(self.offer_variant, Some(OfferVariant::ChooseHowToStart)))
+        .then(|| self.choose_how_to_start_experiment_arm.telemetry_value())
     }
 
     pub(crate) fn show_post_auth_offer(
