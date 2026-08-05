@@ -349,7 +349,6 @@ const SWITCH_CONVERSATION_RUNNING_HINT: &str =
 const SWITCH_LOADING_HINT: &str = "Another conversation is already loading.";
 const SWITCH_UNAVAILABLE_HINT: &str = "That conversation is no longer available.";
 const LOADING_CONVERSATION_HINT: &str = "Loading conversation…";
-const MODEL_PERSISTENCE_FAILED_HINT: &str = "Could not save the selected model.";
 const THEME_INVALID_ARGUMENT_HINT: &str = "Theme must be auto, light, or dark.";
 
 /// Footer label shown while the input is in `!` shell mode. The how-to-exit
@@ -1681,7 +1680,12 @@ impl TuiTerminalSessionView {
             }
         });
         let model_menu = ctx.add_model(|ctx| {
-            TuiModelMenuModel::new(input_editor_model.clone(), suggestions_mode.clone(), ctx)
+            TuiModelMenuModel::new(
+                input_editor_model.clone(),
+                suggestions_mode.clone(),
+                terminal_surface_id,
+                ctx,
+            )
         });
         ctx.subscribe_to_model(&model_menu, |_, _, _: &TuiModelMenuEvent, ctx| {
             ctx.notify();
@@ -2094,6 +2098,7 @@ impl TuiTerminalSessionView {
                 AISettingsChangedEvent::TuiUsageDisplayMode { .. }
                     | AISettingsChangedEvent::TuiStatusline { .. }
                     | AISettingsChangedEvent::VoiceInputEnabled { .. }
+                    | AISettingsChangedEvent::ExecutionProfiles { .. }
             ) {
                 ctx.notify();
             }
@@ -4169,14 +4174,9 @@ impl TuiTerminalSessionView {
     }
 
     fn handle_accepted_model(&mut self, id: &LLMId, ctx: &mut ViewContext<Self>) {
-        let terminal_view_id = ctx.view_id();
-        let persisted = LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-            preferences.update_active_profile_base_model(id, Some(terminal_view_id), ctx)
+        LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
+            preferences.update_preferred_agent_mode_llm(id, self.terminal_surface_id, ctx);
         });
-        if !persisted {
-            self.show_transient_hint(MODEL_PERSISTENCE_FAILED_HINT.to_owned(), ctx);
-            return;
-        }
         self.model_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
     }
     fn handle_accepted_mcp_action(&mut self, action: TuiMcpAction, ctx: &mut ViewContext<Self>) {

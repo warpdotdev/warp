@@ -1723,6 +1723,24 @@ impl UserWorkspaces {
             .unwrap_or(true)
     }
 
+    /// Whether invite links are enabled for the current workspace. This is a
+    /// workspace-level setting; the teams-settings page reads it from here rather
+    /// than from the `Team` struct.
+    pub fn is_invite_link_enabled(&self) -> bool {
+        self.current_workspace()
+            .map(|workspace| workspace.settings.is_invite_link_enabled)
+            .unwrap_or(false)
+    }
+
+    /// Whether the current workspace's team is discoverable. This is a
+    /// workspace-level setting; the teams-settings page reads it from here rather
+    /// than from the `Team` struct.
+    pub fn is_discoverable(&self) -> bool {
+        self.current_workspace()
+            .map(|workspace| workspace.settings.is_discoverable)
+            .unwrap_or(false)
+    }
+
     /// Returns the codebase context settings, taking into account the organization,
     /// global AI settings, and codebase-specific settings.
     /// Prefer this function to determine whether to show indexing-related functionality.
@@ -1808,8 +1826,8 @@ impl UserWorkspaces {
             teams: vec![Team {
                 uid: ServerId::from(2),
                 name: "Test Team".to_string(),
+                settings: Default::default(),
                 color: None,
-                organization_settings: workspace_settings.clone(),
                 billing_metadata: BillingMetadata::default(),
                 members: vec![],
                 invite_code: None,

@@ -1450,6 +1450,109 @@ fn toggle_model_menu_action_opens_and_closes_the_inline_model_menu() {
         });
     });
 }
+
+#[test]
+fn accepted_model_only_changes_the_current_session() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        LLMPreferences::handle(&app).update(&mut app, |preferences, ctx| {
+            let mut alternate = preferences.get_default_base_model(ctx).clone();
+            alternate.id = "tui-session-override".into();
+            alternate.display_name = "TUI session override".to_owned();
+            preferences.add_agent_mode_model_for_test(alternate);
+        });
+        let (first_view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (second_view, _) = add_focus_test_session(&mut app, &fixture, false);
+        let (profile_default_id, alternate_id) = app.read(|ctx| {
+            let preferences = LLMPreferences::as_ref(ctx);
+            let profile_default_id = preferences
+                .get_active_profile_base_model(ctx, None)
+                .id
+                .clone();
+            let alternate_id = preferences
+                .get_base_llm_choices_for_agent_mode(ctx)
+                .find(|model| model.id != profile_default_id && model.disable_reason.is_none())
+                .expect("test model catalog should include an alternate model")
+                .id
+                .clone();
+            (profile_default_id, alternate_id)
+        });
+
+        first_view.update(&mut app, |view, ctx| {
+            view.handle_accepted_model(&alternate_id, ctx);
+        });
+
+        app.read(|ctx| {
+            let preferences = LLMPreferences::as_ref(ctx);
+            let first_surface_id = first_view.as_ref(ctx).terminal_surface_id;
+            let second_surface_id = second_view.as_ref(ctx).terminal_surface_id;
+            assert_eq!(
+                preferences
+                    .get_active_base_model(ctx, Some(first_surface_id))
+                    .id,
+                alternate_id
+            );
+            assert_eq!(
+                preferences
+                    .get_active_base_model(ctx, Some(second_surface_id))
+                    .id,
+                profile_default_id
+            );
+            assert_eq!(
+                preferences
+                    .get_active_profile_base_model(ctx, Some(first_surface_id))
+                    .id,
+                profile_default_id
+            );
+        });
+    });
+}
+
+#[test]
+fn model_menu_labels_the_profile_default_model() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.model_menu.update(ctx, |menu, ctx| menu.open(ctx));
+        });
+
+        view.read(&app, |view, ctx| {
+            let default_name = LLMPreferences::as_ref(ctx)
+                .get_active_profile_base_model(ctx, Some(view.terminal_surface_id))
+                .display_name
+                .clone();
+            let snapshot = view
+                .model_menu
+                .as_ref(ctx)
+                .snapshot(ctx)
+                .expect("model menu should be open");
+            let default_row = snapshot
+                .rows
+                .iter()
+                .find(|row| row.title == default_name)
+                .expect("profile default model should be listed");
+            assert!(
+                default_row
+                    .state_suffix
+                    .as_deref()
+                    .is_some_and(|suffix| suffix.contains("(default)"))
+            );
+            assert_eq!(
+                snapshot
+                    .rows
+                    .iter()
+                    .filter(|row| {
+                        row.state_suffix
+                            .as_deref()
+                            .is_some_and(|suffix| suffix.contains("(default)"))
+                    })
+                    .count(),
+                1
+            );
+        });
+    });
+}
 #[test]
 fn todo_menu_renders_active_list_and_toggles_through_shared_suggestions_mode() {
     App::test((), |mut app| async move {

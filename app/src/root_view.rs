@@ -96,7 +96,7 @@ use crate::terminal::shell::ShellType;
 use crate::terminal::view::{TerminalAction, cell_size_and_padding};
 use crate::themes::onboarding_theme_picker_themes;
 use crate::themes::theme::{AnsiColorIdentifier, Blend, Fill, ThemeKind, WarpThemeConfig};
-use crate::uri::{OpenMCPSettingsArgs, OpenSettingsArgs};
+use crate::uri::{OpenMCPSettingsArgs, OpenSettingsArgs, url_reports_checkout_success};
 use crate::util::bindings::{self, is_binding_pty_compliant};
 use crate::util::traffic_lights::{TrafficLightData, TrafficLightMouseStates, traffic_light_data};
 use crate::view_components::DismissibleToast;
@@ -183,6 +183,23 @@ fn handle_onboarding_credit_purchase_event(
         }
         _ => {}
     }
+}
+
+/// Re-reads the account state onboarding decides on once the user has been out
+/// in the browser: whether they can now use AI, which models they may pick, and
+/// their billing plan. The AI availability read is what the offer slide
+/// advances off, so every path that could follow a purchase goes through here
+/// rather than refreshing its own subset.
+fn refresh_onboarding_account_state(ctx: &mut ViewContext<RootView>) {
+    AIRequestUsageModel::handle(ctx).update(ctx, |usage, ctx| {
+        usage.request_availability_refresh(ctx);
+    });
+    LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+        prefs.refresh_available_models(ctx);
+    });
+    TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
+        drop(manager.refresh_workspace_metadata(ctx));
+    });
 }
 
 #[derive(Debug, Clone)]
@@ -2285,12 +2302,7 @@ impl RootView {
                         onboarding_view.set_auth_state(auth_state, ctx);
                     });
                     if matches!(event, AuthManagerEvent::AuthComplete) {
-                        LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                            prefs.refresh_available_models(ctx);
-                        });
-                        TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
-                            drop(manager.refresh_workspace_metadata(ctx));
-                        });
+                        refresh_onboarding_account_state(ctx);
                     }
                 }
             },
@@ -2954,21 +2966,22 @@ impl RootView {
             }
             AgentOnboardingEvent::OfferCreditsPurchased { variant } => match variant {
                 // Only the free-standard offer surfaces credit packs.
-                OfferVariant::ChooseHowToStart => self.complete_account_first(
-                    AccountFirstCompletion::FreeStandardCreditsPurchased,
-                    ctx,
-                ),
+                OfferVariant::ChooseHowToStart => {
+                    // The offer sells a plan alongside the packs, so the user
+                    // may have subscribed instead; record whichever they did.
+                    let completion = if Self::account_first_is_paid(ctx) {
+                        AccountFirstCompletion::UpgradeCompleted
+                    } else {
+                        AccountFirstCompletion::FreeStandardCreditsPurchased
+                    };
+                    self.complete_account_first(completion, ctx);
+                }
                 OfferVariant::HeadStart => {}
             },
             AgentOnboardingEvent::AppBecameActive => {
-                // fetch the models / workspace metadata when the user tabs/intents back
-                // into the app during onboarding after potentially upgrading
-                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                    prefs.refresh_available_models(ctx);
-                });
-                TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
-                    drop(manager.refresh_workspace_metadata(ctx));
-                });
+                // Coming back to the app is when a purchase made in the browser
+                // becomes visible, whichever call to action sent the user there.
+                refresh_onboarding_account_state(ctx);
             }
         }
     }
@@ -3050,7 +3063,28 @@ impl RootView {
                 });
             }
         }
+        // The web checkout confirmation hands the user back through the same
+        // desktop redirect it uses for auth, so the success flag rides along on
+        // a URL that may also have failed to parse as an auth payload.
+        if url_reports_checkout_success(url) {
+            self.notify_onboarding_checkout_succeeded(ctx);
+        }
         true
+    }
+
+    /// Routes a completed web checkout to onboarding. Returns whether an
+    /// AI-sell onboarding screen consumed the signal and advanced.
+    fn notify_onboarding_checkout_succeeded(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        let AuthOnboardingState::PostAuthOnboarding {
+            onboarding_view, ..
+        } = &self.auth_onboarding_state
+        else {
+            return false;
+        };
+        let onboarding_view = onboarding_view.clone();
+        onboarding_view.update(ctx, |onboarding_view, ctx| {
+            onboarding_view.on_checkout_succeeded(ctx)
+        })
     }
 
     #[allow(clippy::ptr_arg)]
@@ -3394,18 +3428,30 @@ impl RootView {
     ) -> bool {
         let window_id = ctx.window_id();
         if let AuthOnboardingState::Terminal(handle) = &self.auth_onboarding_state {
+            let handle = handle.clone();
             ctx.dispatch_typed_action_for_view(
                 window_id,
                 handle.id(),
                 &WorkspaceAction::ShowSettingsPage(*section),
             );
             ctx.windows().show_window_and_focus_app(window_id);
-        } else {
-            report_error!(
-                "Auth not complete before trying to open settings page",
-                extra: { "section" => ?section }
-            );
+            return true;
         }
+
+        // A checkout confirmation that predates the unified success hand-off
+        // still returns the user through the Billing & Usage deeplink. Landing
+        // it mid-onboarding would interrupt the flow, so onboarding takes it as
+        // the purchase succeeding and moves on instead.
+        if *section == SettingsSection::BillingAndUsage
+            && self.notify_onboarding_checkout_succeeded(ctx)
+        {
+            return true;
+        }
+
+        report_error!(
+            "Auth not complete before trying to open settings page",
+            extra: { "section" => ?section }
+        );
         true
     }
 
