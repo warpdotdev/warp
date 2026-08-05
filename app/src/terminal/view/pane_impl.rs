@@ -423,12 +423,7 @@ impl TerminalView {
             }
             #[cfg(target_arch = "wasm32")]
             {
-                // Gate: ambient task present AND not a shared session (shared sessions already
-                // have the tab-bar info button via `get_simplified_wasm_tab_bar_content`).
-                let model = self.model.lock();
-                self.ambient_agent_task_id_for_details_panel_from_model(&model, app)
-                    .is_some()
-                    && !model.shared_session_status().is_sharer_or_viewer()
+                self.should_show_wasm_pane_header_details_button(app)
             }
         };
         let button_element = if is_waiting_for_session {

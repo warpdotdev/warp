@@ -8055,9 +8055,11 @@ impl TerminalView {
     /// delegates here. The `#[cfg(any(test, target_arch = "wasm32"))]` gate allows this logic
     /// to be exercised by host-target unit tests even though the WASM render path is compiled out.
     ///
-    /// Note: the pane-header `(i)` button uses a narrower gate (ambient task present AND
-    /// `!is_sharer_or_viewer()`) so it only appears on surfaces without a tab-bar affordance.
-    /// This predicate is intentionally broader so the panel renders for all three surfaces.
+    /// Note: the pane-header `(i)` button uses a narrower gate
+    /// ([`Self::should_show_wasm_pane_header_details_button`]) that additionally excludes shared
+    /// sessions and transcript viewers, so it only appears on surfaces without a tab-bar
+    /// affordance. This predicate is intentionally broader so the panel renders for all three
+    /// surfaces.
     ///
     /// Returns `true` for:
     /// - Restored ambient cloud tasks
@@ -8079,6 +8081,22 @@ impl TerminalView {
                 .is_some();
         }
         false
+    }
+
+    /// Whether the WASM pane-header `(i)` details toggle should be shown for this terminal view.
+    /// Narrower than [`Self::should_show_wasm_conversation_details_panel`]: the pane-header button
+    /// appears only on ambient-task panes that lack a tab-bar `(i)` affordance, so shared sessions
+    /// and conversation-transcript viewers — which already show the simplified WASM tab-bar `(i)`
+    /// via `get_simplified_wasm_tab_bar_content` — are excluded to avoid a duplicate button. The
+    /// `#[cfg(any(test, target_arch = "wasm32"))]` gate lets host-target unit tests exercise this
+    /// even though the render path is compiled out on the host.
+    #[cfg(any(test, target_arch = "wasm32"))]
+    pub(crate) fn should_show_wasm_pane_header_details_button(&self, app: &AppContext) -> bool {
+        let model = self.model.lock();
+        self.ambient_agent_task_id_for_details_panel_from_model(&model, app)
+            .is_some()
+            && !model.shared_session_status().is_sharer_or_viewer()
+            && !model.is_conversation_transcript_viewer()
     }
 
     /// Consume the one-shot conversation details panel auto-open for this
