@@ -274,6 +274,85 @@ pub fn test_session_context_lists_directory_entries_remotely() {
     });
 }
 
+/// Regression test for APP-5190: in a remote/Warpified session, a symlink that
+/// points at a directory must be classified as a directory (so it completes with
+/// a trailing separator and is offered for `cd`), while a symlink to a file
+/// completes as a file. The `find` script previously omitted `-L`, so symlinked
+/// directories were bucketed as files.
+#[cfg(unix)]
+#[test]
+pub fn test_session_context_follows_symlinked_directories_remotely() {
+    App::test((), |app| async move {
+        VirtualFS::test(
+            "test_session_context_follows_symlinked_directories_remotely",
+            |dirs, mut sandbox| {
+                sandbox.mkdir("real_dir");
+                sandbox.touch(vec![Stub::EmptyFile("real_file.txt")]);
+                sandbox.ln("real_dir", "link_to_dir");
+                sandbox.ln("real_file.txt", "link_to_file");
+
+                let cwd = TypedPathBuf::from(dirs.tests().to_string_lossy().as_bytes());
+                let ctx = test_session_context(Session::test_remote(), cwd.clone(), &app);
+
+                let mut entries = HashSet::<EngineDirEntry>::from_iter(Arc::unwrap_or_clone(
+                    warpui::r#async::block_on(ctx.list_directory_entries(cwd)),
+                ));
+                // TODO(CORE-2000): The ls script we use to list entries in remote
+                // sessions adds a spurious "." directory when run in the VirtualFS.
+                // As a temporary workaround, we remove this file in the test.
+                entries.remove(&EngineDirEntry::test_dir("."));
+
+                assert_eq!(
+                    entries,
+                    HashSet::from_iter([
+                        EngineDirEntry::test_dir("real_dir"),
+                        EngineDirEntry::test_file("real_file.txt"),
+                        EngineDirEntry::test_dir("link_to_dir"),
+                        EngineDirEntry::test_file("link_to_file"),
+                    ])
+                );
+            },
+        );
+    });
+}
+
+/// Symlink coverage for local sessions: a symlink pointing at a directory is
+/// classified as a directory and a symlink to a file as a file (CORE-3402,
+/// preserved here alongside the APP-5190 remote/WSL fixes).
+#[cfg(unix)]
+#[test]
+pub fn test_session_context_follows_symlinked_directories_locally() {
+    App::test((), |app| async move {
+        VirtualFS::test(
+            "test_session_context_follows_symlinked_directories_locally",
+            |dirs, mut sandbox| {
+                sandbox.mkdir("real_dir");
+                sandbox.touch(vec![Stub::EmptyFile("real_file.txt")]);
+                sandbox.ln("real_dir", "link_to_dir");
+                sandbox.ln("real_file.txt", "link_to_file");
+
+                let tests_dir = TypedPathBuf::from(dirs.tests().to_string_lossy().as_bytes());
+                let ctx = test_session_context(Session::test(), tests_dir.clone(), &app);
+                let ctx = ctx
+                    .path_completion_context()
+                    .expect("Path completion context should exist with active session");
+
+                assert_eq!(
+                    HashSet::<EngineDirEntry>::from_iter(Arc::unwrap_or_clone(
+                        warpui::r#async::block_on(ctx.list_directory_entries(tests_dir))
+                    )),
+                    HashSet::from_iter([
+                        EngineDirEntry::test_dir("real_dir"),
+                        EngineDirEntry::test_file("real_file.txt"),
+                        EngineDirEntry::test_dir("link_to_dir"),
+                        EngineDirEntry::test_file("link_to_file"),
+                    ])
+                );
+            },
+        );
+    });
+}
+
 fn perform_special_characters_in_path_test(session: Session, file_names: Vec<&str>) {
     let file_names = file_names
         .iter()

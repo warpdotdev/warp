@@ -98,7 +98,8 @@ impl SessionContext {
                 };
 
                 read_dir
-                    .filter_map(|res| res.and_then(EngineDirEntry::try_from).ok())
+                    .filter_map(|res| res.ok())
+                    .filter_map(|entry| self.local_engine_dir_entry(directory, entry))
                     .collect::<Vec<_>>()
             }
             SessionType::WarpifiedRemote { .. } => {
@@ -188,6 +189,77 @@ impl SessionContext {
                 }
             }
         }
+    }
+
+    /// Converts a `DirEntry` from a local session into an `EngineDirEntry`.
+    ///
+    /// This mirrors `EngineDirEntry::try_from` but adds a fallback for symlinks
+    /// whose target the host cannot stat directly. In emulated sessions (WSL,
+    /// MSYS2) the session lists a host path (e.g. `\\wsl$\...`) while a symlink's
+    /// target is expressed in the guest path space (e.g. `/mnt/c/...`), so a
+    /// host-side `metadata()` on the link fails and the entry would otherwise be
+    /// misclassified as a file. When that happens, resolve the target through the
+    /// session before deciding whether it points at a directory.
+    fn local_engine_dir_entry(
+        &self,
+        directory: &TypedPath<'_>,
+        entry: std::fs::DirEntry,
+    ) -> Option<EngineDirEntry> {
+        // `EngineDirEntry::try_from` consumes the entry, so capture whether it is
+        // a symlink and its path before converting.
+        let is_symlink = entry
+            .file_type()
+            .map(|file_type| file_type.is_symlink())
+            .unwrap_or(false);
+        let link_path = is_symlink.then(|| entry.path());
+
+        let mut engine_entry = EngineDirEntry::try_from(entry).ok()?;
+        if !engine_entry.is_dir()
+            && let Some(link_path) = link_path
+            && self.symlink_target_is_dir_in_session_space(directory, &link_path)
+        {
+            engine_entry.file_type = EngineFileType::Directory;
+        }
+        Some(engine_entry)
+    }
+
+    /// Returns whether the symlink at `link_path` (a host path) resolves to a
+    /// directory when its target is interpreted in the session's path space.
+    ///
+    /// This is a fallback for when the host cannot follow the link itself, which
+    /// happens in emulated sessions (WSL, MSYS2) where the link target lives in
+    /// the guest path space. The target is read, resolved against `directory`
+    /// (the guest directory being listed) when relative, converted to a native
+    /// host path via the session, then stat'd. Returns `false` for broken links,
+    /// loops, and unconvertible targets so completion never breaks or hangs.
+    fn symlink_target_is_dir_in_session_space(
+        &self,
+        directory: &TypedPath<'_>,
+        link_path: &Path,
+    ) -> bool {
+        let Ok(target) = std::fs::read_link(link_path) else {
+            return false;
+        };
+        // Symlink targets in the sessions this fallback serves use the guest's
+        // Unix path space, so interpret the raw target as a Unix path.
+        let target = target.to_string_lossy();
+        let target = TypedPathBuf::from_unix(target.as_bytes());
+        let guest_target = if target.is_absolute() {
+            target
+        } else {
+            directory.to_path_buf().join(target)
+        };
+
+        let Ok(native_target) = self
+            .session
+            .maybe_convert_to_native_path(&guest_target.to_path())
+        else {
+            return false;
+        };
+        native_target
+            .metadata()
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or(false)
     }
 }
 
@@ -486,12 +558,16 @@ fn ls_script_for_dir(directory: &TypedPath) -> Option<String> {
     // Separate the two lists with `\0`
     // Ex: `a\0b\0\c\0\0d.txt\0e.txt\0f.txt\0`
     // Then do the same for anything that is not a directory, and call it a 'File'.
+    //
+    // `-L` makes `find` follow symlinks when evaluating `-type`, so a symlink
+    // pointing at a directory is classified as a directory (matching how a
+    // standard terminal completes it) instead of landing in the files bucket.
     let command = format!(
         r#"
 cd {escaped_dir} && 
-find . -maxdepth 1 -type d -print0 &&
+find -L . -maxdepth 1 -type d -print0 &&
 printf '%b' '\0' &&
-find . -maxdepth 1 -not -type d -print0
+find -L . -maxdepth 1 -not -type d -print0
             "#
     )
     // Ensure all newlines are escaped, and that the command is a single line, since some
