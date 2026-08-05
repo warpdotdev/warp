@@ -55,17 +55,26 @@ impl OfferVariant {
             OfferVariant::HeadStart => {
                 Some("Your account includes AI usage to help you get started.")
             }
-            OfferVariant::ChooseHowToStart => None,
+            OfferVariant::ChooseHowToStart => {
+                Some("To use AI, start with a plan or one-time credit packs.")
+            }
         }
     }
 
     pub(crate) fn primary_label(self) -> &'static str {
         match self {
             OfferVariant::HeadStart => "Unlock the full AI experience",
-            // Two of the three options are ways to use Warp with AI, so this
-            // card is named for what actually distinguishes it: the plan.
-            OfferVariant::ChooseHowToStart => "Subscribe to a Warp plan",
+            // The plan and the one-time credit packs now share one card, so it
+            // is titled for their common outcome: using Warp with AI.
+            OfferVariant::ChooseHowToStart => "Use Warp with AI",
         }
+    }
+
+    /// Label for the full-width subscribe button inside the combined
+    /// "Use Warp with AI" card. Only rendered for
+    /// [`OfferVariant::ChooseHowToStart`].
+    pub(crate) fn subscribe_label(self) -> &'static str {
+        "Subscribe to Warp plan"
     }
 
     /// `shows_credit_packs` is the same condition that decides whether the
@@ -111,14 +120,6 @@ impl OfferVariant {
         matches!(self, OfferVariant::ChooseHowToStart)
     }
 
-    pub(crate) fn credits_label(self) -> &'static str {
-        "Buy AI credits"
-    }
-
-    pub(crate) fn credits_description(self) -> &'static str {
-        "Best for trying Warp without a subscription. Buy a one-time credit pack and start using the Warp Agent right away."
-    }
-
     fn credits_action(self) -> &'static str {
         "buy_ai_credits"
     }
@@ -151,9 +152,8 @@ impl OfferVariant {
     fn primary_action(self) -> &'static str {
         match self {
             OfferVariant::HeadStart => "get_more_ai",
-            // Telemetry identifier, not user-facing copy: kept stable across
-            // the card's rename to "Subscribe to a Warp plan" so existing
-            // dashboards don't lose continuity.
+            // Telemetry identifier, not user-facing copy: kept stable across the
+            // card's copy changes so existing dashboards don't lose continuity.
             OfferVariant::ChooseHowToStart => "use_warp_with_ai",
         }
     }
@@ -162,6 +162,9 @@ impl OfferVariant {
 #[derive(Clone, Debug)]
 pub enum OfferSlideAction {
     SelectPrimary,
+    /// The full-width "Subscribe to Warp plan" button inside the combined
+    /// "Use Warp with AI" card: pick the plan and start the upgrade flow.
+    Subscribe,
     SelectBuyCredits,
     SelectSetUpLater,
     SelectCreditPack(usize),
@@ -189,8 +192,8 @@ pub enum OfferSlideEvent {
 
 pub struct OfferSlide {
     onboarding_state: ModelHandle<OnboardingStateModel>,
+    /// Also backs the "Subscribe to Warp plan" button in the combined card.
     primary_mouse_state: MouseStateHandle,
-    buy_credits_mouse_state: MouseStateHandle,
     secondary_mouse_state: MouseStateHandle,
     /// One hover handle per rendered credit pack row. Allocated up front so
     /// each row keeps a stable handle across renders.
@@ -212,7 +215,6 @@ impl OfferSlide {
         Self {
             onboarding_state,
             primary_mouse_state: MouseStateHandle::default(),
-            buy_credits_mouse_state: MouseStateHandle::default(),
             secondary_mouse_state: MouseStateHandle::default(),
             credit_pack_mouse_states: std::array::from_fn(|_| MouseStateHandle::default()),
             back_button: button::Button::default(),
@@ -388,16 +390,23 @@ impl OfferSlide {
     ) -> Box<dyn Element> {
         let selected_choice = self.effective_choice(variant, app);
         let shows_credit_packs = self.shows_credit_packs(variant, app);
-        let primary = Self::render_option_card(
-            appearance,
-            variant.primary_label(),
-            variant.primary_description(shows_credit_packs),
-            selected_choice == OfferChoice::Primary,
-            Some("Recommended"),
-            self.primary_mouse_state.clone(),
-            OfferSlideAction::SelectPrimary,
-            None,
-        );
+        // The free-standard offer folds the plan and the one-time credit packs
+        // into a single "Use Warp with AI" card; every other offer keeps its
+        // plain selectable primary card.
+        let primary = if variant.supports_credit_packs() {
+            self.render_use_ai_card(appearance, variant, selected_choice, app)
+        } else {
+            Self::render_option_card(
+                appearance,
+                variant.primary_label(),
+                variant.primary_description(shows_credit_packs),
+                selected_choice == OfferChoice::Primary,
+                Some("Recommended"),
+                self.primary_mouse_state.clone(),
+                OfferSlideAction::SelectPrimary,
+                None,
+            )
+        };
         let secondary = Self::render_option_card(
             appearance,
             variant.secondary_label(),
@@ -412,24 +421,8 @@ impl OfferSlide {
         let mut options = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(Container::new(primary).with_margin_bottom(12.).finish());
-
-        if shows_credit_packs {
-            let buy_credits = Self::render_option_card(
-                appearance,
-                variant.credits_label(),
-                variant.credits_description(),
-                selected_choice == OfferChoice::BuyCredits,
-                None,
-                self.buy_credits_mouse_state.clone(),
-                OfferSlideAction::SelectBuyCredits,
-                Some(self.render_credit_packs(appearance, variant, app)),
-            );
-            options =
-                options.with_child(Container::new(buy_credits).with_margin_bottom(12.).finish());
-        }
-
-        options = options.with_child(secondary);
+            .with_child(Container::new(primary).with_margin_bottom(12.).finish())
+            .with_child(secondary);
 
         if let Some(status) = self.render_purchase_status(appearance, app) {
             options = options.with_child(Container::new(status).with_margin_top(12.).finish());
@@ -437,6 +430,200 @@ impl OfferSlide {
 
         Container::new(options.finish())
             .with_margin_top(38.)
+            .finish()
+    }
+
+    /// The combined "Use Warp with AI" card for the free-standard offer: the
+    /// subscribe-plan button and the one-time credit packs, separated by a
+    /// labelled divider, inside one bordered card. The card reads as active
+    /// whenever either of its options — the plan or a credit pack — is the
+    /// current choice.
+    fn render_use_ai_card(
+        &self,
+        appearance: &Appearance,
+        variant: OfferVariant,
+        selected_choice: OfferChoice,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let shows_credit_packs = self.shows_credit_packs(variant, app);
+        let active = matches!(
+            selected_choice,
+            OfferChoice::Primary | OfferChoice::BuyCredits
+        );
+        let border = if active {
+            theme.accent()
+        } else {
+            Fill::Solid(internal_colors::neutral_4(theme))
+        };
+
+        let title = appearance
+            .ui_builder()
+            .paragraph(variant.primary_label())
+            .with_style(UiComponentStyles {
+                font_size: Some(16.),
+                font_weight: Some(Weight::Semibold),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+        let green = theme.ansi_fg_green();
+        let badge = Container::new(
+            appearance
+                .ui_builder()
+                .paragraph("Recommended")
+                .with_style(UiComponentStyles {
+                    font_size: Some(12.),
+                    font_color: Some(green),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
+        )
+        .with_horizontal_padding(8.)
+        .with_vertical_padding(3.)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(11.)))
+        .with_background(Fill::Solid(green).with_opacity(10))
+        .finish();
+        let header = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(title)
+            .with_child(badge)
+            .finish();
+
+        let description = appearance
+            .ui_builder()
+            .paragraph(variant.primary_description(shows_credit_packs))
+            .with_style(UiComponentStyles {
+                font_size: Some(14.),
+                font_color: Some(internal_colors::text_sub(
+                    theme,
+                    theme.background().into_solid(),
+                )),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        let mut column = Flex::column()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(header)
+            .with_child(Container::new(description).with_margin_top(8.).finish())
+            .with_child(
+                Container::new(self.render_subscribe_button(appearance, variant))
+                    .with_margin_top(16.)
+                    .finish(),
+            );
+
+        // Packs (and the divider that introduces them) only appear once server
+        // pricing has arrived, so before that the card is just the plan.
+        if shows_credit_packs {
+            column = column
+                .with_child(
+                    Container::new(Self::render_credit_divider(appearance))
+                        .with_margin_top(16.)
+                        .finish(),
+                )
+                .with_child(
+                    Container::new(self.render_credit_packs(appearance, variant, app))
+                        .with_margin_top(16.)
+                        .finish(),
+                );
+        }
+
+        Container::new(column.finish())
+            .with_uniform_padding(24.)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+            .with_border(Border::all(1.).with_border_fill(border))
+            .finish()
+    }
+
+    /// The full-width "Subscribe to Warp plan" button inside the combined card.
+    /// Clicking it starts the same upgrade flow the standalone plan card used.
+    fn render_subscribe_button(
+        &self,
+        appearance: &Appearance,
+        variant: OfferVariant,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let label = appearance
+            .ui_builder()
+            .paragraph(variant.subscribe_label())
+            .with_style(UiComponentStyles {
+                font_size: Some(14.),
+                font_weight: Some(Weight::Semibold),
+                font_color: Some(internal_colors::text_main(
+                    theme,
+                    theme.background().into_solid(),
+                )),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+        let content = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::Center)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(label)
+            .finish();
+        let background = internal_colors::accent_overlay_1(theme);
+        let border = theme.accent();
+
+        Hoverable::new(self.primary_mouse_state.clone(), move |_| {
+            Container::new(content)
+                .with_horizontal_padding(12.)
+                .with_vertical_padding(10.)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+                .with_background(background)
+                .with_border(Border::all(1.).with_border_fill(border))
+                .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(OfferSlideAction::Subscribe);
+        })
+        .finish()
+    }
+
+    /// A thin rule with a centered "Or buy AI credits without a subscription"
+    /// label, separating the subscribe button from the credit packs.
+    fn render_credit_divider(appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let line = || {
+            Expanded::new(
+                1.,
+                ConstrainedBox::new(
+                    Container::new(Empty::new().finish())
+                        .with_background(Fill::Solid(internal_colors::neutral_4(theme)))
+                        .finish(),
+                )
+                .with_height(1.)
+                .finish(),
+            )
+            .finish()
+        };
+        let label = appearance
+            .ui_builder()
+            .paragraph("Or buy AI credits without a subscription")
+            .with_style(UiComponentStyles {
+                font_size: Some(13.),
+                font_color: Some(internal_colors::text_sub(
+                    theme,
+                    theme.background().into_solid(),
+                )),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+        Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(line())
+            .with_child(Container::new(label).with_horizontal_padding(12.).finish())
+            .with_child(line())
             .finish()
     }
 
@@ -799,6 +986,14 @@ impl OfferSlide {
         ctx.notify();
     }
 
+    /// Picks the plan and starts the upgrade flow. The subscribe button and the
+    /// keyboard path (selecting the plan, then Get Warping) resolve to the same
+    /// action, so the button behaves identically to the old plan card.
+    fn subscribe(&mut self, ctx: &mut ViewContext<Self>) {
+        self.select_choice(OfferChoice::Primary, ctx);
+        self.request_upgrade(ctx);
+    }
+
     fn set_up_later(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(variant) = self.variant(ctx) else {
             return;
@@ -934,6 +1129,7 @@ impl TypedActionView for OfferSlide {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             OfferSlideAction::SelectPrimary => self.select_choice(OfferChoice::Primary, ctx),
+            OfferSlideAction::Subscribe => self.subscribe(ctx),
             OfferSlideAction::SelectBuyCredits => {
                 self.select_choice(OfferChoice::BuyCredits, ctx);
             }

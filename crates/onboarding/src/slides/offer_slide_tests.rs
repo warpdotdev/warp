@@ -109,8 +109,12 @@ fn choose_how_to_start_copy_and_telemetry_names_match_spec() {
     let variant = OfferVariant::ChooseHowToStart;
 
     assert_eq!(variant.title(), "Choose how to start");
-    assert_eq!(variant.subtitle(), None);
-    assert_eq!(variant.primary_label(), "Subscribe to a Warp plan");
+    assert_eq!(
+        variant.subtitle(),
+        Some("To use AI, start with a plan or one-time credit packs.")
+    );
+    assert_eq!(variant.primary_label(), "Use Warp with AI");
+    assert_eq!(variant.subscribe_label(), "Subscribe to Warp plan");
     assert_eq!(
         variant.primary_description(true),
         "Warp Agent works locally or in the cloud with frontier and OSS models. Get monthly credits at the best value, and save 20% on add-on credits with any Build plan."
@@ -119,11 +123,6 @@ fn choose_how_to_start_copy_and_telemetry_names_match_spec() {
     assert_eq!(
         variant.secondary_description(),
         "Explore the terminal, bring your own inference, or use another CLI agent. Add AI usage and features anytime."
-    );
-    assert_eq!(variant.credits_label(), "Buy AI credits");
-    assert_eq!(
-        variant.credits_description(),
-        "Best for trying Warp without a subscription. Buy a one-time credit pack and start using the Warp Agent right away."
     );
     assert!(variant.included_features().is_empty());
     assert_eq!(variant.slide_name(), "choose_how_to_start");
@@ -160,6 +159,50 @@ fn subscribe_copy_drops_the_add_on_line_when_no_packs_are_shown() {
         OfferVariant::HeadStart.primary_description(true),
         OfferVariant::HeadStart.primary_description(false)
     );
+}
+
+/// Regression test for APP-5176: the combined "Use Warp with AI" card's
+/// "Subscribe to Warp plan" button selects the plan and starts the upgrade
+/// flow, overriding any credit pack that was the active choice, and does not
+/// start a purchase.
+#[test]
+fn subscribe_action_selects_the_plan_and_starts_upgrade() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.update(MockTelemetryContextProvider::register);
+        let onboarding_state = add_onboarding_state(&mut app);
+        let (_, slide) = app.add_window(WindowStyle::NotStealFocus, {
+            let onboarding_state = onboarding_state.clone();
+            move |_| OfferSlide::new(onboarding_state)
+        });
+        onboarding_state.update(&mut app, |model, ctx| {
+            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
+            model.set_credit_pack_options(credit_packs(4), ctx);
+        });
+
+        // Pick a credit pack first, so the active choice is BuyCredits.
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::SelectCreditPack(2), ctx)
+        });
+        assert_eq!(
+            slide.read(&app, |slide, _| slide.selected_choice),
+            OfferChoice::BuyCredits
+        );
+
+        // Subscribing overrides that: it selects the plan and opens the upgrade
+        // auth prompt rather than starting a purchase.
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::Subscribe, ctx)
+        });
+        assert_eq!(
+            slide.read(&app, |slide, _| slide.selected_choice),
+            OfferChoice::Primary
+        );
+        assert!(slide.read(&app, |slide, _| slide.show_auth_prompt_bar));
+        onboarding_state.read(&app, |model, _| {
+            assert_eq!(model.credit_purchase_state(), CreditPurchaseState::Idle);
+        });
+    });
 }
 
 /// The head-start offer already includes AI usage, so it keeps two options.
