@@ -207,15 +207,13 @@ const LEGACY_OZ_PARENT_STATE_ROOT_ENV: &str = "OZ_PARENT_STATE_ROOT";
 struct IdleTimeoutSender<T: Send + 'static> {
     tx_cell: Arc<Mutex<Option<oneshot::Sender<T>>>>,
     generation: Arc<AtomicUsize>,
-    /// The outcome and window most recently armed through [`Self::arm_refreshable`], so a
-    /// refresh can reschedule without its caller having to hold onto them. Keeping this here
-    /// rather than in the caller's closure is what stops a long-lived refresh subscription from
-    /// re-arming with an outcome that has since been superseded.
+    /// Most recent [`Self::arm_refreshable`] call. Held here rather than by the caller so a
+    /// long-lived refresher cannot re-arm with a superseded outcome.
     pending: Arc<Mutex<Option<(T, Duration)>>>,
 }
 
-// Hand-written so cloning does not require `T: Clone`: every field is a shared handle, so a
-// clone drives the same one-shot completion, generation counter, and pending outcome.
+// Hand-written so cloning does not require `T: Clone`. Every field is a shared handle, so
+// clones drive the same completion.
 impl<T: Send + 'static> Clone for IdleTimeoutSender<T> {
     fn clone(&self) -> Self {
         Self {
@@ -278,10 +276,8 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         }
     }
 
-    /// End the run with `value`, deferring by `idle_timeout` when set so the driver stays alive
-    /// long enough to accept a follow-up. Callers pass `idle_on_complete` for "graceful" terminal
-    /// statuses (Success / Blocked / Cancelled) and `idle_on_fail` for a terminal error. Falls
-    /// back to immediate completion when the window is `None`.
+    /// End the run with `value`, deferring by `idle_timeout` when set and completing immediately
+    /// when it is `None`.
     fn complete_with_optional_idle(&self, idle_timeout: Option<Duration>, value: T) {
         if let Some(idle_timeout) = idle_timeout {
             self.end_run_after(idle_timeout, value);
@@ -292,8 +288,7 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
 }
 
 impl<T: Clone + Send + 'static> IdleTimeoutSender<T> {
-    /// End the run with `value` after `window`, recording both so [`Self::refresh`] can push the
-    /// deadline out later without being handed them again.
+    /// End the run with `value` after `window`, recording both for [`Self::refresh`].
     ///
     /// Re-arming replaces the recorded outcome, so a run that fails, resumes, and fails again
     /// exits reporting its most recent failure.
@@ -304,8 +299,8 @@ impl<T: Clone + Send + 'static> IdleTimeoutSender<T> {
         self.end_run_after(window, value);
     }
 
-    /// Push a previously armed deadline out by its original window, returning the window when
-    /// there was something to refresh. A no-op if nothing is armed.
+    /// Push an armed deadline out by its original window. Returns that window, or `None` if
+    /// nothing was armed.
     fn refresh(&self) -> Option<Duration> {
         let (value, window) = {
             let pending = self.pending.lock().ok()?;
@@ -318,31 +313,20 @@ impl<T: Clone + Send + 'static> IdleTimeoutSender<T> {
 
 /// The status update reported for a run that failed during environment preparation.
 ///
-/// Environment setup problems are the user's to fix (a bad setup command, an unreachable repo),
-/// so they are FAILED rather than ERROR.
-///
-/// The code must stay `EnvironmentSetupFailed`. `TaskStatusMessage::is_environment_setup_failure`
-/// matches on that variant alone, and the cloud-continuation resolver keys the no-CTA tombstone
-/// for a setup failure with no conversation off that check. Reporting a generic code here would
-/// silently reroute those runs into continuation handling that has nothing to continue.
+/// The code must stay `EnvironmentSetupFailed`: `TaskStatusMessage::is_environment_setup_failure`
+/// matches that variant alone, and the cloud-continuation resolver keys its no-CTA tombstone off
+/// that check.
 fn setup_failure_status_update(message: String) -> TaskStatusUpdate {
     TaskStatusUpdate::with_error_code(message, PlatformErrorCode::EnvironmentSetupFailed)
 }
 
-/// How long the driver should stay alive after the conversation reaches `status`, if at all.
+/// How long the driver should stay alive after the conversation reaches `status`. `None` exits
+/// immediately.
 ///
-/// The two windows are deliberately independent, and neither is a fallback for the other,
-/// because they answer different questions:
-/// - `idle_on_complete` (`--idle-on-complete`): how long a healthy run stays available for a
-///   follow-up after it completes, is blocked, or is cancelled.
-/// - `idle_on_fail` (`--idle-on-fail`): how long a *failed* run keeps its shared session alive.
-///   The agent process is the session sharer, so exiting on error tears the session down; a
-///   retained sandbox with no live sharer is not attachable, which is the whole point of
-///   post-failure session retention.
-///
-/// `None` means exit immediately, which is the behavior whenever the corresponding flag is unset.
-/// Both windows are idle-based rather than fixed: a follow-up moves the conversation back to
-/// `InProgress`, which cancels the pending exit.
+/// The two windows are deliberately independent and neither is a fallback for the other:
+/// `idle_on_complete` keeps a healthy run available for a follow-up, while `idle_on_fail` keeps a
+/// failed run's shared session attachable. The agent process is the session sharer, so exiting on
+/// error is what tears that session down.
 fn idle_window_for_terminal_status(
     status: &SDKConversationOutputStatus,
     idle_on_complete: Option<Duration>,
@@ -2831,22 +2815,12 @@ impl AgentDriver {
         }
     }
 
-    /// Keeps the agent process — and with it the run's shared session — alive for the configured
-    /// `--idle-on-fail` window before a setup failure propagates and tears everything down.
+    /// Holds the agent process — and with it the run's shared session — open for the
+    /// `--idle-on-fail` window before a setup failure propagates. A no-op without that flag.
     ///
-    /// The shared session is established before environment preparation runs, so a run that dies
-    /// during setup still has a live, joinable session. That is precisely the case post-failure
-    /// retention exists for: the environment is broken and a human wants to get into it and look
-    /// around. Without this the process exits immediately, the sharer disconnects, and the viewer
-    /// lands on an ended-conversation tombstone.
-    ///
-    /// The run's terminal state is reported to the server *before* the wait, so the run reads as
-    /// failed-with-a-live-session for the whole window rather than masquerading as in-progress.
-    ///
-    /// The window is idle-based: each viewer input into the session pushes it out again, so a
-    /// session someone is actively debugging in is not torn down underneath them.
-    ///
-    /// A no-op when `--idle-on-fail` was not passed, preserving immediate-exit behavior.
+    /// The session is established before environment preparation, so a run that dies during setup
+    /// still has a joinable one, which is the case this feature exists for: the environment is
+    /// broken and someone wants to look around inside it.
     async fn linger_after_failure(
         foreground: &ModelSpawner<Self>,
         stage: &str,
@@ -2885,16 +2859,11 @@ impl AgentDriver {
         );
     }
 
-    /// Arms a post-failure debug window on `idle_timeout` and keeps it open while a human is
-    /// working in the session.
+    /// Arms a post-failure debug window and pushes its deadline out on every viewer input, so a
+    /// session someone is working in is not torn down underneath them.
     ///
-    /// Both failure paths go through here so they behave identically: a terminal conversation
-    /// error and an environment setup failure each hold the session for `window`, and each
-    /// pushes that deadline out on any viewer input — a command run in the session, raw PTY
-    /// bytes, or an edit to the shared input.
-    ///
-    /// The subscription is installed once per driver. A run that fails, is resumed, and fails
-    /// again re-arms the timer through the existing subscription rather than stacking another.
+    /// Both failure paths route through here so a conversation error and a setup failure behave
+    /// identically. The refresh subscription is installed once per driver.
     fn arm_debug_window<T: Clone + Send + 'static>(
         &mut self,
         idle_timeout: IdleTimeoutSender<T>,
@@ -2902,9 +2871,7 @@ impl AgentDriver {
         window: Duration,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Recorded on the timer rather than captured by the subscription below: the subscription
-        // is installed once, but a run can fail, be resumed, and fail again, and a captured
-        // outcome would go stale and exit the run reporting the earlier failure.
+        // Recorded on the timer rather than captured below, so re-arming supersedes it.
         idle_timeout.arm_refreshable(window, value);
         self.publish_debug_window_deadline(window, ctx);
 
@@ -2926,13 +2893,10 @@ impl AgentDriver {
         });
     }
 
-    /// Publishes the debug window's current deadline so the run surfaces show how long the
-    /// session stays reachable.
+    /// Publishes the debug window's current deadline for display on run surfaces.
     ///
-    /// Throttled, because the window refreshes on every keystroke-level viewer event and the
-    /// displayed deadline does not need that resolution. The value is advisory: the agent
-    /// process owns the real timer, and the last published deadline is the floor of what a
-    /// viewer is actually guaranteed.
+    /// Throttled, since the window refreshes on keystroke-level events. The published value is
+    /// advisory and lags the real deadline conservatively; the agent process owns the timer.
     fn publish_debug_window_deadline(&mut self, window: Duration, ctx: &mut ModelContext<Self>) {
         const MIN_PUBLISH_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -2970,8 +2934,8 @@ impl AgentDriver {
     /// Reports the run's terminal failure state before the debug window starts.
     ///
     /// A setup failure never creates a conversation, so `LocalAgentTaskSyncModel` — which derives
-    /// task state from conversation status — never fires for it. Without this the run would sit
-    /// in progress for the whole window and surface as a healthy running run.
+    /// task state from conversation status — never fires for it, and the run would otherwise read
+    /// as in-progress for the whole window.
     async fn report_failure_before_lingering(
         foreground: &ModelSpawner<Self>,
         stage: &str,

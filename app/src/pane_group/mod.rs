@@ -6962,11 +6962,9 @@ impl PaneGroup {
     /// terminal rather than a stale read-only view of the run.
     ///
     /// Returns `false` when this pane cannot host a live session — a read-only conversation
-    /// transcript viewer (backed by a mock manager with no network) or any pane whose terminal
-    /// manager is not a shared-session viewer. Callers **must** treat `false` as "reuse is not
-    /// possible" and open a fresh shared-session pane instead; silently reporting success leaves
-    /// the user focused on a pane with no input box (see `WorkspaceView`'s
-    /// `OpenOrAttachAmbientAgentConversation` handling).
+    /// transcript viewer, or any pane whose terminal manager is not a shared-session viewer.
+    /// Callers **must** treat `false` as "reuse is not possible" and open a fresh pane instead;
+    /// reporting success leaves the user focused on a pane with no input box.
     pub fn attach_execution_session_to_ambient_pane(
         &mut self,
         pane_id: PaneId,

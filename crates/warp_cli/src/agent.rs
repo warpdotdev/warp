@@ -402,16 +402,11 @@ pub struct RunAgentArgs {
     )]
     pub idle_on_complete: Option<humantime::Duration>,
 
-    /// Keep the agent's session open after the conversation ends in a terminal error.
+    /// Keep the agent's session open after the conversation ends in a terminal error, so a human
+    /// can attach to the failed run and debug in it. The agent process is the shared-session
+    /// sharer, so without this the session dies with the process.
     ///
-    /// This is the interactive half of post-failure session retention: the agent process — which
-    /// is also the shared-session sharer — stays alive so a human can attach to the failed run's
-    /// session and keep debugging in it. Without this, the process exits the moment the
-    /// conversation errors and the session dies with it, leaving a retained sandbox that nothing
-    /// is serving.
-    ///
-    /// This is an idle window, not a fixed one: any follow-up sent into the session cancels the
-    /// pending exit, and the window restarts when the conversation next goes terminal.
+    /// An idle window, not a fixed one: a follow-up cancels the pending exit.
     ///
     /// Deliberately separate from `--idle-on-complete`, which covers the success/blocked/cancelled
     /// lifecycle. Neither flag is a fallback for the other.

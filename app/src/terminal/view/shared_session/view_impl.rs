@@ -222,13 +222,11 @@ impl TerminalView {
     }
 
     /// Clears the finished/read-only state a pane accumulates when its shared session ends, so it
-    /// can host a live session again.
+    /// can host a live session again. Idempotent.
     ///
-    /// A cloud run that fails can have its environment retained for debugging: the run reaches a
-    /// terminal state (which ends the session and leaves the pane read-only with an
-    /// ended-conversation tombstone) while the sandbox and its shared session stay reachable.
-    /// Reattaching to that retained session must produce a writable terminal, not the ended-run
-    /// view. Idempotent: a pane that is already live is left untouched.
+    /// A failed run whose environment is retained for debugging leaves the pane read-only with an
+    /// ended-conversation tombstone even though its session is still reachable; reattaching must
+    /// produce a writable terminal rather than that ended-run view.
     pub(crate) fn prepare_for_live_session_reattach(&mut self, ctx: &mut ViewContext<Self>) {
         self.remove_conversation_ended_tombstone(ctx);
 
