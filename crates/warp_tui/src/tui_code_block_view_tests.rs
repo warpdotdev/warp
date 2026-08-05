@@ -7,8 +7,8 @@ use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{TuiView, ViewHandle};
 
 use super::{
-    MAX_CODE_LINES, MAX_HIGHLIGHT_BYTES, TRUNCATION_NOTICE, TuiCodeBlockPayload, TuiCodeBlockView,
-    TuiCodeBlockViewEvent, bounded_fallback_text,
+    MAX_CODE_LINES, MAX_HIGHLIGHT_BYTES, TRUNCATION_NOTICE, TuiCodeBlockChrome,
+    TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent, bounded_fallback_text,
 };
 use crate::test_fixtures::TestHostView;
 
@@ -56,6 +56,47 @@ fn renders_read_only_code_with_language_and_wrapping() {
     });
 }
 
+#[test]
+fn renders_minimal_code_with_language_and_wrapping() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let view = add_code_view(&mut app, |ctx| {
+            TuiCodeBlockView::new(
+                TuiCodeBlockPayload::new(
+                    "fn main() {\n    println!(\"hello world\");\n}",
+                    Some("rust".to_owned()),
+                ),
+                ctx,
+            )
+            .with_chrome(TuiCodeBlockChrome::Minimal)
+        });
+        app.read(|ctx| {
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                view.as_ref(ctx).render(ctx),
+                TuiRect::new(0, 0, 18, 10),
+                ctx,
+            );
+            let lines = frame
+                .buffer
+                .to_lines()
+                .into_iter()
+                .map(|line| line.trim_end().to_owned())
+                .take_while(|line| !line.is_empty())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                lines,
+                vec![
+                    "rust",
+                    "fn main() {",
+                    "    println!",
+                    "(\"hello world\");",
+                    "}",
+                ]
+            );
+        });
+    });
+}
 fn add_code_view(
     app: &mut App,
     build: impl FnOnce(&mut warpui_core::ViewContext<TuiCodeBlockView>) -> TuiCodeBlockView + 'static,

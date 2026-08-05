@@ -1401,12 +1401,15 @@ fn agent_block_preserves_and_renders_code_sections_in_order() {
                 TuiRect::new(0, 0, 40, 3),
                 app_ctx,
             );
-            assert!(
+            assert_eq!(
                 frame
                     .buffer
                     .to_lines()
-                    .iter()
-                    .any(|line| line.contains("println!"))
+                    .into_iter()
+                    .map(|line| line.trim_end().to_owned())
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>(),
+                vec!["println!(\"hi\");"]
             );
 
             let rendered = render_block_lines(block, 40, app_ctx);
