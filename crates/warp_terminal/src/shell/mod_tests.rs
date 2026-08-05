@@ -426,9 +426,11 @@ fn test_bash_executable_discovery_survives_names_with_spaces() {
         return;
     };
 
-    // `zz-*` sorts after the space-containing name, so a misalignment starting
-    // at `my tool` swallows it. `aa-plain` sorts before and should survive
-    // either way — it is the control that proves the harness itself works.
+    // One stub on each side of `my tool` by name, because `compgen -c` ordering
+    // is not guaranteed across Bash versions. A misalignment starting at the
+    // space-containing name swallows whatever follows it, so whichever side this
+    // Bash happens to list last is the one that goes missing — asserting on both
+    // catches it either way, without the test depending on the order.
     for name in ["aa-plain", "my tool", "zz-after-space"] {
         let path = dir.path().join(name);
         std::fs::write(&path, "#!/bin/sh\n").expect("write stub executable");
