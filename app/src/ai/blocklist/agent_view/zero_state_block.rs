@@ -6,13 +6,15 @@ use std::sync::Arc;
 use itertools::Itertools as _;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine, parse_markdown};
 use parking_lot::FairMutex;
+use pathfinder_color::ColorU;
 use settings::Setting;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::Icon;
 use warp_errors::report_if_error;
 use warpui::elements::{
-    Clipped, Container, CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement,
-    HighlightedHyperlink, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
+    Clipped, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, EventHandler, Flex,
+    FormattedTextElement, HighlightedHyperlink, MainAxisSize, MouseStateHandle, ParentElement,
+    Radius, Shrinkable, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::Keystroke;
@@ -1233,22 +1235,63 @@ where
     A: Action + Clone + 'static,
 {
     let appearance = Appearance::as_ref(app);
-    let theme = appearance.theme();
+    render_dismissible_promo_pill(
+        format!("{credits} free cloud agent credits"),
+        appearance.theme().terminal_colors().normal.blue.into(),
+        None,
+        None,
+        close_button_mouse_state,
+        dismiss_action,
+        app,
+    )
+}
+
+pub fn render_dismissible_promo_pill<A>(
+    label: String,
+    text_color: ColorU,
+    click_mouse_state: Option<MouseStateHandle>,
+    click_action: Option<A>,
+    close_button_mouse_state: MouseStateHandle,
+    dismiss_action: A,
+    app: &AppContext,
+) -> Box<dyn Element>
+where
+    A: Action + Clone + 'static,
+{
+    let appearance = Appearance::as_ref(app);
     let font_family = appearance.ui_font_family();
     let font_size = styles::CREDITS_BANNER_FONT_SIZE;
-    let text_color = theme.terminal_colors().normal.blue;
-
-    let credits_text = format!("{credits} free cloud agent credits");
-    let text = Text::new(credits_text, font_family, font_size)
-        .with_color(text_color.into())
-        .with_style(Properties::default().weight(Weight::Semibold))
-        .soft_wrap(false)
-        .finish();
+    let label_element: Box<dyn Element> = match (click_mouse_state, click_action) {
+        (Some(mouse_state), Some(action)) => {
+            let label_for_hover = label.clone();
+            let clickable_label = Hoverable::new(mouse_state, move |_| {
+                Text::new(label_for_hover.clone(), font_family, font_size)
+                    .with_color(text_color)
+                    .with_style(Properties::default().weight(Weight::Semibold))
+                    .soft_wrap(false)
+                    .finish()
+            })
+            .with_cursor(Cursor::PointingHand)
+            .finish();
+            EventHandler::new(clickable_label)
+                .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
+                .on_left_mouse_up(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(action.clone());
+                    DispatchEventResult::StopPropagation
+                })
+                .finish()
+        }
+        _ => Text::new(label, font_family, font_size)
+            .with_color(text_color)
+            .with_style(Properties::default().weight(Weight::Semibold))
+            .soft_wrap(false)
+            .finish(),
+    };
     let close_button = appearance
         .ui_builder()
         .close_button(12., close_button_mouse_state)
         .with_style(UiComponentStyles {
-            font_color: Some(text_color.into()),
+            font_color: Some(text_color),
             ..Default::default()
         })
         .build()
@@ -1259,12 +1302,12 @@ where
 
     let content = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(text)
+        .with_child(label_element)
         .with_child(Container::new(close_button).with_margin_left(4.).finish())
         .finish();
 
     Container::new(content)
-        .with_border(Border::all(1.).with_border_color(text_color.into()))
+        .with_border(Border::all(1.).with_border_color(text_color))
         .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
         .with_vertical_padding(2.)
         .with_horizontal_padding(6.)

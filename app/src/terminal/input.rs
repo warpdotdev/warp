@@ -3222,7 +3222,7 @@ impl Input {
             None
         };
 
-        let terminal_input_message_bar = ctx.add_view(|ctx| {
+        let terminal_input_message_bar = ctx.add_typed_action_view(|ctx| {
             TerminalInputMessageBar::new(
                 model.clone(),
                 ai_input_model.clone(),

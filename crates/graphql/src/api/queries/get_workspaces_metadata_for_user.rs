@@ -203,6 +203,7 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
         overages {
           pricePerRequestUsdCents
         }
+        promotionMessage
       }
     }
   }

@@ -100,6 +100,7 @@ fn set_addon_credits_pricing_info(app: &mut App) {
                     credits: 1000,
                     price_usd_cents: 1000,
                 }],
+                promotion_message: None,
             },
             ctx,
         );
