@@ -4,7 +4,7 @@ use warp_core::ui::theme::Fill;
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
     Align, CacheOption, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Empty, Expanded, Flex, Image, MainAxisSize, OffsetPositioning,
+    CrossAxisAlignment, Empty, Expanded, Flex, Highlight, Image, MainAxisSize, OffsetPositioning,
     ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
@@ -21,9 +21,11 @@ const MODAL_WIDTH: f32 = 720.;
 const MODAL_HEIGHT: f32 = 440.;
 /// The card is split into two equal columns: copy on the left, hero on the right.
 const COLUMN_WIDTH: f32 = MODAL_WIDTH / 2.;
-const COLUMN_PADDING: f32 = 32.;
-const CONTENT_WIDTH: f32 = COLUMN_WIDTH - COLUMN_PADDING * 2.;
+const COLUMN_HORIZONTAL_PADDING: f32 = 32.;
+const COLUMN_VERTICAL_PADDING: f32 = 40.;
+const CONTENT_WIDTH: f32 = COLUMN_WIDTH - COLUMN_HORIZONTAL_PADDING * 2.;
 const CARD_RADIUS: f32 = 8.;
+const FEATURE_FONT_SIZE: f32 = 12.;
 const HERO_IMAGE_PATH: &str = "async/png/onboarding/agent_cli_launch_banner.png";
 const GET_STARTED_URL: &str = "https://docs.warp.dev/cli/quickstart/";
 
@@ -247,23 +249,13 @@ impl AgentCliLaunchModal {
         .with_height(16.)
         .finish();
 
-        let title_row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_spacing(4.)
-            .with_child(
-                Text::new_inline(item.label.to_string(), appearance.ui_font_family(), 14.)
-                    .with_color(modal_text_main(appearance))
-                    .with_style(Properties::default().weight(Weight::Semibold))
-                    .finish(),
-            )
-            .with_child(
-                Expanded::new(
-                    1.,
-                    Text::new(item.title, appearance.ui_font_family(), 14.)
-                        .with_color(modal_text_main(appearance))
-                        .finish(),
-                )
-                .finish(),
+        let title = format!("{} {}", item.label, item.title);
+        let label_char_count = item.label.chars().count();
+        let title_row = Text::new(title, appearance.ui_font_family(), FEATURE_FONT_SIZE)
+            .with_color(modal_text_main(appearance))
+            .with_single_highlight(
+                Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+                (0..label_char_count).collect(),
             )
             .finish();
 
@@ -272,9 +264,13 @@ impl AgentCliLaunchModal {
             .with_spacing(2.)
             .with_child(title_row)
             .with_child(
-                Text::new(item.description, appearance.ui_font_family(), 14.)
-                    .with_color(modal_text_sub(appearance))
-                    .finish(),
+                Text::new(
+                    item.description,
+                    appearance.ui_font_family(),
+                    FEATURE_FONT_SIZE,
+                )
+                .with_color(modal_text_sub(appearance))
+                .finish(),
             )
             .finish();
 
@@ -317,7 +313,8 @@ impl AgentCliLaunchModal {
 
         ConstrainedBox::new(
             Container::new(column)
-                .with_uniform_padding(COLUMN_PADDING)
+                .with_vertical_padding(COLUMN_VERTICAL_PADDING)
+                .with_horizontal_padding(COLUMN_HORIZONTAL_PADDING)
                 .finish(),
         )
         .with_width(COLUMN_WIDTH)
