@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use ai::skills::parse_skill;
 use anyhow::anyhow;
 use tempfile::TempDir;
-use warpui::App;
+use warpui::{App, SingletonEntity as _};
 
 use super::{
     CloudAgentStartupBlocker, CloudAgentStartupFailure, CloudAgentStartupIssue,
@@ -140,9 +140,9 @@ fn repo_qualified_skill_spec_resolves_into_runtime_skills() {
             SkillReference::Path(warp_util::local_or_remote_path::LocalOrRemotePath::Local(
                 PathBuf::from(&skill_spec),
             )),
-            SkillReference::Path(warp_util::local_or_remote_path::Local(PathBuf::from(
-                "myrepo:my-skill",
-            ))),
+            SkillReference::Path(warp_util::local_or_remote_path::LocalOrRemotePath::Local(
+                PathBuf::from("myrepo:my-skill"),
+            )),
             SkillReference::Path(warp_util::local_or_remote_path::LocalOrRemotePath::Local(
                 skill_path.clone(),
             )),

@@ -13,6 +13,7 @@ use warp_cli::agent::Harness;
 #[cfg(not(target_family = "wasm"))]
 use warp_cli::skill::SkillSpec;
 use warp_multi_agent_api as multi_agent_api;
+#[cfg(not(target_family = "wasm"))]
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, SingletonEntity as _};
 
@@ -60,6 +61,11 @@ impl RemoteChildLaunchConfig {
     }
 }
 
+/// Fallback for repo-qualified skill specs (`repo:skill`, `org/repo:path`)
+/// that miss the active-skill fast path in `resolve_runtime_skills`. Bundled
+/// ids, remote paths, and active/absolute local paths stay on the fast path:
+/// `resolve_skill_spec` only resolves repo-qualified specs off the local
+/// filesystem and does not honor bundled-skill activation.
 #[cfg(not(target_family = "wasm"))]
 fn resolve_repo_qualified_skill(
     reference: &SkillReference,
@@ -70,6 +76,7 @@ fn resolve_repo_qualified_skill(
         return None;
     };
     let spec = SkillSpec::from_str(&path.display().to_string()).ok()?;
+    // Bail unless the spec is repo-qualified (has a repo component).
     spec.repo.as_ref()?;
     Some(
         resolve_skill_spec(&spec, working_dir, ctx)
