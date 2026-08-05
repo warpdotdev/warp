@@ -10,6 +10,7 @@ use warp_errors::report_error;
 use warp_graphql::object_permissions::OwnerType;
 use warpui_core::{AppContext, Entity, SingletonEntity};
 
+use super::UserUid;
 use super::anonymous_id::get_or_create_anonymous_id;
 use super::credentials::Credentials;
 #[cfg(any(not(target_family = "wasm"), test, feature = "test-util"))]
@@ -18,7 +19,6 @@ use super::user::persistence::PersistedUser;
 use super::user::{
     AnonymousUserType, FirebaseAuthTokens, PersonalObjectLimits, PrincipalType, User,
 };
-use super::{API_KEY_PREFIX, UserUid};
 
 const ANONYMOUS_USER_NOTIFICATION_BLOCK_TIMER: Duration = Duration::days(7);
 
@@ -113,11 +113,10 @@ impl AuthState {
 
     /// Creates and initializes auth state. Checks, in order:
     /// 1. Test user (test/integration/skip_login builds)
-    /// 2. Provided API key
-    /// 3. WARP_USER_SECRET environment variable
-    /// 4. Persisted user from secure storage
+    /// 2. WARP_USER_SECRET environment variable
+    /// 3. Persisted user from secure storage
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    pub fn initialize(ctx: &AppContext, api_key: Option<String>) -> Self {
+    pub fn initialize(ctx: &AppContext) -> Self {
         let state = Self::new(ctx);
 
         if Self::should_use_test_user() {
@@ -129,20 +128,6 @@ impl AuthState {
                 feature = "test-util"
             ))]
             state.set_credentials(Some(Self::test_credentials()));
-            return state;
-        }
-
-        if let Some(api_key_value) = api_key {
-            log::info!("Authenticating via API key");
-            let formatted = if api_key_value.starts_with(API_KEY_PREFIX) {
-                api_key_value
-            } else {
-                format!("{API_KEY_PREFIX}{api_key_value}")
-            };
-            state.set_credentials(Some(Credentials::ApiKey {
-                key: formatted,
-                owner_type: None,
-            }));
             return state;
         }
 
@@ -179,11 +164,11 @@ impl AuthState {
     /// Creates auth state for a client that must validate an explicit credential
     /// before making it available to shared authenticated clients.
     ///
-    /// Unlike [`Self::initialize`], this installs neither the supplied credential
-    /// nor persisted identity. The credential remains outside [`AuthState`] until
-    /// its user fetch succeeds, so failed validation leaves the client fully
-    /// logged out. Persisted state is skipped because an explicit credential
-    /// takes precedence over secure storage.
+    /// This installs neither the pending credential nor persisted identity. The
+    /// credential remains outside [`AuthState`] until its user fetch succeeds,
+    /// so failed validation leaves the client fully logged out. Persisted state
+    /// is skipped because an explicit credential takes precedence over secure
+    /// storage.
     pub fn initialize_for_credential_validation(ctx: &AppContext) -> Self {
         let state = Self::new(ctx);
 

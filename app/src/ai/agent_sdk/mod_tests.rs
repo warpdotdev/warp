@@ -7,7 +7,10 @@ use warp_cli::artifact::{
 use warp_cli::task::{MessageCommand, MessageSendArgs, MessageWatchArgs, TaskCommand};
 use warp_core::telemetry::TelemetryEvent;
 
-use super::{command_requires_auth, command_to_telemetry_event, reconcile_task_harness};
+use super::{
+    CommandAuthentication, command_authentication, command_requires_auth,
+    command_to_telemetry_event, reconcile_task_harness,
+};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 
@@ -19,6 +22,35 @@ fn logout_does_not_require_auth() {
 #[test]
 fn login_does_not_require_auth() {
     assert!(!command_requires_auth(&CliCommand::Login));
+}
+
+#[test]
+fn pending_api_key_is_selected_for_command_authentication() {
+    assert_eq!(
+        command_authentication(Some("api-key".to_owned()), false),
+        Some(CommandAuthentication::PendingApiKey("api-key".to_owned()))
+    );
+}
+
+#[test]
+fn pending_api_key_takes_precedence_over_persisted_auth() {
+    assert_eq!(
+        command_authentication(Some("api-key".to_owned()), true),
+        Some(CommandAuthentication::PendingApiKey("api-key".to_owned()))
+    );
+}
+
+#[test]
+fn persisted_auth_is_refreshed_without_pending_api_key() {
+    assert_eq!(
+        command_authentication(None, true),
+        Some(CommandAuthentication::RefreshUser)
+    );
+}
+
+#[test]
+fn logged_out_command_has_no_authentication_source() {
+    assert_eq!(command_authentication(None, false), None);
 }
 
 #[test]

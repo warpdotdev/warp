@@ -1527,6 +1527,23 @@ impl AgentDriverRunner {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CommandAuthentication {
+    PendingApiKey(String),
+    RefreshUser,
+}
+
+fn command_authentication(
+    pending_api_key: Option<String>,
+    is_logged_in: bool,
+) -> Option<CommandAuthentication> {
+    match pending_api_key {
+        Some(api_key) => Some(CommandAuthentication::PendingApiKey(api_key)),
+        None if is_logged_in => Some(CommandAuthentication::RefreshUser),
+        None => None,
+    }
+}
+
 /// Returns `true` if the given CLI command requires authentication.
 fn command_requires_auth(command: &CliCommand) -> bool {
     match command {
@@ -1583,8 +1600,8 @@ fn command_requires_auth(command: &CliCommand) -> bool {
 /// Launch a CLI command, checking authentication first if needed.
 ///
 /// If auth is not required, dispatches the command immediately.
-/// If auth is required and the user is logged in, triggers a user refresh
-/// before launching the command.
+/// If auth is required, validates an explicit API key or refreshes persisted
+/// credentials before launching the command.
 fn launch_command(
     ctx: &mut AppContext,
     command: CliCommand,
@@ -1599,17 +1616,19 @@ fn launch_command(
     let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
 
     let auth_state = AuthStateProvider::handle(ctx).as_ref(ctx).get();
-    if !auth_state.is_logged_in() {
+    let Some(authentication) =
+        command_authentication(global_options.api_key.clone(), auth_state.is_logged_in())
+    else {
         return Err(anyhow::anyhow!(
             "You are not logged in - please log in with `{cli_name} login` to continue."
         ));
-    }
+    };
 
     // On staging the warp-server is fronted by IAP, so establish an IAP token
     // before *any* warp-server request.
     let iap = IapManager::handle(ctx);
     if !iap.as_ref(ctx).is_enabled() || iap.as_ref(ctx).has_valid_token() {
-        refresh_auth_and_dispatch(ctx, command, global_options);
+        authenticate_and_dispatch(ctx, command, global_options, authentication);
         return Ok(());
     }
 
@@ -1623,7 +1642,12 @@ fn launch_command(
                 if IapManager::handle(ctx).as_ref(ctx).has_valid_token() =>
             {
                 handled = true;
-                refresh_auth_and_dispatch(ctx, command.clone(), global_options.clone());
+                authenticate_and_dispatch(
+                    ctx,
+                    command.clone(),
+                    global_options.clone(),
+                    authentication.clone(),
+                );
             }
             IapManagerEvent::AccessUnavailable => {
                 handled = true;
@@ -1641,18 +1665,17 @@ fn launch_command(
     Ok(())
 }
 
-/// Subscribes to auth events, triggers a user refresh, and dispatches the
-/// command once auth completes. Assumes IAP access (if applicable) is already
-/// established, since the auth refresh is itself an IAP-gated warp-server request.
-fn refresh_auth_and_dispatch(
+/// Subscribes to auth events, authenticates, and dispatches the command once
+/// auth completes. Assumes IAP access (if applicable) is already established.
+fn authenticate_and_dispatch(
     ctx: &mut AppContext,
     command: CliCommand,
     global_options: GlobalOptions,
+    authentication: CommandAuthentication,
 ) {
     let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
 
-    // User is logged in — subscribe to auth events, trigger a refresh, and wait
-    // for the result before running the command.
+    // Subscribe to auth events and wait for validation before running the command.
     let mut dispatched = false;
     ctx.subscribe_to_model(&AuthManager::handle(ctx), move |_, event, ctx| {
         if dispatched {
@@ -1683,9 +1706,12 @@ fn refresh_auth_and_dispatch(
         }
     });
 
-    // Trigger the user refresh - the subscription above will handle the result.
-    AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
-        auth_manager.refresh_user(ctx);
+    // Trigger authentication - the subscription above will handle the result.
+    AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| match authentication {
+        CommandAuthentication::PendingApiKey(api_key) => {
+            auth_manager.authenticate_api_key(api_key, ctx);
+        }
+        CommandAuthentication::RefreshUser => auth_manager.refresh_user(ctx),
     });
 }
 

@@ -408,6 +408,17 @@ impl AgentOnboardingView {
         ctx.notify();
     }
 
+    /// A web checkout reported success through the desktop hand-off. Returns
+    /// whether an AI-sell onboarding screen consumed it, so the caller can tell
+    /// a post-checkout return apart from an unrelated deeplink.
+    pub fn on_checkout_succeeded(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        let advanced = self
+            .onboarding_state
+            .update(ctx, |state, ctx| state.on_checkout_succeeded(ctx));
+        ctx.notify();
+        advanced
+    }
+
     /// The purchased credits are on the account. Safe to call speculatively
     /// (e.g. from a workspace refresh): it is a no-op unless a purchase started
     /// from the offer slide is still awaiting its credits.

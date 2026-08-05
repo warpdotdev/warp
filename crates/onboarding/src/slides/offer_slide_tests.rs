@@ -109,8 +109,12 @@ fn choose_how_to_start_copy_and_telemetry_names_match_spec() {
     let variant = OfferVariant::ChooseHowToStart;
 
     assert_eq!(variant.title(), "Choose how to start");
-    assert_eq!(variant.subtitle(), None);
-    assert_eq!(variant.primary_label(), "Subscribe to a Warp plan");
+    assert_eq!(
+        variant.subtitle(),
+        Some("To use AI, start with a plan or one-time credit packs.")
+    );
+    assert_eq!(variant.primary_label(), "Use Warp with AI");
+    assert_eq!(variant.subscribe_label(), "Subscribe to Warp plan");
     assert_eq!(
         variant.primary_description(true),
         "Warp Agent works locally or in the cloud with frontier and OSS models. Get monthly credits at the best value, and save 20% on add-on credits with any Build plan."
@@ -119,11 +123,6 @@ fn choose_how_to_start_copy_and_telemetry_names_match_spec() {
     assert_eq!(
         variant.secondary_description(),
         "Explore the terminal, bring your own inference, or use another CLI agent. Add AI usage and features anytime."
-    );
-    assert_eq!(variant.credits_label(), "Buy AI credits");
-    assert_eq!(
-        variant.credits_description(),
-        "Best for trying Warp without a subscription. Buy a one-time credit pack and start using the Warp Agent right away."
     );
     assert!(variant.included_features().is_empty());
     assert_eq!(variant.slide_name(), "choose_how_to_start");
@@ -160,6 +159,213 @@ fn subscribe_copy_drops_the_add_on_line_when_no_packs_are_shown() {
         OfferVariant::HeadStart.primary_description(true),
         OfferVariant::HeadStart.primary_description(false)
     );
+}
+
+/// Regression test for APP-5176: the "Subscribe to Warp plan" button only
+/// *selects* the plan — it must not open the upgrade page (only "Get Warping"
+/// does) — and selecting the plan overrides any pack that was chosen.
+#[test]
+fn subscribe_selects_the_plan_without_launching_upgrade() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.update(MockTelemetryContextProvider::register);
+        let onboarding_state = add_onboarding_state(&mut app);
+        let (_, slide) = app.add_window(WindowStyle::NotStealFocus, {
+            let onboarding_state = onboarding_state.clone();
+            move |_| OfferSlide::new(onboarding_state)
+        });
+        onboarding_state.update(&mut app, |model, ctx| {
+            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
+            model.set_credit_pack_options(credit_packs(4), ctx);
+        });
+
+        // A pack is chosen first so we can prove selecting the plan overrides it.
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::SelectCreditPack(2), ctx)
+        });
+
+        // Clicking "Subscribe to Warp plan" only selects the plan.
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::SelectPrimary, ctx)
+        });
+        assert_eq!(
+            slide.read(&app, |slide, _| slide.selected_choice),
+            OfferChoice::Primary
+        );
+        assert!(
+            !slide.read(&app, |slide, _| slide.show_auth_prompt_bar),
+            "selecting the plan must not launch the upgrade flow"
+        );
+        onboarding_state.read(&app, |model, _| {
+            assert_eq!(model.credit_purchase_state(), CreditPurchaseState::Idle);
+        });
+
+        // Get Warping on the plan is what actually starts the upgrade.
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::GetWarping, ctx)
+        });
+        assert!(slide.read(&app, |slide, _| slide.show_auth_prompt_bar));
+    });
+}
+
+/// Regression test for APP-5176: at most one option is ever highlighted. The
+/// plan and a credit pack are mutually exclusive, and choosing "Set up AI
+/// later" clears every highlight in the card above.
+#[test]
+fn exactly_one_option_is_selected_at_a_time() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.update(MockTelemetryContextProvider::register);
+        let onboarding_state = add_onboarding_state(&mut app);
+        let (_, slide) = app.add_window(WindowStyle::NotStealFocus, {
+            let onboarding_state = onboarding_state.clone();
+            move |_| OfferSlide::new(onboarding_state)
+        });
+        onboarding_state.update(&mut app, |model, ctx| {
+            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
+            model.set_credit_pack_options(credit_packs(4), ctx);
+        });
+
+        let plan_selected =
+            |app: &App| slide.read(app, |slide, _| slide.selected_choice) == OfferChoice::Primary;
+        let any_pack_selected = |app: &App| {
+            app.read(|ctx| {
+                (0..4).any(|index| {
+                    slide.as_ref(ctx).credit_pack_is_selected(
+                        OfferVariant::ChooseHowToStart,
+                        index,
+                        ctx,
+                    )
+                })
+            })
+        };
+
+        // Default: the plan is selected, no pack is.
+        assert!(plan_selected(&app));
+        assert!(!any_pack_selected(&app));
+
+        // Choosing a pack deselects the plan; the two never highlight together.
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::SelectCreditPack(2), ctx)
+        });
+        assert!(!plan_selected(&app));
+        assert!(any_pack_selected(&app));
+
+        // "Set up AI later" clears every highlight in the card above.
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::SelectSetUpLater, ctx)
+        });
+        assert_eq!(
+            slide.read(&app, |slide, _| slide.selected_choice),
+            OfferChoice::SetUpLater
+        );
+        assert!(!plan_selected(&app));
+        assert!(!any_pack_selected(&app));
+
+        // Clicking the card body (SelectPrimary) re-selects the plan.
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::SelectPrimary, ctx)
+        });
+        assert!(plan_selected(&app));
+        assert!(!any_pack_selected(&app));
+    });
+}
+
+/// Regression test for APP-5176: once a checkout link has been opened, changing
+/// the selection resets the footer from "Waiting for checkout…" back to "Get
+/// Warping" so the user is never stuck.
+#[test]
+fn changing_selection_after_checkout_clears_the_pending_state() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.update(MockTelemetryContextProvider::register);
+        let onboarding_state = add_onboarding_state(&mut app);
+        let (_, slide) = app.add_window(WindowStyle::NotStealFocus, {
+            let onboarding_state = onboarding_state.clone();
+            move |_| OfferSlide::new(onboarding_state)
+        });
+        onboarding_state.update(&mut app, |model, ctx| {
+            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
+            model.set_credit_pack_options(credit_packs(4), ctx);
+        });
+
+        // Choose a pack and open checkout.
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::SelectCreditPack(1), ctx)
+        });
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::GetWarping, ctx)
+        });
+        onboarding_state.update(&mut app, |model, ctx| model.on_credit_checkout_opened(ctx));
+        onboarding_state.read(&app, |model, _| {
+            assert_eq!(
+                model.credit_purchase_state(),
+                CreditPurchaseState::AwaitingCheckout
+            );
+        });
+
+        // Switching to the plan clears the pending checkout.
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::SelectPrimary, ctx)
+        });
+        onboarding_state.read(&app, |model, _| {
+            assert_eq!(model.credit_purchase_state(), CreditPurchaseState::Idle);
+        });
+    });
+}
+
+/// Regression test for APP-5176: after a checkout link is opened, picking a
+/// different denomination must not be silently ignored — it resets the pending
+/// checkout and takes effect so another link can be opened.
+#[test]
+fn changing_denomination_after_checkout_allows_a_new_link() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.update(MockTelemetryContextProvider::register);
+        let onboarding_state = add_onboarding_state(&mut app);
+        let (_, slide) = app.add_window(WindowStyle::NotStealFocus, {
+            let onboarding_state = onboarding_state.clone();
+            move |_| OfferSlide::new(onboarding_state)
+        });
+        onboarding_state.update(&mut app, |model, ctx| {
+            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
+            model.set_credit_pack_options(credit_packs(4), ctx);
+        });
+
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::SelectCreditPack(1), ctx)
+        });
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::GetWarping, ctx)
+        });
+        onboarding_state.update(&mut app, |model, ctx| model.on_credit_checkout_opened(ctx));
+        onboarding_state.read(&app, |model, _| {
+            assert_eq!(
+                model.credit_purchase_state(),
+                CreditPurchaseState::AwaitingCheckout
+            );
+        });
+
+        // Picking a different denomination resets the checkout and takes effect.
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::SelectCreditPack(3), ctx)
+        });
+        onboarding_state.read(&app, |model, _| {
+            assert_eq!(model.credit_purchase_state(), CreditPurchaseState::Idle);
+            assert_eq!(model.selected_credit_pack_index(), 3);
+        });
+
+        // A fresh Get Warping starts a new purchase (not hard-blocked).
+        slide.update(&mut app, |slide, ctx| {
+            slide.handle_action(&OfferSlideAction::GetWarping, ctx)
+        });
+        onboarding_state.read(&app, |model, _| {
+            assert_eq!(
+                model.credit_purchase_state(),
+                CreditPurchaseState::Purchasing
+            );
+        });
+    });
 }
 
 /// The head-start offer already includes AI usage, so it keeps two options.
