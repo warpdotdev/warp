@@ -77,6 +77,7 @@ use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::persistence::ModelEvent;
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::experiments::ServerExperiments;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::auth::UserAuthenticationError;
 use crate::server::server_api::{ServerApi, ServerApiProvider, ServerTime};
@@ -2412,6 +2413,21 @@ impl RootView {
         ctx.notify();
     }
 
+    /// The REV-1939 offer arm for the in-flight account-first offer, read from
+    /// the onboarding view. `None` outside the arm-experiment offer.
+    fn account_first_offer_experiment_arm(&self, ctx: &AppContext) -> Option<String> {
+        let onboarding_view = match &self.auth_onboarding_state {
+            AuthOnboardingState::PostAuthOnboarding {
+                onboarding_view, ..
+            }
+            | AuthOnboardingState::LoginSlide {
+                onboarding_view, ..
+            } => onboarding_view,
+            _ => return None,
+        };
+        onboarding_view.as_ref(ctx).offer_experiment_arm(ctx)
+    }
+
     fn resolve_account_first_post_auth(
         &mut self,
         fresh_request_limit: Option<usize>,
@@ -2441,6 +2457,10 @@ impl RootView {
                 let variant = offer_variant_for_account_class(account_class)
                     .expect("free account classes have an offer");
                 context.onboarding_view.update(ctx, |view, ctx| {
+                    // Snapshot the server-assigned arm just before the offer is
+                    // shown, then freeze it for this exposure (REV-1939).
+                    let arm = ServerExperiments::as_ref(ctx).choose_how_to_start_experiment_arm();
+                    view.set_choose_how_to_start_experiment_arm(arm, ctx);
                     view.show_post_auth_offer(variant, ctx);
                 });
                 self.auth_onboarding_state = AuthOnboardingState::PostAuthOnboarding {
@@ -2477,6 +2497,7 @@ impl RootView {
         }
 
         if upgrade_started {
+            let experiment_arm = self.account_first_offer_experiment_arm(ctx);
             send_telemetry_from_ctx!(
                 OnboardingEvent::OnboardingUpgradeCompleted {
                     source_slide: match account_class {
@@ -2486,6 +2507,7 @@ impl RootView {
                     }
                     .to_string(),
                     account_class: account_class.as_str().to_string(),
+                    experiment_arm,
                 },
                 ctx
             );
@@ -2538,9 +2560,11 @@ impl RootView {
         self.pending_account_first_tutorial_after_settings =
             completion.starts_agent_tutorial() && !settings_applied;
 
+        let experiment_arm = self.account_first_offer_experiment_arm(ctx);
         send_telemetry_from_ctx!(
             OnboardingEvent::OnboardingCompleted {
                 completion_type: completion.completion_type().to_string(),
+                experiment_arm,
             },
             ctx
         );
@@ -2645,6 +2669,9 @@ impl RootView {
                     let variant = offer_variant_for_account_class(account_class)
                         .expect("free account classes have an offer");
                     onboarding_view.update(ctx, |view, ctx| {
+                        let arm =
+                            ServerExperiments::as_ref(ctx).choose_how_to_start_experiment_arm();
+                        view.set_choose_how_to_start_experiment_arm(arm, ctx);
                         view.show_post_auth_offer(variant, ctx);
                     });
                     self.focus(ctx);
@@ -2804,6 +2831,7 @@ impl RootView {
                     AuthOnboardingState::WebImport(_) => None,
                 };
                 if let Some(account_class) = upgrade_started {
+                    let experiment_arm = self.account_first_offer_experiment_arm(ctx);
                     send_telemetry_from_ctx!(
                         OnboardingEvent::OnboardingUpgradeStarted {
                             source_slide: match account_class {
@@ -2813,6 +2841,7 @@ impl RootView {
                             }
                             .to_string(),
                             account_class: account_class.as_str().to_string(),
+                            experiment_arm,
                         },
                         ctx
                     );
