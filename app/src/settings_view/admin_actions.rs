@@ -27,27 +27,6 @@ impl AdminActions {
         ctx.open_url(&url);
     }
 
-    pub fn admin_panel_link(
-        native_workspaces_enabled: bool,
-        team_uid: Option<ServerId>,
-    ) -> Option<String> {
-        if native_workspaces_enabled {
-            Some(Self::admin_panel_link_for_workspace())
-        } else {
-            team_uid.map(Self::admin_panel_link_for_team)
-        }
-    }
-
-    pub fn open_resolved_admin_panel(
-        native_workspaces_enabled: bool,
-        team_uid: Option<ServerId>,
-        ctx: &mut AppContext,
-    ) {
-        if let Some(url) = Self::admin_panel_link(native_workspaces_enabled, team_uid) {
-            ctx.open_url(&url);
-        }
-    }
-
     /// Open the support email link
     pub fn contact_support(ctx: &mut AppContext) {
         ctx.open_url("mailto:support@warp.dev");

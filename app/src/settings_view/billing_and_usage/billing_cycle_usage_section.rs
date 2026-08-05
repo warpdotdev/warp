@@ -60,7 +60,8 @@ pub enum BillingCycleUsageAction {
     TogglePeriodMenu,
     ChangeSourceFilter(SourceFilter),
     OpenUpgrade,
-    OpenAdminPanel,
+    OpenTeamAdminPanel,
+    OpenWorkspaceAdminPanel,
 }
 
 impl Entity for BillingCycleUsageSectionView {
@@ -210,13 +211,15 @@ impl TypedActionView for BillingCycleUsageSectionView {
                     ctx.open_url(&UserWorkspaces::upgrade_link_for_team(team_uid));
                 }
             }
-            BillingCycleUsageAction::OpenAdminPanel => {
-                let workspaces = UserWorkspaces::as_ref(ctx);
-                let native_workspaces_enabled = workspaces
-                    .current_workspace()
-                    .is_some_and(|workspace| workspace.is_native_workspaces_enabled());
-                let team_uid = workspaces.team_uid_for_window(ctx.window_id());
-                AdminActions::open_resolved_admin_panel(native_workspaces_enabled, team_uid, ctx);
+            BillingCycleUsageAction::OpenTeamAdminPanel => {
+                if let Some(team_uid) =
+                    UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id())
+                {
+                    AdminActions::open_admin_panel(team_uid, ctx);
+                }
+            }
+            BillingCycleUsageAction::OpenWorkspaceAdminPanel => {
+                AdminActions::open_workspace_admin_panel(ctx);
             }
         }
     }
@@ -738,7 +741,7 @@ impl BillingCycleUsageSectionView {
 const NATIVE_WORKSPACES_CTA: (&str, &str, BillingCycleUsageAction, Icon) = (
     "Open the admin panel",
     "to manage workspace settings and spend limits.",
-    BillingCycleUsageAction::OpenAdminPanel,
+    BillingCycleUsageAction::OpenWorkspaceAdminPanel,
     Icon::Users,
 );
 
@@ -771,7 +774,7 @@ fn visibility_cta_for(
         UsageVisibilityGranularity::FullBreakdown => Some((
             "Open the admin panel",
             "to set per-user spend limits.",
-            BillingCycleUsageAction::OpenAdminPanel,
+            BillingCycleUsageAction::OpenTeamAdminPanel,
             Icon::Users,
         )),
     }
