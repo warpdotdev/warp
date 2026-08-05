@@ -259,6 +259,13 @@ impl OfferSlide {
         !self.credit_packs(variant, app).is_empty()
     }
 
+    fn primary_badge_label(&self, variant: OfferVariant, app: &AppContext) -> String {
+        let state = self.onboarding_state.as_ref(app);
+        variant
+            .primary_badge_label(state.pricing_promotion_message())
+            .to_owned()
+    }
+
     /// The selectable options, top to bottom. Also the order the arrow keys
     /// move through.
     fn choices(&self, variant: OfferVariant, app: &AppContext) -> Vec<OfferChoice> {
@@ -410,7 +417,7 @@ impl OfferSlide {
                 variant.primary_label(),
                 variant.primary_description(shows_credit_packs),
                 selected_choice == OfferChoice::Primary,
-                Some("Recommended".to_string()),
+                Some(self.primary_badge_label(variant, app)),
                 self.primary_mouse_state.clone(),
                 OfferSlideAction::SelectPrimary,
                 None,
@@ -476,12 +483,7 @@ impl OfferSlide {
             })
             .build()
             .finish();
-        let badge_label = {
-            let state = self.onboarding_state.as_ref(app);
-            variant
-                .primary_badge_label(state.pricing_promotion_message())
-                .to_owned()
-        };
+        let badge_label = self.primary_badge_label(variant, app);
         let green = theme.ansi_fg_green();
         let badge = Container::new(
             appearance

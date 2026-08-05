@@ -153,6 +153,29 @@ fn promotion_replaces_recommended_on_both_offer_variants() {
     );
 }
 
+#[test]
+fn both_rendered_offer_paths_read_the_promotion_from_onboarding_state() {
+    App::test((), |mut app| async move {
+        let onboarding_state = add_onboarding_state(&mut app);
+        onboarding_state.update(&mut app, |model, ctx| {
+            model
+                .set_pricing_promotion_message(Some("50% off Fable 5 and Opus 5".to_string()), ctx);
+        });
+        let slide = OfferSlide::new(onboarding_state);
+
+        app.read(|ctx| {
+            assert_eq!(
+                slide.primary_badge_label(OfferVariant::HeadStart, ctx),
+                "50% off Fable 5 and Opus 5"
+            );
+            assert_eq!(
+                slide.primary_badge_label(OfferVariant::ChooseHowToStart, ctx),
+                "50% off Fable 5 and Opus 5"
+            );
+        });
+    });
+}
+
 /// The subscribe card must frame the add-on discount as a saving (matching the
 /// web copy), never as a surcharge on the free plan.
 #[test]
