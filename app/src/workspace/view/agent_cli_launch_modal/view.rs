@@ -25,6 +25,7 @@ const COLUMN_PADDING: f32 = 32.;
 const CONTENT_WIDTH: f32 = COLUMN_WIDTH - COLUMN_PADDING * 2.;
 const CARD_RADIUS: f32 = 8.;
 const HERO_IMAGE_PATH: &str = "async/png/onboarding/agent_cli_launch_banner.png";
+const GET_STARTED_URL: &str = "https://docs.warp.dev/cli/quickstart/";
 
 fn modal_background(appearance: &Appearance) -> Fill {
     appearance.theme().surface_3()
@@ -92,6 +93,7 @@ pub fn init(app: &mut AppContext) {
 #[derive(Clone, Debug)]
 pub enum AgentCliLaunchModalAction {
     Close,
+    GetStarted,
 }
 
 #[derive(Clone, Debug)]
@@ -154,7 +156,7 @@ impl AgentCliLaunchModal {
         let get_started_button = ctx.add_view(|_ctx| {
             ActionButton::new("Get started", CtaButtonTheme)
                 .with_full_width(true)
-                .on_click(|ctx| ctx.dispatch_typed_action(AgentCliLaunchModalAction::Close))
+                .on_click(|ctx| ctx.dispatch_typed_action(AgentCliLaunchModalAction::GetStarted))
         });
 
         Self {
@@ -369,6 +371,10 @@ impl TypedActionView for AgentCliLaunchModal {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             AgentCliLaunchModalAction::Close => {
+                ctx.emit(AgentCliLaunchModalEvent::Close);
+            }
+            AgentCliLaunchModalAction::GetStarted => {
+                ctx.open_url(GET_STARTED_URL);
                 ctx.emit(AgentCliLaunchModalEvent::Close);
             }
         }
