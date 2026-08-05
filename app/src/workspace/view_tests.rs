@@ -1011,6 +1011,107 @@ fn test_open_file_notebook_focuses_existing_markdown_pane() {
     });
 }
 
+/// Regression test for the agent file-range preview's "Open file" button: the
+/// handler used to zero out `range_start`, so consumers that read the jump
+/// target off the `CodeSource` opened the file at the top.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_open_file_with_target_event_preserves_requested_line() {
+    use crate::code::editor_management::CodeManager;
+    use crate::code::global_buffer_model::GlobalBufferModel;
+    use crate::terminal::local_shell::LocalShellState;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| CodeManager::default());
+        app.add_singleton_model(|_| LocalShellState::NotLoaded);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let workspace = mock_workspace(&mut app);
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let code_path = temp_dir.path().join("main.rs");
+        let contents: String = (1..=80).map(|line| format!("// line {line}\n")).collect();
+        std::fs::write(&code_path, contents).expect("failed to write code file");
+
+        let range_start = LineAndColumnArg {
+            line_num: 42,
+            column_num: None,
+        };
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().clone();
+            workspace.handle_file_tree_event(
+                pane_group,
+                &crate::pane_group::Event::OpenFileWithTarget {
+                    path: code_path.clone(),
+                    target: FileTarget::CodeEditor(EditorLayout::SplitPane),
+                    line_col: Some(range_start),
+                },
+                ctx,
+            );
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().as_ref(ctx);
+            let code_panes = pane_group.code_panes(ctx).collect_vec();
+            assert_eq!(code_panes.len(), 1);
+            assert_eq!(
+                *code_panes[0].1.as_ref(ctx).source(),
+                CodeSource::Link {
+                    path: code_path.clone(),
+                    range_start: Some(range_start),
+                    range_end: None,
+                }
+            );
+        });
+    });
+}
+
+/// Regression test for the raw-code toggle: the notebook-viewer target used to
+/// drop the `CodeSource` outright, so the raw view always started at line 1.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_open_markdown_viewer_target_preserves_requested_line() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let markdown_path = temp_dir.path().join("README.md");
+        std::fs::write(&markdown_path, "# Test\n").expect("failed to write markdown file");
+
+        let range_start = LineAndColumnArg {
+            line_num: 12,
+            column_num: None,
+        };
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().clone();
+            workspace.handle_file_tree_event(
+                pane_group,
+                &crate::pane_group::Event::OpenFileWithTarget {
+                    path: markdown_path.clone(),
+                    target: FileTarget::MarkdownViewer(EditorLayout::SplitPane),
+                    line_col: Some(range_start),
+                },
+                ctx,
+            );
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().as_ref(ctx);
+            let markdown_panes = pane_group.file_notebook_panes(ctx).collect_vec();
+            assert_eq!(markdown_panes.len(), 1);
+            assert_eq!(
+                markdown_panes[0].1.as_ref(ctx).code_source(),
+                Some(&CodeSource::Link {
+                    path: markdown_path.clone(),
+                    range_start: Some(range_start),
+                    range_end: None,
+                })
+            );
+        });
+    });
+}
+
 #[cfg(feature = "local_fs")]
 #[test]
 fn test_worktree_sidecar_search_editor_enter_executes_selection() {
