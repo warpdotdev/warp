@@ -52,8 +52,9 @@ impl OfferVariant {
 
     pub(crate) fn primary_badge_label(self, pricing_promotion_message: Option<&str>) -> &str {
         match self {
-            OfferVariant::ChooseHowToStart => pricing_promotion_message.unwrap_or("Recommended"),
-            OfferVariant::HeadStart => "Recommended",
+            OfferVariant::HeadStart | OfferVariant::ChooseHowToStart => {
+                pricing_promotion_message.unwrap_or("Recommended")
+            }
         }
     }
 

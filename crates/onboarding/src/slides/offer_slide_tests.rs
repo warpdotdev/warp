@@ -132,7 +132,7 @@ fn choose_how_to_start_copy_and_telemetry_names_match_spec() {
 }
 
 #[test]
-fn promotion_replaces_recommended_only_on_choose_how_to_start() {
+fn promotion_replaces_recommended_on_both_offer_variants() {
     let promotion = Some("50% off Fable and Opus 5");
 
     assert_eq!(
@@ -145,6 +145,10 @@ fn promotion_replaces_recommended_only_on_choose_how_to_start() {
     );
     assert_eq!(
         OfferVariant::HeadStart.primary_badge_label(promotion),
+        "50% off Fable and Opus 5"
+    );
+    assert_eq!(
+        OfferVariant::HeadStart.primary_badge_label(None),
         "Recommended"
     );
 }
