@@ -1046,11 +1046,8 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     }
     timer.mark_interval_end("LOG_FILE_SETUP_COMPLETE");
 
-    // Any headless invocation must claim a background-only process type before
-    // anything can touch AppKit or Launch Services, so that a headless launch of
-    // the bundled GUI executable — most notably the `oz` / `oz-<channel>` CLI
-    // wrapper, which `exec`s it from inside `Warp.app` — never acquires a Dock
-    // tile. See APP-2946.
+    // Claim a background-only process type before anything else can reach
+    // AppKit, so a headless launch never acquires a Dock tile. See APP-2946.
     #[cfg(target_os = "macos")]
     if launch_mode.is_headless()
         && let Err(e) = platform::mac::mark_process_as_background_only()

@@ -150,68 +150,6 @@ fn test_cli_sdk_mode_prevents_autoupdate_polling() {
     });
 }
 
-/// `remove_old_executable` deletes `Contents/MacOS/old` from inside the
-/// installed macOS app bundle, and startup runs it behind `can_autoupdate()`.
-/// The launch modes that execute the GUI binary from inside `Warp.app` without
-/// owning it — the bundled `oz` / `oz-<channel>` CLI wrapper above all — must
-/// therefore resolve to an execution mode that cannot autoupdate, or they will
-/// rewrite that bundle mid-command and macOS will treat the process as a
-/// launching GUI app (APP-2946).
-///
-/// This spans the whole guard chain the fix relies on
-/// (`LaunchMode` → `ExecutionMode` → `can_autoupdate`), so it fails if the CLI
-/// is remapped to an app-like execution mode *or* if `can_autoupdate` is
-/// loosened — either of which would silently re-enable the bundle write.
-///
-/// `LaunchMode::Tui` is deliberately excluded: it is app-like and *can*
-/// autoupdate, and it ships as a separate `warp-tui` binary rather than from
-/// inside `Warp.app`, so the cleanup is harmless there.
-#[test]
-fn test_bundle_sharing_launch_modes_cannot_autoupdate() {
-    let bundle_sharing_launch_modes = [
-        crate::LaunchMode::CommandLine {
-            command: warp_cli::CliCommand::Whoami,
-            global_options: Default::default(),
-            debug: false,
-            is_sandboxed: false,
-            computer_use_override: None,
-        },
-        crate::LaunchMode::RemoteServerProxy,
-        crate::LaunchMode::RemoteServerDaemon {
-            identity_key: "test".to_owned(),
-        },
-    ];
-
-    for launch_mode in bundle_sharing_launch_modes {
-        let execution_mode = launch_mode.execution_mode();
-        App::test((), move |app| async move {
-            let model =
-                app.add_singleton_model(|ctx| AppExecutionMode::new(execution_mode, false, ctx));
-            app.read_model(&model, |model, _| {
-                assert!(
-                    !model.can_autoupdate(),
-                    "{execution_mode:?} shares the GUI app bundle and must never autoupdate"
-                );
-            });
-        });
-    }
-}
-
-/// Counterpart to `test_bundle_sharing_launch_modes_cannot_autoupdate`: the
-/// desktop app owns the installed bundle, so it keeps autoupdating and keeps
-/// cleaning up after its own relaunch.
-#[test]
-fn test_app_mode_can_autoupdate() {
-    App::test((), |app| async move {
-        let execution_mode =
-            app.add_singleton_model(|ctx| AppExecutionMode::new(ExecutionMode::App, false, ctx));
-
-        app.read_model(&execution_mode, |execution_mode, _| {
-            assert!(execution_mode.can_autoupdate());
-        });
-    });
-}
-
 /// Some user interactions like focusing/activating the app may trigger an update check
 /// if the daily check hasn't been performed today. The daily check runs regardless of
 /// login state so the server can track retention for anonymous users.

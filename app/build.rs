@@ -35,10 +35,6 @@ fn main() -> Result<()> {
     if target_os == "macos" && target_family != "wasm" {
         println!("cargo:rustc-link-lib=framework=MetalKit");
         println!("cargo:rustc-link-lib=framework=UserNotifications");
-        // Provides `TransformProcessType`, used to make headless launches
-        // background-only so they never get a Dock tile (see
-        // `src/platform/mac.rs`).
-        println!("cargo:rustc-link-lib=framework=ApplicationServices");
         build_and_link_sentry();
 
         println!("cargo:rerun-if-changed=src/platform/mac/objc/services.h");

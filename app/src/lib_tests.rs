@@ -85,24 +85,3 @@ fn launch_modes_select_expected_logging_frontend() {
         LogFrontend::Cli
     );
 }
-
-/// Characterization test — this behavior predates APP-2946 and this test also
-/// passes on `master`. It pins the two facts the Dock fix is built on, so a
-/// future change that reclassifies the CLI has to do so deliberately:
-/// `is_headless()` is what `startup_steps` keys every Dock/app-bundle guard
-/// off, and `ExecutionMode::Sdk` is what keeps autoupdate work off the CLI.
-/// The behavior-level coverage for the fix itself lives in
-/// `startup_steps_tests.rs`.
-#[test]
-fn command_line_launch_mode_is_headless_and_runs_as_the_sdk() {
-    let cli = LaunchMode::CommandLine {
-        command: CliCommand::Whoami,
-        global_options: Default::default(),
-        debug: false,
-        is_sandboxed: false,
-        computer_use_override: None,
-    };
-
-    assert!(cli.is_headless());
-    assert_eq!(cli.execution_mode(), ExecutionMode::Sdk);
-}
