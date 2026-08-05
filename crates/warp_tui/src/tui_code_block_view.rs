@@ -10,9 +10,7 @@ use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::content::version::BufferVersion;
 use warp_editor::model::CoreEditorModel;
-use warpui_core::elements::tui::{
-    Color, TuiContainer, TuiElement, TuiFlex, TuiParentElement, TuiStyle, TuiText,
-};
+use warpui_core::elements::tui::{Color, TuiElement, TuiFlex, TuiParentElement, TuiStyle, TuiText};
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
 use crate::editor_element::{TuiEditorElement, TuiEditorStyles};
@@ -253,10 +251,7 @@ impl TuiView for TuiCodeBlockView {
             );
         }
         column.add_child(self.render_body(app));
-        TuiContainer::new(column.finish())
-            .with_border_style(builder.muted_text_style())
-            .with_padding_x(1)
-            .finish()
+        column.finish()
     }
 }
 

@@ -30,11 +30,13 @@ use crate::auth::user::TEST_USER_UID;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::context_chips::prompt_type::PromptType;
 use crate::editor::InteractionState;
+use crate::pane_group::BackingView;
 use crate::server::ids::ServerId;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::server::server_api::ai::SpawnAgentRequest;
 use crate::terminal::TerminalView;
 use crate::terminal::model::blocks::{INLINE_BANNER_HEIGHT, ToTotalIndex as _};
+use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 use crate::terminal::view::shared_session::test_utils::terminal_view_for_viewer;
 use crate::terminal::view::{AIQueryRouting, TerminalAction, resolve_ai_query_routing};
 use crate::test_util::add_window_with_terminal;
@@ -2406,5 +2408,292 @@ fn passive_suggestions_suppressed_for_shared_ambient_viewer() {
             suppressed_for_ambient_viewer,
             "passive suggestions must be suppressed for a shared cloud-agent viewer"
         );
+    });
+}
+
+// APP-5027 regression: "Copy link" / "Copy session sharing link" must not silently do
+// nothing when the Manager has no session id (e.g. during ViewPending / SharePending).
+
+#[test]
+fn test_copy_shared_session_link_does_not_write_clipboard_when_session_pending() {
+    // copy_shared_session_link was a silent no-op when the Manager had no session_id
+    // (e.g. ViewPending while the cloud agent environment is still setting up).
+    // With the fix it shows an error toast AND does NOT write the join link to the clipboard.
+    // This test asserts the new observable behavior (the toast), not just the clipboard-unchanged
+    // invariant that also held on the old silent no-op path.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(Manager::new);
+        let toast_stack_handle = app.add_singleton_model(|_| crate::workspace::ToastStack);
+
+        // Subscribe to ToastStack events so we can assert the error toast is emitted.
+        let toast_text = Rc::new(RefCell::new(None::<String>));
+        let toast_text_clone = toast_text.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&toast_stack_handle, move |_, event, _| {
+                if let crate::workspace::ToastStackEvent::AddEphemeralToast { toast, .. } = event {
+                    *toast_text_clone.borrow_mut() = Some(toast.main_text().to_string());
+                }
+            });
+        });
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        // Put the terminal in ViewPending state without registering a session_id with the Manager.
+        // This simulates a cloud agent environment still setting up (no join yet).
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::ViewPending);
+        });
+
+        // Write a sentinel to the clipboard so we can detect if it is overwritten.
+        terminal.update(&mut app, |_, ctx| {
+            ctx.clipboard()
+                .write(warpui::clipboard::ClipboardContent::plain_text(
+                    "sentinel".to_string(),
+                ));
+        });
+
+        // Call copy_shared_session_link. With the fix, it shows an error toast and returns early.
+        terminal.update(&mut app, |view, ctx| {
+            view.copy_shared_session_link(SharedSessionActionSource::RightClickMenu, ctx);
+        });
+
+        // Assert the error toast was shown — this is the new, observable behavior that proves
+        // the fix is active. Without the fix, no toast would be emitted.
+        assert_eq!(
+            toast_text.borrow().as_deref(),
+            Some("Sharing link not yet available"),
+            "copy_shared_session_link must show an error toast when no session_id is registered"
+        );
+
+        // Belt-and-suspenders: clipboard must also remain unchanged.
+        let clipboard_text = terminal.update(&mut app, |_, ctx| ctx.clipboard().read().plain_text);
+        assert_eq!(
+            clipboard_text, "sentinel",
+            "copy_shared_session_link must not write the join link when no session_id is registered"
+        );
+    });
+}
+
+#[test]
+fn test_pane_header_copy_link_disabled_when_view_pending_no_session_id() {
+    // APP-5027 call-site regression: the pane-header "Copy link" item must be disabled
+    // when the terminal is in ViewPending state and Manager has no session_id for this view.
+    // This exercises the actual has_session_link call-site computation inside
+    // pane_header_overflow_menu_items, not just the session_sharing_context_menu_items helper.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(Manager::new);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        // ViewPending simulates a cloud-agent viewer mid-setup: the session exists in the model
+        // but Manager has not yet received a session_id for this view.
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::ViewPending);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let items = view.pane_header_overflow_menu_items(ctx);
+
+            let copy_link_item = items
+                .iter()
+                .find(|item| item.fields().is_some_and(|f| f.label() == "Copy link"));
+            assert!(
+                copy_link_item.is_some(),
+                "Copy link item should appear when terminal is in ViewPending state"
+            );
+            assert!(
+                copy_link_item.unwrap().fields().unwrap().is_disabled(),
+                "Copy link must be disabled when Manager has no session_id (ViewPending setup)"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_session_sharing_context_menu_copy_link_disabled_when_no_session_link() {
+    // The "Copy session sharing link" context-menu item must be disabled (greyed out)
+    // when the session link is not yet available (has_session_link=false).
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+
+        terminal.read(&app, |view, _| {
+            let model = view.model.lock();
+            // has_session_link=false simulates ViewPending with no registered session_id.
+            let items = view.session_sharing_context_menu_items(&model, false, false);
+
+            let copy_link_item = items.iter().find(|item| {
+                item.fields()
+                    .is_some_and(|f| f.label() == "Copy session sharing link")
+            });
+            assert!(
+                copy_link_item.is_some(),
+                "Copy session sharing link item should be present when is_sharer_or_viewer"
+            );
+            assert!(
+                copy_link_item.unwrap().fields().unwrap().is_disabled(),
+                "Copy session sharing link must be disabled when no session link is available"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_session_sharing_context_menu_copy_link_enabled_when_session_link_available() {
+    // The "Copy session sharing link" item must be enabled when the session link is available.
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+
+        terminal.read(&app, |view, _| {
+            let model = view.model.lock();
+            // has_session_link=true simulates an active or ended session with a registered id.
+            let items = view.session_sharing_context_menu_items(&model, false, true);
+
+            let copy_link_item = items.iter().find(|item| {
+                item.fields()
+                    .is_some_and(|f| f.label() == "Copy session sharing link")
+            });
+            assert!(
+                copy_link_item.is_some(),
+                "Copy session sharing link item should be present when is_sharer_or_viewer"
+            );
+            assert!(
+                !copy_link_item.unwrap().fields().unwrap().is_disabled(),
+                "Copy session sharing link must be enabled when session link is available"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_wasm_details_panel_gate_shows_for_ambient_task() {
+    // REMOTE-2346: the workspace-level transcript details panel is gated on
+    // `Workspace::should_show_conversation_details_panel`. It is gated on
+    // `cfg(any(test, target_arch = "wasm32"))`, so it can be exercised on the host target even
+    // though the WASM render path itself is compiled out.
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+        let task = create_cloud_mode_task_for_user(TEST_USER_UID);
+        configure_ambient_details_panel_test(&mut app, &terminal, task);
+
+        terminal.read(&app, |view, ctx| {
+            assert!(
+                view.should_show_wasm_conversation_details_panel(ctx),
+                "WASM details button gate must return true when an ambient cloud task is wired"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_wasm_details_panel_gate_hidden_for_plain_terminal() {
+    // REMOTE-2346: `should_show_wasm_conversation_details_panel` must return false for a
+    // terminal with no ambient task, no transcript viewer, and no active conversation, so
+    // the pane-header button does not appear when the workspace panel would render nothing.
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+
+        terminal.read(&app, |view, ctx| {
+            assert!(
+                !view.should_show_wasm_conversation_details_panel(ctx),
+                "WASM details button gate must return false for a plain terminal with no cloud task"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_wasm_details_panel_button_shows_for_ambient_task() {
+    // REMOTE-2346: the pane-header `(i)` gate is narrower than the workspace panel gate. It must
+    // return true for an ambient-task pane that is neither a shared session nor a
+    // conversation-transcript viewer (surfaces that lack the simplified WASM tab-bar `(i)`).
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(Manager::new);
+        let terminal = add_window_with_terminal(&mut app, None);
+        configure_ambient_details_panel_test(
+            &mut app,
+            &terminal,
+            create_cloud_mode_task_for_user(TEST_USER_UID),
+        );
+
+        terminal.read(&app, |view, ctx| {
+            assert!(
+                view.should_show_wasm_pane_header_details_button(ctx),
+                "pane-header (i) must show for an ambient-task pane with no tab-bar affordance"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_wasm_details_panel_button_hidden_for_transcript_viewer() {
+    // REMOTE-2346 regression: a conversation-transcript viewer already shows the simplified WASM
+    // tab-bar `(i)`, so the pane-header `(i)` must be suppressed to avoid a duplicate button —
+    // even though the broader workspace panel gate still returns true for that surface.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(Manager::new);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let task_id = configure_ambient_details_panel_test(
+            &mut app,
+            &terminal,
+            create_cloud_mode_task_for_user(TEST_USER_UID),
+        );
+
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .set_conversation_transcript_viewer_status(Some(
+                    ConversationTranscriptViewerStatus::ViewingAmbientConversation(task_id),
+                ));
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert!(
+                view.should_show_wasm_conversation_details_panel(ctx),
+                "workspace panel gate must still show for a transcript viewer"
+            );
+            assert!(
+                !view.should_show_wasm_pane_header_details_button(ctx),
+                "pane-header (i) must be hidden for a transcript viewer (it already has the tab-bar (i))"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_wasm_details_panel_button_hidden_for_shared_session() {
+    // REMOTE-2346: a shared session already shows the simplified WASM tab-bar `(i)`, so the
+    // pane-header `(i)` must be suppressed there too.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(Manager::new);
+        let terminal = add_window_with_terminal(&mut app, None);
+        configure_ambient_details_panel_test(
+            &mut app,
+            &terminal,
+            create_cloud_mode_task_for_user(TEST_USER_UID),
+        );
+
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .set_shared_session_status(SharedSessionStatus::ActiveViewer {
+                    role: Default::default(),
+                });
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert!(
+                !view.should_show_wasm_pane_header_details_button(ctx),
+                "pane-header (i) must be hidden for a shared session (it already has the tab-bar (i))"
+            );
+        });
     });
 }

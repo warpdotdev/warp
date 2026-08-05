@@ -439,6 +439,12 @@ enum TuiEntryPoint {
         execute: Box<dyn FnOnce(&mut warpui::AppContext)>,
     },
 }
+
+enum AuthInitialization {
+    Persisted,
+    PendingApiKey(String),
+}
+
 impl LaunchMode {
     fn args(&self) -> Cow<'_, warp_cli::AppArgs> {
         match self {
@@ -467,23 +473,10 @@ impl LaunchMode {
         }
     }
 
-    /// Returns whether a startup API key should be installed before its user is fetched.
-    ///
-    /// The interactive TUI defers the key so its UI cannot treat credential presence as a
-    /// validated identity. Other launch modes retain their existing initialization behavior.
-    fn should_initialize_api_key_eagerly(&self) -> bool {
-        match self {
-            LaunchMode::Tui {
-                entrypoint: TuiEntryPoint::Interactive { .. },
-            } => false,
-            LaunchMode::App { .. }
-            | LaunchMode::CommandLine { .. }
-            | LaunchMode::Test { .. }
-            | LaunchMode::RemoteServerProxy
-            | LaunchMode::RemoteServerDaemon { .. }
-            | LaunchMode::Tui {
-                entrypoint: TuiEntryPoint::CliCommand { .. },
-            } => true,
+    fn auth_initialization(&self) -> AuthInitialization {
+        match self.api_key() {
+            Some(api_key) => AuthInitialization::PendingApiKey(api_key),
+            None => AuthInitialization::Persisted,
         }
     }
 
@@ -1046,6 +1039,15 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     }
     timer.mark_interval_end("LOG_FILE_SETUP_COMPLETE");
 
+    // Claim a background-only process type before anything else can reach
+    // AppKit, so a headless launch never acquires a Dock tile. See APP-2946.
+    #[cfg(target_os = "macos")]
+    if launch_mode.is_headless()
+        && let Err(e) = platform::mac::mark_process_as_background_only()
+    {
+        log::warn!("Failed to mark process as background-only: {e:#}");
+    }
+
     #[cfg(windows)]
     platform::windows::check_redirection_guard();
 
@@ -1216,8 +1218,10 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         app_builder.enable_headless_microphone_access_query();
     }
 
+    // A headless invocation has no Dock presence, so it performs no Dock-visible
+    // setup at all (Dock icon, Dock menu, menu bar). See APP-2946.
     #[cfg(target_os = "macos")]
-    {
+    if !launch_mode.is_headless() {
         use warpui::AssetProvider as _;
         use warpui::platform::mac::AppExt;
 
@@ -1455,16 +1459,14 @@ pub(crate) fn initialize_app(
         ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());
     }
 
-    let (api_key, pending_api_key) = if launch_mode.should_initialize_api_key_eagerly() {
-        (launch_mode.api_key(), None)
-    } else {
-        (None, launch_mode.api_key())
+    let (auth_state, pending_api_key) = match launch_mode.auth_initialization() {
+        AuthInitialization::Persisted => (AuthState::initialize(ctx), None),
+        AuthInitialization::PendingApiKey(api_key) => (
+            AuthState::initialize_for_credential_validation(ctx),
+            Some(api_key),
+        ),
     };
-    let auth_state = Arc::new(if pending_api_key.is_some() {
-        AuthState::initialize_for_credential_validation(ctx)
-    } else {
-        AuthState::initialize(ctx, api_key)
-    });
+    let auth_state = Arc::new(auth_state);
     timer.mark_interval_end("AUTH_MANAGER_SET_USER");
 
     let agent_source = determine_agent_source(launch_mode);
@@ -1768,14 +1770,21 @@ pub(crate) fn initialize_app(
 
     ctx.set_default_binding_validator(is_binding_cross_platform);
 
-    if FeatureFlag::Autoupdate.is_enabled() {
-        // Attempt to clean up any old executable, whether or not we were
-        // explicitly launched as part of the auto-update process.  We may have
-        // failed to remove the executable on a previous launch of the app and
-        // should try again.
-        if let Err(e) = autoupdate::remove_old_executable() {
-            report_error!(e.context("Failed to remove old executable"));
-        }
+    // Attempt to clean up any old executable, whether or not we were explicitly
+    // launched as part of the auto-update process. We may have failed to remove
+    // the executable on a previous launch of the app and should try again.
+    //
+    // On macOS this deletes `Contents/MacOS/old` from inside the installed app
+    // bundle, so it runs behind the same `can_autoupdate` guard as the rest of
+    // the autoupdate machinery: an execution mode that never autoupdates must
+    // not mutate that bundle. The bundled CLI runs the GUI executable from
+    // inside `Warp.app`, so without this it would rewrite a bundle it does not
+    // own. See APP-2946.
+    if FeatureFlag::Autoupdate.is_enabled()
+        && AppExecutionMode::as_ref(ctx).can_autoupdate()
+        && let Err(e) = autoupdate::remove_old_executable()
+    {
+        report_error!(e.context("Failed to remove old executable"));
     }
 
     experiments::init(ctx);
@@ -2368,12 +2377,13 @@ pub(crate) fn initialize_app(
     // CLI commands establish IAP access and refresh auth in their dispatch path so they can
     // surface failures synchronously. Interactive clients wait for IAP here before authenticating
     // their startup user, since the request itself calls the IAP-gated warp-server.
-    let startup_authentication = pending_api_key
-        .map(StartupUserAuthentication::ApiKey)
-        .or_else(|| {
-            (user_is_logged_in && !matches!(launch_mode, LaunchMode::CommandLine { .. }))
-                .then_some(StartupUserAuthentication::RefreshUser)
-        });
+    let startup_authentication = if matches!(launch_mode, LaunchMode::CommandLine { .. }) {
+        None
+    } else {
+        pending_api_key
+            .map(StartupUserAuthentication::ApiKey)
+            .or_else(|| user_is_logged_in.then_some(StartupUserAuthentication::RefreshUser))
+    };
     if let Some(authentication) = startup_authentication {
         authenticate_user_after_iap_access(authentication, ctx);
     }

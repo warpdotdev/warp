@@ -15,15 +15,23 @@
 //! drives the agent seat unchanged: events are indistinguishable from real hardware input to
 //! applications, while the user's own pointer, keyboard focus, and modifier state stay put.
 //!
+//! A seat must outlive any single `perform_actions` batch: the actor is rebuilt for every
+//! batch, and a drag routinely spans batches (press in one, moves and release in later ones).
+//! Removing a master device implicitly releases the buttons its XTEST slave holds — which would
+//! end an in-progress drag (the application sees the selection drop and subsequent moves as
+//! plain hover) — so seats used by in-app sessions are shared per session owner via
+//! [`shared_for_session`] and live until [`end_session`]. Owner-less actors (the developer CLI)
+//! keep a private seat dropped with the actor.
+//!
 //! Unlike most X resources, master devices are server-global and outlive the connection that
 //! created them, so the pair is removed explicitly on drop, and every seat creation reaps
 //! leaked pairs: pairs of this process not owned by a live [`AgentSeat`] (per a process-local
 //! registry), and pairs whose owning process (identified by the pid embedded in the seat name)
 //! no longer exists.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use x11rb::connection::Connection;
 use x11rb::protocol::xinput::{
@@ -150,6 +158,33 @@ impl AgentSeat {
             .map_err(|e| format!("Failed to focus target window {window}: {e}"))?;
         Ok(())
     }
+}
+
+/// The shared seats of active background computer-use sessions, keyed by session owner (the
+/// client conversation id).
+fn session_seats() -> &'static Mutex<HashMap<String, Arc<AgentSeat>>> {
+    static SESSION_SEATS: OnceLock<Mutex<HashMap<String, Arc<AgentSeat>>>> = OnceLock::new();
+    SESSION_SEATS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Returns `owner`'s session seat, creating it on first use. The seat is shared by every actor
+/// of the session so input state spanning batches — a held button mid-drag, the agent
+/// keyboard's focus — survives actor teardown between batches.
+pub fn shared_for_session(owner: &str) -> Result<Arc<AgentSeat>, String> {
+    let mut seats = session_seats().lock().unwrap();
+    if let Some(seat) = seats.get(owner) {
+        return Ok(seat.clone());
+    }
+    let seat = Arc::new(AgentSeat::new()?);
+    seats.insert(owner.to_string(), seat.clone());
+    Ok(seat)
+}
+
+/// Ends `owner`'s background session: drops its shared seat, removing the master pair (and its
+/// on-screen cursor) and implicitly releasing any input state it still holds. An actor mid-batch
+/// keeps the seat alive until its batch completes. Idempotent; a no-op for unknown owners.
+pub fn end_session(owner: &str) {
+    session_seats().lock().unwrap().remove(owner);
 }
 
 impl Drop for AgentSeat {

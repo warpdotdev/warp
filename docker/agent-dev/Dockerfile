@@ -10,7 +10,6 @@ ENV PATH=/usr/local/cargo/bin:/usr/local/go/bin:/usr/local/tfenv/bin:$PATH
 
 # This set of packages is adapted from ./script/bootstrap in warp-internal and warp-server.
 # It doesn't include *everything* (ex. no wgslfmt), but is enough to build and test Warp.
-# Note: currently, only x86_64 builds are supported.
 
 # Install system-level packages. These are needed to build on Linux, and/or to run integration tests.
 RUN set -eux; \
@@ -38,8 +37,8 @@ RUN set -eux; \
 # Install go and go command-line tools we use.
 RUN set -eux; \
   dpkgArch="$(dpkg --print-architecture)"; ARCH="${dpkgArch##*-}"; \
-  curl --proto '=https' --tlsv1.2 -fsSLO https://go.dev/dl/go1.26.1.linux-$ARCH.tar.gz; \
-  tar -C /usr/local -xzf go1.26.1.linux-$ARCH.tar.gz; \
+  curl --proto '=https' --tlsv1.2 -fsSLO https://go.dev/dl/go1.26.5.linux-$ARCH.tar.gz; \
+  tar -C /usr/local -xzf go1.26.5.linux-$ARCH.tar.gz; \
   go version; \
   go env -w "GOPRIVATE=github.com/warpdotdev/*"; \
   CGO_ENABLED=0 go install -tags='no_clickhouse no_libsql no_mssql no_mysql no_sqlite3 no_vertica no_ydb' github.com/pressly/goose/v3/cmd/goose@v3.24.1; \
@@ -50,7 +49,7 @@ RUN set -eux; \
   echo "Installed protoc-gen-go"; \
   go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.2.0; \
   echo "Installed protoc-gen-go-grpc"; \
-  rm go1.26.1.linux-$ARCH.tar.gz
+  rm go1.26.5.linux-$ARCH.tar.gz
 
 # Install golangci-lint
 RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /usr/local/go/bin v2.6.1 \
@@ -91,7 +90,7 @@ RUN cd ./setup && ./script/linux/install_test_deps
 RUN set -eux; \
   install -d -m 0755 /usr/share/keyrings; \
   curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
-    | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg; \
+    | gpg --batch --yes --dearmor -o /usr/share/keyrings/cloud.google.gpg; \
   echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
     > /etc/apt/sources.list.d/google-cloud-sdk.list; \
   apt-get update; \

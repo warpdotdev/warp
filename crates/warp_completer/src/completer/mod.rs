@@ -19,8 +19,9 @@ pub use describe::{Description, TopLevelCommandCaseSensitivity, describe, descri
 pub use engine::{EngineDirEntry, EngineFileType, LocationType};
 pub use matchers::{Match, MatchStrategy, MatchType};
 pub use suggest::{
-    CompleterOptions, CompletionsFallbackStrategy, MatchedSuggestion, Priority, Suggestion,
-    SuggestionResults, SuggestionType, SuggestionTypeName, suggestions,
+    CompleterOptions, CompletionsFallbackStrategy, ExplicitTabCompletion, MatchedSuggestion,
+    PreparedSuggestion, Priority, Suggestion, SuggestionResults, SuggestionType,
+    SuggestionTypeName, suggestions,
 };
 
 fn get_path_separators(ctx: &dyn CompletionContext) -> PathSeparators {

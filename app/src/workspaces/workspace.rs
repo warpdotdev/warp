@@ -973,7 +973,7 @@ pub struct LinkSharingSettings {
     pub direct_link_sharing_enabled: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct EnterpriseSecretRegex {
     pub pattern: String,
     #[serde(default)]
@@ -1032,6 +1032,100 @@ pub struct WorkspaceSettings {
     pub enable_warp_attribution: AdminEnablementSetting,
     #[serde(default)]
     pub default_host_slug: Option<String>,
+}
+
+/// A workspace-governable setting carried on [`TeamSettings`]: the effective
+/// `value` plus whether the workspace layer enforces it (mirrors the server's
+/// `*SettingInfo` wrappers). The enforcement bit is preserved so future admin UI
+/// can distinguish workspace-enforced values from team-owned ones.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct EnforceableSetting<T> {
+    pub value: T,
+    #[serde(default)]
+    pub is_enforced_by_workspace: bool,
+}
+
+/// A list setting split by the layer that contributed each entry (mirrors the
+/// server's `StringListSettingInfo` / `SecretRedactionRegexListInfo`). `values`
+/// is the authoritative merged result; `workspace_entries` / `team_entries` are
+/// preserved so future admin UI can present the layers separately.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SplitListSetting<T> {
+    pub values: Vec<T>,
+    #[serde(default)]
+    pub workspace_entries: Vec<T>,
+    #[serde(default)]
+    pub team_entries: Vec<T>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamAiPermissionsSettings {
+    pub allow_ai_in_remote_sessions: EnforceableSetting<bool>,
+    pub remote_session_regex_list: SplitListSetting<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamSecretRedactionSettings {
+    pub enabled: EnforceableSetting<bool>,
+    pub regexes: SplitListSetting<EnterpriseSecretRegex>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamAiAutonomySettings {
+    pub apply_code_diffs: EnforceableSetting<Option<ActionPermission>>,
+    pub read_files: EnforceableSetting<Option<ActionPermission>>,
+    pub create_plans: EnforceableSetting<Option<ActionPermission>>,
+    pub execute_commands: EnforceableSetting<Option<ActionPermission>>,
+    pub write_to_pty: EnforceableSetting<Option<WriteToPtyPermission>>,
+    pub computer_use: EnforceableSetting<Option<ComputerUsePermission>>,
+    pub read_files_allowlist: SplitListSetting<String>,
+    pub execute_commands_allowlist: SplitListSetting<String>,
+    pub execute_commands_denylist: SplitListSetting<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamLinkSharingSettings {
+    pub anyone_with_link_sharing_enabled: EnforceableSetting<bool>,
+    pub direct_link_sharing_enabled: EnforceableSetting<bool>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamSandboxedAgentSettings {
+    pub execute_commands_denylist: SplitListSetting<String>,
+}
+
+/// The effective settings that apply to a team, combining the workspace layer
+/// with the team's own configuration.
+///
+/// This is intentionally a distinct type from [`WorkspaceSettings`] rather than
+/// an alias: it is sourced from the server's effective `Team.settings`. Each
+/// workspace-governable group keeps both its effective value **and** the
+/// `is_enforced_by_workspace` / workspace-vs-team split metadata (via
+/// [`EnforceableSetting`] / [`SplitListSetting`]) so future admin UI can recover
+/// those details. Unlike `WorkspaceSettings`, it does not carry the
+/// workspace-scoped `is_invite_link_enabled` / `is_discoverable` flags (those
+/// remain on [`WorkspaceSettings`] and are read from the current workspace).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct TeamSettings {
+    pub ugc_collection: EnforceableSetting<UgcCollectionEnablementSetting>,
+    pub cloud_conversation_storage: EnforceableSetting<AdminEnablementSetting>,
+    pub codebase_context: EnforceableSetting<AdminEnablementSetting>,
+    pub ai_permissions: TeamAiPermissionsSettings,
+    pub secret_redaction: TeamSecretRedactionSettings,
+    pub ai_autonomy: TeamAiAutonomySettings,
+    pub link_sharing: TeamLinkSharingSettings,
+    pub sandboxed_agent: TeamSandboxedAgentSettings,
+    pub llm_settings: LlmSettings,
+    pub telemetry_settings: TelemetrySettings,
+    pub usage_based_pricing_settings: UsageBasedPricingSettings,
+    pub addon_credits_settings: AddonCreditsSettings,
+    /// The team-level agent attribution setting. When `Enable` or `Disable`, the
+    /// user toggle is locked. When `RespectUserSetting` (or absent), the user can choose.
+    #[serde(default)]
+    pub enable_warp_attribution: AdminEnablementSetting,
+    #[serde(default)]
+    pub default_host_slug: Option<String>,
+    pub team_byo: Option<TeamByoSettings>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

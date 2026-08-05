@@ -21,8 +21,8 @@ use warp::tui_export::{
     AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin, BlockPadding,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatus, ConversationUsageTotals,
     Harness, InputTypeAutoDetectionSource, LLMPreferences, LinkedWorkflowData,
-    LongRunningCommandControlState, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, SizeInfo,
-    SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope,
+    LongRunningCommandControlState, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, Session,
+    SizeInfo, SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope,
     TuiMcpAction, TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers,
     TuiUpArrowHistoryItemKind, UserTakeOverReason, WarpConfig, WarpConfigUpdateEvent,
     export_conversation_markdown, forkable_tui_conversation_for_test,
@@ -48,7 +48,7 @@ use warpui_core::event::KeyState;
 use warpui_core::event::ModifiersState;
 use warpui_core::keymap::{Context, DescriptionContext, Keystroke, Trigger};
 use warpui_core::platform::keyboard::KeyCode;
-use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::presenter::tui::{TuiFrame, TuiPresenter};
 use warpui_core::telemetry::{EventPayload, flush_events};
 use warpui_core::{App, AppContext, TuiView, TypedActionView, WindowInvalidation};
 
@@ -971,6 +971,27 @@ fn shell_mode_reserves_tab_even_when_attachments_render() {
     assert!(!attachment_focus_available(true, true));
     assert!(!attachment_focus_available(false, false));
 }
+#[test]
+fn shell_completion_source_warmup_loads_path_executables() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let session = Arc::new(Session::test());
+
+        view.update(&mut app, |view, ctx| {
+            view.warm_shell_completion_sources(session.clone(), ctx);
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !session.has_loaded_external_commands() && Instant::now() < deadline {
+            Timer::after(Duration::from_millis(10)).await;
+        }
+
+        assert!(session.has_attempted_to_load_external_commands());
+        assert!(session.has_loaded_external_commands());
+        assert!(session.executable_names().any(|command| command == "git"));
+    });
+}
 
 #[test]
 fn nld_reset_only_unlocks_after_agent_control_and_not_on_user_edit() {
@@ -1562,6 +1583,109 @@ fn toggle_model_menu_action_opens_and_closes_the_inline_model_menu() {
         });
     });
 }
+
+#[test]
+fn accepted_model_only_changes_the_current_session() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        LLMPreferences::handle(&app).update(&mut app, |preferences, ctx| {
+            let mut alternate = preferences.get_default_base_model(ctx).clone();
+            alternate.id = "tui-session-override".into();
+            alternate.display_name = "TUI session override".to_owned();
+            preferences.add_agent_mode_model_for_test(alternate);
+        });
+        let (first_view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (second_view, _) = add_focus_test_session(&mut app, &fixture, false);
+        let (profile_default_id, alternate_id) = app.read(|ctx| {
+            let preferences = LLMPreferences::as_ref(ctx);
+            let profile_default_id = preferences
+                .get_active_profile_base_model(ctx, None)
+                .id
+                .clone();
+            let alternate_id = preferences
+                .get_base_llm_choices_for_agent_mode(ctx)
+                .find(|model| model.id != profile_default_id && model.disable_reason.is_none())
+                .expect("test model catalog should include an alternate model")
+                .id
+                .clone();
+            (profile_default_id, alternate_id)
+        });
+
+        first_view.update(&mut app, |view, ctx| {
+            view.handle_accepted_model(&alternate_id, ctx);
+        });
+
+        app.read(|ctx| {
+            let preferences = LLMPreferences::as_ref(ctx);
+            let first_surface_id = first_view.as_ref(ctx).terminal_surface_id;
+            let second_surface_id = second_view.as_ref(ctx).terminal_surface_id;
+            assert_eq!(
+                preferences
+                    .get_active_base_model(ctx, Some(first_surface_id))
+                    .id,
+                alternate_id
+            );
+            assert_eq!(
+                preferences
+                    .get_active_base_model(ctx, Some(second_surface_id))
+                    .id,
+                profile_default_id
+            );
+            assert_eq!(
+                preferences
+                    .get_active_profile_base_model(ctx, Some(first_surface_id))
+                    .id,
+                profile_default_id
+            );
+        });
+    });
+}
+
+#[test]
+fn model_menu_labels_the_profile_default_model() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.model_menu.update(ctx, |menu, ctx| menu.open(ctx));
+        });
+
+        view.read(&app, |view, ctx| {
+            let default_name = LLMPreferences::as_ref(ctx)
+                .get_active_profile_base_model(ctx, Some(view.terminal_surface_id))
+                .display_name
+                .clone();
+            let snapshot = view
+                .model_menu
+                .as_ref(ctx)
+                .snapshot(ctx)
+                .expect("model menu should be open");
+            let default_row = snapshot
+                .rows
+                .iter()
+                .find(|row| row.title == default_name)
+                .expect("profile default model should be listed");
+            assert!(
+                default_row
+                    .state_suffix
+                    .as_deref()
+                    .is_some_and(|suffix| suffix.contains("(default)"))
+            );
+            assert_eq!(
+                snapshot
+                    .rows
+                    .iter()
+                    .filter(|row| {
+                        row.state_suffix
+                            .as_deref()
+                            .is_some_and(|suffix| suffix.contains("(default)"))
+                    })
+                    .count(),
+                1
+            );
+        });
+    });
+}
 #[test]
 fn todo_menu_renders_active_list_and_toggles_through_shared_suggestions_mode() {
     App::test((), |mut app| async move {
@@ -1906,7 +2030,7 @@ fn theme_slash_command_rejects_a_missing_argument() {
 }
 
 #[test]
-fn statusline_slash_command_clears_input_focuses_one_picker_and_cancels_cleanly() {
+fn statusline_slash_command_preserves_nested_focus_and_restores_the_input_cursor() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
@@ -1917,7 +2041,7 @@ fn statusline_slash_command_clears_input_focuses_one_picker_and_cancels_cleanly(
             view.execute_tui_slash_command(&slash_commands::STATUSLINE, None, ctx);
         });
 
-        let picker_id = view.read(&app, |view, ctx| {
+        let (picker_id, picker_focus_id) = view.read(&app, |view, ctx| {
             let picker = view
                 .statusline_config_view
                 .as_ref()
@@ -1934,9 +2058,21 @@ fn statusline_slash_command_clears_input_focuses_one_picker_and_cancels_cleanly(
                 ""
             );
             assert!(ctx.check_view_or_child_focused(fixture.window_id, &picker.id()));
-            picker.id()
+            (
+                picker.id(),
+                ctx.focused_view_id(fixture.window_id)
+                    .expect("the statusline picker should delegate focus to a child"),
+            )
         });
 
+        assert!(view.update(&mut app, |view, ctx| { view.handle_terminal_wakeup(ctx) }));
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.focused_view_id(fixture.window_id),
+                Some(picker_focus_id),
+                "a redraw must preserve the interaction surface's delegated child focus"
+            );
+        });
         view.update(&mut app, |view, ctx| {
             view.execute_tui_slash_command(&slash_commands::STATUSLINE, None, ctx);
         });
@@ -1954,6 +2090,12 @@ fn statusline_slash_command_clears_input_focuses_one_picker_and_cancels_cleanly(
             assert!(view.statusline_config_view.is_none());
             assert!(ctx.check_view_or_child_focused(fixture.window_id, &view.input_view.id()));
         });
+        assert!(
+            render_session_frame(&mut app, &view, 80, 24)
+                .cursor
+                .is_some(),
+            "dismissing the interaction surface should restore the input cursor"
+        );
     });
 }
 
@@ -2621,6 +2763,15 @@ fn render_session_buffer(
     width: u16,
     height: u16,
 ) -> TuiBuffer {
+    render_session_frame(app, view, width, height).buffer
+}
+
+fn render_session_frame(
+    app: &mut App,
+    view: &ViewHandle<super::TuiTerminalSessionView>,
+    width: u16,
+    height: u16,
+) -> TuiFrame {
     let mut presenter = TuiPresenter::new();
     app.update(|ctx| {
         let mut invalidation = WindowInvalidation::default();
@@ -2629,9 +2780,7 @@ fn render_session_buffer(
             .updated
             .extend(view.as_ref(ctx).child_view_ids(ctx));
         presenter.invalidate(&invalidation, ctx, view.window_id(ctx));
-        presenter
-            .present(ctx, view, TuiRect::new(0, 0, width, height))
-            .buffer
+        presenter.present(ctx, view, TuiRect::new(0, 0, width, height))
     })
 }
 
@@ -4986,6 +5135,7 @@ fn user_input_event_projects_to_raw_user_bytes() {
     };
     assert_eq!(&*bytes, b"hello\r");
 }
+
 #[test]
 fn running_command_attachment_bindings_are_context_scoped() {
     App::test((), |mut app| async move {
@@ -5454,6 +5604,27 @@ fn terminal_wakeup_redraws_only_the_focused_session() {
 
         assert!(foreground.update(&mut app, |view, ctx| { view.handle_terminal_wakeup(ctx) }));
         assert!(!background.update(&mut app, |view, ctx| { view.handle_terminal_wakeup(ctx) }));
+    });
+}
+#[test]
+fn background_focus_reconciliation_does_not_steal_foreground_focus() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (foreground, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (background, _) = add_focus_test_session(&mut app, &fixture, false);
+        let foreground_input_id = foreground.read(&app, |view, _| view.input_view.id());
+
+        background.update(&mut app, |view, ctx| {
+            view.reconcile_focus(ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.focused_view_id(fixture.window_id),
+                Some(foreground_input_id),
+                "background ownership transitions must not change framework focus"
+            );
+        });
     });
 }
 

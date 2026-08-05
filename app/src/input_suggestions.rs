@@ -10,7 +10,7 @@ use itertools::Itertools;
 use pathfinder_geometry::vector::vec2f;
 use warp_command_signatures::IconType;
 use warp_completer::completer::{
-    MatchType, PathSeparators, Suggestion, SuggestionResults, SuggestionType,
+    MatchType, PathSeparators, PreparedSuggestion, Suggestion, SuggestionResults, SuggestionType,
 };
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::AnsiColorIdentifier;
@@ -274,8 +274,14 @@ fn filter_tab_suggestions(
     query: &str,
     path_separators: &[char],
 ) -> Vec<Item> {
+    items_from_prepared_suggestions(suggestions.prepare_for_query(query, path_separators))
+}
+
+fn items_from_prepared_suggestions(
+    suggestions: impl IntoIterator<Item = PreparedSuggestion>,
+) -> Vec<Item> {
     suggestions
-        .filter_by_query(query, path_separators)
+        .into_iter()
         .map(|suggestion| Item {
             // TODO(vorporeal): Consider changing the type of `text` and `display` here to be `SmolStr`.
             text: suggestion.suggestion.replacement.to_string(),
@@ -286,7 +292,7 @@ fn filter_tab_suggestions(
                 .as_ref()
                 .map(|desc| desc.clone().into()),
             matches: Some(suggestion.matching_indices),
-            icon_type: Some(icon_type(suggestion.suggestion)),
+            icon_type: Some(icon_type(&suggestion.suggestion)),
             match_type: suggestion.match_type,
             is_ai_query: false,
             is_history_item: false,
@@ -336,6 +342,27 @@ impl InputSuggestions {
         }
 
         self.visible_items = Some(new_visible_items);
+        ctx.notify();
+    }
+
+    pub fn set_prepared_tab_completions(
+        &mut self,
+        suggestions: Vec<PreparedSuggestion>,
+        preselect_option: TabCompletionsPreselectOption,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.set_items(items_from_prepared_suggestions(suggestions));
+        if self.items.is_empty() {
+            return;
+        }
+
+        match preselect_option {
+            TabCompletionsPreselectOption::First => self.select_first_item(ctx),
+            TabCompletionsPreselectOption::Unselected => self.selected_index = None,
+            TabCompletionsPreselectOption::Unchanged => {}
+        }
+
+        self.cycle = true;
         ctx.notify();
     }
 

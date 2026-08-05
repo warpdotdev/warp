@@ -299,7 +299,116 @@ pub struct Team {
     pub uid: cynic::Id,
     pub name: String,
     pub members: Vec<TeamMember>,
+    pub settings: TeamSettings,
     pub color: Option<String>,
+}
+
+/// The effective settings that apply to a team, combining the workspace layer
+/// with the team's own configuration. Workspace-governable groups are wrapped in
+/// `*SettingInfo` types carrying the effective `value` plus whether the value is
+/// enforced by the workspace; list settings carry the merged `values`.
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct TeamSettings {
+    pub ugc_collection: UgcCollectionSettingInfo,
+    pub cloud_conversation_storage: AdminEnablementSettingInfo,
+    pub codebase_context: AdminEnablementSettingInfo,
+    pub ai_permissions: AiPermissionsSettingsInfo,
+    pub secret_redaction: SecretRedactionSettingsInfo,
+    pub ai_autonomy: AiAutonomySettingsInfo,
+    pub link_sharing: LinkSharingSettingsInfo,
+    pub sandboxed_agent: SandboxedAgentSettingsInfo,
+    pub llm_settings: LlmSettings,
+    pub telemetry_settings: TelemetrySettings,
+    pub usage_based_pricing_settings: UsageBasedPricingSettings,
+    pub addon_credits_settings: AddonCreditsSettings,
+    pub ambient_agent_settings: Option<AmbientAgentSettings>,
+    pub team_byo: Option<TeamByoSettings>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct UgcCollectionSettingInfo {
+    pub value: UgcCollectionEnablementSetting,
+    pub is_enforced_by_workspace: bool,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct AdminEnablementSettingInfo {
+    pub value: AdminEnablementSetting,
+    pub is_enforced_by_workspace: bool,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct BooleanSettingInfo {
+    pub value: bool,
+    pub is_enforced_by_workspace: bool,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct AiAutonomySettingInfo {
+    pub value: AiAutonomyValue,
+    pub is_enforced_by_workspace: bool,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct WriteToPtySettingInfo {
+    pub value: WriteToPtyAutonomyValue,
+    pub is_enforced_by_workspace: bool,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ComputerUseSettingInfo {
+    pub value: ComputerUseAutonomyValue,
+    pub is_enforced_by_workspace: bool,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct StringListSettingInfo {
+    pub values: Vec<String>,
+    pub workspace_entries: Vec<String>,
+    pub team_entries: Vec<String>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct SecretRedactionRegexListInfo {
+    pub values: Vec<SecretRedactionRegex>,
+    pub workspace_entries: Vec<SecretRedactionRegex>,
+    pub team_entries: Vec<SecretRedactionRegex>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct AiPermissionsSettingsInfo {
+    pub allow_ai_in_remote_sessions: BooleanSettingInfo,
+    pub remote_session_regex_list: StringListSettingInfo,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct SecretRedactionSettingsInfo {
+    pub enabled: BooleanSettingInfo,
+    pub regexes: SecretRedactionRegexListInfo,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct AiAutonomySettingsInfo {
+    pub apply_code_diffs: AiAutonomySettingInfo,
+    pub read_files: AiAutonomySettingInfo,
+    pub create_plans: AiAutonomySettingInfo,
+    pub execute_commands: AiAutonomySettingInfo,
+    pub write_to_pty: WriteToPtySettingInfo,
+    pub computer_use: ComputerUseSettingInfo,
+    pub read_files_allowlist: StringListSettingInfo,
+    pub execute_commands_allowlist: StringListSettingInfo,
+    pub execute_commands_denylist: StringListSettingInfo,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct LinkSharingSettingsInfo {
+    pub anyone_with_link_sharing_enabled: BooleanSettingInfo,
+    pub direct_link_sharing_enabled: BooleanSettingInfo,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct SandboxedAgentSettingsInfo {
+    pub execute_commands_denylist: StringListSettingInfo,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

@@ -49,6 +49,11 @@ pub enum PointerEventKind {
     Down,
     Move,
     Up,
+    /// A pointer-position sample taken when a scroll warps the pointer before
+    /// wheeling. It never participates in click/drag gesture classification;
+    /// it only keeps the synthetic cursor (and a later release's coordinate)
+    /// tracking the pointer.
+    Scroll,
 }
 
 /// Returns true if a `UseComputer` action batch contains at least one real
@@ -258,6 +263,33 @@ const DRAG_TRAIL_THICKNESS: f64 = 4.0;
 const CLICK_RING_TAIL_HEADROOM: Duration = Duration::from_millis(100);
 #[cfg(any(linux, test))]
 const DRAG_FADE_TAIL_HEADROOM: Duration = Duration::from_millis(400);
+/// Outline thickness of the synthetic cursor glyph. The capture composites no
+/// real X11 cursor (`-draw_mouse 0`; XFixes never reports the background agent
+/// seat's cursor), so the burn-in draws an arrow glyph — white fill with a
+/// black outline for legibility on any background — that tracks the recorded
+/// pointer events.
+#[cfg(any(linux, test))]
+const CURSOR_OUTLINE_THICKNESS: i32 = 2;
+/// Maximum duration of the eased glide the synthetic cursor takes into each
+/// pointer event. The glide ends exactly at the event (so a click's ripple
+/// fires the moment the cursor arrives) and starts up to this long before it,
+/// never before the previous event. Calibrated against polished
+/// screen-recording tools, which glide the cursor for roughly half a second.
+#[cfg(any(linux, test))]
+const CURSOR_GLIDE_MAX: Duration = Duration::from_millis(500);
+/// Target duration of each linear `\move` piece used to approximate the
+/// ease-in-out glide curve (an ASS `\move` is strictly linear).
+#[cfg(any(linux, test))]
+const CURSOR_GLIDE_STEP: Duration = Duration::from_millis(50);
+/// Upper bound on `\move` pieces per glide, capping the dialogue count for
+/// pathologically long spans.
+#[cfg(any(linux, test))]
+const CURSOR_GLIDE_MAX_PIECES: usize = 16;
+/// Fade-in applied to the first cursor dialogue so the glyph does not pop
+/// into existence at the first pointer event (its position is unknown before
+/// that event, so nothing is drawn earlier).
+#[cfg(any(linux, test))]
+const CURSOR_FADE_IN: Duration = Duration::from_millis(150);
 
 #[cfg(any(linux, test))]
 fn click_ring_duration() -> Duration {
@@ -434,6 +466,27 @@ pub(crate) fn remap_source_interval(
     (out_end > out_start).then_some((out_start, out_end))
 }
 
+/// Remaps a single source-timeline instant onto the compacted output timeline.
+/// Returns `None` when the instant falls in removed footage — defensive only:
+/// every pointer event lies inside its group's retained window by
+/// construction.
+#[cfg(any(linux, test))]
+fn remap_source_instant(instant: Duration, segments: &[KeepSegment]) -> Option<Duration> {
+    segments
+        .iter()
+        .find(|seg| seg.source_start <= instant && instant < seg.source_end)
+        .map(|seg| seg.output_start + (instant - seg.source_start))
+}
+
+/// Total duration of the compacted output timeline (the concatenated retained
+/// segments).
+#[cfg(any(linux, test))]
+fn output_duration(segments: &[KeepSegment]) -> Duration {
+    segments.last().map_or(Duration::ZERO, |seg| {
+        seg.output_start + (seg.source_end - seg.source_start)
+    })
+}
+
 /// Builds an ASS subtitle document that renders each entry as a bottom-center
 /// row on the compacted output timeline. Entries are ordered by source start;
 /// each group's overlay display interval (its action window lingered
@@ -524,7 +577,12 @@ pub(crate) fn build_overlay_ass(
     // The whole recording's pointer events are flattened into one stream and
     // classified once, so a drag split across `UseComputer` calls renders one
     // continuous trail rather than a per-entry held press plus stray moves.
-    append_recording_pointer_dialogues(&mut script, &ordered, &segments, width, height);
+    let stream = flatten_pointer_events(&ordered);
+    append_recording_pointer_dialogues(&mut script, &stream, &segments, width, height);
+    // The synthetic cursor is drawn above everything else: the capture
+    // composites no real cursor (see `append_cursor_dialogues`), so this pass
+    // is the artifact's only visible pointer.
+    append_cursor_dialogues(&mut script, &stream, &segments, width, height);
     script
 }
 
@@ -579,14 +637,27 @@ enum PointerGesture {
 /// This enforces the drag-vs-click exclusivity invariant: a drag never emits a
 /// click ring.
 ///
+/// Scroll samples are position-only and never affect classification: they add
+/// no trail point and change no button state.
+///
 /// The stream is recording-level — every committed entry's `pointer_events`
-/// concatenated and stable-sorted by offset (see [`append_recording_pointer_dialogues`])
+/// concatenated and stable-sorted by offset (see [`flatten_pointer_events`])
 /// — so a drag split across multiple `UseComputer` calls (`Down` in one call,
 /// `Move`s in others, `Up` in a later call) is reconstructed into a single
 /// gesture rather than a per-entry held press plus stray moves.
+///
+/// Alongside the gestures, returns one [`CursorRole`] per event describing how
+/// the synthetic cursor should treat it: events that contribute a drag's path
+/// (its press, moves, and matching release) are tagged with that drag's index
+/// so the cursor moves continuously through them; non-contributing events
+/// inside a drag (scroll samples, unmatched releases) are skipped so the
+/// cursor and the held indicator stay glued together; everything else is a
+/// free waypoint.
 #[cfg(any(linux, test))]
-fn classify_pointer_gestures(events: &[PointerEvent]) -> Vec<PointerGesture> {
+fn classify_pointer_gestures(events: &[PointerEvent]) -> (Vec<PointerGesture>, Vec<CursorRole>) {
     let mut gestures = Vec::new();
+    let mut roles = vec![CursorRole::Free; events.len()];
+    let mut drag_count = 0;
     let mut i = 0;
     while i < events.len() {
         if events[i].kind != PointerEventKind::Down {
@@ -597,6 +668,8 @@ fn classify_pointer_gestures(events: &[PointerEvent]) -> Vec<PointerGesture> {
         let down = &events[i];
         let down_button = down.button;
         let mut points = vec![(down.offset, down.point)];
+        let mut member_indices = vec![i];
+        let mut bystander_indices = Vec::new();
         let mut moved = false;
         let mut release = None;
         let mut j = i + 1;
@@ -605,6 +678,7 @@ fn classify_pointer_gestures(events: &[PointerEvent]) -> Vec<PointerGesture> {
                 PointerEventKind::Move => {
                     moved = true;
                     points.push((events[j].offset, events[j].point));
+                    member_indices.push(j);
                     j += 1;
                 }
                 PointerEventKind::Up => {
@@ -616,9 +690,17 @@ fn classify_pointer_gestures(events: &[PointerEvent]) -> Vec<PointerGesture> {
                         if moved {
                             points.push((events[j].offset, events[j].point));
                         }
+                        member_indices.push(j);
                         j += 1;
                         break;
                     }
+                    bystander_indices.push(j);
+                    j += 1;
+                }
+                // A scroll sample is position-only: it never adds a trail
+                // point or changes button state, so classification skips it.
+                PointerEventKind::Scroll => {
+                    bystander_indices.push(j);
                     j += 1;
                 }
                 // A new press closes the prior incomplete gesture: it renders as
@@ -627,48 +709,86 @@ fn classify_pointer_gestures(events: &[PointerEvent]) -> Vec<PointerGesture> {
                 PointerEventKind::Down => break,
             }
         }
-        match (moved, release) {
-            (true, _) => gestures.push(PointerGesture::Drag { points, release }),
-            (false, Some(offset)) => gestures.push(PointerGesture::Click {
-                offset,
-                point: down.point,
-            }),
-            (false, None) => gestures.push(PointerGesture::Drag {
-                points,
-                release: None,
-            }),
+        let drag = match (moved, release) {
+            (true, _) => {
+                gestures.push(PointerGesture::Drag { points, release });
+                true
+            }
+            (false, Some(offset)) => {
+                gestures.push(PointerGesture::Click {
+                    offset,
+                    point: down.point,
+                });
+                false
+            }
+            (false, None) => {
+                gestures.push(PointerGesture::Drag {
+                    points,
+                    release: None,
+                });
+                true
+            }
+        };
+        if drag {
+            for index in member_indices {
+                roles[index] = CursorRole::Drag(drag_count);
+            }
+            for index in bystander_indices {
+                roles[index] = CursorRole::Skip;
+            }
+            drag_count += 1;
         }
         i = j;
     }
-    gestures
+    (gestures, roles)
 }
 
-/// Emits the ASS vector dialogues for the whole recording's pointer gestures.
-/// Every committed entry's `pointer_events` are concatenated in source order
-/// and stable-sorted by event offset into one recording-level stream, then
-/// classified once (see [`classify_pointer_gestures`]). Each gesture is remapped
-/// through the retained segments onto the compacted output timeline. Sorting is
+/// How the synthetic cursor treats one pointer event (see
+/// [`classify_pointer_gestures`]).
+#[cfg(any(linux, test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CursorRole {
+    /// A standalone waypoint: the cursor glides into it and holds.
+    Free,
+    /// Part of the identified drag's path: the cursor moves continuously
+    /// through it while the button is held.
+    Drag(usize),
+    /// Ignored by the cursor (a position-only sample inside a drag).
+    Skip,
+}
+
+/// Flattens every committed entry's `pointer_events` (entries in source order)
+/// into one recording-level stream, stable-sorted by event offset. Sorting is
 /// stable so equal-offset events keep their insertion (dispatch) order, which
 /// preserves a `Down` before its same-offset `Up` and a call-A event before a
-/// call-B event at the same timestamp. A drag that arrives as one `UseComputer`
-/// call and one split across `Down`/`Move`/`Up` calls therefore produce the same
-/// single trail/anchor/held indicator.
+/// call-B event at the same timestamp.
 #[cfg(any(linux, test))]
-fn append_recording_pointer_dialogues(
-    script: &mut String,
-    entries: &[&ActionLogEntry],
-    segments: &[KeepSegment],
-    width: u32,
-    height: u32,
-) {
+fn flatten_pointer_events(entries: &[&ActionLogEntry]) -> Vec<PointerEvent> {
     let mut stream: Vec<PointerEvent> = Vec::new();
     for entry in entries {
         stream.extend_from_slice(&entry.pointer_events);
     }
     // `sort_by_key` is stable: equal offsets keep dispatch (insertion) order.
     stream.sort_by_key(|event| event.offset);
+    stream
+}
 
-    for gesture in classify_pointer_gestures(&stream) {
+/// Emits the ASS vector dialogues for the whole recording's pointer gestures
+/// from the flattened, offset-sorted event stream (see
+/// [`flatten_pointer_events`]), classified once (see
+/// [`classify_pointer_gestures`]). Each gesture is remapped through the
+/// retained segments onto the compacted output timeline. A drag that arrives
+/// as one `UseComputer` call and one split across `Down`/`Move`/`Up` calls
+/// therefore produce the same single trail/anchor/held indicator.
+#[cfg(any(linux, test))]
+fn append_recording_pointer_dialogues(
+    script: &mut String,
+    events: &[PointerEvent],
+    segments: &[KeepSegment],
+    width: u32,
+    height: u32,
+) {
+    for gesture in classify_pointer_gestures(events).0 {
         match gesture {
             PointerGesture::Click { offset, point } => {
                 append_click_ring(script, offset, point, segments, width, height);
@@ -678,6 +798,362 @@ fn append_recording_pointer_dialogues(
             }
         }
     }
+}
+
+/// The speed profile of one motion span. A free glide eases in and out; a
+/// drag's legs share the profile across the whole gesture — accelerate out of
+/// the press, constant speed through intermediate waypoints, settle into the
+/// final point — so the pointer never appears to stop mid-path.
+#[cfg(any(linux, test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MotionEase {
+    InOut,
+    In,
+    Out,
+    Linear,
+}
+
+/// One span of a pointer glyph's motion plan on the compacted output
+/// timeline: stationary when `from == to`, otherwise a glide from `from` to
+/// `to` on the span's ease profile.
+#[cfg(any(linux, test))]
+struct MotionSpan {
+    out_start: Duration,
+    out_end: Duration,
+    from: (i32, i32),
+    to: (i32, i32),
+    ease: MotionEase,
+    /// The drag gesture this span belongs to, when it is a drag leg.
+    drag: Option<usize>,
+}
+
+/// One input waypoint for [`build_motion_spans`], on the compacted output
+/// timeline. `drag` tags waypoints that belong to the same drag gesture.
+#[cfg(any(linux, test))]
+struct MotionWaypoint {
+    time: Duration,
+    point: (i32, i32),
+    drag: Option<usize>,
+}
+
+/// Builds a motion plan from output-timeline waypoints.
+///
+/// Between free waypoints the glyph holds at its position and then glides
+/// into the next waypoint, arriving exactly at that waypoint's time; a glide
+/// lasts at most [`CURSOR_GLIDE_MAX`] (the preceding hold shrinks to nothing
+/// when waypoints are closer together than the glide).
+///
+/// Between waypoints of the same drag the button is held, so motion is
+/// continuous instead: each leg fills its whole gap (no hold, no glide cap)
+/// and the ease profile spans the gesture — the first moving leg eases in,
+/// the last eases out, intermediate legs are linear — so the pointer never
+/// pauses at a sampled drag waypoint (see [`assign_drag_leg_easing`]).
+///
+/// The plan is computed on the output timeline so motion whose lead-in
+/// footage was removed by the cut still plays smoothly across the seam.
+/// Zero-length spans are dropped: coincident waypoints defer to the later
+/// one, matching the previous hold-only behavior for a same-instant press +
+/// release. After the last waypoint the glyph holds through `end`.
+#[cfg(any(linux, test))]
+fn build_motion_spans(waypoints: &[MotionWaypoint], end: Duration) -> Vec<MotionSpan> {
+    let mut spans = Vec::new();
+    for (index, waypoint) in waypoints.iter().enumerate() {
+        let (time, point) = (waypoint.time, waypoint.point);
+        match waypoints.get(index + 1) {
+            Some(next) if waypoint.drag.is_some() && next.drag == waypoint.drag => {
+                if next.time > time {
+                    spans.push(MotionSpan {
+                        out_start: time,
+                        out_end: next.time,
+                        from: point,
+                        to: next.point,
+                        ease: MotionEase::Linear,
+                        drag: waypoint.drag,
+                    });
+                }
+            }
+            Some(next) if next.point != point => {
+                let glide_start = next.time.saturating_sub(CURSOR_GLIDE_MAX).max(time);
+                if glide_start > time {
+                    spans.push(MotionSpan {
+                        out_start: time,
+                        out_end: glide_start,
+                        from: point,
+                        to: point,
+                        ease: MotionEase::Linear,
+                        drag: None,
+                    });
+                }
+                if next.time > glide_start {
+                    spans.push(MotionSpan {
+                        out_start: glide_start,
+                        out_end: next.time,
+                        from: point,
+                        to: next.point,
+                        ease: MotionEase::InOut,
+                        drag: None,
+                    });
+                }
+            }
+            Some(next) => {
+                if next.time > time {
+                    spans.push(MotionSpan {
+                        out_start: time,
+                        out_end: next.time,
+                        from: point,
+                        to: point,
+                        ease: MotionEase::Linear,
+                        drag: None,
+                    });
+                }
+            }
+            None => {
+                if end > time {
+                    spans.push(MotionSpan {
+                        out_start: time,
+                        out_end: end,
+                        from: point,
+                        to: point,
+                        ease: MotionEase::Linear,
+                        drag: None,
+                    });
+                }
+            }
+        }
+    }
+    assign_drag_leg_easing(&mut spans);
+    spans
+}
+
+/// Assigns the gesture-wide ease profile to each drag's legs: a lone moving
+/// leg gets the full ease-in-out; otherwise the first moving leg eases in,
+/// the last eases out, and intermediate legs stay linear. Stationary legs
+/// (real dwells, for example resting at the end point before releasing) are
+/// left as holds.
+#[cfg(any(linux, test))]
+fn assign_drag_leg_easing(spans: &mut [MotionSpan]) {
+    let mut index = 0;
+    while index < spans.len() {
+        let Some(drag) = spans[index].drag else {
+            index += 1;
+            continue;
+        };
+        let mut moving = Vec::new();
+        let mut next = index;
+        while next < spans.len() && spans[next].drag == Some(drag) {
+            if spans[next].from != spans[next].to {
+                moving.push(next);
+            }
+            next += 1;
+        }
+        match moving.as_slice() {
+            [] => {}
+            [only] => spans[*only].ease = MotionEase::InOut,
+            [first, middle @ .., last] => {
+                spans[*first].ease = MotionEase::In;
+                for &leg in middle {
+                    spans[leg].ease = MotionEase::Linear;
+                }
+                spans[*last].ease = MotionEase::Out;
+            }
+        }
+        index = next;
+    }
+}
+
+/// Eased progress in `[0, 1]` for a span's speed profile. `InOut` is
+/// smoothstep; `In`/`Out` are its quadratic halves so a drag accelerates out
+/// of the press and settles into the final point.
+#[cfg(any(linux, test))]
+fn ease_progress(ease: MotionEase, progress: f64) -> f64 {
+    match ease {
+        MotionEase::InOut => progress * progress * (3.0 - 2.0 * progress),
+        MotionEase::In => progress * progress,
+        MotionEase::Out => 1.0 - (1.0 - progress) * (1.0 - progress),
+        MotionEase::Linear => progress,
+    }
+}
+
+/// The glide position at `progress` in `[0, 1]` along a span, on the span's
+/// ease profile.
+#[cfg(any(linux, test))]
+fn eased_glide_point(span: &MotionSpan, progress: f64) -> (i32, i32) {
+    let eased = ease_progress(span.ease, progress);
+    let x = span.from.0 as f64 + (span.to.0 - span.from.0) as f64 * eased;
+    let y = span.from.1 as f64 + (span.to.1 - span.from.1) as f64 * eased;
+    (x.round() as i32, y.round() as i32)
+}
+
+/// ASS timecodes carry centisecond precision; quantizing span boundaries up
+/// front keeps adjacent dialogues exactly contiguous and lets each `\move`
+/// duration equal its dialogue's rendered length, so the glyph never doubles,
+/// vanishes, or stutters at a piece boundary.
+#[cfg(any(linux, test))]
+fn quantize_cs(duration: Duration) -> u64 {
+    (duration.as_millis() / 10) as u64
+}
+
+#[cfg(any(linux, test))]
+fn format_cs_timecode(cs: u64) -> String {
+    format_ass_timecode(Duration::from_millis(cs * 10))
+}
+
+/// Rendering parameters shared by every dialogue of one motion plan.
+#[cfg(any(linux, test))]
+struct MotionGlyph<'a> {
+    layer: u8,
+    /// Color/alpha/border override tags applied to every dialogue.
+    style_tags: &'a str,
+    /// The `\p1` drawing commands for the glyph.
+    path: &'a str,
+    /// Fades in the first emitted dialogue (clamped to that dialogue's
+    /// length); `None` renders at full opacity from the start.
+    fade_in: Option<Duration>,
+}
+
+/// Emits the dialogues for one motion plan: a stationary span renders as a
+/// single `\pos` hold and a glide span as a run of short linear `\move`
+/// pieces sampled from the ease curve (libass has no positional easing tag).
+#[cfg(any(linux, test))]
+fn append_motion_dialogues(
+    script: &mut String,
+    spans: &[MotionSpan],
+    glyph: &MotionGlyph<'_>,
+    width: u32,
+    height: u32,
+) {
+    let mut fade_in = glyph.fade_in;
+    for span in spans {
+        let pieces: Vec<(u64, u64, String)> = if span.from == span.to {
+            let (x, y) = span.from;
+            vec![(
+                quantize_cs(span.out_start),
+                quantize_cs(span.out_end),
+                format!("\\pos({x},{y})"),
+            )]
+        } else {
+            let total = span.out_end - span.out_start;
+            // A linear span needs no ease sampling: one `\move` is exact.
+            let count = if span.ease == MotionEase::Linear {
+                1
+            } else {
+                ((total.as_secs_f64() / CURSOR_GLIDE_STEP.as_secs_f64()).ceil() as usize)
+                    .clamp(1, CURSOR_GLIDE_MAX_PIECES)
+            };
+            let boundary = |index: usize| {
+                if index == count {
+                    span.out_end
+                } else {
+                    span.out_start + total.mul_f64(index as f64 / count as f64)
+                }
+            };
+            (0..count)
+                .map(|piece| {
+                    let start_cs = quantize_cs(boundary(piece));
+                    let end_cs = quantize_cs(boundary(piece + 1));
+                    let (xa, ya) = eased_glide_point(span, piece as f64 / count as f64);
+                    let (xb, yb) = eased_glide_point(span, (piece + 1) as f64 / count as f64);
+                    let move_ms = (end_cs - start_cs) * 10;
+                    (
+                        start_cs,
+                        end_cs,
+                        format!("\\move({xa},{ya},{xb},{yb},0,{move_ms})"),
+                    )
+                })
+                .collect()
+        };
+        for (start_cs, end_cs, motion) in pieces {
+            if end_cs <= start_cs {
+                continue;
+            }
+            let fade_tag = fade_in
+                .take()
+                .map(|fade| {
+                    let ms = (fade.as_millis() as u64).min((end_cs - start_cs) * 10);
+                    format!("\\fad({ms},0)")
+                })
+                .unwrap_or_default();
+            script.push_str(&format!(
+                "Dialogue: {layer},{start},{end},Cursor,,0,0,0,,\
+                 {{\\an7{motion}\\clip(0,0,{width},{height}){fade_tag}{style}\\p1}}{path}{{\\p0}}\n",
+                layer = glyph.layer,
+                start = format_cs_timecode(start_cs),
+                end = format_cs_timecode(end_cs),
+                style = glyph.style_tags,
+                path = glyph.path,
+            ));
+        }
+    }
+}
+
+/// Emits the synthetic cursor: an arrow glyph that follows the recorded
+/// pointer events. The capture composites no real X11 cursor
+/// (`-draw_mouse 0`) because XFixes only reports the user's core pointer —
+/// never the background agent seat's — so this pass is what makes the
+/// artifact's pointer visible, identically for screen and window scopes.
+///
+/// Raw XTEST dispatch warps the pointer instantly between action points, so a
+/// faithful piecewise-constant cursor teleports, which reads as choppy.
+/// Instead the glyph holds at each event's position and then glides into the
+/// next event with an eased approach (see [`build_motion_spans`]) that
+/// arrives exactly when the event fires, keeping rings and trails anchored to
+/// the moment of arrival. Within a drag the cursor instead moves continuously
+/// through the recorded path — easing in from the press and out into the
+/// final point — rather than pausing at each sampled waypoint. The plan is
+/// computed on the compacted output timeline — each event's offset remapped
+/// through the retained segments — so motion bridges a cut seam smoothly
+/// instead of being swallowed by removed footage. After the last event the
+/// glyph holds through the end of the output; there is no cursor before the
+/// first event (its position is unknown), and the first dialogue fades in
+/// over [`CURSOR_FADE_IN`].
+#[cfg(any(linux, test))]
+fn append_cursor_dialogues(
+    script: &mut String,
+    events: &[PointerEvent],
+    segments: &[KeepSegment],
+    width: u32,
+    height: u32,
+) {
+    let (_, roles) = classify_pointer_gestures(events);
+    let waypoints: Vec<MotionWaypoint> = events
+        .iter()
+        .zip(&roles)
+        .filter_map(|(event, role)| {
+            let drag = match role {
+                CursorRole::Skip => return None,
+                CursorRole::Free => None,
+                CursorRole::Drag(drag) => Some(*drag),
+            };
+            remap_source_instant(event.offset, segments).map(|out| MotionWaypoint {
+                time: out,
+                point: clamp_point(event.point, width, height),
+                drag,
+            })
+        })
+        .collect();
+    let spans = build_motion_spans(&waypoints, output_duration(segments));
+    let style_tags =
+        format!("\\1c&HFFFFFF&\\1a&H00&\\3c&H000000&\\3a&H00&\\bord{CURSOR_OUTLINE_THICKNESS}");
+    append_motion_dialogues(
+        script,
+        &spans,
+        &MotionGlyph {
+            layer: 2,
+            style_tags: &style_tags,
+            path: ass_cursor_arrow_path(),
+            fade_in: Some(CURSOR_FADE_IN),
+        },
+        width,
+        height,
+    );
+}
+
+/// A classic arrow pointer (~28 px tall) as ASS `\p` drawing commands, with
+/// the tip (hotspot) at the drawing origin so `\an7\pos` lands it exactly on
+/// the pointer position.
+#[cfg(any(linux, test))]
+fn ass_cursor_arrow_path() -> &'static str {
+    "m 0 0 l 0 25 l 6 20 l 10 28 l 14 26 l 11 18 l 19 18"
 }
 
 /// An expanding, fading orange ring centered on the click: a transparent-fill
@@ -747,7 +1223,6 @@ fn append_drag(
         .map(|(_, point)| clamp_point(*point, width, height))
         .collect();
     let (anchor_x, anchor_y) = clamped[0];
-    let (last_x, last_y) = clamped[clamped.len() - 1];
 
     // Trail + anchor, shown from press through the end of the release fade.
     if let Some((out_start, out_end)) = remap_source_interval(start_off, vis_end, segments) {
@@ -778,20 +1253,39 @@ fn append_drag(
         ));
     }
 
-    // Held indicator: a filled dot moving from the press to the release point
-    // while the button is held. Disappears at release (no fade). `\an7` centers
-    // the dot on the moving point (see [`append_click_ring`]).
+    // Held indicator: a filled dot that follows the same continuous motion as
+    // the synthetic cursor along the drag waypoints while the button is held,
+    // so the dot stays glued to the cursor glyph instead of drifting on its
+    // own schedule. Disappears at release (no fade). `\an7` centers the dot
+    // on the moving point (see [`append_click_ring`]).
     let held_end = release.unwrap_or(vis_end);
-    if let Some((out_start, out_end)) = remap_source_interval(start_off, held_end, segments) {
-        let dur_ms = (out_end - out_start).as_millis();
+    if let Some((_, out_end)) = remap_source_interval(start_off, held_end, segments) {
+        let waypoints: Vec<MotionWaypoint> = points
+            .iter()
+            .zip(&clamped)
+            .filter_map(|(&(offset, _), &point)| {
+                remap_source_instant(offset, segments).map(|out| MotionWaypoint {
+                    time: out.min(out_end),
+                    point,
+                    drag: Some(0),
+                })
+            })
+            .collect();
+        let spans = build_motion_spans(&waypoints, out_end);
+        let style_tags = format!("\\1c&H{POINTER_COLOR_BGR}&\\1a&H4B&\\bord0");
         let held = ass_circle_path(HELD_INDICATOR_RADIUS);
-        script.push_str(&format!(
-            "Dialogue: 1,{start},{end},Cursor,,0,0,0,,\
-             {{\\an7\\move({anchor_x},{anchor_y},{last_x},{last_y},0,{dur_ms})\
-             \\clip(0,0,{width},{height})\\1c&H{POINTER_COLOR_BGR}&\\1a&H4B&\\bord0\\p1}}{held}{{\\p0}}\n",
-            start = format_ass_timecode(out_start),
-            end = format_ass_timecode(out_end),
-        ));
+        append_motion_dialogues(
+            script,
+            &spans,
+            &MotionGlyph {
+                layer: 1,
+                style_tags: &style_tags,
+                path: &held,
+                fade_in: None,
+            },
+            width,
+            height,
+        );
     }
 }
 
