@@ -1,4 +1,5 @@
 use futures::FutureExt;
+use warp_core::features::FeatureFlag;
 use warpui::{App, SingletonEntity};
 
 use super::{
@@ -290,6 +291,55 @@ fn feature_intro_becomes_visible_when_target_window_is_assigned() {
                     model.active_feature_intro(),
                     Some(FeatureIntroId::CustomModelRouter)
                 );
+            });
+        });
+    });
+}
+
+#[test]
+fn agent_cli_launch_modal_shows_at_most_once() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |_, ctx| {
+            let _flag = FeatureFlag::AgentCliLaunchModal.override_enabled(true);
+
+            OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                assert!(!*AISettings::as_ref(ctx).did_check_to_trigger_agent_cli_launch_modal);
+
+                let shown = model.check_and_trigger_agent_cli_launch_modal(ctx);
+
+                // The seen marker is written up front, whether or not the modal
+                // is shown on the current channel.
+                assert!(*AISettings::as_ref(ctx).did_check_to_trigger_agent_cli_launch_modal);
+                assert_eq!(model.is_agent_cli_launch_modal_open, shown);
+
+                // A second check is a no-op, so the modal is never shown twice.
+                assert!(!model.check_and_trigger_agent_cli_launch_modal(ctx));
+
+                model.mark_agent_cli_launch_modal_dismissed(ctx);
+                assert!(!model.is_agent_cli_launch_modal_open);
+                assert!(!model.check_and_trigger_agent_cli_launch_modal(ctx));
+            });
+        });
+    });
+}
+
+#[test]
+fn agent_cli_launch_modal_skipped_when_flag_disabled() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |_, ctx| {
+            let _flag = FeatureFlag::AgentCliLaunchModal.override_enabled(false);
+
+            OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                assert!(!model.check_and_trigger_agent_cli_launch_modal(ctx));
+                // The seen marker stays untouched so the modal can still be
+                // shown once the flag is turned on.
+                assert!(!*AISettings::as_ref(ctx).did_check_to_trigger_agent_cli_launch_modal);
             });
         });
     });
