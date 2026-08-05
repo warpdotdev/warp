@@ -114,6 +114,32 @@ NSNumber *previouslyActiveAppPID;
 }
 @end
 
+// Activates the application and makes |window| key once that activation lands.
+//
+// `activateIgnoringOtherApps:` completes asynchronously, and AppKit picks the key window itself
+// when it does. In a multi-screen setup it prefers an ordinary window on another display over the
+// hotkey panel we just ordered front, so the panel loses focus moments after being shown. Re-keying
+// from NSApplicationDidBecomeActiveNotification is what makes the requested window win that race.
+static void activate_app_and_focus_window(NSWindow *window) {
+    NSApplication *app = [NSApplication sharedApplication];
+    if ([app isActive]) {
+        return;
+    }
+
+    // Declared __block so the block can reference the observer it is registering.
+    __block id observer;
+    observer = [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSApplicationDidBecomeActiveNotification
+                    object:nil
+                     queue:NULL
+                usingBlock:^(NSNotification *note __unused) {
+                  [window makeKeyAndOrderFront:nil];
+                  [[NSNotificationCenter defaultCenter] removeObserver:observer];
+                }];
+
+    [app activateIgnoringOtherApps:YES];
+}
+
 @interface WarpWindow : NSWindow <WarpWindowProtocol>
 @end
 
@@ -746,8 +772,8 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
          NSWindowCollectionBehaviorFullScreenAuxiliary);
 
     [self setMovable:NO];
-    [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
     [self makeKeyAndOrderFront:nil];
+    activate_app_and_focus_window(self);
 }
 
 // Note this returns a retained object ("create" rule).
@@ -1066,22 +1092,7 @@ void show_window_and_focus_app(WarpWindow<WarpWindowProtocol> *window, bool brin
     // There are some edge cases with the hot key window in a multi-screen setup that toggling
     // the hotkey will activate the app and only bring forward a normal window. This code makes
     // sure that we are bringing forward the hotkey window
-    if (![[NSApplication sharedApplication] isActive]) {
-        // Creates a static observer so it can be referenced in the observer callback.
-        __block id observer;
-        observer = [[NSNotificationCenter defaultCenter]
-            addObserverForName:NSApplicationDidBecomeActiveNotification
-                        object:nil
-                         queue:NULL
-                    usingBlock:^(NSNotification *note __unused) {
-                      // Make key and order front again after the app has activated to make
-                      // sure the toggled window is focused after initializing.
-                      [window makeKeyAndOrderFront:nil];
-                      [[NSNotificationCenter defaultCenter] removeObserver:observer];
-                    }];
-
-        [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
-    }
+    activate_app_and_focus_window(window);
 }
 
 void hide_window(WarpWindow<WarpWindowProtocol> *window) {
