@@ -82,13 +82,12 @@ impl TerminalInputMessageBar {
                 ctx.notify();
             }
         });
-        ctx.subscribe_to_model(&PricingPromotionState::handle(ctx), |me, _, event, ctx| {
+        ctx.subscribe_to_model(&PricingPromotionState::handle(ctx), |_, _, event, ctx| {
             if matches!(event, PricingPromotionStateEvent::Updated) {
-                me.record_visible_promotion(ctx);
                 ctx.notify();
             }
         });
-        let message_bar = Self {
+        Self {
             terminal_model,
             ai_input_model,
             input_buffer_model,
@@ -96,21 +95,7 @@ impl TerminalInputMessageBar {
             suggestions_mode_model,
             inline_history_model,
             promotion_close_mouse_state: MouseStateHandle::default(),
-        };
-        message_bar.record_visible_promotion(ctx);
-        message_bar
-    }
-
-    fn record_visible_promotion(&self, ctx: &mut ViewContext<Self>) {
-        if PricingPromotionState::as_ref(ctx)
-            .visible_message(PricingPromotionSurface::TerminalMessageBar, ctx)
-            .is_none()
-        {
-            return;
         }
-        PricingPromotionState::handle(ctx).update(ctx, |state, ctx| {
-            state.record_displayed(PricingPromotionSurface::TerminalMessageBar, ctx);
-        });
     }
 }
 

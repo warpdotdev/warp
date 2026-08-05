@@ -312,7 +312,8 @@ impl AgentMessageBar {
     }
 
     fn record_visible_promotion(&self, ctx: &mut ViewContext<Self>) {
-        if !self.agent_view_controller.as_ref(ctx).is_active()
+        if cfg!(target_family = "wasm")
+            || !self.agent_view_controller.as_ref(ctx).is_active()
             || self
                 .input_suggestions_model
                 .as_ref(ctx)
