@@ -162,9 +162,6 @@ impl OfferVariant {
 #[derive(Clone, Debug)]
 pub enum OfferSlideAction {
     SelectPrimary,
-    /// The full-width "Subscribe to Warp plan" button inside the combined
-    /// "Use Warp with AI" card: pick the plan and start the upgrade flow.
-    Subscribe,
     SelectBuyCredits,
     SelectSetUpLater,
     SelectCreditPack(usize),
@@ -192,8 +189,11 @@ pub enum OfferSlideEvent {
 
 pub struct OfferSlide {
     onboarding_state: ModelHandle<OnboardingStateModel>,
-    /// Also backs the "Subscribe to Warp plan" button in the combined card.
+    /// Backs the "Subscribe to Warp plan" button, which only selects the plan.
     primary_mouse_state: MouseStateHandle,
+    /// Backs the click target covering the whole "Use Warp with AI" card, so a
+    /// click anywhere in it (not on a nested control) selects the card.
+    use_ai_card_mouse_state: MouseStateHandle,
     secondary_mouse_state: MouseStateHandle,
     /// One hover handle per rendered credit pack row. Allocated up front so
     /// each row keeps a stable handle across renders.
@@ -215,6 +215,7 @@ impl OfferSlide {
         Self {
             onboarding_state,
             primary_mouse_state: MouseStateHandle::default(),
+            use_ai_card_mouse_state: MouseStateHandle::default(),
             secondary_mouse_state: MouseStateHandle::default(),
             credit_pack_mouse_states: std::array::from_fn(|_| MouseStateHandle::default()),
             back_button: button::Button::default(),
@@ -513,9 +514,13 @@ impl OfferSlide {
             .with_child(header)
             .with_child(Container::new(description).with_margin_top(8.).finish())
             .with_child(
-                Container::new(self.render_subscribe_button(appearance, variant))
-                    .with_margin_top(16.)
-                    .finish(),
+                Container::new(self.render_subscribe_button(
+                    appearance,
+                    variant,
+                    selected_choice == OfferChoice::Primary,
+                ))
+                .with_margin_top(16.)
+                .finish(),
             );
 
         // Packs (and the divider that introduces them) only appear once server
@@ -534,19 +539,35 @@ impl OfferSlide {
                 );
         }
 
-        Container::new(column.finish())
+        let card = Container::new(column.finish())
             .with_uniform_padding(24.)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
             .with_border(Border::all(1.).with_border_fill(border))
+            .finish();
+
+        // The whole card is one click target: a click anywhere in it selects
+        // the plan (the card's default in-card choice). The plan button and the
+        // pack tiles are nested click targets, so `defer_events_to_children`
+        // lets their more specific selection win while a click on any other
+        // part of the card still selects the card.
+        Hoverable::new(self.use_ai_card_mouse_state.clone(), move |_| card)
+            .with_defer_events_to_children()
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(OfferSlideAction::SelectPrimary);
+            })
             .finish()
     }
 
     /// The full-width "Subscribe to Warp plan" button inside the combined card.
-    /// Clicking it starts the same upgrade flow the standalone plan card used.
+    /// It only *selects* the plan — the upgrade flow is started by "Get
+    /// Warping" — and paints as selected exactly when the plan is the current
+    /// choice, so it can never look selected at the same time as a pack tile.
     fn render_subscribe_button(
         &self,
         appearance: &Appearance,
         variant: OfferVariant,
+        selected: bool,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let label = appearance
@@ -569,21 +590,29 @@ impl OfferSlide {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(label)
             .finish();
-        let background = internal_colors::accent_overlay_1(theme);
-        let border = theme.accent();
+        // Filled/accent only while the plan is the selection; otherwise a plain
+        // outline, so the button never reads as selected next to a chosen pack.
+        let background = selected.then(|| internal_colors::accent_overlay_1(theme));
+        let border = if selected {
+            theme.accent()
+        } else {
+            Fill::Solid(internal_colors::neutral_4(theme))
+        };
 
         Hoverable::new(self.primary_mouse_state.clone(), move |_| {
-            Container::new(content)
+            let mut button = Container::new(content)
                 .with_horizontal_padding(12.)
                 .with_vertical_padding(10.)
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
-                .with_background(background)
-                .with_border(Border::all(1.).with_border_fill(border))
-                .finish()
+                .with_border(Border::all(1.).with_border_fill(border));
+            if let Some(background) = background {
+                button = button.with_background(background);
+            }
+            button.finish()
         })
         .with_cursor(Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(OfferSlideAction::Subscribe);
+            ctx.dispatch_typed_action(OfferSlideAction::SelectPrimary);
         })
         .finish()
     }
@@ -986,14 +1015,6 @@ impl OfferSlide {
         ctx.notify();
     }
 
-    /// Picks the plan and starts the upgrade flow. The subscribe button and the
-    /// keyboard path (selecting the plan, then Get Warping) resolve to the same
-    /// action, so the button behaves identically to the old plan card.
-    fn subscribe(&mut self, ctx: &mut ViewContext<Self>) {
-        self.select_choice(OfferChoice::Primary, ctx);
-        self.request_upgrade(ctx);
-    }
-
     fn set_up_later(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(variant) = self.variant(ctx) else {
             return;
@@ -1024,6 +1045,12 @@ impl OfferSlide {
             return;
         }
         self.selected_choice = choice;
+        // Changing the selection abandons a checkout that is only waiting for the
+        // browser, so the footer returns to "Get Warping" and a new link can be
+        // opened.
+        self.onboarding_state.update(ctx, |model, ctx| {
+            model.reset_pending_checkout(ctx);
+        });
         ctx.notify();
     }
 
@@ -1044,6 +1071,19 @@ impl OfferSlide {
     }
 
     fn select_credit_pack(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        // Switching *into* the credit option is handled by `select_choice`;
+        // switching to a different denomination while already on it must also
+        // reset a pending checkout so a link can be opened for the new pack.
+        let denomination_changed = self
+            .onboarding_state
+            .as_ref(ctx)
+            .selected_credit_pack_index()
+            != index;
+        if self.selected_choice == OfferChoice::BuyCredits && denomination_changed {
+            self.onboarding_state.update(ctx, |model, ctx| {
+                model.reset_pending_checkout(ctx);
+            });
+        }
         self.select_choice(OfferChoice::BuyCredits, ctx);
         self.onboarding_state.update(ctx, |model, ctx| {
             model.select_credit_pack(index, ctx);
@@ -1129,7 +1169,6 @@ impl TypedActionView for OfferSlide {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             OfferSlideAction::SelectPrimary => self.select_choice(OfferChoice::Primary, ctx),
-            OfferSlideAction::Subscribe => self.subscribe(ctx),
             OfferSlideAction::SelectBuyCredits => {
                 self.select_choice(OfferChoice::BuyCredits, ctx);
             }
