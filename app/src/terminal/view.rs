@@ -457,6 +457,7 @@ use crate::terminal::session_settings::{
     SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
 };
 use crate::terminal::settings::{TerminalSettings, TerminalSettingsChangedEvent};
+use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::role_change_modal::{
     RoleChangeCloseSource, RoleChangeOpenSource,
 };
@@ -16760,9 +16761,12 @@ impl TerminalView {
                             .block_at(tail_block_index)
                             .is_none_or(|b| b.is_restored());
 
-                    items.extend(
-                        self.session_sharing_context_menu_items(&model, is_share_session_disabled),
-                    );
+                    let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+                    items.extend(self.session_sharing_context_menu_items(
+                        &model,
+                        is_share_session_disabled,
+                        has_session_link,
+                    ));
                 }
 
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
@@ -16970,7 +16974,12 @@ impl TerminalView {
                 if FeatureFlag::CreatingSharedSessions.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled()
                 {
-                    items.extend(self.session_sharing_context_menu_items(&model, false));
+                    let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+                    items.extend(self.session_sharing_context_menu_items(
+                        &model,
+                        false,
+                        has_session_link,
+                    ));
                 }
 
                 items
@@ -17441,7 +17450,8 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            items.extend(self.session_sharing_context_menu_items(&model, false));
+            let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+            items.extend(self.session_sharing_context_menu_items(&model, false, has_session_link));
         }
 
         // Section 2: AI Command Search, Ask Warp AI
@@ -17679,7 +17689,12 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            menu_items.extend(self.session_sharing_context_menu_items(&model, false));
+            let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+            menu_items.extend(self.session_sharing_context_menu_items(
+                &model,
+                false,
+                has_session_link,
+            ));
         }
         let current_shell = model.shell_launch_state().available_shell();
         let mut pane_context_menu_items = self.pane_context_menu_items(current_shell, ctx);

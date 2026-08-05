@@ -439,6 +439,12 @@ enum TuiEntryPoint {
         execute: Box<dyn FnOnce(&mut warpui::AppContext)>,
     },
 }
+
+enum AuthInitialization {
+    Persisted,
+    PendingApiKey(String),
+}
+
 impl LaunchMode {
     fn args(&self) -> Cow<'_, warp_cli::AppArgs> {
         match self {
@@ -467,23 +473,10 @@ impl LaunchMode {
         }
     }
 
-    /// Returns whether a startup API key should be installed before its user is fetched.
-    ///
-    /// The interactive TUI defers the key so its UI cannot treat credential presence as a
-    /// validated identity. Other launch modes retain their existing initialization behavior.
-    fn should_initialize_api_key_eagerly(&self) -> bool {
-        match self {
-            LaunchMode::Tui {
-                entrypoint: TuiEntryPoint::Interactive { .. },
-            } => false,
-            LaunchMode::App { .. }
-            | LaunchMode::CommandLine { .. }
-            | LaunchMode::Test { .. }
-            | LaunchMode::RemoteServerProxy
-            | LaunchMode::RemoteServerDaemon { .. }
-            | LaunchMode::Tui {
-                entrypoint: TuiEntryPoint::CliCommand { .. },
-            } => true,
+    fn auth_initialization(&self) -> AuthInitialization {
+        match self.api_key() {
+            Some(api_key) => AuthInitialization::PendingApiKey(api_key),
+            None => AuthInitialization::Persisted,
         }
     }
 
@@ -1466,16 +1459,14 @@ pub(crate) fn initialize_app(
         ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());
     }
 
-    let (api_key, pending_api_key) = if launch_mode.should_initialize_api_key_eagerly() {
-        (launch_mode.api_key(), None)
-    } else {
-        (None, launch_mode.api_key())
+    let (auth_state, pending_api_key) = match launch_mode.auth_initialization() {
+        AuthInitialization::Persisted => (AuthState::initialize(ctx), None),
+        AuthInitialization::PendingApiKey(api_key) => (
+            AuthState::initialize_for_credential_validation(ctx),
+            Some(api_key),
+        ),
     };
-    let auth_state = Arc::new(if pending_api_key.is_some() {
-        AuthState::initialize_for_credential_validation(ctx)
-    } else {
-        AuthState::initialize(ctx, api_key)
-    });
+    let auth_state = Arc::new(auth_state);
     timer.mark_interval_end("AUTH_MANAGER_SET_USER");
 
     let agent_source = determine_agent_source(launch_mode);
@@ -2386,12 +2377,13 @@ pub(crate) fn initialize_app(
     // CLI commands establish IAP access and refresh auth in their dispatch path so they can
     // surface failures synchronously. Interactive clients wait for IAP here before authenticating
     // their startup user, since the request itself calls the IAP-gated warp-server.
-    let startup_authentication = pending_api_key
-        .map(StartupUserAuthentication::ApiKey)
-        .or_else(|| {
-            (user_is_logged_in && !matches!(launch_mode, LaunchMode::CommandLine { .. }))
-                .then_some(StartupUserAuthentication::RefreshUser)
-        });
+    let startup_authentication = if matches!(launch_mode, LaunchMode::CommandLine { .. }) {
+        None
+    } else {
+        pending_api_key
+            .map(StartupUserAuthentication::ApiKey)
+            .or_else(|| user_is_logged_in.then_some(StartupUserAuthentication::RefreshUser))
+    };
     if let Some(authentication) = startup_authentication {
         authenticate_user_after_iap_access(authentication, ctx);
     }

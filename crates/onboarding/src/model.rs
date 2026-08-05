@@ -599,6 +599,19 @@ impl OnboardingStateModel {
         ctx.notify();
     }
 
+    /// Drops a checkout that is only waiting for the browser round-trip back to
+    /// `Idle` so a changed selection can start a fresh purchase. Called when the
+    /// user changes their offer selection: an abandoned or backgrounded checkout
+    /// must not trap them on "Waiting for checkout\u{2026}". A mutation still in
+    /// flight (`Purchasing`) is deliberately left untouched.
+    pub(crate) fn reset_pending_checkout(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.credit_purchase_state != CreditPurchaseState::AwaitingCheckout {
+            return;
+        }
+        self.credit_purchase_state = CreditPurchaseState::Idle;
+        ctx.notify();
+    }
+
     pub(crate) fn no_ai_confirmation(&self) -> Option<NoAiConfirmationSource> {
         self.no_ai_confirmation
     }

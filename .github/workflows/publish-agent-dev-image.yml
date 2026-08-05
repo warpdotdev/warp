@@ -35,7 +35,8 @@ jobs:
   publish:
     name: Build and push agent-dev image
     # Namespace runners build linux/amd64 and linux/arm64 natively, so no QEMU
-    # or Buildx setup step is needed (matches warp-server's sidecar workflow).
+    # or Buildx setup step is needed (same runner profile as warp-server's
+    # sidecar workflow).
     runs-on: namespace-profile-ubuntu-small
     steps:
       - name: Check out warp
@@ -46,6 +47,12 @@ jobs:
         uses: docker/oidc-action@96ba694c64860c7209bcd1ede7d698c71564ef78 # v1.2.0
         with:
           connection-id: 0a8fc2fc-a9a0-4115-a449-0c7a64bd74c2
+          # The action's 300s default expires mid-build: buildx only requests a
+          # push-scoped token once the ~6.5 minute multi-arch build finishes, and
+          # Docker Hub rejects the expired token as "401 Unauthorized: incorrect
+          # username or password". An hour leaves headroom for the cold-cache
+          # scheduled rebuilds.
+          expires-in: 3600
 
       - name: Log in to Docker Hub
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
