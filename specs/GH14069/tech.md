@@ -92,7 +92,7 @@ The setter calls retain current behavior:
 
 - ungrouped tabs reuse existing set/reset telemetry and view notification;
 - grouped tabs continue to render their shared color on the group header and container without overwriting member tab colors;
-- app-state saving happens after the action handler;
+- app-state saving happens once through the typed-action postamble after the action handler;
 - focus, active-tab selection, terminal input, and the existing `/set-tab-color` and picker paths remain untouched.
 
 Do not dispatch six parameterized actions or add per-color editable bindings. Do not implement the cycle in the slash-command parser or the color-dot renderer.
@@ -128,14 +128,15 @@ Map the product invariants to concrete coverage:
 
 4. Add a binding-registration assertion using the initialized workspace test app:
    - The binding name is `workspace:cycle_active_tab_color`.
-   - Its description is `Cycle current tab color`.
+   - Its source description is `Cycle current tab color`; the standard binding normalization renders it as `Cycle Current Tab Color`.
    - It has no default trigger.
    - It remains editable and has a workspace context predicate.
    - Covers behavior 1–2 and 11.
 
-5. Add a Command Palette data-source/action test:
+5. Cover the Command Palette data-source/action contract in the fully registered GUI integration test below:
    - Searching for the exact label `Cycle current tab color` returns the new workspace action while a workspace is active.
-   - Invoking that search result advances the active tab from no color to Red.
+   - The selected result is the exact `AcceptBinding` for `workspace:cycle_active_tab_color` before Enter is dispatched.
+   - Invoking that search result advances the active tab from Green to Yellow after the two keybinding invocations below.
    - The active tab, pane, focus, and terminal input remain unchanged.
    - Covers behavior 1, 3, 8–9, and 11.
 
@@ -165,7 +166,7 @@ Following the existing custom-keybinding integration pattern:
 This approach is grounded in the current custom-keybinding integration test and the existing public `Workspace::get_tab_color` assertion surface linked in Context. It covers the actual editable-binding dispatch and behavior 2–4, 8–9, and 11. Run it with:
 
 ```bash
-WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS=1 cargo run -p integration -- test_cycle_active_tab_color_with_keybinding
+WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS=1 cargo run -p integration --bin integration -- test_cycle_active_tab_color_with_keybinding
 ```
 
 ### Manual proof for the implementation PR
