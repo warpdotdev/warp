@@ -50,6 +50,7 @@ pub struct DiscoverableTeam {
     pub team_uid: String,
     pub num_members: i64,
     pub name: String,
+    pub color: Option<String>,
     pub team_accepting_invites: bool,
 }
 

@@ -1206,6 +1206,7 @@ enum DisableReason {
 }
 
 type DiscoverableTeamData {
+  color: String
   name: String!
   numMembers: Int!
   teamAcceptingInvites: Boolean!
@@ -1970,6 +1971,17 @@ type IssueTaskIdentityTokenOutput implements Response {
 }
 
 union IssueTaskIdentityTokenResult = IssueTaskIdentityTokenOutput | UserFacingError
+input JoinTeamInWorkspaceInput {
+  entrypoint: TeamDiscoveryEntrypoint!
+  teamUid: ID!
+}
+
+type JoinTeamInWorkspaceOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union JoinTeamInWorkspaceResult = JoinTeamInWorkspaceOutput | UserFacingError
 
 input JoinTeamWithTeamDiscoveryInput {
   entrypoint: TeamDiscoveryEntrypoint!
@@ -1982,6 +1994,22 @@ type JoinTeamWithTeamDiscoveryOutput implements Response {
 }
 
 union JoinTeamWithTeamDiscoveryResult = JoinTeamWithTeamDiscoveryOutput | UserFacingError
+input JoinWorkspaceFromDiscoveryInput {
+  workspaceUid: ID!
+}
+
+type JoinWorkspaceFromDiscoveryOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union JoinWorkspaceFromDiscoveryResult = JoinWorkspaceFromDiscoveryOutput | UserFacingError
+
+type JoinableWorkspaceData {
+  joinableTeams: [DiscoverableTeamData!]!
+  name: String!
+  workspaceUid: ID!
+}
 
 input LeaveObjectInput {
   objectUid: ID!
@@ -3135,7 +3163,9 @@ type RootMutation {
   giveUpNotebookEditAccess(input: UpdateNotebookEditAccessInput!, requestContext: RequestContext!): UpdateNotebookEditAccessResult!
   grabNotebookEditAccess(input: UpdateNotebookEditAccessInput!, requestContext: RequestContext!): UpdateNotebookEditAccessResult!
   issueTaskIdentityToken(input: IssueTaskIdentityTokenInput!, requestContext: RequestContext!): IssueTaskIdentityTokenResult!
+  joinTeamInWorkspace(input: JoinTeamInWorkspaceInput!, requestContext: RequestContext!): JoinTeamInWorkspaceResult!
   joinTeamWithTeamDiscovery(input: JoinTeamWithTeamDiscoveryInput!, requestContext: RequestContext!): JoinTeamWithTeamDiscoveryResult!
+  joinWorkspaceFromDiscovery(input: JoinWorkspaceFromDiscoveryInput!, requestContext: RequestContext!): JoinWorkspaceFromDiscoveryResult!
 
   """The API for leaving an object as a direct guest or link-shared."""
   leaveObject(input: LeaveObjectInput!, requestContext: RequestContext!): LeaveObjectResult!
@@ -4410,6 +4440,7 @@ type User {
   globalSkills: [String!]!
   isOnWorkDomain: Boolean!
   isOnboarded: Boolean!
+  joinableWorkspaces: [JoinableWorkspaceData!]!
   llms: FeatureModelChoice!
   managedSecrets: ManagedSecretConfig
   onboardingSurveyStatus: OnboardingSurveyStatus
@@ -4607,6 +4638,7 @@ type Workspace {
   inviteCode: String
   inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]!
   isEligibleForDiscovery: Boolean!
+  joinableTeams: [DiscoverableTeamData!]!
   memberSpendLimits: [MemberSpendLimit!]
   members: [WorkspaceMember!]!
   name: String!

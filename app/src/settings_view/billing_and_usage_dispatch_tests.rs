@@ -7,6 +7,7 @@ fn workspace_with_customer_type(customer_type: CustomerType) -> Workspace {
         name: "test".to_string(),
         stripe_customer_id: None,
         teams: vec![],
+        joinable_teams: vec![],
         billing_metadata: BillingMetadata {
             customer_type,
             ..Default::default()

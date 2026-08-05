@@ -1,6 +1,6 @@
 use core::default::Default;
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use email_address::EmailAddress;
@@ -78,7 +78,8 @@ use crate::workspaces::team::{DiscoverableTeam, MembershipRole, Team, TeamDelete
 use crate::workspaces::update_manager::{TeamUpdateManager, TeamUpdateManagerEvent};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::{
-    BillingMetadata, CustomerType, DelinquencyStatus, WorkspaceSizePolicy,
+    BillingMetadata, CustomerType, DelinquencyStatus, JoinableWorkspace, WorkspaceSizePolicy,
+    WorkspaceUid,
 };
 
 const TEAM_MEMBERS_HEADER_POSITION_ID: &str = "team_settings:team_members_header";
@@ -131,6 +132,20 @@ lazy_static! {
     static ref PAST_DUE_BADGE_COLOR: ColorU = ColorU::new(254, 253, 194, 255);
     static ref UNPAID_BADGE_COLOR: ColorU = ColorU::new(255, 130, 114, 255);
     static ref DELINQUENCY_BADGE_TEXT_COLOR: ColorU = ColorU::new(0, 0, 0, 190);
+}
+
+#[derive(Clone, Copy)]
+enum NativeTeamJoinTarget {
+    CurrentWorkspace,
+    DiscoveredWorkspace(WorkspaceUid),
+}
+
+struct NativeTeamCardData {
+    team_uid: ServerId,
+    name: String,
+    color: Option<String>,
+    num_members: i64,
+    joined: bool,
 }
 
 fn owner_state_chip_text_color(theme: &themes::theme::WarpTheme) -> ColorU {
@@ -195,6 +210,16 @@ pub enum TeamsPageAction {
     JoinTeamWithTeamDiscovery {
         team_uid: ServerId,
     },
+    JoinTeamInWorkspace {
+        team_uid: ServerId,
+    },
+    JoinWorkspaceFromDiscovery {
+        workspace_uid: WorkspaceUid,
+    },
+    JoinTeamInDiscoveredWorkspace {
+        workspace_uid: WorkspaceUid,
+        team_uid: ServerId,
+    },
     ShowTransferOwnershipModal {
         new_owner_email: String,
         new_owner_uid: UserUid,
@@ -233,6 +258,9 @@ impl TeamsPageAction {
                 | ToggleTeamDiscoverabilityBeforeCreation
                 | ToggleTeamDiscoverability { .. }
                 | JoinTeamWithTeamDiscovery { .. }
+                | JoinTeamInWorkspace { .. }
+                | JoinWorkspaceFromDiscovery { .. }
+                | JoinTeamInDiscoveredWorkspace { .. }
         )
     }
 }
@@ -258,8 +286,32 @@ impl From<&TeamsPageAction> for LoginGatedFeature {
                 "Toggle Team Discoverability"
             }
             JoinTeamWithTeamDiscovery { .. } => "Join Team With Team Discovery",
+            JoinTeamInWorkspace { .. } => "Join Team In Workspace",
+            JoinWorkspaceFromDiscovery { .. } => "Join Workspace From Discovery",
+            JoinTeamInDiscoveredWorkspace { .. } => "Join Team In Discovered Workspace",
             _ => "Unknown reason",
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TeamDiscoveryMode {
+    Legacy,
+    CurrentNativeWorkspace,
+    SignupWorkspaceChooser,
+    SoleSignupWorkspace,
+}
+
+fn team_discovery_mode(
+    current_workspace_is_native: Option<bool>,
+    joinable_workspace_count: usize,
+) -> TeamDiscoveryMode {
+    match current_workspace_is_native {
+        Some(true) => TeamDiscoveryMode::CurrentNativeWorkspace,
+        Some(false) => TeamDiscoveryMode::Legacy,
+        None if joinable_workspace_count == 1 => TeamDiscoveryMode::SoleSignupWorkspace,
+        None if joinable_workspace_count > 1 => TeamDiscoveryMode::SignupWorkspaceChooser,
+        None => TeamDiscoveryMode::Legacy,
     }
 }
 
@@ -477,6 +529,8 @@ pub struct TeamsPageView {
     transfer_ownership_modal_state: ModalViewState<Modal<TransferOwnershipConfirmationModal>>,
     clipped_scroll_state: ClippedScrollStateHandle,
     discoverable_teams_states: Vec<DiscoverableTeamState>,
+    native_team_mouse_states: HashMap<ServerId, MouseStateHandle>,
+    native_workspace_mouse_states: HashMap<WorkspaceUid, MouseStateHandle>,
     rename_team_editor: ViewHandle<ClickableTextInput>,
     checkbox_value: bool,
     member_actions_menu: ViewHandle<Menu<TeamsPageAction>>,
@@ -604,6 +658,27 @@ impl TypedActionView for TeamsPageView {
                 self.join_team_with_team_discovery(*team_uid, ctx);
                 ctx.notify();
             }
+            TeamsPageAction::JoinTeamInWorkspace { team_uid } => {
+                self.user_workspaces.update(ctx, |workspaces, ctx| {
+                    workspaces.join_team_in_workspace(*team_uid, ctx);
+                });
+                ctx.notify();
+            }
+            TeamsPageAction::JoinWorkspaceFromDiscovery { workspace_uid } => {
+                self.user_workspaces.update(ctx, |workspaces, ctx| {
+                    workspaces.join_workspace_from_discovery(*workspace_uid, ctx);
+                });
+                ctx.notify();
+            }
+            TeamsPageAction::JoinTeamInDiscoveredWorkspace {
+                workspace_uid,
+                team_uid,
+            } => {
+                self.user_workspaces.update(ctx, |workspaces, ctx| {
+                    workspaces.join_team_in_discovered_workspace(*workspace_uid, *team_uid, ctx);
+                });
+                ctx.notify();
+            }
             TeamsPageAction::ShowTransferOwnershipModal {
                 new_owner_email,
                 new_owner_uid,
@@ -696,6 +771,7 @@ impl TeamsPageView {
         ctx.observe(&user_workspaces, |me, _, ctx| {
             me.update_team_members_state(ctx);
             me.update_approved_domains_state(ctx);
+            me.update_native_discovery_state(ctx);
         });
         ctx.subscribe_to_model(&user_workspaces, |me, _handle, event, ctx| {
             me.handle_model_event(event, ctx);
@@ -833,7 +909,7 @@ impl TeamsPageView {
         });
 
         let page = PageType::new_monolith(TeamsWidget::default(), None, true);
-        TeamsPageView {
+        let mut page = TeamsPageView {
             self_handle: ctx.handle(),
             page,
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
@@ -863,10 +939,54 @@ impl TeamsPageView {
             pending_team_action_confirmation: None,
             transfer_ownership_modal_state: ModalViewState::new(transfer_ownership_modal),
             discoverable_teams_states: Vec::new(),
+            native_team_mouse_states: HashMap::new(),
+            native_workspace_mouse_states: HashMap::new(),
             rename_team_editor,
             checkbox_value: true,
             member_actions_menu,
             open_member_actions_menu_index: None,
+        };
+        page.update_native_discovery_state(ctx);
+        page
+    }
+
+    fn update_native_discovery_state(&mut self, ctx: &AppContext) {
+        let workspaces = self.user_workspaces.as_ref(ctx);
+        let mut team_uids = HashSet::new();
+        if let Some(workspace) = workspaces.current_workspace() {
+            team_uids.extend(workspace.teams.iter().map(|team| team.uid));
+            team_uids.extend(
+                workspace
+                    .joinable_teams
+                    .iter()
+                    .map(|team| ServerId::from_string_lossy(&team.team_uid)),
+            );
+        }
+        for workspace in workspaces.joinable_workspaces() {
+            team_uids.extend(
+                workspace
+                    .joinable_teams
+                    .iter()
+                    .map(|team| ServerId::from_string_lossy(&team.team_uid)),
+            );
+        }
+        self.native_team_mouse_states
+            .retain(|team_uid, _| team_uids.contains(team_uid));
+        for team_uid in team_uids {
+            self.native_team_mouse_states.entry(team_uid).or_default();
+        }
+
+        let workspace_uids = workspaces
+            .joinable_workspaces()
+            .iter()
+            .map(|workspace| workspace.uid)
+            .collect::<HashSet<_>>();
+        self.native_workspace_mouse_states
+            .retain(|workspace_uid, _| workspace_uids.contains(workspace_uid));
+        for workspace_uid in workspace_uids {
+            self.native_workspace_mouse_states
+                .entry(workspace_uid)
+                .or_default();
         }
     }
 
@@ -926,6 +1046,7 @@ impl TeamsPageView {
             UserWorkspacesEvent::TeamsChanged => {
                 self.update_team_members_state(ctx);
                 self.update_approved_domains_state(ctx);
+                self.update_native_discovery_state(ctx);
 
                 AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
                     usage_model.refresh_request_usage_async(ctx);
@@ -936,6 +1057,9 @@ impl TeamsPageView {
             UserWorkspacesEvent::CurrentWorkspaceChanged => {
                 // A workspace selection change always emits `TeamsChanged` too,
                 // which already refreshes this page.
+            }
+            UserWorkspacesEvent::JoinableWorkspacesChanged => {
+                self.update_native_discovery_state(ctx);
             }
             UserWorkspacesEvent::ToggleInviteLinksSuccess => {
                 self.show_success("Toggled invite links", ctx);
@@ -1015,6 +1139,25 @@ impl TeamsPageView {
             }
             UserWorkspacesEvent::JoinTeamWithTeamDiscoveryRejected(err) => {
                 self.show_error("Failed to join team", Some(err), ctx);
+            }
+            UserWorkspacesEvent::JoinTeamInWorkspaceSuccess
+            | UserWorkspacesEvent::JoinTeamInDiscoveredWorkspaceSuccess => {
+                UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
+                    update_manager.refresh_updated_objects(ctx);
+                });
+                self.show_success("Successfully joined team", ctx);
+                ctx.notify();
+            }
+            UserWorkspacesEvent::JoinTeamInWorkspaceRejected(err)
+            | UserWorkspacesEvent::JoinTeamInDiscoveredWorkspaceRejected(err) => {
+                self.show_error("Failed to join team", Some(err), ctx);
+            }
+            UserWorkspacesEvent::JoinWorkspaceFromDiscoverySuccess => {
+                self.show_success("Successfully joined workspace", ctx);
+                ctx.notify();
+            }
+            UserWorkspacesEvent::JoinWorkspaceFromDiscoveryRejected(err) => {
+                self.show_error("Failed to join workspace", Some(err), ctx);
             }
             UserWorkspacesEvent::FetchDiscoverableTeamsSuccess(teams) => {
                 self.discoverable_teams_states = teams
@@ -4125,6 +4268,260 @@ impl TeamsWidget {
         team_discovery.finish()
     }
 
+    fn render_native_team_card(
+        &self,
+        view: &TeamsPageView,
+        team: NativeTeamCardData,
+        target: NativeTeamJoinTarget,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let mouse_state = view
+            .native_team_mouse_states
+            .get(&team.team_uid)
+            .cloned()
+            .unwrap_or_default();
+        let team_color = team
+            .color
+            .as_deref()
+            .and_then(|hex| warp_core::ui::color::hex_color::coloru_from_hex_string(hex).ok())
+            .unwrap_or_else(|| internal_colors::neutral_5(appearance.theme()));
+        let color_dot = appearance
+            .ui_builder()
+            .span("●".to_string())
+            .with_style(UiComponentStyles {
+                font_color: Some(team_color),
+                font_size: Some(16.),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+        let member_label = if team.num_members == 1 {
+            "1 member".to_string()
+        } else {
+            format!("{} members", team.num_members)
+        };
+        let text = Flex::column()
+            .with_child(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(8.)
+                    .with_child(color_dot)
+                    .with_child(self.render_subsubsection_header(team.name, appearance))
+                    .finish(),
+            )
+            .with_child(
+                Container::new(self.render_sub_text(member_label, appearance, None))
+                    .with_padding_top(4.)
+                    .with_padding_left(24.)
+                    .finish(),
+            )
+            .finish();
+
+        let button = if team.joined {
+            appearance
+                .ui_builder()
+                .button(ButtonVariant::Outlined, mouse_state)
+                .with_style(self.button_properties().set_width(92.).set_height(36.))
+                .with_centered_text_label("Joined".to_string())
+                .disabled()
+                .build()
+                .finish()
+        } else {
+            let action = match target {
+                NativeTeamJoinTarget::CurrentWorkspace => TeamsPageAction::JoinTeamInWorkspace {
+                    team_uid: team.team_uid,
+                },
+                NativeTeamJoinTarget::DiscoveredWorkspace(workspace_uid) => {
+                    TeamsPageAction::JoinTeamInDiscoveredWorkspace {
+                        workspace_uid,
+                        team_uid: team.team_uid,
+                    }
+                }
+            };
+            appearance
+                .ui_builder()
+                .button(ButtonVariant::Outlined, mouse_state)
+                .with_style(self.button_properties().set_width(92.).set_height(36.))
+                .with_centered_text_label("Join".to_string())
+                .build()
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                .finish()
+        };
+
+        Container::new(
+            Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(Shrinkable::new(1., text).finish())
+                .with_child(button)
+                .finish(),
+        )
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+        .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
+        .with_uniform_padding(16.)
+        .with_margin_top(12.)
+        .finish()
+    }
+
+    fn render_native_team_discovery(
+        &self,
+        view: &TeamsPageView,
+        title: String,
+        subtitle: String,
+        joined_teams: &[Team],
+        joinable_teams: &[DiscoverableTeam],
+        target: NativeTeamJoinTarget,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let mut page = Flex::column();
+        page.add_child(self.render_subsection_header(title, appearance));
+        page.add_child(
+            Container::new(self.render_sub_text(subtitle, appearance, None))
+                .with_padding_top(6.)
+                .finish(),
+        );
+
+        if joined_teams.is_empty() && joinable_teams.is_empty() {
+            page.add_child(
+                Container::new(self.render_sub_text(
+                    "No teams available — ask a workspace admin.".to_string(),
+                    appearance,
+                    None,
+                ))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+                .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
+                .with_uniform_padding(16.)
+                .with_margin_top(12.)
+                .finish(),
+            );
+            return page.finish();
+        }
+
+        for team in joined_teams {
+            page.add_child(self.render_native_team_card(
+                view,
+                NativeTeamCardData {
+                    team_uid: team.uid,
+                    name: team.name.clone(),
+                    color: team.color.clone(),
+                    num_members: team.members.len() as i64,
+                    joined: true,
+                },
+                target,
+                appearance,
+            ));
+        }
+        for team in joinable_teams {
+            page.add_child(self.render_native_team_card(
+                view,
+                NativeTeamCardData {
+                    team_uid: ServerId::from_string_lossy(&team.team_uid),
+                    name: team.name.clone(),
+                    color: team.color.clone(),
+                    num_members: team.num_members,
+                    joined: false,
+                },
+                target,
+                appearance,
+            ));
+        }
+        page.finish()
+    }
+
+    fn render_signup_workspace_chooser(
+        &self,
+        view: &TeamsPageView,
+        workspaces: &[JoinableWorkspace],
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let mut page = Flex::column();
+        page.add_child(render_sub_header(
+            appearance,
+            "Join your team".to_string(),
+            None,
+        ));
+        page.add_child(self.render_sub_header_with_subtext_color(
+            appearance,
+            "Choose a workspace or team".to_string(),
+        ));
+        page.add_child(
+            Container::new(self.render_description(
+                "Find your company workspace, then choose the team you work with.".to_string(),
+                appearance,
+            ))
+            .with_padding_top(6.)
+            .with_padding_bottom(12.)
+            .finish(),
+        );
+
+        page.add_child(self.render_subsubsection_header("Workspaces".to_string(), appearance));
+        for workspace in workspaces {
+            let workspace_uid = workspace.uid;
+            let mouse_state = view
+                .native_workspace_mouse_states
+                .get(&workspace_uid)
+                .cloned()
+                .unwrap_or_default();
+            let team_count = workspace.joinable_teams.len();
+            let team_count_label = if team_count == 1 {
+                "1 open team".to_string()
+            } else {
+                format!("{team_count} open teams")
+            };
+            let button = appearance
+                .ui_builder()
+                .button(ButtonVariant::Outlined, mouse_state)
+                .with_style(self.button_properties().set_width(110.).set_height(36.))
+                .with_centered_text_label("View teams".to_string())
+                .build()
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(TeamsPageAction::JoinWorkspaceFromDiscovery {
+                        workspace_uid,
+                    })
+                })
+                .finish();
+            let text = Flex::column()
+                .with_child(self.render_subsubsection_header(workspace.name.clone(), appearance))
+                .with_child(
+                    Container::new(self.render_sub_text(team_count_label, appearance, None))
+                        .with_padding_top(4.)
+                        .finish(),
+                )
+                .finish();
+            page.add_child(
+                Container::new(
+                    Flex::row()
+                        .with_main_axis_size(MainAxisSize::Max)
+                        .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_child(Shrinkable::new(1., text).finish())
+                        .with_child(button)
+                        .finish(),
+                )
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+                .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
+                .with_uniform_padding(16.)
+                .with_margin_top(12.)
+                .finish(),
+            );
+        }
+
+        if !view.discoverable_teams_states.is_empty() {
+            page.add_child(
+                Container::new(render_separator(appearance))
+                    .with_padding_top(16.)
+                    .with_padding_bottom(16.)
+                    .finish(),
+            );
+            page.add_child(self.render_subsubsection_header("Teams".to_string(), appearance));
+            page.add_child(self.render_team_discovery_section(view, appearance));
+        }
+        page.finish()
+    }
+
     fn render_single_team_in_team_discovery(
         &self,
         team_state: &DiscoverableTeamState,
@@ -4388,17 +4785,93 @@ impl SettingsWidget for TeamsWidget {
             let teams = view.user_workspaces.as_ref(app);
             let cloud_model = view.cloud_model.as_ref(app);
             let ai_request_usage_model = view.ai_request_usage_model.as_ref(app);
+            let mode = team_discovery_mode(
+                teams
+                    .current_workspace()
+                    .map(|workspace| workspace.is_native_workspaces_enabled()),
+                teams.joinable_workspaces().len(),
+            );
 
-            match teams.team_for_view_handle(&view.self_handle, app) {
-                Some(team) => self.render_team_management_page(
-                    team,
-                    cloud_model,
-                    ai_request_usage_model,
+            match mode {
+                TeamDiscoveryMode::CurrentNativeWorkspace => {
+                    let workspace = teams
+                        .current_workspace()
+                        .expect("native discovery mode requires a current workspace");
+                    let discovery = self.render_native_team_discovery(
+                        view,
+                        "Discover teams".to_string(),
+                        format!("Join an open team in {}.", workspace.name),
+                        &workspace.teams,
+                        &workspace.joinable_teams,
+                        NativeTeamJoinTarget::CurrentWorkspace,
+                        appearance,
+                    );
+                    if let Some(team) = teams.team_for_view_handle(&view.self_handle, app) {
+                        Flex::column()
+                            .with_child(self.render_team_management_page(
+                                team,
+                                cloud_model,
+                                ai_request_usage_model,
+                                view,
+                                appearance,
+                                app,
+                            ))
+                            .with_child(
+                                Container::new(render_separator(appearance))
+                                    .with_padding_top(16.)
+                                    .with_padding_bottom(16.)
+                                    .finish(),
+                            )
+                            .with_child(discovery)
+                            .finish()
+                    } else {
+                        Flex::column()
+                            .with_child(render_sub_header(appearance, "Teams".to_string(), None))
+                            .with_child(Container::new(discovery).with_padding_top(4.).finish())
+                            .finish()
+                    }
+                }
+                TeamDiscoveryMode::SignupWorkspaceChooser => self.render_signup_workspace_chooser(
                     view,
+                    teams.joinable_workspaces(),
                     appearance,
-                    app,
                 ),
-                None => self.render_create_team_page_with_banner(view, appearance, app),
+                TeamDiscoveryMode::SoleSignupWorkspace => {
+                    let workspace = &teams.joinable_workspaces()[0];
+                    Flex::column()
+                        .with_child(render_sub_header(
+                            appearance,
+                            "Join your team".to_string(),
+                            None,
+                        ))
+                        .with_child(
+                            Container::new(self.render_native_team_discovery(
+                                view,
+                                workspace.name.clone(),
+                                "Choose the team you work with.".to_string(),
+                                &[],
+                                &workspace.joinable_teams,
+                                NativeTeamJoinTarget::DiscoveredWorkspace(workspace.uid),
+                                appearance,
+                            ))
+                            .with_padding_top(4.)
+                            .finish(),
+                        )
+                        .finish()
+                }
+                TeamDiscoveryMode::Legacy => {
+                    match teams.team_for_view_handle(&view.self_handle, app) {
+                        Some(team) => self.render_team_management_page(
+                            team,
+                            cloud_model,
+                            ai_request_usage_model,
+                            view,
+                            appearance,
+                            app,
+                        ),
+                        None => self.render_create_team_page_with_banner(view, appearance, app),
+                    }
+                }
             }
         } else {
             appearance
@@ -4454,6 +4927,36 @@ pub fn test_valid_domains() {
     assert!(TeamsPageView::is_valid_domain("warp0.dev0"));
     assert!(TeamsPageView::is_valid_domain("warp.dev"));
     assert!(TeamsPageView::is_valid_domain("miniclip.com"));
+}
+
+#[cfg(test)]
+#[test]
+fn test_team_discovery_mode_preserves_legacy_and_skips_single_workspace_chooser() {
+    assert_eq!(
+        team_discovery_mode(Some(false), 3),
+        TeamDiscoveryMode::Legacy,
+        "non-native current workspaces must keep the legacy Teams page",
+    );
+    assert_eq!(
+        team_discovery_mode(Some(true), 0),
+        TeamDiscoveryMode::CurrentNativeWorkspace,
+        "native workspace members use in-workspace discovery",
+    );
+    assert_eq!(
+        team_discovery_mode(None, 0),
+        TeamDiscoveryMode::Legacy,
+        "users without server-gated native discovery keep the legacy signup flow",
+    );
+    assert_eq!(
+        team_discovery_mode(None, 1),
+        TeamDiscoveryMode::SoleSignupWorkspace,
+        "a sole native workspace skips the workspace chooser",
+    );
+    assert_eq!(
+        team_discovery_mode(None, 2),
+        TeamDiscoveryMode::SignupWorkspaceChooser,
+        "multiple native workspaces render the blended chooser",
+    );
 }
 
 #[cfg(test)]

@@ -27,7 +27,10 @@ use warp_graphql::billing::{
 use warp_graphql::queries::get_conversation_usage as gql_usage;
 use warp_graphql::queries::get_workspaces_metadata_for_user::User as GqlUser;
 use warp_graphql::subscriptions::get_warp_drive_updates::WarpDriveUpdate;
-use warp_graphql::user::DiscoverableTeamData as GqlDiscoverableTeamData;
+use warp_graphql::user::{
+    DiscoverableTeamData as GqlDiscoverableTeamData,
+    JoinableWorkspaceData as GqlJoinableWorkspaceData,
+};
 use warp_graphql::workspace::{
     AddonCreditsSettings as GqlAddonCreditsSettings,
     AdminEnablementSetting as GqlAdminEnablementSetting, AiAutonomyValue as GqlAiAutonomyValue,
@@ -54,13 +57,13 @@ use super::workspace::{
     BillingCycleUsageSummary, BillingMetadata, ByoEndpointMetadata, ByoEndpointModelMetadata,
     ByoFirstPartyKey, CloudConversationStorageSettings, CodebaseContextSettings, CustomerType,
     DelinquencyStatus, EmailInvite, EnterpriseSecretRegex, HostEnablementSetting, InstanceShape,
-    InviteLinkDomainRestriction, LinkSharingSettings, LlmSettings, MaxPriorCycles,
-    SandboxedAgentSettings, SecretRedactionSettings, SessionSharingPolicy, SharedNotebooksPolicy,
-    SharedWorkflowsPolicy, TeamByoSettings, TelemetryDataCollectionPolicy, TelemetrySettings, Tier,
-    UgcCollectionEnablementSetting, UgcCollectionSettings, UgcDataCollectionPolicy,
-    UsageBasedPricingPolicy, UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy,
-    Workspace, WorkspaceInviteCode, WorkspaceMember, WorkspaceMemberUsageInfo, WorkspaceSettings,
-    WorkspaceSizePolicy,
+    InviteLinkDomainRestriction, JoinableWorkspace, LinkSharingSettings, LlmSettings,
+    MaxPriorCycles, SandboxedAgentSettings, SecretRedactionSettings, SessionSharingPolicy,
+    SharedNotebooksPolicy, SharedWorkflowsPolicy, TeamByoSettings, TelemetryDataCollectionPolicy,
+    TelemetrySettings, Tier, UgcCollectionEnablementSetting, UgcCollectionSettings,
+    UgcDataCollectionPolicy, UsageBasedPricingPolicy, UsageVisibilityGranularity,
+    UsageVisibilityPolicy, WarpAiPolicy, Workspace, WorkspaceInviteCode, WorkspaceMember,
+    WorkspaceMemberUsageInfo, WorkspaceSettings, WorkspaceSizePolicy,
 };
 use crate::ai::blocklist::usage::conversation_usage_view::ConversationUsageInfo;
 use crate::ai::execution_profiles::{
@@ -1093,6 +1096,12 @@ impl From<GqlWorkspace> for Workspace {
                 .into_iter()
                 .map(|gql_team| Team::from_gql(gql_workspace.clone(), gql_team))
                 .collect(),
+            joinable_teams: gql_workspace
+                .joinable_teams
+                .clone()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             billing_metadata: gql_workspace.billing_metadata.clone().into(),
             bonus_grants_purchased_this_month: gql_workspace
                 .bonus_grants_info
@@ -1169,6 +1178,11 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
             .into_iter()
             .map(|gql_joinable_team| gql_joinable_team.into())
             .collect();
+        let joinable_workspaces = gql_user
+            .joinable_workspaces
+            .into_iter()
+            .map(Into::into)
+            .collect();
 
         let experiments = gql_user
             .experiments
@@ -1188,6 +1202,7 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
         WorkspacesMetadataResponse {
             workspaces,
             joinable_teams,
+            joinable_workspaces,
             experiments,
             feature_model_choices,
             ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
@@ -1254,7 +1269,22 @@ impl From<GqlDiscoverableTeamData> for DiscoverableTeam {
             team_uid: gql_discoverable_team.team_uid.into_inner(),
             num_members: i64::from(gql_discoverable_team.num_members),
             name: gql_discoverable_team.name,
+            color: gql_discoverable_team.color,
             team_accepting_invites: gql_discoverable_team.team_accepting_invites,
+        }
+    }
+}
+
+impl From<GqlJoinableWorkspaceData> for JoinableWorkspace {
+    fn from(gql_workspace: GqlJoinableWorkspaceData) -> Self {
+        Self {
+            uid: ServerId::from_string_lossy(gql_workspace.workspace_uid.inner()).into(),
+            name: gql_workspace.name,
+            joinable_teams: gql_workspace
+                .joinable_teams
+                .into_iter()
+                .map(Into::into)
+                .collect(),
         }
     }
 }

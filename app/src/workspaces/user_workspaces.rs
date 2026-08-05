@@ -17,7 +17,8 @@ use super::team::{DiscoverableTeam, MembershipRole, Team};
 use super::workspace::WorkspaceMemberUsageInfo;
 use super::workspace::{
     AdminEnablementSetting, BillingMetadata, CustomerType, EnterpriseSecretRegex,
-    HostEnablementSetting, UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
+    HostEnablementSetting, JoinableWorkspace, UgcCollectionEnablementSetting, Workspace,
+    WorkspaceUid,
 };
 use crate::ai::credit_availability::AICreditAvailability;
 use crate::ai::llms::LLMModelHost;
@@ -67,6 +68,13 @@ pub enum UserWorkspacesEvent {
     ToggleTeamDiscoverabilityRejected(anyhow::Error),
     JoinTeamWithTeamDiscoverySuccess,
     JoinTeamWithTeamDiscoveryRejected(anyhow::Error),
+    JoinTeamInWorkspaceSuccess,
+    JoinTeamInWorkspaceRejected(anyhow::Error),
+    JoinWorkspaceFromDiscoverySuccess,
+    JoinWorkspaceFromDiscoveryRejected(anyhow::Error),
+    JoinTeamInDiscoveredWorkspaceSuccess,
+    JoinTeamInDiscoveredWorkspaceRejected(anyhow::Error),
+    JoinableWorkspacesChanged,
     FetchDiscoverableTeamsSuccess(Vec<DiscoverableTeam>),
     FetchDiscoverableTeamsRejected(anyhow::Error),
     TransferTeamOwnershipSuccess,
@@ -102,6 +110,7 @@ pub struct UserWorkspaces {
     workspaces: Tracked<Vec<Workspace>>,
     window_team_uids: HashMap<WindowId, Option<ServerId>>,
     joinable_teams: Vec<DiscoverableTeam>,
+    joinable_workspaces: Vec<JoinableWorkspace>,
     /// The user-level add-on credits purchase policy from the latest
     /// workspaces-metadata response. Teamless (fresh free) users have no
     /// team and their only workspace is the server's placeholder, which is
@@ -119,6 +128,8 @@ pub struct WorkspacesMetadataResponse {
     pub workspaces: Vec<Workspace>,
     /// The list of discoverable teams that the user can join.
     pub joinable_teams: Vec<DiscoverableTeam>,
+    /// Native workspaces available to this teamless user through domain discovery.
+    pub joinable_workspaces: Vec<JoinableWorkspace>,
     /// The list of experiments applicable to the user.
     pub experiments: Option<Vec<ServerExperiment>>,
     /// TODO(Tyler): Post-workspaces, move this into the workspace object.
@@ -163,6 +174,7 @@ impl UserWorkspaces {
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
+            joinable_workspaces: Default::default(),
             user_purchase_policy: None,
             team_client,
             workspace_client,
@@ -213,6 +225,7 @@ impl UserWorkspaces {
             workspaces: cached_workspaces.into(),
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
+            joinable_workspaces: Default::default(),
             user_purchase_policy: None,
             team_client,
             workspace_client,
@@ -874,6 +887,10 @@ impl UserWorkspaces {
         self.joinable_teams.len()
     }
 
+    pub fn joinable_workspaces(&self) -> &[JoinableWorkspace] {
+        &self.joinable_workspaces
+    }
+
     pub fn spaces_for_window(&self, window_id: WindowId, ctx: &AppContext) -> Vec<Space> {
         if AuthStateProvider::as_ref(ctx)
             .get()
@@ -1038,6 +1055,16 @@ impl UserWorkspaces {
         ctx.notify();
     }
 
+    pub fn update_joinable_workspaces(
+        &mut self,
+        joinable_workspaces: Vec<JoinableWorkspace>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.joinable_workspaces = joinable_workspaces;
+        ctx.emit(UserWorkspacesEvent::JoinableWorkspacesChanged);
+        ctx.notify();
+    }
+
     // TODO follow up with moving other modifying calls out of UserWorkspaces to TeamUpdateManager
     fn on_workspaces_updated(
         &mut self,
@@ -1060,10 +1087,12 @@ impl UserWorkspaces {
 
                 let workspaces = response.metadata.workspaces;
                 let joinable_teams = response.metadata.joinable_teams;
+                let joinable_workspaces = response.metadata.joinable_workspaces;
 
                 self.set_user_purchase_policy(response.metadata.user_purchase_policy);
                 self.update_workspaces(workspaces.clone(), ctx);
                 self.update_joinable_teams(joinable_teams, ctx);
+                self.update_joinable_workspaces(joinable_workspaces, ctx);
 
                 // Check if the current workspace is still in the list of workspaces.
                 // If it's not, then set the current workspace to the first workspace in the list.
@@ -1321,6 +1350,106 @@ impl UserWorkspaces {
         let _ = ctx.spawn(
             async move { team_client.join_team_with_team_discovery(team_uid).await },
             Self::on_join_team_with_team_discovery,
+        );
+    }
+
+    fn on_join_team_in_workspace(
+        &mut self,
+        result: Result<WorkspacesMetadataWithPricing>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match result {
+            Err(err) => ctx.emit(UserWorkspacesEvent::JoinTeamInWorkspaceRejected(err)),
+            Ok(result) => {
+                self.on_workspaces_updated(Ok(result), ctx);
+                ctx.emit(UserWorkspacesEvent::JoinTeamInWorkspaceSuccess);
+            }
+        }
+        ctx.notify();
+    }
+
+    pub fn join_team_in_workspace(&mut self, team_uid: ServerId, ctx: &mut ModelContext<Self>) {
+        let team_client = self.team_client.clone();
+        let _ = ctx.spawn(
+            async move { team_client.join_team_in_workspace(team_uid).await },
+            Self::on_join_team_in_workspace,
+        );
+    }
+
+    fn on_join_workspace_from_discovery(
+        &mut self,
+        result: Result<WorkspacesMetadataWithPricing>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match result {
+            Err(err) => ctx.emit(UserWorkspacesEvent::JoinWorkspaceFromDiscoveryRejected(err)),
+            Ok(result) => {
+                self.on_workspaces_updated(Ok(result), ctx);
+                ctx.emit(UserWorkspacesEvent::JoinWorkspaceFromDiscoverySuccess);
+            }
+        }
+        ctx.notify();
+    }
+
+    pub fn join_workspace_from_discovery(
+        &mut self,
+        workspace_uid: WorkspaceUid,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let team_client = self.team_client.clone();
+        let workspace_uid = ServerId::from_string_lossy(&String::from(workspace_uid));
+        let _ = ctx.spawn(
+            async move {
+                team_client
+                    .join_workspace_from_discovery(workspace_uid)
+                    .await
+            },
+            Self::on_join_workspace_from_discovery,
+        );
+    }
+
+    fn on_join_team_in_discovered_workspace(
+        &mut self,
+        result: Result<(WorkspacesMetadataWithPricing, Option<anyhow::Error>)>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match result {
+            Err(err) => ctx.emit(UserWorkspacesEvent::JoinTeamInDiscoveredWorkspaceRejected(
+                err,
+            )),
+            Ok((metadata, team_join_error)) => {
+                self.on_workspaces_updated(Ok(metadata), ctx);
+                if let Some(err) = team_join_error {
+                    ctx.emit(UserWorkspacesEvent::JoinTeamInDiscoveredWorkspaceRejected(
+                        err,
+                    ));
+                } else {
+                    ctx.emit(UserWorkspacesEvent::JoinTeamInDiscoveredWorkspaceSuccess);
+                }
+            }
+        }
+        ctx.notify();
+    }
+
+    pub fn join_team_in_discovered_workspace(
+        &mut self,
+        workspace_uid: WorkspaceUid,
+        team_uid: ServerId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let team_client = self.team_client.clone();
+        let workspace_uid = ServerId::from_string_lossy(&String::from(workspace_uid));
+        let _ = ctx.spawn(
+            async move {
+                let workspace_metadata = team_client
+                    .join_workspace_from_discovery(workspace_uid)
+                    .await?;
+                match team_client.join_team_in_workspace(team_uid).await {
+                    Ok(metadata) => Ok((metadata, None)),
+                    Err(err) => Ok((workspace_metadata, Some(err))),
+                }
+            },
+            Self::on_join_team_in_discovered_workspace,
         );
     }
 
@@ -1819,6 +1948,7 @@ impl UserWorkspaces {
                 is_eligible_for_discovery: false,
                 has_billing_history: false,
             }],
+            joinable_teams: vec![],
             members: vec![WorkspaceMember {
                 uid: owner_uid,
                 email: "test@example.com".to_string(),

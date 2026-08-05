@@ -124,6 +124,7 @@ impl TeamUpdateManager {
                 metadata: WorkspacesMetadataResponse {
                     workspaces: vec![],
                     joinable_teams: vec![],
+                    joinable_workspaces: vec![],
                     experiments: None,
                     feature_model_choices: None,
                     ai_credit_availability: None,
@@ -358,12 +359,14 @@ impl TeamUpdateManager {
 
                 let workspaces = response.metadata.workspaces;
                 let joinable_teams = response.metadata.joinable_teams;
+                let joinable_workspaces = response.metadata.joinable_workspaces;
                 let user_purchase_policy = response.metadata.user_purchase_policy;
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
                     user_workspaces.set_user_purchase_policy(user_purchase_policy);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams, ctx);
+                    user_workspaces.update_joinable_workspaces(joinable_workspaces, ctx);
                 });
 
                 // Check if the current workspace is still in the list of workspaces.
@@ -478,6 +481,7 @@ impl TeamUpdateManager {
             Ok(user_workspaces_access) => {
                 let workspaces = user_workspaces_access.workspaces;
                 let joinable_teams = user_workspaces_access.joinable_teams;
+                let joinable_workspaces = user_workspaces_access.joinable_workspaces;
                 let experiments = user_workspaces_access.experiments;
                 let user_purchase_policy = user_workspaces_access.user_purchase_policy;
 
@@ -491,6 +495,7 @@ impl TeamUpdateManager {
                     user_workspaces.set_user_purchase_policy(user_purchase_policy);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams.clone(), ctx);
+                    user_workspaces.update_joinable_workspaces(joinable_workspaces, ctx);
                 });
 
                 // Check if the current workspace is still in the list of workspaces.

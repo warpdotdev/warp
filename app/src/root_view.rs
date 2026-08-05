@@ -1882,7 +1882,7 @@ impl RootView {
         });
 
         ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
-            me.handle_account_first_workspaces_event(event, ctx);
+            me.handle_user_workspaces_event(event, ctx);
         });
 
         let auth_view =
@@ -2477,6 +2477,40 @@ impl RootView {
             self.complete_account_first(AccountFirstCompletion::UpgradeCompleted, ctx);
         } else {
             self.complete_account_first(AccountFirstCompletion::PaidTeam, ctx);
+        }
+    }
+
+    fn handle_user_workspaces_event(
+        &mut self,
+        event: &UserWorkspacesEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.handle_account_first_workspaces_event(event, ctx);
+        if !matches!(
+            event,
+            UserWorkspacesEvent::TeamsChanged
+                | UserWorkspacesEvent::CurrentWorkspaceChanged
+                | UserWorkspacesEvent::JoinableWorkspacesChanged
+        ) {
+            return;
+        }
+
+        let workspaces = UserWorkspaces::as_ref(ctx);
+        let should_open_team_discovery = workspaces.current_workspace().map_or_else(
+            || !workspaces.joinable_workspaces().is_empty(),
+            |workspace| workspace.is_native_workspaces_enabled() && workspace.teams.is_empty(),
+        );
+        if !should_open_team_discovery {
+            return;
+        }
+
+        if let AuthOnboardingState::Terminal(workspace) = &self.auth_onboarding_state {
+            ctx.dispatch_typed_action_for_view(
+                self.window_id,
+                workspace.id(),
+                &WorkspaceAction::ShowSettingsPage(SettingsSection::Teams),
+            );
+            ctx.windows().show_window_and_focus_app(self.window_id);
         }
     }
 

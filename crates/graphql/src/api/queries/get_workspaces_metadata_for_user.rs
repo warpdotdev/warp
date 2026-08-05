@@ -3,7 +3,7 @@ use crate::billing::{PricingInfo, PurchaseAddOnCreditsPolicy};
 use crate::experiment::Experiment;
 use crate::request_context::RequestContext;
 use crate::schema;
-use crate::user::DiscoverableTeamData;
+use crate::user::{DiscoverableTeamData, JoinableWorkspaceData};
 use crate::workspace::Workspace;
 
 /*
@@ -246,6 +246,7 @@ pub struct User {
     pub workspaces: Vec<Workspace>,
     pub experiments: Option<Vec<Experiment>>,
     pub discoverable_teams: Vec<DiscoverableTeamData>,
+    pub joinable_workspaces: Vec<JoinableWorkspaceData>,
 }
 
 /// Slim selection of the user-level `billingMetadata`: only the add-on
