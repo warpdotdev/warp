@@ -131,6 +131,24 @@ fn choose_how_to_start_copy_and_telemetry_names_match_spec() {
     assert_eq!(variant.credits_action(), "buy_ai_credits");
 }
 
+#[test]
+fn promotion_replaces_recommended_only_on_choose_how_to_start() {
+    let promotion = Some("50% off Fable and Opus 5");
+
+    assert_eq!(
+        OfferVariant::ChooseHowToStart.primary_badge_label(promotion),
+        "50% off Fable and Opus 5"
+    );
+    assert_eq!(
+        OfferVariant::ChooseHowToStart.primary_badge_label(None),
+        "Recommended"
+    );
+    assert_eq!(
+        OfferVariant::HeadStart.primary_badge_label(promotion),
+        "Recommended"
+    );
+}
+
 /// The subscribe card must frame the add-on discount as a saving (matching the
 /// web copy), never as a surcharge on the free plan.
 #[test]
