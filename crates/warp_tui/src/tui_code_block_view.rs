@@ -10,9 +10,7 @@ use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::content::version::BufferVersion;
 use warp_editor::model::CoreEditorModel;
-use warpui_core::elements::tui::{
-    Color, TuiContainer, TuiElement, TuiFlex, TuiParentElement, TuiStyle, TuiText,
-};
+use warpui_core::elements::tui::{Color, TuiElement, TuiFlex, TuiParentElement, TuiStyle, TuiText};
 use warpui_core::{AppContext, Entity, ModelHandle, TuiView, ViewContext};
 
 use crate::editor_element::{TuiEditorElement, TuiEditorStyles};
@@ -26,12 +24,6 @@ const TRUNCATION_NOTICE: &str = "… code block truncated …";
 pub(crate) enum TuiCodeBlockViewEvent {
     LayoutChanged,
     SyntaxUpdated,
-}
-#[derive(Clone, Copy, Default)]
-pub(crate) enum TuiCodeBlockChrome {
-    #[default]
-    Bordered,
-    Minimal,
 }
 
 /// Persistent payload identity for one code child.
@@ -57,7 +49,6 @@ pub(crate) struct TuiCodeBlockView {
     expected_syntax_version: Option<BufferVersion>,
     text_overrides: Vec<(std::ops::Range<CharOffset>, TuiStyle)>,
     fallback_text: Option<String>,
-    chrome: TuiCodeBlockChrome,
 }
 
 impl TuiCodeBlockView {
@@ -69,14 +60,9 @@ impl TuiCodeBlockView {
             expected_syntax_version: None,
             text_overrides: Vec::new(),
             fallback_text: None,
-            chrome: TuiCodeBlockChrome::default(),
         };
         view.sync(payload, ctx);
         view
-    }
-    pub(crate) fn with_chrome(mut self, chrome: TuiCodeBlockChrome) -> Self {
-        self.chrome = chrome;
-        self
     }
 
     fn create_editor(ctx: &mut ViewContext<Self>) -> ModelHandle<CodeEditorModel> {
@@ -265,14 +251,7 @@ impl TuiView for TuiCodeBlockView {
             );
         }
         column.add_child(self.render_body(app));
-        let container = TuiContainer::new(column.finish());
-        match self.chrome {
-            TuiCodeBlockChrome::Bordered => container
-                .with_border_style(builder.muted_text_style())
-                .with_padding_x(1)
-                .finish(),
-            TuiCodeBlockChrome::Minimal => container.finish(),
-        }
+        column.finish()
     }
 }
 

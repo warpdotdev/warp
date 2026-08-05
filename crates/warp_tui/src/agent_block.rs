@@ -53,9 +53,7 @@ use crate::terminal_session_view::BlockingInputSource;
 use crate::transcript_view::BLOCK_TOP_PADDING_ROWS;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_cli_subagent_view::TuiCLISubagentView;
-use crate::tui_code_block_view::{
-    TuiCodeBlockChrome, TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent,
-};
+use crate::tui_code_block_view::{TuiCodeBlockPayload, TuiCodeBlockView, TuiCodeBlockViewEvent};
 use crate::tui_markdown::{
     TuiMarkdownBlockHooks, TuiMarkdownPalette, render_formatted_table, render_formatted_text,
 };
@@ -1062,9 +1060,7 @@ impl TuiAIBlock {
                 });
                 continue;
             }
-            let view = ctx.add_tui_view(move |ctx| {
-                TuiCodeBlockView::new(payload, ctx).with_chrome(TuiCodeBlockChrome::Minimal)
-            });
+            let view = ctx.add_tui_view(move |ctx| TuiCodeBlockView::new(payload, ctx));
             ctx.subscribe_to_view(&view, |me, _, event, ctx| match event {
                 TuiCodeBlockViewEvent::LayoutChanged | TuiCodeBlockViewEvent::SyntaxUpdated => {
                     me.invalidate_layout(ctx)
