@@ -11,6 +11,7 @@ use warpui::{
 };
 
 use crate::ai::AIRequestUsageModel;
+use crate::ai::blocklist::billing_denial::{BillingDenialKind, out_of_credits_denial_kind};
 use crate::ai::blocklist::error_color;
 use crate::ai::credit_availability::{AICreditAvailability, AICreditDenialReason};
 use crate::auth::AuthStateProvider;
@@ -205,23 +206,18 @@ impl PromptAlertView {
     /// Picks the most actionable presentation for an out-of-credits denial
     /// based on the current workspace's overage policy.
     fn out_of_credits_presentation(app: &AppContext) -> PromptAlertState {
-        // Check if overages are available.
-        if let Some(workspace) = UserWorkspaces::as_ref(app).current_workspace() {
-            let are_overages_toggleable = workspace.are_overages_toggleable();
-            let are_overages_enabled = workspace.are_overages_enabled();
-
-            if are_overages_toggleable {
-                if are_overages_enabled {
-                    return PromptAlertState::MonthlyOveragesSpendLimitReached;
-                } else {
-                    return PromptAlertState::OveragesToggleableButNotEnabled;
-                }
+        match out_of_credits_denial_kind(app) {
+            BillingDenialKind::MonthlyOveragesSpendLimitReached => {
+                PromptAlertState::MonthlyOveragesSpendLimitReached
             }
+            BillingDenialKind::OveragesToggleableButNotEnabled => {
+                PromptAlertState::OveragesToggleableButNotEnabled
+            }
+            BillingDenialKind::DelinquentDueToPaymentIssue => {
+                PromptAlertState::DelinquentDueToPaymentIssue
+            }
+            BillingDenialKind::RequestLimitReached => PromptAlertState::RequestLimitReached,
         }
-
-        // If overages aren't available, and since we already checked that the user
-        // has no requests remaining, we can show the generic request limit reached alert.
-        PromptAlertState::RequestLimitReached
     }
 
     pub fn is_no_alert(&self) -> bool {

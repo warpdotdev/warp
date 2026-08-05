@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
+use settings::Setting as _;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable, MainAxisAlignment,
@@ -17,6 +18,8 @@ use warpui::{AppContext, Element, EntityId, EventContext, SingletonEntity};
 
 use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::RenderableAIError;
+use crate::ai::blocklist::billing_denial::{BillingDenialGuidance, billing_denial_guidance};
+use crate::settings::AISettings;
 use crate::themes::theme::{AnsiColorIdentifier, Fill, WarpTheme};
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -64,8 +67,15 @@ pub fn error_color(theme: &WarpTheme) -> ColorU {
 pub enum FailedOutputPresentation {
     Message(String),
     OutOfCredits {
+        /// The server's explanation of the denial, already prefixed with the
+        /// apology line.
         message: String,
         can_use_own_api_keys: bool,
+        /// Whether this user is eligible for the subscribe / upgrade call to
+        /// action. Paid plans and enterprise spend limits are not.
+        show_subscribe_cta: bool,
+        /// The role- and policy-aware next step for this denial.
+        guidance: BillingDenialGuidance,
     },
     InvalidApiKey {
         title: &'static str,
@@ -76,6 +86,9 @@ pub enum FailedOutputPresentation {
     },
     AwsBedrockCredentialsExpiredOrInvalid {
         fallback_message: String,
+        /// The user's configured refresh command. The GUI runs it from a
+        /// button; surfaces without one name it so the user can run it.
+        login_command: Option<String>,
     },
     GeminiEnterpriseCredentialsExpiredOrInvalid {
         fallback_message: String,
@@ -99,14 +112,11 @@ pub fn failed_output_presentation(
             user_display_message,
         } => {
             if let Some(message) = user_display_message {
-                if should_show_subscribe_cta(app) {
-                    FailedOutputPresentation::OutOfCredits {
-                        message: format!("{ERROR_APOLOGY_TEXT}\n\n{message}"),
-                        can_use_own_api_keys: UserWorkspaces::as_ref(app)
-                            .is_byo_api_key_enabled(app),
-                    }
-                } else {
-                    FailedOutputPresentation::Message(format!("{ERROR_APOLOGY_TEXT}\n\n{message}"))
+                FailedOutputPresentation::OutOfCredits {
+                    message: format!("{ERROR_APOLOGY_TEXT}\n\n{message}"),
+                    can_use_own_api_keys: UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app),
+                    show_subscribe_cta: should_show_subscribe_cta(app),
+                    guidance: billing_denial_guidance(app),
                 }
             } else {
                 let formatted_next_refresh_time = AIRequestUsageModel::as_ref(app)
@@ -145,6 +155,7 @@ pub fn failed_output_presentation(
                     "{ERROR_APOLOGY_TEXT}\n\nAWS credentials expired or missing for {model_name}. \
                      Please refresh your AWS credentials."
                 ),
+                login_command: aws_bedrock_login_command(app),
             }
         }
         RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid => {
@@ -184,6 +195,17 @@ pub fn should_show_failed_output_usage_notice(
         && !has_expanded_last_requested_command
         && !is_restored
         && !error.is_invalid_api_key()
+}
+
+/// The user's configured AWS Bedrock credential refresh command, when it is set
+/// to something runnable.
+fn aws_bedrock_login_command(app: &AppContext) -> Option<String> {
+    let command = AISettings::as_ref(app)
+        .aws_bedrock_auth_refresh_command
+        .value()
+        .trim()
+        .to_owned();
+    (!command.is_empty()).then_some(command)
 }
 
 /// Whether to show the out-of-credits CTA: only for non-paid users. Paid users and the enterprise

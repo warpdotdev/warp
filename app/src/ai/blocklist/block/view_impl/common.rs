@@ -3060,10 +3060,15 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
 
     let error_text = match presentation {
         FailedOutputPresentation::Message(message) => message,
-        FailedOutputPresentation::OutOfCredits { message, .. } => {
+        FailedOutputPresentation::OutOfCredits {
+            message,
+            show_subscribe_cta,
+            ..
+        } => {
             return render_out_of_credits_error(
                 &message,
                 props.subscribe_button_handle,
+                show_subscribe_cta,
                 props.is_ai_input_enabled,
                 props.icon_right_margin,
                 app,
@@ -3084,7 +3089,10 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
                 .render(app)
                 .finish();
         }
-        FailedOutputPresentation::AwsBedrockCredentialsExpiredOrInvalid { fallback_message } => {
+        FailedOutputPresentation::AwsBedrockCredentialsExpiredOrInvalid {
+            fallback_message,
+            ..
+        } => {
             // Use the rich stateful view if it exists, otherwise show a simple error message
             if let Some(view) = props.aws_bedrock_credentials_error_view {
                 return ChildView::new(view).finish();
@@ -3177,10 +3185,12 @@ fn out_of_credits_cta_button(
         .with_cursor(Some(Cursor::PointingHand))
 }
 
-/// Renders the out-of-credits failure: alert icon + message with a Subscribe CTA below.
+/// Renders the out-of-credits failure: alert icon + message, with a Subscribe
+/// CTA below for users eligible to subscribe.
 fn render_out_of_credits_error(
     message: &str,
     subscribe_button_handle: &MouseStateHandle,
+    show_subscribe_cta: bool,
     is_ai_input_enabled: bool,
     icon_right_margin: f32,
     app: &AppContext,
@@ -3221,15 +3231,7 @@ fn render_out_of_credits_error(
     })
     .finish();
 
-    let subscribe_button =
-        out_of_credits_cta_button(OUT_OF_CREDITS_SUBSCRIBE_LABEL, subscribe_button_handle, app)
-            .build()
-            .on_click(|ctx, _, _| {
-                ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
-            })
-            .finish();
-
-    Flex::column()
+    let mut column = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
         .with_spacing(12.)
         .with_child(
@@ -3237,8 +3239,17 @@ fn render_out_of_credits_error(
                 .with_child(icon)
                 .with_child(Shrinkable::new(1., text).finish())
                 .finish(),
-        )
-        .with_child(
+        );
+
+    if show_subscribe_cta {
+        let subscribe_button =
+            out_of_credits_cta_button(OUT_OF_CREDITS_SUBSCRIBE_LABEL, subscribe_button_handle, app)
+                .build()
+                .on_click(|ctx, _, _| {
+                    ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
+                })
+                .finish();
+        column.add_child(
             Container::new(
                 Flex::row()
                     .with_main_axis_size(MainAxisSize::Min)
@@ -3248,8 +3259,10 @@ fn render_out_of_credits_error(
             )
             .with_margin_left(icon_size(app) + icon_right_margin)
             .finish(),
-        )
-        .finish()
+        );
+    }
+
+    column.finish()
 }
 
 fn render_invalid_api_key_error(

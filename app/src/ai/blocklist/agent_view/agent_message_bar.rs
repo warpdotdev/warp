@@ -734,7 +734,7 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
     }
 }
 
-pub(crate) fn fork_from_last_known_good_state_exchange_id(
+pub fn fork_from_last_known_good_state_exchange_id(
     active_conversation: &AIConversation,
     terminal_model: &TerminalModel,
 ) -> Option<AIAgentExchangeId> {

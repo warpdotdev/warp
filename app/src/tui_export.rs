@@ -54,8 +54,9 @@ pub use crate::ai::ambient_agents::telemetry::{
 };
 pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
-    EphemeralMessageModel,
+    EphemeralMessageModel, fork_from_last_known_good_state_exchange_id,
 };
+pub use crate::ai::blocklist::billing_denial::{BillingDenialGuidance, BillingDenialKind};
 pub use crate::ai::blocklist::block::cli_controller::{
     CLISubagentController, CLISubagentEvent, CLISubagentTarget, LongRunningCommandControlState,
     UserTakeOverReason,
