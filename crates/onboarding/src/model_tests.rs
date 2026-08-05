@@ -1,12 +1,13 @@
 use ai::LLMId;
 use warp_core::features::FeatureFlag;
 use warp_core::telemetry::testing::MockTelemetryContextProvider;
-use warpui_core::{App, ModelHandle};
+use warpui_core::{App, Entity, ModelHandle};
 
 use crate::OnboardingIntention;
 use crate::model::{
     AiSetupChoice, CreditPackOption, CreditPurchaseState, NoAiConfirmationSource,
-    OnboardingAuthState, OnboardingStateModel, OnboardingStep, SelectedSettings,
+    OnboardingAuthState, OnboardingStateEvent, OnboardingStateModel, OnboardingStep,
+    SelectedSettings,
 };
 use crate::slides::OfferVariant;
 
@@ -118,6 +119,37 @@ fn credit_packs() -> Vec<CreditPackOption> {
 
 fn purchase_state(app: &App, model: &ModelHandle<OnboardingStateModel>) -> CreditPurchaseState {
     model.read(app, |model, _| model.credit_purchase_state())
+}
+
+/// A do-nothing model used only to count the completion events the onboarding
+/// model emits. Completion is an event rather than a state change, so it can't
+/// be read back off the model itself.
+#[derive(Default)]
+struct CompletionObserver {
+    completions: usize,
+}
+
+impl Entity for CompletionObserver {
+    type Event = ();
+}
+
+fn observe_completions(
+    app: &mut App,
+    model: &ModelHandle<OnboardingStateModel>,
+) -> ModelHandle<CompletionObserver> {
+    let model = model.clone();
+    app.add_model(move |ctx| {
+        ctx.subscribe_to_model(&model, |observer: &mut CompletionObserver, _, event, _| {
+            if matches!(event, OnboardingStateEvent::CreditPurchaseCompleted) {
+                observer.completions += 1;
+            }
+        });
+        CompletionObserver::default()
+    })
+}
+
+fn completions(app: &App, observer: &ModelHandle<CompletionObserver>) -> usize {
+    observer.read(app, |observer, _| observer.completions)
 }
 
 #[test]
@@ -240,20 +272,18 @@ fn access_arriving_from_any_source_completes_the_purchase() {
 }
 
 /// The availability report rides along on a generic usage refresh, so it must
-/// be inert outside a pending checkout.
+/// be inert while no AI-sell offer is on screen.
 #[test]
-fn observing_availability_outside_checkout_does_nothing() {
+fn observing_availability_outside_the_offer_does_nothing() {
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
+        let observer = observe_completions(&mut app, &model);
         model.update(&mut app, |model, ctx| {
             model.set_credit_pack_options(credit_packs(), ctx);
             model.on_credit_availability_observed(true, ctx);
         });
         assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
 
-        // Still inert while the purchase mutation is in flight: that path
-        // completes on the server's explicit success, not on an availability
-        // read.
         model.update(&mut app, |model, ctx| {
             model.request_credit_purchase(ctx);
             model.on_credit_availability_observed(true, ctx);
@@ -262,6 +292,81 @@ fn observing_availability_outside_checkout_does_nothing() {
             purchase_state(&app, &model),
             CreditPurchaseState::Purchasing
         );
+        assert_eq!(completions(&app, &observer), 0);
+    });
+}
+
+/// Regression test for REV-1952: the user leaves the offer through the plan
+/// call to action and buys a one-time pack on the web instead, so no
+/// client-side checkout was ever recorded. Completion has to come from the
+/// account having AI, not from a purchase the client started.
+#[test]
+fn credit_availability_advances_the_offer_without_a_pending_checkout() {
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        let observer = observe_completions(&mut app, &model);
+        model.update(&mut app, |model, ctx| {
+            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
+            model.set_credit_pack_options(credit_packs(), ctx);
+        });
+        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
+
+        model.update(&mut app, |model, ctx| {
+            model.on_credit_availability_observed(false, ctx)
+        });
+        assert_eq!(
+            completions(&app, &observer),
+            0,
+            "a user who still can't use AI must stay on the offer"
+        );
+
+        model.update(&mut app, |model, ctx| {
+            model.on_credit_availability_observed(true, ctx)
+        });
+        assert_eq!(completions(&app, &observer), 1);
+    });
+}
+
+/// Regression test for REV-1952: following the confirmation page's link back
+/// into the app advances onboarding, so the flow no longer stalls on the offer
+/// while the credit grant catches up.
+#[test]
+fn the_checkout_success_handoff_advances_the_ai_sell_offer() {
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        let observer = observe_completions(&mut app, &model);
+        model.update(&mut app, |model, ctx| {
+            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
+        });
+
+        let advanced = model.update(&mut app, |model, ctx| model.on_checkout_succeeded(ctx));
+        assert!(advanced);
+        assert_eq!(completions(&app, &observer), 1);
+    });
+}
+
+/// The hand-off arrives on a generic deeplink, so it must be inert anywhere the
+/// user isn't being sold AI: before the offer is shown, and on the head-start
+/// offer, whose account already includes AI usage.
+#[test]
+fn the_checkout_success_handoff_is_inert_outside_an_ai_sell_offer() {
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        let observer = observe_completions(&mut app, &model);
+
+        let advanced = model.update(&mut app, |model, ctx| model.on_checkout_succeeded(ctx));
+        assert!(!advanced, "no offer is showing yet");
+
+        model.update(&mut app, |model, ctx| {
+            model.show_post_auth_offer(OfferVariant::HeadStart, ctx);
+        });
+        let advanced = model.update(&mut app, |model, ctx| model.on_checkout_succeeded(ctx));
+        assert!(!advanced, "the head-start offer is not selling AI usage");
+
+        model.update(&mut app, |model, ctx| {
+            model.on_credit_availability_observed(true, ctx)
+        });
+        assert_eq!(completions(&app, &observer), 0);
     });
 }
 

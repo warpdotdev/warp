@@ -563,19 +563,44 @@ impl OnboardingStateModel {
         ctx.notify();
     }
 
-    /// Reports whether the user can make an AI request, observed on a refresh
-    /// while checkout is pending. Deliberately the generic availability answer
-    /// rather than "did these particular credits land": onboarding only needs
-    /// to avoid letting through someone who still can't use AI.
+    /// Reports whether the user can make an AI request. The AI-sell offer
+    /// exists to get the user AI usage, so observing that they now have it is
+    /// the whole completion condition — a plan or a one-time pack, bought in
+    /// the client or on the web. Onboarding deliberately does not track which
+    /// purchase landed, so a user who leaves through one call to action and
+    /// buys through another is still let through.
     pub(crate) fn on_credit_availability_observed(
         &mut self,
         available: bool,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.credit_purchase_state != CreditPurchaseState::AwaitingCheckout || !available {
+        if !available || !self.is_showing_ai_sell_offer() {
             return;
         }
-        self.on_credit_purchase_completed(ctx);
+        self.finish_ai_sell_offer(ctx);
+    }
+
+    /// A web checkout reported success through the desktop hand-off. The grant
+    /// can lag the redirect, so the hand-off itself is trusted rather than
+    /// waiting for an availability read. Returns whether an AI-sell offer
+    /// consumed the signal.
+    pub(crate) fn on_checkout_succeeded(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        if !self.is_showing_ai_sell_offer() {
+            return false;
+        }
+        self.finish_ai_sell_offer(ctx);
+        true
+    }
+
+    /// Whether an onboarding screen whose purpose is to sell AI usage is on
+    /// screen. The head-start offer is excluded: it ships with AI usage already
+    /// on the account, so availability there says nothing about whether the
+    /// user has made their choice yet.
+    fn is_showing_ai_sell_offer(&self) -> bool {
+        self.step == OnboardingStep::PostAuthOffer
+            && self
+                .offer_variant
+                .is_some_and(OfferVariant::supports_credit_packs)
     }
 
     /// The credits landed — either charged synchronously or granted after the
@@ -584,6 +609,12 @@ impl OnboardingStateModel {
         if !self.credit_purchase_state.is_in_flight() {
             return;
         }
+        self.finish_ai_sell_offer(ctx);
+    }
+
+    /// Clears any in-flight purchase and reports that the user can now use AI,
+    /// so onboarding moves past the offer.
+    fn finish_ai_sell_offer(&mut self, ctx: &mut ModelContext<Self>) {
         self.credit_purchase_state = CreditPurchaseState::Idle;
         ctx.emit(OnboardingStateEvent::CreditPurchaseCompleted);
         ctx.notify();
