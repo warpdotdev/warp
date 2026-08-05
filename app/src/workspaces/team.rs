@@ -121,17 +121,10 @@ impl Team {
     fn get_member_by_email(&self, email: &str) -> Option<&TeamMember> {
         self.members.iter().find(|member| member.email == email)
     }
-    fn get_member_by_uid(&self, user_uid: UserUid) -> Option<&TeamMember> {
-        self.members.iter().find(|member| member.uid == user_uid)
-    }
 
     pub fn has_owner_permissions(&self, user_email: &str) -> bool {
         self.get_member_by_email(user_email)
             .is_some_and(|member| member.role.is_owner())
-    }
-    pub fn has_admin_role(&self, user_uid: UserUid) -> bool {
-        self.get_member_by_uid(user_uid)
-            .is_some_and(|member| member.role.is_admin_or_owner())
     }
 
     pub fn is_multi_admin_enabled(&self) -> bool {

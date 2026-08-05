@@ -26,8 +26,7 @@ use warp::tui_export::{
     TuiMcpAction, TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers,
     TuiUpArrowHistoryItemKind, UserTakeOverReason, WarpConfig, WarpConfigUpdateEvent,
     export_conversation_markdown, forkable_tui_conversation_for_test,
-    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test,
-    set_tui_settings_mode_for_test, slash_commands,
+    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test, slash_commands,
 };
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
@@ -247,7 +246,6 @@ fn out_of_credits_ctrl_o_binding_opens_upgrade() {
 
 #[test]
 fn upgrade_slash_command_is_always_available_and_opens_the_upgrade_page() {
-    set_tui_settings_mode_for_test();
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
@@ -281,10 +279,17 @@ fn upgrade_slash_command_is_always_available_and_opens_the_upgrade_page() {
 }
 #[test]
 fn manage_billing_slash_command_opens_the_default_team_billing_page_for_admins() {
-    set_tui_settings_mode_for_test();
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.read(&app, |view, ctx| {
+            assert!(!matches!(
+                view.slash_commands_source
+                    .as_ref(ctx)
+                    .parse_input("/manage-billing", ctx),
+                ParsedSlashCommandInput::SlashCommand(_)
+            ));
+        });
         app.update(set_tui_default_team_admin_for_test);
         let opened_urls = Rc::new(RefCell::new(Vec::new()));
         let opened_urls_for_callback = opened_urls.clone();
@@ -317,7 +322,6 @@ fn manage_billing_slash_command_opens_the_default_team_billing_page_for_admins()
 
 #[test]
 fn manage_billing_slash_command_rejects_users_without_an_admin_team() {
-    set_tui_settings_mode_for_test();
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);

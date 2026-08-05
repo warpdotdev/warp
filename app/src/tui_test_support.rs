@@ -289,9 +289,6 @@ pub fn set_tui_default_team_admin_for_test(ctx: &mut AppContext) {
     });
 }
 
-pub fn set_tui_settings_mode_for_test() {
-    settings::set_settings_mode(settings::SettingsMode::Tui);
-}
 /// Queues an action as the active confirmation request for a TUI view test.
 pub fn queue_tui_permission_action(
     action_model: &mut BlocklistAIActionModel,

@@ -91,8 +91,8 @@ impl TuiSlashCommandDataSource {
     }
 
     pub fn manage_billing_url(&self, app: &AppContext) -> Option<String> {
-        let user_uid = AuthStateProvider::as_ref(app).get().user_id()?;
-        UserWorkspaces::as_ref(app).admin_billing_link_for_default_team(user_uid)
+        let user_email = AuthStateProvider::as_ref(app).get().user_email()?;
+        UserWorkspaces::as_ref(app).admin_billing_link_for_default_team(&user_email)
     }
     pub fn set_active_repo_root(
         &mut self,
@@ -118,7 +118,8 @@ impl TuiSlashCommandDataSource {
             COMMAND_REGISTRY
                 .all_commands_by_id()
                 .filter(|(_, command)| {
-                    (command.name != VOICE.name || voice_command_is_available)
+                    command.supports_tui()
+                        && (command.name != VOICE.name || voice_command_is_available)
                         && (command.kind != SlashCommandKind::ManageBilling
                             || self.manage_billing_url(ctx).is_some())
                         && self.command_passes_common_gates(command, availability, &gates)

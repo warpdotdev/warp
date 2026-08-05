@@ -54,7 +54,7 @@ use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AdminEnablementSetting, CodebaseContextSettings, HostEnablementSetting, LlmHostSettings,
-    PurchaseAddOnCreditsPolicy, Workspace,
+    MultiAdminPolicy, PurchaseAddOnCreditsPolicy, Workspace,
 };
 
 #[derive(Default)]
@@ -871,7 +871,7 @@ fn admin_billing_link_for_default_team_targets_the_first_admin_team() {
 
         app.read(|ctx| {
             assert_eq!(
-                UserWorkspaces::as_ref(ctx).admin_billing_link_for_default_team(user_uid),
+                UserWorkspaces::as_ref(ctx).admin_billing_link_for_default_team(email),
                 Some(format!(
                     "{}/admin/{first_team_uid}/billing",
                     ChannelState::server_root_url().trim_end_matches('/'),
@@ -882,10 +882,11 @@ fn admin_billing_link_for_default_team_targets_the_first_admin_team() {
 }
 
 #[test]
-fn admin_billing_link_for_default_team_accepts_admin_role_without_multi_admin_policy() {
+fn admin_billing_link_for_default_team_accepts_admin_when_multi_admin_is_enabled() {
     let email = "admin@example.com";
     let user_uid = UserUid::new("admin");
     let mut team = team_for_test();
+    team.billing_metadata.tier.multi_admin_policy = Some(MultiAdminPolicy { enabled: true });
     team.members.push(TeamMember {
         uid: user_uid,
         email: email.to_owned(),
@@ -899,11 +900,35 @@ fn admin_billing_link_for_default_team_accepts_admin_role_without_multi_admin_po
 
         app.read(|ctx| {
             assert_eq!(
-                UserWorkspaces::as_ref(ctx).admin_billing_link_for_default_team(user_uid),
+                UserWorkspaces::as_ref(ctx).admin_billing_link_for_default_team(email),
                 Some(format!(
                     "{}/admin/{team_uid}/billing",
                     ChannelState::server_root_url().trim_end_matches('/'),
                 ))
+            );
+        });
+    })
+}
+
+#[test]
+fn admin_billing_link_for_default_team_rejects_admin_without_multi_admin_policy() {
+    let email = "admin@example.com";
+    let user_uid = UserUid::new("admin");
+    let mut team = team_for_test();
+    team.members.push(TeamMember {
+        uid: user_uid,
+        email: email.to_owned(),
+        role: MembershipRole::Admin,
+    });
+    let workspace = workspace_for_test(&team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).admin_billing_link_for_default_team(email),
+                None
             );
         });
     })
@@ -926,7 +951,7 @@ fn admin_billing_link_for_default_team_rejects_regular_members() {
 
         app.read(|ctx| {
             assert_eq!(
-                UserWorkspaces::as_ref(ctx).admin_billing_link_for_default_team(user_uid),
+                UserWorkspaces::as_ref(ctx).admin_billing_link_for_default_team(email),
                 None
             );
         });

@@ -258,10 +258,10 @@ impl UserWorkspaces {
         )
     }
 
-    pub fn admin_billing_link_for_default_team(&self, user_uid: UserUid) -> Option<String> {
+    pub fn admin_billing_link_for_default_team(&self, user_email: &str) -> Option<String> {
         let team_uid = self.inherited_or_default_team_uid(None)?;
         self.team_from_uid(team_uid)
-            .filter(|team| team.has_admin_role(user_uid))
+            .filter(|team| team.has_admin_permissions(user_email))
             .map(|_| Self::admin_billing_link_for_team(team_uid))
     }
 

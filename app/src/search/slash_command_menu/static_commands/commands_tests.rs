@@ -68,6 +68,24 @@ fn command_registry_filters_explicit_surface_metadata() {
 }
 
 #[test]
+fn command_registry_contains_commands_for_both_surfaces() {
+    let registry = Registry::new();
+
+    assert_eq!(
+        registry
+            .get_command_with_name(UPGRADE.name)
+            .map(|command| command.supported_surfaces),
+        Some(SlashCommandSurfaces::TuiOnly)
+    );
+    assert!(matches!(
+        registry
+            .get_command_with_name(ADD_MCP.name)
+            .map(|command| command.supported_surfaces),
+        Some(SlashCommandSurfaces::GuiOnly { .. })
+    ));
+}
+
+#[test]
 fn voice_command_is_registered_only_for_tui_mode() {
     assert!(
         all_commands(settings::SettingsMode::Tui)
