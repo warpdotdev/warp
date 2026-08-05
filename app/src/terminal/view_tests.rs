@@ -488,6 +488,52 @@ fn cmd_down_past_newest_preserves_viewport_when_already_at_end() {
 }
 
 #[test]
+fn cmd_down_without_navigation_cursor_is_a_no_op() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            let conversation_id = enter_agent_view_for_navigation(view, ctx);
+            append_inputs_to_conversation_and_handle_event(
+                view,
+                conversation_id,
+                vec![agent_view_user_query_input("prompt 1")],
+                ctx,
+            );
+            simulate_user_shell_block_in_conversation(view, conversation_id, "user-shell");
+
+            // At the end of the transcript with no navigation cursor there is nothing to
+            // move toward, so Cmd-Down must leave the cursor, the selection, the ring and
+            // the viewport untouched.
+            let scroll_position = view.scroll_position();
+            view.select_more_recent_block(
+                true,  /* is_cmd_down */
+                false, /* is_shift_down */
+                ctx,
+            );
+            assert_eq!(view.agent_transcript_selection_for_test(), None);
+            assert_eq!(view.selected_blocks.tail(), None);
+            assert!(navigation_ring_targets(view, ctx).is_empty());
+            assert_eq!(view.scroll_position(), scroll_position);
+
+            // Cmd-Up takes the newest stop and Cmd-Down past it clears the cursor; a
+            // further Cmd-Down must not re-select that stop (no oscillation).
+            view.select_less_recent_block(false /* is_shift_down */, ctx);
+            assert!(view.agent_transcript_selection_for_test().is_some());
+            view.select_more_recent_block(true, false, ctx);
+            assert_eq!(view.agent_transcript_selection_for_test(), None);
+
+            view.select_more_recent_block(true, false, ctx);
+            assert_eq!(view.agent_transcript_selection_for_test(), None);
+            assert_eq!(view.selected_blocks.tail(), None);
+            assert!(navigation_ring_targets(view, ctx).is_empty());
+        });
+    })
+}
+
+#[test]
 fn agent_transcript_navigation_marks_target_user_query() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

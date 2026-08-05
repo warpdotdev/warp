@@ -20004,23 +20004,27 @@ impl TerminalView {
                 },
                 None => navigable_items.last().copied(),
             },
-            AgentTranscriptNavigationDirection::Next => match current {
-                Some(current) => {
-                    let next = navigable_items
-                        .iter()
-                        .position(|item| *item == current)
-                        .and_then(|index| navigable_items.get(index + 1).copied());
-                    if next.is_none() {
-                        self.scroll_to_end_of_blocklist_if_not_at_end(ctx);
-                        self.clear_selected_blocks(ctx);
-                        ctx.focus(&self.input);
-                        ctx.notify();
-                        return;
-                    }
-                    next
+            AgentTranscriptNavigationDirection::Next => {
+                // Without a cursor the user is already past the newest stop, so there is
+                // nothing more recent to move to: do nothing, matching ordinary block
+                // navigation. Selecting the newest stop here would make repeated Cmd-Down
+                // presses oscillate between selecting and clearing it.
+                let Some(current) = current else {
+                    return;
+                };
+                let next = navigable_items
+                    .iter()
+                    .position(|item| *item == current)
+                    .and_then(|index| navigable_items.get(index + 1).copied());
+                if next.is_none() {
+                    self.scroll_to_end_of_blocklist_if_not_at_end(ctx);
+                    self.clear_selected_blocks(ctx);
+                    ctx.focus(&self.input);
+                    ctx.notify();
+                    return;
                 }
-                None => navigable_items.last().copied(),
-            },
+                next
+            }
         };
 
         let Some(target) = target else {
