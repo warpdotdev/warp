@@ -274,11 +274,9 @@ pub fn test_session_context_lists_directory_entries_remotely() {
     });
 }
 
-/// Regression test for APP-5190: in a remote/Warpified session, a symlink that
-/// points at a directory must be classified as a directory (so it completes with
-/// a trailing separator and is offered for `cd`), while a symlink to a file
-/// completes as a file. The `find` script previously omitted `-L`, so symlinked
-/// directories were bucketed as files.
+/// Regression test for APP-5190: in a remote/Warpified session a symlink pointing at a
+/// directory is classified as a directory (so it completes with a trailing separator and is
+/// offered for `cd`), while a symlink to a file completes as a file.
 #[cfg(unix)]
 #[test]
 pub fn test_session_context_follows_symlinked_directories_remotely() {
@@ -316,9 +314,8 @@ pub fn test_session_context_follows_symlinked_directories_remotely() {
     });
 }
 
-/// Symlink coverage for local sessions: a symlink pointing at a directory is
-/// classified as a directory and a symlink to a file as a file (CORE-3402,
-/// preserved here alongside the APP-5190 remote/WSL fixes).
+/// Local sessions classify a symlink pointing at a directory as a directory and a symlink
+/// to a file as a file.
 #[cfg(unix)]
 #[test]
 pub fn test_session_context_follows_symlinked_directories_locally() {
