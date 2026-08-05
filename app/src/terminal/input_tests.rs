@@ -16,8 +16,8 @@ use unindent::Unindent;
 #[cfg(feature = "voice_input")]
 use voice_input::VoiceInputToggledFrom;
 use warp_completer::completer::{
-    EngineFileType, Match, MatchStrategy, MatchedSuggestion, PathSeparators, Priority,
-    Suggestion, SuggestionResults, SuggestionType,
+    EngineFileType, Match, MatchStrategy, MatchedSuggestion, PathSeparators, Priority, Suggestion,
+    SuggestionResults, SuggestionType,
 };
 use warp_completer::meta::Span;
 use warp_util::standardized_path::StandardizedPath;
