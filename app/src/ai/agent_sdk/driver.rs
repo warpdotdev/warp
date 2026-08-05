@@ -202,15 +202,21 @@ const LEGACY_OZ_PARENT_STATE_ROOT_ENV: &str = "OZ_PARENT_STATE_ROOT";
 struct IdleTimeoutSender<T: Send + 'static> {
     tx_cell: Arc<Mutex<Option<oneshot::Sender<T>>>>,
     generation: Arc<AtomicUsize>,
+    /// The outcome and window most recently armed through [`Self::arm_refreshable`], so a
+    /// refresh can reschedule without its caller having to hold onto them. Keeping this here
+    /// rather than in the caller's closure is what stops a long-lived refresh subscription from
+    /// re-arming with an outcome that has since been superseded.
+    pending: Arc<Mutex<Option<(T, Duration)>>>,
 }
 
-// Hand-written so cloning does not require `T: Clone`: both fields are shared handles, so a
-// clone drives the same one-shot completion and the same generation counter.
+// Hand-written so cloning does not require `T: Clone`: every field is a shared handle, so a
+// clone drives the same one-shot completion, generation counter, and pending outcome.
 impl<T: Send + 'static> Clone for IdleTimeoutSender<T> {
     fn clone(&self) -> Self {
         Self {
             tx_cell: Arc::clone(&self.tx_cell),
             generation: Arc::clone(&self.generation),
+            pending: Arc::clone(&self.pending),
         }
     }
 }
@@ -220,6 +226,7 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         Self {
             tx_cell: Arc::new(Mutex::new(Some(tx))),
             generation: Arc::new(AtomicUsize::new(0)),
+            pending: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -277,6 +284,44 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
             self.end_run_now(value);
         }
     }
+}
+
+impl<T: Clone + Send + 'static> IdleTimeoutSender<T> {
+    /// End the run with `value` after `window`, recording both so [`Self::refresh`] can push the
+    /// deadline out later without being handed them again.
+    ///
+    /// Re-arming replaces the recorded outcome, so a run that fails, resumes, and fails again
+    /// exits reporting its most recent failure.
+    fn arm_refreshable(&self, window: Duration, value: T) {
+        if let Ok(mut pending) = self.pending.lock() {
+            *pending = Some((value.clone(), window));
+        }
+        self.end_run_after(window, value);
+    }
+
+    /// Push a previously armed deadline out by its original window, returning the window when
+    /// there was something to refresh. A no-op if nothing is armed.
+    fn refresh(&self) -> Option<Duration> {
+        let (value, window) = {
+            let pending = self.pending.lock().ok()?;
+            pending.clone()?
+        };
+        self.end_run_after(window, value);
+        Some(window)
+    }
+}
+
+/// The status update reported for a run that failed during environment preparation.
+///
+/// Environment setup problems are the user's to fix (a bad setup command, an unreachable repo),
+/// so they are FAILED rather than ERROR.
+///
+/// The code must stay `EnvironmentSetupFailed`. `TaskStatusMessage::is_environment_setup_failure`
+/// matches on that variant alone, and the cloud-continuation resolver keys the no-CTA tombstone
+/// for a setup failure with no conversation off that check. Reporting a generic code here would
+/// silently reroute those runs into continuation handling that has nothing to continue.
+fn setup_failure_status_update(message: String) -> TaskStatusUpdate {
+    TaskStatusUpdate::with_error_code(message, PlatformErrorCode::EnvironmentSetupFailed)
 }
 
 /// How long the driver should stay alive after the conversation reaches `status`, if at all.
@@ -2707,7 +2752,10 @@ impl AgentDriver {
         window: Duration,
         ctx: &mut ModelContext<Self>,
     ) {
-        idle_timeout.end_run_after(window, value.clone());
+        // Recorded on the timer rather than captured by the subscription below: the subscription
+        // is installed once, but a run can fail, be resumed, and fail again, and a captured
+        // outcome would go stale and exit the run reporting the earlier failure.
+        idle_timeout.arm_refreshable(window, value);
         self.publish_debug_window_deadline(window, ctx);
 
         if self.debug_window_refresh_installed {
@@ -2717,11 +2765,12 @@ impl AgentDriver {
 
         let terminal_driver = self.terminal_driver.clone();
         ctx.subscribe_to_model(&terminal_driver, move |me, _, event, ctx| {
-            if matches!(event, TerminalDriverEvent::SharedSessionViewerInput) {
+            if matches!(event, TerminalDriverEvent::SharedSessionViewerInput)
+                && let Some(window) = idle_timeout.refresh()
+            {
                 log::debug!(
                     "Ambient agent idle lifecycle: event=idle_timeout_refreshed trigger=viewer_input"
                 );
-                idle_timeout.end_run_after(window, value.clone());
                 me.publish_debug_window_deadline(window, ctx);
             }
         });
@@ -2789,9 +2838,7 @@ impl AgentDriver {
             return;
         };
 
-        // Environment setup problems are the user's to fix (a bad setup command, an unreachable
-        // repo), so they are FAILED rather than ERROR.
-        let status = TaskStatusUpdate::with_error_code(message, PlatformErrorCode::InvalidRequest);
+        let status = setup_failure_status_update(message);
         if let Err(error) = ai_client
             .update_agent_task(
                 task_id,
