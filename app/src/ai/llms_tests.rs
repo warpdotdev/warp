@@ -1158,6 +1158,64 @@ fn updating_active_profile_base_model_persists_and_updates_resolution() {
 }
 
 #[test]
+fn selecting_a_custom_profile_default_clears_the_session_override() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+        let profiles = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let custom_model_id = LLMId::from("custom-endpoint");
+        let preferences = app.add_singleton_model(|_| {
+            let mut preferences = preferences_for_profile_model_tests();
+            preferences
+                .custom_llms
+                .push(agent_llm(custom_model_id.as_str(), "Custom Endpoint"));
+            preferences
+        });
+        let surface_id = EntityId::new();
+        let profile_id = profiles.read(&app, |profiles, ctx| {
+            profiles.active_profile(Some(surface_id), ctx).id().clone()
+        });
+        profiles.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(&profile_id, Some(custom_model_id.clone()), ctx);
+        });
+        preferences.update(&mut app, |preferences, ctx| {
+            preferences.set_agent_mode_llm_override(surface_id, LLMId::from("claude-opus"), ctx);
+            preferences.update_preferred_agent_mode_llm(&custom_model_id, surface_id, ctx);
+        });
+
+        preferences.read(&app, |preferences, _| {
+            assert_eq!(
+                preferences.base_llm_for_terminal_view.get(&surface_id),
+                None
+            );
+        });
+        profiles.update(&mut app, |profiles, ctx| {
+            profiles.set_base_model(&profile_id, Some(LLMId::from("auto")), ctx);
+        });
+        preferences.read(&app, |preferences, ctx| {
+            assert_eq!(
+                preferences
+                    .get_active_base_model(ctx, Some(surface_id))
+                    .id
+                    .as_str(),
+                "auto"
+            );
+        });
+    });
+}
+
+#[test]
 fn explicit_child_model_pin_preserves_gui_behavior_and_only_emits_for_effective_changes() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
