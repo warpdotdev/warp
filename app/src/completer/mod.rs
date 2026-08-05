@@ -98,8 +98,7 @@ impl SessionContext {
                 };
 
                 read_dir
-                    .filter_map(|res| res.ok())
-                    .filter_map(|entry| self.local_engine_dir_entry(directory, entry))
+                    .filter_map(|res| res.and_then(EngineDirEntry::try_from).ok())
                     .collect::<Vec<_>>()
             }
             SessionType::WarpifiedRemote { .. } => {
@@ -189,65 +188,6 @@ impl SessionContext {
                 }
             }
         }
-    }
-
-    /// Converts a local `DirEntry` into an `EngineDirEntry`, following symlinks even when
-    /// the host cannot resolve the target itself. In emulated sessions (WSL, MSYS2) a
-    /// symlink target lives in the guest path space (e.g. `/mnt/c/...`) that a host-side
-    /// `metadata()` cannot follow, which would otherwise misclassify the entry as a file.
-    fn local_engine_dir_entry(
-        &self,
-        directory: &TypedPath<'_>,
-        entry: std::fs::DirEntry,
-    ) -> Option<EngineDirEntry> {
-        // Capture symlink state before `try_from` consumes the entry.
-        let is_symlink = entry
-            .file_type()
-            .map(|file_type| file_type.is_symlink())
-            .unwrap_or(false);
-        let link_path = is_symlink.then(|| entry.path());
-
-        let mut engine_entry = EngineDirEntry::try_from(entry).ok()?;
-        if !engine_entry.is_dir()
-            && let Some(link_path) = link_path
-            && self.symlink_target_is_dir_in_session_space(directory, &link_path)
-        {
-            engine_entry.file_type = EngineFileType::Directory;
-        }
-        Some(engine_entry)
-    }
-
-    /// Returns whether the symlink at `link_path` points at a directory once its target is
-    /// interpreted in the session's path space. Needed in emulated sessions (WSL, MSYS2),
-    /// where a guest-space target cannot be followed by a host-side `metadata()`. Returns
-    /// `false` for broken links, loops, and unconvertible targets so completion never hangs.
-    fn symlink_target_is_dir_in_session_space(
-        &self,
-        directory: &TypedPath<'_>,
-        link_path: &Path,
-    ) -> bool {
-        let Ok(target) = std::fs::read_link(link_path) else {
-            return false;
-        };
-        // Guest-space targets use Unix separators, so interpret the raw target as a Unix path.
-        let target = target.to_string_lossy();
-        let target = TypedPathBuf::from_unix(target.as_bytes());
-        let guest_target = if target.is_absolute() {
-            target
-        } else {
-            directory.to_path_buf().join(target)
-        };
-
-        let Ok(native_target) = self
-            .session
-            .maybe_convert_to_native_path(&guest_target.to_path())
-        else {
-            return false;
-        };
-        native_target
-            .metadata()
-            .map(|metadata| metadata.is_dir())
-            .unwrap_or(false)
     }
 }
 
