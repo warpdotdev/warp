@@ -11,6 +11,7 @@ use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 
 const AGENT_DISMISSED_KEY: &str = "pricing_promotion_agent_dismissed";
 const TERMINAL_DISMISSED_KEY: &str = "pricing_promotion_terminal_dismissed";
+const DISMISSED_VALUE: &str = "true";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PricingPromotionSurface {
@@ -95,7 +96,7 @@ impl PricingPromotionState {
         }
         if let Err(error) = ctx
             .private_user_preferences()
-            .write_value(surface.dismissal_key(), true.to_string())
+            .write_value(surface.dismissal_key(), DISMISSED_VALUE.to_string())
         {
             log::warn!("Failed to persist pricing promotion dismissal: {error:#}");
         }
@@ -115,7 +116,7 @@ impl PricingPromotionState {
         ctx.private_user_preferences()
             .read_value(key)
             .unwrap_or_default()
-            .is_some_and(|value| value == "true")
+            .is_some_and(|value| value == DISMISSED_VALUE)
     }
 }
 
