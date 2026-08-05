@@ -5,9 +5,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
 use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::{
-    CrossAxisAlignment, Element, Empty, Flex, MainAxisSize, MouseStateHandle, ParentElement,
-};
+use warpui::elements::{Element, Empty, MouseStateHandle};
 use warpui::keymap::Keystroke;
 use warpui::platform::OperatingSystem;
 use warpui::{
@@ -402,42 +400,37 @@ impl View for AgentMessageBar {
             return Empty::new().finish();
         };
 
-        let mut right_elements = Vec::new();
-        if !cfg!(target_family = "wasm") {
-            if let Some(message) = PricingPromotionState::as_ref(app)
-                .visible_message(PricingPromotionSurface::AgentMessageBar, app)
-            {
-                right_elements.push(render_dismissible_promo_pill(
-                    message,
-                    appearance.theme().ansi_fg_green(),
-                    Some(self.mouse_states.pricing_promotion.clone()),
-                    Some(AgentMessageBarAction::UpgradePricingPromotion),
-                    self.mouse_states.pricing_promotion_close.clone(),
-                    AgentMessageBarAction::DismissPricingPromotion,
-                    app,
-                ));
-            }
+        let right_element = if cfg!(target_family = "wasm") {
+            None
+        } else if let Some(message) = PricingPromotionState::as_ref(app)
+            .visible_message(PricingPromotionSurface::AgentMessageBar, app)
+        {
+            Some(render_dismissible_promo_pill(
+                message,
+                appearance.theme().ansi_fg_green(),
+                Some(self.mouse_states.pricing_promotion.clone()),
+                Some(AgentMessageBarAction::UpgradePricingPromotion),
+                self.mouse_states.pricing_promotion_close.clone(),
+                AgentMessageBarAction::DismissPricingPromotion,
+                app,
+            ))
+        } else {
             let request_usage_model = AIRequestUsageModel::as_ref(app);
-            if let Some(credits) = request_usage_model.ambient_only_credits_remaining()
-                && credits >= AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD
-                && !request_usage_model.is_ambient_credits_banner_dismissed()
-            {
-                right_elements.push(render_ambient_credits_banner(
-                    credits,
-                    self.mouse_states.ambient_credits_banner_close.clone(),
-                    AgentMessageBarAction::DismissAmbientCreditsBanner,
-                    app,
-                ));
-            }
-        }
-        let right_element = (!right_elements.is_empty()).then(|| {
-            Flex::row()
-                .with_main_axis_size(MainAxisSize::Min)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(4.)
-                .with_children(right_elements)
-                .finish()
-        });
+            request_usage_model
+                .ambient_only_credits_remaining()
+                .filter(|credits| {
+                    *credits >= AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD
+                        && !request_usage_model.is_ambient_credits_banner_dismissed()
+                })
+                .map(|credits| {
+                    render_ambient_credits_banner(
+                        credits,
+                        self.mouse_states.ambient_credits_banner_close.clone(),
+                        AgentMessageBarAction::DismissAmbientCreditsBanner,
+                        app,
+                    )
+                })
+        };
 
         // Append a Figma MCP chip to the message if applicable.
         match self.figma_button_status(app) {
