@@ -47,7 +47,7 @@ use warpui_core::event::KeyState;
 use warpui_core::event::ModifiersState;
 use warpui_core::keymap::{Context, DescriptionContext, Keystroke, Trigger};
 use warpui_core::platform::keyboard::KeyCode;
-use warpui_core::presenter::tui::TuiPresenter;
+use warpui_core::presenter::tui::{TuiFrame, TuiPresenter};
 use warpui_core::telemetry::{EventPayload, flush_events};
 use warpui_core::{App, AppContext, TuiView, TypedActionView, WindowInvalidation};
 
@@ -1897,7 +1897,7 @@ fn theme_slash_command_rejects_a_missing_argument() {
 }
 
 #[test]
-fn statusline_slash_command_clears_input_focuses_one_picker_and_cancels_cleanly() {
+fn statusline_slash_command_preserves_nested_focus_and_restores_the_input_cursor() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
@@ -1908,7 +1908,7 @@ fn statusline_slash_command_clears_input_focuses_one_picker_and_cancels_cleanly(
             view.execute_tui_slash_command(&slash_commands::STATUSLINE, None, ctx);
         });
 
-        let picker_id = view.read(&app, |view, ctx| {
+        let (picker_id, picker_focus_id) = view.read(&app, |view, ctx| {
             let picker = view
                 .statusline_config_view
                 .as_ref()
@@ -1925,9 +1925,21 @@ fn statusline_slash_command_clears_input_focuses_one_picker_and_cancels_cleanly(
                 ""
             );
             assert!(ctx.check_view_or_child_focused(fixture.window_id, &picker.id()));
-            picker.id()
+            (
+                picker.id(),
+                ctx.focused_view_id(fixture.window_id)
+                    .expect("the statusline picker should delegate focus to a child"),
+            )
         });
 
+        assert!(view.update(&mut app, |view, ctx| { view.handle_terminal_wakeup(ctx) }));
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.focused_view_id(fixture.window_id),
+                Some(picker_focus_id),
+                "a redraw must preserve the interaction surface's delegated child focus"
+            );
+        });
         view.update(&mut app, |view, ctx| {
             view.execute_tui_slash_command(&slash_commands::STATUSLINE, None, ctx);
         });
@@ -1945,6 +1957,12 @@ fn statusline_slash_command_clears_input_focuses_one_picker_and_cancels_cleanly(
             assert!(view.statusline_config_view.is_none());
             assert!(ctx.check_view_or_child_focused(fixture.window_id, &view.input_view.id()));
         });
+        assert!(
+            render_session_frame(&mut app, &view, 80, 24)
+                .cursor
+                .is_some(),
+            "dismissing the interaction surface should restore the input cursor"
+        );
     });
 }
 
@@ -2612,6 +2630,15 @@ fn render_session_buffer(
     width: u16,
     height: u16,
 ) -> TuiBuffer {
+    render_session_frame(app, view, width, height).buffer
+}
+
+fn render_session_frame(
+    app: &mut App,
+    view: &ViewHandle<super::TuiTerminalSessionView>,
+    width: u16,
+    height: u16,
+) -> TuiFrame {
     let mut presenter = TuiPresenter::new();
     app.update(|ctx| {
         let mut invalidation = WindowInvalidation::default();
@@ -2620,9 +2647,7 @@ fn render_session_buffer(
             .updated
             .extend(view.as_ref(ctx).child_view_ids(ctx));
         presenter.invalidate(&invalidation, ctx, view.window_id(ctx));
-        presenter
-            .present(ctx, view, TuiRect::new(0, 0, width, height))
-            .buffer
+        presenter.present(ctx, view, TuiRect::new(0, 0, width, height))
     })
 }
 
@@ -5445,6 +5470,27 @@ fn terminal_wakeup_redraws_only_the_focused_session() {
 
         assert!(foreground.update(&mut app, |view, ctx| { view.handle_terminal_wakeup(ctx) }));
         assert!(!background.update(&mut app, |view, ctx| { view.handle_terminal_wakeup(ctx) }));
+    });
+}
+#[test]
+fn background_focus_reconciliation_does_not_steal_foreground_focus() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (foreground, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (background, _) = add_focus_test_session(&mut app, &fixture, false);
+        let foreground_input_id = foreground.read(&app, |view, _| view.input_view.id());
+
+        background.update(&mut app, |view, ctx| {
+            view.reconcile_focus(ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.focused_view_id(fixture.window_id),
+                Some(foreground_input_id),
+                "background ownership transitions must not change framework focus"
+            );
+        });
     });
 }
 

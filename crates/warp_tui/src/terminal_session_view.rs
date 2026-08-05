@@ -19,12 +19,12 @@ use warp::settings::{
 #[cfg(feature = "voice_input")]
 use warp::tui_export::slash_commands;
 use warp::tui_export::{
-    AIAgentActionId, AIAgentActionResultType, AIAgentContext, AIAgentExchangeId,
-    AIAgentPtyWriteMode, AIConversation, AIConversationAutoexecuteMode, AIConversationId,
-    AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent, AfterBlockCompletedEvent,
-    AgentConversationEntryId, AgentConversationListEntryState, AgentConversationsModel,
-    AgentInteractionMetadata, AgentViewEntryOrigin, Appearance, BlockId, BlockType,
-    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    AIAgentActionId, AIAgentContext, AIAgentExchangeId, AIAgentPtyWriteMode, AIConversation,
+    AIConversationAutoexecuteMode, AIConversationId, AcceptSlashCommandOrSavedPrompt,
+    ActiveSession, ActiveSessionEvent, AfterBlockCompletedEvent, AgentConversationEntryId,
+    AgentConversationListEntryState, AgentConversationsModel, AgentInteractionMetadata,
+    AgentViewEntryOrigin, Appearance, BlockId, BlockType, BlocklistAIActionEvent,
+    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel,
     BlocklistOrchestrationTelemetryEvent, CLISubagentController, CLISubagentEvent,
     CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel, ChangelogRequestType,
@@ -965,15 +965,6 @@ impl TuiTerminalSessionView {
         })
     }
 
-    fn update_process_input_focus(&mut self, ctx: &mut ViewContext<Self>) {
-        self.focus_current_owner_if_active(ctx);
-    }
-
-    fn refresh_input_focus(&mut self, ctx: &mut ViewContext<Self>) {
-        self.focus_current_owner_if_active(ctx);
-        ctx.notify();
-    }
-
     fn emit_input_buffer_submitted_telemetry(&self, ctx: &mut ViewContext<Self>) {
         let input_model = self.ai_input_model.as_ref(ctx);
         let block_id = self.terminal_model.lock().active_block_id().clone();
@@ -1140,7 +1131,8 @@ impl TuiTerminalSessionView {
         }
     }
 
-    fn focus_current_owner_if_active(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Focuses the active session's immediate interaction owner; child views may delegate further.
+    fn reconcile_focus(&mut self, ctx: &mut ViewContext<Self>) {
         if self.is_focused_session(ctx) {
             let tabs_were_focused = self.orchestration_tabs_focused;
             self.focus_current_owner(ctx);
@@ -1149,12 +1141,7 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         }
-    }
-
-    fn focus_input_if_active(&self, ctx: &mut ViewContext<Self>) {
-        if self.is_focused_session(ctx) {
-            ctx.focus(&self.input_view);
-        }
+        ctx.notify();
     }
 
     fn resume_after_user_controlled_command(
@@ -1192,7 +1179,7 @@ impl TuiTerminalSessionView {
             input.reset_after_agent_control(ctx);
         });
         self.resume_after_user_controlled_command(block_id, ctx);
-        self.refresh_input_focus(ctx);
+        self.reconcile_focus(ctx);
         ctx.notify();
     }
 
@@ -1207,7 +1194,6 @@ impl TuiTerminalSessionView {
                 transcript.detach_cli_subagent(initial_requested_command_action_id, view.id(), ctx);
             });
         }
-        self.focus_input_if_active(ctx);
     }
     fn handle_cli_subagent_event(&mut self, event: &CLISubagentEvent, ctx: &mut ViewContext<Self>) {
         match event {
@@ -1278,8 +1264,16 @@ impl TuiTerminalSessionView {
                 });
             }
         }
-        self.refresh_input_focus(ctx);
-        ctx.notify();
+        if matches!(
+            event,
+            CLISubagentEvent::UpdatedInstruction { .. }
+                | CLISubagentEvent::UpdatedLastSnapshot
+                | CLISubagentEvent::ToggledHideResponses
+        ) {
+            ctx.notify();
+        } else {
+            self.reconcile_focus(ctx);
+        }
     }
 
     fn handle_terminal_use_interrupt(&mut self, ctx: &mut ViewContext<Self>) -> bool {
@@ -1307,7 +1301,7 @@ impl TuiTerminalSessionView {
                         ctx,
                     );
                 });
-                self.refresh_input_focus(ctx);
+                self.reconcile_focus(ctx);
                 true
             }
             TerminalUseInterruptAction::InterruptCommand => {
@@ -1324,7 +1318,7 @@ impl TuiTerminalSessionView {
         self.cli_subagent_controller.update(ctx, |controller, ctx| {
             controller.handoff_active_command_control_to_agent(ctx);
         });
-        self.refresh_input_focus(ctx);
+        self.reconcile_focus(ctx);
     }
     /// Attempts to expose the agent composer for the active user-controlled LRC.
     ///
@@ -1347,7 +1341,7 @@ impl TuiTerminalSessionView {
             input.clear(ctx);
             input.lock_for_agent_control(ctx);
         });
-        self.refresh_input_focus(ctx);
+        self.reconcile_focus(ctx);
         ctx.notify();
         true
     }
@@ -1373,7 +1367,7 @@ impl TuiTerminalSessionView {
         self.input_view.update(ctx, |input, ctx| {
             input.clear(ctx);
         });
-        self.refresh_input_focus(ctx);
+        self.reconcile_focus(ctx);
         ctx.notify();
         true
     }
@@ -1591,29 +1585,17 @@ impl TuiTerminalSessionView {
         });
         // Only action lifecycle transitions can change the blocking input
         // owner. Presentation updates stay within the focused blocker.
-        ctx.subscribe_to_model(
-            &action_model,
-            |view, action_model, event, ctx| match event {
-                BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
-                | BlocklistAIActionEvent::ExecutingAction(_) => view.refresh_input_focus(ctx),
-                BlocklistAIActionEvent::FinishedAction { action_id, .. } => {
-                    view.refresh_input_focus(ctx);
-                    let finished_asking_question = action_model
-                        .as_ref(ctx)
-                        .get_action_result(action_id)
-                        .is_some_and(|result| {
-                            matches!(&result.result, AIAgentActionResultType::AskUserQuestion(_))
-                        });
-                    if finished_asking_question {
-                        ctx.focus(&view.input_view);
-                    }
-                }
-                BlocklistAIActionEvent::QueuedAction(_)
-                | BlocklistAIActionEvent::InitProject(_)
-                | BlocklistAIActionEvent::ToggleCodeReview(_)
-                | BlocklistAIActionEvent::InsertCodeReviewComments { .. } => {}
-            },
-        );
+        ctx.subscribe_to_model(&action_model, |view, _, event, ctx| match event {
+            BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
+            | BlocklistAIActionEvent::ExecutingAction(_)
+            | BlocklistAIActionEvent::FinishedAction { .. } => {
+                view.reconcile_focus(ctx);
+            }
+            BlocklistAIActionEvent::QueuedAction(_)
+            | BlocklistAIActionEvent::InitProject(_)
+            | BlocklistAIActionEvent::ToggleCodeReview(_)
+            | BlocklistAIActionEvent::InsertCodeReviewComments { .. } => {}
+        });
         let input_editor_model =
             ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));
         let suggestions_mode = ctx.add_model(|_| TuiInputSuggestionsModeModel::new());
@@ -1900,7 +1882,7 @@ impl TuiTerminalSessionView {
                 }
             },
             TuiTranscriptViewEvent::BlockingStateChanged => {
-                view.refresh_input_focus(ctx);
+                view.reconcile_focus(ctx);
             }
             TuiTranscriptViewEvent::PermissionReplacementGuidanceSubmitted {
                 conversation_id,
@@ -2064,15 +2046,15 @@ impl TuiTerminalSessionView {
                 view.emit_block_completed_telemetry(completed, ctx);
             }
             ModelEvent::AfterBlockStarted { .. } => {
-                view.refresh_input_focus(ctx);
+                view.reconcile_focus(ctx);
                 ctx.notify();
             }
             ModelEvent::VisibleBootstrapBlock | ModelEvent::BootstrapPrecmdDone => {
-                view.refresh_input_focus(ctx);
+                view.reconcile_focus(ctx);
                 ctx.notify();
             }
             ModelEvent::TerminalModeSwapped(_) => {
-                view.update_process_input_focus(ctx);
+                view.reconcile_focus(ctx);
                 ctx.notify();
             }
             ModelEvent::Typeahead => view.handle_typeahead_event(ctx),
@@ -2405,7 +2387,7 @@ impl TuiTerminalSessionView {
         if !tabs_are_available && self.orchestration_tabs_focused {
             self.orchestration_tabs_focused = false;
             focus_changed = true;
-            self.focus_current_owner(ctx);
+            self.reconcile_focus(ctx);
         }
         // Disarm the child-kill window when the child is no longer reachable.
         if !tabs_are_available && self.child_kill_armed_conversation.is_some() {
@@ -2433,7 +2415,7 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.orchestration_tabs_focused = focused;
-        self.focus_current_owner(ctx);
+        self.reconcile_focus(ctx);
         self.refresh_orchestration_tab_bar(ctx);
         ctx.notify();
     }
@@ -3038,7 +3020,7 @@ impl TuiTerminalSessionView {
 
         self.conversation_restore_state = ConversationRestoreState::Idle;
         self.refresh_exit_summary(ctx);
-        self.focus_input_if_active(ctx);
+        self.reconcile_focus(ctx);
         if origin.records_telemetry() {
             warp::send_telemetry_from_ctx!(
                 TuiConversationRestoreTelemetryEvent {
@@ -3093,7 +3075,7 @@ impl TuiTerminalSessionView {
                 ctx
             );
         }
-        self.focus_input_if_active(ctx);
+        self.reconcile_focus(ctx);
         ctx.notify();
         true
     }
@@ -3131,7 +3113,7 @@ impl TuiTerminalSessionView {
                 }
                 self.conversation_restore_state = ConversationRestoreState::Idle;
                 self.show_transient_hint(message, ctx);
-                self.focus_input_if_active(ctx);
+                self.reconcile_focus(ctx);
             }
         }
         ctx.notify();
@@ -3191,7 +3173,6 @@ impl TuiTerminalSessionView {
         }
         let is_focused = self.is_focused_session(ctx);
         if is_focused {
-            self.refresh_input_focus(ctx);
             ctx.notify();
         }
         is_focused
@@ -4728,7 +4709,7 @@ impl TuiTerminalSessionView {
         self.statusline_config_view = Some(statusline_config_view);
         self.input_view.update(ctx, |input, ctx| input.clear(ctx));
         self.orchestration_tabs_focused = false;
-        self.focus_current_owner_if_active(ctx);
+        self.reconcile_focus(ctx);
         record_static_slash_command_accepted(command_name, true, ctx);
         ctx.notify();
     }
@@ -4744,7 +4725,7 @@ impl TuiTerminalSessionView {
             }
             TuiStatuslineConfigEvent::Cancelled => {
                 self.statusline_config_view = None;
-                self.focus_current_owner_if_active(ctx);
+                self.reconcile_focus(ctx);
                 ctx.notify();
             }
             TuiStatuslineConfigEvent::LayoutChanged => ctx.notify(),
@@ -4761,7 +4742,7 @@ impl TuiTerminalSessionView {
             settings.tui_statusline.set_value(config.normalized(), ctx)
         });
         self.statusline_config_view = None;
-        self.focus_current_owner_if_active(ctx);
+        self.reconcile_focus(ctx);
         match result {
             Ok(()) => self.show_success_hint(success_hint.to_owned(), ctx),
             Err(error) => {
