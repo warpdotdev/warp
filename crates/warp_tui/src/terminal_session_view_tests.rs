@@ -80,6 +80,7 @@ use super::{
     SESSION_COMPOSER_SHORTCUTS_ACTIVE_FLAG, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
     voice_argument_is_empty, voice_command_argument,
 };
+use crate::agent_block::upgrade_url;
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
 use crate::input_mode_policy::{AI_LOCKED_CONFIG, AI_UNLOCKED_CONFIG};
@@ -218,6 +219,7 @@ fn out_of_credits_ctrl_o_binding_opens_upgrade() {
 
         let fixture = focus_test_fixture(&mut app);
         let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let expected_upgrade_url = app.read(upgrade_url);
         app.read(|ctx| {
             let ctrl_o = Trigger::Keystrokes(vec![Keystroke::parse("ctrl-o").unwrap()]);
             let input_view_id = view.as_ref(ctx).input_view.id();
@@ -239,13 +241,44 @@ fn out_of_credits_ctrl_o_binding_opens_upgrade() {
         view.update(&mut app, |view, ctx| {
             view.handle_action(&TuiTerminalSessionAction::OpenOutOfCreditsUrl, ctx);
         });
-        assert_eq!(
-            opened_urls.borrow().as_slice(),
-            &["https://app.warp.dev/upgrade?source=warp-agent-cli".to_owned()]
-        );
+        assert_eq!(opened_urls.borrow().as_slice(), &[expected_upgrade_url]);
     });
 }
 
+#[test]
+fn upgrade_slash_command_is_always_available_and_opens_the_upgrade_page() {
+    set_tui_settings_mode_for_test();
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let expected_upgrade_url = app.read(upgrade_url);
+        let opened_urls = Rc::new(RefCell::new(Vec::new()));
+        let opened_urls_for_callback = opened_urls.clone();
+        app.update(|ctx| {
+            ctx.set_before_open_url(move |url, _| {
+                opened_urls_for_callback.borrow_mut().push(url.to_owned());
+                url.to_owned()
+            });
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view
+                .update(ctx, |input, ctx| input.set_text("/upgrade", ctx));
+            assert!(matches!(
+                view.slash_commands_source
+                    .as_ref(ctx)
+                    .parse_input("/upgrade", ctx),
+                ParsedSlashCommandInput::SlashCommand(_)
+            ));
+            view.execute_tui_slash_command(&slash_commands::UPGRADE, None, ctx);
+        });
+
+        assert_eq!(opened_urls.borrow().as_slice(), &[expected_upgrade_url]);
+        view.read(&app, |view, ctx| {
+            assert!(view.input_view.as_ref(ctx).is_empty(ctx));
+        });
+    });
+}
 #[test]
 fn manage_billing_slash_command_opens_the_default_team_billing_page_for_admins() {
     set_tui_settings_mode_for_test();

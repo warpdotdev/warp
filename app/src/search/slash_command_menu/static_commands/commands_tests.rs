@@ -137,6 +137,25 @@ fn manage_billing_command_is_always_available_only_in_tui_mode() {
             .all(|command| command.kind != SlashCommandKind::ManageBilling)
     );
 }
+
+#[test]
+fn upgrade_command_is_always_available_only_in_tui_mode() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::Upgrade)
+        .expect("expected /upgrade to be registered in TUI mode");
+
+    assert_eq!(command, UPGRADE);
+    assert_eq!(command.availability, Availability::ALWAYS);
+    assert_eq!(command.supported_surfaces, SlashCommandSurfaces::TuiOnly);
+    assert!(!command.auto_enter_ai_mode);
+    assert!(command.argument.is_none());
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::Upgrade)
+    );
+}
 #[test]
 fn auto_approve_command_is_local_agent_action_without_arguments() {
     let tui_commands = all_commands(settings::SettingsMode::Tui);

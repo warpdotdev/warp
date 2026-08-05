@@ -237,6 +237,20 @@ impl UserWorkspaces {
             team_uid
         )
     }
+
+    pub fn warp_agent_cli_upgrade_link(user_id: Option<UserUid>) -> String {
+        let upgrade_link = user_id.map_or_else(
+            || {
+                format!(
+                    "{}{}",
+                    ChannelState::server_root_url().trim_end_matches('/'),
+                    STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX
+                )
+            },
+            Self::upgrade_link,
+        );
+        format!("{upgrade_link}?source=warp-agent-cli")
+    }
     pub fn admin_billing_link_for_team(team_uid: ServerId) -> String {
         format!(
             "{}/admin/{team_uid}/billing",
@@ -244,10 +258,10 @@ impl UserWorkspaces {
         )
     }
 
-    pub fn admin_billing_link_for_default_team(&self, user_email: &str) -> Option<String> {
+    pub fn admin_billing_link_for_default_team(&self, user_uid: UserUid) -> Option<String> {
         let team_uid = self.inherited_or_default_team_uid(None)?;
         self.team_from_uid(team_uid)
-            .filter(|team| team.has_admin_permissions(user_email))
+            .filter(|team| team.has_admin_role(user_uid))
             .map(|_| Self::admin_billing_link_for_team(team_uid))
     }
 

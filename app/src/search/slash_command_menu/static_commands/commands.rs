@@ -137,6 +137,15 @@ pub const MANAGE_BILLING: StaticCommand = StaticCommand {
     auto_enter_ai_mode: false,
     argument: None,
 };
+pub const UPGRADE: StaticCommand = StaticCommand {
+    name: "/upgrade",
+    description: "Open the Warp upgrade page in your browser",
+    kind: SlashCommandKind::Upgrade,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
 pub const THEME: StaticCommand = StaticCommand {
     name: "/theme",
     description: "Set color theme",
@@ -942,6 +951,7 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         INDEX,
         INIT,
         API_KEYS,
+        UPGRADE,
         MANAGE_BILLING,
         LOGOUT,
         MCP,

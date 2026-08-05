@@ -91,8 +91,8 @@ impl TuiSlashCommandDataSource {
     }
 
     pub fn manage_billing_url(&self, app: &AppContext) -> Option<String> {
-        let user_email = AuthStateProvider::as_ref(app).get().user_email()?;
-        UserWorkspaces::as_ref(app).admin_billing_link_for_default_team(&user_email)
+        let user_uid = AuthStateProvider::as_ref(app).get().user_id()?;
+        UserWorkspaces::as_ref(app).admin_billing_link_for_default_team(user_uid)
     }
     pub fn set_active_repo_root(
         &mut self,
