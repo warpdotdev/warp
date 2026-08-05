@@ -381,7 +381,11 @@ fn fail_conversation_due_to_shell_exit_reports_error_and_survives_manual_cancel(
             let stream = ctx.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
             view.ai_controller().update(ctx, |controller, ctx| {
                 controller.register_mock_stream_for_test(stream_id, conversation_id, stream, ctx);
-                controller.fail_conversation_due_to_shell_exit(conversation_id, ctx);
+                controller.fail_conversation_due_to_shell_exit(
+                    conversation_id,
+                    "exit 1".to_string(),
+                    ctx,
+                );
             });
             conversation_id
         });

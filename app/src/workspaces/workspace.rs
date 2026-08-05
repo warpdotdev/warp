@@ -95,6 +95,13 @@ impl Workspace {
             .is_some_and(|member| member.role.is_admin_or_owner())
     }
 
+    pub fn is_native_workspaces_enabled(&self) -> bool {
+        self.billing_metadata
+            .tier
+            .native_workspaces_policy
+            .is_some_and(|policy| policy.enabled)
+    }
+
     pub fn resolve_usage_visibility(&self, is_admin: bool) -> UsageVisibility {
         let Some(policy) = self.billing_metadata.tier.usage_visibility_policy else {
             return UsageVisibility::default();
@@ -175,7 +182,8 @@ impl Workspace {
         }
     }
 
-    /// Returns the price in cents for the selected auto-reload credit denomination.
+    /// Returns the price in cents for the selected auto-reload credit denomination,
+    /// including any plan surcharge (premium plans reload at the premium price).
     /// Returns None if auto-reload is not configured or if the denomination can't be found in pricing options.
     pub fn get_auto_reload_price_cents(
         &self,
@@ -189,7 +197,11 @@ impl Workspace {
         addon_credits_options
             .iter()
             .find(|option| option.credits == selected_credits)
-            .map(|option| option.price_usd_cents)
+            .map(|option| {
+                option.price_usd_cents_with_premium(
+                    self.billing_metadata.addon_credits_price_premium_bps(),
+                )
+            })
     }
 }
 
@@ -385,9 +397,36 @@ pub struct ManagedByokByoePolicy {
     pub enabled: bool,
 }
 
-#[derive(Clone, Debug, Copy, Serialize, Deserialize)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PurchaseAddOnCreditsPolicy {
     pub enabled: bool,
+    /// When `enabled` is false, allows purchasing add-on credit packs at a
+    /// `price_premium_bps` surcharge over list price (e.g. on the Free plan).
+    #[serde(default)]
+    pub premium_enabled: bool,
+    /// Surcharge in basis points applied to list prices when purchasing via
+    /// the premium path (1000 bps = +10%). 0 for standard purchasing plans.
+    #[serde(default)]
+    pub price_premium_bps: i32,
+}
+
+impl PurchaseAddOnCreditsPolicy {
+    /// Whether this plan may purchase add-on credit packs at all, either at
+    /// list price (`enabled`) or at a premium surcharge (`premium_enabled`).
+    pub fn allows_purchases(&self) -> bool {
+        self.enabled || self.premium_enabled
+    }
+
+    /// The surcharge in basis points applied to pack list prices. 0 whenever
+    /// standard (list price) purchasing is enabled — standard purchasing
+    /// wins if the server ever sends both flags.
+    pub fn effective_premium_bps(&self) -> i32 {
+        if !self.enabled && self.premium_enabled {
+            self.price_premium_bps
+        } else {
+            0
+        }
+    }
 }
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
@@ -402,6 +441,11 @@ pub struct EnterpriseCreditsAutoReloadPolicy {
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize)]
 pub struct MultiAdminPolicy {
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Copy, Serialize, Deserialize)]
+pub struct NativeWorkspacesPolicy {
     pub enabled: bool,
 }
 
@@ -489,6 +533,7 @@ pub struct Tier {
     pub enterprise_pay_as_you_go_policy: Option<EnterprisePayAsYouGoPolicy>,
     pub enterprise_credits_auto_reload_policy: Option<EnterpriseCreditsAutoReloadPolicy>,
     pub multi_admin_policy: Option<MultiAdminPolicy>,
+    pub native_workspaces_policy: Option<NativeWorkspacesPolicy>,
     pub ambient_agents_policy: Option<AmbientAgentsPolicy>,
     pub usage_visibility_policy: Option<UsageVisibilityPolicy>,
 }
@@ -775,10 +820,28 @@ impl BillingMetadata {
                 .is_some_and(|policy| policy.enabled)
     }
 
+    /// Whether this plan may purchase add-on credit packs at all, either at
+    /// list price (`enabled`) or at a premium surcharge (`premium_enabled`).
     pub fn is_purchase_add_on_credits_policy_enabled(&self) -> bool {
         self.tier
             .purchase_add_on_credits_policy
-            .is_some_and(|policy| policy.enabled)
+            .is_some_and(|policy| policy.allows_purchases())
+    }
+
+    /// Whether add-on credit purchases on this plan go through the premium
+    /// (surcharged) path rather than standard list-price purchasing.
+    pub fn is_premium_addon_credits_purchase(&self) -> bool {
+        self.tier
+            .purchase_add_on_credits_policy
+            .is_some_and(|policy| !policy.enabled && policy.premium_enabled)
+    }
+
+    /// The surcharge in basis points applied to add-on credit pack list
+    /// prices for this plan. 0 whenever standard purchasing is enabled.
+    pub fn addon_credits_price_premium_bps(&self) -> i32 {
+        self.tier
+            .purchase_add_on_credits_policy
+            .map_or(0, |policy| policy.effective_premium_bps())
     }
 }
 

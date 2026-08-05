@@ -157,7 +157,9 @@ impl AgentSlide {
                 | OnboardingStateEvent::IntentionChanged
                 | OnboardingStateEvent::Completed
                 | OnboardingStateEvent::UpgradeRequested
-                | OnboardingStateEvent::NoAiConfirmationChanged => {}
+                | OnboardingStateEvent::NoAiConfirmationChanged
+                | OnboardingStateEvent::CreditPurchaseRequested { .. }
+                | OnboardingStateEvent::CreditPurchaseCompleted => {}
             }
         });
 

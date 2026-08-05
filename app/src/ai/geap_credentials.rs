@@ -2,8 +2,9 @@ use std::time::{Duration, SystemTime};
 
 use ai::api_keys::{
     ApiKeyManager, GEAP_REFRESH_LEAD_TIME, GeapCredentials, GeapCredentialsState, GeapFederation,
-    GeapMintBinding, LoadGeapCredentialsError,
+    GeapMintBinding, GeapRefreshOutcome, LoadGeapCredentialsError,
 };
+use futures::channel::oneshot;
 use serde::{Deserialize, Serialize};
 use vec1::vec1;
 use warp_core::features::FeatureFlag;
@@ -133,14 +134,23 @@ pub(crate) fn refresh_geap_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    refresh_geap_credentials_with_options(manager, false, ctx);
+    refresh_geap_credentials_with_options(manager, false, None, ctx);
 }
 
 pub(crate) fn force_refresh_geap_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    refresh_geap_credentials_with_options(manager, true, ctx);
+    refresh_geap_credentials_with_options(manager, true, None, ctx);
+}
+
+/// Mint kickoff for a request blocked on an expired credential.
+pub(crate) fn start_geap_refresh_for_waiter(
+    manager: &mut ApiKeyManager,
+    waiter: oneshot::Sender<GeapRefreshOutcome>,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) {
+    refresh_geap_credentials_with_options(manager, false, Some(waiter), ctx);
 }
 
 /// Request-time safety net. The triggering request is never delayed —
@@ -175,6 +185,7 @@ pub(crate) fn refresh_geap_credentials_if_needed(
 fn refresh_geap_credentials_with_options(
     manager: &mut ApiKeyManager,
     force: bool,
+    waiter: Option<oneshot::Sender<GeapRefreshOutcome>>,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
     let minted_for = match current_geap_policy(ctx) {
@@ -217,6 +228,7 @@ fn refresh_geap_credentials_with_options(
         "GEAP: minting credentials (audience={}, force={force})",
         minted_for.audience
     );
+    manager.install_geap_refresh_waiter(waiter);
     manager.set_geap_credentials_state(GeapCredentialsState::Refreshing { previous }, ctx);
 
     // Leg 1: every mint — initial or re-mint, timer/trigger/forced — starts
@@ -251,16 +263,30 @@ fn apply_geap_mint_result(
     force: bool,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
+    let waiters = manager.take_geap_refresh_waiters();
+    let outcome = apply_geap_mint_result_inner(manager, result, minted_for, force, ctx);
+    for waiter in waiters {
+        let _ = waiter.send(outcome);
+    }
+}
+
+fn apply_geap_mint_result_inner(
+    manager: &mut ApiKeyManager,
+    result: Result<GeapCredentials, LoadGeapCredentialsError>,
+    minted_for: GeapMintBinding,
+    force: bool,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) -> GeapRefreshOutcome {
     let current_binding = match current_geap_policy(ctx) {
         GeapPolicy::Disabled => {
             log::info!("GEAP: gate flipped off mid-mint; discarding the mint result");
             manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
-            return;
+            return GeapRefreshOutcome::Failed;
         }
         GeapPolicy::Unconfigured => {
             log::info!("GEAP: gate unconfigured mid-mint; discarding the mint result");
             manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
-            return;
+            return GeapRefreshOutcome::Failed;
         }
         GeapPolicy::Mintable(binding) => binding,
     };
@@ -292,7 +318,7 @@ fn apply_geap_mint_result(
             }
         }
         refresh_geap_credentials(manager, ctx);
-        return;
+        return GeapRefreshOutcome::Failed;
     }
 
     match result {
@@ -313,6 +339,8 @@ fn apply_geap_mint_result(
             // Arm the next one-shot proactive refresh — this is what makes
             // the ~hourly loop self-sustaining.
             schedule_geap_token_refresh(manager, ctx);
+            manager.clear_geap_mint_failure();
+            GeapRefreshOutcome::Refreshed
         }
         Err(err) => {
             report_error!("GEAP: credential mint failed", extra: { "error" => ?err });
@@ -342,6 +370,9 @@ fn apply_geap_mint_result(
                     );
                 }
             }
+            // Start the cooldown.
+            manager.record_geap_mint_failure();
+            GeapRefreshOutcome::Failed
         }
     }
 }

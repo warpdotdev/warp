@@ -2204,9 +2204,45 @@ impl VimHandler for EditorView {
         });
     }
 
-    fn replace_char(&mut self, c: char, char_count: u32, ctx: &mut ViewContext<Self>) {
-        if char_count <= self.distance_to_line_end(ctx) {
+    fn replace_char(
+        &mut self,
+        c: char,
+        char_count: u32,
+        advance: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if advance {
+            if self.distance_to_line_end(ctx) > 0 {
+                self.replace_characters(c, 1, ctx);
+                self.move_right(true, ctx);
+            } else {
+                self.user_insert(&c.to_string(), ctx);
+            }
+        } else if char_count <= self.distance_to_line_end(ctx) {
             self.replace_characters(c, char_count, ctx);
+        }
+    }
+
+    fn replace_text(
+        &mut self,
+        text: &str,
+        count: u32,
+        already_applied: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let repeat_count = count.saturating_sub(u32::from(already_applied));
+        for _ in 0..repeat_count {
+            for c in text.chars() {
+                if self.distance_to_line_end(ctx) > 0 {
+                    self.replace_characters(c, 1, ctx);
+                    self.move_right(true, ctx);
+                } else {
+                    self.user_insert(&c.to_string(), ctx);
+                }
+            }
+        }
+        if !text.is_empty() {
+            self.move_left(true, ctx);
         }
     }
 

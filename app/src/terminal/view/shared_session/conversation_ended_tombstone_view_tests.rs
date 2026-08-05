@@ -24,6 +24,7 @@ fn task_with_run_time_and_credits() -> AmbientAgentTask {
         run_time: Some("PT42S".parse().unwrap()),
         status_message: None,
         source: None,
+        execution_location: None,
         session_id: None,
         session_link: None,
         creator: Some(TaskPrincipalInfo {

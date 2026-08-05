@@ -13,6 +13,7 @@ futures-lite.workspace = true
 hex.workspace = true
 instant.workspace = true
 is_executable = "1.0.1"
+itertools.workspace = true
 log.workspace = true
 nix = { workspace = true, features = ["user"] }
 serde.workspace = true
@@ -21,6 +22,7 @@ sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+warp_core.workspace = true
 warp_errors.workspace = true
 
 [dev-dependencies]

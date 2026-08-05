@@ -163,6 +163,81 @@ impl std::fmt::Display for AiAccessChoice {
     }
 }
 
+/// A one-time add-on credit pack offered on the "Choose how to start" slide.
+///
+/// Display-only data: the app crate builds these from the server's pricing
+/// info and the viewer's add-on credits purchase policy (which carries the
+/// free-plan premium), so the onboarding crate never hardcodes prices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CreditPackOption {
+    /// The number of AI credits the pack grants.
+    pub credits: i32,
+    /// The final purchase price in USD cents, with any plan premium already
+    /// applied — i.e. exactly what the user is charged.
+    pub price_usd_cents: i32,
+    /// Whole-percent savings on the per-credit rate versus the smallest pack.
+    /// Zero for the smallest pack (and whenever savings can't be computed).
+    pub savings_percent: u32,
+}
+
+impl CreditPackOption {
+    /// `"$12"` for a whole-dollar price, `"$12.50"` otherwise.
+    pub fn price_label(&self) -> String {
+        if self.price_usd_cents % 100 == 0 {
+            format!("${}", self.price_usd_cents / 100)
+        } else {
+            format!("${:.2}", self.price_usd_cents as f64 / 100.)
+        }
+    }
+
+    /// The credit count, thousands-separated so large packs stay readable
+    /// (`"6,500"`). The unit comes from the surrounding card, matching how the
+    /// Billing & Usage denominations are labelled.
+    pub fn credits_label(&self) -> String {
+        let digits = self.credits.abs().to_string();
+        let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+        for (index, digit) in digits.chars().enumerate() {
+            if index > 0 && (digits.len() - index).is_multiple_of(3) {
+                grouped.push(',');
+            }
+            grouped.push(digit);
+        }
+        if self.credits < 0 {
+            grouped.insert(0, '-');
+        }
+        grouped
+    }
+}
+
+/// Progress of a one-time credit-pack purchase started from the offer slide.
+///
+/// A purchase without a saved payment method (the common case for a brand-new
+/// account) hands off to browser checkout; onboarding then waits for the
+/// credits to actually land rather than trusting the browser round-trip, so
+/// abandoning checkout leaves the user on this slide.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CreditPurchaseState {
+    #[default]
+    Idle,
+    /// The purchase mutation is in flight.
+    Purchasing,
+    /// Checkout was opened in the browser; waiting for credits to be available.
+    AwaitingCheckout,
+    /// The purchase failed. The user stays on the slide and can retry.
+    Failed,
+}
+
+impl CreditPurchaseState {
+    /// Whether a purchase is underway, so the primary action should not start
+    /// another one.
+    pub fn is_in_flight(self) -> bool {
+        matches!(
+            self,
+            CreditPurchaseState::Purchasing | CreditPurchaseState::AwaitingCheckout
+        )
+    }
+}
+
 /// Which opt-out entry point opened the "Are you sure you don't want AI?" modal.
 /// Determines where "Give me AI features" routes the user on cancel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,6 +255,14 @@ pub(crate) enum OnboardingStateEvent {
     UpgradeRequested,
     AuthStateChanged,
     NoAiConfirmationChanged,
+    /// The user asked to buy the selected credit pack. The app crate owns the
+    /// purchase mutation, so it listens for this and calls the server.
+    CreditPurchaseRequested {
+        credits: i32,
+    },
+    /// The purchased credits landed on the account, so onboarding may advance
+    /// past the offer slide.
+    CreditPurchaseCompleted,
 }
 
 #[derive(Clone, Debug)]
@@ -205,6 +288,14 @@ pub(crate) struct OnboardingStateModel {
     /// When set, the "Are you sure you don't want AI?" confirmation modal is
     /// shown; the value records which entry point triggered it.
     no_ai_confirmation: Option<NoAiConfirmationSource>,
+    /// The ad-hoc credit packs offered on the "Choose how to start" slide,
+    /// supplied by the app crate from server pricing. Empty until pricing has
+    /// been fetched, which hides the buy-credits option entirely.
+    credit_pack_options: Vec<CreditPackOption>,
+    /// Index into `credit_pack_options` of the pack the user has selected.
+    selected_credit_pack_index: usize,
+    /// Progress of a credit purchase started from the offer slide.
+    credit_purchase_state: CreditPurchaseState,
 }
 
 impl OnboardingStateModel {
@@ -230,6 +321,9 @@ impl OnboardingStateModel {
             auth_state,
             offer_variant: None,
             no_ai_confirmation: None,
+            credit_pack_options: Vec::new(),
+            selected_credit_pack_index: 0,
+            credit_purchase_state: CreditPurchaseState::default(),
         }
     }
 
@@ -379,6 +473,129 @@ impl OnboardingStateModel {
             ctx
         );
         self.ai_access_choice = choice;
+        ctx.notify();
+    }
+
+    /// The ad-hoc credit packs to offer, in the order the server listed them
+    /// (smallest first). Empty until the app supplies server pricing.
+    pub(crate) fn credit_pack_options(&self) -> &[CreditPackOption] {
+        &self.credit_pack_options
+    }
+
+    /// Replaces the offered credit packs. Keeps the user's selection when it
+    /// still points at a pack, otherwise falls back to the first one.
+    pub(crate) fn set_credit_pack_options(
+        &mut self,
+        options: Vec<CreditPackOption>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.credit_pack_options == options {
+            return;
+        }
+        self.credit_pack_options = options;
+        if self.selected_credit_pack_index >= self.credit_pack_options.len() {
+            self.selected_credit_pack_index = 0;
+        }
+        ctx.notify();
+    }
+
+    pub(crate) fn selected_credit_pack_index(&self) -> usize {
+        self.selected_credit_pack_index
+    }
+
+    pub(crate) fn selected_credit_pack(&self) -> Option<CreditPackOption> {
+        self.credit_pack_options
+            .get(self.selected_credit_pack_index)
+            .copied()
+    }
+
+    /// Selects the credit pack at `index`. Ignored while a purchase is in
+    /// flight so the pack being paid for can't change underneath it.
+    pub(crate) fn select_credit_pack(&mut self, index: usize, ctx: &mut ModelContext<Self>) {
+        if self.credit_purchase_state.is_in_flight()
+            || index >= self.credit_pack_options.len()
+            || self.selected_credit_pack_index == index
+        {
+            return;
+        }
+        let credits = self.credit_pack_options[index].credits;
+        send_telemetry_from_ctx!(
+            OnboardingEvent::SettingChanged {
+                setting: "credit_pack".to_string(),
+                value: credits.to_string(),
+            },
+            ctx
+        );
+        self.selected_credit_pack_index = index;
+        ctx.notify();
+    }
+
+    pub(crate) fn credit_purchase_state(&self) -> CreditPurchaseState {
+        self.credit_purchase_state
+    }
+
+    /// Starts buying the selected credit pack. The app crate owns the purchase
+    /// mutation, so this only moves to `Purchasing` and asks for the purchase;
+    /// the outcome comes back via [`Self::on_credit_checkout_opened`],
+    /// [`Self::on_credit_purchase_completed`], or
+    /// [`Self::on_credit_purchase_failed`].
+    pub(crate) fn request_credit_purchase(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.credit_purchase_state.is_in_flight() {
+            return;
+        }
+        let Some(pack) = self.selected_credit_pack() else {
+            return;
+        };
+        self.credit_purchase_state = CreditPurchaseState::Purchasing;
+        ctx.emit(OnboardingStateEvent::CreditPurchaseRequested {
+            credits: pack.credits,
+        });
+        ctx.notify();
+    }
+
+    /// The purchase needs browser checkout (no saved payment method).
+    /// Onboarding stays on this slide until credits are available.
+    pub(crate) fn on_credit_checkout_opened(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.credit_purchase_state != CreditPurchaseState::Purchasing {
+            return;
+        }
+        self.credit_purchase_state = CreditPurchaseState::AwaitingCheckout;
+        ctx.notify();
+    }
+
+    /// Reports whether the user can make an AI request, observed on a refresh
+    /// while checkout is pending. Deliberately the generic availability answer
+    /// rather than "did these particular credits land": onboarding only needs
+    /// to avoid letting through someone who still can't use AI.
+    pub(crate) fn on_credit_availability_observed(
+        &mut self,
+        available: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.credit_purchase_state != CreditPurchaseState::AwaitingCheckout || !available {
+            return;
+        }
+        self.on_credit_purchase_completed(ctx);
+    }
+
+    /// The credits landed — either charged synchronously or granted after the
+    /// user finished browser checkout. Advances past the offer slide.
+    pub(crate) fn on_credit_purchase_completed(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.credit_purchase_state.is_in_flight() {
+            return;
+        }
+        self.credit_purchase_state = CreditPurchaseState::Idle;
+        ctx.emit(OnboardingStateEvent::CreditPurchaseCompleted);
+        ctx.notify();
+    }
+
+    /// The purchase could not be started or was rejected. The user keeps their
+    /// place on the slide and can retry or choose another option.
+    pub(crate) fn on_credit_purchase_failed(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.credit_purchase_state.is_in_flight() {
+            return;
+        }
+        self.credit_purchase_state = CreditPurchaseState::Failed;
         ctx.notify();
     }
 

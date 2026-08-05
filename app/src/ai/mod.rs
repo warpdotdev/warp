@@ -30,6 +30,7 @@ pub(crate) mod conversation_navigation;
 pub(crate) mod conversation_rename;
 pub(crate) mod conversation_status_ui;
 pub(crate) mod conversation_utils;
+pub mod credit_availability;
 pub(crate) mod custom_model_router_editor;
 pub(crate) mod custom_model_routers;
 pub(crate) mod document;
@@ -51,8 +52,11 @@ pub(crate) mod remote_context_files;
 pub mod request_usage_model;
 pub(crate) mod restored_conversations;
 pub(crate) mod skills;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod tui_api_keys;
 pub(crate) mod voice;
 pub use agent_tips::*;
+pub use credit_availability::*;
 pub use request_usage_model::*;
 use warpui::AppContext;
 #[cfg(not(target_family = "wasm"))]

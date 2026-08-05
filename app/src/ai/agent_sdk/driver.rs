@@ -10,7 +10,10 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
-use ai::skills::{ParsedSkill, SKILL_PROVIDER_DEFINITIONS};
+use ai::skills::{
+    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, parse_skills_dirs_env, read_skills_for_skills_dirs,
+    resolve_skills_dirs,
+};
 use anyhow::{Context as _, anyhow};
 use futures::FutureExt as _;
 use futures::channel::oneshot;
@@ -26,6 +29,7 @@ use warp_cli::agent::{Harness, OutputFormat};
 use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
+use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::{safe_debug, safe_error, safe_info};
 use warp_errors::{ErrorExt, register_error, report_error, report_if_error};
@@ -71,13 +75,14 @@ use crate::ai::mcp::parsing::{ParsedTemplatableMCPServerResult, normalize_mcp_js
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::ai::mcp::{
     JSONMCPServer, MCPServerState, TemplatableMCPServerInstallation, TemplatableMCPServerManager,
-    VariableType, VariableValue,
+    VariableType, VariableValue, builtin,
 };
 use crate::ai::skills::{
     SkillManager, SkillWatcher, filter_skills_by_spec, read_skills_from_directories,
     resolve_skill_repos,
 };
 use crate::auth::AuthStateProvider;
+use crate::auth::credentials::Credentials;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
 use crate::send_telemetry_from_app_ctx;
 use crate::server::ids::{ServerId, SyncId};
@@ -526,6 +531,15 @@ pub enum AgentDriverError {
     ConversationCancelled { reason: CancellationReason },
     #[error("The agent got stuck waiting for user confirmation on the action: {blocked_action}")]
     ConversationBlocked { blocked_action: String },
+    /// The shell process exited while an environment setup command was
+    /// running (e.g. the command ran `exit`), so the run cannot continue.
+    /// `command` is the (secret-redacted) command that was in flight (or
+    /// most recently submitted) when the shell died.
+    #[error(
+        "The shell exited during setup command `{command}`, so the run could not continue. \
+         Check the setup commands for this environment."
+    )]
+    SetupCommandExitedShell { command: String },
     #[error("Timed out refreshing team metadata")]
     TeamMetadataRefreshTimeout,
     #[error("{0}")]
@@ -1074,7 +1088,11 @@ impl AgentDriver {
             // Success/blocked/cancelled are handled by LocalAgentTaskSyncModel.
             if let (Some(task_id), Err(err)) = (task_id, &result) {
                 report_driver_error(task_id, err, &server_api_for_error).await;
-                if matches!(err, AgentDriverError::EnvironmentSetupFailed(_)) {
+                if matches!(
+                    err,
+                    AgentDriverError::EnvironmentSetupFailed(_)
+                        | AgentDriverError::SetupCommandExitedShell { .. }
+                ) {
                     let _ = foreground_for_error
                         .spawn(|me, ctx| {
                             me.extend_shared_session_retention(
@@ -1210,7 +1228,7 @@ impl AgentDriver {
                 }
                 MCPSpec::Uuid(uuid) => {
                     let client_config = managed_mcp_client
-                        .create_managed_mcp_client_config(*uuid)
+                        .create_managed_mcp_client_config(uuid.to_string())
                         .await
                         .map_err(|err| AgentDriverError::ManagedMcpResolutionFailed {
                             uid: *uuid,
@@ -1227,6 +1245,41 @@ impl AgentDriver {
                     })?;
                     resolved.ephemeral_installations.extend(installations);
                 }
+                MCPSpec::WellKnown(id) => {
+                    // Backstop for specs created before the flag was disabled
+                    // (e.g. persisted configs): skip rather than resolve.
+                    if !FeatureFlag::WellKnownMcpIds.is_enabled() {
+                        log::warn!(
+                            "Skipping well-known MCP server '{id}': WellKnownMcpIds is disabled"
+                        );
+                        continue;
+                    }
+                    // Well-known MCP ids (e.g. "linear") resolve best-effort:
+                    // the server owns the set of recognized ids, and the
+                    // backing integration may be disconnected or the feature
+                    // disabled between dispatch and run setup — so resolution
+                    // failures skip the server instead of failing the run.
+                    let client_config = match managed_mcp_client
+                        .create_managed_mcp_client_config(id.clone())
+                        .await
+                    {
+                        Ok(client_config) => client_config,
+                        Err(err) => {
+                            log::warn!("Skipping well-known MCP server '{id}': {err:#}");
+                            continue;
+                        }
+                    };
+                    match Self::installations_from_managed_client_config_json(
+                        &client_config.mcp_config_json,
+                    ) {
+                        Ok(installations) => {
+                            resolved.ephemeral_installations.extend(installations);
+                        }
+                        Err(err) => {
+                            log::warn!("Skipping well-known MCP server '{id}': {err}");
+                        }
+                    }
+                }
                 MCPSpec::Json(json_str) => {
                     resolved
                         .ephemeral_installations
@@ -1236,6 +1289,39 @@ impl AgentDriver {
         }
 
         Ok(resolved)
+    }
+
+    /// Returns the built-in Factory MCP server installation to attach to this
+    /// run, or `None` when it should not be attached.
+    ///
+    /// Interactive clients (GUI/TUI) attach built-in Warp-hosted servers via
+    /// [`TemplatableMCPServerManager::sync_builtin_servers`], which skips CLI
+    /// agent runs. The driver mirrors the same eligibility rules for its
+    /// run-scoped ephemeral startup path: the `FactoryMcp` feature flag, a
+    /// usable bearer token, and no configured server already named
+    /// `warp-factory` (an explicit configuration wins over the built-in).
+    ///
+    /// The token is pinned into the transport at spawn time and is not
+    /// refreshed mid-run: cloud runs authenticate with API keys, which do not
+    /// rotate, so only Firebase-authenticated local runs that outlive their
+    /// token would see factory tool calls start failing.
+    fn builtin_factory_mcp_for_run(
+        credentials: Option<&Credentials>,
+        taken_server_names: &HashSet<String>,
+    ) -> Option<TemplatableMCPServerInstallation> {
+        if !FeatureFlag::FactoryMcp.is_enabled() {
+            return None;
+        }
+        if taken_server_names.contains(builtin::FACTORY_MCP_SERVER_NAME) {
+            log::info!(
+                "Skipping the built-in Factory MCP server: a server named '{}' is already configured for this run",
+                builtin::FACTORY_MCP_SERVER_NAME
+            );
+            return None;
+        }
+        let token = builtin::builtin_bearer_token(credentials?)?;
+        log::info!("Attaching the built-in Factory MCP server to this agent run");
+        Some(builtin::factory_mcp_installation(&token))
     }
 
     fn installations_from_user_mcp_json(
@@ -2102,6 +2188,45 @@ impl AgentDriver {
         }
     }
 
+    /// Load skills from the `WARP_SKILL_DIRS` environment variable as personal (home) tier skills.
+    ///
+    /// `WARP_SKILL_DIRS` is a comma-separated list of paths; each entry is itself a skills directory
+    /// whose **direct children** are expected to be skill folders containing `SKILL.md`. Relative
+    /// entries are resolved against the driver's working directory — not the process's current
+    /// working directory, which environment preparation may have changed (e.g. by cd-ing into a
+    /// cloned repo). Skills loaded this way behave identically to `~/.agents/skills` personal
+    /// skills—always in scope, regardless of the current working directory.
+    ///
+    /// Invalid, missing, or unreadable entries are skipped with a warning; an unset or empty
+    /// variable is a no-op.
+    async fn load_skills_dirs(foreground: &ModelSpawner<Self>) {
+        let dirs = parse_skills_dirs_env();
+        if dirs.is_empty() {
+            return;
+        }
+        log::info!(
+            "WARP_SKILL_DIRS: loading skills from {} directories",
+            dirs.len()
+        );
+        let load_result = foreground
+            .spawn(move |me, ctx| {
+                let dirs = resolve_skills_dirs(&me.working_dir, dirs);
+                let skills = read_skills_for_skills_dirs(&dirs);
+                if skills.is_empty() {
+                    log::info!("WARP_SKILL_DIRS: no skills found");
+                } else {
+                    log::info!("WARP_SKILL_DIRS: loaded {} skill(s)", skills.len());
+                }
+                SkillManager::handle(ctx).update(ctx, |manager, _| {
+                    manager.add_skills_dirs_skills(skills);
+                });
+            })
+            .await;
+        if let Err(err) = load_result {
+            log::warn!("Failed to load WARP_SKILL_DIRS skills: {err}");
+        }
+    }
+
     /// Runs the agent to completion.
     /// Driving the agent mostly requires main-thread UI framework updates, but using `async` and
     /// a `ModelSpawner` lets us express the high-level process linearly rather than in a
@@ -2178,7 +2303,61 @@ impl AgentDriver {
                         Self::resolve_mcp_specs(&mcp_specs, managed_mcp_client, &foreground)
                             .await?;
                     let existing_uuids = resolved_mcp_specs.local_uuids;
-                    let ephemeral_installations = resolved_mcp_specs.ephemeral_installations;
+                    let mut ephemeral_installations = resolved_mcp_specs.ephemeral_installations;
+
+                    // Attach the built-in Factory MCP server. Interactive
+                    // clients attach built-ins via
+                    // `TemplatableMCPServerManager::sync_builtin_servers`,
+                    // which skips CLI agent runs, so the driver injects the
+                    // same code-owned installation here, scoped to this run.
+                    let local_uuids = existing_uuids.clone();
+                    let mut taken_server_names: HashSet<String> = ephemeral_installations
+                        .iter()
+                        .map(|installation| installation.templatable_mcp_server().name.clone())
+                        .collect();
+                    let credentials = foreground
+                        .spawn(move |_, ctx| {
+                            let (local_names, builtin_already_active) = {
+                                let manager = TemplatableMCPServerManager::as_ref(ctx);
+                                let local_names = local_uuids
+                                    .iter()
+                                    .filter_map(|uuid| {
+                                        manager.get_installed_server(uuid).map(|installation| {
+                                            installation.templatable_mcp_server().name.clone()
+                                        })
+                                    })
+                                    .collect::<Vec<_>>();
+                                let builtin_already_active = manager.is_server_active_or_pending(
+                                    builtin::FACTORY_MCP_INSTALLATION_UUID,
+                                );
+                                (local_names, builtin_already_active)
+                            };
+                            // Interactive clients (GUI/TUI) attach built-ins
+                            // through `sync_builtin_servers`, under the same
+                            // stable installation UUID. The driver currently
+                            // only runs in SDK mode, where that path never
+                            // spawns, but guard anyway so this injection can
+                            // never double-spawn the built-in if the driver
+                            // is ever hosted in an interactive process.
+                            let builtin_owned_by_manager = builtin_already_active
+                                || AppExecutionMode::as_ref(ctx).can_autostart_mcp_servers();
+                            let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+                            let credentials = (!builtin_owned_by_manager
+                                && !auth_state.is_anonymous_or_logged_out())
+                            .then(|| auth_state.credentials())
+                            .flatten();
+                            (credentials, local_names)
+                        })
+                        .await
+                        .map(|(credentials, local_names)| {
+                            taken_server_names.extend(local_names);
+                            credentials
+                        })?;
+                    if let Some(installation) =
+                        Self::builtin_factory_mcp_for_run(credentials.as_ref(), &taken_server_names)
+                    {
+                        ephemeral_installations.push(installation);
+                    }
 
                     log::info!(
                         "Starting {} existing and {} ephemeral MCP servers",
@@ -2402,6 +2581,12 @@ impl AgentDriver {
                 .record_value(
                     SetupStep::GlobalSkillLoading,
                     Self::load_global_skills(&foreground, global_skill_specs, global_skill_repos),
+                )
+                .await;
+            setup_events
+                .record_value(
+                    SetupStep::SkillsDirsLoading,
+                    Self::load_skills_dirs(&foreground),
                 )
                 .await;
         }

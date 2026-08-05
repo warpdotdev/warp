@@ -462,6 +462,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     // Copy current path command-palette action
     register_test!(test_copy_current_path_copies_terminal_pwd);
+    register_test!(test_copy_current_path_copies_code_editor_file_path);
 
     // Go to Line tests
     register_test!(test_goto_line_dialog_open_close);

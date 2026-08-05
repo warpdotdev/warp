@@ -51,7 +51,7 @@ fn border_frames_the_child() {
     let container = TuiContainer::new(TuiText::new("X").finish()).with_border();
     assert_eq!(
         render_to_lines(container, TuiSize::new(3, 3)),
-        vec!["┌─┐", "│X│", "└─┘"],
+        vec!["▁▁▁", "▏X▕", "▔▔▔"],
     );
 }
 
@@ -77,7 +77,7 @@ fn border_and_padding_compose() {
 
             assert_eq!(
                 render_to_lines(container, TuiSize::new(5, 5)),
-                vec!["┌───┐", "│   │", "│ X │", "│   │", "└───┘"],
+                vec!["▁▁▁▁▁", "▏   ▕", "▏ X ▕", "▏   ▕", "▔▔▔▔▔"],
             );
         });
     });

@@ -853,15 +853,55 @@ fn is_prompt_suggestions_enabled(ctx: &ModelContext<PassiveSuggestionsModel>) ->
         && UserWorkspaces::as_ref(ctx).is_prompt_suggestions_toggleable()
 }
 
+/// Maximum total byte length of block text to scan for file paths when building passive
+/// code-diff context. Caps CPU and memory usage for large shell outputs (e.g. a Rails
+/// console session that emits thousands of lines) by bounding the per-block token scan +
+/// filesystem-stat loop to a fixed amount of work regardless of output size.
+///
+/// The budget is split between the start and end of the text: relevant paths cluster both
+/// near the beginning of output (the command itself, early compiler/build errors) and near
+/// the end (stack traces and test failures printed right before the prompt returns).
+#[cfg(feature = "local_fs")]
+const MAX_BLOCK_CONTENTS_BYTES_FOR_PATH_DETECTION: usize = 100_000;
+
+/// Splits `text` into a head slice and an optional tail slice whose combined length is at
+/// most `max_bytes`, cutting at UTF-8 char boundaries. The tail is `None` when `text`
+/// already fits within the budget.
+#[cfg(feature = "local_fs")]
+fn head_and_tail_within_budget(text: &str, max_bytes: usize) -> (&str, Option<&str>) {
+    if text.len() <= max_bytes {
+        return (text, None);
+    }
+    let mut head_end = max_bytes / 2;
+    while !text.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = text.len() - max_bytes / 2;
+    while !text.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    (&text[..head_end], Some(&text[tail_start..]))
+}
+
 #[cfg(feature = "local_fs")]
 fn detect_relevant_file_paths_for_block(
     block_contents: &str,
     current_working_directory: &str,
     shell: Option<&ShellLaunchData>,
 ) -> Vec<PathBuf> {
+    // Cap how much text is scanned so huge outputs can't pin a CPU core; the middle of the
+    // output is the least likely place for paths relevant to code suggestions.
+    let (head, tail) =
+        head_and_tail_within_budget(block_contents, MAX_BLOCK_CONTENTS_BYTES_FOR_PATH_DETECTION);
     // TODO (suraj): use line num hint to limit the line range to read.
-    detect_file_paths(current_working_directory, block_contents, shell)
+    let mut links: Vec<_> = detect_file_paths(current_working_directory, head, shell)
         .into_values()
+        .collect();
+    if let Some(tail) = tail {
+        links.extend(detect_file_paths(current_working_directory, tail, shell).into_values());
+    }
+    links
+        .into_iter()
         .filter_map(|link| match link {
             DetectedLinkType::FilePath { absolute_path, .. } => Some(absolute_path),
             DetectedLinkType::Url(_) => None,
@@ -927,3 +967,7 @@ async fn read_files(
         }
     }
 }
+
+#[cfg(all(test, feature = "local_fs"))]
+#[path = "maa_tests.rs"]
+mod tests;

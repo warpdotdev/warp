@@ -18,6 +18,7 @@ use warp_cli::{
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
 use warp_graphql::mutations::create_managed_mcp_client_config::{
     CreateManagedMcpClientConfigOutput, ManagedMcpTransportKind,
 };
@@ -41,8 +42,10 @@ use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::mcp::JSONTransportType;
+use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
 use crate::ai::mcp::parsing::normalize_mcp_json;
 use crate::ai::skills::SkillManager;
+use crate::auth::credentials::Credentials;
 use crate::server::server_api::managed_mcp::MockManagedMcpClient;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
@@ -189,7 +192,7 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
     mock.expect_create_managed_mcp_client_config()
         .times(1)
         .returning(move |requested_uid| {
-            assert_eq!(requested_uid, uuid);
+            assert_eq!(requested_uid, uuid.to_string());
             Ok(managed_client_config_output(config_json))
         });
 
@@ -202,6 +205,99 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
 
     assert!(resolved.local_uuids.is_empty());
     assert_eq!(resolved.ephemeral_installations.len(), 1);
+}
+
+#[test]
+fn well_known_spec_resolves_via_managed_client() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let config_json = r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/integration-proxy/linear","headers":{"Authorization":"Bearer tok"}}}}"#;
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(move |requested_uid| {
+            assert_eq!(requested_uid, "linear");
+            Ok(managed_client_config_output(config_json))
+        });
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::WellKnown("linear".to_string())],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert!(resolved.local_uuids.is_empty());
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+}
+
+#[test]
+fn well_known_resolution_failure_skips_server() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(|_| Err(anyhow::anyhow!("Linear is not connected for this team")));
+
+    // Well-known references are server-injected and best-effort: a failure must
+    // skip the server, not fail run setup.
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::WellKnown("linear".to_string())],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert!(resolved.local_uuids.is_empty());
+    assert!(resolved.ephemeral_installations.is_empty());
+}
+
+#[test]
+fn well_known_resolution_failure_does_not_drop_other_specs() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let config_json =
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#;
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(2)
+        .returning(move |requested_uid| {
+            if requested_uid == "linear" {
+                Err(anyhow::anyhow!("Linear is not connected for this team"))
+            } else {
+                assert_eq!(requested_uid, uuid.to_string());
+                Ok(managed_client_config_output(config_json))
+            }
+        });
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[
+            MCPSpec::WellKnown("linear".to_string()),
+            MCPSpec::Uuid(uuid),
+        ],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+}
+
+#[test]
+fn well_known_spec_is_skipped_when_flag_disabled() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(false);
+    // The managed client must not be called for well-known specs when the
+    // feature is disabled (e.g. a persisted config from a dogfood build).
+    let mock = MockManagedMcpClient::new();
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::WellKnown("linear".to_string())],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert!(resolved.local_uuids.is_empty());
+    assert!(resolved.ephemeral_installations.is_empty());
 }
 
 #[test]
@@ -342,6 +438,59 @@ fn managed_command_config_missing_secret_leaves_placeholder() {
         }
         other => panic!("expected CLI server, got {other:?}"),
     }
+}
+
+// ── Built-in Factory MCP injection tests ────────────────────────────────────
+
+fn api_key_credentials() -> Credentials {
+    Credentials::ApiKey {
+        key: "wk-test-key".to_string(),
+        owner_type: None,
+    }
+}
+
+#[test]
+fn builtin_factory_mcp_attaches_with_api_key_credentials() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+
+    let installation =
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
+            .expect("built-in Factory MCP should attach when eligible");
+
+    assert_eq!(installation.uuid(), FACTORY_MCP_INSTALLATION_UUID);
+    assert_eq!(
+        installation.templatable_mcp_server().name,
+        FACTORY_MCP_SERVER_NAME
+    );
+}
+
+#[test]
+fn builtin_factory_mcp_skipped_when_flag_disabled() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(false);
+
+    assert!(
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
+            .is_none()
+    );
+}
+
+#[test]
+fn builtin_factory_mcp_skipped_without_credentials() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+
+    assert!(AgentDriver::builtin_factory_mcp_for_run(None, &HashSet::new()).is_none());
+}
+
+#[test]
+fn builtin_factory_mcp_skipped_on_name_collision() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+    // A user-configured server named `warp-factory` wins over the built-in.
+    let taken_server_names = HashSet::from([FACTORY_MCP_SERVER_NAME.to_string()]);
+
+    assert!(
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &taken_server_names)
+            .is_none()
+    );
 }
 
 #[test]
@@ -1159,6 +1308,162 @@ fn write_skill_file(repo: &Path, name: &str) {
     let skill_dir = repo.join(".agents").join("skills").join(name);
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(skill_dir.join("SKILL.md"), format!("Skill: {name}.")).unwrap();
+}
+
+/// Write a minimal SKILL.md at `{skills_dir}/{name}/SKILL.md`.
+/// This is the flat layout expected by `WARP_SKILL_DIRS` (no `.agents/skills` wrapper).
+fn write_flat_skill(skills_dir: &Path, name: &str) {
+    let skill_dir = skills_dir.join(name);
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: Skill {name}.\n---\n\n# {name}\n"),
+    )
+    .unwrap();
+}
+
+/// Verifies that `load_skills_dirs` reads skills from the `WARP_SKILL_DIRS` environment
+/// variable and registers them in the personal (home) bucket so they are always in scope,
+/// regardless of the current working directory.
+#[test]
+#[serial_test::serial]
+fn warp_skill_dirs_env_loads_skills_as_home_tier() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+
+        // Create two separate flat skills directories (no .agents/skills prefix).
+        let skills_dir_a = working_dir.join("extra-skills-a");
+        let skills_dir_b = working_dir.join("extra-skills-b");
+        write_flat_skill(&skills_dir_a, "env-skill-a1");
+        write_flat_skill(&skills_dir_a, "env-skill-a2");
+        write_flat_skill(&skills_dir_b, "env-skill-b1");
+
+        // Point WARP_SKILL_DIRS at both directories.
+        let skills_dirs_value = format!("{},{}", skills_dir_a.display(), skills_dir_b.display());
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("WARP_SKILL_DIRS", &skills_dirs_value) };
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    AgentDriver::load_skills_dirs(&spawner).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
+
+        // Skills from WARP_SKILL_DIRS are home-tier, so they appear for any working directory.
+        // Use None cwd — home skills are included regardless of is_cloud_environment.
+        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            skill_names.contains(&"env-skill-a1".to_string()),
+            "'env-skill-a1' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"env-skill-a2".to_string()),
+            "'env-skill-a2' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"env-skill-b1".to_string()),
+            "'env-skill-b1' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
+        );
+
+        // Verify the skills have Home scope (personal tier).
+        let scope_check = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            use ai::skills::SkillScope;
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .filter(|s| s.name.starts_with("env-skill-"))
+                .all(|s| s.scope == SkillScope::Home)
+        });
+        assert!(
+            scope_check,
+            "all WARP_SKILL_DIRS skills must have SkillScope::Home"
+        );
+    });
+}
+
+/// Verifies that relative `WARP_SKILL_DIRS` entries are resolved against the driver's
+/// working directory rather than the process's current working directory (which
+/// `prepare_environment` may have changed).
+#[test]
+#[serial_test::serial]
+fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+
+        // Create a flat skills directory inside the working dir and reference it by
+        // relative path only. No `rel-skills` directory exists under the process cwd,
+        // so this only loads if resolution is anchored at the driver's working dir.
+        write_flat_skill(&working_dir.join("rel-skills"), "env-skill-rel");
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("WARP_SKILL_DIRS", "rel-skills") };
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    AgentDriver::load_skills_dirs(&spawner).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
+
+        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            skill_names.contains(&"env-skill-rel".to_string()),
+            "'env-skill-rel' should load via a relative WARP_SKILL_DIRS entry resolved against the driver's working dir; got: {skill_names:?}"
+        );
+    });
 }
 
 #[test]

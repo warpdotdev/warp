@@ -96,7 +96,9 @@ const TAB_CLOSE_BUTTON_WIDTH: f32 = 20.0;
 const MAX_TOOLTIP_LENGTH: usize = 80;
 pub(crate) const TAB_PIN_INDICATOR_ICON_SIZE: f32 = 16.0;
 
-const TAB_INDICATOR_SYNCED_COLOR: u32 = 0x4A93FFFF;
+/// Color of the synchronized-inputs indicator, shared by the horizontal tab bar
+/// and the vertical tabs panel so both surfaces read identically.
+pub(crate) const TAB_INDICATOR_SYNCED_COLOR: u32 = 0x4A93FFFF;
 
 // Width threshold (in px) below which we render an icon-only tab
 pub(crate) const COMPACT_TAB_WIDTH_THRESHOLD: f32 = 42.0;
@@ -1501,7 +1503,7 @@ impl<'a> TabComponent<'a> {
                     }
                 } else {
                     let icon_color = self.appearance.theme().nonactive_ui_text_color();
-                    Some(Icon::Oz.to_warpui_icon(icon_color).finish())
+                    Some(Icon::Agent.to_warpui_icon(icon_color).finish())
                 }
             }
             Indicator::AmbientAgent => {
@@ -1515,8 +1517,9 @@ impl<'a> TabComponent<'a> {
                 let mouse_state = self.tab.indicator_hover_state.clone();
                 Some(
                     Hoverable::new(mouse_state, move |state| {
-                        let mut stack = Stack::new()
-                            .with_child(Icon::OzCloud.to_warpui_icon(icon_color.into()).finish());
+                        let mut stack = Stack::new().with_child(
+                            Icon::CloudFilled.to_warpui_icon(icon_color.into()).finish(),
+                        );
 
                         if state.is_hovered() {
                             let tooltip = ui_builder
