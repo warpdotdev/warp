@@ -43,6 +43,7 @@ use crate::settings::app_installation_detection::{
 };
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::shared_session::SharedSessionActionSource;
+use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::participant_avatar_view::render_participants_and_role_elements;
 use crate::terminal::shared_session::render_util::shared_session_indicator_color;
 use crate::terminal::{TerminalManager, TerminalView};
@@ -640,9 +641,13 @@ impl BackingView for TerminalView {
         let is_ambient_agent = self.is_ambient_agent_session(ctx);
         if shared_session_status.is_sharer_or_viewer() {
             if !is_ambient_agent {
+                // Disable the item (rather than silently no-op) when the Manager does not yet
+                // have a session id (e.g. during ViewPending while the session is still setting up).
+                let has_session_link = Manager::as_ref(ctx).has_session_link(&self.view_id);
                 items.push(
                     MenuItemFields::new("Copy link")
                         .with_on_select_action(TerminalAction::CopySharedSessionLink { source })
+                        .with_disabled(!has_session_link)
                         .into_item(),
                 );
             }

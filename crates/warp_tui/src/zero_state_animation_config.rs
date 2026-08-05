@@ -218,6 +218,19 @@ impl Entity for ZeroStateAnimationConfig {
 impl SingletonEntity for ZeroStateAnimationConfig {}
 
 impl ZeroStateAnimationConfig {
+    #[cfg(feature = "test-util")]
+    pub(crate) fn benchmark_ascii() -> Self {
+        Self {
+            active_object: TuiZeroStateObject::BuiltIn,
+            shape: Arc::new(ZeroStateShape::Ascii(
+                AsciiArtMask::parse("    #\n   ###\n  #####\n #######\n   ###\n  #   #\n")
+                    .expect("benchmark ASCII art is valid"),
+            )),
+            rotation_period: Duration::from_secs(5),
+            extrusion_depth: 0.18,
+            load_failure: None,
+        }
+    }
     pub(crate) fn register(ctx: &mut AppContext) {
         let config_dir = warp_core::paths::tui_config_local_dir();
         let (object, rotation_period, extrusion_depth) = {

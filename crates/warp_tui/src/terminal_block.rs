@@ -186,6 +186,11 @@ impl TuiElement for TerminalBlockElement {
         let Some(size) = self.size else {
             return;
         };
+
+        let Some(visible_element_rows) = surface.visible_rows(origin, size) else {
+            return;
+        };
+
         let model = self.model.lock();
         let colors = model.colors();
         let block_list = model.block_list();
@@ -197,22 +202,43 @@ impl TuiElement for TerminalBlockElement {
             TerminalBlockRows::Visible { rows, width } => (rows.clone(), (*width).min(size.width)),
             TerminalBlockRows::Content => (block_content_rows(block), size.width),
         };
-        let cursor = terminal_block_cursor(block, cursor_owner == Some(block.id()), &rows, size)
-            .and_then(|(column, row)| {
-                let column = if self.command_style.is_some() && block.is_command_grid_active() {
-                    column.saturating_add(SHELL_COMMAND_PREFIX_WIDTH)
-                } else {
-                    column
-                };
-                (column < size.width).then_some((column, row))
-            });
+
+        let visible_rows = rows
+            .start
+            .saturating_add(usize::from(visible_element_rows.start))
+            ..rows
+                .start
+                .saturating_add(usize::from(visible_element_rows.end))
+                .min(rows.end);
+        let visible_size = TuiSize::new(
+            size.width,
+            visible_element_rows
+                .end
+                .saturating_sub(visible_element_rows.start),
+        );
+        let visible_origin = origin.offset(0, i32::from(visible_element_rows.start));
+        let cursor = terminal_block_cursor(
+            block,
+            cursor_owner == Some(block.id()),
+            &visible_rows,
+            visible_size,
+        )
+        .and_then(|(column, row)| {
+            let column = if self.command_style.is_some() && block.is_command_grid_active() {
+                column.saturating_add(SHELL_COMMAND_PREFIX_WIDTH)
+            } else {
+                column
+            };
+            (column < visible_size.width).then_some((column, row))
+        });
+
         render_block_rows(
             block,
-            rows,
+            visible_rows,
             width,
             TerminalBlockPaintBounds {
-                origin,
-                size,
+                origin: visible_origin,
+                size: visible_size,
                 background: None,
                 content_offset: 0,
                 prefix_style: None,
@@ -223,7 +249,9 @@ impl TuiElement for TerminalBlockElement {
         );
         drop(model);
         if let Some((col, row)) = cursor {
-            ctx.set_terminal_cursor(ctx.scene_point(origin.offset(i32::from(col), i32::from(row))));
+            ctx.set_terminal_cursor(
+                ctx.scene_point(visible_origin.offset(i32::from(col), i32::from(row))),
+            );
         }
     }
 

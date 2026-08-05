@@ -76,6 +76,10 @@ use warp_graphql::queries::free_available_models::{
     FreeAvailableModels, FreeAvailableModelsInput, FreeAvailableModelsResult,
     FreeAvailableModelsVariables,
 };
+#[cfg(not(feature = "agent_mode_evals"))]
+use warp_graphql::queries::get_ai_credit_availability::{
+    GetAICreditAvailability, GetAICreditAvailabilityVariables,
+};
 use warp_graphql::queries::get_available_harnesses::{
     GetAvailableHarnesses, GetAvailableHarnessesVariables,
 };
@@ -117,7 +121,6 @@ use super::download::write_response_body_to_path;
 use super::harness_support::{UploadField, UploadFieldValue, UploadTarget};
 #[cfg(not(feature = "agent_mode_evals"))]
 use crate::ai::BonusGrant;
-use crate::ai::RequestUsageInfo;
 pub use crate::ai::agent::UserQueryMode;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
@@ -127,7 +130,8 @@ use crate::ai::agent::conversation::{
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 // Re-export ambient agent types for backwards compatibility
 pub use crate::ai::ambient_agents::{
-    AgentConfigSnapshot, AgentSource, AmbientAgentTask, AmbientAgentTaskState, TaskStatusMessage,
+    AgentConfigSnapshot, AgentSource, AmbientAgentTask, AmbientAgentTaskState, ExecutionLocation,
+    TaskStatusMessage,
     task::{AttachmentInput, TaskAttachment},
 };
 use crate::ai::artifacts::Artifact;
@@ -141,6 +145,7 @@ use crate::ai::llms::{
 };
 #[cfg(feature = "agent_mode_evals")]
 use crate::ai::request_usage_model::RequestLimitInfo;
+use crate::ai::{AICreditAvailability, RequestUsageInfo};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::ai_assistant::requests::GenerateDialogueResult;
 use crate::ai_assistant::utils::TranscriptPart;
@@ -708,22 +713,6 @@ pub struct TaskListFilter {
     pub cursor: Option<String>,
 }
 
-/// Execution location filter values accepted by the public API.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExecutionLocation {
-    Local,
-    Remote,
-}
-
-impl ExecutionLocation {
-    pub fn as_query_param(&self) -> &'static str {
-        match self {
-            ExecutionLocation::Local => "LOCAL",
-            ExecutionLocation::Remote => "REMOTE",
-        }
-    }
-}
-
 /// Artifact type filter values accepted by the public API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArtifactType {
@@ -1157,6 +1146,10 @@ pub trait AIClient: 'static + Send + Sync {
     ) -> Result<GeneratedCommandMetadata, GeneratedCommandMetadataError>;
 
     async fn get_request_limit_info(&self) -> Result<RequestUsageInfo, anyhow::Error>;
+
+    /// Fetches the server-authoritative decision on whether the authenticated
+    /// user can start an interactive AI request.
+    async fn get_ai_credit_availability(&self) -> Result<AICreditAvailability, anyhow::Error>;
 
     /// Returns conversation usage history for the current user over the requested number of days.
     ///
@@ -1814,6 +1807,34 @@ impl AIClient for ServerApi {
             }
             warp_graphql::queries::get_request_limit_info::UserResult::Unknown => {
                 Err(anyhow!("failed to get request limit info"))
+            }
+        }
+    }
+
+    #[cfg(feature = "agent_mode_evals")]
+    async fn get_ai_credit_availability(&self) -> Result<AICreditAvailability, anyhow::Error> {
+        Ok(AICreditAvailability::available_with_source(Some(
+            crate::ai::AICreditSource::BaseLimit,
+        )))
+    }
+
+    #[cfg(not(feature = "agent_mode_evals"))]
+    async fn get_ai_credit_availability(&self) -> Result<AICreditAvailability, anyhow::Error> {
+        let variables = GetAICreditAvailabilityVariables {
+            request_context: get_request_context(),
+        };
+        let operation = GetAICreditAvailability::build(variables);
+        let response = self.send_graphql_request(operation, None).await?;
+
+        match response.user {
+            warp_graphql::queries::get_ai_credit_availability::UserResult::UserOutput(output) => {
+                Ok(output.user.ai_credit_availability.into())
+            }
+            warp_graphql::queries::get_ai_credit_availability::UserResult::UserFacingError(e) => {
+                Err(anyhow!(get_user_facing_error_message(e)))
+            }
+            warp_graphql::queries::get_ai_credit_availability::UserResult::Unknown => {
+                Err(anyhow!("failed to get AI credit availability"))
             }
         }
     }

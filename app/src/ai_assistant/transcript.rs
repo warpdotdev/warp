@@ -28,6 +28,7 @@ use super::utils::{
     TranscriptPartSubType, code_block_position_id, markdown_segments_from_text,
     render_prepared_response_button, render_request_limit_info, save_as_workflow_position_id,
 };
+use crate::ai::AIRequestUsageModel;
 use crate::appearance::Appearance;
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{SaveAsWorkflowModalSource, TelemetryEvent, WarpAIActionType};
@@ -816,7 +817,7 @@ impl View for Transcript {
         let theme = appearance.theme();
         let transcript = self.requests_model.as_ref(app).transcript();
         let request_status = self.requests_model.as_ref(app).request_status();
-        let num_remaining_reqs = self.requests_model.as_ref(app).num_remaining_reqs();
+        let has_ai_available = AIRequestUsageModel::as_ref(app).has_any_ai_remaining(app);
 
         let mut blocks = Flex::column();
         for (index, part) in transcript.iter().enumerate() {
@@ -850,7 +851,7 @@ impl View for Transcript {
         if !transcript.is_empty() && matches!(request_status, RequestStatus::NotInFlight) {
             // Only show the prepared responses if the last response wasn't an error
             // and the user still has remaining requests.
-            if !transcript.last().is_none_or(|p| p.assistant.is_error) && num_remaining_reqs > 0 {
+            if !transcript.last().is_none_or(|p| p.assistant.is_error) && has_ai_available {
                 blocks.add_child(
                     Container::new(self.render_prepared_responses(appearance))
                         .with_margin_top(15.)

@@ -186,7 +186,7 @@ const GIT_OPERATIONS_AUTOGEN_DESCRIPTION: &str =
     "Let AI generate commit messages and pull request titles and descriptions.";
 const WISPR_FLOW_URL: &str = "https://wisprflow.ai/";
 const CUSTOM_INFERENCE_LEARN_MORE_URL: &str =
-    "https://docs.warp.dev/agent-platform/inference/custom-inference-endpoint/";
+    "https://docs.warp.dev/agents/inference/custom-inference-endpoint/";
 const CUSTOM_INFERENCE_TERMS_URL: &str = "https://www.warp.dev/legal/terms-of-service";
 const CUSTOM_INFERENCE_INFO_TOOLTIP_MAX_WIDTH: f32 = 320.;
 const CUSTOM_ENDPOINT_MODAL_MAX_HEIGHT_PERCENTAGE: f32 = 0.8;
@@ -1796,6 +1796,7 @@ impl AISettingsPageView {
         ctx.subscribe_to_model(&ai_request_model, |me, _, event, ctx| {
             match event {
                 AIRequestUsageModelEvent::RequestUsageUpdated => ctx.notify(),
+                AIRequestUsageModelEvent::CreditAvailabilityUpdated => ctx.notify(),
                 AIRequestUsageModelEvent::RequestBonusRefunded { .. } => ctx.notify(),
                 AIRequestUsageModelEvent::AmbientCreditsBannerDismissed => {}
             }
@@ -2226,7 +2227,8 @@ impl AISettingsPageView {
         let on_paid_plan = UserWorkspaces::as_ref(ctx)
             .current_workspace()
             .is_some_and(|workspace| workspace.billing_metadata.is_user_on_paid_plan());
-        let out_of_monthly_credits = !AIRequestUsageModel::as_ref(ctx).has_requests_remaining();
+        let out_of_monthly_credits =
+            !AIRequestUsageModel::as_ref(ctx).has_base_plan_requests_remaining();
         !on_paid_plan && out_of_monthly_credits && !Self::active_base_model_is_byo_covered(ctx)
     }
 
@@ -2914,7 +2916,7 @@ impl AISettingsPageView {
                     widgets.push(Box::new(VoiceWidget::default()));
                 }
                 widgets.push(Box::new(CloudHandoffWidget::default()));
-                widgets.push(Box::new(CLIAgentWidget::default()));
+                widgets.extend(cli_agent_widgets());
                 widgets.push(Box::new(ApiKeysWidget::new(ctx)));
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(GeminiEnterpriseWidget::new(ctx)));
@@ -2981,14 +2983,19 @@ impl AISettingsPageView {
                 }
             }
             Some(AISubpage::ThirdPartyCLIAgents) => {
-                widgets.push(Box::new(CLIAgentWidget::default()));
+                widgets.extend(cli_agent_widgets());
             }
         }
 
-        // Most subpage widgets render their own subheader-sized titles internally.
-        // Knowledge follows the Account-page convention and renders its title as page chrome,
-        // so filtering its setting widgets never removes the title.
-        let title = (subpage == Some(AISubpage::Knowledge)).then_some("Knowledge");
+        // Multi-section subpages (Warp Agent, Profiles) render their own subheader-sized
+        // section titles inside each widget, so they get no page-level title here.
+        // Single-topic subpages follow the Account-page convention and render their title as
+        // page chrome, so filtering their setting widgets never removes the title.
+        let title = match subpage {
+            Some(AISubpage::Knowledge) => Some("Knowledge"),
+            Some(AISubpage::ThirdPartyCLIAgents) => Some("Third party CLI agents"),
+            None | Some(AISubpage::WarpAgent) | Some(AISubpage::Profiles) => None,
+        };
         PageType::new_uncategorized(widgets, title)
     }
 
@@ -6381,7 +6388,7 @@ impl AgentsWidget {
             ),
             FormattedTextFragment::hyperlink(
                 "Learn more",
-                "https://docs.warp.dev/agent-platform/capabilities/codebase-context",
+                "https://docs.warp.dev/agents/capabilities/codebase-context",
             ),
         ];
         let description = Container::new(
@@ -6459,7 +6466,7 @@ impl AgentsWidget {
                 FormattedTextFragment::plain_text(" or "),
                 FormattedTextFragment::hyperlink(
                     "learn more about MCPs.",
-                    "https://docs.warp.dev/agent-platform/capabilities/mcp",
+                    "https://docs.warp.dev/agents/capabilities/mcp",
                 ),
             ];
 
@@ -6996,7 +7003,7 @@ impl SettingsWidget for MCPServersWidget {
             ),
             FormattedTextFragment::hyperlink(
                 "Learn more",
-                "https://docs.warp.dev/agent-platform/capabilities/mcp",
+                "https://docs.warp.dev/agents/capabilities/mcp",
             ),
         ];
 
@@ -7042,7 +7049,7 @@ impl SettingsWidget for MCPServersWidget {
                                 ),
                                 FormattedTextFragment::hyperlink(
                                     "See supported providers.",
-                                    "https://docs.warp.dev/agent-platform/capabilities/mcp#file-based-mcp-servers",
+                                    "https://docs.warp.dev/agents/capabilities/mcp#file-based-mcp-servers",
                                 ),
                             ]
                         });
@@ -7134,7 +7141,7 @@ impl SettingsWidget for RulesWidget {
             ),
             FormattedTextFragment::hyperlink(
                 "Learn more",
-                "https://docs.warp.dev/agent-platform/capabilities/rules",
+                "https://docs.warp.dev/agents/capabilities/rules",
             ),
         ];
         let description = Container::new(
@@ -7647,22 +7654,28 @@ impl SettingsWidget for OtherAIWidget {
 pub(crate) fn cli_agent_settings_widget_id() -> &'static str {
     CLIAgentWidget::static_widget_id()
 }
+fn cli_agent_widgets() -> Vec<Box<dyn SettingsWidget<View = AISettingsPageView>>> {
+    vec![
+        Box::new(CLIAgentWidget::default()),
+        Box::new(CLIAgentAutoToggleRichInputWidget::default()),
+        Box::new(CLIAgentAutoOpenRichInputWidget::default()),
+        Box::new(CLIAgentAutoDismissRichInputWidget::default()),
+        Box::new(CLIAgentSubmitRichInputWidget::default()),
+        Box::new(CLIAgentCommandsWidget),
+        Box::new(CLIAgentToolbarLayoutWidget),
+    ]
+}
 
 #[derive(Default)]
 struct CLIAgentWidget {
     cli_agent_footer_toggle: SwitchStateHandle,
-    auto_toggle_rich_input_toggle: SwitchStateHandle,
-    auto_toggle_rich_input_info_tooltip: MouseStateHandle,
-    auto_open_rich_input_on_cli_agent_start_toggle: SwitchStateHandle,
-    auto_dismiss_rich_input_toggle: SwitchStateHandle,
-    submit_on_ctrl_enter_toggle: SwitchStateHandle,
 }
 
 impl SettingsWidget for CLIAgentWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "third party cli coding agent claude codex gemini toolbar footer layout chip chips rearrange re-arrange bar command regex auto show rich input dismiss ctrl enter submit newline"
+        "third party cli coding agent claude codex gemini toolbar footer quick actions show"
     }
 
     fn render(
@@ -7707,18 +7720,7 @@ impl SettingsWidget for CLIAgentWidget {
             HighlightedHyperlink::default(),
         );
 
-        let is_footer_enabled = *ai_settings.should_render_cli_agent_footer;
-
-        let mut column = Flex::column()
-            .with_child(
-                build_sub_header(
-                    appearance,
-                    "Third party CLI agents",
-                    Some(styles::header_font_color(true, app)),
-                )
-                .with_padding_bottom(HEADER_PADDING)
-                .finish(),
-            )
+        Flex::column()
             .with_child(cli_agent_footer_toggle)
             .with_child(
                 Container::new(description.finish())
@@ -7726,211 +7728,361 @@ impl SettingsWidget for CLIAgentWidget {
                     .with_margin_bottom(styles::DESCRIPTION_MARGIN_BOTTOM)
                     .with_margin_right(styles::TOGGLE_WIDTH_MARGIN)
                     .finish(),
-            );
+            )
+            .finish()
+    }
+}
 
-        if is_footer_enabled {
-            use super::settings_page::AdditionalInfo;
-            use crate::settings::{
-                AutoDismissRichInputAfterSubmit, AutoOpenRichInputOnCLIAgentStart,
-                AutoToggleRichInput, SubmitRichInputOnCtrlEnter,
-            };
+fn should_render_cli_agent_detail(app: &AppContext) -> bool {
+    *AISettings::as_ref(app).should_render_cli_agent_footer
+}
 
-            if FeatureFlag::CLIAgentRichInput.is_enabled() {
-                // Setting 1: Auto show/hide rich input based on agent status
-                let auto_show_toggle_label = render_body_item_label::<AISettingsPageAction>(
-                    "Auto show/hide Rich Input based on agent status".into(),
-                    Some(styles::header_font_color(true, app)),
-                    Some(AdditionalInfo {
-                        mouse_state: self.auto_toggle_rich_input_info_tooltip.clone(),
-                        on_click_action: None,
-                        secondary_text: None,
-                        tooltip_override_text: Some(
-                            "Requires the Warp plugin for your coding agent".to_owned(),
-                        ),
-                    }),
-                    LocalOnlyIconState::for_setting(
-                        AutoToggleRichInput::storage_key(),
-                        AutoToggleRichInput::sync_to_cloud(),
-                        &mut view.local_only_icon_tooltip_states.borrow_mut(),
-                        app,
-                    ),
-                    ToggleState::Enabled,
-                    appearance,
-                );
-                column.add_child(build_toggle_element(
-                    auto_show_toggle_label,
-                    render_ai_feature_switch(
-                        self.auto_toggle_rich_input_toggle.clone(),
-                        *ai_settings.auto_toggle_rich_input,
-                        true,
-                        AISettingsPageAction::ToggleAutoToggleRichInput,
-                        app,
-                    ),
-                    appearance,
-                    None,
-                ));
+fn should_render_cli_agent_rich_input(app: &AppContext) -> bool {
+    should_render_cli_agent_detail(app) && FeatureFlag::CLIAgentRichInput.is_enabled()
+}
 
-                column.add_child(
-                    render_ai_setting_toggle::<AutoOpenRichInputOnCLIAgentStart>(
-                        "Auto open Rich Input when a coding agent session starts",
-                        AISettingsPageAction::ToggleAutoOpenRichInputOnCLIAgentStart,
-                        *ai_settings.auto_open_rich_input_on_cli_agent_start,
-                        true,
-                        self.auto_open_rich_input_on_cli_agent_start_toggle.clone(),
-                        &view.local_only_icon_tooltip_states,
-                        app,
-                    ),
-                );
+#[derive(Default)]
+struct CLIAgentAutoToggleRichInputWidget {
+    toggle: SwitchStateHandle,
+    info_tooltip: MouseStateHandle,
+}
 
-                // Setting 2: Auto dismiss rich input after prompt submission
-                column.add_child(render_ai_setting_toggle::<AutoDismissRichInputAfterSubmit>(
-                    "Auto dismiss Rich Input after prompt submission",
-                    AISettingsPageAction::ToggleAutoDismissRichInputAfterSubmit,
-                    *ai_settings.auto_dismiss_rich_input_after_submit,
-                    true,
-                    self.auto_dismiss_rich_input_toggle.clone(),
-                    &view.local_only_icon_tooltip_states,
-                    app,
-                ));
+impl SettingsWidget for CLIAgentAutoToggleRichInputWidget {
+    type View = AISettingsPageView;
 
-                // Setting 3: Submit Rich Input with Ctrl+Enter
-                column.add_child(render_ai_setting_toggle::<SubmitRichInputOnCtrlEnter>(
-                    "Submit Rich Input with Ctrl+Enter",
-                    AISettingsPageAction::ToggleSubmitRichInputOnCtrlEnter,
-                    *ai_settings.submit_on_ctrl_enter,
-                    true,
-                    self.submit_on_ctrl_enter_toggle.clone(),
-                    &view.local_only_icon_tooltip_states,
-                    app,
-                ));
-            }
+    fn search_terms(&self) -> &str {
+        "third party cli coding agent rich input auto show hide status plugin"
+    }
 
-            let command_list = {
-                let mut list_column = Flex::column();
+    fn should_render(&self, app: &AppContext) -> bool {
+        should_render_cli_agent_rich_input(app)
+    }
 
-                list_column.add_child(
-                    appearance
-                        .ui_builder()
-                        .span("Commands that enable the toolbar".to_string())
-                        .with_style(UiComponentStyles {
-                            font_size: Some(CONTENT_FONT_SIZE),
-                            ..Default::default()
-                        })
-                        .build()
-                        .finish(),
-                );
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        use super::settings_page::AdditionalInfo;
+        use crate::settings::AutoToggleRichInput;
 
-                list_column
-                    .add_child(ChildView::new(&view.cli_agent_footer_command_editor).finish());
+        if !self.should_render(app) {
+            return Empty::new().finish();
+        }
 
-                let background = appearance.theme().surface_1();
-                let font_color = appearance.theme().foreground();
-                let items: Vec<_> = ai_settings
-                    .cli_agent_footer_enabled_commands
-                    .value()
-                    .keys()
-                    .cloned()
-                    .collect();
-                let len = items.len();
-                for (rev_i, pattern) in items.iter().rev().enumerate() {
-                    let original_i = len - 1 - rev_i;
-                    let remove_action =
-                        AISettingsPageAction::RemoveCLIAgentToolbarEnabledCommand(pattern.clone());
-                    let mouse_state = view
-                        .cli_agent_footer_command_mouse_state_handles
-                        .get(original_i)
-                        .cloned()
-                        .unwrap_or_default();
+        let label = render_body_item_label::<AISettingsPageAction>(
+            "Auto show/hide Rich Input based on agent status".into(),
+            Some(styles::header_font_color(true, app)),
+            Some(AdditionalInfo {
+                mouse_state: self.info_tooltip.clone(),
+                on_click_action: None,
+                secondary_text: None,
+                tooltip_override_text: Some(
+                    "Requires the Warp plugin for your coding agent".to_owned(),
+                ),
+            }),
+            LocalOnlyIconState::for_setting(
+                AutoToggleRichInput::storage_key(),
+                AutoToggleRichInput::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+        );
 
-                    let remove_button = appearance
-                        .ui_builder()
-                        .close_button(16., mouse_state)
-                        .build()
-                        .on_click(move |ctx, _, _| {
-                            ctx.dispatch_typed_action(remove_action.clone());
-                        })
-                        .finish();
+        build_toggle_element(
+            label,
+            render_ai_feature_switch(
+                self.toggle.clone(),
+                *AISettings::as_ref(app).auto_toggle_rich_input,
+                true,
+                AISettingsPageAction::ToggleAutoToggleRichInput,
+                app,
+            ),
+            appearance,
+            None,
+        )
+    }
+}
 
-                    let label = appearance
-                        .ui_builder()
-                        .wrappable_text(pattern.clone(), true)
-                        .with_style(UiComponentStyles {
-                            font_color: Some(font_color.into_solid()),
-                            font_family_id: Some(appearance.monospace_font_family()),
-                            font_size: Some(appearance.ui_font_size()),
-                            ..Default::default()
-                        })
-                        .build()
-                        .finish();
+#[derive(Default)]
+struct CLIAgentAutoOpenRichInputWidget {
+    toggle: SwitchStateHandle,
+}
 
-                    let mut right_side =
-                        Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-                    if let Some(dropdown_handle) = view
-                        .cli_agent_footer_command_agent_dropdowns
-                        .get(original_i)
-                    {
-                        right_side.add_child(
-                            Container::new(ChildView::new(dropdown_handle).finish())
-                                .with_margin_right(8.)
-                                .finish(),
-                        );
-                    }
-                    right_side.add_child(remove_button);
+impl SettingsWidget for CLIAgentAutoOpenRichInputWidget {
+    type View = AISettingsPageView;
 
-                    let row = Container::new(
-                        Flex::row()
-                            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                            .with_main_axis_size(MainAxisSize::Max)
-                            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                            .with_children([
-                                Shrinkable::new(1., label).finish(),
-                                right_side.finish(),
-                            ])
-                            .finish(),
-                    )
-                    .with_background(background)
-                    .with_horizontal_padding(8.)
-                    .with_vertical_padding(4.)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-                    .with_margin_bottom(4.)
-                    .finish();
+    fn search_terms(&self) -> &str {
+        "third party cli coding agent rich input auto open session start"
+    }
 
-                    list_column.add_child(row);
-                }
+    fn should_render(&self, app: &AppContext) -> bool {
+        should_render_cli_agent_rich_input(app)
+    }
 
-                list_column.finish()
-            };
-            let command_list_description = appearance
+    fn render(
+        &self,
+        view: &Self::View,
+        _appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        use crate::settings::AutoOpenRichInputOnCLIAgentStart;
+
+        if !self.should_render(app) {
+            return Empty::new().finish();
+        }
+
+        render_ai_setting_toggle::<AutoOpenRichInputOnCLIAgentStart>(
+            "Auto open Rich Input when a coding agent session starts",
+            AISettingsPageAction::ToggleAutoOpenRichInputOnCLIAgentStart,
+            *AISettings::as_ref(app).auto_open_rich_input_on_cli_agent_start,
+            true,
+            self.toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        )
+    }
+}
+
+#[derive(Default)]
+struct CLIAgentAutoDismissRichInputWidget {
+    toggle: SwitchStateHandle,
+}
+
+impl SettingsWidget for CLIAgentAutoDismissRichInputWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "third party cli coding agent rich input auto dismiss prompt submission"
+    }
+
+    fn should_render(&self, app: &AppContext) -> bool {
+        should_render_cli_agent_rich_input(app)
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        _appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        use crate::settings::AutoDismissRichInputAfterSubmit;
+
+        if !self.should_render(app) {
+            return Empty::new().finish();
+        }
+
+        render_ai_setting_toggle::<AutoDismissRichInputAfterSubmit>(
+            "Auto dismiss Rich Input after prompt submission",
+            AISettingsPageAction::ToggleAutoDismissRichInputAfterSubmit,
+            *AISettings::as_ref(app).auto_dismiss_rich_input_after_submit,
+            true,
+            self.toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        )
+    }
+}
+
+#[derive(Default)]
+struct CLIAgentSubmitRichInputWidget {
+    toggle: SwitchStateHandle,
+}
+
+impl SettingsWidget for CLIAgentSubmitRichInputWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "third party cli coding agent rich input submit ctrl enter newline"
+    }
+
+    fn should_render(&self, app: &AppContext) -> bool {
+        should_render_cli_agent_rich_input(app)
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        _appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        use crate::settings::SubmitRichInputOnCtrlEnter;
+
+        if !self.should_render(app) {
+            return Empty::new().finish();
+        }
+
+        render_ai_setting_toggle::<SubmitRichInputOnCtrlEnter>(
+            "Submit Rich Input with Ctrl+Enter",
+            AISettingsPageAction::ToggleSubmitRichInputOnCtrlEnter,
+            *AISettings::as_ref(app).submit_on_ctrl_enter,
+            true,
+            self.toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        )
+    }
+}
+
+struct CLIAgentCommandsWidget;
+
+impl SettingsWidget for CLIAgentCommandsWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "third party cli coding agent claude codex gemini toolbar commands regex patterns"
+    }
+
+    fn should_render(&self, app: &AppContext) -> bool {
+        should_render_cli_agent_detail(app)
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        if !self.should_render(app) {
+            return Empty::new().finish();
+        }
+
+        let mut list_column = Flex::column();
+        list_column.add_child(
+            appearance
                 .ui_builder()
-                .paragraph(
-                    "Add regex patterns to show the coding agent toolbar for matching commands.",
-                )
+                .span("Commands that enable the toolbar".to_string())
                 .with_style(UiComponentStyles {
+                    font_size: Some(CONTENT_FONT_SIZE),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
+        );
+        list_column.add_child(ChildView::new(&view.cli_agent_footer_command_editor).finish());
+
+        let background = appearance.theme().surface_1();
+        let font_color = appearance.theme().foreground();
+        let items: Vec<_> = AISettings::as_ref(app)
+            .cli_agent_footer_enabled_commands
+            .value()
+            .keys()
+            .cloned()
+            .collect();
+        let len = items.len();
+        for (rev_i, pattern) in items.iter().rev().enumerate() {
+            let original_i = len - 1 - rev_i;
+            let remove_action =
+                AISettingsPageAction::RemoveCLIAgentToolbarEnabledCommand(pattern.clone());
+            let mouse_state = view
+                .cli_agent_footer_command_mouse_state_handles
+                .get(original_i)
+                .cloned()
+                .unwrap_or_default();
+
+            let remove_button = appearance
+                .ui_builder()
+                .close_button(16., mouse_state)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(remove_action.clone());
+                })
+                .finish();
+
+            let label = appearance
+                .ui_builder()
+                .wrappable_text(pattern.clone(), true)
+                .with_style(UiComponentStyles {
+                    font_color: Some(font_color.into_solid()),
+                    font_family_id: Some(appearance.monospace_font_family()),
                     font_size: Some(appearance.ui_font_size()),
-                    font_color: Some(styles::description_font_color(true, app).into()),
-                    margin: Some(
-                        Coords::default()
-                            .top(4.)
-                            .bottom(styles::DESCRIPTION_MARGIN_BOTTOM)
-                            .right(styles::TOGGLE_WIDTH_MARGIN),
-                    ),
                     ..Default::default()
                 })
                 .build()
                 .finish();
 
-            column.add_child(command_list);
-            column.add_child(command_list_description);
-
-            if FeatureFlag::AgentToolbarEditor.is_enabled() {
-                column.add_child(render_toolbar_layout_editor(
-                    &view.cli_agent_toolbar_inline_editor,
-                    appearance,
-                ));
+            let mut right_side = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+            if let Some(dropdown_handle) = view
+                .cli_agent_footer_command_agent_dropdowns
+                .get(original_i)
+            {
+                right_side.add_child(
+                    Container::new(ChildView::new(dropdown_handle).finish())
+                        .with_margin_right(8.)
+                        .finish(),
+                );
             }
+            right_side.add_child(remove_button);
+
+            let row = Container::new(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                    .with_children([Shrinkable::new(1., label).finish(), right_side.finish()])
+                    .finish(),
+            )
+            .with_background(background)
+            .with_horizontal_padding(8.)
+            .with_vertical_padding(4.)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+            .with_margin_bottom(4.)
+            .finish();
+
+            list_column.add_child(row);
         }
 
-        column.finish()
+        let description = appearance
+            .ui_builder()
+            .paragraph("Add regex patterns to show the coding agent toolbar for matching commands.")
+            .with_style(UiComponentStyles {
+                font_size: Some(appearance.ui_font_size()),
+                font_color: Some(styles::description_font_color(true, app).into()),
+                margin: Some(
+                    Coords::default()
+                        .top(4.)
+                        .bottom(styles::DESCRIPTION_MARGIN_BOTTOM)
+                        .right(styles::TOGGLE_WIDTH_MARGIN),
+                ),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        Flex::column()
+            .with_child(list_column.finish())
+            .with_child(description)
+            .finish()
+    }
+}
+
+struct CLIAgentToolbarLayoutWidget;
+
+impl SettingsWidget for CLIAgentToolbarLayoutWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "third party cli coding agent toolbar layout chip chips rearrange re-arrange"
+    }
+
+    fn should_render(&self, app: &AppContext) -> bool {
+        should_render_cli_agent_detail(app) && FeatureFlag::AgentToolbarEditor.is_enabled()
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        if !self.should_render(app) {
+            return Empty::new().finish();
+        }
+
+        render_toolbar_layout_editor(&view.cli_agent_toolbar_inline_editor, appearance)
     }
 }
 

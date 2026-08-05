@@ -2,7 +2,8 @@
 //!
 //! [`run`] boots the real headless Warp app via [`warp::run_tui`]. Once shared
 //! initialization is done, the mount built here starts the TUI driver and
-//! defers creating the first terminal session until login.
+//! creates the first terminal session once browser authentication starts, while
+//! allowing authentication to complete in the background.
 
 use std::io::{self, IsTerminal as _, Read as _};
 
@@ -12,10 +13,13 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use clap::error::ErrorKind;
 use inquire::{InquireError, Password, PasswordDisplayMode};
-use warp::settings::{TuiThemeSettings, TuiVoiceSettings, TuiVoiceSettingsChangedEvent};
+use warp::settings::{TuiThemeSettings, TuiZeroStateSettings, TuiZeroStateSettingsChangedEvent};
+#[cfg(feature = "voice_input")]
+use warp::settings::{TuiVoiceSettings, TuiVoiceSettingsChangedEvent};
 use warp::tui_export::{AIConversationAutoexecuteMode, Appearance, ServerConversationToken};
 use warp::{TuiLoginEvent, TuiLoginModel, TuiLoginPhase};
 use warp_core::channel::ChannelState;
+use warp_core::settings::Setting as _;
 use warp_core::telemetry::TelemetryEvent as _;
 use warp_errors::report_error;
 use warpui::SingletonEntity as _;
@@ -23,15 +27,17 @@ use warpui_core::platform::{TerminationMode, WindowStyle};
 use warpui_core::runtime::spawn_tui_driver;
 use warpui_core::{AddWindowOptions, AppContext, ModelHandle, ViewHandle};
 
+use crate::clipboard::copy_to_clipboard;
 use crate::orchestration_model::TuiOrchestrationModel;
 use crate::resume::TuiExitSummaryHandle;
 use crate::root_view::RootTuiView;
 use crate::session_registry::{TuiSessions, TuiSessionsEvent};
 use crate::telemetry::TuiStartupTelemetryEvent;
-use crate::terminal_background::TuiHostTerminalBackground;
+use crate::terminal_background::probe_and_select_theme;
 use crate::terminal_session_view::{
     TuiConversationRestoreOrigin, TuiConversationRestoreTarget, tui_resume_shell_command,
 };
+#[cfg(feature = "voice_input")]
 use crate::voice_input::requires_modifier_key_reporting;
 
 /// Version string printed by `--version`. Release builds get `GIT_RELEASE_TAG`;
@@ -236,7 +242,7 @@ fn init(
     // Appearance theme at mount time, without changing normal GUI theme
     // selection or font settings.
     let selected_theme = TuiThemeSettings::as_ref(ctx).selected_theme();
-    let (theme, probe) = TuiHostTerminalBackground::register(selected_theme, ctx);
+    let theme = probe_and_select_theme(selected_theme);
     Appearance::handle(ctx).update(ctx, |appearance, ctx| {
         appearance.set_theme(theme, ctx);
     });
@@ -248,18 +254,45 @@ fn init(
         },
         |_| RootTuiView::new(),
     );
+    #[cfg(feature = "voice_input")]
+    let modifier_key_lifecycle_enabled = requires_modifier_key_reporting(ctx);
+    #[cfg(not(feature = "voice_input"))]
+    let modifier_key_lifecycle_enabled = false;
+    let freeze_repaints_when_unfocused = *TuiZeroStateSettings::as_ref(ctx)
+        .freeze_animation_when_unfocused
+        .value();
     match spawn_tui_driver(
         ctx,
         window_id,
         root.clone(),
-        requires_modifier_key_reporting(ctx),
-        Some(probe),
+        modifier_key_lifecycle_enabled,
+        freeze_repaints_when_unfocused,
     ) {
         Ok(driver) => {
             let sessions = ctx.add_singleton_model(|_| {
                 TuiSessions::new(driver, exit_summary, resume_token, default_autoexecute_mode)
             });
+            let sessions_for_zero_state_settings = sessions.clone();
+            ctx.subscribe_to_model(
+                &TuiZeroStateSettings::handle(ctx),
+                move |settings, event, ctx| {
+                    let TuiZeroStateSettingsChangedEvent::TuiZeroStateFreezeAnimationWhenUnfocusedSetting {
+                        ..
+                    } = event
+                    else {
+                        return;
+                    };
+                    let freeze =
+                        *settings.as_ref(ctx).freeze_animation_when_unfocused.value();
+                    sessions_for_zero_state_settings.update(ctx, |sessions, _| {
+                        sessions.set_freeze_repaints_when_unfocused(freeze);
+                    });
+                    ctx.invalidate_all_views();
+                },
+            );
+            #[cfg(feature = "voice_input")]
             let sessions_for_voice_settings = sessions.clone();
+            #[cfg(feature = "voice_input")]
             ctx.subscribe_to_model(&TuiVoiceSettings::handle(ctx), move |_, event, ctx| {
                 let TuiVoiceSettingsChangedEvent::TuiVoiceInputHoldKeySetting { .. } = event;
                 let enabled = requires_modifier_key_reporting(ctx);
@@ -286,10 +319,12 @@ fn init(
             let login_model = TuiLoginModel::handle(ctx);
             ctx.subscribe_to_model(&login_model, move |_, event, ctx| match event {
                 TuiLoginEvent::PhaseChanged => {
-                    root_for_login.update(ctx, |_, ctx| ctx.notify());
+                    root_for_login.update(ctx, |root, ctx| {
+                        root.handle_login_phase_changed(ctx, copy_to_clipboard);
+                    });
                 }
                 TuiLoginEvent::LoggedIn => {
-                    create_terminal_session_after_login(&sessions_for_login, &root_for_login, ctx)
+                    ensure_terminal_session(&sessions_for_login, &root_for_login, ctx)
                 }
                 TuiLoginEvent::LoggedOut => {
                     root_for_login.update(ctx, |root, ctx| root.show_auth(ctx));
@@ -298,7 +333,7 @@ fn init(
             });
             if matches!(TuiLoginModel::as_ref(ctx).phase(), TuiLoginPhase::LoggedIn) {
                 // Already authenticated at mount: create the first session now.
-                create_terminal_session_after_login(&sessions, &root, ctx);
+                ensure_terminal_session(&sessions, &root, ctx);
             }
         }
         Err(error) => {
@@ -310,7 +345,7 @@ fn init(
 }
 
 /// Creates the focused bootstrap session and restores the requested conversation.
-fn create_terminal_session_after_login(
+fn ensure_terminal_session(
     sessions: &ModelHandle<TuiSessions>,
     root: &ViewHandle<RootTuiView>,
     ctx: &mut AppContext,
@@ -321,10 +356,12 @@ fn create_terminal_session_after_login(
 
     let resume_token = sessions.update(ctx, |sessions, _| sessions.take_resume_token());
     let window_id = root.window_id(ctx);
+    let handles_first_run_onboarding = resume_token.is_none();
     let (_, surface) = TuiSessions::create_local_terminal_session(
         sessions,
         window_id,
         true,
+        handles_first_run_onboarding,
         std::env::current_dir().ok(),
         ctx,
     );
@@ -341,6 +378,7 @@ fn create_terminal_session_after_login(
         });
     }
     root.update(ctx, |root, ctx| root.show_terminal(ctx));
+    TuiLoginModel::record_terminal_shown(ctx);
 }
 
 #[cfg(test)]

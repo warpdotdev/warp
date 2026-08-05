@@ -151,6 +151,7 @@ impl TuiSessions {
         sessions: &ModelHandle<Self>,
         window_id: WindowId,
         focus: bool,
+        handles_first_run_onboarding: bool,
         startup_directory: Option<PathBuf>,
         ctx: &mut AppContext,
     ) -> (TuiSessionId, ViewHandle<TuiTerminalSessionView>) {
@@ -197,6 +198,7 @@ impl TuiSessions {
                         exit_summary,
                         keyboard_enhancement_supported,
                         default_autoexecute_mode,
+                        handles_first_run_onboarding,
                         initial_settings_file_error,
                         ctx,
                     )
@@ -268,8 +270,14 @@ impl TuiSessions {
         conversation: AIConversation,
         ctx: &mut AppContext,
     ) -> (TuiSessionId, ViewHandle<TuiTerminalSessionView>) {
-        let (session_id, surface) =
-            Self::create_local_terminal_session(sessions, window_id, false, startup_directory, ctx);
+        let (session_id, surface) = Self::create_local_terminal_session(
+            sessions,
+            window_id,
+            false,
+            false,
+            startup_directory,
+            ctx,
+        );
         surface.update(ctx, |view, ctx| {
             view.restore_orchestrated_child_conversation(conversation, ctx);
         });
@@ -434,6 +442,7 @@ impl TuiSessions {
                     &sessions,
                     window_id,
                     false,
+                    false,
                     working_directory.clone(),
                     ctx,
                 );
@@ -593,6 +602,13 @@ impl TuiSessions {
         }
     }
 
+    pub(crate) fn set_freeze_repaints_when_unfocused(&mut self, freeze: bool) {
+        if let Some(driver) = self.driver.as_mut() {
+            driver.set_freeze_repaints_when_unfocused(freeze);
+        }
+    }
+
+    #[cfg(feature = "voice_input")]
     pub(crate) fn set_modifier_key_lifecycle_enabled(
         &mut self,
         enabled: bool,

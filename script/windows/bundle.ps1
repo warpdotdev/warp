@@ -165,7 +165,7 @@ if ($IS_TUI) {
         'stable' { 'tui' }
         'oss' { 'tui-oss' }
     }
-    $FEATURES = 'release_bundle,standalone'
+    $FEATURES = 'release_bundle,standalone,voice_input'
     if ("$CHANNEL" -ne 'oss') {
         $FEATURES = "$FEATURES,crash_reporting"
     }

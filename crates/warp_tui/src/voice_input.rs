@@ -378,6 +378,6 @@ impl TuiVoiceInputModel {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "voice_input"))]
 #[path = "voice_input_tests.rs"]
 mod tests;

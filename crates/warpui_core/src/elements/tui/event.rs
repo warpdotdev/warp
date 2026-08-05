@@ -27,6 +27,8 @@ pub type TuiScrollDelta = (isize, isize);
 /// Input events dispatched through TUI elements.
 #[derive(Clone, Debug)]
 pub enum TuiEvent {
+    FocusGained,
+    FocusLost,
     KeyDown {
         keystroke: Keystroke,
         chars: String,
@@ -88,7 +90,11 @@ impl TuiEvent {
             | Self::MiddleMouseDown { position, .. }
             | Self::RightMouseDown { position, .. }
             | Self::MouseMoved { position, .. } => Some(*position),
-            Self::KeyDown { .. } | Self::ModifierKeyChanged { .. } | Self::Paste { .. } => None,
+            Self::FocusGained
+            | Self::FocusLost
+            | Self::KeyDown { .. }
+            | Self::ModifierKeyChanged { .. }
+            | Self::Paste { .. } => None,
         }
     }
 

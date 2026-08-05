@@ -933,6 +933,10 @@ impl TeamsPageView {
 
                 ctx.emit(TeamsPageViewEvent::TeamsChanged);
             }
+            UserWorkspacesEvent::CurrentWorkspaceChanged => {
+                // A workspace selection change always emits `TeamsChanged` too,
+                // which already refreshes this page.
+            }
             UserWorkspacesEvent::ToggleInviteLinksSuccess => {
                 self.show_success("Toggled invite links", ctx);
                 ctx.notify();
@@ -1048,6 +1052,9 @@ impl TeamsPageView {
             }
             UserWorkspacesEvent::PurchaseAddonCreditsSuccess => {
                 // Addon credits purchase success is handled in billing_and_usage_page
+            }
+            UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { .. } => {
+                // Checkout handoff is handled by the surface that initiated the purchase
             }
             UserWorkspacesEvent::PurchaseAddonCreditsRejected(_) => {
                 // Addon credits purchase rejection is handled in billing_and_usage_page
@@ -1704,8 +1711,8 @@ impl TeamsPageView {
     fn focus_on_next_input(&mut self, ctx: &mut ViewContext<Self>) {
         let workspaces: &UserWorkspaces = self.user_workspaces.as_ref(ctx);
 
-        if let Some(team) = workspaces.team_for_view(ctx) {
-            if team.organization_settings.is_invite_link_enabled {
+        if workspaces.team_for_view(ctx).is_some() {
+            if workspaces.is_invite_link_enabled() {
                 ctx.focus(&self.approve_domains_block_editor);
             } else {
                 ctx.focus(&self.email_invites_block_editor);
@@ -2659,6 +2666,12 @@ impl TeamsWidget {
     ) -> Box<dyn Element> {
         let mut invitation_section = Flex::column();
 
+        // Invite-link enablement and discoverability are workspace-level settings,
+        // read from the current workspace rather than the Team struct.
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        let is_invite_link_enabled = user_workspaces.is_invite_link_enabled();
+        let is_discoverable = user_workspaces.is_discoverable();
+
         // "team is full" or "billing issue" or some other alert thats restricting you from adding team members
         let warning = Self::grow_team_warning(team_metadata);
         let pricing_info_model = view.pricing_info_model.as_ref(app);
@@ -2697,9 +2710,10 @@ impl TeamsWidget {
 
         // Invite by link section
         // Only show invite-by-link if user is admin OR if invite links are enabled
-        if team_metadata.organization_settings.is_invite_link_enabled || has_admin_permissions {
+        if is_invite_link_enabled || has_admin_permissions {
             invitation_section.add_child(self.render_invite_by_link_section(
                 team_metadata,
+                is_invite_link_enabled,
                 has_admin_permissions,
                 view,
                 appearance,
@@ -2727,6 +2741,7 @@ impl TeamsWidget {
         {
             invitation_section.add_child(self.render_discoverability_toggle_section(
                 team_metadata,
+                is_discoverable,
                 &current_user_email,
                 appearance,
             ));
@@ -2738,6 +2753,7 @@ impl TeamsWidget {
     fn render_invite_by_link_section(
         &self,
         team: &Team,
+        is_invite_link_enabled: bool,
         has_admin_permissions: bool,
         view: &TeamsPageView,
         appearance: &Appearance,
@@ -2774,11 +2790,11 @@ impl TeamsWidget {
         // Toggle on the right only renders if user is admin
         if has_admin_permissions {
             let team_uid = team.uid;
-            let current_state = team.organization_settings.is_invite_link_enabled;
+            let current_state = is_invite_link_enabled;
             let invite_by_link_toggle = appearance
                 .ui_builder()
                 .switch(self.mouse_state_handles.invite_by_link_toggle_state.clone())
-                .check(team.organization_settings.is_invite_link_enabled)
+                .check(is_invite_link_enabled)
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(TeamsPageAction::ToggleIsInviteLinkEnabled {
@@ -2794,7 +2810,7 @@ impl TeamsWidget {
 
         // 3) Invite link + domain restrictions
         // Only renders if invite by link is enabled
-        if team.organization_settings.is_invite_link_enabled {
+        if is_invite_link_enabled {
             section.add_child(self.render_copy_link_row(team, appearance));
 
             // Render invite link reset text if admin user
@@ -3253,6 +3269,7 @@ impl TeamsWidget {
     fn render_discoverability_toggle_section(
         &self,
         team: &Team,
+        is_discoverable: bool,
         current_user_email: &str,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -3274,7 +3291,7 @@ impl TeamsWidget {
             .finish();
 
         let team_uid = team.uid;
-        let current_state = team.organization_settings.is_discoverable;
+        let current_state = is_discoverable;
         let discoverable_team_toggle = appearance
             .ui_builder()
             .switch(
@@ -3282,7 +3299,7 @@ impl TeamsWidget {
                     .discoverable_team_toggle_state
                     .clone(),
             )
-            .check(team.organization_settings.is_discoverable)
+            .check(is_discoverable)
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(TeamsPageAction::ToggleTeamDiscoverability {

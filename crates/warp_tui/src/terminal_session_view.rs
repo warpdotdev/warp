@@ -9,12 +9,15 @@ use std::time::Duration;
 use async_channel::Sender;
 use instant::Instant;
 use parking_lot::FairMutex;
-use warp::appearance::AppearanceEvent;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
+#[cfg(feature = "voice_input")]
+use warp::settings::TuiVoiceSettings;
 use warp::settings::{
     AISettings, AISettingsChangedEvent, AppEditorSettings, SettingsFileError, TuiStatuslineConfig,
-    TuiTheme, TuiThemeSettings, TuiVoiceSettings,
+    TuiTheme, TuiThemeSettings,
 };
+#[cfg(feature = "voice_input")]
+use warp::tui_export::slash_commands;
 use warp::tui_export::{
     AIAgentActionId, AIAgentActionResultType, AIAgentContext, AIAgentExchangeId,
     AIAgentPtyWriteMode, AIConversation, AIConversationAutoexecuteMode, AIConversationId,
@@ -26,17 +29,18 @@ use warp::tui_export::{
     BlocklistOrchestrationTelemetryEvent, CLISubagentController, CLISubagentEvent,
     CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel, ChangelogRequestType,
     CloudConversationData, CommandExecutionSource, ConversationFileExport, ConversationSelection,
-    ConversationSelectionHandle, ExecuteCommandEvent, GetRelevantFilesController, GitHubRepoModel,
-    GitRepoStatusModel, LLMId, LLMPreferences, LLMPreferencesEvent,
-    LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, LinkedWorkflowData, ModelEvent,
-    ParsedSlashCommandInput, PersistenceWriter, PillBarActionKind, PillBarInteractionEvent,
-    PillBarPillKind, PillSwitchOutcome, PtyIntent, PtyIntentEvent, QueuedQueryEvent,
-    QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource, ServerConversationToken,
-    SessionSettings, Sessions, ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference,
-    SlashCommandDataSource as _, SlashCommandKind, SlashCommandSelectionBehavior,
-    StartAgentExecutorEvent, StartAgentRequest, StaticCommand, TelemetryEvent, TerminalColorList,
-    TerminalColors, TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope,
-    TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue, TuiSlashCommandDataSource,
+    ConversationSelectionHandle, ExecuteCommandEvent, FORK_PREFIX, ForkConversationError,
+    GetRelevantFilesController, GitHubRepoModel, GitRepoStatusModel, LLMId, LLMPreferences,
+    LLMPreferencesEvent, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE, LinkedWorkflowData,
+    ModelEvent, ParsedSlashCommandInput, PersistenceWriter, PillBarActionKind,
+    PillBarInteractionEvent, PillBarPillKind, PillSwitchOutcome, PtyIntent, PtyIntentEvent,
+    QueuedQueryEvent, QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource,
+    ServerConversationToken, SessionSettings, Sessions, ShellCommandExecutorEvent, SizeInfo,
+    SizeUpdate, SkillReference, SlashCommandDataSource as _, SlashCommandKind,
+    SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest, StaticCommand,
+    TelemetryEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope,
+    TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue, TuiOnboardingMarker,
+    TuiOnboardingMarkers, TuiOnboardingMarkersEvent, TuiSlashCommandDataSource,
     TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
     TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
     WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
@@ -44,7 +48,7 @@ use warp::tui_export::{
     maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
     record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
     record_static_slash_command_accepted, saved_prompt_text_for_id,
-    slash_command_selection_behavior, slash_commands, throttle,
+    slash_command_selection_behavior, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
@@ -53,17 +57,20 @@ use warp_editor::model::CoreEditorModel;
 use warp_errors::report_error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
+#[cfg(feature = "voice_input")]
 use warpui::event::KeyState;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
-    Modifier, TuiAnimated, TuiChildView, TuiConstrainedBox, TuiContainer, TuiDispatchEventResult,
-    TuiElement, TuiEventHandler, TuiFlex, TuiHoverable, TuiSelectionHandle, TuiSize, TuiStyle,
-    TuiText, TuiViewportedListState,
+    Modifier, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiHoverable,
+    TuiSelectionHandle, TuiSize, TuiStyle, TuiText, TuiViewportedListState,
 };
+#[cfg(feature = "voice_input")]
+use warpui_core::elements::tui::{TuiAnimated, TuiDispatchEventResult, TuiEventHandler};
 use warpui_core::keymap::macros::*;
 use warpui_core::keymap::{self, EditableBinding, FixedBinding};
 use warpui_core::platform::TerminationMode;
+#[cfg(feature = "voice_input")]
 use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
@@ -125,7 +132,7 @@ use crate::telemetry::{
     TuiConversationMenuTelemetryEvent, TuiConversationRestoreTelemetryEvent,
     TuiConversationRestoreTelemetryState, TuiConversationRestoreTelemetryTarget,
 };
-use crate::terminal_background::TuiHostTerminalBackground;
+use crate::terminal_background::probed_colors;
 use crate::terminal_content_element::TuiTerminalContentElement;
 use crate::terminal_use::{
     TerminalUseInterruptAction, TuiInputTarget, hide_agent_requested_command_from_top_level,
@@ -139,6 +146,7 @@ use crate::tui_cli_subagent_view::{HAND_BACK_KEY_BINDING, TuiCLISubagentView};
 use crate::tui_permission_prompt::TuiPermissionPrompt;
 use crate::ui::{abbreviate_home_prefix, conversation_restore_failed, conversation_restoring};
 use crate::usage::UsageToggle;
+#[cfg(feature = "voice_input")]
 use crate::voice_input::{
     TuiVoiceInputEvent, TuiVoiceInputState, VoiceInputStartSource, configured_hold_key,
 };
@@ -146,6 +154,7 @@ use crate::warping_indicator::{render_response_summary, render_warping_indicator
 use crate::zero_state::TuiZeroStateView;
 use crate::zero_state_animation::{
     ZeroStateAnimationConfig, ZeroStateAnimationConfigEvent, ZeroStateAnimationLoadFailure,
+    ZeroStateInteractionHandle,
 };
 mod completions;
 
@@ -160,7 +169,8 @@ mod todo_menu;
 use self::completions::CompletionRequestState;
 use self::input_detection::InputDetectionState;
 use self::state::{
-    TuiTerminalSessionState, TuiTerminalSessionStateModel, TuiTerminalSessionStateResolveError,
+    TuiFirstZeroStateState, TuiTerminalSessionState, TuiTerminalSessionStateModel,
+    TuiTerminalSessionStateResolveError,
 };
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
@@ -168,7 +178,10 @@ const INITIAL_INPUT_WIDTH: u16 = 80;
 const INLINE_MENU_TOP_PADDING_ROWS: u16 = 1;
 const MAX_READ_ONLY_MENU_ROWS: u16 = 10;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
+/// Top and bottom border rows plus one padding row inside each border.
+const BORDERED_INPUT_CHROME_ROWS: u16 = 4;
 const AUTO_APPROVE_FEEDBACK_DURATION: Duration = Duration::from_secs(3);
+#[cfg(feature = "voice_input")]
 const VOICE_INPUT_BORDER_REPAINT_INTERVAL: Duration = Duration::from_millis(33);
 
 /// The footer hint shown while the ctrl-c exit confirmation is armed.
@@ -178,6 +191,9 @@ const RUNNING_COMMAND_DETACH_HINT: &str = "ctrl-c to return to command";
 /// Replaces the exit hint when viewing a child agent conversation.
 pub(crate) const CTRL_C_KILL_CHILD_HINT: &str = "ctrl-c again to kill child agent";
 const STARTING_SHELL_HINT: &str = "Starting shell...";
+/// The hint row plus its top padding. The zero state accounts for this temporary
+/// chrome so its centered position already matches the post-bootstrap layout.
+const STARTING_SHELL_CHROME_ROWS: u16 = 2;
 const SETTINGS_PARSE_FAILED_HINT: &str = "Settings failed to load: invalid syntax.";
 const SETTINGS_INVALID_VALUES_HINT: &str = "Settings failed to load: invalid values.";
 
@@ -193,7 +209,6 @@ const STATUS_UNAVAILABLE: &str = "\u{2014}"; // em dash
 const STATUS_UNTITLED_SESSION: &str = "Untitled";
 const STATUS_DEV_BUILD: &str = "dev build";
 const STATUS_NOT_SIGNED_IN: &str = "Not signed in";
-const STATUS_SIGNED_IN: &str = "Signed in";
 
 fn status_menu_is_open(mode: TuiInputSuggestionsMode) -> bool {
     matches!(
@@ -225,6 +240,7 @@ pub(crate) const ATTACH_AGENT_TO_RUNNING_COMMAND_BINDING_NAME: &str =
     "tui:session:attach_agent_to_running_command";
 pub(crate) const DETACH_AGENT_FROM_RUNNING_COMMAND_BINDING_NAME: &str =
     "tui:session:detach_agent_from_running_command";
+#[cfg(feature = "voice_input")]
 pub(crate) const VOICE_INPUT_BINDING_NAME: &str = "tui:session:start_voice_input";
 
 /// The current source preventing the normal session composer from owning input.
@@ -322,6 +338,10 @@ fn zero_state_ascii_load_failure_hint(failure: ZeroStateAnimationLoadFailure) ->
 const COMMAND_ALREADY_RUNNING_HINT: &str = "cannot run — command already running";
 const NEW_CONVERSATION_COMMAND_RUNNING_HINT: &str =
     "cannot start new conversation while terminal command is running";
+const FORK_NO_ACTIVE_CONVERSATION_HINT: &str = "/fork requires an active conversation";
+const FORK_EMPTY_CONVERSATION_HINT: &str = "Nothing to fork — start a conversation first.";
+const FORK_NO_RESUME_ID_HINT: &str = "This conversation cannot be forked until it has a resume ID.";
+const FORK_FAILED_HINT: &str = "Conversation forking failed.";
 const SWITCH_COMMAND_RUNNING_HINT: &str =
     "Cannot switch conversations while a command is in progress.";
 const SWITCH_CONVERSATION_RUNNING_HINT: &str =
@@ -329,7 +349,6 @@ const SWITCH_CONVERSATION_RUNNING_HINT: &str =
 const SWITCH_LOADING_HINT: &str = "Another conversation is already loading.";
 const SWITCH_UNAVAILABLE_HINT: &str = "That conversation is no longer available.";
 const LOADING_CONVERSATION_HINT: &str = "Loading conversation…";
-const MODEL_PERSISTENCE_FAILED_HINT: &str = "Could not save the selected model.";
 const THEME_INVALID_ARGUMENT_HINT: &str = "Theme must be auto, light, or dark.";
 
 /// Footer label shown while the input is in `!` shell mode. The how-to-exit
@@ -353,6 +372,7 @@ const ZERO_STATE_ASCII_INITIAL_LOAD_FAILED_HINT: &str =
     "Could not load custom ASCII art. Using the built-in Warp logo.";
 const ZERO_STATE_ASCII_RELOAD_FAILED_HINT: &str =
     "Could not reload custom ASCII art. Keeping the current object.";
+#[cfg(feature = "voice_input")]
 const VOICE_USAGE_HINT: &str = "Usage: /voice (no arguments)";
 const AUTO_APPROVE_ENABLED_HINT: &str = "Auto approve on";
 const AUTO_APPROVE_DISABLED_HINT: &str = "Auto approve off";
@@ -408,6 +428,7 @@ fn attachment_focus_available(is_shell_mode: bool, attachments_should_render: bo
     !is_shell_mode && attachments_should_render
 }
 
+#[cfg(feature = "voice_input")]
 fn voice_command_argument(input: &str) -> Option<&str> {
     let argument = input.strip_prefix(slash_commands::VOICE.name)?;
     argument
@@ -417,6 +438,7 @@ fn voice_command_argument(input: &str) -> Option<&str> {
         .then_some(argument)
 }
 
+#[cfg(feature = "voice_input")]
 fn voice_argument_is_empty(argument: Option<&String>) -> bool {
     argument.is_none_or(|argument| argument.trim().is_empty())
 }
@@ -475,6 +497,7 @@ fn render_mcp_menu_footer(
 pub(crate) enum TuiConversationRestoreOrigin {
     Startup,
     ConversationList,
+    Fork,
 }
 
 impl TuiConversationRestoreOrigin {
@@ -483,6 +506,7 @@ impl TuiConversationRestoreOrigin {
             Self::Startup | Self::ConversationList => {
                 AgentViewEntryOrigin::RestoreExistingConversation
             }
+            Self::Fork => AgentViewEntryOrigin::Tui,
         }
     }
 
@@ -532,23 +556,22 @@ fn export_file_success_message(export: &ConversationFileExport) -> String {
 /// chain as `render_login_line`:
 /// 1. `email` when non-empty
 /// 2. `username` when non-empty (display name or email fallback from auth)
-/// 3. `STATUS_SIGNED_IN` when `is_logged_in` is true but no identifier
-/// 4. `STATUS_NOT_SIGNED_IN` when fully logged out
+/// 3. `user_id` when non-empty
+/// 4. `STATUS_NOT_SIGNED_IN` when no validated identity is available
 fn resolve_status_email(
     email: Option<String>,
     username: Option<String>,
+    user_id: Option<String>,
     is_logged_in: bool,
 ) -> String {
+    if !is_logged_in {
+        return STATUS_NOT_SIGNED_IN.to_owned();
+    }
     email
         .filter(|e| !e.is_empty())
         .or_else(|| username.filter(|u| !u.is_empty()))
-        .unwrap_or_else(|| {
-            if is_logged_in {
-                STATUS_SIGNED_IN.to_owned()
-            } else {
-                STATUS_NOT_SIGNED_IN.to_owned()
-            }
-        })
+        .or_else(|| user_id.filter(|id| !id.is_empty()))
+        .unwrap_or_else(|| STATUS_NOT_SIGNED_IN.to_owned())
 }
 
 fn format_status_conversation_id(conversation_id: Option<AIConversationId>) -> String {
@@ -614,6 +637,7 @@ pub(crate) enum TuiTerminalSessionAction {
     /// Paste host clipboard text or attach image data and image paths.
     PasteFromClipboard,
     /// Start recording voice input from the session composer.
+    #[cfg(feature = "voice_input")]
     StartVoiceInput,
     /// Left-click on the inline menu at absolute snapshot index `index`:
     /// selects and accepts that row.
@@ -622,8 +646,10 @@ pub(crate) enum TuiTerminalSessionAction {
     /// without changing the selection.
     InlineMenuMouseScrollBy(isize),
     /// Start or stop voice input from the configured statusline control.
+    #[cfg(feature = "voice_input")]
     ToggleVoiceInputFromStatusline,
     /// Route a configured hold-to-talk modifier transition to the input view.
+    #[cfg(feature = "voice_input")]
     VoiceHoldKeyChanged { key: KeyCode, state: KeyState },
     /// A drag selection started inside the shared read-only menu.
     ReadOnlyMenuSelectionStarted,
@@ -687,6 +713,7 @@ pub(crate) struct TuiTerminalSessionView {
     /// Hover and click state for the configured TODO statusline control.
     todo_list_mouse: MouseStateHandle,
     /// Hover and click state for the configured Voice statusline control.
+    #[cfg(feature = "voice_input")]
     voice_input_mouse: MouseStateHandle,
     github_pr_link: TuiLink,
     keyboard_enhancement_supported: bool,
@@ -722,6 +749,7 @@ pub(crate) struct TuiTerminalSessionView {
     /// rather than exit the TUI. The footer shows [`CTRL_C_KILL_CHILD_HINT`]
     /// while armed, and a second ctrl-c within the window kills the child.
     child_kill_armed_conversation: Option<AIConversationId>,
+    zero_state_interaction: ZeroStateInteractionHandle,
     zero_state_view: ViewHandle<TuiZeroStateView>,
 }
 
@@ -861,6 +889,7 @@ pub(crate) fn init(app: &mut AppContext) {
         )
         .with_group(TUI_BINDING_GROUP)
         .with_key_binding("ctrl-shift-V"),
+        #[cfg(feature = "voice_input")]
         EditableBinding::new(
             VOICE_INPUT_BINDING_NAME,
             "Start voice input",
@@ -1431,6 +1460,7 @@ impl TuiTerminalSessionView {
         exit_summary: TuiExitSummaryHandle,
         keyboard_enhancement_supported: bool,
         default_autoexecute_mode: AIConversationAutoexecuteMode,
+        handles_first_run_onboarding: bool,
         initial_settings_file_error: Option<SettingsFileError>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -1447,9 +1477,6 @@ impl TuiTerminalSessionView {
             .lock()
             .block_list_mut()
             .set_transcript_scope(TranscriptScope::Unfiltered);
-        ctx.subscribe_to_model(&Appearance::handle(ctx), |view, _, event, ctx| {
-            view.handle_appearance_event(event, ctx);
-        });
         ctx.subscribe_to_model(&WarpConfig::handle(ctx), |view, _, event, ctx| {
             if let WarpConfigUpdateEvent::SettingsErrors(error) = event {
                 view.show_settings_file_error(error, ctx);
@@ -1653,7 +1680,12 @@ impl TuiTerminalSessionView {
             }
         });
         let model_menu = ctx.add_model(|ctx| {
-            TuiModelMenuModel::new(input_editor_model.clone(), suggestions_mode.clone(), ctx)
+            TuiModelMenuModel::new(
+                input_editor_model.clone(),
+                suggestions_mode.clone(),
+                terminal_surface_id,
+                ctx,
+            )
         });
         ctx.subscribe_to_model(&model_menu, |_, _, _: &TuiModelMenuEvent, ctx| {
             ctx.notify();
@@ -1765,6 +1797,24 @@ impl TuiTerminalSessionView {
         let suggestions_mode_for_input = suggestions_mode.clone();
         let terminal_model_for_input = model.clone();
         let orchestration_tab_bar = ctx.add_typed_action_tui_view(|_| TuiTabBarView::empty());
+        let onboarding_markers =
+            handles_first_run_onboarding.then(|| TuiOnboardingMarkers::handle(ctx));
+        let first_zero_state =
+            onboarding_markers
+                .as_ref()
+                .map_or(TuiFirstZeroStateState::Dismissed, |markers| {
+                    markers.update(ctx, |markers, ctx| {
+                        if markers.is_ready() {
+                            if markers.consume(TuiOnboardingMarker::FirstZeroState, ctx) {
+                                TuiFirstZeroStateState::Visible
+                            } else {
+                                TuiFirstZeroStateState::Dismissed
+                            }
+                        } else {
+                            TuiFirstZeroStateState::Pending
+                        }
+                    })
+                });
         let session_state = ctx.add_model(|_| {
             TuiTerminalSessionStateModel::new(
                 &model,
@@ -1773,8 +1823,30 @@ impl TuiTerminalSessionView {
                 &ai_input_model,
                 &suggestions_mode,
                 &orchestration_tab_bar,
+                first_zero_state,
             )
         });
+        if let Some(onboarding_markers) = onboarding_markers {
+            let session_state_for_markers = session_state.clone();
+            ctx.subscribe_to_model(
+                &onboarding_markers,
+                move |_, markers, event, ctx| match event {
+                    TuiOnboardingMarkersEvent::Loading => {
+                        session_state_for_markers.update(ctx, |state, ctx| {
+                            state.set_first_zero_state_pending(ctx);
+                        });
+                    }
+                    TuiOnboardingMarkersEvent::Ready => {
+                        let keep_showing = markers.update(ctx, |markers, ctx| {
+                            markers.consume(TuiOnboardingMarker::FirstZeroState, ctx)
+                        });
+                        session_state_for_markers.update(ctx, |state, ctx| {
+                            state.resolve_first_zero_state(keep_showing, ctx);
+                        });
+                    }
+                },
+            );
+        }
         let input_editor_for_input = input_editor_model.clone();
         let session_state_for_input = session_state.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
@@ -1792,7 +1864,9 @@ impl TuiTerminalSessionView {
             })
             .with_keyboard_enhancement_supported(keyboard_enhancement_supported)
         });
+        #[cfg(feature = "voice_input")]
         let voice_input_model = input_view.as_ref(ctx).voice_input_model().clone();
+        #[cfg(feature = "voice_input")]
         ctx.subscribe_to_model(&voice_input_model, |view, _, event, ctx| {
             view.handle_voice_input_event(event, ctx);
         });
@@ -1922,6 +1996,7 @@ impl TuiTerminalSessionView {
                 .scroll_to_rows_from_top(scroll_top);
             ctx.notify();
         });
+        #[cfg(feature = "voice_input")]
         ctx.subscribe_to_model(&TuiVoiceSettings::handle(ctx), |_, _, _, ctx| {
             ctx.notify();
         });
@@ -2023,6 +2098,7 @@ impl TuiTerminalSessionView {
                 AISettingsChangedEvent::TuiUsageDisplayMode { .. }
                     | AISettingsChangedEvent::TuiStatusline { .. }
                     | AISettingsChangedEvent::VoiceInputEnabled { .. }
+                    | AISettingsChangedEvent::ExecutionProfiles { .. }
             ) {
                 ctx.notify();
             }
@@ -2121,8 +2197,14 @@ impl TuiTerminalSessionView {
             |_, _| {},
         );
         ctx.spawn_stream_local(terminal_resize_rx, Self::handle_terminal_resize, |_, _| {});
-        let zero_state_view =
-            ctx.add_tui_view(|ctx| TuiZeroStateView::new(active_session.clone(), ctx));
+        let zero_state_interaction = ZeroStateInteractionHandle::default();
+        let zero_state_view = {
+            let interaction = zero_state_interaction.clone();
+            let zero_state_active_session = active_session.clone();
+            ctx.add_tui_view(move |ctx| {
+                TuiZeroStateView::new(zero_state_active_session, interaction, ctx)
+            })
+        };
         let mut view = Self {
             transcript,
             input_view,
@@ -2158,6 +2240,7 @@ impl TuiTerminalSessionView {
             hidden_response_summary_exchange_ids: HashSet::new(),
             model_label_hover: MouseStateHandle::default(),
             todo_list_mouse: MouseStateHandle::default(),
+            #[cfg(feature = "voice_input")]
             voice_input_mouse: MouseStateHandle::default(),
             github_pr_link: TuiLink::default(),
             keyboard_enhancement_supported,
@@ -2181,6 +2264,7 @@ impl TuiTerminalSessionView {
             orchestration_tab_bar,
             orchestration_tabs_focused: false,
             child_kill_armed_conversation: None,
+            zero_state_interaction,
             zero_state_view,
         };
         if let Some(failure) = initial_zero_state_load_failure {
@@ -2213,21 +2297,6 @@ impl TuiTerminalSessionView {
         });
         publisher.as_ref(ctx).publish_session_start(ctx);
         self.cli_agent_osc_event_publisher = Some(publisher);
-    }
-    fn handle_appearance_event(&mut self, event: &AppearanceEvent, ctx: &mut ViewContext<Self>) {
-        match event {
-            AppearanceEvent::ThemeChanged => {
-                let theme = Appearance::as_ref(ctx).theme().clone();
-                let colors = TerminalColorList::from(&TerminalColors::from(theme));
-                self.terminal_model.lock().update_colors(colors);
-                ctx.notify();
-            }
-            AppearanceEvent::UiFontFamilyChanged { .. }
-            | AppearanceEvent::MonospaceFontSizeChanged { .. }
-            | AppearanceEvent::MonospaceFontFamilyChanged { .. }
-            | AppearanceEvent::MonospaceFontWeightChanged { .. }
-            | AppearanceEvent::LineHeightRatioChanged { .. } => {}
-        }
     }
 
     /// Starts the first request for a child conversation hosted by this
@@ -2602,6 +2671,7 @@ impl TuiTerminalSessionView {
                 .finish(),
             );
         }
+        #[cfg(feature = "voice_input")]
         let input = if self.input_view.as_ref(ctx).voice_state(ctx) == TuiVoiceInputState::Listening
         {
             let input_view = self.input_view.clone();
@@ -2615,6 +2685,17 @@ impl TuiTerminalSessionView {
             })
             .finish()
         } else {
+            let border_style = if self.api_keys_menu.as_ref(ctx).uses_credential_border(ctx) {
+                builder.credential_entry_accent_style()
+            } else if self.is_shell_mode(ctx) {
+                builder.shell_mode_accent_style()
+            } else {
+                builder.accent_border_style()
+            };
+            bordered_input(&self.input_view, border_style)
+        };
+        #[cfg(not(feature = "voice_input"))]
+        let input = {
             let border_style = if self.api_keys_menu.as_ref(ctx).uses_credential_border(ctx) {
                 builder.credential_entry_accent_style()
             } else if self.is_shell_mode(ctx) {
@@ -2640,7 +2721,7 @@ impl TuiTerminalSessionView {
         }
         content = content.child(
             TuiConstrainedBox::new(input)
-                .with_max_rows(MAX_INPUT_TEXT_ROWS + 2)
+                .with_max_rows(MAX_INPUT_TEXT_ROWS + BORDERED_INPUT_CHROME_ROWS)
                 .finish(),
         );
         let footer = if let Some(footer) = self.api_keys_menu.as_ref(ctx).footer(ctx) {
@@ -2696,8 +2777,12 @@ impl TuiTerminalSessionView {
         let org = user_info
             .org
             .unwrap_or_else(|| STATUS_UNAVAILABLE.to_owned());
-        let email =
-            resolve_status_email(user_info.email, user_info.username, user_info.is_logged_in);
+        let email = resolve_status_email(
+            user_info.email,
+            user_info.username,
+            user_info.user_id,
+            user_info.is_logged_in,
+        );
         status_menu::TuiStatusInfo {
             version,
             session: session_name,
@@ -3034,14 +3119,16 @@ impl TuiTerminalSessionView {
             TuiConversationRestoreOrigin::Startup => {
                 self.conversation_restore_state = ConversationRestoreState::Failed(message);
             }
-            TuiConversationRestoreOrigin::ConversationList => {
-                warp::send_telemetry_from_ctx!(
-                    TuiConversationRestoreTelemetryEvent {
-                        state: TuiConversationRestoreTelemetryState::Failed,
-                        target,
-                    },
-                    ctx
-                );
+            TuiConversationRestoreOrigin::ConversationList | TuiConversationRestoreOrigin::Fork => {
+                if origin.records_telemetry() {
+                    warp::send_telemetry_from_ctx!(
+                        TuiConversationRestoreTelemetryEvent {
+                            state: TuiConversationRestoreTelemetryState::Failed,
+                            target,
+                        },
+                        ctx
+                    );
+                }
                 self.conversation_restore_state = ConversationRestoreState::Idle;
                 self.show_transient_hint(message, ctx);
                 self.focus_input_if_active(ctx);
@@ -3668,6 +3755,9 @@ impl TuiTerminalSessionView {
         linked_workflow_data: Option<LinkedWorkflowData>,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.session_state.update(ctx, |state, ctx| {
+            state.dismiss_first_zero_state(ctx);
+        });
         // A stale editor frame must not submit into a shell that is still
         // bootstrapping or has handed input to a foreground process.
         if !self.input_target().agent_editor_owns_input() {
@@ -3816,6 +3906,7 @@ impl TuiTerminalSessionView {
     /// composer area — a permission prompt or a conversation restore, for
     /// instance — and the release that ends a recording must still reach the
     /// voice model from those states.
+    #[cfg(feature = "voice_input")]
     fn with_voice_hold_handler(
         &self,
         child: Box<dyn TuiElement>,
@@ -3847,6 +3938,7 @@ impl TuiTerminalSessionView {
             .finish()
     }
 
+    #[cfg(feature = "voice_input")]
     pub(crate) fn handle_voice_hold_key_setting_changed(
         &mut self,
         modifier_key_lifecycle_enabled: bool,
@@ -3860,6 +3952,7 @@ impl TuiTerminalSessionView {
     }
 
     /// Asks the input-owned voice model to start recording.
+    #[cfg(feature = "voice_input")]
     fn start_voice_input(
         &mut self,
         source: VoiceInputStartSource,
@@ -3881,6 +3974,7 @@ impl TuiTerminalSessionView {
         started
     }
 
+    #[cfg(feature = "voice_input")]
     fn toggle_voice_input_from_statusline(&mut self, ctx: &mut ViewContext<Self>) {
         match self.input_view.as_ref(ctx).voice_state(ctx) {
             TuiVoiceInputState::Idle => {
@@ -3893,6 +3987,7 @@ impl TuiTerminalSessionView {
             TuiVoiceInputState::Transcribing => {}
         }
     }
+    #[cfg(feature = "voice_input")]
     fn handle_voice_input_event(
         &mut self,
         event: &TuiVoiceInputEvent,
@@ -3921,10 +4016,13 @@ impl TuiTerminalSessionView {
             return;
         }
 
-        if voice_command_argument(input).is_some_and(|argument| !argument.trim().is_empty()) {
-            self.show_transient_hint(VOICE_USAGE_HINT.to_owned(), ctx);
-            self.input_view.update(ctx, |input, ctx| input.clear(ctx));
-            return;
+        #[cfg(feature = "voice_input")]
+        {
+            if voice_command_argument(input).is_some_and(|argument| !argument.trim().is_empty()) {
+                self.show_transient_hint(VOICE_USAGE_HINT.to_owned(), ctx);
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                return;
+            }
         }
 
         match self
@@ -4076,14 +4174,9 @@ impl TuiTerminalSessionView {
     }
 
     fn handle_accepted_model(&mut self, id: &LLMId, ctx: &mut ViewContext<Self>) {
-        let terminal_view_id = ctx.view_id();
-        let persisted = LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-            preferences.update_active_profile_base_model(id, Some(terminal_view_id), ctx)
+        LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
+            preferences.update_preferred_agent_mode_llm(id, self.terminal_surface_id, ctx);
         });
-        if !persisted {
-            self.show_transient_hint(MODEL_PERSISTENCE_FAILED_HINT.to_owned(), ctx);
-            return;
-        }
         self.model_menu.update(ctx, |menu, ctx| menu.dismiss(ctx));
     }
     fn handle_accepted_mcp_action(&mut self, action: TuiMcpAction, ctx: &mut ViewContext<Self>) {
@@ -4232,6 +4325,89 @@ impl TuiTerminalSessionView {
         self.input_view.update(ctx, |input, ctx| input.clear(ctx));
         true
     }
+    fn fork_current_conversation(
+        &mut self,
+        prompt: Option<&String>,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !self
+            .ai_context_model
+            .as_ref(ctx)
+            .can_start_new_conversation()
+        {
+            self.show_error_hint(NEW_CONVERSATION_COMMAND_RUNNING_HINT.to_owned(), ctx);
+            return false;
+        }
+        let Some(source_conversation_id) = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
+            self.show_error_hint(FORK_NO_ACTIVE_CONVERSATION_HINT.to_owned(), ctx);
+            return false;
+        };
+        let Some(source_conversation) = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&source_conversation_id)
+            .cloned()
+        else {
+            self.show_error_hint(FORK_NO_ACTIVE_CONVERSATION_HINT.to_owned(), ctx);
+            return false;
+        };
+        if let Err(ForkConversationError::EmptyConversation) =
+            BlocklistAIHistoryModel::validate_fork_source(&source_conversation)
+        {
+            self.show_error_hint(FORK_EMPTY_CONVERSATION_HINT.to_owned(), ctx);
+            return false;
+        }
+        let Some(source_token) = source_conversation.server_conversation_token().cloned() else {
+            self.show_error_hint(FORK_NO_RESUME_ID_HINT.to_owned(), ctx);
+            return false;
+        };
+
+        let forked_conversation =
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.fork_conversation(&source_conversation, FORK_PREFIX, false, None, ctx)
+            });
+        let forked_conversation = match forked_conversation {
+            Ok(conversation) => conversation,
+            Err(error) => {
+                match error.downcast_ref::<ForkConversationError>() {
+                    Some(ForkConversationError::EmptyConversation) => {
+                        self.show_error_hint(FORK_EMPTY_CONVERSATION_HINT.to_owned(), ctx);
+                    }
+                    None => {
+                        report_error!(error.context("TUI conversation forking failed"));
+                        self.show_error_hint(FORK_FAILED_HINT.to_owned(), ctx);
+                    }
+                }
+                return false;
+            }
+        };
+        self.replace_conversation_surface(
+            forked_conversation,
+            TuiConversationRestoreOrigin::Fork,
+            TuiConversationRestoreTelemetryTarget::Local,
+            ctx,
+        );
+        let resume_command =
+            tui_resume_shell_command(ChannelState::channel(), source_token.as_str());
+        self.transcript.update(ctx, |transcript, ctx| {
+            transcript.append_notice(
+                format!(
+                    "Forked conversation. To resume the original in another session, run: {resume_command}"
+                ),
+                ctx,
+            );
+        });
+        if let Some(prompt) = prompt
+            .map(|argument| argument.trim())
+            .filter(|argument| !argument.is_empty())
+        {
+            self.send_prompt(prompt.to_owned(), ctx);
+        }
+        self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+        true
+    }
 
     fn execute_tui_slash_command(
         &mut self,
@@ -4260,6 +4436,11 @@ impl TuiTerminalSessionView {
             }
             SlashCommandKind::MoveToCloud => {
                 self.start_handoff(argument, ctx);
+            }
+            SlashCommandKind::Fork => {
+                if self.fork_current_conversation(argument, ctx) {
+                    record_static_slash_command_accepted(command.name, true, ctx);
+                }
             }
             SlashCommandKind::AutoApprove => {
                 self.toggle_auto_approve(true, ctx);
@@ -4346,12 +4527,15 @@ impl TuiTerminalSessionView {
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             SlashCommandKind::Voice => {
-                if !voice_argument_is_empty(argument) {
-                    self.show_transient_hint(VOICE_USAGE_HINT.to_owned(), ctx);
-                    self.input_view.update(ctx, |input, ctx| input.clear(ctx));
-                    return;
+                #[cfg(feature = "voice_input")]
+                {
+                    if !voice_argument_is_empty(argument) {
+                        self.show_transient_hint(VOICE_USAGE_HINT.to_owned(), ctx);
+                        self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                        return;
+                    }
+                    self.start_voice_input(VoiceInputStartSource::SlashCommand, ctx);
                 }
-                self.start_voice_input(VoiceInputStartSource::SlashCommand, ctx);
             }
             SlashCommandKind::CreateNewProject => {
                 let Some(query) = argument
@@ -4496,7 +4680,6 @@ impl TuiTerminalSessionView {
             | SlashCommandKind::RenameTab
             | SlashCommandKind::RenameConversation
             | SlashCommandKind::SetTabColor
-            | SlashCommandKind::Fork
             | SlashCommandKind::OpenCodeReview
             | SlashCommandKind::Index
             | SlashCommandKind::Init
@@ -4685,10 +4868,11 @@ impl TuiTerminalSessionView {
             .update(ctx, |settings, ctx| settings.theme.set_value(theme, ctx));
         match result {
             Ok(()) => {
-                let resolved_theme = TuiHostTerminalBackground::handle(ctx)
-                    .update(ctx, |background, _| background.select_theme(theme));
                 Appearance::handle(ctx).update(ctx, |appearance, ctx| {
-                    appearance.set_theme(resolved_theme, ctx);
+                    appearance.set_theme(
+                        theme.resolve_for_background(probed_colors().background_luminance()),
+                        ctx,
+                    );
                 });
                 let hint = match theme {
                     TuiTheme::Auto => format!(
@@ -4871,7 +5055,15 @@ impl TuiView for TuiTerminalSessionView {
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         let (content, composer_shortcuts_active) = self.render_session_content(ctx);
-        self.with_voice_hold_handler(content, composer_shortcuts_active, ctx)
+        #[cfg(feature = "voice_input")]
+        {
+            self.with_voice_hold_handler(content, composer_shortcuts_active, ctx)
+        }
+        #[cfg(not(feature = "voice_input"))]
+        {
+            let _ = composer_shortcuts_active;
+            content
+        }
     }
 }
 
@@ -4890,6 +5082,10 @@ impl TuiTerminalSessionView {
             } => return (conversation_restoring(ctx), false),
             ConversationRestoreState::Loading {
                 origin: TuiConversationRestoreOrigin::ConversationList,
+                ..
+            }
+            | ConversationRestoreState::Loading {
+                origin: TuiConversationRestoreOrigin::Fork,
                 ..
             } => {}
             ConversationRestoreState::Failed(message) => {
@@ -4934,8 +5130,11 @@ impl TuiTerminalSessionView {
         let builder = TuiUiBuilder::from_app(ctx);
         let orchestration_tabs_available = state.orchestration_available();
         let blocker_active = state.has_blocking_interaction();
+        let show_starting_shell_hint =
+            !blocker_active && matches!(input_target, TuiInputTarget::Disabled);
 
         if state.is_alt_screen() {
+            self.zero_state_interaction.set_visible(false);
             let terminal_content = TuiTerminalContentElement::new(
                 self.terminal_resize_tx.clone(),
                 AltScreenElement::new(self.terminal_model.clone()).finish(),
@@ -5011,8 +5210,21 @@ impl TuiTerminalSessionView {
         // swaps the transcript back in.
         let mut content = TuiFlex::column();
         let transcript_is_empty = self.transcript.as_ref(ctx).is_empty();
+        self.zero_state_interaction.set_visible(transcript_is_empty);
         if transcript_is_empty {
-            content = content.flex_child(TuiChildView::new(&self.zero_state_view).finish());
+            let zero_state = if self.session_state.as_ref(ctx).show_first_zero_state() {
+                self.zero_state_view.as_ref(ctx).render_first_run(ctx)
+            } else {
+                TuiChildView::new(&self.zero_state_view).finish()
+            };
+            let zero_state = if show_starting_shell_hint {
+                TuiContainer::new(zero_state)
+                    .with_padding_top(STARTING_SHELL_CHROME_ROWS)
+                    .finish()
+            } else {
+                zero_state
+            };
+            content = content.flex_child(zero_state);
         } else {
             content = content.flex_child(TuiChildView::new(&self.transcript).finish());
         }
@@ -5024,7 +5236,7 @@ impl TuiTerminalSessionView {
         // fresh each pass — no stored suppression flag — and the hidden
         // input model is never written to, so its draft/cursor/selection/
         // scroll survive untouched.
-        if !blocker_active && matches!(input_target, TuiInputTarget::Disabled) {
+        if show_starting_shell_hint {
             content = content.child(
                 TuiContainer::new(
                     TuiText::new(STARTING_SHELL_HINT)
@@ -5273,6 +5485,7 @@ impl TypedActionView for TuiTerminalSessionView {
                 self.attachment_bar
                     .update(ctx, |bar, ctx| bar.paste_from_clipboard(ctx));
             }
+            #[cfg(feature = "voice_input")]
             TuiTerminalSessionAction::StartVoiceInput => {
                 self.start_voice_input(VoiceInputStartSource::Keybinding, ctx);
             }
@@ -5286,9 +5499,11 @@ impl TypedActionView for TuiTerminalSessionView {
                     ctx.notify();
                 }
             }
+            #[cfg(feature = "voice_input")]
             TuiTerminalSessionAction::ToggleVoiceInputFromStatusline => {
                 self.toggle_voice_input_from_statusline(ctx)
             }
+            #[cfg(feature = "voice_input")]
             TuiTerminalSessionAction::VoiceHoldKeyChanged { key, state } => {
                 let local_skills_available = self
                     .slash_commands_source

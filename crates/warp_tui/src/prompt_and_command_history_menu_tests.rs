@@ -344,27 +344,75 @@ fn accepting_selected_item_returns_its_kind() {
 }
 
 #[test]
-fn accepting_without_a_match_uses_the_current_input_type() {
+fn editing_a_previewed_history_item_dismisses_the_palette_and_keeps_edited_text() {
+    // Regression test for APP-5052: editing a recalled command while the
+    // history palette is open must close the palette without restoring the
+    // original buffer or input type, leaving the user's edit in place.
     agent_mode_test(|mut app| async move {
+        // Seed a shell command so the menu has something to preview.
         let setup = initialized_setup(&mut app, &[], &["echo command"], InputType::AI).await;
         app.update(|ctx| {
+            // Open menu: "echo command" is previewed and input type switches to Shell.
             setup.menu.update(ctx, |menu, ctx| menu.open(ctx));
+            assert_eq!(buffer_text(&setup.input, ctx), "echo command");
             assert_eq!(setup.input_mode.as_ref(ctx).input_type(), InputType::Shell);
+            assert!(setup.menu.as_ref(ctx).is_open(ctx));
         });
+        // User edits the previewed text (deletes a character).
         app.update(|ctx| {
-            set_text(&setup.input, "no matching prompt", ctx);
+            set_text(&setup.input, "echo comman", ctx);
         });
+        // The palette must be closed and the edited text kept.
+        // Input type stays Shell (the type visible during preview, not original AI).
         app.update(|ctx| {
-            let accepted = setup
-                .menu
-                .update(ctx, |menu, ctx| menu.accept_selected(ctx))
-                .expect("typed query is accepted");
-            assert_eq!(accepted.text, "no matching prompt");
+            assert!(
+                !setup.menu.as_ref(ctx).is_open(ctx),
+                "palette must close when user edits the previewed text"
+            );
             assert_eq!(
-                accepted.kind,
-                TuiUpArrowHistoryItemKind::Command {
-                    linked_workflow_data: None
-                }
+                buffer_text(&setup.input, ctx),
+                "echo comman",
+                "edited text must be preserved after palette closes"
+            );
+            assert_eq!(
+                setup.input_mode.as_ref(ctx).input_type(),
+                InputType::Shell,
+                "input type from preview must be kept, not restored to original"
+            );
+            // Accepting has no effect now that the palette is closed.
+            assert!(
+                setup
+                    .menu
+                    .update(ctx, |menu, ctx| menu.accept_selected(ctx))
+                    .is_none(),
+                "accept_selected must return None after palette was dismissed by edit"
+            );
+        });
+    });
+}
+
+#[test]
+fn up_down_previews_do_not_close_the_palette() {
+    // Preview writes from Up/Down navigation must not be treated as user edits.
+    agent_mode_test(|mut app| async move {
+        let setup =
+            initialized_setup(&mut app, &["prompt one", "prompt two"], &[], InputType::AI).await;
+        app.update(|ctx| {
+            setup.menu.update(ctx, |menu, ctx| menu.open(ctx));
+            assert!(setup.menu.as_ref(ctx).is_open(ctx));
+            // select_previous writes preview text — must not close the palette.
+            setup
+                .menu
+                .update(ctx, |menu, ctx| menu.select_previous(ctx));
+            assert!(
+                setup.menu.as_ref(ctx).is_open(ctx),
+                "select_previous must not close the palette"
+            );
+            // select_next writes preview text — must not close the palette.
+            setup.menu.update(ctx, |menu, ctx| menu.select_next(ctx));
+            assert!(
+                setup.menu.as_ref(ctx).is_open(ctx),
+                "select_next must not close the palette"
             );
         });
     });

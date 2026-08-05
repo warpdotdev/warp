@@ -16,6 +16,7 @@ use super::user_workspaces::{
 };
 use super::workspace::WorkspaceUid;
 use crate::ai::llms::LLMPreferences;
+use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::CloudObjectEventEntrypoint;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
@@ -125,6 +126,8 @@ impl TeamUpdateManager {
                     joinable_teams: vec![],
                     experiments: None,
                     feature_model_choices: None,
+                    ai_credit_availability: None,
+                    user_purchase_policy: None,
                 },
                 pricing_info: None,
             })
@@ -347,10 +350,18 @@ impl TeamUpdateManager {
                     });
                 }
 
+                if let Some(availability) = response.metadata.ai_credit_availability {
+                    AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
+                        usage_model.apply_server_availability(Ok(availability), ctx);
+                    });
+                }
+
                 let workspaces = response.metadata.workspaces;
                 let joinable_teams = response.metadata.joinable_teams;
+                let user_purchase_policy = response.metadata.user_purchase_policy;
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                    user_workspaces.set_user_purchase_policy(user_purchase_policy);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams, ctx);
                 });
@@ -468,8 +479,16 @@ impl TeamUpdateManager {
                 let workspaces = user_workspaces_access.workspaces;
                 let joinable_teams = user_workspaces_access.joinable_teams;
                 let experiments = user_workspaces_access.experiments;
+                let user_purchase_policy = user_workspaces_access.user_purchase_policy;
+
+                if let Some(availability) = user_workspaces_access.ai_credit_availability {
+                    AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
+                        usage_model.apply_server_availability(Ok(availability), ctx);
+                    });
+                }
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                    user_workspaces.set_user_purchase_policy(user_purchase_policy);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams.clone(), ctx);
                 });

@@ -102,6 +102,14 @@ impl TransientHint {
         }
     }
 
+    /// Clears the current notice and cancels its pending expiry.
+    pub(crate) fn clear(&mut self) {
+        self.content = None;
+        if let Some(timer) = self.timer.take() {
+            timer.abort();
+        }
+    }
+
     /// The currently displayed notice, if any.
     pub(crate) fn current(&self) -> Option<(&str, TransientHintTone)> {
         self.content

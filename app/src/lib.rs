@@ -86,6 +86,8 @@ mod tracing;
 mod tui;
 #[cfg(feature = "tui")]
 pub mod tui_export;
+#[cfg(feature = "tui")]
+mod tui_onboarding_markers;
 #[cfg(all(feature = "tui", any(test, feature = "test-util")))]
 mod tui_test_support;
 mod ui_components;
@@ -437,6 +439,12 @@ enum TuiEntryPoint {
         execute: Box<dyn FnOnce(&mut warpui::AppContext)>,
     },
 }
+
+enum AuthInitialization {
+    Persisted,
+    PendingApiKey(String),
+}
+
 impl LaunchMode {
     fn args(&self) -> Cow<'_, warp_cli::AppArgs> {
         match self {
@@ -446,6 +454,29 @@ impl LaunchMode {
             | LaunchMode::RemoteServerProxy
             | LaunchMode::RemoteServerDaemon { .. }
             | LaunchMode::Tui { .. } => Cow::Owned(warp_cli::AppArgs::default()),
+        }
+    }
+
+    fn api_key(&self) -> Option<String> {
+        match self {
+            LaunchMode::CommandLine { global_options, .. } => global_options.api_key.clone(),
+            LaunchMode::App { api_key, .. }
+            | LaunchMode::Tui {
+                entrypoint: TuiEntryPoint::Interactive { api_key, .. },
+            } => api_key.clone(),
+            LaunchMode::Test { .. }
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::RemoteServerDaemon { .. }
+            | LaunchMode::Tui {
+                entrypoint: TuiEntryPoint::CliCommand { .. },
+            } => None,
+        }
+    }
+
+    fn auth_initialization(&self) -> AuthInitialization {
+        match self.api_key() {
+            Some(api_key) => AuthInitialization::PendingApiKey(api_key),
+            None => AuthInitialization::Persisted,
         }
     }
 
@@ -1008,6 +1039,15 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     }
     timer.mark_interval_end("LOG_FILE_SETUP_COMPLETE");
 
+    // Claim a background-only process type before anything else can reach
+    // AppKit, so a headless launch never acquires a Dock tile. See APP-2946.
+    #[cfg(target_os = "macos")]
+    if launch_mode.is_headless()
+        && let Err(e) = platform::mac::mark_process_as_background_only()
+    {
+        log::warn!("Failed to mark process as background-only: {e:#}");
+    }
+
     #[cfg(windows)]
     platform::windows::check_redirection_guard();
 
@@ -1178,8 +1218,10 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         app_builder.enable_headless_microphone_access_query();
     }
 
+    // A headless invocation has no Dock presence, so it performs no Dock-visible
+    // setup at all (Dock icon, Dock menu, menu bar). See APP-2946.
     #[cfg(target_os = "macos")]
-    {
+    if !launch_mode.is_headless() {
         use warpui::AssetProvider as _;
         use warpui::platform::mac::AppExt;
 
@@ -1319,28 +1361,42 @@ pub struct UpdateQuakeModeEventArg {
     active_window_id: Option<WindowId>,
 }
 
-fn refresh_user_after_iap_access(ctx: &mut AppContext) {
+enum StartupUserAuthentication {
+    RefreshUser,
+    ApiKey(String),
+}
+
+impl StartupUserAuthentication {
+    fn start(self, ctx: &mut AppContext) {
+        AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| match self {
+            Self::RefreshUser => auth_manager.refresh_user(ctx),
+            Self::ApiKey(api_key) => auth_manager.authenticate_api_key(api_key, ctx),
+        });
+    }
+}
+
+fn authenticate_user_after_iap_access(
+    authentication: StartupUserAuthentication,
+    ctx: &mut AppContext,
+) {
     let iap_manager = IapManager::handle(ctx);
     if !iap_manager.as_ref(ctx).is_enabled() || iap_manager.as_ref(ctx).has_valid_token() {
-        AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
-            auth_manager.refresh_user(ctx);
-        });
+        authentication.start(ctx);
         return;
     }
 
-    let mut refresh_started = false;
+    let mut pending_authentication = Some(authentication);
     ctx.subscribe_to_model(&iap_manager, move |iap_manager, event, ctx| match event {
         IapManagerEvent::StateChanged => {
-            if refresh_started || !iap_manager.as_ref(ctx).has_valid_token() {
+            if !iap_manager.as_ref(ctx).has_valid_token() {
                 return;
             }
-            refresh_started = true;
-            AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
-                auth_manager.refresh_user(ctx);
-            });
+            if let Some(authentication) = pending_authentication.take() {
+                authentication.start(ctx);
+            }
         }
         IapManagerEvent::AccessUnavailable => {
-            report_error!("Staging IAP access unavailable before startup user refresh");
+            report_error!("Staging IAP access unavailable before startup user authentication");
         }
         IapManagerEvent::RefreshFailed {
             message: _,
@@ -1348,22 +1404,6 @@ fn refresh_user_after_iap_access(ctx: &mut AppContext) {
         } => {}
     });
     iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
-}
-
-fn api_key_from_launch_mode(launch_mode: &LaunchMode) -> Option<String> {
-    match launch_mode {
-        LaunchMode::CommandLine { global_options, .. } => global_options.api_key.clone(),
-        LaunchMode::App { api_key, .. }
-        | LaunchMode::Tui {
-            entrypoint: TuiEntryPoint::Interactive { api_key, .. },
-        } => api_key.clone(),
-        LaunchMode::Test { .. }
-        | LaunchMode::RemoteServerProxy
-        | LaunchMode::RemoteServerDaemon { .. }
-        | LaunchMode::Tui {
-            entrypoint: TuiEntryPoint::CliCommand { .. },
-        } => None,
-    }
 }
 
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
@@ -1419,10 +1459,14 @@ pub(crate) fn initialize_app(
         ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());
     }
 
-    // Extract API key from command line options, if applicable.
-    let api_key = api_key_from_launch_mode(launch_mode);
-
-    let auth_state = Arc::new(AuthState::initialize(ctx, api_key));
+    let (auth_state, pending_api_key) = match launch_mode.auth_initialization() {
+        AuthInitialization::Persisted => (AuthState::initialize(ctx), None),
+        AuthInitialization::PendingApiKey(api_key) => (
+            AuthState::initialize_for_credential_validation(ctx),
+            Some(api_key),
+        ),
+    };
+    let auth_state = Arc::new(auth_state);
     timer.mark_interval_end("AUTH_MANAGER_SET_USER");
 
     let agent_source = determine_agent_source(launch_mode);
@@ -1680,6 +1724,28 @@ pub(crate) fn initialize_app(
         manager
     });
 
+    ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |_, event, ctx| {
+        if matches!(
+            event,
+            UserWorkspacesEvent::CurrentWorkspaceChanged
+                | UserWorkspacesEvent::AiOveragesUpdated
+                | UserWorkspacesEvent::PurchaseAddonCreditsSuccess
+        ) {
+            AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
+                usage_model.request_availability_refresh(ctx);
+            });
+        }
+    });
+    ctx.subscribe_to_model(
+        &::ai::api_keys::ApiKeyManager::handle(ctx),
+        |_, event, ctx| {
+            let ::ai::api_keys::ApiKeyManagerEvent::KeysUpdated = event;
+            AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
+                usage_model.request_availability_refresh(ctx);
+            });
+        },
+    );
+
     ctx.add_singleton_model(AntivirusInfo::new);
 
     cfg_if::cfg_if! {
@@ -1704,14 +1770,21 @@ pub(crate) fn initialize_app(
 
     ctx.set_default_binding_validator(is_binding_cross_platform);
 
-    if FeatureFlag::Autoupdate.is_enabled() {
-        // Attempt to clean up any old executable, whether or not we were
-        // explicitly launched as part of the auto-update process.  We may have
-        // failed to remove the executable on a previous launch of the app and
-        // should try again.
-        if let Err(e) = autoupdate::remove_old_executable() {
-            report_error!(e.context("Failed to remove old executable"));
-        }
+    // Attempt to clean up any old executable, whether or not we were explicitly
+    // launched as part of the auto-update process. We may have failed to remove
+    // the executable on a previous launch of the app and should try again.
+    //
+    // On macOS this deletes `Contents/MacOS/old` from inside the installed app
+    // bundle, so it runs behind the same `can_autoupdate` guard as the rest of
+    // the autoupdate machinery: an execution mode that never autoupdates must
+    // not mutate that bundle. The bundled CLI runs the GUI executable from
+    // inside `Warp.app`, so without this it would rewrite a bundle it does not
+    // own. See APP-2946.
+    if FeatureFlag::Autoupdate.is_enabled()
+        && AppExecutionMode::as_ref(ctx).can_autoupdate()
+        && let Err(e) = autoupdate::remove_old_executable()
+    {
+        report_error!(e.context("Failed to remove old executable"));
     }
 
     experiments::init(ctx);
@@ -2302,10 +2375,17 @@ pub(crate) fn initialize_app(
     });
 
     // CLI commands establish IAP access and refresh auth in their dispatch path so they can
-    // surface failures synchronously. Interactive clients wait for IAP here before refreshing
-    // their persisted user, since the refresh itself calls the IAP-gated warp-server.
-    if user_is_logged_in && !matches!(launch_mode, LaunchMode::CommandLine { .. }) {
-        refresh_user_after_iap_access(ctx);
+    // surface failures synchronously. Interactive clients wait for IAP here before authenticating
+    // their startup user, since the request itself calls the IAP-gated warp-server.
+    let startup_authentication = if matches!(launch_mode, LaunchMode::CommandLine { .. }) {
+        None
+    } else {
+        pending_api_key
+            .map(StartupUserAuthentication::ApiKey)
+            .or_else(|| user_is_logged_in.then_some(StartupUserAuthentication::RefreshUser))
+    };
+    if let Some(authentication) = startup_authentication {
+        authenticate_user_after_iap_access(authentication, ctx);
     }
 
     // Add a singleton model that holds the current prompt configuration.

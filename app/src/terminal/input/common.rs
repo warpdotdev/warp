@@ -470,7 +470,8 @@ fn render_command_token_description(
 
 /// Conditionally adds the "buy credits" banner overlay.
 /// The overlay only is shown if all of the following is true:
-/// - The user is on a team that can purchase addon credits
+/// - The purchase policy for the pane's team (or the viewer, when teamless)
+///   allows buying addon credits
 /// - The user is out of credits (or at their auto-reload limit)
 /// - The input is focused
 /// - There is not a BYO API key for the current model
@@ -483,10 +484,10 @@ pub(super) fn maybe_add_buy_credits_banner(
     is_input_at_top: bool,
     app: &AppContext,
 ) {
-    let can_purchase_addon_credits = UserWorkspaces::as_ref(app)
-        .team_for_view_handle(input_view_handle, app)
-        .and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
-        .is_some_and(|policy| policy.enabled);
+    let workspaces = UserWorkspaces::as_ref(app);
+    let can_purchase_addon_credits = workspaces
+        .purchase_policy_for_team(workspaces.team_for_view_handle(input_view_handle, app))
+        .is_some_and(|policy| policy.allows_purchases());
 
     // Show buy credits banner if billing policy allows purchasing, input is focused,
     // and either:

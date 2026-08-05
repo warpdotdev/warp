@@ -457,6 +457,7 @@ use crate::terminal::session_settings::{
     SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
 };
 use crate::terminal::settings::{TerminalSettings, TerminalSettingsChangedEvent};
+use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::role_change_modal::{
     RoleChangeCloseSource, RoleChangeOpenSource,
 };
@@ -11273,12 +11274,13 @@ impl TerminalView {
     }
 
     /// Sends telemetry if an AI-requested command caused the shell to exit, and
-    /// returns the conversation that issued that command so the caller can
-    /// finalize it as a shell-exit failure.
+    /// returns the conversation that issued that command along with the
+    /// (secret-redacted) command text so the caller can finalize it as a
+    /// shell-exit failure.
     fn maybe_send_agent_exited_shell_telemetry(
         &self,
         ctx: &mut ViewContext<Self>,
-    ) -> Option<AIConversationId> {
+    ) -> Option<(AIConversationId, String)> {
         let model = self.model.lock();
         let block_list = model.block_list();
         let blocks = block_list.blocks();
@@ -11317,12 +11319,12 @@ impl TerminalView {
         });
         send_telemetry_from_ctx!(
             TelemetryEvent::AgentExitedShellProcess {
-                command,
+                command: command.clone(),
                 server_output_id,
             },
             ctx
         );
-        conversation_id
+        conversation_id.map(|conversation_id| (conversation_id, command))
     }
 
     /// Updates the back button's state and label. For child agents the
@@ -11707,15 +11709,20 @@ impl TerminalView {
             }
             ModelEvent::Exit { reason } => {
                 if !self.manual_pty_shutdown_requested
-                    && let Some(conversation_id) = self.maybe_send_agent_exited_shell_telemetry(ctx)
+                    && let Some((conversation_id, command)) =
+                        self.maybe_send_agent_exited_shell_telemetry(ctx)
                 {
                     // The agent's command caused the shell to exit. Finalize the
-                    // conversation as a failure (with a message) before the pane is
-                    // torn down, so the Oz run reports the failure instead of
-                    // "Cancelled by user" (which the pane-close cancellation would
-                    // otherwise produce).
+                    // conversation as a failure (with a message naming the command)
+                    // before the pane is torn down, so the Oz run reports the
+                    // failure instead of "Cancelled by user" (which the pane-close
+                    // cancellation would otherwise produce).
                     self.ai_controller.update(ctx, |controller, ctx| {
-                        controller.fail_conversation_due_to_shell_exit(conversation_id, ctx);
+                        controller.fail_conversation_due_to_shell_exit(
+                            conversation_id,
+                            command,
+                            ctx,
+                        );
                     });
                 }
 
@@ -16761,9 +16768,12 @@ impl TerminalView {
                             .block_at(tail_block_index)
                             .is_none_or(|b| b.is_restored());
 
-                    items.extend(
-                        self.session_sharing_context_menu_items(&model, is_share_session_disabled),
-                    );
+                    let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+                    items.extend(self.session_sharing_context_menu_items(
+                        &model,
+                        is_share_session_disabled,
+                        has_session_link,
+                    ));
                 }
 
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
@@ -16971,7 +16981,12 @@ impl TerminalView {
                 if FeatureFlag::CreatingSharedSessions.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled()
                 {
-                    items.extend(self.session_sharing_context_menu_items(&model, false));
+                    let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+                    items.extend(self.session_sharing_context_menu_items(
+                        &model,
+                        false,
+                        has_session_link,
+                    ));
                 }
 
                 items
@@ -17442,7 +17457,8 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            items.extend(self.session_sharing_context_menu_items(&model, false));
+            let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+            items.extend(self.session_sharing_context_menu_items(&model, false, has_session_link));
         }
 
         // Section 2: AI Command Search, Ask Warp AI
@@ -17680,7 +17696,12 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            menu_items.extend(self.session_sharing_context_menu_items(&model, false));
+            let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+            menu_items.extend(self.session_sharing_context_menu_items(
+                &model,
+                false,
+                has_session_link,
+            ));
         }
         let current_shell = model.shell_launch_state().available_shell();
         let mut pane_context_menu_items = self.pane_context_menu_items(current_shell, ctx);
