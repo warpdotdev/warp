@@ -36,8 +36,8 @@ use crate::ai::document::plan_publication::{
 };
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 use crate::ai::orchestration::{
-    OrchestrationConfigState, can_execute_with_auth_secret,
-    populate_default_auth_secret_for_execution,
+    OrchestrationConfigState, can_execute_with_auth_secret, effective_computer_use_enabled,
+    orchestration_harness, populate_default_auth_secret_for_execution,
 };
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
@@ -357,7 +357,12 @@ impl RunAgentsExecutor {
                     } => RunAgentsLaunchedExecutionMode::Remote {
                         environment_id: environment_id.clone(),
                         worker_host: worker_host.clone(),
-                        computer_use_enabled: *computer_use_enabled,
+                        // An unspecified per-call flag resolves to the same
+                        // default the children were launched with.
+                        computer_use_enabled: effective_computer_use_enabled(
+                            *computer_use_enabled,
+                            orchestration_harness(&run_harness_type),
+                        ),
                         runner_id: runner_id.clone(),
                     },
                 };

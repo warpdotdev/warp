@@ -32,7 +32,7 @@ pub use remote_child::{
     CloudAgentStartupAuthFlow, CloudAgentStartupBlocker, CloudAgentStartupFailure,
     CloudAgentStartupIssue, CloudAgentStartupPresentation, PrepareRemoteChildLaunchError,
     PreparedRemoteChildLaunch, RemoteChildLaunchConfig, classify_cloud_agent_startup_error,
-    oz_run_url, prepare_remote_child_launch,
+    effective_computer_use_enabled, orchestration_harness, oz_run_url, prepare_remote_child_launch,
 };
 pub(crate) use snapshots::AUTH_SECRET_INHERIT_LABEL;
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]

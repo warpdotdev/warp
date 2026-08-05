@@ -1,4 +1,4 @@
-use ai::agent::action::AskUserQuestionType;
+use ai::agent::action::{AskUserQuestionType, RunAgentsExecutionMode};
 use ai::skills::SkillPathOrigin;
 use warp_multi_agent_api as api;
 
@@ -246,4 +246,89 @@ fn transfer_control_tool_call_converts_to_action_message() {
             panic!("Expected transfer-control tool call to produce a client action")
         }
     }
+}
+
+/// Builds a `run_agents` tool call whose remote block carries the given
+/// `computer_use_enabled` wire value.
+fn run_agents_remote_tool_call(computer_use_enabled: bool) -> api::Message {
+    api::Message {
+        fetched_memories: vec![],
+        id: "message".to_string(),
+        task_id: "task".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+            tool_call_id: "tool_call".to_string(),
+            tool: Some(api::message::tool_call::Tool::RunAgents(api::RunAgents {
+                summary: "summary".to_string(),
+                base_prompt: "base".to_string(),
+                skills: vec![],
+                model_id: "auto".to_string(),
+                harness: None,
+                agent_run_configs: vec![],
+                execution_mode: Some(api::run_agents::ExecutionModeOneOf::Remote(
+                    api::run_agents::Remote {
+                        environment_id: "env-1".to_string(),
+                        worker_host: "warp".to_string(),
+                        computer_use_enabled,
+                        runner_id: String::new(),
+                    },
+                )),
+                plan_id: String::new(),
+            })),
+        })),
+        request_id: "req".to_string(),
+        timestamp: None,
+    }
+}
+
+fn converted_run_agents_execution_mode(message: api::Message) -> RunAgentsExecutionMode {
+    let task_id = TaskId::new("task".to_string());
+    let converted = message
+        .to_client_output_message(ConversionParams {
+            task_id: &task_id,
+            current_todo_list: None,
+            active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
+        })
+        .expect("run_agents conversion should succeed");
+    let MaybeAIAgentOutputMessage::Message(output) = converted else {
+        panic!("Expected run_agents tool call to produce a client action");
+    };
+    let AIAgentOutputMessageType::Action(action) = output.message else {
+        panic!("Expected an action message");
+    };
+    let AIAgentActionType::RunAgents(request) = action.action else {
+        panic!("Expected a RunAgents action");
+    };
+    request.execution_mode
+}
+
+/// Regression for REMOTE-2444: an omitted `computer_use_enabled` reaches the
+/// client as the wire zero value, and must stay unspecified rather than
+/// becoming an explicit disable that overrides the cloud default.
+#[test]
+fn run_agents_remote_without_computer_use_flag_stays_unspecified() {
+    assert_eq!(
+        converted_run_agents_execution_mode(run_agents_remote_tool_call(false)),
+        RunAgentsExecutionMode::Remote {
+            environment_id: "env-1".to_string(),
+            worker_host: "warp".to_string(),
+            computer_use_enabled: None,
+            runner_id: String::new(),
+        }
+    );
+}
+
+#[test]
+fn run_agents_remote_with_computer_use_enabled_round_trips() {
+    assert_eq!(
+        converted_run_agents_execution_mode(run_agents_remote_tool_call(true)),
+        RunAgentsExecutionMode::Remote {
+            environment_id: "env-1".to_string(),
+            worker_host: "warp".to_string(),
+            computer_use_enabled: Some(true),
+            runner_id: String::new(),
+        }
+    );
 }

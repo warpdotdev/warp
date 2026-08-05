@@ -234,7 +234,7 @@ fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
             execution_mode: RunAgentsExecutionMode::Remote {
                 environment_id: "env-1".to_string(),
                 worker_host: "warp".to_string(),
-                computer_use_enabled: false,
+                computer_use_enabled: None,
                 runner_id: String::new(),
             },
             agent_run_configs: vec![RunAgentsAgentRunConfig {

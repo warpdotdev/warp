@@ -92,6 +92,23 @@ pub(crate) fn convert_run_agents_harness(harness: Option<&api::Harness>) -> Opti
     )
 }
 
+/// Maps the wire `computer_use_enabled` bool onto the client's tri-state
+/// flag.
+///
+/// The generated Rust proto type has **no field presence** for this field
+/// (the crate's codegen compiles the editions source as `proto3`), so an
+/// unset flag and an explicit `false` both decode as `false`. Collapsing
+/// that into an explicit `Some(false)` is what forced computer use off for
+/// every orchestrated child whose `run_agents` call simply omitted the
+/// field, bypassing the server's normal Oz default. Treat `false` as "no
+/// opinion" (`None`) so the server resolves its documented default, and
+/// only carry an explicit `Some(true)` through. Restoring an explicit
+/// `false` end-to-end requires field presence on the wire; the rest of the
+/// launch path already carries `Some(false)` faithfully once it does.
+fn convert_run_agents_computer_use_enabled(computer_use_enabled: bool) -> Option<bool> {
+    computer_use_enabled.then_some(true)
+}
+
 fn convert_run_agents_execution_mode(
     execution_mode: Option<api::run_agents::ExecutionModeOneOf>,
 ) -> RunAgentsExecutionMode {
@@ -100,7 +117,9 @@ fn convert_run_agents_execution_mode(
             RunAgentsExecutionMode::Remote {
                 environment_id: remote.environment_id,
                 worker_host: remote.worker_host,
-                computer_use_enabled: remote.computer_use_enabled,
+                computer_use_enabled: convert_run_agents_computer_use_enabled(
+                    remote.computer_use_enabled,
+                ),
                 runner_id: remote.runner_id,
             }
         }

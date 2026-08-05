@@ -80,7 +80,7 @@ fn remote(environment_id: &str, worker_host: &str) -> RunAgentsExecutionMode {
     RunAgentsExecutionMode::Remote {
         environment_id: environment_id.to_string(),
         worker_host: worker_host.to_string(),
-        computer_use_enabled: true,
+        computer_use_enabled: Some(true),
         runner_id: String::new(),
     }
 }
@@ -225,7 +225,7 @@ fn build_request_carries_card_fields_and_edited_run_wide_state() {
         RunAgentsExecutionMode::Remote {
             environment_id: "env-9".to_string(),
             worker_host: "self-hosted".to_string(),
-            computer_use_enabled: true,
+            computer_use_enabled: Some(true),
             runner_id: String::new(),
         },
     );

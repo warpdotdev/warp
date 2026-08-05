@@ -239,7 +239,12 @@ pub enum RunAgentsExecutionMode {
     Remote {
         environment_id: String,
         worker_host: String,
-        computer_use_enabled: bool,
+        /// Tri-state per-call computer-use flag. `None` means the caller
+        /// expressed no opinion, so the children inherit the normal cloud
+        /// default (Oz harness → enabled, third-party harnesses →
+        /// disabled) instead of being forced off. `Some(_)` is an explicit
+        /// choice that applies to the whole batch.
+        computer_use_enabled: Option<bool>,
         /// Runner UID selecting the children's compute config (docker
         /// image, instance shape, setup commands). Empty means "no
         /// override" — fall back to the environment's default runner then
@@ -286,7 +291,10 @@ pub enum StartAgentExecutionMode {
         environment_id: String,
         skill_references: Vec<SkillReference>,
         model_id: String,
-        computer_use_enabled: bool,
+        /// Tri-state computer-use flag for the child run. `None` leaves the
+        /// field off the spawn request so the server applies its normal
+        /// default; `Some(_)` is an explicit enable/disable.
+        computer_use_enabled: Option<bool>,
         worker_host: String,
         harness_type: String,
         title: String,

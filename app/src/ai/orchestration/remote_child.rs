@@ -31,7 +31,10 @@ pub struct RemoteChildLaunchConfig {
     pub environment_id: String,
     pub skill_references: Vec<SkillReference>,
     pub model_id: String,
-    pub computer_use_enabled: bool,
+    /// Tri-state computer-use flag. `None` (nobody expressed an opinion)
+    /// leaves the field off the spawn request so the server applies its
+    /// normal default instead of the child being forced off.
+    pub computer_use_enabled: Option<bool>,
     pub worker_host: String,
     pub harness_type: String,
     pub title: String,
@@ -42,12 +45,45 @@ pub struct RemoteChildLaunchConfig {
 
 impl RemoteChildLaunchConfig {
     pub fn orchestration_harness(&self) -> Harness {
-        if self.harness_type.trim().is_empty() {
-            Harness::Oz
-        } else {
-            Harness::parse_orchestration_harness(&self.harness_type).unwrap_or(Harness::Unknown)
-        }
+        orchestration_harness(&self.harness_type)
     }
+}
+
+/// Resolves a run-wide orchestration harness string to a [`Harness`]. An
+/// empty string means the caller did not override the harness, which is
+/// the default Oz harness.
+pub fn orchestration_harness(harness_type: &str) -> Harness {
+    if harness_type.trim().is_empty() {
+        Harness::Oz
+    } else {
+        Harness::parse_orchestration_harness(harness_type).unwrap_or(Harness::Unknown)
+    }
+}
+
+/// The `computer_use_enabled` value to put on the child's spawn config.
+///
+/// Only the Oz harness supports computer use, so an explicit choice is
+/// forwarded for Oz children and dropped for third-party harnesses.
+/// `None` is left off the request entirely (the field is
+/// `skip_serializing_if = "Option::is_none"`), so the server resolves its
+/// documented default — Oz runs get computer use, third-party harnesses do
+/// not — exactly like a non-orchestrated cloud run.
+pub fn spawn_computer_use_enabled(
+    computer_use_enabled: Option<bool>,
+    orchestration_harness: Harness,
+) -> Option<bool> {
+    computer_use_enabled.filter(|_| orchestration_harness == Harness::Oz)
+}
+
+/// The computer-use setting a launched child effectively runs with, used
+/// for reporting the resolved orchestration config. Mirrors the server's
+/// default resolution for the value [`spawn_computer_use_enabled`] sends.
+pub fn effective_computer_use_enabled(
+    computer_use_enabled: Option<bool>,
+    orchestration_harness: Harness,
+) -> bool {
+    spawn_computer_use_enabled(computer_use_enabled, orchestration_harness)
+        .unwrap_or(orchestration_harness == Harness::Oz)
 }
 
 /// Frontend-neutral output used to launch one remote child.
@@ -227,7 +263,7 @@ pub fn prepare_remote_child_launch(
         }
     };
     let computer_use_enabled =
-        (orchestration_harness == Harness::Oz).then_some(computer_use_enabled);
+        spawn_computer_use_enabled(computer_use_enabled, orchestration_harness);
     let harness_auth_secrets = auth_secret_name
         .filter(|name| !name.trim().is_empty())
         .and_then(|name| match orchestration_harness {

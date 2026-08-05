@@ -31,7 +31,7 @@ fn remote_request(parent_conversation_id: AIConversationId) -> StartAgentRequest
             environment_id: "env-1".to_string(),
             skill_references: Vec::new(),
             model_id: "auto".to_string(),
-            computer_use_enabled: false,
+            computer_use_enabled: None,
             worker_host: "warp".to_string(),
             harness_type: "oz".to_string(),
             title: "Researcher".to_string(),

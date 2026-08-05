@@ -45,7 +45,9 @@ pub struct OrchestrationConfigState {
     pub execution_mode: RunAgentsExecutionMode,
     /// Per-call value hidden from the orchestration editors. Kept outside
     /// `execution_mode` so a temporary switch to Local does not discard it.
-    remote_computer_use_enabled: bool,
+    /// `None` means the call expressed no opinion, so the children fall back
+    /// to the normal cloud default rather than being forced off.
+    remote_computer_use_enabled: Option<bool>,
     /// Drives the picker display and Accept gate. Persisted as
     /// `Named(_)` only via `CloudAgentSettings.last_selected_auth_secret`.
     pub auth_secret_selection: AuthSecretSelection,
@@ -96,7 +98,7 @@ impl OrchestrationConfigState {
         execution_mode: &RunAgentsExecutionMode,
     ) -> Self {
         let remote_computer_use_enabled = match execution_mode {
-            RunAgentsExecutionMode::Local => false,
+            RunAgentsExecutionMode::Local => None,
             RunAgentsExecutionMode::Remote {
                 computer_use_enabled,
                 ..
@@ -122,7 +124,9 @@ impl OrchestrationConfigState {
             } => RunAgentsExecutionMode::Remote {
                 environment_id: environment_id.clone(),
                 worker_host: worker_host.clone(),
-                computer_use_enabled: false,
+                // The approved plan carries no computer-use opinion, so leave
+                // it unspecified and let the normal cloud default apply.
+                computer_use_enabled: None,
                 runner_id: runner_id.clone(),
             },
         };
@@ -130,7 +134,7 @@ impl OrchestrationConfigState {
             model_id: config.model_id.clone(),
             harness_type: config.harness_type.clone(),
             execution_mode,
-            remote_computer_use_enabled: false,
+            remote_computer_use_enabled: None,
             auth_secret_selection: AuthSecretSelection::Unset,
         };
         if matches!(state.execution_mode, RunAgentsExecutionMode::Local) {
