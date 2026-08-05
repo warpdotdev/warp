@@ -169,9 +169,7 @@ pub use crate::code_review::git_repo_model::{
     GitRepoModels, GitRepoStatusModel, GitStatusMetadata,
 };
 pub use crate::code_review::github_repo_model::GitHubRepoModel;
-pub use crate::completer::{
-    CompletionSourcePolicy, SessionContext, completion_suggestions_with_native_fallback,
-};
+pub use crate::completer::SessionContext;
 pub use crate::global_resource_handles::GlobalResourceHandlesProvider;
 pub use crate::persistence::PersistenceWriter;
 pub use crate::prefix::longest_common_prefix;
@@ -229,7 +227,6 @@ pub use crate::terminal::model::blockgrid::BlockGrid;
 pub use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
 };
-pub use crate::terminal::model::completions::ShellCompletion;
 pub use crate::terminal::model::escape_sequences::{KeystrokeWithDetails, ToEscapeSequence};
 pub use crate::terminal::model::grid::grid_handler::{GridHandler, TermMode};
 pub use crate::terminal::model::rich_content::RichContentType;

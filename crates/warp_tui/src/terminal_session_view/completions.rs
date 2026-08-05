@@ -2,19 +2,15 @@
 
 use std::sync::Arc;
 
-use futures::FutureExt as _;
-use warp::tui_export::{
-    CompletionSourcePolicy, Session, completion_suggestions_with_native_fallback,
-    tui_completion_session_context,
-};
+use warp::tui_export::{Session, tui_completion_session_context};
 use warp_completer::completer::{
-    CompleterOptions, EngineFileType, ExplicitTabCompletion, SuggestionResults,
+    CompleterOptions, EngineFileType, ExplicitTabCompletion, SuggestionResults, suggestions,
 };
 use warp_core::SessionId;
 use warpui_core::r#async::SpawnedFutureHandle;
 use warpui_core::{AppContext, ViewContext};
 
-use super::{TuiTerminalSessionEvent, TuiTerminalSessionView};
+use super::TuiTerminalSessionView;
 use crate::completion_menu::TuiCompletionAcceptance;
 use crate::inline_menu::active_inline_menu;
 use crate::input::view::TuiCompletionInputSnapshot;
@@ -89,8 +85,6 @@ impl TuiTerminalSessionView {
             return;
         };
         let session_id = session.id();
-        let completion_source_policy =
-            CompletionSourcePolicy::for_session(&session, &input.buffer_text, ctx);
         let Some(completion_context) = tui_completion_session_context(
             self.active_session.as_ref(ctx),
             current_working_directory.clone(),
@@ -113,27 +107,16 @@ impl TuiTerminalSessionView {
             current_working_directory,
             generation,
         };
+        let line = request.input.buffer_text[..request.input.cursor_byte_offset].to_owned();
         let cursor_byte_offset = request.input.cursor_byte_offset;
-        let native_results = if completion_source_policy.should_request_native_shell_completions() {
-            let (results_tx, results_rx) = async_channel::unbounded();
-            ctx.emit(TuiTerminalSessionEvent::RunNativeShellCompletions {
-                buffer_text: request.input.buffer_text[..cursor_byte_offset].to_owned(),
-                results_tx,
-            });
-            async move { results_rx.recv().await.ok() }.boxed()
-        } else {
-            futures::future::ready(None).boxed()
-        };
         let completion_session = completion_context.session.clone();
         self.completion_request.future = Some(ctx.spawn_abortable(
             async move {
-                let results = completion_suggestions_with_native_fallback(
-                    &request.input.buffer_text,
+                let results = suggestions(
+                    &line,
                     cursor_byte_offset,
                     session_env_vars.as_ref(),
                     CompleterOptions::default(),
-                    completion_source_policy,
-                    native_results,
                     &completion_context,
                 )
                 .await;

@@ -37,18 +37,18 @@ use warp::tui_export::{
     PillBarInteractionEvent, PillBarPillKind, PillSwitchOutcome, PtyIntent, PtyIntentEvent,
     QueuedQueryEvent, QueuedQueryModel, RepoDetectionSessionType, RepoDetectionSource,
     ServerConversationToken, SessionSettings, Sessions, SessionsEvent, ShellCommandExecutorEvent,
-    ShellCompletion, SizeInfo, SizeUpdate, SkillReference, SlashCommandDataSource as _,
-    SlashCommandKind, SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest,
-    StaticCommand, TelemetryEvent, TerminalColorList, TerminalColors, TerminalModel,
-    TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager,
-    TuiMcpServerId, TuiMcpVariableValue, TuiOnboardingMarker, TuiOnboardingMarkers,
-    TuiOnboardingMarkersEvent, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
-    TuiUpArrowHistoryItemKind, TuiUserInfoManager, TuiUserInfoManagerEvent, TuiZeroStateDataSource,
-    UserTakeOverReason, WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent,
-    block_context_from_terminal_model, build_slash_command_mixer, detect_possible_git_repo,
-    export_conversation_markdown, log_out_tui, maybe_build_ai_query_upsert_event,
-    prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
-    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
+    SizeInfo, SizeUpdate, SkillReference, SlashCommandDataSource as _, SlashCommandKind,
+    SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest, StaticCommand,
+    TelemetryEvent, TerminalColorList, TerminalColors, TerminalModel, TerminalSurface,
+    TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiMcpServerId,
+    TuiMcpVariableValue, TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
+    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind,
+    TuiUserInfoManager, TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason,
+    WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
+    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown, log_out_tui,
+    maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
+    record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
+    record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
@@ -300,10 +300,6 @@ pub(crate) enum TuiTerminalSessionEvent {
     },
     WriteUserInput(Cow<'static, [u8]>),
     Resize(SizeUpdate),
-    RunNativeShellCompletions {
-        buffer_text: String,
-        results_tx: Sender<Vec<ShellCompletion>>,
-    },
     StartAgentConversation {
         request: Box<StartAgentRequest>,
         working_directory: Option<PathBuf>,
@@ -324,13 +320,6 @@ impl PtyIntentEvent for TuiTerminalSessionEvent {
             }),
             Self::WriteUserInput(bytes) => Some(PtyIntent::WriteBytes(bytes.clone())),
             Self::Resize(size_update) => Some(PtyIntent::Resize(*size_update)),
-            Self::RunNativeShellCompletions {
-                buffer_text,
-                results_tx,
-            } => Some(PtyIntent::RunNativeShellCompletions {
-                buffer_text: buffer_text.clone(),
-                results_tx: results_tx.clone(),
-            }),
             Self::StartAgentConversation { .. } | Self::CleanupFailedChildLaunch { .. } => None,
         }
     }

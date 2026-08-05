@@ -4886,32 +4886,6 @@ fn user_input_event_projects_to_raw_user_bytes() {
 }
 
 #[test]
-fn native_completion_event_projects_to_pty_request() {
-    let (results_tx, results_rx) = async_channel::unbounded();
-    let event = TuiTerminalSessionEvent::RunNativeShellCompletions {
-        buffer_text: "git che".to_owned(),
-        results_tx,
-    };
-    let Some(PtyIntent::RunNativeShellCompletions {
-        buffer_text,
-        results_tx,
-    }) = event.pty_intent()
-    else {
-        panic!("native completion event should map to a PTY request");
-    };
-
-    assert_eq!(buffer_text, "git che");
-    results_tx
-        .try_send(Vec::new())
-        .expect("projected sender should remain connected");
-    assert!(
-        results_rx
-            .try_recv()
-            .expect("original receiver should receive projected results")
-            .is_empty()
-    );
-}
-#[test]
 fn running_command_attachment_bindings_are_context_scoped() {
     App::test((), |mut app| async move {
         app.update(crate::keybindings::init);

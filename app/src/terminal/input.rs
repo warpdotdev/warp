@@ -73,6 +73,7 @@ use warp_core::r#async::debounce;
 use warp_core::context_flag::ContextFlag;
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warp_core::ui::theme::color::internal_colors;
+use warp_core::user_preferences::GetUserPreferences as _;
 use warp_editor::editor::NavigationKey;
 use warp_errors::{report_error, report_if_error};
 use warp_util::path::ShellFamily;
@@ -214,9 +215,7 @@ use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Space};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
 use crate::code_review::diff_state::DiffMode;
-use crate::completer::{
-    CompletionSourcePolicy, SessionContext, completion_suggestions_with_native_fallback,
-};
+use crate::completer::SessionContext;
 use crate::context_chips::display::{PromptDisplay, PromptDisplayEvent};
 use crate::context_chips::display_chip::{DisplayChipConfig, PromptChipShellCommand};
 use crate::context_chips::prompt_type::PromptType;
@@ -12247,11 +12246,30 @@ impl Input {
         ctx: &mut ViewContext<'_, Input>,
     ) {
         let buffer_text = self.buffer_text(ctx);
-        let completion_source_policy =
-            CompletionSourcePolicy::for_session(&completion_context.session, &buffer_text, ctx);
+
+        // The 'ForceNativeShellCompletions' user pref can be used to unconditionally
+        // generate and show native shell completion results (i.e. regardless of whether or
+        // not we have completion results via completion specs).
+        let force_native_shell_completions = ctx
+            .private_user_preferences()
+            .read_value("ForceNativeShellCompletions")
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(false);
+
+        let use_native_shell_completions = (FeatureFlag::NativeShellCompletions.is_enabled() || force_native_shell_completions)
+            && completion_context
+                .session
+                .shell()
+                .supports_native_shell_completions()
+            // For now, don't use native shell completions for multi-line commands.
+            && !buffer_text.contains('\n');
 
         let fallback_strategy = match completions_trigger {
-            CompletionsTrigger::Keybinding | CompletionsTrigger::SlashCommandAutoOpen => {
+            CompletionsTrigger::Keybinding | CompletionsTrigger::SlashCommandAutoOpen
+                if !use_native_shell_completions =>
+            {
                 CompletionsFallbackStrategy::FilePaths
             }
             _ => CompletionsFallbackStrategy::None,
@@ -12282,29 +12300,28 @@ impl Input {
         });
 
         let cursor_position = cursor_position.as_usize();
-        let native_results_fut =
-            if completion_source_policy.should_request_native_shell_completions() {
-                // If we're using native shell completions, construct a future that
-                // will be resolved with any completions data provided by the shell.
-                let (results_tx, results_rx) = async_channel::unbounded();
-                ctx.dispatch_typed_action(&TerminalAction::RunNativeShellCompletions {
-                    buffer_text: buffer_text[0..cursor_position].to_owned(),
-                    results_tx,
-                });
-                async move { results_rx.recv().await.ok() }.boxed()
-            } else {
-                // If not, we can immediately say that there are no completion
-                // results from the shell.
-                futures::future::ready(None).boxed()
-            };
+        let native_results_fut = if use_native_shell_completions {
+            // If we're using native shell completions, construct a future that
+            // will be resolved with any completions data provided by the shell.
+            let (results_tx, results_rx) = async_channel::unbounded();
+            ctx.dispatch_typed_action(&TerminalAction::RunNativeShellCompletions {
+                buffer_text: buffer_text[0..cursor_position].to_owned(),
+                results_tx,
+            });
+            async move { results_rx.recv().await.ok() }.boxed()
+        } else {
+            // If not, we can immediately say that there are no completion
+            // results from the shell.
+            futures::future::ready(None).boxed()
+        };
 
         let completion_session = completion_context.session.clone();
 
         let abort_handle = ctx
             .spawn_abortable(
                 async move {
-                    let suggestions = completion_suggestions_with_native_fallback(
-                        &buffer_text,
+                    let suggestions = completer::suggestions(
+                        before_cursor_text.as_str(),
                         cursor_position,
                         session_env_vars.as_ref(),
                         CompleterOptions {
@@ -12313,11 +12330,35 @@ impl Input {
                             suggest_file_path_completions_only: input_type.is_ai(),
                             parse_quotes_as_literals: input_type.is_ai(),
                         },
-                        completion_source_policy,
-                        native_results_fut,
                         &completion_context,
                     )
                     .await;
+
+                    let suggestions = match suggestions {
+                        Some(s) if !s.suggestions.is_empty() && !force_native_shell_completions => {
+                            Some(s)
+                        }
+                        _ => native_results_fut.await.map(|results| {
+                            let suggestions = results.into_iter().map(Into::into).collect_vec();
+
+                            let token_end = cursor_position;
+                            // Within the section of the buffer from the start
+                            // to the end of this token...
+                            let token_start = buffer_text[0..token_end]
+                                // Find the last whitespace char before the token end.
+                                .rfind(char::is_whitespace)
+                                // If we find one, the token start is the next char.
+                                .map(|pos| pos + 1)
+                                // Otherwise, the start is the beginning of the buffer.
+                                .unwrap_or_default();
+
+                            SuggestionResults {
+                                replacement_span: (token_start, token_end).into(),
+                                suggestions,
+                                match_strategy: MatchStrategy::Fuzzy,
+                            }
+                        }),
+                    };
 
                     (suggestions, completions_trigger, editor_snapshot)
                 },

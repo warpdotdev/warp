@@ -1,4 +1,3 @@
-mod completion_source;
 #[cfg(feature = "completions_v2")]
 mod js;
 
@@ -9,7 +8,6 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-pub use completion_source::{CompletionSourcePolicy, completion_suggestions_with_native_fallback};
 use lazy_static::lazy_static;
 use smol_str::SmolStr;
 use typed_path::{TypedPath, TypedPathBuf};

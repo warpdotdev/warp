@@ -344,7 +344,6 @@ impl TuiSessions {
                 }
                 TuiTerminalSessionEvent::ExecuteCommand(_)
                 | TuiTerminalSessionEvent::InterruptPty
-                | TuiTerminalSessionEvent::RunNativeShellCompletions { .. }
                 | TuiTerminalSessionEvent::WriteAgentInput { .. }
                 | TuiTerminalSessionEvent::WriteUserInput(_)
                 | TuiTerminalSessionEvent::Resize(_) => {}
