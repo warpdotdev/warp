@@ -639,7 +639,9 @@ impl BackingView for TerminalView {
         let shared_session_status = model.shared_session_status();
         let is_ambient_agent = self.is_ambient_agent_session(ctx);
         if shared_session_status.is_sharer_or_viewer() {
-            if !is_ambient_agent {
+            if !is_ambient_agent
+                && self.has_copyable_shared_session_link(shared_session_status, ctx)
+            {
                 items.push(
                     MenuItemFields::new("Copy link")
                         .with_on_select_action(TerminalAction::CopySharedSessionLink { source })

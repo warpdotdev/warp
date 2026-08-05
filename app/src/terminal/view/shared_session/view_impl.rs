@@ -1442,10 +1442,8 @@ impl TerminalView {
     ) {
         #[cfg(target_family = "wasm")]
         {
-            let manager = Manager::as_ref(ctx);
-            let Some(session_id) = manager
-                .session_id(&ctx.view_id())
-                .or_else(|| manager.ended_session_id(&ctx.view_id()))
+            let shared_session_status = self.model.lock().shared_session_status().clone();
+            let Some(session_id) = self.copyable_shared_session_id(&shared_session_status, ctx)
             else {
                 return;
             };
@@ -1556,11 +1554,8 @@ impl TerminalView {
         source: SharedSessionActionSource,
         ctx: &mut ViewContext<Self>,
     ) {
-        let manager = Manager::as_ref(ctx);
-        let Some(session_id) = manager
-            .session_id(&ctx.view_id())
-            .or_else(|| manager.ended_session_id(&ctx.view_id()))
-        else {
+        let shared_session_status = self.model.lock().shared_session_status().clone();
+        let Some(session_id) = self.copyable_shared_session_id(&shared_session_status, ctx) else {
             return;
         };
 
@@ -1574,6 +1569,35 @@ impl TerminalView {
         });
 
         send_telemetry_from_ctx!(TelemetryEvent::CopiedSharedSessionLink { source }, ctx);
+    }
+
+    fn copyable_shared_session_id(
+        &self,
+        shared_session_status: &SharedSessionStatus,
+        ctx: &AppContext,
+    ) -> Option<SessionId> {
+        let manager = Manager::as_ref(ctx);
+        manager
+            .session_id(&self.id())
+            .or_else(|| match shared_session_status {
+                SharedSessionStatus::NotShared | SharedSessionStatus::FinishedViewer => {
+                    manager.ended_session_id(&self.id())
+                }
+                SharedSessionStatus::ViewPending
+                | SharedSessionStatus::ActiveViewer { .. }
+                | SharedSessionStatus::SharePendingPreBootstrap { .. }
+                | SharedSessionStatus::SharePending
+                | SharedSessionStatus::ActiveSharer => None,
+            })
+    }
+
+    pub(in crate::terminal::view) fn has_copyable_shared_session_link(
+        &self,
+        shared_session_status: &SharedSessionStatus,
+        ctx: &AppContext,
+    ) -> bool {
+        self.copyable_shared_session_id(shared_session_status, ctx)
+            .is_some()
     }
 
     pub fn open_shared_session_qr_code(&mut self, ctx: &mut ViewContext<Self>) {
@@ -1905,6 +1929,7 @@ impl TerminalView {
         &self,
         model: &TerminalModel,
         is_share_session_disabled: bool,
+        ctx: &AppContext,
     ) -> Vec<MenuItem<TerminalAction>> {
         let mut items = Vec::new();
 
@@ -1927,7 +1952,7 @@ impl TerminalView {
             );
         }
 
-        if model.shared_session_status().is_sharer_or_viewer() {
+        if self.has_copyable_shared_session_link(model.shared_session_status(), ctx) {
             items.push(
                 MenuItemFields::new("Copy session sharing link")
                     .with_on_select_action(TerminalAction::CopySharedSessionLink {
