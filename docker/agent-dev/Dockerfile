@@ -51,9 +51,38 @@ RUN set -eux; \
   echo "Installed protoc-gen-go-grpc"; \
   rm go1.26.5.linux-$ARCH.tar.gz
 
-# Install golangci-lint
-RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /usr/local/go/bin v2.6.1 \
+# Install golangci-lint. Keep this version in step with warp-server's CI
+# (.github/workflows/ci.yml), which is also the floor for what will run at all:
+# golangci-lint refuses to load a config whose target Go version is newer than
+# the Go release golangci-lint itself was built with.
+RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /usr/local/go/bin v2.12.2 \
     && golangci-lint --version
+
+# Preinstall the static tokenizers library that warp-server links through cgo.
+# Its huggingface package links -ltokenizers against a checkout-local libs/
+# directory that only exists once warp-server's ./script/install-tokenizer-assets
+# has run, so an unbootstrapped checkout fails to link with
+# "cannot find -ltokenizers". Installing the same release archive into
+# /usr/local/lib makes the linker's default search path satisfy it instead. A
+# checkout that has run the bootstrap still wins, because cgo passes its -L
+# directory ahead of the default paths.
+#
+# Keep this version in step with TOKENIZERS_VERSION in warp-server's
+# script/install-tokenizer-assets.
+RUN set -eux; \
+  tokenizers_version=v1.27.0; \
+  case "$(dpkg --print-architecture)" in \
+    amd64) tokenizers_asset='libtokenizers.linux-x86_64.tar.gz';; \
+    arm64) tokenizers_asset='libtokenizers.linux-arm64.tar.gz';; \
+    *) echo "no libtokenizers release for $(dpkg --print-architecture)" >&2; exit 1;; \
+  esac; \
+  tokenizers_tmp="$(mktemp -d)"; \
+  curl --proto '=https' --tlsv1.2 -fsSL \
+    "https://github.com/daulet/tokenizers/releases/download/$tokenizers_version/$tokenizers_asset" \
+    -o "$tokenizers_tmp/libtokenizers.tar.gz"; \
+  tar -xzf "$tokenizers_tmp/libtokenizers.tar.gz" -C "$tokenizers_tmp"; \
+  install -m 0644 "$tokenizers_tmp/libtokenizers.a" /usr/local/lib/libtokenizers.a; \
+  rm -rf "$tokenizers_tmp"
 
 # Install Node
 # Adapted from https://github.com/nodejs/docker-node/blob/eda40f3c41d33cb595232cb7000ab31af1ce2f02/25/bookworm/Dockerfile#L8-L17
