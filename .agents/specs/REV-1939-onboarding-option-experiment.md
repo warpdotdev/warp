@@ -53,10 +53,10 @@ Behavior (testable invariants):
 
 ## Tech
 
-- Add `OnboardingChooseHowToStartControl` / `OnboardingChooseHowToStartThreeOptions`
+- Add `OnboardingChooseHowToStartControl` / `OnboardingChooseHowToStartExperiment`
   to the client GraphQL `Experiment` enum and the checked-in schema snapshot,
   mapping to `ONBOARDING_CHOOSE_HOW_TO_START_CONTROL` and
-  `ONBOARDING_CHOOSE_HOW_TO_START_THREE_OPTIONS`.
+  `ONBOARDING_CHOOSE_HOW_TO_START_EXPERIMENT`.
 - Add matching `ServerExperiment` arms (no-op `on_added_to`, queried directly)
   and a `ServerExperiments::choose_how_to_start_experiment_arm()` resolver
   (control-only → Control, experiment-only → Experiment, neither/both →

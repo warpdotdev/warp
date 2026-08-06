@@ -99,7 +99,7 @@ fn test_choose_how_to_start_experiment_arm_resolution() {
         assert_eq!(
             arm_for(
                 &mut app,
-                vec![ServerExperiment::OnboardingChooseHowToStartThreeOptions]
+                vec![ServerExperiment::OnboardingChooseHowToStartExperiment]
             ),
             ChooseHowToStartExperimentArm::Experiment
         );
@@ -109,7 +109,7 @@ fn test_choose_how_to_start_experiment_arm_resolution() {
                 &mut app,
                 vec![
                     ServerExperiment::OnboardingChooseHowToStartControl,
-                    ServerExperiment::OnboardingChooseHowToStartThreeOptions,
+                    ServerExperiment::OnboardingChooseHowToStartExperiment,
                 ]
             ),
             ChooseHowToStartExperimentArm::Unassigned

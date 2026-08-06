@@ -67,7 +67,7 @@ impl ServerExperiments {
         let control =
             self.is_experiment_enabled(&ServerExperiment::OnboardingChooseHowToStartControl);
         let experiment =
-            self.is_experiment_enabled(&ServerExperiment::OnboardingChooseHowToStartThreeOptions);
+            self.is_experiment_enabled(&ServerExperiment::OnboardingChooseHowToStartExperiment);
         match (control, experiment) {
             (true, false) => ChooseHowToStartExperimentArm::Control,
             (false, true) => ChooseHowToStartExperimentArm::Experiment,
