@@ -37,6 +37,7 @@ use futures::future::join_all;
 use tokio::fs::{self as tokio_fs, OpenOptions};
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::{mpsc, oneshot};
+use warp_core::safe_info;
 use warp_errors::report_error;
 use warpui::r#async::FutureExt as _;
 use warpui::r#async::executor::Background;
@@ -211,8 +212,7 @@ pub(super) async fn run_declarations_script(
 ///
 /// Reads `$OZ_SNAPSHOT_DECLARATIONS_FILE` for the operator/test override, then delegates to
 /// [`resolve_declarations_path_with_override`] so tests can exercise the pure logic without
-/// racing on the shared env var. `pub(super)` so `checkpoint_coordinator` can resolve the same
-/// path used by the declarations writer and by [`run_declarations_script`].
+/// racing on the shared env var.
 pub(super) fn resolve_declarations_path(task_id: Option<&AmbientAgentTaskId>) -> PathBuf {
     resolve_declarations_path_with_override(task_id, std::env::var_os(DECLARATIONS_PATH_ENV_VAR))
 }
@@ -665,8 +665,6 @@ struct SnapshotOutcome {
 
 /// Outcome of one checkpoint attempt, where [`SnapshotOutcome`] only covers per-entry upload
 /// results within that attempt.
-// The checkpoint pipeline below has no production caller until the periodic coordinator
-// lands in a follow-up, stacked PR; the `allow(dead_code)`s go away with it.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub(super) enum CheckpointResult {
@@ -982,7 +980,10 @@ pub(super) async fn run_checkpoint_from_declarations_file(
     path: &Path,
     client: Arc<dyn HarnessSupportClient>,
 ) -> CheckpointResult {
-    log::info!("Checkpoint attempt starting from {}", path.display());
+    safe_info!(
+        safe: ("Checkpoint attempt starting"),
+        full: ("Checkpoint attempt starting from {}", path.display())
+    );
     let Some(declarations) = read_and_parse_declarations(path) else {
         return CheckpointResult::Skipped;
     };
