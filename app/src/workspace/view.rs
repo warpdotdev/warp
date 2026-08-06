@@ -588,7 +588,6 @@ const THEME_CHOOSER_RATIO: f32 = 3.5;
 /// Save position for the tab bar.
 pub(crate) const TAB_BAR_POSITION_ID: &str = "workspace_view:tab_bar";
 const TEAM_SWITCHER_PILL_POSITION_ID: &str = "workspace_view:team_switcher_pill";
-const TEAM_HEADER_TINT_ALPHA: u8 = 96;
 const TEAM_SWITCHER_DOT_ALPHA: u8 = 204;
 
 /// Save position for the vertical tabs panel.
@@ -21365,7 +21364,7 @@ impl Workspace {
         let tab_bar_border =
             Border::bottom(TAB_BAR_BORDER_HEIGHT).with_border_fill(appearance.theme().outline());
 
-        let mut tab_bar_container = Container::new(
+        let tab_bar_element = Container::new(
             EventHandler::new(Clipped::new(self.render_tab_bar_hoverable(bar_contents)).finish())
                 .on_back_mouse_down(move |ctx, _app, _position| {
                     ctx.dispatch_typed_action(WorkspaceAction::ActivatePrevTab);
@@ -21377,21 +21376,8 @@ impl Workspace {
                 })
                 .finish(),
         )
-        .with_border(tab_bar_border);
-        let is_multi_team = UserWorkspaces::as_ref(ctx).can_switch_teams();
-        let team_color = is_multi_team
-            .then(|| UserWorkspaces::as_ref(ctx).team_for_window(self.window_id))
-            .flatten()
-            .and_then(|team| team.color.as_deref())
-            .and_then(|hex| warp_core::ui::color::hex_color::coloru_from_hex_string(hex).ok())
-            .map(|mut color| {
-                color.a = TEAM_HEADER_TINT_ALPHA;
-                color
-            });
-        if let Some(team_color) = team_color {
-            tab_bar_container = tab_bar_container.with_background(Fill::Solid(team_color));
-        }
-        let tab_bar_element = tab_bar_container.finish();
+        .with_border(tab_bar_border)
+        .finish();
 
         let dimming_color = appearance.theme().background().into();
         SavePosition::new(
