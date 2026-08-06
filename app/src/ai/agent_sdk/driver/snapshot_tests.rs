@@ -1779,6 +1779,59 @@ fn checkpoint_commits_despite_cap_skipped_entries() {
 }
 
 #[test]
+fn checkpoint_skips_oversized_files_and_still_commits() {
+    // A blob over the per-file limit would have its PUT rejected by storage, and a failed
+    // blob withholds the commit -- so one oversized file would block every future attempt.
+    // It must be dropped as a policy `skipped` instead, leaving the rest committable.
+    let tempdir = snaptest_tempdir();
+    let big = tempdir.path().join("huge.bin");
+    // Sparse: the gather path stats before reading, so no bytes need to be written.
+    let file = fs::File::create(&big).unwrap();
+    file.set_len(MAX_SNAPSHOT_FILE_SIZE_BYTES + 1).unwrap();
+    drop(file);
+    let small = tempdir.path().join("note.txt");
+    fs::write(&small, b"keep me").unwrap();
+    let decl_dir = snaptest_tempdir();
+    let declarations_path = write_declarations(decl_dir.path(), &[], &[&big, &small]);
+
+    let mut server = Server::new();
+    let small_mock = server
+        .mock("PUT", upload_path("note\\.txt"))
+        .with_status(200)
+        .expect(1)
+        .create();
+    let manifest_mock = server
+        .mock("PUT", upload_path("snapshot_state\\.json"))
+        .with_status(200)
+        .expect(1)
+        .create();
+
+    let client = TestClient::new(server.url());
+    let result = Runtime::new()
+        .unwrap()
+        .block_on(run_checkpoint_from_declarations_file(
+            &declarations_path,
+            client.clone(),
+        ));
+    let CheckpointResult::Committed { .. } = result else {
+        panic!("an oversized file must not fail the attempt, got {result:?}");
+    };
+
+    // The oversized blob is never offered for upload, and never committed.
+    for request in client.upload_requests() {
+        assert!(
+            !request.files.iter().any(|f| f.filename == "huge.bin"),
+            "oversized file must not be sent for upload-target allocation"
+        );
+    }
+    let mut committed = client.commit_requests()[0].files.clone();
+    committed.sort();
+    assert_eq!(committed, vec!["note.txt", "snapshot_state.json"]);
+    small_mock.assert();
+    manifest_mock.assert();
+}
+
+#[test]
 fn checkpoint_skips_when_declarations_file_missing() {
     let tempdir = snaptest_tempdir();
     let missing = tempdir.path().join("does-not-exist.txt");

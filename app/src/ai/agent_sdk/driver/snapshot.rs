@@ -88,6 +88,15 @@ const UPLOAD_BATCH_SIZE: usize = 25;
 /// consumers can distinguish capped entries from real upload failures.
 const MAX_SNAPSHOT_FILES_PER_RUN: usize = 100;
 
+/// Per-file ceiling, mirroring the server's `handoff_snapshots.max_file_upload_size_bytes`.
+/// The presigned URL is signed with this limit, so a larger blob's PUT is rejected by storage.
+///
+/// Oversized blobs are dropped from the upload plan and marked `skipped` rather than left to
+/// fail: a checkpoint attempt refuses to commit when any required blob failed, so one
+/// too-large file would otherwise block every future attempt for the run rather than costing
+/// just itself.
+const MAX_SNAPSHOT_FILE_SIZE_BYTES: u64 = 25 * 1024 * 1024;
+
 // --- Declarations file parsing ---
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1288,6 +1297,13 @@ async fn upload_prepared_snapshot_files(
     })
 }
 
+/// Message recorded for a blob dropped for exceeding [`MAX_SNAPSHOT_FILE_SIZE_BYTES`].
+fn oversized_error(size_bytes: u64) -> String {
+    format!(
+        "exceeds the per-file snapshot limit of {MAX_SNAPSHOT_FILE_SIZE_BYTES} bytes ({size_bytes} bytes)"
+    )
+}
+
 /// Gather a repo entry: run `build_repo_patch` and append an upload blob + manifest stub.
 async fn gather_repo(
     repo_path: &str,
@@ -1300,6 +1316,25 @@ async fn gather_repo(
     let repo = Path::new(repo_path);
     let metadata = repo_metadata(repo).await;
     match build_repo_patch(repo).await {
+        Ok(patch) if patch.len() as u64 > MAX_SNAPSHOT_FILE_SIZE_BYTES => {
+            let err_str = oversized_error(patch.len() as u64);
+            log::warn!("Skipping repo '{repo_path}': {err_str}");
+            repos.push(RepoManifestEntry {
+                path: repo_path.to_string(),
+                repo_name: metadata.repo_name,
+                branch: metadata.branch,
+                head_sha: metadata.head_sha,
+                patch_file: None,
+                status: "skipped",
+                uploaded: Some(false),
+                error: Some(err_str.clone()),
+            });
+            pre_upload_entries.push(EntryResult {
+                label: format!("[repo] {repo_path}"),
+                status: EntryStatus::Skipped,
+                error: Some(err_str),
+            });
+        }
         Ok(patch) if patch.is_empty() => {
             repos.push(RepoManifestEntry {
                 path: repo_path.to_string(),
@@ -1366,6 +1401,26 @@ async fn gather_file(
     pre_upload_entries: &mut Vec<EntryResult>,
 ) {
     let path = Path::new(file_path);
+    // Stat before reading so an oversized file is skipped without pulling it into memory.
+    if let Ok(metadata) = tokio::fs::metadata(path).await
+        && metadata.len() > MAX_SNAPSHOT_FILE_SIZE_BYTES
+    {
+        let err_str = oversized_error(metadata.len());
+        log::warn!("Skipping file '{file_path}': {err_str}");
+        files.push(FileManifestEntry {
+            path: file_path.to_string(),
+            snapshot_file: None,
+            status: "skipped",
+            uploaded: Some(false),
+            error: Some(err_str.clone()),
+        });
+        pre_upload_entries.push(EntryResult {
+            label: format!("[file] {file_path}"),
+            status: EntryStatus::Skipped,
+            error: Some(err_str),
+        });
+        return;
+    }
     match tokio::fs::read(path).await {
         Ok(content) => {
             // Sanitize before uniquifying so the de-duplication suffix cannot break the
