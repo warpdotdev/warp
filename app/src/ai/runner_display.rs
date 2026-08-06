@@ -56,8 +56,10 @@ pub struct RunnerPlatform {
     pub arch: RunnerArch,
     pub macos_version: Option<RunnerMacOsVersion>,
     pub name: String,
-    /// vCPU count and memory in GB, when the runner pins an instance shape.
-    pub instance_shape: Option<(i32, i32)>,
+    /// vCPUs the runner pins, when it pins an instance shape.
+    pub vcpus: Option<i32>,
+    /// Memory in GB the runner pins, when it pins an instance shape.
+    pub memory_gb: Option<i32>,
 }
 
 impl RunnerPlatform {
@@ -67,10 +69,8 @@ impl RunnerPlatform {
             arch: config.arch,
             macos_version: config.mac.as_ref().and_then(|mac| mac.version),
             name: config.name.clone(),
-            instance_shape: config
-                .instance_shape
-                .as_ref()
-                .map(|shape| (shape.vcpus, shape.memory_gb)),
+            vcpus: config.instance_shape.as_ref().map(|shape| shape.vcpus),
+            memory_gb: config.instance_shape.as_ref().map(|shape| shape.memory_gb),
         }
     }
 }
@@ -132,8 +132,10 @@ impl RunPlatform {
         if !platform.name.is_empty() {
             parts.push(platform.name.clone());
         }
-        if let Some((vcpus, memory_gb)) = platform.instance_shape {
+        if let Some(vcpus) = platform.vcpus {
             parts.push(format!("{vcpus} vCPU"));
+        }
+        if let Some(memory_gb) = platform.memory_gb {
             parts.push(format!("{memory_gb} GB"));
         }
         parts.join(" · ")

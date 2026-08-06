@@ -11,7 +11,8 @@ fn linux_runner() -> RunnerPlatform {
         arch: RunnerArch::X8664,
         macos_version: None,
         name: "linux-standard".to_string(),
-        instance_shape: Some((4, 16)),
+        vcpus: Some(4),
+        memory_gb: Some(16),
     }
 }
 
@@ -21,7 +22,8 @@ fn macos_runner() -> RunnerPlatform {
         arch: RunnerArch::Aarch64,
         macos_version: Some(RunnerMacOsVersion::Macos26),
         name: "macos-arm64".to_string(),
-        instance_shape: Some((8, 14)),
+        vcpus: Some(8),
+        memory_gb: Some(14),
     }
 }
 
@@ -100,7 +102,8 @@ fn omits_absent_runner_metadata_from_the_summary() {
         arch: RunnerArch::Aarch64,
         macos_version: None,
         name: String::new(),
-        instance_shape: None,
+        vcpus: None,
+        memory_gb: None,
     };
 
     assert_eq!(RunPlatform::Runner(sparse).summary(), "Linux · aarch64");
@@ -111,4 +114,35 @@ fn uses_a_distinct_icon_per_operating_system() {
     assert_eq!(RunPlatform::Runner(macos_runner()).icon(), Icon::Apple);
     assert_eq!(RunPlatform::Runner(linux_runner()).icon(), Icon::Linux);
     assert_eq!(RunPlatform::Default.icon(), Icon::Linux);
+}
+
+// The two shape fields are independent, so a runner that somehow reports only
+// one of them still renders the half it has.
+#[test]
+fn summarizes_a_partially_known_instance_shape() {
+    let only_memory = RunnerPlatform {
+        os: RunnerOs::Linux,
+        arch: RunnerArch::X8664,
+        macos_version: None,
+        name: "half-known".to_string(),
+        vcpus: None,
+        memory_gb: Some(16),
+    };
+    assert_eq!(
+        RunPlatform::Runner(only_memory).summary(),
+        "Linux · x86-64 · half-known · 16 GB"
+    );
+
+    let only_vcpus = RunnerPlatform {
+        os: RunnerOs::Linux,
+        arch: RunnerArch::X8664,
+        macos_version: None,
+        name: "half-known".to_string(),
+        vcpus: Some(4),
+        memory_gb: None,
+    };
+    assert_eq!(
+        RunPlatform::Runner(only_vcpus).summary(),
+        "Linux · x86-64 · half-known · 4 vCPU"
+    );
 }

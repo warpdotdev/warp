@@ -1847,7 +1847,7 @@ impl ConversationDetailsPanel {
             .finish();
 
         let label = Text::new(
-            format!("Platform: {}", platform.summary()),
+            platform.summary(),
             appearance.ui_font_family(),
             ui_font_size,
         )
