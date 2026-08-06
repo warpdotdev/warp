@@ -95,23 +95,43 @@ fn app_keeps_default_secure_storage_service_name() {
 }
 
 #[test]
-fn iap_startup_access_failure_is_nonfatal_only_on_local_channel() {
-    // The internal `local` (HEAD) build is the only channel that treats a
-    // startup staging-IAP-access failure as non-fatal. Every other channel must
-    // keep the fail-closed behavior so the relaxation can never widen to Dev or
-    // to a release/production build.
-    assert!(iap_startup_access_failure_is_nonfatal(Channel::Local));
+fn startup_auth_is_non_blocking_only_for_tui() {
+    // Only the TUI front-end skips the startup IAP wait; every other launch mode
+    // keeps the blocking behavior so this scope can't widen beyond the TUI.
+    let tui = LaunchMode::Tui {
+        entrypoint: TuiEntryPoint::Interactive {
+            mount: Box::new(|_| {}),
+            api_key: None,
+        },
+    };
+    assert!(startup_auth_is_non_blocking(&tui));
 
-    for channel in [
-        Channel::Dev,
-        Channel::Stable,
-        Channel::Preview,
-        Channel::Oss,
-        Channel::Integration,
-    ] {
+    let blocking_modes = [
+        LaunchMode::App {
+            args: Default::default(),
+            api_key: None,
+        },
+        LaunchMode::CommandLine {
+            command: CliCommand::Whoami,
+            global_options: GlobalOptions::default(),
+            debug: false,
+            is_sandboxed: false,
+            computer_use_override: None,
+        },
+        LaunchMode::Test {
+            driver: Box::new(None),
+            is_integration_test: false,
+        },
+        LaunchMode::RemoteServerProxy,
+        LaunchMode::RemoteServerDaemon {
+            identity_key: "test".to_owned(),
+        },
+    ];
+    for mode in blocking_modes {
         assert!(
-            !iap_startup_access_failure_is_nonfatal(channel),
-            "{channel} must keep the fail-closed IAP startup behavior"
+            !startup_auth_is_non_blocking(&mode),
+            "{} must block startup auth on IAP",
+            mode.as_str_for_tracing()
         );
     }
 }

@@ -206,7 +206,7 @@ use ::settings::{Setting, ToggleableSetting};
 use anyhow::Context;
 use anyhow::{Result, anyhow};
 use appearance::{Appearance, AppearanceManager};
-use channel::{Channel, ChannelState};
+use channel::ChannelState;
 use interval_timer::IntervalTimer;
 use itertools::Itertools;
 #[cfg(feature = "integration_tests")]
@@ -1361,6 +1361,7 @@ pub struct UpdateQuakeModeEventArg {
     active_window_id: Option<WindowId>,
 }
 
+#[derive(Clone)]
 enum StartupUserAuthentication {
     RefreshUser,
     ApiKey(String),
@@ -1375,13 +1376,53 @@ impl StartupUserAuthentication {
     }
 }
 
+/// Whether startup user authentication should proceed without blocking on IAP.
+///
+/// The TUI front-end must not stall its startup waiting for a staging IAP token
+/// the server may not even require, so it authenticates immediately and lets IAP
+/// resolve out of band (see [`authenticate_user_after_iap_access`]). Every other
+/// front-end keeps the blocking behavior. IAP config only exists on staging
+/// builds, so this never affects production.
+fn startup_auth_is_non_blocking(launch_mode: &LaunchMode) -> bool {
+    matches!(launch_mode, LaunchMode::Tui { .. })
+}
+
 fn authenticate_user_after_iap_access(
     authentication: StartupUserAuthentication,
+    non_blocking: bool,
     ctx: &mut AppContext,
 ) {
     let iap_manager = IapManager::handle(ctx);
     if !iap_manager.as_ref(ctx).is_enabled() || iap_manager.as_ref(ctx).has_valid_token() {
         authentication.start(ctx);
+        return;
+    }
+
+    if non_blocking {
+        // Don't stall startup waiting for an IAP token the server may not even
+        // require. Authenticate immediately; if the server DOES enforce IAP, this
+        // first attempt hits an IAP challenge, which notifies `IapManager` to mint
+        // a token (`observe_iap_challenge` -> `handle_challenge`). Once a valid
+        // token lands we retry auth so login still recovers — unless the
+        // optimistic attempt already established a session.
+        authentication.clone().start(ctx);
+        let mut pending_authentication = Some(authentication);
+        ctx.subscribe_to_model(&iap_manager, move |iap_manager, event, ctx| match event {
+            IapManagerEvent::StateChanged => {
+                if !iap_manager.as_ref(ctx).has_valid_token() {
+                    return;
+                }
+                if AuthStateProvider::as_ref(ctx).get().user_id().is_some() {
+                    pending_authentication = None;
+                    return;
+                }
+                if let Some(authentication) = pending_authentication.take() {
+                    authentication.start(ctx);
+                }
+            }
+            IapManagerEvent::AccessUnavailable | IapManagerEvent::RefreshFailed { .. } => {}
+        });
+        iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
         return;
     }
 
@@ -1396,21 +1437,7 @@ fn authenticate_user_after_iap_access(
             }
         }
         IapManagerEvent::AccessUnavailable => {
-            if iap_startup_access_failure_is_nonfatal(ChannelState::channel()) {
-                // Staging toggles IAP enforcement on and off, and a
-                // headless/sandboxed `local` build frequently cannot mint an IAP
-                // token at all. Dropping the pending authentication here strands
-                // the client on the login screen for a check the server may not
-                // even be performing, so instead proceed with startup user
-                // authentication and rely on the reactive IAP-challenge path
-                // (`observe_iap_challenge` -> `handle_challenge`) to mint a token
-                // if the server actually enforces IAP.
-                if let Some(authentication) = pending_authentication.take() {
-                    authentication.start(ctx);
-                }
-            } else {
-                report_error!("Staging IAP access unavailable before startup user authentication");
-            }
+            report_error!("Staging IAP access unavailable before startup user authentication");
         }
         IapManagerEvent::RefreshFailed {
             message: _,
@@ -1418,25 +1445,6 @@ fn authenticate_user_after_iap_access(
         } => {}
     });
     iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
-}
-
-/// Whether a failure to establish staging IAP access at startup should be
-/// treated as non-fatal — letting startup user authentication proceed and
-/// relying on the reactive IAP-challenge path to mint a token only if the server
-/// actually enforces IAP.
-///
-/// Scoped to the internal `local` (HEAD) channel: it is the build that runs
-/// headless/sandboxed against staging, where staging's IAP enforcement has been
-/// toggled off and a token often cannot be minted at all. `Dev` and every
-/// release channel keep the fail-closed behavior; production builds compile in
-/// no `IapConfig`, so this path is never reached there regardless.
-fn iap_startup_access_failure_is_nonfatal(channel: Channel) -> bool {
-    match channel {
-        Channel::Local => true,
-        Channel::Dev | Channel::Stable | Channel::Preview | Channel::Oss | Channel::Integration => {
-            false
-        }
-    }
 }
 
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
@@ -2409,8 +2417,10 @@ pub(crate) fn initialize_app(
     });
 
     // CLI commands establish IAP access and refresh auth in their dispatch path so they can
-    // surface failures synchronously. Interactive clients wait for IAP here before authenticating
-    // their startup user, since the request itself calls the IAP-gated warp-server.
+    // surface failures synchronously. Other interactive clients gate startup user authentication
+    // on IAP here, since the request itself calls the IAP-gated warp-server — except the TUI,
+    // which authenticates immediately and resolves IAP out of band (see
+    // `startup_auth_is_non_blocking`).
     let startup_authentication = if matches!(launch_mode, LaunchMode::CommandLine { .. }) {
         None
     } else {
@@ -2419,7 +2429,11 @@ pub(crate) fn initialize_app(
             .or_else(|| user_is_logged_in.then_some(StartupUserAuthentication::RefreshUser))
     };
     if let Some(authentication) = startup_authentication {
-        authenticate_user_after_iap_access(authentication, ctx);
+        authenticate_user_after_iap_access(
+            authentication,
+            startup_auth_is_non_blocking(launch_mode),
+            ctx,
+        );
     }
 
     // Add a singleton model that holds the current prompt configuration.
