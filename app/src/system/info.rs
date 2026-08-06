@@ -19,6 +19,18 @@ use crate::{TelemetryEvent, send_telemetry_from_app_ctx, send_telemetry_sync_fro
 /// The threshold at which we emit a memory usage warning.
 const MEMORY_USAGE_WARNING_THRESHOLD: Option<Byte> = byte_unit::Byte::GIGABYTE.multiply(10);
 
+/// The footprint below which periodically purging the allocator's retained
+/// pages isn't worth what it costs.
+///
+/// A purge walks every arena and `madvise`s each dirty extent, and the pages
+/// it returns have to be re-faulted the next time they're touched.  Sessions
+/// this small aren't the ones producing multi-gigabyte footprints, so they
+/// only stand to pay for it.
+const ALLOCATOR_PURGE_FOOTPRINT_FLOOR: Option<Byte> = byte_unit::Byte::GIGABYTE.multiply(2);
+
+/// How long to wait between periodic allocator purges.
+const ALLOCATOR_PURGE_INTERVAL: chrono::Duration = chrono::Duration::minutes(10);
+
 /// The refresh interval for system information, in seconds.
 const REFRESH_INTERVAL_S: usize = 5;
 /// The refresh interval for system information.
@@ -46,9 +58,11 @@ pub struct SystemInfo {
     system: sysinfo::System,
     /// Whether or not we've already emitted an event due to high memory usage.
     has_emitted_memory_warning_event: bool,
-    /// Whether an allocator purge started by the excessive-memory check is
-    /// still running, so that successive refreshes don't stack up purges.
+    /// Whether an allocator purge is still running, so that successive
+    /// refreshes don't stack up purges.
     is_purging_allocator: bool,
+    /// When the last periodic allocator purge was started.
+    time_last_allocator_purge: DateTime<Utc>,
     /// A circular buffer storing resource usage data.
     stats: StatsBuffer,
     /// A helper structure for reporting resource usage via telemetry events.
@@ -68,6 +82,7 @@ impl SystemInfo {
             system: sysinfo::System::new(),
             has_emitted_memory_warning_event: false,
             is_purging_allocator: false,
+            time_last_allocator_purge: Utc::now(),
             stats: Default::default(),
             resource_usage_reporter: Default::default(),
             long_os_version: sysinfo::System::long_os_version(),
@@ -157,6 +172,7 @@ impl SystemInfo {
         let rss = self.used_memory();
         let footprint = self.memory_footprint();
         self.check_for_excessive_memory_usage(rss, footprint, ctx);
+        self.maybe_purge_retained_pages(footprint, ctx);
 
         // Once we have a full buffer of statistics, consider sending a report
         // each time we store new resource usage data.
@@ -168,6 +184,59 @@ impl SystemInfo {
     /// The footprint at or above which memory usage is considered excessive.
     fn memory_warning_threshold() -> Byte {
         MEMORY_USAGE_WARNING_THRESHOLD.expect("Threshold should not overflow u64")
+    }
+
+    /// The footprint at or above which periodic allocator purges are worth
+    /// their cost.
+    fn allocator_purge_footprint_floor() -> Byte {
+        ALLOCATOR_PURGE_FOOTPRINT_FLOOR.expect("Floor should not overflow u64")
+    }
+
+    /// Periodically hands the allocator's retained pages back to the OS.
+    ///
+    /// [`Self::check_for_excessive_memory_usage`] purges too, but only once
+    /// the footprint has already crossed the warning threshold -- by which
+    /// point the user has been carrying those pages for the whole session.
+    /// Nothing else returns them: jemalloc advances its dirty-page decay only
+    /// while the process is allocating, and `background_thread`, which would
+    /// otherwise drive decay on a timer, is compiled out of jemalloc on macOS
+    /// (`malloc_mutex_t` is an `os_unfair_lock` there, which cannot back the
+    /// pthread condition variable the background thread waits on).  So an
+    /// explicit periodic purge is the only thing that returns pages while
+    /// they are cold.
+    ///
+    /// Deliberately not gated on the app being idle: footprints with this
+    /// composition have been observed while the app is in active use.
+    fn maybe_purge_retained_pages(&mut self, memory_footprint: Byte, ctx: &mut ModelContext<Self>) {
+        if self.is_purging_allocator || memory_footprint < Self::allocator_purge_footprint_floor() {
+            return;
+        }
+
+        let now = Utc::now();
+        if now - self.time_last_allocator_purge < ALLOCATOR_PURGE_INTERVAL {
+            return;
+        }
+        self.time_last_allocator_purge = now;
+
+        self.is_purging_allocator = true;
+        ctx.spawn(
+            async { crate::alloc::purge_unused_pages() },
+            move |me, did_purge, _| {
+                me.is_purging_allocator = false;
+                if !did_purge {
+                    return;
+                }
+
+                let footprint = me.memory_footprint();
+                log::info!(
+                    "Periodic allocator purge reclaimed {} bytes, taking the memory footprint \
+                     from {} to {} bytes",
+                    memory_footprint.as_u64().saturating_sub(footprint.as_u64()),
+                    memory_footprint.as_u64(),
+                    footprint.as_u64(),
+                );
+            },
+        );
     }
 
     /// Checks for excessive memory usage, purging the allocator's retained
