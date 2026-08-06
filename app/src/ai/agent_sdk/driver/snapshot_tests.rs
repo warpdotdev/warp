@@ -1552,16 +1552,7 @@ fn mint_generation_produces_unique_charset_valid_ids() {
 }
 
 #[test]
-fn storage_name_prefixes_logical_name_with_generation() {
-    let generation = CheckpointGeneration::new_for_test("1700000000000-0");
-    assert_eq!(
-        storage_name(&generation, "snapshot_state.json"),
-        "checkpoint_1700000000000-0__snapshot_state.json"
-    );
-}
-
-#[test]
-fn checkpoint_commits_generation_prefixed_storage_names_while_upload_targets_use_plain_names() {
+fn checkpoint_commits_logical_names_and_never_storage_names() {
     let tempdir = snaptest_tempdir();
     let file_path = tempdir.path().join("note.txt");
     fs::write(&file_path, b"hello").unwrap();
@@ -1591,8 +1582,8 @@ fn checkpoint_commits_generation_prefixed_storage_names_while_upload_targets_use
         panic!("expected Committed, got {result:?}");
     };
 
-    // Upload-target requests use checkpoint mode with the plain logical filename; the server
-    // (not the client) derives the storage name from `generation` + `filename`.
+    // Upload-target requests carry checkpoint mode and the generation; the filename is the
+    // plain logical one, because the server (not the client) owns storage naming.
     let upload_requests = client.upload_requests();
     assert!(!upload_requests.is_empty());
     for request in &upload_requests {
@@ -1606,22 +1597,15 @@ fn checkpoint_commits_generation_prefixed_storage_names_while_upload_targets_use
         "expected an upload-targets request naming the plain logical filename"
     );
 
-    // The commit request is the only place storage names appear, and they must be
-    // generation-prefixed.
+    // Commit names the same logical files, keyed by generation. The client must never spell
+    // out a storage path, so the server stays free to change the layout.
     let commit_requests = client.commit_requests();
     assert_eq!(commit_requests.len(), 1, "exactly one commit call expected");
     let commit = &commit_requests[0];
     assert_eq!(commit.generation, generation.as_str());
-    let expected_manifest = format!("checkpoint_{}__snapshot_state.json", generation.as_str());
-    assert_eq!(commit.manifest_object, expected_manifest);
-    assert!(commit.objects.contains(&commit.manifest_object));
-    assert!(
-        commit
-            .objects
-            .contains(&format!("checkpoint_{}__note.txt", generation.as_str())),
-        "expected note.txt's storage name in commit objects: {:?}",
-        commit.objects
-    );
+    let mut committed = commit.files.clone();
+    committed.sort();
+    assert_eq!(committed, vec!["note.txt", "snapshot_state.json"]);
     file_mock.assert();
     manifest_mock.assert();
 }
@@ -1781,17 +1765,16 @@ fn checkpoint_commits_despite_cap_skipped_entries() {
     let commit_requests = client.commit_requests();
     assert_eq!(commit_requests.len(), 1);
     let commit = &commit_requests[0];
+    assert_eq!(commit.generation, generation.as_str());
     // Kept blobs (cap - 1, since the manifest reserves a slot) + the manifest itself.
-    let expected_objects = (MAX_SNAPSHOT_FILES_PER_RUN - 1) + 1;
+    let expected_files = (MAX_SNAPSHOT_FILES_PER_RUN - 1) + 1;
     assert_eq!(
-        commit.objects.len(),
-        expected_objects,
+        commit.files.len(),
+        expected_files,
         "cap-skipped entries must be excluded from the exact-set commit: {:?}",
-        commit.objects
+        commit.files
     );
-    assert!(commit.objects.contains(&commit.manifest_object));
-    let prefix = format!("checkpoint_{}__", generation.as_str());
-    assert!(commit.objects.iter().all(|o| o.starts_with(&prefix)));
+    assert!(commit.files.iter().any(|f| f == "snapshot_state.json"));
     drop(upload_mock);
 }
 
@@ -1840,9 +1823,9 @@ fn checkpoint_clean_repo_commits_manifest_only() {
     let commit_requests = client.commit_requests();
     assert_eq!(commit_requests.len(), 1);
     assert_eq!(
-        commit_requests[0].objects,
-        vec![commit_requests[0].manifest_object.clone()],
-        "a clean repo should commit only the manifest object"
+        commit_requests[0].files,
+        vec!["snapshot_state.json".to_string()],
+        "a clean repo should commit only the manifest"
     );
     manifest_mock.assert();
 }
@@ -1951,47 +1934,6 @@ fn sanitize_name_component_never_yields_the_reserved_double_underscore() {
         );
         assert!(!sanitized.is_empty(), "sanitized {raw:?} became empty");
     }
-}
-
-#[test]
-fn checkpoint_storage_names_stay_unambiguous_for_hostile_filenames() {
-    // End-to-end guard: a basename containing `__` must not produce a storage name with a
-    // second `__`, which would make the server's split ambiguous.
-    let tempdir = snaptest_tempdir();
-    let hostile = tempdir.path().join("checkpoint_1700000000000-0__evil.txt");
-    fs::write(&hostile, b"hostile").unwrap();
-    let decl_dir = snaptest_tempdir();
-    let declarations_path = write_declarations(decl_dir.path(), &[], &[&hostile]);
-
-    let mut server = Server::new();
-    let upload_mock = server
-        .mock("PUT", upload_path(r".+"))
-        .with_status(200)
-        .create();
-
-    let client = TestClient::new(server.url());
-    let result = Runtime::new()
-        .unwrap()
-        .block_on(run_checkpoint_from_declarations_file(
-            &declarations_path,
-            client.clone(),
-        ));
-    let CheckpointResult::Committed { generation } = result else {
-        panic!("expected Committed, got {result:?}");
-    };
-
-    let commit = &client.commit_requests()[0];
-    let prefix = format!("checkpoint_{}__", generation.as_str());
-    for object in &commit.objects {
-        let suffix = object
-            .strip_prefix(&prefix)
-            .unwrap_or_else(|| panic!("object {object} is not under the generation prefix"));
-        assert!(
-            !suffix.contains("__"),
-            "storage name {object} has an ambiguous second `__` separator"
-        );
-    }
-    drop(upload_mock);
 }
 
 #[test]
@@ -2106,7 +2048,12 @@ fn checkpoint_commits_server_valid_names_for_hostile_basenames() {
     // awkward basename must not be able to cost the whole checkpoint.
     let tempdir = snaptest_tempdir();
     let decl_dir = snaptest_tempdir();
-    let hostile_names = ["-rf.txt", "latest-checkpoint.json", "spaced name!.txt"];
+    let hostile_names = [
+        "-rf.txt",
+        "latest-checkpoint.json",
+        "spaced name!.txt",
+        "checkpoint_1700000000000-0__evil.txt",
+    ];
     let file_paths: Vec<std::path::PathBuf> = hostile_names
         .iter()
         .map(|name| {
@@ -2131,7 +2078,7 @@ fn checkpoint_commits_server_valid_names_for_hostile_basenames() {
             &declarations_path,
             client.clone(),
         ));
-    let CheckpointResult::Committed { generation } = result else {
+    let CheckpointResult::Committed { .. } = result else {
         panic!("expected Committed, got {result:?}");
     };
 
@@ -2140,12 +2087,9 @@ fn checkpoint_commits_server_valid_names_for_hostile_basenames() {
             assert_server_accepts_logical_name(&file.filename);
         }
     }
-    let prefix = format!("checkpoint_{}__", generation.as_str());
-    for object in &client.commit_requests()[0].objects {
-        let logical = object
-            .strip_prefix(&prefix)
-            .unwrap_or_else(|| panic!("object {object} is not under the generation prefix"));
-        assert_server_accepts_logical_name(logical);
+    // Commit reuses those same logical names, so the server-side contract holds there too.
+    for name in &client.commit_requests()[0].files {
+        assert_server_accepts_logical_name(name);
     }
     drop(upload_mock);
 }
@@ -2191,23 +2135,16 @@ fn checkpoint_upload_request_sends_mode_and_generation() {
 
 #[test]
 fn commit_snapshot_request_matches_the_server_schema() {
+    // Logical names only: storage naming is the server's to derive from the generation.
     let request = CommitSnapshotRequest {
         generation: "1700000000000-0".to_string(),
-        manifest_object: "checkpoint_1700000000000-0__snapshot_state.json".to_string(),
-        objects: vec![
-            "checkpoint_1700000000000-0__note.txt".to_string(),
-            "checkpoint_1700000000000-0__snapshot_state.json".to_string(),
-        ],
+        files: vec!["note.txt".to_string(), "snapshot_state.json".to_string()],
     };
     assert_eq!(
         serde_json::to_value(request).unwrap(),
         serde_json::json!({
             "generation": "1700000000000-0",
-            "manifest_object": "checkpoint_1700000000000-0__snapshot_state.json",
-            "objects": [
-                "checkpoint_1700000000000-0__note.txt",
-                "checkpoint_1700000000000-0__snapshot_state.json",
-            ],
+            "files": ["note.txt", "snapshot_state.json"],
         })
     );
 }

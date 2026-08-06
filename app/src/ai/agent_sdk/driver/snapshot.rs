@@ -710,14 +710,6 @@ pub(super) fn mint_generation() -> CheckpointGeneration {
     CheckpointGeneration::from_validated(format!("{millis}-{counter}"))
 }
 
-/// Reproduce the server's `checkpoint_<generation>__<logical_name>` storage name.
-///
-/// Only the exact-set [`CommitSnapshotRequest`] needs this; everything earlier in the pipeline
-/// speaks logical names, and the server derives each presigned target's storage name itself.
-fn storage_name(generation: &CheckpointGeneration, logical: &str) -> String {
-    format!("checkpoint_{}__{logical}", generation.as_str())
-}
-
 // --- Manifest schema ---
 
 #[derive(serde::Serialize)]
@@ -1053,20 +1045,19 @@ async fn run_checkpoint_pipeline(
         };
     }
 
-    // Exact-set commit: the manifest plus every blob that actually uploaded.
-    let manifest_object = storage_name(&generation, &manifest_filename);
-    let mut objects: Vec<String> = outcome
+    // Exact-set commit: the manifest plus every blob that actually uploaded, named the same way
+    // the upload-targets request named them. The server resolves each to a storage object.
+    let mut files: Vec<String> = outcome
         .entries
         .iter()
         .filter(|e| e.status == EntryStatus::Uploaded && e.label != manifest_filename)
-        .map(|e| storage_name(&generation, &e.label))
+        .map(|e| e.label.clone())
         .collect();
-    objects.push(manifest_object.clone());
+    files.push(manifest_filename);
 
     let commit_request = CommitSnapshotRequest {
         generation: generation.as_str().to_string(),
-        manifest_object,
-        objects,
+        files,
     };
     // Every object is already in storage, so a transient failure here would throw away the
     // whole attempt. Re-committing the same generation is idempotent server-side.
@@ -1730,8 +1721,8 @@ const MAX_SNAPSHOT_FILENAME_LEN: usize = 240;
 /// request if one is malformed, so a single awkward basename would otherwise cost the whole
 /// snapshot. Its rules: `[A-Za-z0-9._-]` only, at most 255 bytes, not `.` or `..`, no leading
 /// `-`, and — on the legacy path — nothing in the reserved `checkpoint_` namespace. Runs of
-/// `_` are squashed on top of that so the `checkpoint_<generation>__<logical_name>` separator
-/// stays unambiguous.
+/// `_` are squashed on top of that, which keeps [`unique_filename`]'s `_<n>` suffix legible
+/// and names conservative.
 fn sanitize_name_component(value: &str, fallback: &str) -> String {
     let mut sanitized = String::with_capacity(value.len());
     for c in value.chars() {
@@ -1783,7 +1774,7 @@ fn unique_filename(preferred: &str, used: &mut HashSet<String>) -> String {
 
     let path = Path::new(&preferred);
     // Trailing `_` is trimmed so `a_.txt` de-duplicates to `a_2.txt` rather than reintroducing
-    // the reserved `__` separator that sanitization just squashed out.
+    // the `__` run that sanitization just squashed out.
     let stem = path
         .file_stem()
         .map(|s| s.to_string_lossy().trim_end_matches('_').to_string())

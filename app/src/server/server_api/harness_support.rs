@@ -157,13 +157,16 @@ impl std::fmt::Display for CheckpointGeneration {
 
 /// Request body for committing a fully uploaded checkpoint generation.
 ///
-/// Exact-set: the server persists `objects` verbatim as the commit marker and selection
-/// later returns exactly that set, not everything sharing the generation prefix.
+/// `files` are logical names, exactly as sent to `upload-snapshot`. The server derives each
+/// object's storage name from the generation, so how a checkpoint is laid out in storage stays
+/// entirely server-side.
+///
+/// Exact-set: the server commits only the objects these names resolve to, and selection later
+/// returns exactly that set rather than everything sharing the generation.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CommitSnapshotRequest {
     pub generation: String,
-    pub manifest_object: String,
-    pub objects: Vec<String>,
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -338,9 +341,9 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
 
     /// Make a fully uploaded checkpoint generation the selected checkpoint.
     ///
-    /// Only call this once every object in `request.objects` (including
-    /// `request.manifest_object`) has uploaded successfully; the server verifies existence
-    /// and per-attempt size limits and rejects the whole commit otherwise.
+    /// Only call this once every file in `request.files` (including the manifest) has
+    /// uploaded successfully; the server resolves each name to its object, verifies existence
+    /// and per-attempt size limits, and rejects the whole commit otherwise.
     #[allow(dead_code)]
     async fn commit_snapshot(
         &self,
