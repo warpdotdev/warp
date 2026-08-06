@@ -270,7 +270,13 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
     }
 
     /// Cancel any pending idle timers.
+    ///
+    /// Also drops the recorded [`Self::arm_refreshable`] outcome, so a refresher that outlives the
+    /// cancellation cannot reschedule the exit it was cancelling.
     fn cancel_idle_timeout(&self) {
+        if let Ok(mut pending) = self.pending.lock() {
+            *pending = None;
+        }
         if self.generation.load(Ordering::SeqCst) > 0 {
             self.generation.fetch_add(1, Ordering::SeqCst);
         }
@@ -340,6 +346,23 @@ fn idle_window_for_terminal_status(
     }
 }
 
+/// [`idle_window_for_terminal_status`] for a third-party CLI harness session.
+///
+/// A failed CLI session is the same situation as a failed Oz conversation — the agent process is
+/// still the session sharer — so `--idle-on-fail` has to apply to both, or the flag silently does
+/// nothing depending on which harness the run happened to use.
+fn idle_window_for_cli_session_status(
+    status: &CLIAgentSessionStatus,
+    idle_on_complete: Option<Duration>,
+    idle_on_fail: Option<Duration>,
+) -> Option<Duration> {
+    match status {
+        CLIAgentSessionStatus::Success | CLIAgentSessionStatus::Blocked { .. } => idle_on_complete,
+        CLIAgentSessionStatus::Failed { .. } => idle_on_fail,
+        CLIAgentSessionStatus::InProgress => None,
+    }
+}
+
 /// Low-cardinality `outcome=` label for the ambient agent idle lifecycle logs.
 fn terminal_status_log_outcome(status: &SDKConversationOutputStatus) -> &'static str {
     match status {
@@ -347,6 +370,17 @@ fn terminal_status_log_outcome(status: &SDKConversationOutputStatus) -> &'static
         | SDKConversationOutputStatus::Blocked { .. }
         | SDKConversationOutputStatus::Cancelled { .. } => "non_error_completion",
         SDKConversationOutputStatus::Error { .. } => "error",
+    }
+}
+
+/// [`terminal_status_log_outcome`] for a third-party CLI harness session.
+fn cli_session_status_log_outcome(status: &CLIAgentSessionStatus) -> &'static str {
+    match status {
+        CLIAgentSessionStatus::Success | CLIAgentSessionStatus::Blocked { .. } => {
+            "non_error_completion"
+        }
+        CLIAgentSessionStatus::Failed { .. } => "error",
+        CLIAgentSessionStatus::InProgress => "in_progress",
     }
 }
 
@@ -4016,23 +4050,38 @@ impl AgentDriver {
                         return;
                     }
 
-                    // Drive idle-on-complete timer for the harness exit signal.
+                    // Drive the idle timer for the harness exit signal.
                     match status {
                         CLIAgentSessionStatus::Success
                         | CLIAgentSessionStatus::Failed { .. }
                         | CLIAgentSessionStatus::Blocked { .. } => {
-                            if let Some(idle_timeout) = me.idle_on_complete {
+                            let idle_window = idle_window_for_cli_session_status(
+                                status,
+                                me.idle_on_complete,
+                                me.idle_on_fail,
+                            );
+                            let outcome = cli_session_status_log_outcome(status);
+                            if let Some(idle_timeout) = idle_window {
                                 log::info!(
-                                    "Ambient agent CLI lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_view_id:?} timeout={idle_timeout:?}",
+                                    "Ambient agent CLI lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_view_id:?} timeout={idle_timeout:?} outcome={outcome}",
                                     me.task_id
                                 );
                             } else {
                                 log::info!(
-                                    "Ambient agent CLI lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_view_id:?}",
+                                    "Ambient agent CLI lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_view_id:?} outcome={outcome}",
                                     me.task_id
                                 );
                             }
-                            harness_exit.complete_with_optional_idle(me.idle_on_complete, ());
+                            match idle_window {
+                                // A failure window is held open by whoever is debugging in the
+                                // session, so it refreshes on viewer input like the Oz path.
+                                Some(window)
+                                    if matches!(status, CLIAgentSessionStatus::Failed { .. }) =>
+                                {
+                                    me.arm_debug_window(harness_exit.clone(), (), window, ctx);
+                                }
+                                _ => harness_exit.complete_with_optional_idle(idle_window, ()),
+                            }
                         }
                         CLIAgentSessionStatus::InProgress => {
                             log::info!(

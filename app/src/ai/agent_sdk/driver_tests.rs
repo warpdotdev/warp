@@ -28,11 +28,12 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentDriverError, IdleTimeoutSender,
+    AgentDriver, AgentDriverError, CLIAgentSessionStatus, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
     OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
     PlatformErrorCode, SDKConversationOutputStatus, build_secret_env_vars,
-    idle_window_for_terminal_status, setup_failure_status_update, terminal_status_log_outcome,
+    idle_window_for_cli_session_status, idle_window_for_terminal_status,
+    setup_failure_status_update, terminal_status_log_outcome,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -752,6 +753,70 @@ fn debug_window_refresh_is_inert_before_anything_is_armed() {
     let idle_timeout = IdleTimeoutSender::new(tx);
 
     assert_eq!(idle_timeout.refresh(), None);
+}
+
+#[test]
+fn cancelling_the_idle_timeout_stops_a_later_refresh_from_resurrecting_it() {
+    // A follow-up cancels the pending exit, but the viewer-input subscription outlives that
+    // cancellation. Without clearing the armed outcome, typing in the session afterwards would
+    // reschedule the old failure and exit the run mid-follow-up.
+    let (tx, mut rx) = oneshot::channel::<SDKConversationOutputStatus>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+
+    idle_timeout.arm_refreshable(Duration::ZERO, error_status());
+    idle_timeout.cancel_idle_timeout();
+
+    assert_eq!(
+        idle_timeout.refresh(),
+        None,
+        "a cancelled debug window must not be refreshable"
+    );
+
+    // The zero-duration timer already spawned; give it time to observe the bumped generation and
+    // exit, so the assertion below reflects a settled state rather than a race.
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(
+        matches!(rx.try_recv(), Ok(None)),
+        "the run must not have been ended by the cancelled window"
+    );
+}
+
+#[test]
+fn failed_cli_harness_session_defers_by_idle_on_fail() {
+    // The flag lives on `warp agent run`, so it has to behave the same whichever harness the run
+    // uses; a failed CLI session is the same "process is the session sharer" situation.
+    let idle_on_complete = Some(Duration::from_secs(45 * 60));
+    let idle_on_fail = Some(Duration::from_secs(15 * 60));
+
+    let failed = CLIAgentSessionStatus::Failed {
+        error_type: None,
+        message: Some("boom".to_string()),
+    };
+    assert_eq!(
+        idle_window_for_cli_session_status(&failed, idle_on_complete, idle_on_fail),
+        idle_on_fail
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(&failed, idle_on_complete, None),
+        None,
+        "--idle-on-complete must not act as a fallback for a failed CLI session"
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(
+            &CLIAgentSessionStatus::Success,
+            idle_on_complete,
+            idle_on_fail
+        ),
+        idle_on_complete
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(
+            &CLIAgentSessionStatus::InProgress,
+            idle_on_complete,
+            idle_on_fail
+        ),
+        None
+    );
 }
 
 #[test]
