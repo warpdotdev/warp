@@ -685,12 +685,6 @@ impl From<GqlDelinquencyStatus> for DelinquencyStatus {
     }
 }
 
-/// Resolves the client-side grant scope from the server-provided `scope` and
-/// the workspace the grant was fetched under. `workspace.bonusGrantsInfo.grants`
-/// merges team- and workspace-scoped grants into one list, so `scope` is the
-/// only way to tell them apart; the workspace uid still comes from the query
-/// path because the server enum carries none. `workspace_uid` is `None` for
-/// user-scoped grants fetched via `user.bonusGrants`.
 fn bonus_grant_scope_from_gql(
     scope: GqlBonusGrantScope,
     workspace_uid: Option<WorkspaceUid>,
