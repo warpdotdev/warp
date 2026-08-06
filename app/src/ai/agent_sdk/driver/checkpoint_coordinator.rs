@@ -16,13 +16,7 @@
 //! This trades a small amount of latency (up to [`SAFE_BOUNDARY_POLL_INTERVAL`]) for
 //! avoiding new push-subscription wiring through the UI model graph.
 
-// This module has no production caller yet -- `AgentDriver` wires
-// `CheckpointCoordinatorHandle::new` into its spawn/finalize lifecycle in a
-// follow-up, stacked PR. Until then, `CheckpointCoordinatorHandle::new` (and
-// everything it reaches) is unreachable outside `#[cfg(test)]`, which reaches the
-// same code through `new_for_test`. This module-level allow is temporary and should
-// be removable once that PR merges on top of this one.
-#![allow(dead_code)]
+#![expect(dead_code)]
 
 use std::path::PathBuf;
 use std::sync::Arc;
