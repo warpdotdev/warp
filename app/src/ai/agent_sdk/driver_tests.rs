@@ -763,7 +763,9 @@ fn cancelling_the_idle_timeout_stops_a_later_refresh_from_resurrecting_it() {
     let (tx, mut rx) = oneshot::channel::<SDKConversationOutputStatus>();
     let idle_timeout = IdleTimeoutSender::new(tx);
 
-    idle_timeout.arm_refreshable(Duration::ZERO, error_status());
+    // Long enough that the armed timer cannot fire before the cancellation below, which would
+    // otherwise make this race under load rather than test the cancellation.
+    idle_timeout.arm_refreshable(Duration::from_secs(60), error_status());
     idle_timeout.cancel_idle_timeout();
 
     assert_eq!(
@@ -771,10 +773,6 @@ fn cancelling_the_idle_timeout_stops_a_later_refresh_from_resurrecting_it() {
         None,
         "a cancelled debug window must not be refreshable"
     );
-
-    // The zero-duration timer already spawned; give it time to observe the bumped generation and
-    // exit, so the assertion below reflects a settled state rather than a race.
-    std::thread::sleep(Duration::from_millis(50));
     assert!(
         matches!(rx.try_recv(), Ok(None)),
         "the run must not have been ended by the cancelled window"

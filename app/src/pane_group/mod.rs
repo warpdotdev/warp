@@ -6992,11 +6992,9 @@ impl PaneGroup {
 
         // The pane may have been left in a finished/read-only state (ended-conversation tombstone,
         // `FinishedViewer` status, non-editable input) by an earlier end-of-session transition.
-        // Clear it first so the re-joined session is interactive.
-        terminal_view.update(ctx, |view, ctx| {
-            view.prepare_for_live_session_reattach(ctx);
-        });
-
+        // Only cleared once a join is actually underway: a caller that gets `false` opens a fresh
+        // pane instead, and this one would otherwise be left looking writable while attached to
+        // nothing.
         if let Some(ambient_agent_view_model) = terminal_view
             .as_ref(ctx)
             .ambient_agent_view_model()
@@ -7004,6 +7002,9 @@ impl PaneGroup {
         {
             ambient_agent_view_model.update(ctx, |model, ctx| {
                 model.attach_execution_session(session_id, ctx);
+            });
+            terminal_view.update(ctx, |view, ctx| {
+                view.prepare_for_live_session_reattach(ctx);
             });
             return true;
         }
@@ -7027,6 +7028,12 @@ impl PaneGroup {
             };
             attached = manager.attach_execution_session(session_id, ctx);
         });
+
+        if attached {
+            terminal_view.update(ctx, |view, ctx| {
+                view.prepare_for_live_session_reattach(ctx);
+            });
+        }
         attached
     }
 

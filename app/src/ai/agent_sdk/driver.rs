@@ -2907,6 +2907,11 @@ impl AgentDriver {
     ) {
         // Recorded on the timer rather than captured below, so re-arming supersedes it.
         idle_timeout.arm_refreshable(window, value);
+
+        // A newly armed window always publishes. The throttle exists for keystroke-level
+        // refreshes; letting it suppress this would leave the previous window's deadline on the
+        // run, which reads as already-expired and hides that the session is reachable.
+        self.last_published_debug_deadline = None;
         self.publish_debug_window_deadline(window, ctx);
 
         if self.debug_window_refresh_installed {
