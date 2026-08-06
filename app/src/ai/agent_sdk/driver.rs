@@ -313,6 +313,10 @@ pub struct AgentDriverOptions {
     pub snapshot_upload_timeout: Option<Duration>,
     /// Declarations script timeout override.
     pub snapshot_script_timeout: Option<Duration>,
+    /// Periodic checkpoint cadence override. Only used when
+    /// `FeatureFlag::PeriodicHandoffCheckpoints` is enabled; deliberately separate
+    /// from `snapshot_upload_timeout`/`snapshot_script_timeout` per-attempt budgets.
+    pub checkpoint_interval: Option<Duration>,
     /// Skip the initial `StartFromAmbientRunPrompt` so the agent waits for a
     /// follow-up instead of hallucinating an empty turn. Sourced from the
     /// `--skip-initial-turn` CLI flag, which the worker emits when the
@@ -377,6 +381,13 @@ pub struct AgentDriver {
     snapshot_disabled: bool,
     snapshot_upload_timeout: Duration,
     snapshot_script_timeout: Duration,
+
+    /// Periodic workspace-handoff checkpoint coordinator. `Some` only when
+    /// `FeatureFlag::OzHandoff` and `FeatureFlag::PeriodicHandoffCheckpoints` are both
+    /// enabled, the run has a cloud task id, and `--no-snapshot` was not set;
+    /// `None` otherwise, in which case `run_snapshot_upload` falls back to the legacy
+    /// one-shot upload path unchanged.
+    checkpoint_coordinator: Option<checkpoint_coordinator::CheckpointCoordinatorHandle>,
 
     /// Conversation ID this driver is running. Set at construction for
     /// resumed runs and on `ConversationServerTokenAssigned` for fresh
@@ -651,6 +662,7 @@ impl AgentDriver {
             snapshot_disabled,
             snapshot_upload_timeout,
             snapshot_script_timeout,
+            checkpoint_interval,
             skip_initial_turn,
             strict_mcp_startup,
             mcp_startup_timeout,
@@ -759,6 +771,36 @@ impl AgentDriver {
             _ => None,
         };
 
+        // Spawn the periodic checkpoint coordinator under the same gates as the
+        // declarations writer above, plus the dedicated rollout flag. `None` keeps
+        // `run_snapshot_upload` on the legacy one-shot upload path unchanged.
+        let checkpoint_coordinator = match task_id {
+            Some(id)
+                if FeatureFlag::OzHandoff.is_enabled()
+                    && FeatureFlag::PeriodicHandoffCheckpoints.is_enabled()
+                    && !snapshot_disabled_value =>
+            {
+                let client = ServerApiProvider::as_ref(ctx).get_harness_support_client();
+                Some(checkpoint_coordinator::CheckpointCoordinatorHandle::new(
+                    client,
+                    id,
+                    working_dir.clone(),
+                    // Shared with the history subscription so every attempt can drain
+                    // queued `file` appends before the declarations script runs, exactly
+                    // as `run_snapshot_upload` does on the legacy path.
+                    snapshot_file_writer.clone(),
+                    ctx.spawner(),
+                    checkpoint_interval
+                        .unwrap_or(checkpoint_coordinator::DEFAULT_CHECKPOINT_INTERVAL),
+                    snapshot_script_timeout
+                        .unwrap_or(snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT),
+                    snapshot_upload_timeout.unwrap_or(snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT),
+                    ctx.background_executor(),
+                ))
+            }
+            _ => None,
+        };
+
         Ok(Self {
             terminal_driver,
             working_dir,
@@ -778,6 +820,7 @@ impl AgentDriver {
                 .unwrap_or(snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT),
             snapshot_script_timeout: snapshot_script_timeout
                 .unwrap_or(snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT),
+            checkpoint_coordinator,
             run_conversation_id,
             parent_run_id: parent_run_id_for_self,
             third_party_harness_model_config,
@@ -821,6 +864,7 @@ impl AgentDriver {
             snapshot_disabled: false,
             snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
             snapshot_script_timeout: snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT,
+            checkpoint_coordinator: None,
             run_conversation_id: None,
             parent_run_id: None,
             third_party_harness_model_config: None,
@@ -3789,13 +3833,20 @@ impl AgentDriver {
 
         // Snapshot upload is only meaningful for cloud task runs, so short-circuit before
         // pulling the rest of the context onto this task.
-        let Ok((Some(task_id), snapshot_disabled, upload_timeout, script_timeout)) = spawner
+        let Ok((
+            Some(task_id),
+            snapshot_disabled,
+            upload_timeout,
+            script_timeout,
+            checkpoint_coordinator,
+        )) = spawner
             .spawn(|me, _| {
                 (
                     me.task_id,
                     me.snapshot_disabled,
                     me.snapshot_upload_timeout,
                     me.snapshot_script_timeout,
+                    me.checkpoint_coordinator.clone(),
                 )
             })
             .await
@@ -3804,6 +3855,26 @@ impl AgentDriver {
         };
         if snapshot_disabled {
             log::info!("Skipping snapshot upload because --no-snapshot was specified");
+            return;
+        }
+
+        // When the periodic checkpoint coordinator is active, it owns the entire
+        // end-of-run path: `finalize` drains the declarations writer, regenerates
+        // declarations, runs one last best-effort attempt, and commits it as the
+        // selected checkpoint. This replaces the legacy one-shot upload below so
+        // there is exactly one end-of-run snapshot path, not two.
+        //
+        // The budget must come from `finalize_budget`, not from `upload_timeout` alone:
+        // the coordinator's floor is `script_timeout + upload_timeout`, so a smaller
+        // budget silently skips the final attempt — and since this path `return`s past
+        // the legacy upload below, that would mean no end-of-run snapshot at all.
+        if let Some(coordinator) = checkpoint_coordinator {
+            coordinator
+                .finalize(checkpoint_coordinator::finalize_budget(
+                    script_timeout,
+                    upload_timeout,
+                ))
+                .await;
             return;
         }
 
