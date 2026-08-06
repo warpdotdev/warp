@@ -102,7 +102,7 @@ impl From<GqlTeamMember> for TeamMember {
 /// The server hands workspace admins every team in the workspace so admin
 /// surfaces can manage them, but a team the user is not a member of is not one
 /// they can operate as in the client. Filtering here keeps every consumer of
-/// `Workspace::teams` — the team switcher, team spaces, default team selection —
+/// `Workspace::teams` (team switcher, team spaces, warp drive teams, ...)
 /// scoped to real memberships.
 fn retain_authenticated_teams(workspace: &mut Workspace, user_uid: UserUid) {
     workspace
