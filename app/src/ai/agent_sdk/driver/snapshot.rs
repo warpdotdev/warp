@@ -674,7 +674,6 @@ struct SnapshotOutcome {
 
 /// Outcome of one checkpoint attempt, where [`SnapshotOutcome`] only covers per-entry upload
 /// results within that attempt.
-#[expect(dead_code)]
 #[derive(Debug)]
 pub(super) enum CheckpointResult {
     /// `generation` is now the server's selected checkpoint.
@@ -707,9 +706,10 @@ static GENERATION_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 /// Mint a generation identifier, which satisfies [`CheckpointGeneration`]'s format by
 /// construction.
 ///
-/// Call this exactly once per attempt, after that attempt's payload has been gathered.
-/// Re-uploading an already-gathered payload must reuse its generation; enforcing that is the
-/// caller's job (see the coordinator).
+/// Call this once per *uncommitted attempt sequence*, after the payload has been gathered:
+/// a retry that follows a failed attempt reuses that attempt's generation rather than minting
+/// a new one, so it overwrites the same staged objects. Enforcing that is the caller's job
+/// (see the coordinator).
 pub(super) fn mint_generation() -> CheckpointGeneration {
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -972,12 +972,17 @@ async fn run_pipeline(
 /// Unlike [`upload_snapshot_from_declarations_file`], an unusable declarations file is
 /// [`CheckpointResult::Skipped`] rather than `None`, because the coordinator's state machine
 /// distinguishes "nothing to do" from "tried and failed".
-// Mirrors the `cfg(all(test, not(windows)))` gate on the tests module below: this is only
-// dead where those tests aren't compiled.
-#[cfg_attr(any(not(test), windows), expect(dead_code))]
+///
+/// Pass `generation` to retry a previously failed attempt. The payload is still re-gathered,
+/// so the checkpoint stays current, but it is staged under that generation's object names
+/// again instead of adding a whole new set. The server bounds how many objects one
+/// execution's prefix may hold and only reclaims abandoned ones during a *successful* commit,
+/// so minting per retry would let a run of failures exhaust that budget and lock the
+/// execution out of checkpointing entirely.
 pub(super) async fn run_checkpoint_from_declarations_file(
     path: &Path,
     client: Arc<dyn HarnessSupportClient>,
+    generation: Option<CheckpointGeneration>,
 ) -> CheckpointResult {
     safe_info!(
         safe: ("Checkpoint attempt starting"),
@@ -993,7 +998,7 @@ pub(super) async fn run_checkpoint_from_declarations_file(
     }
     let gathered = gather_snapshot_entries(declarations).await;
     // Mint only once the payload is frozen — see `mint_generation`'s contract.
-    let generation = mint_generation();
+    let generation = generation.unwrap_or_else(mint_generation);
     run_checkpoint_pipeline(client, generation, gathered).await
 }
 
