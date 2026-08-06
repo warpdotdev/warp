@@ -70,3 +70,9 @@ pub fn onboarding_credit_packs(ctx: &AppContext) -> Vec<CreditPackOption> {
     };
     onboarding_credit_pack_options(options, policy.effective_premium_bps())
 }
+
+pub fn onboarding_pricing_promotion_message(ctx: &AppContext) -> Option<String> {
+    PricingInfoModel::as_ref(ctx)
+        .promotion_message()
+        .map(str::to_owned)
+}

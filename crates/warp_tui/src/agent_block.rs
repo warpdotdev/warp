@@ -1224,7 +1224,6 @@ impl TuiAIBlock {
     /// Whether the cached height is stale at `width`.
     pub(super) fn needs_height_measurement(&self, width: u16, app: &AppContext) -> bool {
         self.last_measured_width.get() != Some(width)
-            || self.block_model.status(app).is_streaming()
             || self.action_views.values().any(|view| match view {
                 TuiToolCallView::AskQuestion(_)
                 | TuiToolCallView::FileEdits(_)

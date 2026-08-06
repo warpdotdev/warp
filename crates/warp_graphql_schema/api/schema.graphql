@@ -2690,6 +2690,7 @@ type PricingInfo {
   addonCreditsOptions: [AddonCreditsOption!]!
   overages: OveragesPricing!
   plans: [PlanPricing!]!
+  promotionMessage: String
 }
 
 type PricingInfoOutput implements Response {

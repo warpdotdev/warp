@@ -16,6 +16,33 @@ fn add_test_model(app: &mut App) -> ModelHandle<OnboardingStateModel> {
     add_model(app)
 }
 
+#[test]
+fn pricing_promotion_message_can_be_replaced_and_cleared() {
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        model.read(&app, |model, _| {
+            assert_eq!(model.pricing_promotion_message(), None);
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pricing_promotion_message(Some("50% off Fable and Opus 5".to_string()), ctx)
+        });
+        model.read(&app, |model, _| {
+            assert_eq!(
+                model.pricing_promotion_message(),
+                Some("50% off Fable and Opus 5")
+            );
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pricing_promotion_message(None, ctx)
+        });
+        model.read(&app, |model, _| {
+            assert_eq!(model.pricing_promotion_message(), None);
+        });
+    });
+}
+
 fn add_model(app: &mut App) -> ModelHandle<OnboardingStateModel> {
     app.add_model(|_| {
         OnboardingStateModel::new(

@@ -50,6 +50,14 @@ impl OfferVariant {
         }
     }
 
+    pub(crate) fn primary_badge_label(self, pricing_promotion_message: Option<&str>) -> &str {
+        match self {
+            OfferVariant::HeadStart | OfferVariant::ChooseHowToStart => {
+                pricing_promotion_message.unwrap_or("Recommended")
+            }
+        }
+    }
+
     pub(crate) fn subtitle(self) -> Option<&'static str> {
         match self {
             OfferVariant::HeadStart => {
@@ -251,6 +259,13 @@ impl OfferSlide {
         !self.credit_packs(variant, app).is_empty()
     }
 
+    fn primary_badge_label(&self, variant: OfferVariant, app: &AppContext) -> String {
+        let state = self.onboarding_state.as_ref(app);
+        variant
+            .primary_badge_label(state.pricing_promotion_message())
+            .to_owned()
+    }
+
     /// The selectable options, top to bottom. Also the order the arrow keys
     /// move through.
     fn choices(&self, variant: OfferVariant, app: &AppContext) -> Vec<OfferChoice> {
@@ -402,7 +417,7 @@ impl OfferSlide {
                 variant.primary_label(),
                 variant.primary_description(shows_credit_packs),
                 selected_choice == OfferChoice::Primary,
-                Some("Recommended"),
+                Some(self.primary_badge_label(variant, app)),
                 self.primary_mouse_state.clone(),
                 OfferSlideAction::SelectPrimary,
                 None,
@@ -468,11 +483,12 @@ impl OfferSlide {
             })
             .build()
             .finish();
+        let badge_label = self.primary_badge_label(variant, app);
         let green = theme.ansi_fg_green();
         let badge = Container::new(
             appearance
                 .ui_builder()
-                .paragraph("Recommended")
+                .paragraph(badge_label)
                 .with_style(UiComponentStyles {
                     font_size: Some(12.),
                     font_color: Some(green),
@@ -897,7 +913,7 @@ impl OfferSlide {
         label: &'static str,
         description: &'static str,
         selected: bool,
-        badge_label: Option<&'static str>,
+        badge_label: Option<String>,
         mouse_state: MouseStateHandle,
         action: OfferSlideAction,
         extra_content: Option<Box<dyn Element>>,
