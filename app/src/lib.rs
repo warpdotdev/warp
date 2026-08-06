@@ -206,7 +206,7 @@ use ::settings::{Setting, ToggleableSetting};
 use anyhow::Context;
 use anyhow::{Result, anyhow};
 use appearance::{Appearance, AppearanceManager};
-use channel::ChannelState;
+use channel::{Channel, ChannelState};
 use interval_timer::IntervalTimer;
 use itertools::Itertools;
 #[cfg(feature = "integration_tests")]
@@ -1396,7 +1396,21 @@ fn authenticate_user_after_iap_access(
             }
         }
         IapManagerEvent::AccessUnavailable => {
-            report_error!("Staging IAP access unavailable before startup user authentication");
+            if iap_startup_access_failure_is_nonfatal(ChannelState::channel()) {
+                // Staging toggles IAP enforcement on and off, and a
+                // headless/sandboxed `local` build frequently cannot mint an IAP
+                // token at all. Dropping the pending authentication here strands
+                // the client on the login screen for a check the server may not
+                // even be performing, so instead proceed with startup user
+                // authentication and rely on the reactive IAP-challenge path
+                // (`observe_iap_challenge` -> `handle_challenge`) to mint a token
+                // if the server actually enforces IAP.
+                if let Some(authentication) = pending_authentication.take() {
+                    authentication.start(ctx);
+                }
+            } else {
+                report_error!("Staging IAP access unavailable before startup user authentication");
+            }
         }
         IapManagerEvent::RefreshFailed {
             message: _,
@@ -1404,6 +1418,25 @@ fn authenticate_user_after_iap_access(
         } => {}
     });
     iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
+}
+
+/// Whether a failure to establish staging IAP access at startup should be
+/// treated as non-fatal — letting startup user authentication proceed and
+/// relying on the reactive IAP-challenge path to mint a token only if the server
+/// actually enforces IAP.
+///
+/// Scoped to the internal `local` (HEAD) channel: it is the build that runs
+/// headless/sandboxed against staging, where staging's IAP enforcement has been
+/// toggled off and a token often cannot be minted at all. `Dev` and every
+/// release channel keep the fail-closed behavior; production builds compile in
+/// no `IapConfig`, so this path is never reached there regardless.
+fn iap_startup_access_failure_is_nonfatal(channel: Channel) -> bool {
+    match channel {
+        Channel::Local => true,
+        Channel::Dev | Channel::Stable | Channel::Preview | Channel::Oss | Channel::Integration => {
+            false
+        }
+    }
 }
 
 #[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]

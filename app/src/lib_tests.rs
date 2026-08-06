@@ -95,6 +95,28 @@ fn app_keeps_default_secure_storage_service_name() {
 }
 
 #[test]
+fn iap_startup_access_failure_is_nonfatal_only_on_local_channel() {
+    // The internal `local` (HEAD) build is the only channel that treats a
+    // startup staging-IAP-access failure as non-fatal. Every other channel must
+    // keep the fail-closed behavior so the relaxation can never widen to Dev or
+    // to a release/production build.
+    assert!(iap_startup_access_failure_is_nonfatal(Channel::Local));
+
+    for channel in [
+        Channel::Dev,
+        Channel::Stable,
+        Channel::Preview,
+        Channel::Oss,
+        Channel::Integration,
+    ] {
+        assert!(
+            !iap_startup_access_failure_is_nonfatal(channel),
+            "{channel} must keep the fail-closed IAP startup behavior"
+        );
+    }
+}
+
+#[test]
 fn launch_modes_select_expected_logging_frontend() {
     let tui = LaunchMode::Tui {
         entrypoint: TuiEntryPoint::Interactive {
