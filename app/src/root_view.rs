@@ -43,6 +43,7 @@ use crate::ai::blocklist::SerializedBlockListItem;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::onboarding::{
     build_onboarding_models, current_onboarding_auth_state, onboarding_credit_packs,
+    onboarding_pricing_promotion_message,
 };
 use crate::ai::request_usage_model::AIRequestUsageModelEvent;
 use crate::app_state::{AppState, PaneUuid, WindowSnapshot};
@@ -2207,18 +2208,20 @@ impl RootView {
                 ctx,
             );
             view.set_credit_pack_options(onboarding_credit_packs(ctx), ctx);
+            view.set_pricing_promotion_message(onboarding_pricing_promotion_message(ctx), ctx);
             view
         });
-
-        // Keep the offer slide's credit packs in sync with server pricing.
+        // Keep the offer slide's credit packs and promotion in sync with server pricing.
         let onboarding_view_for_pricing = onboarding_view.clone();
         ctx.subscribe_to_model(
             &PricingInfoModel::handle(ctx),
             move |_, _pricing, event, ctx| {
                 let PricingInfoModelEvent::PricingInfoUpdated = event;
                 let options = onboarding_credit_packs(ctx);
+                let promotion_message = onboarding_pricing_promotion_message(ctx);
                 onboarding_view_for_pricing.update(ctx, |onboarding_view, ctx| {
                     onboarding_view.set_credit_pack_options(options, ctx);
+                    onboarding_view.set_pricing_promotion_message(promotion_message, ctx);
                 });
             },
         );

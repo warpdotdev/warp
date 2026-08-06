@@ -306,6 +306,7 @@ pub struct PricingInfo {
     pub plans: Vec<PlanPricing>,
     pub overages: OveragesPricing,
     pub addon_credits_options: Vec<AddonCreditsOption>,
+    pub promotion_message: Option<String>,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
