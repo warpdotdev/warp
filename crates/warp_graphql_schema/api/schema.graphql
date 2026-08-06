@@ -578,7 +578,15 @@ type BonusGrant {
   reason: String!
   requestCreditsGranted: Int!
   requestCreditsRemaining: Int!
+  scope: BonusGrantScope!
   userFacingMessage: String
+}
+
+"""The credit pool a bonus grant belongs to."""
+enum BonusGrantScope {
+  USER
+  TEAM
+  WORKSPACE
 }
 
 type BonusGrantSpendingInfo {

@@ -744,6 +744,41 @@ fn test_has_any_ai_remaining_true_with_workspace_bonus_credits() {
 }
 
 #[test]
+fn test_total_workspace_bonus_credits_counts_team_and_workspace_scopes() {
+    App::test((), |mut app| async move {
+        let (uid, workspace) = create_test_workspace();
+        let other_uid = WorkspaceUid::from(crate::server::ids::ServerId::from(2_i64));
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, _ctx| {
+            let make = |scope, remaining| BonusGrant {
+                created_at: Utc::now(),
+                cost_cents: 0,
+                expiration: None,
+                grant_type: BonusGrantType::Any,
+                reason: "test".to_string(),
+                user_facing_message: None,
+                request_credits_granted: remaining,
+                request_credits_remaining: remaining,
+                scope,
+            };
+            model.bonus_grants = vec![
+                make(BonusGrantScope::User, 5),
+                make(BonusGrantScope::Team(uid), 7),
+                make(BonusGrantScope::Workspace(uid), 11),
+                make(BonusGrantScope::Team(other_uid), 13),
+            ];
+
+            // The current workspace's pool sums both its team- and
+            // workspace-scoped grants, but not other workspaces or user scope.
+            assert_eq!(model.total_workspace_bonus_credits_remaining(uid), 18);
+            assert_eq!(model.total_user_interactive_bonus_credits_remaining(), 5);
+        });
+    });
+}
+
+#[test]
 fn test_has_any_ai_remaining_true_with_payg_enabled() {
     App::test((), |mut app| async move {
         // Create a workspace with pay-as-you-go enabled.

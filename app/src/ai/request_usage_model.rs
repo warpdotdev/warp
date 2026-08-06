@@ -29,7 +29,21 @@ pub const AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD: i32 = 20;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BonusGrantScope {
     User,
+    Team(WorkspaceUid),
     Workspace(WorkspaceUid),
+}
+
+impl BonusGrantScope {
+    /// The workspace a team- or workspace-scoped grant belongs to. Both scopes
+    /// are spendable by a member of that workspace, so callers that reason about
+    /// a workspace's combined bonus pool use this instead of matching a single
+    /// variant. Returns `None` for user-scoped grants.
+    pub fn workspace_uid(&self) -> Option<WorkspaceUid> {
+        match self {
+            BonusGrantScope::User => None,
+            BonusGrantScope::Team(uid) | BonusGrantScope::Workspace(uid) => Some(*uid),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -663,7 +677,7 @@ impl AIRequestUsageModel {
         let now = Utc::now();
         self.bonus_grants
             .iter()
-            .filter(|grant| grant.scope == BonusGrantScope::Workspace(uid))
+            .filter(|grant| grant.scope.workspace_uid() == Some(uid))
             .filter(|grant| grant.expiration.is_none_or(|exp| now < exp))
             .map(|grant| grant.request_credits_remaining)
             .sum()
@@ -718,7 +732,7 @@ impl AIRequestUsageModel {
             .filter(|grant| grant.request_credits_remaining > 0)
             .any(|grant| match grant.scope {
                 BonusGrantScope::User => true,
-                BonusGrantScope::Workspace(uid) => {
+                BonusGrantScope::Team(uid) | BonusGrantScope::Workspace(uid) => {
                     current_workspace.is_some_and(|workspace| workspace.uid == uid)
                 }
             });

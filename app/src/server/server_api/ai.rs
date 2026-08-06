@@ -156,7 +156,6 @@ use crate::server::graphql::{get_request_context, get_user_facing_error_message}
 use crate::terminal::model::block::SerializedBlock;
 #[cfg(not(feature = "agent_mode_evals"))]
 use crate::{
-    ai::request_usage_model::BonusGrantScope,
     server::ids::ServerId,
     workspaces::{gql_convert::PLACEHOLDER_WORKSPACE_UID, workspace::WorkspaceUid},
 };
@@ -1774,10 +1773,7 @@ impl AIClient for ServerApi {
                             .grants
                             .into_iter()
                             .map(move |grant| {
-                                BonusGrant::from_gql_bonus_grant(
-                                    grant,
-                                    BonusGrantScope::Workspace(workspace_uid),
-                                )
+                                BonusGrant::from_gql_bonus_grant(grant, Some(workspace_uid))
                             })
                     });
 
@@ -1785,7 +1781,7 @@ impl AIClient for ServerApi {
                     .user
                     .bonus_grants
                     .into_iter()
-                    .map(|grant| BonusGrant::from_gql_bonus_grant(grant, BonusGrantScope::User))
+                    .map(|grant| BonusGrant::from_gql_bonus_grant(grant, None))
                     .chain(workspace_bonus_grants)
                     .collect();
 
