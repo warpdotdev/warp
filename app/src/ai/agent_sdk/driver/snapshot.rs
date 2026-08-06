@@ -674,7 +674,6 @@ struct SnapshotOutcome {
 
 /// Outcome of one checkpoint attempt, where [`SnapshotOutcome`] only covers per-entry upload
 /// results within that attempt.
-#[expect(dead_code)]
 #[derive(Debug)]
 pub(super) enum CheckpointResult {
     /// `generation` is now the server's selected checkpoint.
@@ -972,9 +971,6 @@ async fn run_pipeline(
 /// Unlike [`upload_snapshot_from_declarations_file`], an unusable declarations file is
 /// [`CheckpointResult::Skipped`] rather than `None`, because the coordinator's state machine
 /// distinguishes "nothing to do" from "tried and failed".
-// Mirrors the `cfg(all(test, not(windows)))` gate on the tests module below: this is only
-// dead where those tests aren't compiled.
-#[cfg_attr(any(not(test), windows), expect(dead_code))]
 pub(super) async fn run_checkpoint_from_declarations_file(
     path: &Path,
     client: Arc<dyn HarnessSupportClient>,
