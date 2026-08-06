@@ -77,6 +77,7 @@ fn seed_row(task_id: AmbientAgentTaskId) -> Box<AmbientAgentTask> {
         run_time: None,
         status_message: None,
         source: None,
+        execution_location: None,
         session_id: None,
         session_link: None,
         creator: None,
