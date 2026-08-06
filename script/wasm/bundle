@@ -78,7 +78,6 @@ while (( "$#" )); do
       ;;
     --features)
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
-        echo "Adding features: $2"
         FEATURES_ADDITIONS+=("$2")
         shift 2
       else
@@ -90,7 +89,6 @@ while (( "$#" )); do
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
         # Use this only when intentionally replacing the release and channel
         # defaults (including local's remote_tty).
-        echo "Replacing default features with: $2"
         FEATURES_OVERRIDE=$2
         shift 2
       else
