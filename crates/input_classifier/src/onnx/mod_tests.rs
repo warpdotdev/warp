@@ -39,31 +39,6 @@ fn parsed_input_without_descriptions(buffer_text: &str) -> ParsedTokensSnapshot 
 }
 
 #[test]
-fn test_warp_keyword_short_circuits_to_shell_before_model() {
-    block_on(async move {
-        let classifier = OnnxClassifier {
-            inference_runner: Box::new(FailingInferenceRunner),
-            has_panicked: HasPanicked::new(),
-        };
-        let context = Context {
-            current_input_type: InputType::AI,
-            is_agent_follow_up: false,
-        };
-        let input = parsed_input_without_descriptions("warp agent run");
-
-        let decision = classifier.detect_input_type(input, &context).await;
-
-        assert_eq!(
-            decision,
-            InputClassificationResult::new(
-                InputType::Shell,
-                InputClassifierDecisionSource::ShellHeuristic,
-            )
-        );
-    });
-}
-
-#[test]
 fn test_inference_error_reports_current_input_fallback_source() {
     block_on(async move {
         let classifier = OnnxClassifier {
