@@ -5,9 +5,9 @@ use warpui_core::{App, Entity, ModelHandle};
 
 use crate::OnboardingIntention;
 use crate::model::{
-    AiSetupChoice, CreditPackOption, CreditPurchaseState, NoAiConfirmationSource,
-    OnboardingAuthState, OnboardingStateEvent, OnboardingStateModel, OnboardingStep,
-    SelectedSettings,
+    AiSetupChoice, ChooseHowToStartExperimentArm, CreditPackOption, CreditPurchaseState,
+    NoAiConfirmationSource, OnboardingAuthState, OnboardingStateEvent, OnboardingStateModel,
+    OnboardingStep, SelectedSettings,
 };
 use crate::slides::OfferVariant;
 
@@ -96,6 +96,40 @@ fn post_auth_offer_is_unclassified_until_selected_and_does_not_switch() {
         assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
         model.read(&app, |model, _| {
             assert_eq!(model.offer_variant(), Some(OfferVariant::HeadStart));
+        });
+    });
+}
+
+/// REV-1939 regression: `offer_variant` is sticky, so after backing out of the
+/// offer the reported arm must clear — otherwise the `theme_picker` (and
+/// earlier) `SlideViewed` events would still carry `experiment_arm`, violating
+/// spec invariant #6. `offer_experiment_arm()` is the sole source of that
+/// payload key (`with_experiment_arm(None)` omits it entirely), so asserting it
+/// is `None` on the non-offer slide proves the payload omits the key.
+#[test]
+fn backing_out_of_the_offer_drops_the_experiment_arm_from_slide_views() {
+    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
+    App::test((), |mut app| async move {
+        let model = add_test_model(&mut app);
+        model.update(&mut app, |model, ctx| {
+            model.set_choose_how_to_start_experiment_arm(
+                ChooseHowToStartExperimentArm::Experiment,
+                ctx,
+            );
+            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
+        });
+        // On the offer, the arm is reported.
+        model.read(&app, |model, _| {
+            assert_eq!(model.offer_experiment_arm(), Some("experiment"));
+        });
+
+        // Backing out lands on theme_picker, a non-offer slide whose SlideViewed
+        // must omit the arm even though `offer_variant` is still set.
+        model.update(&mut app, |model, ctx| model.back(ctx));
+        assert_eq!(step(&app, &model), OnboardingStep::ThemePicker);
+        model.read(&app, |model, _| {
+            assert_eq!(model.offer_variant(), Some(OfferVariant::ChooseHowToStart));
+            assert_eq!(model.offer_experiment_arm(), None);
         });
     });
 }
