@@ -444,13 +444,13 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
 - (void)sendEvent:(NSEvent *)event {
     switch (event.type) {
         case NSEventTypeLeftMouseDown: {
-            NSButton *windowButton = [self standardWindowButtonAtEvent:event];
-            if (windowButton) {
-                _leftMouseDownStartedInNativeWindowChrome = NO;
-                [windowButton mouseDown:event];
-                break;
-            }
-            _leftMouseDownStartedInNativeWindowChrome = [self eventIsOverResizeEdge:event];
+            // Clicks on the traffic-light buttons must go through AppKit's own routing
+            // rather than being delivered to the button's mouseDown: directly; direct
+            // delivery bypasses the window's modifier handling, so option-clicking the
+            // zoom button would enter fullscreen instead of zooming the window (#13326).
+            _leftMouseDownStartedInNativeWindowChrome =
+                [self standardWindowButtonAtEvent:event] != nil ||
+                [self eventIsOverResizeEdge:event];
             [super sendEvent:event];
             break;
         }
