@@ -97,12 +97,17 @@ impl From<GqlTeamMember> for TeamMember {
     }
 }
 
-fn order_authenticated_teams_first(workspace: &mut Workspace, user_uid: UserUid) {
-    let (member_teams, non_member_teams): (Vec<_>, Vec<_>) = workspace
+/// Narrows a workspace to the teams the authenticated user actually belongs to.
+///
+/// The server hands workspace admins every team in the workspace so admin
+/// surfaces can manage them, but a team the user is not a member of is not one
+/// they can operate as in the client. Filtering here keeps every consumer of
+/// `Workspace::teams` — the team switcher, team spaces, default team selection —
+/// scoped to real memberships.
+fn retain_authenticated_teams(workspace: &mut Workspace, user_uid: UserUid) {
+    workspace
         .teams
-        .drain(..)
-        .partition(|team| team.members.iter().any(|member| member.uid == user_uid));
-    workspace.teams = member_teams.into_iter().chain(non_member_teams).collect();
+        .retain(|team| team.members.iter().any(|member| member.uid == user_uid));
 }
 
 impl From<GqlManagedByokByoePolicy> for ManagedByokByoePolicy {
@@ -1375,10 +1380,7 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
             })
             .map(|gql_workspace| {
                 let mut workspace = gql_workspace.into();
-                // TODO(isaiah): this is a temporary measure while the client doesn't support many teams per user.
-                // Workspace admins technically have access to every team in their workspace, but when they're on the
-                // client, they should only see the 1 team they're formally a part of.
-                order_authenticated_teams_first(&mut workspace, user_uid);
+                retain_authenticated_teams(&mut workspace, user_uid);
                 workspace
             })
             .collect();

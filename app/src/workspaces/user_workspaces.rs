@@ -510,6 +510,19 @@ impl UserWorkspaces {
             .or_else(|| self.current_workspace_billing_metadata())
     }
 
+    /// Whether custom LLMs are enabled for the given team, falling back to the
+    /// current workspace's settings when the viewer has no team. A workspace
+    /// admin who belongs to no team is teamless in the client, so the workspace
+    /// settings are where their defaults live.
+    pub fn is_custom_llm_enabled_for_team(&self, team: Option<&Team>) -> bool {
+        team.map(Team::is_custom_llm_enabled)
+            .or_else(|| {
+                self.current_workspace()
+                    .map(Workspace::is_custom_llm_enabled)
+            })
+            .unwrap_or(false)
+    }
+
     /// The add-on credits purchase policy for the current viewer context: the
     /// current workspace's policy when one exists, else the user-level policy
     /// from the workspaces-metadata response (how teamless users get one).

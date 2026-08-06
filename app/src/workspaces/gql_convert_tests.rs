@@ -36,19 +36,19 @@ fn team_names(workspace: &Workspace) -> Vec<&str> {
 }
 
 #[test]
-fn order_authenticated_teams_before_non_member_teams() {
+fn drop_teams_the_user_is_not_a_member_of() {
     let mut workspace = workspace(vec![
         team("non-member", &["other-user"]),
         team("member", &["current-user"]),
     ]);
 
-    order_authenticated_teams_first(&mut workspace, UserUid::new("current-user"));
+    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"));
 
-    assert_eq!(team_names(&workspace), ["member", "non-member"]);
+    assert_eq!(team_names(&workspace), ["member"]);
 }
 
 #[test]
-fn preserve_relative_order_within_member_groups() {
+fn preserve_server_order_across_member_teams() {
     let mut workspace = workspace(vec![
         team("non-member-one", &["other-user"]),
         team("member-one", &["current-user"]),
@@ -56,29 +56,23 @@ fn preserve_relative_order_within_member_groups() {
         team("member-two", &["current-user"]),
     ]);
 
-    order_authenticated_teams_first(&mut workspace, UserUid::new("current-user"));
+    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"));
 
-    assert_eq!(
-        team_names(&workspace),
-        [
-            "member-one",
-            "member-two",
-            "non-member-one",
-            "non-member-two"
-        ]
-    );
+    assert_eq!(team_names(&workspace), ["member-one", "member-two"]);
 }
 
 #[test]
-fn preserve_server_order_when_user_has_no_team_membership() {
+fn drop_every_team_when_user_has_no_team_membership() {
+    // A workspace admin the server grants every team but who joined none of them
+    // has nothing to operate as in the client, so the list ends up empty.
     let mut workspace = workspace(vec![
         team("first", &["other-user"]),
         team("second", &["another-user"]),
     ]);
 
-    order_authenticated_teams_first(&mut workspace, UserUid::new("current-user"));
+    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"));
 
-    assert_eq!(team_names(&workspace), ["first", "second"]);
+    assert!(team_names(&workspace).is_empty());
 }
 
 mod team_settings_conversion {
