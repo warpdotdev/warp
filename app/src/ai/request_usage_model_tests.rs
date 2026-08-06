@@ -770,8 +770,6 @@ fn test_total_workspace_bonus_credits_counts_team_and_workspace_scopes() {
                 make(BonusGrantScope::Team(other_uid), 13),
             ];
 
-            // The current workspace's pool sums both its team- and
-            // workspace-scoped grants, but not other workspaces or user scope.
             assert_eq!(model.total_workspace_bonus_credits_remaining(uid), 18);
             assert_eq!(model.total_user_interactive_bonus_credits_remaining(), 5);
         });
