@@ -34,10 +34,6 @@ pub enum BonusGrantScope {
 }
 
 impl BonusGrantScope {
-    /// The workspace a team- or workspace-scoped grant belongs to. Both scopes
-    /// are spendable by a member of that workspace, so callers that reason about
-    /// a workspace's combined bonus pool use this instead of matching a single
-    /// variant. Returns `None` for user-scoped grants.
     pub fn workspace_uid(&self) -> Option<WorkspaceUid> {
         match self {
             BonusGrantScope::User => None,
