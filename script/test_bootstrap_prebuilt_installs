@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 #
 # Asserts that the cargo tools on the bootstrap critical path are installed from
-# prebuilt binaries. Re-adding a `cargo install` for any of them puts a
-# multi-minute source build back into every fresh bootstrap.
+# prebuilt binaries, that the one binary bootstrap downloads and runs directly
+# (cargo-binstall) is verified first, and that binstall keeps its source-compile
+# fallback. Re-adding a `cargo install` for any of them puts a multi-minute source
+# build back into every fresh bootstrap.
 
 set -eo pipefail
 
@@ -27,9 +29,18 @@ for tool in cargo-binstall cargo-bundle cargo-about; do
     fi
 done
 
-# cargo-binstall can't install itself, so it comes from the upstream release installer.
-if [ -z "$(scan "install-from-binstall-release.sh")" ]; then
-    echo "error: no script installs cargo-binstall from its prebuilt release"
+# cargo-binstall can't install itself, so its own install downloads a release archive
+# and executes it. That is only acceptable with an integrity check, so require both
+# the download and the digest it is checked against.
+BINSTALL_INSTALLER="script/install_cargo_binstall"
+
+if ! grep -q "releases/download" "$BINSTALL_INSTALLER"; then
+    echo "error: $BINSTALL_INSTALLER must install cargo-binstall from its prebuilt release"
+    status=1
+fi
+
+if ! grep -q "EXPECTED_SHA256" "$BINSTALL_INSTALLER"; then
+    echo "error: $BINSTALL_INSTALLER must verify the release archive against a pinned SHA-256 before running it"
     status=1
 fi
 
@@ -39,6 +50,15 @@ for tool in cargo-bundle cargo-about; do
         status=1
     fi
 done
+
+# binstall's source-compile fallback stays enabled on purpose: when a prebuilt can't
+# be resolved, a slow bootstrap is a better outcome than one that can't finish.
+disabled_compile="$(scan -e "--disable-strategies compile")"
+if [ -n "$disabled_compile" ]; then
+    echo "error: binstall's compile fallback must stay available, found:"
+    echo "$disabled_compile"
+    status=1
+fi
 
 if [ "$status" -eq 0 ]; then
     echo "Bootstrap prebuilt install check succeeded."

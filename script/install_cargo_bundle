@@ -16,6 +16,7 @@ CARGO_BUNDLE_VERSION="0.11.0"
 "$PWD"/script/install_cargo_binstall
 
 # burtonageo/cargo-bundle publishes no release assets, so binstall resolves this
-# through cargo-quickinstall, which covers both apple-darwin targets. On a target
-# quickinstall doesn't cover, binstall falls back to building from source.
+# through cargo-quickinstall, which covers both apple-darwin targets. Where no
+# prebuilt is available binstall compiles from source, which is left enabled: a
+# slow bootstrap is a better outcome than one that can't finish.
 cargo binstall --no-confirm "cargo-bundle@${CARGO_BUNDLE_VERSION}"
