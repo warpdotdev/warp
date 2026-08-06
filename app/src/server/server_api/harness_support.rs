@@ -24,6 +24,8 @@ use crate::ai::artifacts::Artifact;
 pub struct UploadTarget {
     pub url: String,
     pub method: String,
+    #[serde(default)]
+    #[serde_as(deserialize_as = "serde_with::DefaultOnNull")]
     pub headers: HashMap<String, String>,
     /// Ordered multipart form fields for POST uploads.
     #[serde(default)]

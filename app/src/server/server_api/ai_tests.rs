@@ -1163,47 +1163,29 @@ fn deserialize_fork_conversation_response() {
     );
 }
 
-/// An S3-backed prepare-upload response, matching the `AttachmentUpload` schema
-/// in warp-server's `public_api/openapi.yaml`.
-fn s3_prepare_attachment_uploads_response(url: &str) -> serde_json::Value {
-    serde_json::json!({
-        "attachments": [{
-            "attachment_id": "7b1f1f6c-2f5c-4c3e-9c3a-6a1a3d9f0001",
-            "upload_url": url,
-            "upload_target": {
-                "url": url,
-                "method": "POST",
-                "headers": {},
-                "fields": [
-                    {
-                        "name": "key",
-                        "value": {
-                            "kind": "static",
-                            "value": "task-1/7b1f1f6c-2f5c-4c3e-9c3a-6a1a3d9f0001",
-                        },
-                    },
-                    {
-                        "name": "x-amz-checksum-crc32c",
-                        "value": {"kind": "content_crc32c"},
-                    },
-                    {"name": "file", "value": {"kind": "content_data"}},
-                ],
-            },
-        }],
-    })
+/// Verbatim prepare-upload response bodies, captured by marshalling the
+/// handler's own `PrepareAttachmentUploadsResponse` in warp-server. Hand-written
+/// approximations hid two mismatches that the real bytes exposed, so keep these
+/// literal rather than rebuilding them with `serde_json::json!`.
+const S3_FORM_PREPARE_RESPONSE: &str = r#"{"attachments":[{"attachment_id":"7b1f1f6c-2f5c-4c3e-9c3a-6a1a3d9f0001","upload_target":{"fields":[{"name":"key","value":{"kind":"static","value":"task-1/7b1f1f6c-2f5c-4c3e-9c3a-6a1a3d9f0001"}},{"name":"x-amz-checksum-crc32c","value":{"kind":"content_crc32c"}},{"name":"file","value":{"kind":"content_data"}}],"headers":null,"method":"POST","url":"UPLOAD_URL"},"upload_url":"UPLOAD_URL"}]}"#;
+
+const PUT_PREPARE_RESPONSE: &str = r#"{"attachments":[{"attachment_id":"7b1f1f6c-2f5c-4c3e-9c3a-6a1a3d9f0001","upload_target":{"fields":[],"headers":{"Content-Type":"image/png"},"method":"PUT","url":"UPLOAD_URL"},"upload_url":"UPLOAD_URL"}]}"#;
+
+/// What a server that predates `upload_target` returns.
+const LEGACY_PREPARE_RESPONSE: &str = r#"{"attachments":[{"attachment_id":"7b1f1f6c-2f5c-4c3e-9c3a-6a1a3d9f0001","upload_url":"UPLOAD_URL"}]}"#;
+
+fn parse_prepare_response(body: &str, upload_url: &str) -> PrepareAttachmentUploadsResponse {
+    serde_json::from_str(&body.replace("UPLOAD_URL", upload_url)).unwrap()
 }
 
 #[test]
 fn prepare_attachment_uploads_response_parses_s3_form_upload_target() {
-    let response: PrepareAttachmentUploadsResponse = serde_json::from_value(
-        s3_prepare_attachment_uploads_response("https://s3.test/bucket"),
-    )
-    .unwrap();
+    let response = parse_prepare_response(S3_FORM_PREPARE_RESPONSE, "https://s3.test/bucket");
 
-    let attachment = &response.attachments[0];
-    let target = attachment.resolve_upload_target("image/png");
+    let target = response.attachments[0].resolve_upload_target("image/png");
     assert_eq!(target.method, "POST");
     assert_eq!(target.url, "https://s3.test/bucket");
+    assert!(target.headers.is_empty());
     assert_eq!(
         target
             .fields
@@ -1223,32 +1205,35 @@ fn prepare_attachment_uploads_response_parses_s3_form_upload_target() {
 }
 
 #[test]
+fn prepare_attachment_uploads_response_prefers_upload_target_over_upload_url() {
+    let response = parse_prepare_response(PUT_PREPARE_RESPONSE, "https://gcs.test/bucket/file");
+
+    let target = response.attachments[0].resolve_upload_target("application/octet-stream");
+    assert_eq!(target.method, "PUT");
+    assert_eq!(target.url, "https://gcs.test/bucket/file");
+    // The presigned URL is only valid for the type it was signed with, so the
+    // server's header wins over the caller's content type.
+    assert_eq!(target.headers.get("Content-Type").unwrap(), "image/png");
+}
+
+#[test]
 fn prepare_attachment_uploads_response_falls_back_to_upload_url() {
-    let response: PrepareAttachmentUploadsResponse = serde_json::from_value(serde_json::json!({
-        "attachments": [{
-            "attachment_id": "7b1f1f6c-2f5c-4c3e-9c3a-6a1a3d9f0001",
-            "upload_url": "https://storage.googleapis.test/bucket/task-1/file",
-        }],
-    }))
-    .unwrap();
+    let response = parse_prepare_response(LEGACY_PREPARE_RESPONSE, "https://gcs.test/bucket/file");
 
     let attachment = &response.attachments[0];
     assert!(attachment.upload_target.is_none());
 
     let target = attachment.resolve_upload_target("image/png");
     assert_eq!(target.method, "PUT");
-    assert_eq!(
-        target.url,
-        "https://storage.googleapis.test/bucket/task-1/file"
-    );
+    assert_eq!(target.url, "https://gcs.test/bucket/file");
     assert_eq!(target.headers.get("Content-Type").unwrap(), "image/png");
     assert!(target.fields.is_empty());
 }
 
-/// Upload `b"attachment bytes"` to the target the first attachment in `body`
+/// Upload `b"attachment bytes"` to the target the response's first attachment
 /// resolves to, the way the attachment upload path does.
-fn upload_first_attachment(body: serde_json::Value) {
-    let response: PrepareAttachmentUploadsResponse = serde_json::from_value(body).unwrap();
+fn upload_first_attachment(body: &str, upload_url: &str) {
+    let response = parse_prepare_response(body, upload_url);
     let target = response.attachments[0].resolve_upload_target("image/png");
 
     block_on(upload_to_target(
@@ -1281,10 +1266,10 @@ fn s3_form_upload_target_is_uploaded_as_a_multipart_post() {
         .with_status(204)
         .create();
 
-    upload_first_attachment(s3_prepare_attachment_uploads_response(&format!(
-        "{}/s3/bucket",
-        server.url()
-    )));
+    upload_first_attachment(
+        S3_FORM_PREPARE_RESPONSE,
+        &format!("{}/s3/bucket", server.url()),
+    );
 
     storage.assert();
 }
@@ -1299,12 +1284,10 @@ fn upload_url_fallback_is_uploaded_as_a_put_with_its_content_type() {
         .with_status(200)
         .create();
 
-    upload_first_attachment(serde_json::json!({
-        "attachments": [{
-            "attachment_id": "7b1f1f6c-2f5c-4c3e-9c3a-6a1a3d9f0001",
-            "upload_url": format!("{}/gcs/task-1/file", server.url()),
-        }],
-    }));
+    upload_first_attachment(
+        LEGACY_PREPARE_RESPONSE,
+        &format!("{}/gcs/task-1/file", server.url()),
+    );
 
     storage.assert();
 }

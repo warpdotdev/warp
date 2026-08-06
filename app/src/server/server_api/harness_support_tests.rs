@@ -1,18 +1,21 @@
 use crate::ai::artifacts::Artifact;
 
+/// The server marshals its unset Go maps and slices as `null`, which a POST
+/// target routinely carries for `headers`.
 #[test]
-fn upload_target_deserializes_null_fields_as_empty() {
+fn upload_target_deserializes_null_headers_and_fields_as_empty() {
     use super::UploadTarget;
 
     let target: UploadTarget = serde_json::from_value(serde_json::json!({
         "url": "https://example.com/upload",
         "method": "PUT",
-        "headers": {},
+        "headers": null,
         "fields": null
     }))
     .unwrap();
 
-    assert_eq!(target.fields.len(), 0);
+    assert!(target.headers.is_empty());
+    assert!(target.fields.is_empty());
 }
 
 /// Each `kind` here is a discriminator from the `UploadFieldValue` schema in
