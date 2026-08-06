@@ -665,7 +665,7 @@ struct SnapshotOutcome {
 
 /// Outcome of one checkpoint attempt, where [`SnapshotOutcome`] only covers per-entry upload
 /// results within that attempt.
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[derive(Debug)]
 pub(super) enum CheckpointResult {
     /// `generation` is now the server's selected checkpoint.
@@ -689,12 +689,10 @@ pub(super) enum CheckpointResult {
 /// [`SnapshotUploadMode`] for the server-side semantics.
 enum PipelineMode {
     Legacy,
-    #[allow(dead_code)]
     Checkpoint(CheckpointGeneration),
 }
 
 /// Disambiguates [`mint_generation`] calls landing in the same millisecond.
-#[allow(dead_code)]
 static GENERATION_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Mint a generation identifier, which satisfies [`CheckpointGeneration`]'s format by
@@ -703,7 +701,6 @@ static GENERATION_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 /// Call this exactly once per attempt, after that attempt's payload has been gathered.
 /// Re-uploading an already-gathered payload must reuse its generation; enforcing that is the
 /// caller's job (see the coordinator).
-#[allow(dead_code)]
 pub(super) fn mint_generation() -> CheckpointGeneration {
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -717,7 +714,6 @@ pub(super) fn mint_generation() -> CheckpointGeneration {
 ///
 /// Only the exact-set [`CommitSnapshotRequest`] needs this; everything earlier in the pipeline
 /// speaks logical names, and the server derives each presigned target's storage name itself.
-#[allow(dead_code)]
 fn storage_name(generation: &CheckpointGeneration, logical: &str) -> String {
     format!("checkpoint_{}__{logical}", generation.as_str())
 }
@@ -975,7 +971,9 @@ async fn run_pipeline(
 /// Unlike [`upload_snapshot_from_declarations_file`], an unusable declarations file is
 /// [`CheckpointResult::Skipped`] rather than `None`, because the coordinator's state machine
 /// distinguishes "nothing to do" from "tried and failed".
-#[allow(dead_code)]
+// Mirrors the `cfg(all(test, not(windows)))` gate on the tests module below: this is only
+// dead where those tests aren't compiled.
+#[cfg_attr(any(not(test), windows), expect(dead_code))]
 pub(super) async fn run_checkpoint_from_declarations_file(
     path: &Path,
     client: Arc<dyn HarnessSupportClient>,
@@ -1000,7 +998,6 @@ pub(super) async fn run_checkpoint_from_declarations_file(
 
 /// Upload and commit an already-gathered payload under `generation`. Split out so a caller
 /// re-running the exact same attempt can reuse both the payload and the generation.
-#[allow(dead_code)]
 async fn run_checkpoint_pipeline(
     client: Arc<dyn HarnessSupportClient>,
     generation: CheckpointGeneration,

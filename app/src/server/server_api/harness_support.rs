@@ -132,9 +132,6 @@ impl CheckpointGeneration {
     /// Construct from a string the caller has already shaped to [`Self::is_valid`].
     /// `snapshot::mint_generation` is the only production caller and satisfies it by
     /// construction, so the invariant is a debug assertion rather than a fallible return.
-    // Nothing calls the checkpoint API in this file yet -- the periodic coordinator that does
-    // lands in a follow-up, stacked PR, and takes the `allow(dead_code)`s with it.
-    #[allow(dead_code)]
     pub(crate) fn from_validated(value: String) -> Self {
         debug_assert!(
             Self::is_valid(&value),
@@ -143,7 +140,6 @@ impl CheckpointGeneration {
         Self(value)
     }
 
-    #[allow(dead_code)]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -163,7 +159,6 @@ impl std::fmt::Display for CheckpointGeneration {
 ///
 /// Exact-set: the server persists `objects` verbatim as the commit marker and selection
 /// later returns exactly that set, not everything sharing the generation prefix.
-#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CommitSnapshotRequest {
     pub generation: String,
@@ -171,7 +166,6 @@ pub struct CommitSnapshotRequest {
     pub objects: Vec<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct CommitSnapshotResponse {
     pub generation: String,
