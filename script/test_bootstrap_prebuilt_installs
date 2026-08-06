@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+#
+# Asserts that the cargo tools on the bootstrap critical path are installed from
+# prebuilt binaries. Re-adding a `cargo install` for any of them puts a
+# multi-minute source build back into every fresh bootstrap.
+
+set -eo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+# This file names the same commands it searches for, so it is excluded from its own
+# scan to keep the assertions from being self-satisfying.
+SELF="$(basename "${BASH_SOURCE[0]}")"
+
+scan() {
+    grep -rn --exclude="$SELF" "$@" script || true
+}
+
+status=0
+
+for tool in cargo-binstall cargo-bundle cargo-about; do
+    source_installs="$(scan "cargo install" | grep -- "$tool" || true)"
+    if [ -n "$source_installs" ]; then
+        echo "error: $tool must be installed from a prebuilt binary, found source install(s):"
+        echo "$source_installs"
+        status=1
+    fi
+done
+
+# cargo-binstall can't install itself, so it comes from the upstream release installer.
+if [ -z "$(scan "install-from-binstall-release.sh")" ]; then
+    echo "error: no script installs cargo-binstall from its prebuilt release"
+    status=1
+fi
+
+for tool in cargo-bundle cargo-about; do
+    if [ -z "$(scan "cargo binstall" | grep -- "$tool" || true)" ]; then
+        echo "error: no script installs $tool with cargo binstall"
+        status=1
+    fi
+done
+
+if [ "$status" -eq 0 ]; then
+    echo "Bootstrap prebuilt install check succeeded."
+fi
+
+exit "$status"

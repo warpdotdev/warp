@@ -1,12 +1,31 @@
 #!/usr/bin/env bash
 #
-# Installs cargo-binstall if not present, or updates it if already installed.
+# Installs cargo-binstall at the pinned version if it isn't already present.
 
 # This script should be platform-agnostic (eg. no unix-only references like /dev/null).
 
-# Install cargo-binstall, then/or use it to update itself.
-if ! command -v cargo-binstall; then
-    cargo install cargo-binstall@1.14.3 --locked
+set -eo pipefail
+
+# Keep in sync with the cargo-bins/cargo-binstall action pin in .github/workflows/ci.yml
+# so local bootstraps and CI resolve binaries with the same binstall version.
+BINSTALL_VERSION="1.18.1"
+
+# cargo-binstall is installed from its own prebuilt release rather than with
+# `cargo install`, which compiles it and its whole dependency tree from source and
+# dominates the runtime of a fresh bootstrap.
+INSTALLED_VERSION=""
+if command -v cargo-binstall; then
+    INSTALLED_VERSION="$(cargo-binstall -V)"
 fi
 
-cargo binstall --no-confirm cargo-binstall
+if [ "$INSTALLED_VERSION" != "$BINSTALL_VERSION" ]; then
+    echo "Installing cargo-binstall v${BINSTALL_VERSION} from its prebuilt release..."
+    # The installer is fetched at the tag it installs, so an upstream change to the
+    # script can't retroactively alter what a pinned bootstrap runs.
+    INSTALLER="$(mktemp)"
+    curl -L --proto '=https' --tlsv1.2 -sSf \
+        "https://raw.githubusercontent.com/cargo-bins/cargo-binstall/v${BINSTALL_VERSION}/install-from-binstall-release.sh" \
+        --output "$INSTALLER"
+    BINSTALL_VERSION="$BINSTALL_VERSION" bash "$INSTALLER"
+    rm -f "$INSTALLER"
+fi
