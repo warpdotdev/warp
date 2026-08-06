@@ -405,6 +405,28 @@ fn api_keys_slash_command_opens_inline_and_clears_the_input() {
 }
 
 #[test]
+fn connect_grok_slash_command_opens_the_api_keys_menu_in_grok_flow() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.input_view
+                .update(ctx, |input, ctx| input.set_text("/connect-grok", ctx));
+            view.execute_tui_slash_command(&slash_commands::CONNECT_GROK, None, ctx);
+        });
+
+        view.read(&app, |view, ctx| {
+            assert!(view.api_keys_menu.as_ref(ctx).is_open(ctx));
+            assert_eq!(
+                view.suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::ApiKeys
+            );
+            assert!(view.input_view.as_ref(ctx).is_empty(ctx));
+        });
+    });
+}
+
+#[test]
 fn mcp_primary_action_hints_match_available_actions() {
     let id = TuiMcpServerId::FileBased(1);
     assert_eq!(

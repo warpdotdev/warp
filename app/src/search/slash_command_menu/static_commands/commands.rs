@@ -128,6 +128,16 @@ pub const API_KEYS: StaticCommand = StaticCommand {
     argument: None,
 };
 
+pub const CONNECT_GROK: StaticCommand = StaticCommand {
+    name: "/connect-grok",
+    description: "Connect your Grok (X Premium / SuperGrok) account",
+    kind: SlashCommandKind::ConnectGrok,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub const MANAGE_BILLING: StaticCommand = StaticCommand {
     name: "/manage-billing",
     description: "Open the team billing page in your browser",
@@ -959,6 +969,7 @@ fn all_commands_for_all_surfaces() -> Vec<StaticCommand> {
         INDEX,
         INIT,
         API_KEYS,
+        CONNECT_GROK,
         UPGRADE,
         MANAGE_BILLING,
         LOGOUT,
