@@ -292,6 +292,7 @@ pub(crate) struct OnboardingStateModel {
     /// supplied by the app crate from server pricing. Empty until pricing has
     /// been fetched, which hides the buy-credits option entirely.
     credit_pack_options: Vec<CreditPackOption>,
+    pricing_promotion_message: Option<String>,
     /// Index into `credit_pack_options` of the pack the user has selected.
     selected_credit_pack_index: usize,
     /// Progress of a credit purchase started from the offer slide.
@@ -322,6 +323,7 @@ impl OnboardingStateModel {
             offer_variant: None,
             no_ai_confirmation: None,
             credit_pack_options: Vec::new(),
+            pricing_promotion_message: None,
             selected_credit_pack_index: 0,
             credit_purchase_state: CreditPurchaseState::default(),
         }
@@ -480,6 +482,22 @@ impl OnboardingStateModel {
     /// (smallest first). Empty until the app supplies server pricing.
     pub(crate) fn credit_pack_options(&self) -> &[CreditPackOption] {
         &self.credit_pack_options
+    }
+
+    pub(crate) fn pricing_promotion_message(&self) -> Option<&str> {
+        self.pricing_promotion_message.as_deref()
+    }
+
+    pub(crate) fn set_pricing_promotion_message(
+        &mut self,
+        message: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.pricing_promotion_message == message {
+            return;
+        }
+        self.pricing_promotion_message = message;
+        ctx.notify();
     }
 
     /// Replaces the offered credit packs. Keeps the user's selection when it
