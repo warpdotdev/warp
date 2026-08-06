@@ -1577,6 +1577,7 @@ fn checkpoint_commits_logical_names_and_never_storage_names() {
         .block_on(run_checkpoint_from_declarations_file(
             &declarations_path,
             client.clone(),
+            None,
         ));
     let CheckpointResult::Committed { generation } = result else {
         panic!("expected Committed, got {result:?}");
@@ -1638,6 +1639,7 @@ fn checkpoint_withholds_commit_when_a_required_blob_fails() {
         .block_on(run_checkpoint_from_declarations_file(
             &declarations_path,
             client.clone(),
+            None,
         ));
     let CheckpointResult::Failed { reason, .. } = result else {
         panic!("expected Failed, got {result:?}");
@@ -1681,6 +1683,7 @@ fn checkpoint_manifest_upload_failure_withholds_commit() {
         .block_on(run_checkpoint_from_declarations_file(
             &declarations_path,
             client.clone(),
+            None,
         ));
     let CheckpointResult::Failed { reason, .. } = result else {
         panic!("expected Failed, got {result:?}");
@@ -1714,6 +1717,7 @@ fn checkpoint_target_allocation_failure_skips_commit() {
         .block_on(run_checkpoint_from_declarations_file(
             &declarations_path,
             client.clone(),
+            None,
         ));
     let CheckpointResult::Failed { reason, .. } = result else {
         panic!("expected Failed, got {result:?}");
@@ -1757,6 +1761,7 @@ fn checkpoint_commits_despite_cap_skipped_entries() {
         .block_on(run_checkpoint_from_declarations_file(
             &declarations_path,
             client.clone(),
+            None,
         ));
     let CheckpointResult::Committed { generation } = result else {
         panic!("expected Committed, got {result:?}");
@@ -1812,6 +1817,7 @@ fn checkpoint_skips_oversized_files_and_still_commits() {
         .block_on(run_checkpoint_from_declarations_file(
             &declarations_path,
             client.clone(),
+            None,
         ));
     let CheckpointResult::Committed { .. } = result else {
         panic!("an oversized file must not fail the attempt, got {result:?}");
@@ -1842,6 +1848,7 @@ fn checkpoint_skips_when_declarations_file_missing() {
         .block_on(run_checkpoint_from_declarations_file(
             &missing,
             client.clone(),
+            None,
         ));
     assert!(matches!(result, CheckpointResult::Skipped));
     assert!(client.commit_requests().is_empty());
@@ -1869,6 +1876,7 @@ fn checkpoint_clean_repo_commits_manifest_only() {
         .block_on(run_checkpoint_from_declarations_file(
             &declarations_path,
             client.clone(),
+            None,
         ));
     let CheckpointResult::Committed { .. } = result else {
         panic!("expected Committed, got {result:?}");
@@ -1903,6 +1911,7 @@ fn checkpoint_commit_failure_reports_failed_result() {
         .block_on(run_checkpoint_from_declarations_file(
             &declarations_path,
             client.clone(),
+            None,
         ));
     assert!(
         matches!(result, CheckpointResult::Failed { .. }),
@@ -1948,6 +1957,7 @@ fn checkpoint_withholds_commit_when_the_server_omits_a_blob_upload_target() {
         .block_on(run_checkpoint_from_declarations_file(
             &declarations_path,
             client.clone(),
+            None,
         ));
 
     let CheckpointResult::Failed { reason, .. } = result else {
@@ -1990,6 +2000,47 @@ fn sanitize_name_component_never_yields_the_reserved_double_underscore() {
 }
 
 #[test]
+fn checkpoint_retry_reuses_the_supplied_generation() {
+    // A retry must stage under the failed attempt's generation rather than minting a new
+    // one: the server bounds how many objects an execution's prefix may hold and only
+    // reclaims abandoned ones during a successful commit, so a run of failures that each
+    // staged a fresh set would lock the execution out of checkpointing entirely.
+    let tempdir = snaptest_tempdir();
+    let file_path = tempdir.path().join("note.txt");
+    fs::write(&file_path, b"hello").unwrap();
+    let decl_dir = snaptest_tempdir();
+    let declarations_path = write_declarations(decl_dir.path(), &[], &[&file_path]);
+
+    let mut server = Server::new();
+    let upload_mock = server
+        .mock("PUT", upload_path(r".+"))
+        .with_status(200)
+        .create();
+
+    let reused = CheckpointGeneration::new_for_test("1700000000000-0");
+    let client = TestClient::new(server.url());
+    let result = Runtime::new()
+        .unwrap()
+        .block_on(run_checkpoint_from_declarations_file(
+            &declarations_path,
+            client.clone(),
+            Some(reused.clone()),
+        ));
+    let CheckpointResult::Committed { generation } = result else {
+        panic!("expected Committed, got {result:?}");
+    };
+    assert_eq!(generation.as_str(), reused.as_str());
+
+    // Both the upload-target requests and the commit must be keyed by the reused
+    // generation, so the objects overwrite the previous attempt's.
+    for request in client.upload_requests() {
+        assert_eq!(request.generation.as_deref(), Some(reused.as_str()));
+    }
+    assert_eq!(client.commit_requests()[0].generation, reused.as_str());
+    drop(upload_mock);
+}
+
+#[test]
 fn checkpoint_new_gather_mints_a_fresh_generation_each_time() {
     // Two independent checkpoint attempts (each a fresh gather) must never reuse a generation.
     let tempdir = snaptest_tempdir();
@@ -2009,10 +2060,12 @@ fn checkpoint_new_gather_mints_a_fresh_generation_each_time() {
     let first = rt.block_on(run_checkpoint_from_declarations_file(
         &declarations_path,
         client.clone(),
+        None,
     ));
     let second = rt.block_on(run_checkpoint_from_declarations_file(
         &declarations_path,
         client.clone(),
+        None,
     ));
     let (
         CheckpointResult::Committed {
@@ -2130,6 +2183,7 @@ fn checkpoint_commits_server_valid_names_for_hostile_basenames() {
         .block_on(run_checkpoint_from_declarations_file(
             &declarations_path,
             client.clone(),
+            None,
         ));
     let CheckpointResult::Committed { .. } = result else {
         panic!("expected Committed, got {result:?}");
