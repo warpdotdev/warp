@@ -117,6 +117,17 @@ fn parse_session_start_notification() {
 }
 
 #[test]
+fn parse_grok_session_start_notification() {
+    let body = r#"{"v":1,"agent":"grok","event":"session_start","session_id":"g1","cwd":"/tmp/proj","plugin_version":"1.0.0"}"#;
+    let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
+
+    assert_eq!(notif.agent, CLIAgent::Grok);
+    assert_eq!(notif.event, CLIAgentEventType::SessionStart);
+    assert_eq!(notif.session_id.as_deref(), Some("g1"));
+    assert_eq!(notif.payload.plugin_version.as_deref(), Some("1.0.0"));
+}
+
+#[test]
 fn returns_none_for_wrong_sentinel() {
     let body = r#"{"v":1,"agent":"claude","event":"stop"}"#;
     assert!(parse_event(Some("Claude Code"), body).is_none());
