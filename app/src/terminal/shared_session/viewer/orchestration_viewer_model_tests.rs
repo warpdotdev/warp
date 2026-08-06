@@ -60,67 +60,6 @@ fn settled_states_map_to_matching_conversation_status() {
     }
 }
 
-// ---- Test helpers -----------------------------------------------------------
-
-/// Stub UUIDs used for `AmbientAgentTaskId`s; the model treats them as opaque.
-const PARENT_TASK_ID: &str = "11111111-1111-1111-1111-111111111111";
-const CHILD_A_TASK_ID: &str = "22222222-2222-2222-2222-222222222222";
-const CHILD_B_TASK_ID: &str = "33333333-3333-3333-3333-333333333333";
-const SESSION_A: &str = "44444444-4444-4444-4444-444444444444";
-
-fn task_id(s: &str) -> AmbientAgentTaskId {
-    s.parse().expect("hardcoded task id parses")
-}
-
-/// Builds a minimal [`AmbientAgentTask`] suitable for the registration path.
-fn make_task(
-    id: &str,
-    state: AmbientAgentTaskState,
-    title: &str,
-    session_id: Option<&str>,
-) -> AmbientAgentTask {
-    make_task_with_name(id, state, None, title, session_id)
-}
-
-fn make_task_with_name(
-    id: &str,
-    state: AmbientAgentTaskState,
-    snapshot_name: Option<&str>,
-    title: &str,
-    session_id: Option<&str>,
-) -> AmbientAgentTask {
-    let now = Utc::now();
-    let agent_config_snapshot = snapshot_name.map(|name| AgentConfigSnapshot {
-        name: Some(name.to_string()),
-        ..Default::default()
-    });
-    AmbientAgentTask {
-        task_id: task_id(id),
-        parent_run_id: Some(PARENT_TASK_ID.to_string()),
-        title: title.to_string(),
-        state,
-        prompt: String::new(),
-        created_at: now,
-        started_at: Some(now),
-        updated_at: now,
-        run_time: Some("PT1S".parse().unwrap()),
-        status_message: None,
-        source: None,
-        execution_location: None,
-        session_id: session_id.map(String::from),
-        session_link: None,
-        creator: None,
-        executor: None,
-        conversation_id: None,
-        request_usage: None,
-        is_sandbox_running: false,
-        agent_config_snapshot,
-        artifacts: vec![],
-        last_event_sequence: None,
-        children: vec![],
-    }
-}
-
 // ---- Child registration -----------------------------------------------------
 
 #[test]

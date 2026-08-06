@@ -3732,7 +3732,11 @@ impl PaneGroup {
         if FeatureFlag::HandoffCloudCloud.is_enabled()
             && let Some(task_id) = ambient_agent_task_id
         {
-            if terminal_view.as_ref(ctx).ambient_agent_view_model().is_some() {
+            if terminal_view
+                .as_ref(ctx)
+                .ambient_agent_view_model()
+                .is_some()
+            {
                 let parent_conversation_id = Self::load_data_into_restored_ambient_cloud_mode_view(
                     terminal_view,
                     cloud_conversation,

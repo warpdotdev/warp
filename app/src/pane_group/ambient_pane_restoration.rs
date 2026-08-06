@@ -9,7 +9,7 @@ use crate::ai::agent_conversations_model::{
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::pane_group::{CloudConversationData, PaneGroup, PaneId, TerminalPane, TerminalViewResources};
+use crate::pane_group::{PaneGroup, PaneId, TerminalPane, TerminalViewResources};
 use crate::terminal::TerminalView;
 use crate::workspace::WorkspaceAction;
 

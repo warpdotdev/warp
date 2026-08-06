@@ -543,6 +543,7 @@ fn adjacent_orchestration_child_navigation_cycles_whole_tree_from_grandchild() {
                 "mid".to_string(),
                 root_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -552,6 +553,7 @@ fn adjacent_orchestration_child_navigation_cycles_whole_tree_from_grandchild() {
                 "grandchild".to_string(),
                 mid_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -603,6 +605,7 @@ fn child_conversations_in_pill_order_returns_direct_children_only() {
                 "mid".to_string(),
                 root_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -612,6 +615,7 @@ fn child_conversations_in_pill_order_returns_direct_children_only() {
                 "grandchild".to_string(),
                 mid_id,
                 None,
+                false,
                 ctx,
             )
         });
