@@ -331,7 +331,6 @@ impl View {
     }
 
     #[cfg(feature = "integration_tests")]
-    /// Exposes the selected result so integration tests can verify the exact action before Enter.
     pub fn selected_search_result<'a>(
         &'a self,
         app: &'a AppContext,

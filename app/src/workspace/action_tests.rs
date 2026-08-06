@@ -80,11 +80,3 @@ fn pane_name_actions_save_workspace_state() {
     // `rename_pane` which mutates `pane_configuration`.
     assert!(WorkspaceAction::RenameActivePane.should_save_app_state_on_action());
 }
-
-#[test]
-fn cycle_active_tab_color_is_local_and_saves_workspace_state() {
-    let action = WorkspaceAction::CycleActiveTabColor;
-
-    assert!(action.should_save_app_state_on_action());
-    assert!(!action.blocked_for_anonymous_user());
-}

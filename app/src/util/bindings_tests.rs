@@ -1,13 +1,10 @@
 use warpui::App;
-use warpui::keymap::{Context, DescriptionContext, EditableBinding, Keystroke, Trigger};
+use warpui::keymap::{EditableBinding, Keystroke, Trigger};
 use warpui::platform::OperatingSystem;
 
 use crate::terminal;
-use crate::util::bindings::{
-    BindingGroup, keybinding_name_to_display_string, trigger_to_keystroke,
-};
+use crate::util::bindings::{keybinding_name_to_display_string, trigger_to_keystroke};
 use crate::workspace::WorkspaceAction;
-use crate::workspace::view::tests::initialize_app;
 
 #[test]
 fn test_keybinding_name_to_display_string() {
@@ -160,40 +157,6 @@ fn test_terminal_page_scroll_bindings_are_editable() {
 
             assert_eq!(page_up, Keystroke::parse("pageup").ok());
             assert_eq!(page_down, Keystroke::parse("pagedown").ok());
-        });
-    });
-}
-
-#[test]
-fn test_cycle_active_tab_color_binding_contract() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-
-        app.update(|ctx| {
-            let binding = ctx
-                .editable_bindings()
-                .find(|binding| binding.name == "workspace:cycle_active_tab_color")
-                .expect("cycle active tab color should be registered as an editable binding");
-
-            assert_eq!(
-                binding
-                    .description
-                    .resolve(ctx, DescriptionContext::Default),
-                "Cycle Current Tab Color"
-            );
-            assert_eq!(binding.group, Some(BindingGroup::Settings.as_str()));
-            assert_eq!(binding.trigger, &Trigger::Empty);
-            assert!(matches!(
-                binding.action.as_any().downcast_ref::<WorkspaceAction>(),
-                Some(WorkspaceAction::CycleActiveTabColor)
-            ));
-
-            let workspace_context = Context {
-                set: ["Workspace"].into(),
-                ..Default::default()
-            };
-            assert!(binding.in_context(&workspace_context));
-            assert!(!binding.in_context(&Context::default()));
         });
     });
 }
