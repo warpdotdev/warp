@@ -627,7 +627,26 @@ pub struct ListHandoffSnapshotAttachmentsResponse {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct AttachmentUploadInfo {
     pub attachment_id: String,
+    /// Presigned URL form of [`Self::upload_target`], kept for compatibility.
+    /// It only describes a plain `PUT`, so it cannot express the presigned POST
+    /// form that self-hosted S3 storage requires.
     pub upload_url: String,
+    /// Absent when the server predates the upload-target contract.
+    #[serde(default)]
+    pub upload_target: Option<UploadTarget>,
+}
+
+impl AttachmentUploadInfo {
+    /// The target to upload this attachment to, synthesizing a presigned `PUT`
+    /// from [`Self::upload_url`] when the server did not send an upload target.
+    pub fn resolve_upload_target(&self, content_type: &str) -> UploadTarget {
+        self.upload_target.clone().unwrap_or_else(|| UploadTarget {
+            url: self.upload_url.clone(),
+            method: "PUT".to_string(),
+            headers: HashMap::from([("Content-Type".to_string(), content_type.to_string())]),
+            fields: Vec::new(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

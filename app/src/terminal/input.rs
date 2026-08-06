@@ -257,6 +257,7 @@ use crate::server::server_api::ServerApi;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::server::server_api::ai::AttachmentInput;
 use crate::server::server_api::ai::{AIClient, AttachmentFileInfo};
+use crate::server::server_api::presigned_upload::upload_to_target;
 use crate::server::telemetry::{
     AICommandSearchEntrypoint, AgentModeAutoDetectionFalsePositivePayload,
     AgentModeAutoDetectionSettingOrigin, AnonymousUserSignupEntrypoint, CommandXRayTrigger,
@@ -1833,8 +1834,8 @@ enum TaskAttachmentUploadOutcome {
 }
 
 /// Decode, size-check, and upload `pending_attachments` to the given task's storage
-/// bucket via presigned URLs obtained from the server. Returns one [`TaskAttachmentUploadOutcome`]
-/// per input attachment in the same order.
+/// via presigned upload targets obtained from the server. Returns one
+/// [`TaskAttachmentUploadOutcome`] per input attachment in the same order.
 ///
 /// The outer `Err` is returned only when [`AIClient::prepare_attachments_for_upload`] fails
 /// (meaning no individual uploads were attempted). Decode errors, size-limit violations,
@@ -1906,26 +1907,18 @@ async fn upload_pending_attachments_to_task(
             .iter()
             .zip(prepare_response.attachments.iter())
         {
-            let result = server_api
-                .http_client()
-                .put(&upload_info.upload_url)
-                .header("Content-Type", mime_type.as_str())
-                .body(file_bytes.clone())
-                .send()
-                .await;
+            let target = upload_info.resolve_upload_target(mime_type);
+            let result =
+                upload_to_target(server_api.http_client(), &target, file_bytes.clone()).await;
 
             outcomes[*orig_idx] = Some(match result {
-                Ok(resp) if resp.status().is_success() => TaskAttachmentUploadOutcome::Uploaded {
+                Ok(()) => TaskAttachmentUploadOutcome::Uploaded {
                     attachment_id: upload_info.attachment_id.clone(),
                     file_name: file_name.clone(),
                 },
-                Ok(resp) => TaskAttachmentUploadOutcome::Failed {
-                    file_name: file_name.clone(),
-                    error: format!("HTTP {}", resp.status()),
-                },
                 Err(e) => TaskAttachmentUploadOutcome::Failed {
                     file_name: file_name.clone(),
-                    error: e.to_string(),
+                    error: format!("{e:#}"),
                 },
             });
         }

@@ -48,6 +48,9 @@ pub enum UploadFieldValue {
     Static { value: String },
     /// Client should compute CRC32C of the upload, base64-encode the 4-byte
     /// big-endian result, and send it as this field's value.
+    // `snake_case` would derive `content_crc32_c`, which does not match the
+    // `ContentCRC32CFieldValue` discriminator in warp-server's OpenAPI schema.
+    #[serde(rename = "content_crc32c")]
     ContentCrc32C,
     /// Client should use the raw upload bytes as this field's value.
     ContentData,
