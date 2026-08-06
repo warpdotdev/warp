@@ -335,6 +335,7 @@ async fn finalize_with_new_attempt_below_floor_skips_the_attempt_entirely() {
         None,
         Duration::from_secs(1),
         Duration::from_secs(1),
+        None,
     )
     .await;
     assert_eq!(
@@ -378,6 +379,7 @@ async fn finalize_with_the_derived_budget_runs_the_attempt() {
         None,
         script_timeout,
         upload_timeout,
+        None,
     )
     .await;
     assert_eq!(
@@ -417,6 +419,7 @@ async fn finalize_with_new_attempt_above_floor_starts_and_commits() {
         None,
         Duration::from_millis(10),
         Duration::from_secs(5),
+        None,
     )
     .await;
     assert_eq!(
@@ -469,6 +472,7 @@ async fn start_attempt_runs_to_completion_even_if_the_receiver_is_dropped() {
         None,
         Duration::from_secs(5),
         Duration::from_secs(5),
+        None,
         &background,
     );
     drop(rx); // The caller stops waiting immediately; the spawned task must still run.

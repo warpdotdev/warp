@@ -252,6 +252,11 @@ fn jittered_interval(interval: Duration, jitter: Duration) -> Duration {
 /// regenerate declarations, then gather, upload, and commit. Bounded by `upload_timeout`;
 /// `script_timeout` separately bounds only the declarations-script sub-step (matching the
 /// legacy pipeline).
+///
+/// `generation` carries the previous attempt's generation when this attempt is a retry, so
+/// the re-gathered payload overwrites that attempt's staged objects instead of adding a new
+/// set. See [`snapshot::run_checkpoint_from_declarations_file`].
+#[allow(clippy::too_many_arguments)]
 async fn run_one_attempt(
     client: Arc<dyn HarnessSupportClient>,
     task_id: AmbientAgentTaskId,
@@ -259,6 +264,7 @@ async fn run_one_attempt(
     declarations_writer: Option<DeclarationsWriterHandle>,
     script_timeout: Duration,
     upload_timeout: Duration,
+    generation: Option<CheckpointGeneration>,
 ) -> CheckpointResult {
     // Drain queued driver-side `file` appends before the bash script starts appending its
     // own `repo` entries to the same append-only JSONL. `AgentDriver::run_snapshot_upload`
@@ -269,13 +275,16 @@ async fn run_one_attempt(
     }
     snapshot::run_declarations_script(&working_dir, &task_id, script_timeout).await;
     let path = snapshot::resolve_declarations_path(Some(&task_id));
-    match snapshot::run_checkpoint_from_declarations_file(&path, client)
+    // Kept so a timeout can still report the generation it was retrying: the attempt may have
+    // staged objects under it, and the next retry should overwrite them rather than add more.
+    let retried_generation = generation.clone();
+    match snapshot::run_checkpoint_from_declarations_file(&path, client, generation)
         .with_timeout(upload_timeout)
         .await
     {
         Ok(result) => result,
         Err(_) => CheckpointResult::Failed {
-            generation: None,
+            generation: retried_generation,
             reason: format!("checkpoint attempt exceeded {upload_timeout:?} upload timeout"),
         },
     }
@@ -295,6 +304,7 @@ fn start_attempt(
     declarations_writer: Option<DeclarationsWriterHandle>,
     script_timeout: Duration,
     upload_timeout: Duration,
+    generation: Option<CheckpointGeneration>,
     background: &Background,
 ) -> oneshot::Receiver<CheckpointResult> {
     let (tx, rx) = oneshot::channel();
@@ -307,6 +317,7 @@ fn start_attempt(
                 declarations_writer,
                 script_timeout,
                 upload_timeout,
+                generation,
             )
             .await;
             let _ = tx.send(result);
@@ -431,6 +442,7 @@ async fn finalize_with_new_attempt(
     declarations_writer: Option<DeclarationsWriterHandle>,
     script_timeout: Duration,
     upload_timeout: Duration,
+    generation: Option<CheckpointGeneration>,
 ) {
     let floor = script_timeout + upload_timeout;
     let remaining = request.deadline.saturating_duration_since(Instant::now());
@@ -445,6 +457,7 @@ async fn finalize_with_new_attempt(
             declarations_writer,
             script_timeout,
             upload_timeout,
+            generation,
         );
         if tokio::time::timeout(remaining, attempt).await.is_err() {
             log::warn!("Final checkpoint attempt did not complete within {remaining:?}");
@@ -506,6 +519,11 @@ async fn coordinator_loop(
     background: Arc<Background>,
     mut finalize_rx: mpsc::UnboundedReceiver<FinalizeRequest>,
 ) {
+    // Generation of the last attempt that failed, if any. Retrying under it overwrites that
+    // attempt's staged objects; minting per attempt would instead pile up a new set each time
+    // and can exhaust the server's per-execution staging budget. Cleared once an attempt
+    // commits (its objects are the committed checkpoint) or skips (nothing was staged).
+    let mut pending_generation: Option<CheckpointGeneration> = None;
     loop {
         // --- Idle: wait for the next (jittered) tick or a finalize request. ---
         futures::select! {
@@ -520,6 +538,7 @@ async fn coordinator_loop(
                     declarations_writer.clone(),
                     script_timeout,
                     upload_timeout,
+                    pending_generation,
                 )
                 .await;
                 return;
@@ -538,6 +557,7 @@ async fn coordinator_loop(
                     declarations_writer.clone(),
                     script_timeout,
                     upload_timeout,
+                    pending_generation,
                 )
                 .await;
                 return;
@@ -553,6 +573,7 @@ async fn coordinator_loop(
             declarations_writer.clone(),
             script_timeout,
             upload_timeout,
+            pending_generation.clone(),
             &background,
         );
         futures::select! {
@@ -563,15 +584,20 @@ async fn coordinator_loop(
                             "Periodic checkpoint committed: generation={}",
                             generation.as_str()
                         );
+                        pending_generation = None;
                     }
                     Ok(CheckpointResult::Skipped) => {
                         log::info!("Periodic checkpoint skipped: no usable declarations");
+                        pending_generation = None;
                     }
                     Ok(CheckpointResult::Failed { generation, reason }) => {
                         log::warn!(
                             "Periodic checkpoint attempt failed (generation={:?}): {reason}",
                             generation.as_ref().map(CheckpointGeneration::as_str)
                         );
+                        // Retry under the same generation so the next attempt overwrites
+                        // whatever this one staged instead of staging a second set.
+                        pending_generation = generation;
                     }
                     Err(_) => {
                         log::warn!(
