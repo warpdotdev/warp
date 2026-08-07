@@ -580,8 +580,9 @@ impl BillingAndUsagePageView {
             }
             SpendingLimitModalEvent::Update { amount_cents } => {
                 let workspaces = UserWorkspaces::as_ref(ctx);
-                let team_uid = workspaces.team_uid_for_window(ctx.window_id());
-                let usage_settings = workspaces.usage_based_pricing_settings();
+                let window_id = ctx.window_id();
+                let team_uid = workspaces.team_uid_for_window(window_id);
+                let usage_settings = workspaces.usage_based_pricing_settings(Some(window_id));
 
                 if let Some(team_uid) = team_uid {
                     self.update_usage_based_pricing_settings(
@@ -668,7 +669,7 @@ impl BillingAndUsagePageView {
 
     fn update_spending_limit_modals(&mut self, ctx: &mut ViewContext<Self>) {
         let workspaces = UserWorkspaces::as_ref(ctx);
-        let usage_settings = workspaces.usage_based_pricing_settings();
+        let usage_settings = workspaces.usage_based_pricing_settings(Some(ctx.window_id()));
         let overage_limit = usage_settings.max_monthly_spend_cents.unwrap_or(5000);
         let addon_limit = workspaces
             .current_workspace()
@@ -1416,7 +1417,8 @@ impl BillingAndUsagePageView {
         has_admin_permissions: bool,
     ) -> Box<dyn Element> {
         let workspaces = UserWorkspaces::as_ref(app);
-        let usage_settings = workspaces.usage_based_pricing_settings();
+        let usage_settings =
+            workspaces.usage_based_pricing_settings(self.self_handle.window_id(app));
 
         let spend_limit_text = if let Some(cents) = usage_settings.max_monthly_spend_cents {
             format!("${:.2}", cents as f64 / 100.0)
@@ -3336,7 +3338,8 @@ impl BillingAndUsagePageView {
         if let (Some(team), Some(billing_metadata)) = (team, billing_metadata)
             && billing_metadata.is_usage_based_pricing_toggleable()
         {
-            let usage_based_pricing_settings = workspaces.usage_based_pricing_settings();
+            let usage_based_pricing_settings =
+                workspaces.usage_based_pricing_settings(self.self_handle.window_id(app));
 
             let enabled = self
                 .usage_based_pricing_toggle_override

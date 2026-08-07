@@ -23105,7 +23105,8 @@ impl Workspace {
         }
         if !privacy_settings.is_telemetry_force_enabled()
             && matches!(
-                UserWorkspaces::as_ref(app).get_cloud_conversation_storage_enablement_setting(),
+                UserWorkspaces::as_ref(app)
+                    .get_cloud_conversation_storage_enablement_setting(Some(self.window_id)),
                 AdminEnablementSetting::RespectUserSetting
             )
         {

@@ -26,9 +26,10 @@ pub(crate) fn should_use_codebase_indexing(
     surface: CodebaseAutoIndexingSurface,
     ctx: &AppContext,
 ) -> bool {
+    // TODO(team-scoped-settings): thread a real window_id through once available here.
     codebase_indexing_enabled(
         surface,
-        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx),
+        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(None, ctx),
     )
 }
 
@@ -36,9 +37,10 @@ pub(crate) fn should_auto_index_codebase(
     surface: CodebaseAutoIndexingSurface,
     ctx: &AppContext,
 ) -> bool {
+    // TODO(team-scoped-settings): thread a real window_id through once available here.
     codebase_auto_indexing_enabled(
         surface,
-        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx),
+        UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(None, ctx),
         *CodeSettings::as_ref(ctx).auto_indexing_enabled,
     )
 }

@@ -111,6 +111,7 @@ mod team_settings_conversion {
         let owned = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect();
         gqlws::StringListSettingInfo {
             values: owned(values),
+            is_configured: true,
             workspace_entries: owned(workspace),
             team_entries: owned(team),
         }
@@ -148,6 +149,7 @@ mod team_settings_conversion {
                         name: Some("api-key".to_string()),
                         pattern: "sk-.*".to_string(),
                     }],
+                    is_configured: true,
                     workspace_entries: vec![gqlws::SecretRedactionRegex {
                         name: None,
                         pattern: "ws-secret".to_string(),
@@ -235,6 +237,12 @@ mod team_settings_conversion {
             settings.ai_permissions.remote_session_regex_list.values,
             vec!["foo.*".to_string()]
         );
+        assert!(
+            settings
+                .ai_permissions
+                .remote_session_regex_list
+                .is_configured
+        );
         assert_eq!(
             settings
                 .ai_permissions
@@ -316,6 +324,42 @@ mod team_settings_conversion {
         assert_eq!(
             settings.sandboxed_agent.execute_commands_denylist.values,
             vec!["danger".to_string()]
+        );
+    }
+
+    #[test]
+    fn explicit_empty_override_is_not_confused_with_unconfigured() {
+        // Regression test for the bug this field exists to fix: a
+        // workspace/team explicitly locking a list to empty (`is_configured:
+        // true`, `values: []`) must produce `Some(vec![])` end-to-end through
+        // `AiAutonomySettings::from`, not collapse to `None` the way an
+        // unconfigured list (`is_configured: false`) correctly does.
+        let mut gql = sample_gql_team_settings();
+        gql.ai_autonomy.execute_commands_allowlist = gqlws::StringListSettingInfo {
+            values: vec![],
+            is_configured: true,
+            workspace_entries: vec![],
+            team_entries: vec![],
+        };
+        gql.ai_autonomy.execute_commands_denylist = gqlws::StringListSettingInfo {
+            values: vec![],
+            is_configured: false,
+            workspace_entries: vec![],
+            team_entries: vec![],
+        };
+
+        let team_settings = TeamSettings::from(gql);
+        let autonomy =
+            crate::workspaces::workspace::AiAutonomySettings::from(&team_settings.ai_autonomy);
+
+        assert_eq!(
+            autonomy.execute_commands_allowlist,
+            Some(vec![]),
+            "an explicit empty override must be enforced (Some(vec![])), not treated as unconfigured"
+        );
+        assert_eq!(
+            autonomy.execute_commands_denylist, None,
+            "a genuinely unconfigured list must still fall through to the execution profile's own list"
         );
     }
 

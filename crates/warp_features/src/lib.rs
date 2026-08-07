@@ -942,6 +942,14 @@ pub enum FeatureFlag {
     /// between credits and dollars. When disabled (prod/stable), the footer
     /// falls back to a static, non-interactive credits total.
     TuiCostTransparency,
+
+    /// Gates resolving AI/security/policy settings (AI autonomy, secret
+    /// redaction, link sharing, codebase context, etc.) from the *team*
+    /// bound to the current window (`UserWorkspaces::window_team_uids`)
+    /// instead of from a single workspace-wide value shared by every window.
+    /// Falls back to today's workspace-wide behavior when disabled, when no
+    /// window is in scope, or when the window has no team bound.
+    TeamScopedSettings,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1017,6 +1025,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WellKnownMcpIds,
     FeatureFlag::FactoryMcp,
     FeatureFlag::TuiCostTransparency,
+    FeatureFlag::TeamScopedSettings,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

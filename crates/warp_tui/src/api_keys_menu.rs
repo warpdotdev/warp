@@ -163,7 +163,7 @@ impl TuiApiKeysMenuModel {
             Some("Grok subscriptions aren't available in this build.")
         } else if !workspaces.is_byo_api_key_enabled(ctx) {
             Some("Grok subscriptions require BYOK access for this workspace.")
-        } else if !workspaces.are_member_byo_keys_allowed() {
+        } else if !workspaces.are_member_byo_keys_allowed(None) {
             Some("Your organization doesn't allow member-provided credentials.")
         } else {
             None

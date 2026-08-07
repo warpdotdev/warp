@@ -94,10 +94,11 @@ pub fn resolve_default_host_slug(ctx: &AppContext) -> Option<String> {
             return Some(trimmed.to_string());
         }
     }
+    // TODO(team-scoped-settings): thread a real window_id through once available here.
     UserWorkspaces::as_ref(ctx)
-        .default_host_slug()
-        .map(str::to_string)
+        .default_host_slug(None)
         .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
 }
 
 /// Returns the user's last-selected custom host slug from

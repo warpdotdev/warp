@@ -527,7 +527,8 @@ impl AIRequestUsageModel {
         if user_workspaces.is_byo_api_key_enabled(ctx) && api_keys.has_any_key() {
             return true;
         }
-        user_workspaces.is_aws_bedrock_credentials_enabled(ctx)
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
+        user_workspaces.is_aws_bedrock_credentials_enabled(None, ctx)
             && matches!(
                 api_keys.aws_credentials_state(),
                 AwsCredentialsState::Loaded { .. }

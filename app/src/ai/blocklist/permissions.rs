@@ -227,14 +227,15 @@ impl BlocklistAIPermissions {
     /// In sandboxed mode, returns settings derived from the sandboxed agent config.
     /// In unsandboxed mode, returns the standard AI autonomy settings.
     fn workspace_autonomy_settings(ctx: &AppContext) -> AiAutonomySettings {
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
         if AppExecutionMode::as_ref(ctx).is_sandboxed() {
-            let sandboxed = UserWorkspaces::as_ref(ctx).sandboxed_agent_settings();
+            let sandboxed = UserWorkspaces::as_ref(ctx).sandboxed_agent_settings(None);
             AiAutonomySettings {
                 execute_commands_denylist: sandboxed.and_then(|s| s.execute_commands_denylist),
                 ..Default::default()
             }
         } else {
-            UserWorkspaces::as_ref(ctx).ai_autonomy_settings()
+            UserWorkspaces::as_ref(ctx).ai_autonomy_settings(None)
         }
     }
 
@@ -1228,7 +1229,8 @@ impl SingletonEntity for BlocklistAIPermissions {}
 /// Granular permissions still need to be checked for specific autonomy features
 /// (e.g. whether a command is auto-executable).
 pub fn is_agent_mode_autonomy_allowed(ctx: &AppContext) -> bool {
-    crate::UserWorkspaces::as_ref(ctx).is_ai_autonomy_allowed()
+    // TODO(team-scoped-settings): thread a real window_id through once available here.
+    crate::UserWorkspaces::as_ref(ctx).is_ai_autonomy_allowed(None)
 }
 
 #[cfg(test)]

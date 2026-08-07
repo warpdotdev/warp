@@ -80,13 +80,14 @@ pub(crate) fn current_geap_policy(app: &AppContext) -> GeapPolicy {
         return GeapPolicy::Disabled;
     }
     let user_workspaces = UserWorkspaces::as_ref(app);
-    if !user_workspaces.is_gemini_enterprise_credentials_enabled(app) {
+    // TODO(team-scoped-settings): thread a real window_id through once available here.
+    if !user_workspaces.is_gemini_enterprise_credentials_enabled(None, app) {
         return GeapPolicy::Disabled;
     }
     let Some(user_id) = AuthStateProvider::as_ref(app).get().user_id() else {
         return GeapPolicy::Disabled;
     };
-    let Some(settings) = user_workspaces.gemini_enterprise_host_settings() else {
+    let Some(settings) = user_workspaces.gemini_enterprise_host_settings(None) else {
         return GeapPolicy::Unconfigured;
     };
     match geap_mint_binding_from_parts(

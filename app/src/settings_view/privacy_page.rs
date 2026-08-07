@@ -27,7 +27,7 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
 use warpui::{
     Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
-    UpdateModel, View, ViewContext, ViewHandle, id,
+    UpdateModel, View, ViewContext, ViewHandle, WindowId, id,
 };
 
 use super::privacy::{AddRegexModal, AddRegexModalEvent};
@@ -100,6 +100,7 @@ pub fn data_management_url(custom_token: Option<&str>) -> String {
 }
 
 pub struct PrivacyPageView {
+    window_id: WindowId,
     page: PageType<Self>,
     local_only_icon_tooltip_states: RefCell<HashMap<String, MouseStateHandle>>,
     /// This needs to mirror the length of PrivacySettings::user_secret_regex_list.
@@ -201,6 +202,7 @@ impl PrivacyPageView {
         });
 
         let mut privacy_page_view = Self {
+            window_id: ctx.window_id(),
             page: Self::build_page(),
             local_only_icon_tooltip_states: Default::default(),
             added_user_secret_regex_list_button_handles: Default::default(),
@@ -1420,8 +1422,9 @@ impl AppAnalyticsWidget {
         .finish()
     }
 
-    fn should_show_zdr_badge(&self, app: &AppContext) -> bool {
-        let setting = UserWorkspaces::as_ref(app).get_ugc_collection_enablement_setting();
+    fn should_show_zdr_badge(&self, window_id: WindowId, app: &AppContext) -> bool {
+        let setting =
+            UserWorkspaces::as_ref(app).get_ugc_collection_enablement_setting(Some(window_id));
         matches!(setting, UgcCollectionEnablementSetting::Disable)
     }
 }
@@ -1445,7 +1448,7 @@ impl SettingsWidget for AppAnalyticsWidget {
 
     fn render(
         &self,
-        _view: &Self::View,
+        view: &Self::View,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -1465,7 +1468,7 @@ impl SettingsWidget for AppAnalyticsWidget {
 
         let org_setting = UserWorkspaces::handle(app)
             .as_ref(app)
-            .get_ugc_collection_enablement_setting();
+            .get_ugc_collection_enablement_setting(Some(view.window_id));
 
         let (is_toggleable, is_checked) = match org_setting {
             UgcCollectionEnablementSetting::Enable => (false, true),
@@ -1475,7 +1478,7 @@ impl SettingsWidget for AppAnalyticsWidget {
             }
         };
 
-        let zdr_label_component = if self.should_show_zdr_badge(app) {
+        let zdr_label_component = if self.should_show_zdr_badge(view.window_id, app) {
             Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(render_body_item_label::<PrivacyPageAction>(
@@ -1670,14 +1673,14 @@ impl SettingsWidget for CloudConversationStorageWidget {
 
     fn render(
         &self,
-        _view: &Self::View,
+        view: &Self::View,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         let privacy_settings = PrivacySettings::as_ref(app);
-        let org_setting =
-            UserWorkspaces::as_ref(app).get_cloud_conversation_storage_enablement_setting();
+        let org_setting = UserWorkspaces::as_ref(app)
+            .get_cloud_conversation_storage_enablement_setting(Some(view.window_id));
 
         let (toggle_state, is_checked) = match org_setting {
             AdminEnablementSetting::Enable => (ToggleState::Disabled, true),

@@ -350,7 +350,8 @@ impl BlocklistAIContextModel {
             // source code embedding based context is still available.
             false
         } else {
-            UserWorkspaces::as_ref(app).is_codebase_context_enabled(app)
+            // TODO(team-scoped-settings): thread a real window_id through once available here.
+            UserWorkspaces::as_ref(app).is_codebase_context_enabled(None, app)
                 && pwd.as_ref().is_some_and(|pwd| {
                     RepoOutlines::as_ref(app).is_directory_indexed(Path::new(&pwd))
                 })

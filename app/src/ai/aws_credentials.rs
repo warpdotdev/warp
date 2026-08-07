@@ -260,7 +260,8 @@ fn refresh_aws_credentials_local_chain(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
-    let is_available = UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx);
+    // TODO(team-scoped-settings): thread a real window_id through once available here.
+    let is_available = UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(None, ctx);
 
     if !is_available {
         manager.set_aws_credentials_state(AwsCredentialsState::Disabled, ctx);

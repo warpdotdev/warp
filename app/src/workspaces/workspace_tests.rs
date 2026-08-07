@@ -181,3 +181,9 @@ fn purchase_policy_standard_purchasing_wins_over_premium() {
     assert!(!billing_metadata.is_premium_addon_credits_purchase());
     assert_eq!(billing_metadata.addon_credits_price_premium_bps(), 0);
 }
+
+// Coverage for the workspace-vs-team-vs-unconfigured distinction previously exercised here
+// through `TeamSettings::from_workspace_defaults` (removed -- fallback reads now go directly
+// to `WorkspaceSettings` fields per accessor, see `UserWorkspaces::team_settings_for_window`)
+// now lives in `gql_convert_tests.rs` (real-team path) and `user_workspaces_tests.rs`
+// (per-accessor fallback behavior).

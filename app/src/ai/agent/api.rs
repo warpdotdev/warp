@@ -316,7 +316,8 @@ impl RequestParams {
         let geap_binding: Option<::ai::api_keys::GeapMintBinding> = None;
         let api_keys = api_key_manager.api_keys_for_request(
             is_byo_enabled,
-            user_workspaces.is_aws_bedrock_credentials_enabled(app),
+            // TODO(team-scoped-settings): thread a real window_id through once available here.
+            user_workspaces.is_aws_bedrock_credentials_enabled(None, app),
             geap_binding,
         );
         let is_custom_inference_enabled = user_workspaces.is_custom_inference_enabled(app);

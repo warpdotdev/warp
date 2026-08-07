@@ -62,8 +62,9 @@ pub fn resolve_cloud_agent_computer_use_state(ctx: &AppContext) -> CloudAgentCom
         };
     }
 
+    // TODO(team-scoped-settings): thread a real window_id through once available here.
     let autonomy_setting = UserWorkspaces::as_ref(ctx)
-        .ai_autonomy_settings()
+        .ai_autonomy_settings(None)
         .computer_use_setting;
     let user_preference = *AISettings::as_ref(ctx).cloud_agent_computer_use_enabled;
 

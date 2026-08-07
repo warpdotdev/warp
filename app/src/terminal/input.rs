@@ -2338,8 +2338,8 @@ impl Input {
             .filter(|s| !s.is_empty())
             .or_else(|| {
                 UserWorkspaces::as_ref(ctx)
-                    .default_host_slug()
-                    .map(String::from)
+                    .default_host_slug(Some(ctx.window_id()))
+                    .map(str::to_string)
             });
         if let Some(slug) = &effective_host {
             view.update(ctx, |selector, ctx| {
@@ -2386,8 +2386,8 @@ impl Input {
                 .filter(|s| !s.is_empty())
                 .or_else(|| {
                     UserWorkspaces::as_ref(ctx)
-                        .default_host_slug()
-                        .map(String::from)
+                        .default_host_slug(Some(ctx.window_id()))
+                        .map(str::to_string)
                 });
             if let Some(slug) = &effective_host {
                 view_for_ws.update(ctx, |selector, ctx| {

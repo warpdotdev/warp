@@ -1358,7 +1358,9 @@ impl ExecutionProfileEditorView {
         ctx: &mut ViewContext<Self>,
     ) {
         let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
-        let ai_autonomy_settings = workspace.as_ref(ctx).ai_autonomy_settings();
+        let ai_autonomy_settings = workspace
+            .as_ref(ctx)
+            .ai_autonomy_settings(Some(ctx.window_id()));
 
         Self::update_editor_interaction_state(
             view.command_denylist_editor.as_ref(ctx).editor().clone(),

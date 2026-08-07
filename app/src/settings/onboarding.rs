@@ -205,7 +205,8 @@ fn apply_agent_settings(agent_settings: &AgentDevelopmentSettings, app: &mut App
         );
     });
 
-    let workspace_autonomy_settings = UserWorkspaces::as_ref(app).ai_autonomy_settings();
+    // TODO(team-scoped-settings): thread a real window_id through once available here.
+    let workspace_autonomy_settings = UserWorkspaces::as_ref(app).ai_autonomy_settings(None);
 
     AISettings::handle(app).update(app, |settings, ctx| {
         report_if_error!(

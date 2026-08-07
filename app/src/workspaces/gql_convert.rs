@@ -1082,10 +1082,12 @@ impl From<GqlWorkspaceSettings> for WorkspaceSettings {
 }
 
 /// Converts a GraphQL `StringListSettingInfo` into the app list setting,
-/// preserving the workspace/team split entries alongside the merged values.
+/// preserving `is_configured` and the workspace/team split entries alongside
+/// the merged values.
 fn split_string_list(info: GqlStringListSettingInfo) -> SplitListSetting<String> {
     SplitListSetting {
         values: info.values,
+        is_configured: info.is_configured,
         workspace_entries: info.workspace_entries,
         team_entries: info.team_entries,
     }
@@ -1145,6 +1147,7 @@ impl From<GqlTeamSettings> for TeamSettings {
                 },
                 regexes: SplitListSetting {
                     values: map_regexes(gql_team_settings.secret_redaction.regexes.values),
+                    is_configured: gql_team_settings.secret_redaction.regexes.is_configured,
                     workspace_entries: map_regexes(
                         gql_team_settings.secret_redaction.regexes.workspace_entries,
                     ),

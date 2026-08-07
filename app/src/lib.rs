@@ -2506,9 +2506,11 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(DefaultTerminal::new);
 
     ctx.add_singleton_model(|ctx| {
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
+        // (this runs during app-wide singleton model initialization, with no window yet.)
         let should_restore_indices = launch_mode.supports_indexing()
             && (matches!(launch_mode, LaunchMode::RemoteServerDaemon { .. })
-                || UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx));
+                || UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(None, ctx));
         let indices_to_restore = if should_restore_indices {
             persisted_workspaces.clone()
         } else {

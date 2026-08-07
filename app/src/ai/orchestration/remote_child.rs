@@ -374,8 +374,9 @@ pub(crate) fn should_disable_snapshot(ctx: &AppContext) -> bool {
     if !privacy.is_cloud_conversation_storage_enabled {
         return true;
     }
+    // TODO(team-scoped-settings): thread a real window_id through once available here.
     matches!(
-        UserWorkspaces::as_ref(ctx).get_cloud_conversation_storage_enablement_setting(),
+        UserWorkspaces::as_ref(ctx).get_cloud_conversation_storage_enablement_setting(None),
         AdminEnablementSetting::Disable
     )
 }

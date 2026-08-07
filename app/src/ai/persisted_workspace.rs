@@ -640,8 +640,9 @@ impl PersistedWorkspace {
             if !manager.is_indexing_enabled() {
                 return;
             }
+            // TODO(team-scoped-settings): thread a real window_id through once available here.
             let codebase_context_enabled =
-                UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx);
+                UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(None, ctx);
             if codebase_context_enabled {
                 Self::enable_codebase_indexing(manager, ctx);
             } else {
@@ -685,8 +686,9 @@ impl PersistedWorkspace {
                 ctx,
             );
         });
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
         if FeatureFlag::FullSourceCodeEmbedding.is_enabled()
-            && UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx)
+            && UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(None, ctx)
             && *CodeSettings::as_ref(ctx).auto_indexing_enabled
         {
             CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -827,7 +829,8 @@ impl PersistedWorkspace {
         terminal_view_id: warpui::EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx) {
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
+        if !UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(None, ctx) {
             return;
         }
 

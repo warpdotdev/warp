@@ -2169,8 +2169,9 @@ impl AISettings {
         let contains_restored_remote_blocks =
             FocusedTerminalInfo::as_ref(app).contains_any_restored_remote_blocks();
 
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
         let is_ai_allowed_in_remote_sessions =
-            UserWorkspaces::as_ref(app).is_ai_allowed_in_remote_sessions();
+            UserWorkspaces::as_ref(app).is_ai_allowed_in_remote_sessions(None);
 
         if is_ai_allowed_in_remote_sessions {
             return false;
@@ -2362,8 +2363,9 @@ impl AISettings {
         if !privacy.is_cloud_conversation_storage_enabled {
             return false;
         }
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
         !matches!(
-            UserWorkspaces::as_ref(app).get_cloud_conversation_storage_enablement_setting(),
+            UserWorkspaces::as_ref(app).get_cloud_conversation_storage_enablement_setting(None),
             crate::workspaces::workspace::AdminEnablementSetting::Disable
         )
     }
@@ -2472,54 +2474,61 @@ impl AISettings {
     }
 
     pub fn is_command_allowlist_editable(&self, app: &AppContext) -> bool {
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings(None)
             .has_override_for_execute_commands_allowlist();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
     pub fn is_directory_allowlist_editable(&self, app: &AppContext) -> bool {
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings(None)
             .has_override_for_read_files_allowlist();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
     pub fn is_execute_commands_permissions_editable(&self, app: &AppContext) -> bool {
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings(None)
             .has_override_for_execute_commands();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
     pub fn is_write_to_pty_permissions_editable(&self, app: &AppContext) -> bool {
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings(None)
             .has_override_for_write_to_pty();
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
     pub fn is_computer_use_permissions_editable(&self, app: &AppContext) -> bool {
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings(None)
             .has_override_for_computer_use();
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
     pub fn is_read_files_permissions_editable(&self, app: &AppContext) -> bool {
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings(None)
             .has_override_for_read_files();
 
         self.is_any_ai_enabled(app) && !set_by_workspace
     }
 
     pub fn is_code_diffs_permissions_editable(&self, app: &AppContext) -> bool {
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
         let set_by_workspace = UserWorkspaces::as_ref(app)
-            .ai_autonomy_settings()
+            .ai_autonomy_settings(None)
             .has_override_for_code_diffs();
 
         self.is_any_ai_enabled(app) && !set_by_workspace

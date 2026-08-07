@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use chrono::Utc;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use warp_errors::report_error;
 use warp_graphql::billing::{AddonCreditAutoReloadStatus, ServiceAgreement, ServiceAgreementType};
 pub use warp_graphql::billing::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
@@ -973,7 +974,7 @@ pub struct LinkSharingSettings {
     pub direct_link_sharing_enabled: bool,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct EnterpriseSecretRegex {
     pub pattern: String,
     #[serde(default)]
@@ -1049,9 +1050,16 @@ pub struct EnforceableSetting<T> {
 /// server's `StringListSettingInfo` / `SecretRedactionRegexListInfo`). `values`
 /// is the authoritative merged result; `workspace_entries` / `team_entries` are
 /// preserved so future admin UI can present the layers separately.
+///
+/// `is_configured` is true when *either* layer explicitly configured this list
+/// (even to empty), false when neither did. This is what distinguishes "the
+/// workspace/team locked this list to empty" from "nobody configured this list
+/// at all" -- both otherwise look identical as an empty `values`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SplitListSetting<T> {
     pub values: Vec<T>,
+    #[serde(default)]
+    pub is_configured: bool,
     #[serde(default)]
     pub workspace_entries: Vec<T>,
     #[serde(default)]
@@ -1126,6 +1134,78 @@ pub struct TeamSettings {
     #[serde(default)]
     pub default_host_slug: Option<String>,
     pub team_byo: Option<TeamByoSettings>,
+}
+
+/// Best-effort compiles a merged string list from a [`SplitListSetting`] into
+/// [`AgentModeCommandExecutionPredicate`]s, skipping and reporting any pattern that fails to
+/// compile as a regex. An empty result (including one where every entry failed to compile) is
+/// treated as "no effective entries" by callers that further map it to `None`.
+fn predicates_from_split_list(
+    list: &SplitListSetting<String>,
+) -> Vec<AgentModeCommandExecutionPredicate> {
+    list.values
+        .iter()
+        .filter_map(
+            |pattern| match AgentModeCommandExecutionPredicate::new_regex(pattern) {
+                Ok(predicate) => Some(predicate),
+                Err(e) => {
+                    report_error!(anyhow::Error::new(e).context(
+                        "Couldn't parse team-effective command pattern into AgentModeCommandExecutionPredicate"
+                    ));
+                    None
+                }
+            },
+        )
+        .collect()
+}
+
+/// Converts an effective list into the `Option<Vec<T>>` shape [`AiAutonomySettings`] and
+/// [`SandboxedAgentSettings`] use, where `None` means "no override, fall back to the execution
+/// profile's own list" and `Some` (even `Some(vec![])`) means the workspace/team explicitly
+/// configured this list and it should be enforced as-is. Driven directly by
+/// [`SplitListSetting::is_configured`] rather than the values' emptiness, so an explicit empty
+/// override is never confused with the list never having been configured at all.
+fn to_optional_override<T>(values: Vec<T>, is_configured: bool) -> Option<Vec<T>> {
+    is_configured.then_some(values)
+}
+
+impl From<&TeamAiAutonomySettings> for AiAutonomySettings {
+    fn from(team: &TeamAiAutonomySettings) -> Self {
+        Self {
+            apply_code_diffs_setting: team.apply_code_diffs.value,
+            read_files_setting: team.read_files.value,
+            read_files_allowlist: to_optional_override(
+                team.read_files_allowlist
+                    .values
+                    .iter()
+                    .map(PathBuf::from)
+                    .collect(),
+                team.read_files_allowlist.is_configured,
+            ),
+            execute_commands_setting: team.execute_commands.value,
+            execute_commands_allowlist: to_optional_override(
+                predicates_from_split_list(&team.execute_commands_allowlist),
+                team.execute_commands_allowlist.is_configured,
+            ),
+            execute_commands_denylist: to_optional_override(
+                predicates_from_split_list(&team.execute_commands_denylist),
+                team.execute_commands_denylist.is_configured,
+            ),
+            write_to_pty_setting: team.write_to_pty.value,
+            computer_use_setting: team.computer_use.value,
+        }
+    }
+}
+
+impl From<&TeamSandboxedAgentSettings> for SandboxedAgentSettings {
+    fn from(team: &TeamSandboxedAgentSettings) -> Self {
+        Self {
+            execute_commands_denylist: to_optional_override(
+                predicates_from_split_list(&team.execute_commands_denylist),
+                team.execute_commands_denylist.is_configured,
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

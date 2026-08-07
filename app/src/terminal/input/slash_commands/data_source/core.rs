@@ -339,7 +339,8 @@ pub trait SlashCommandDataSource {
             availability |= Availability::NO_LRC_CONTROL;
         }
 
-        if UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx) {
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
+        if UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(None, ctx) {
             availability |= Availability::CODEBASE_CONTEXT;
         }
 
@@ -425,7 +426,8 @@ pub trait SlashCommandDataSource {
             .ok()
             .filter(|s| !s.is_empty())
             .is_some()
-            || UserWorkspaces::as_ref(ctx).default_host_slug().is_some();
+            // TODO(team-scoped-settings): thread a real window_id through once available here.
+            || UserWorkspaces::as_ref(ctx).default_host_slug(None).is_some();
         CommonCommandGates {
             is_orchestration_enabled: ai_settings.is_orchestration_enabled(ctx),
             is_cloud_handoff_enabled: ai_settings.is_cloud_handoff_enabled(ctx),

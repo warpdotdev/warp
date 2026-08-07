@@ -64,7 +64,9 @@ pub fn first_party_key_source_for_provider(
     app: &AppContext,
 ) -> Option<ByoKeySource> {
     let workspaces = UserWorkspaces::as_ref(app);
-    if workspaces.are_member_byo_keys_allowed() && is_using_api_key_for_provider(provider, app) {
+    // TODO(team-scoped-settings): thread a real window_id through once available here.
+    if workspaces.are_member_byo_keys_allowed(None) && is_using_api_key_for_provider(provider, app)
+    {
         return Some(ByoKeySource::UserProvided);
     }
     if is_using_team_first_party_key_for_provider(provider, app) {
@@ -100,7 +102,8 @@ pub fn byo_key_source_for_model(llm: &LLMInfo, app: &AppContext) -> Option<ByoKe
     let is_custom_endpoint = LLMPreferences::as_ref(app)
         .custom_llm_info_for_id(&llm.id)
         .is_some();
-    if is_custom_endpoint && UserWorkspaces::as_ref(app).are_member_byo_endpoints_allowed() {
+    // TODO(team-scoped-settings): thread a real window_id through once available here.
+    if is_custom_endpoint && UserWorkspaces::as_ref(app).are_member_byo_endpoints_allowed(None) {
         return Some(ByoKeySource::UserProvided);
     }
     if is_using_team_byo_endpoint_for_model(llm, app) {
@@ -147,10 +150,11 @@ fn should_show_host_icon_for_model(
 }
 
 pub fn should_show_bedrock_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
+    // TODO(team-scoped-settings): thread a real window_id through once available here.
     should_show_host_icon_for_model(
         llm,
         &LLMModelHost::AwsBedrock,
-        UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(app),
+        UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(None, app),
     )
 }
 
@@ -158,10 +162,11 @@ pub fn should_show_gemini_enterprise_agent_platform_icon_for_model(
     llm: &LLMInfo,
     app: &AppContext,
 ) -> bool {
+    // TODO(team-scoped-settings): thread a real window_id through once available here.
     should_show_host_icon_for_model(
         llm,
         &LLMModelHost::GeminiEnterprise,
-        UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled(app),
+        UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled(None, app),
     )
 }
 
@@ -1164,7 +1169,9 @@ impl LLMPreferences {
 
     fn custom_inference_enabled(app: &AppContext) -> bool {
         let workspaces = UserWorkspaces::as_ref(app);
-        workspaces.is_custom_inference_enabled(app) && workspaces.are_member_byo_endpoints_allowed()
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
+        workspaces.is_custom_inference_enabled(app)
+            && workspaces.are_member_byo_endpoints_allowed(None)
     }
 
     /// Resolves a custom model router by its `config_key`/`LLMId`.

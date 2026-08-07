@@ -2193,7 +2193,7 @@ impl RootView {
                 build_onboarding_models(LLMPreferences::as_ref(ctx), ctx);
 
             let workspace_enforces_autonomy = UserWorkspaces::as_ref(ctx)
-                .ai_autonomy_settings()
+                .ai_autonomy_settings(Some(ctx.window_id()))
                 .has_any_overrides();
 
             let auth_state = current_onboarding_auth_state(ctx);
@@ -2253,7 +2253,7 @@ impl RootView {
                 if matches!(event, UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess) {
                     let workspace_enforces_autonomy = user_workspaces
                         .as_ref(ctx)
-                        .ai_autonomy_settings()
+                        .ai_autonomy_settings(Some(ctx.window_id()))
                         .has_any_overrides();
                     onboarding_view_for_workspaces.update(ctx, |onboarding_view, ctx| {
                         onboarding_view

@@ -178,9 +178,11 @@ impl Slide for OzLaunchSlide {
     }
 
     fn should_show_checkbox(&self, app: &AppContext) -> bool {
+        // TODO(team-scoped-settings): thread a real window_id through once available here.
+        // (`should_show_checkbox` is a `Slide` trait method with no window context of its own.)
         let cloud_storage_setting =
-            UserWorkspaces::as_ref(app).get_cloud_conversation_storage_enablement_setting();
-        let ugc_setting = UserWorkspaces::as_ref(app).get_ugc_collection_enablement_setting();
+            UserWorkspaces::as_ref(app).get_cloud_conversation_storage_enablement_setting(None);
+        let ugc_setting = UserWorkspaces::as_ref(app).get_ugc_collection_enablement_setting(None);
 
         // Show checkbox only when user has control over cloud storage AND UGC is not force-enabled.
         matches!(
