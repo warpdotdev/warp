@@ -186,43 +186,17 @@ pub fn model_leading_icon(llm: &LLMInfo, flags: ModelIconFlags) -> Icon {
         Icon::Aws
     } else if flags.is_using_gemini_enterprise {
         Icon::GeminiEnterpriseAgentPlatform
+    } else if is_kimi_model(llm) {
+        Icon::KimiLogo
     } else {
-        model_provider_icon(llm)
+        llm.provider.icon().unwrap_or(Icon::Agent)
     }
 }
 
-/// The brand icon for the model's provider, falling back to the agent glyph.
-pub fn model_provider_icon(llm: &LLMInfo) -> Icon {
-    if is_kimi_model(llm) {
-        return Icon::KimiLogo;
-    }
-    llm.provider.icon().unwrap_or(Icon::Agent)
-}
-
-/// Kimi models are hosted through Fireworks, which the server reports as
-/// [`LLMProvider::Unknown`], so their branding can't be carried by the provider
-/// enum. Match on the model's own names instead, and keep the match anchored to
-/// the leading `kimi` token so the other Fireworks-hosted families (GLM,
-/// MiniMax, Qwen, DeepSeek) are unaffected.
-fn is_kimi_model(llm: &LLMInfo) -> bool {
-    [
-        llm.id.as_str(),
-        llm.display_name.as_str(),
-        llm.base_model_name.as_str(),
-    ]
-    .iter()
-    .any(|name| starts_with_kimi_token(name))
-}
-
-fn starts_with_kimi_token(name: &str) -> bool {
-    name.trim()
-        .to_lowercase()
-        .strip_prefix("kimi")
-        .is_some_and(|rest| {
-            rest.is_empty()
-                || rest.starts_with(['-', '_', '.', ' ', '/', ':'])
-                || rest.starts_with(|c: char| c.is_ascii_digit())
-        })
+/// Kimi is Fireworks-hosted, which the server reports as `LLMProvider::Unknown`,
+/// so the provider enum can't carry its logo.
+pub fn is_kimi_model(llm: &LLMInfo) -> bool {
+    llm.id.as_str().starts_with("kimi-")
 }
 
 /// Key for cached LLM metadata in user preferences.
