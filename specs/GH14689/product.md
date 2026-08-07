@@ -65,6 +65,7 @@ A workspace with a tab group named `backend` containing three tabs titled `api s
 12. An empty query shows every tab and every group at its stored collapsed state.
 13. A query matching neither any tab text nor any group name shows the existing "No tabs match your search." empty state.
 14. Behavior is consistent across all three vertical tabs display modes (Summary, FocusedSession, Panes), since group headers render in each.
+15. The next/previous-tab keybindings, while a search is active, cycle through exactly the tabs the panel shows — including members admitted by a group-name match. What is visible and what is reachable by keyboard never disagree.
 
 ## Success criteria
 
@@ -74,12 +75,14 @@ A workspace with a tab group named `backend` containing three tabs titled `api s
 4. Typing text that matches only a tab title still filters to that tab, with no group behavior triggered.
 5. Typing text matching nothing shows the empty state.
 6. A tab in a matched group that also matches by title is not duplicated in the list.
+7. With a group-name query active, pressing the next/previous-tab keybindings visits the matched group's members rather than skipping them.
 
 ## Validation
 
 - **Unit tests:** cover name matching including the untitled placeholder, and the merge of group matches into text matches (member inclusion, ordering, pane-row upgrade, empty group, non-member exclusion, no-match passthrough).
 - **Manual test:** create a group named `backend` with tabs whose titles do not contain "backend", collapse it, type `backend` in the panel search, and confirm the group appears expanded with all members; clear the query and confirm it re-collapses.
 - **Regression test:** confirm searching for a plain tab title still behaves as before, and that the empty state still appears for a nonsense query.
+- **Navigation test:** with a group-name query active, cycle tabs with the next/previous-tab keybindings and confirm the matched group's members are visited.
 
 ## Open questions
 
