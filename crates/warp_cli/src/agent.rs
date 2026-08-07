@@ -411,10 +411,14 @@ pub struct RunAgentArgs {
     /// Deliberately separate from `--idle-on-complete`, which covers the success/blocked/cancelled
     /// lifecycle. Neither flag is a fallback for the other.
     ///
+    /// Cloud workers set this through `OZ_IDLE_ON_FAIL` rather than the flag, so that a pinned
+    /// CLI predating this option ignores it instead of rejecting an unknown argument.
+    ///
     /// You can optionally provide a duration (e.g. `--idle-on-fail 10m`).
     #[arg(
         long = "idle-on-fail",
         value_name = "DURATION",
+        env = "OZ_IDLE_ON_FAIL",
         num_args = 0..=1,
         default_missing_value = "15m",
         hide = true
