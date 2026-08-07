@@ -692,6 +692,115 @@ fn agent_run_accepts_idle_on_complete_duration() {
 }
 
 #[test]
+fn agent_run_accepts_idle_on_fail_flag() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--prompt",
+        "hello",
+        "--idle-on-fail",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    assert_eq!(
+        run_args.idle_on_fail,
+        Some(humantime::Duration::from(std::time::Duration::from_secs(
+            15 * 60
+        )))
+    );
+}
+
+#[test]
+fn agent_run_accepts_idle_on_fail_duration() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--prompt",
+        "hello",
+        "--idle-on-fail",
+        "30m",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    assert_eq!(
+        run_args.idle_on_fail,
+        Some(humantime::Duration::from(std::time::Duration::from_secs(
+            30 * 60
+        )))
+    );
+}
+
+#[test]
+fn agent_run_idle_on_fail_is_opt_in() {
+    // Post-failure session retention must stay off unless explicitly requested, so an
+    // omitted flag leaves the failure window unset (immediate exit, today's behavior).
+    let args = Args::try_parse_from(["warp", "agent", "run", "--prompt", "hello"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    assert_eq!(run_args.idle_on_fail, None);
+}
+
+#[test]
+fn agent_run_accepts_idle_on_fail_alongside_idle_on_complete() {
+    // The success and failure windows are independent: the worker emits both for a run
+    // whose environment opted into post-failure retention.
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--prompt",
+        "hello",
+        "--idle-on-complete",
+        "10m",
+        "--idle-on-fail",
+        "15m",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    assert_eq!(
+        run_args.idle_on_complete,
+        Some(humantime::Duration::from(std::time::Duration::from_secs(
+            10 * 60
+        )))
+    );
+    assert_eq!(
+        run_args.idle_on_fail,
+        Some(humantime::Duration::from(std::time::Duration::from_secs(
+            15 * 60
+        )))
+    );
+}
+
+#[test]
 fn agent_run_accepts_skip_initial_turn_with_task_id_and_idle_on_complete() {
     let args = Args::try_parse_from([
         "warp",

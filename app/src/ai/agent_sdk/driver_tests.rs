@@ -633,6 +633,37 @@ fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_
 }
 
 #[test]
+fn third_party_failure_idle_window_prefers_failure_window() {
+    // `--idle-on-fail` wins when both windows are configured.
+    assert_eq!(
+        AgentDriver::third_party_failure_idle_window(
+            Some(Duration::from_secs(15 * 60)),
+            Some(Duration::from_secs(45 * 60)),
+        ),
+        Some(Duration::from_secs(15 * 60))
+    );
+}
+
+#[test]
+fn third_party_failure_idle_window_falls_back_to_success_window() {
+    // Back-compat: a failed third-party harness session idled for `idle_on_complete`
+    // before `--idle-on-fail` existed, so an unset failure window must not regress
+    // those runs into an immediate exit.
+    assert_eq!(
+        AgentDriver::third_party_failure_idle_window(None, Some(Duration::from_secs(45 * 60))),
+        Some(Duration::from_secs(45 * 60))
+    );
+}
+
+#[test]
+fn third_party_failure_idle_window_is_none_when_neither_is_set() {
+    assert_eq!(
+        AgentDriver::third_party_failure_idle_window(None, None),
+        None
+    );
+}
+
+#[test]
 fn task_env_vars_include_parent_run_id_when_present() {
     let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
     let env_vars = task_env_vars(Some(&task_id), Some("parent-run-123"), Harness::Claude);

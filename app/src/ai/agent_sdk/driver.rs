@@ -259,12 +259,15 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         }
     }
 
-    /// End the run with `value`, deferring by `idle_on_complete` when set so the
-    /// driver stays alive long enough to accept a follow-up. Use for "graceful"
-    /// terminal statuses (Success / Blocked / Cancelled). Falls back to
-    /// immediate completion when `idle_on_complete` is `None`.
-    fn complete_with_optional_idle(&self, idle_on_complete: Option<Duration>, value: T) {
-        if let Some(idle_timeout) = idle_on_complete {
+    /// End the run with `value`, deferring by `idle_timeout` when set so the driver
+    /// stays alive long enough to accept a follow-up. Falls back to immediate
+    /// completion when `idle_timeout` is `None`.
+    ///
+    /// Callers pick the window that matches the outcome: `idle_on_complete` for
+    /// "graceful" terminal statuses (Success / Blocked / Cancelled), `idle_on_fail`
+    /// for terminal failures.
+    fn complete_with_optional_idle(&self, idle_timeout: Option<Duration>, value: T) {
+        if let Some(idle_timeout) = idle_timeout {
             self.end_run_after(idle_timeout, value);
         } else {
             self.end_run_now(value);
@@ -296,6 +299,10 @@ pub struct AgentDriverOptions {
     pub should_share: bool,
     /// How long to keep the session alive after the agent run completes, if at all.
     pub idle_on_complete: Option<Duration>,
+    /// How long to keep the session alive after the agent run ends in a terminal
+    /// failure, if at all. Sourced from `--idle-on-fail`. Deliberately separate from
+    /// `idle_on_complete`: the success window is not a fallback for the failure window.
+    pub idle_on_fail: Option<Duration>,
     /// If set, resume an existing conversation instead of starting fresh. The variant
     /// determines which harness-specific path is taken (Oz transcript restore vs.
     /// third-party-harness payload rehydration).
@@ -361,6 +368,11 @@ pub struct AgentDriver {
     // Optional idle timeout after completion. If set, the process will stay alive for follow-ups
     // and exit after this period of inactivity.
     idle_on_complete: Option<Duration>,
+
+    // Optional idle timeout after a terminal failure. If set, the process stays alive —
+    // still hosting its shared session — so the failed run can be inspected and followed
+    // up on, then exits after this period of inactivity.
+    idle_on_fail: Option<Duration>,
 
     // The conversation ID to continue (if provided).
     restored_conversation_id: Option<AIConversationId>,
@@ -654,6 +666,7 @@ impl AgentDriver {
             parent_run_id,
             should_share,
             idle_on_complete,
+            idle_on_fail,
             secrets,
             resume,
             cloud_providers,
@@ -679,9 +692,9 @@ impl AgentDriver {
         };
 
         safe_info!(
-            safe: ("Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}"),
+            safe: ("Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}, idle_on_fail={idle_on_fail:?}"),
             full: (
-                "Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}, working_dir={}",
+                "Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}, idle_on_fail={idle_on_fail:?}, working_dir={}",
                 working_dir.display()
             )
         );
@@ -781,6 +794,7 @@ impl AgentDriver {
             task_id,
             harness: None,
             idle_on_complete,
+            idle_on_fail,
             restored_conversation_id,
             resume_payload,
             cloud_providers,
@@ -826,6 +840,7 @@ impl AgentDriver {
             task_id: None,
             harness: None,
             idle_on_complete: None,
+            idle_on_fail: None,
             restored_conversation_id: None,
             resume_payload: None,
             cloud_providers: Vec::new(),
@@ -3542,13 +3557,29 @@ impl AgentDriver {
                                 );
                             }
                             // Errors here are terminal: in-flight recoveries surface as
-                            // TransientError (handled above).
+                            // TransientError (handled above). The failure is already
+                            // reported to the server by LocalAgentTaskSyncModel; the only
+                            // question here is whether this process sticks around.
+                            //
+                            // With `--idle-on-fail` we keep it alive so it keeps hosting
+                            // the shared session: a session is only joinable while its
+                            // host process lives, so exiting here is what makes a failed
+                            // run's session unreachable. Note this deliberately does NOT
+                            // fall back to `idle_on_complete` — the success window must
+                            // not silently extend failed runs.
                             SDKConversationOutputStatus::Error { .. } => {
-                                log::info!(
-                                    "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome=error",
-                                    me.task_id
-                                );
-                                run_exit.end_run_now(output_status);
+                                if let Some(idle_timeout) = me.idle_on_fail {
+                                    log::info!(
+                                        "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome=error",
+                                        me.task_id
+                                    );
+                                } else {
+                                    log::info!(
+                                        "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome=error",
+                                        me.task_id
+                                    );
+                                }
+                                run_exit.complete_with_optional_idle(me.idle_on_fail, output_status);
                             }
                         }
                     }
@@ -3747,11 +3778,10 @@ impl AgentDriver {
                         return;
                     }
 
-                    // Drive idle-on-complete timer for the harness exit signal.
+                    // Drive the idle timer for the harness exit signal, picking the
+                    // window that matches the outcome.
                     match status {
-                        CLIAgentSessionStatus::Success
-                        | CLIAgentSessionStatus::Failed { .. }
-                        | CLIAgentSessionStatus::Blocked { .. } => {
+                        CLIAgentSessionStatus::Success | CLIAgentSessionStatus::Blocked { .. } => {
                             if let Some(idle_timeout) = me.idle_on_complete {
                                 log::info!(
                                     "Ambient agent CLI lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_view_id:?} timeout={idle_timeout:?}",
@@ -3764,6 +3794,24 @@ impl AgentDriver {
                                 );
                             }
                             harness_exit.complete_with_optional_idle(me.idle_on_complete, ());
+                        }
+                        CLIAgentSessionStatus::Failed { .. } => {
+                            let idle_on_fail = Self::third_party_failure_idle_window(
+                                me.idle_on_fail,
+                                me.idle_on_complete,
+                            );
+                            if let Some(idle_timeout) = idle_on_fail {
+                                log::info!(
+                                    "Ambient agent CLI lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_view_id:?} timeout={idle_timeout:?} outcome=error",
+                                    me.task_id
+                                );
+                            } else {
+                                log::info!(
+                                    "Ambient agent CLI lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_view_id:?} outcome=error",
+                                    me.task_id
+                                );
+                            }
+                            harness_exit.complete_with_optional_idle(idle_on_fail, ());
                         }
                         CLIAgentSessionStatus::InProgress => {
                             log::info!(
@@ -3808,6 +3856,20 @@ impl AgentDriver {
                 | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
                 | CLIAgentSessionsModelEvent::Ended { .. } => {}
             });
+    }
+
+    /// The idle window to apply when a third-party harness session ends in failure.
+    ///
+    /// Unlike the Oz path — where a terminal error exits immediately unless
+    /// `--idle-on-fail` asks otherwise — a failed third-party harness session already
+    /// idled for `idle_on_complete` before `--idle-on-fail` existed. Falling back to the
+    /// success window preserves that behavior instead of regressing those runs to an
+    /// immediate exit, while still letting the failure-specific window take precedence.
+    fn third_party_failure_idle_window(
+        idle_on_fail: Option<Duration>,
+        idle_on_complete: Option<Duration>,
+    ) -> Option<Duration> {
+        idle_on_fail.or(idle_on_complete)
     }
 
     /// Removes the task mapping registered for CLI agent session status updates.

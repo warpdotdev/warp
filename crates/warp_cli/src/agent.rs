@@ -402,6 +402,26 @@ pub struct RunAgentArgs {
     )]
     pub idle_on_complete: Option<humantime::Duration>,
 
+    /// Keep the agent's session open after the conversation ends in a terminal failure.
+    ///
+    /// The failure counterpart to `--idle-on-complete`: the run is still reported as
+    /// FAILED/ERROR immediately, but the process keeps hosting its shared session so a
+    /// human can inspect the failed environment and send a follow-up. A shared session is
+    /// only reachable while the process hosting it is alive, so this flag is what makes
+    /// server-side post-failure session retention actually joinable.
+    ///
+    /// Independent of `--idle-on-complete`: neither implies the other for Oz runs.
+    ///
+    /// You can optionally provide a duration (e.g. `--idle-on-fail 15m`).
+    #[arg(
+        long = "idle-on-fail",
+        value_name = "DURATION",
+        num_args = 0..=1,
+        default_missing_value = "15m",
+        hide = true
+    )]
+    pub idle_on_fail: Option<humantime::Duration>,
+
     #[command(flatten)]
     pub snapshot: SnapshotArgs,
     /// Identifier for the task that spawned this agent, used to report progress.
