@@ -3039,6 +3039,9 @@ macro_rules! delegate {
                     Default::default()
                 }
             },
+            _ if $self.bootstrap_stage == BootstrapStage::ScriptExecution => {
+                $self.output_grid.$method($( $arg ),*)
+            },
             _ => {
                 if $self.state == BlockState::BeforeExecution {
                     $self.header_grid.$method($( $arg ),*)
