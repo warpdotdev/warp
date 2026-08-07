@@ -693,6 +693,7 @@ fn tab_in_group(group: Option<usize>) -> TabTemplate {
             is_focused: None,
             pane_mode: PaneMode::Terminal,
             shell: None,
+            title: None,
         },
         commands: vec![],
         color: None,
