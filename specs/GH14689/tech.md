@@ -12,7 +12,8 @@ Separately, `render_grouped_tab_container` hides member rows when `TabGroup::col
 
 All in `app/src/workspace/view/vertical_tabs.rs` unless noted.
 
-- `render_groups` (1748) — builds the filtered list and renders it. The only site that needs to change.
+- `render_groups` (1748) — builds the filtered list and renders it.
+- `VerticalTabsPanelState::matching_tab_indices` (1166) — **a second, near-duplicate copy of the same filter**, driving tab cycling under an active search via `activate_next_tab` / `activate_prev_tab` (`app/src/workspace/view.rs:11934`, `11958`). Both sites must admit the same tabs, or the panel shows tabs the keybindings refuse to visit. #9666 documents this same duplication causing a separate bug.
 - `render_groups` (1784-1886) — the existing per-tab filter, producing `Vec<(usize, Option<Vec<PaneId>>)>`: tab index plus either `None` ("render all pane rows") or `Some(ids)` ("render only these pane rows"). Branches on `VerticalTabsResolvedMode`; `Summary` matches summary fragments, `Panes`/`FocusedSession` match per-pane via `pane_matches_query`.
 - `render_groups` (1911) — the `"No tabs match your search."` empty state.
 - `render_groups` (1950) — the group-container branch. Already clones the `TabGroup` out of `workspace.tab_groups`.
@@ -48,7 +49,25 @@ fn group_display_name(group: &TabGroup) -> String {
 
 `render_grouped_tabs_header` (2815) switches to calling it, replacing its inlined `unwrap_or_else(|| "New Group".to_string())`. This is what makes invariant 9 true by construction rather than by coincidence: the text searched and the text displayed cannot drift.
 
-### 2. Merge helper
+### 2. Shared matched-group helpers
+
+Both filter sites derive their matched groups from the same two functions, so the rendered list and the navigable list cannot drift apart:
+
+```rust
+fn matched_group_ids(
+    tab_groups: &HashMap<TabGroupId, TabGroup>,
+    query_lower: &str,
+) -> HashSet<TabGroupId>
+
+fn tab_admitted_by_group_name(
+    group_id: Option<TabGroupId>,
+    matched_groups: &HashSet<TabGroupId>,
+) -> bool
+```
+
+`matching_tab_indices` gains a `tab_groups` parameter and short-circuits to `true` for any tab admitted by its group's name. Its two callers in `view.rs` pass `&self.tab_groups`.
+
+### 3. Merge helper
 
 ```rust
 fn merge_group_name_matches(
@@ -73,21 +92,12 @@ Two properties this encodes:
 
 Taking `tab_group_ids: &[Option<TabGroupId>]` rather than the `Workspace` keeps the function free of `AppContext`, so it is unit-testable directly.
 
-### 3. Wire into `render_groups`
+### 4. Wire into `render_groups`
 
 In the non-empty-query branch, after the existing filter produces `own_matches`:
 
 ```rust
-let matched_groups: HashSet<TabGroupId> = workspace
-    .tab_groups
-    .iter()
-    .filter(|(_, group)| {
-        group_display_name(group)
-            .to_lowercase()
-            .contains(&query_lower)
-    })
-    .map(|(group_id, _)| *group_id)
-    .collect();
+let matched_groups = matched_group_ids(&workspace.tab_groups, &query_lower);
 let tab_group_ids: Vec<Option<TabGroupId>> =
     workspace.tabs.iter().map(|tab| tab.group_id).collect();
 
@@ -96,7 +106,7 @@ merge_group_name_matches(&tab_group_ids, &matched_groups, own_matches)
 
 The `to_lowercase().contains()` test is the same case-insensitive substring rule the existing filter uses, so no new matching semantics enter the code. A group with no members contributes nothing, because nothing in `tab_group_ids` references it (invariant 8).
 
-### 4. Collapse override during search
+### 5. Collapse override during search
 
 At the group branch (1950), the `TabGroup` is already an owned clone, so the binding becomes `mut` and:
 
@@ -142,6 +152,8 @@ Unit tests in `app/src/workspace/view/vertical_tabs_tests.rs`, matching the pure
 | 6 | empty `matched_groups` returns the input untouched |
 | 7 | results stay ordered by tab index rather than appended |
 | 8 | a matched group with no members is a no-op |
+| 1, 9 (nav) | `matched_group_ids` selects by displayed name, case-insensitively, including the untitled placeholder |
+| 2 (nav) | `tab_admitted_by_group_name` admits members of matched groups and never ungrouped tabs |
 
 Invariants 10-14 are render-path behavior that this test file does not reach. Validate manually: create a group named `backend` with tabs whose titles lack that word, collapse it, search `backend`, confirm the group renders expanded with all members, then clear the query and confirm it re-collapses. Repeat in each of the three display modes for invariant 14.
 

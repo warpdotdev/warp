@@ -1166,12 +1166,18 @@ impl VerticalTabsPanelState {
         });
     }
 
-    /// Returns the indices (in original order) of tab groups that have at least
-    /// one pane matching the current search query. Returns all indices when the
-    /// query is empty.
+    /// Returns the indices (in original order) of tabs that match the current
+    /// search query, either through their own text or by belonging to a tab
+    /// group whose displayed name matches. Returns all indices when the query
+    /// is empty.
+    ///
+    /// This drives tab cycling under an active search, so it must admit exactly
+    /// the tabs `render_groups` renders — otherwise the panel would show tabs
+    /// the next/previous-tab keybindings refuse to visit.
     pub(super) fn matching_tab_indices(
         &self,
         tabs: &[TabData],
+        tab_groups: &HashMap<TabGroupId, TabGroup>,
         active_tab_index: usize,
         app: &AppContext,
     ) -> Vec<usize> {
@@ -1179,6 +1185,7 @@ impl VerticalTabsPanelState {
             return (0..tabs.len()).collect();
         }
         let query_lower = self.search_query.to_lowercase();
+        let matched_groups = matched_group_ids(tab_groups, &query_lower);
         let resolved_mode = resolve_vertical_tabs_mode(app);
         let display_granularity = match resolved_mode {
             VerticalTabsResolvedMode::Panes => VerticalTabsDisplayGranularity::Panes,
@@ -1189,6 +1196,10 @@ impl VerticalTabsPanelState {
         tabs.iter()
             .enumerate()
             .filter(|(tab_index, tab)| {
+                // A group-name match admits every member, regardless of its own text.
+                if tab_admitted_by_group_name(tab.group_id, &matched_groups) {
+                    return true;
+                }
                 let pane_group = tab.pane_group.as_ref(app);
                 let visible_pane_ids = pane_group.visible_pane_ids();
                 match resolved_mode {
@@ -1895,16 +1906,7 @@ fn render_groups(
 
         // A query matching a group's name reveals every tab under that group,
         // even members whose own text does not match.
-        let matched_groups: HashSet<TabGroupId> = workspace
-            .tab_groups
-            .iter()
-            .filter(|(_, group)| {
-                group_display_name(group)
-                    .to_lowercase()
-                    .contains(&query_lower)
-            })
-            .map(|(group_id, _)| *group_id)
-            .collect();
+        let matched_groups = matched_group_ids(&workspace.tab_groups, &query_lower);
         let tab_group_ids: Vec<Option<TabGroupId>> =
             workspace.tabs.iter().map(|tab| tab.group_id).collect();
 
@@ -4084,6 +4086,35 @@ fn group_display_name(group: &TabGroup) -> String {
         .unwrap_or_else(|| UNTITLED_GROUP_NAME.to_string())
 }
 
+/// The ids of every tab group whose displayed name contains `query_lower`.
+///
+/// Shared by the two search filter sites — the rendered list in `render_groups`
+/// and the tab-navigation list in `matching_tab_indices` — so the tabs you can
+/// see under a query and the tabs you can cycle to cannot disagree.
+fn matched_group_ids(
+    tab_groups: &HashMap<TabGroupId, TabGroup>,
+    query_lower: &str,
+) -> HashSet<TabGroupId> {
+    tab_groups
+        .iter()
+        .filter(|(_, group)| {
+            group_display_name(group)
+                .to_lowercase()
+                .contains(query_lower)
+        })
+        .map(|(group_id, _)| *group_id)
+        .collect()
+}
+
+/// Whether a tab is admitted by its group's name matching the query, rather
+/// than by its own text. Ungrouped tabs are never admitted this way.
+fn tab_admitted_by_group_name(
+    group_id: Option<TabGroupId>,
+    matched_groups: &HashSet<TabGroupId>,
+) -> bool {
+    group_id.is_some_and(|id| matched_groups.contains(&id))
+}
+
 /// Force-includes every member of a name-matched tab group into the search
 /// results, so matching a group by name reveals all the tabs under it.
 ///
@@ -4109,7 +4140,7 @@ fn merge_group_name_matches(
     let mut own_matches = own_matches.into_iter().peekable();
 
     for (tab_index, group_id) in tab_group_ids.iter().enumerate() {
-        let in_matched_group = group_id.is_some_and(|id| matched_groups.contains(&id));
+        let in_matched_group = tab_admitted_by_group_name(*group_id, matched_groups);
         let own_match = own_matches.next_if(|(index, _)| *index == tab_index);
 
         match (in_matched_group, own_match) {
