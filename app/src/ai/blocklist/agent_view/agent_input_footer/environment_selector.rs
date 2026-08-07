@@ -247,9 +247,7 @@ impl EnvironmentSelector {
 
         let environments = CloudEnvironmentCatalog::handle(ctx);
         ctx.subscribe_to_model(&environments, |me, _, _, ctx| {
-            if me.should_auto_select_default_environment(ctx) {
-                me.ensure_default_selection(ctx);
-            }
+            me.auto_select_default_environment_if_new_session(ctx);
             me.refresh_menu(ctx);
             me.refresh_button(ctx);
             ctx.notify();
@@ -272,9 +270,7 @@ impl EnvironmentSelector {
                                 me.set_menu_visibility(false, ctx);
                             }
 
-                            if me.should_auto_select_default_environment(ctx) {
-                                me.ensure_default_selection(ctx);
-                            }
+                            me.auto_select_default_environment_if_new_session(ctx);
                             me.refresh_menu(ctx);
                         }
                         HandoffComposeStateEvent::EnvironmentSelected => {
@@ -295,9 +291,7 @@ impl EnvironmentSelector {
         };
         me.refresh_menu(ctx);
         me.refresh_button(ctx);
-        if me.should_auto_select_default_environment(ctx) {
-            me.ensure_default_selection(ctx);
-        }
+        me.auto_select_default_environment_if_new_session(ctx);
         me
     }
 
@@ -349,6 +343,12 @@ impl EnvironmentSelector {
         }
         ctx.emit(EnvironmentSelectorEvent::MenuVisibilityChanged { open: is_open });
         ctx.notify();
+    }
+
+    fn auto_select_default_environment_if_new_session(&self, ctx: &AppContext) -> bool {
+        if self.should_auto_select_default_environment(ctx) {
+            self.ensure_default_selection(ctx);
+        }
     }
 
     fn should_auto_select_default_environment(&self, ctx: &AppContext) -> bool {
@@ -409,9 +409,9 @@ impl EnvironmentSelector {
                 .map(|environment| environment.name.clone())
                 .unwrap_or_else(|| "New environment".to_string())
         } else if is_configuring {
-            "New environment".to_string()
+            "Choose an environment".to_string()
         } else {
-            "No environment selected".to_string()
+            "Empty environment".to_string()
         };
 
         self.button.update(ctx, |button, ctx| {
