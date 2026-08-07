@@ -23,6 +23,7 @@ RELEASE_CHANNEL="dev"
 # TODO: We should enable crash_reporting before enabling for trusted testers.
 # https://linear.app/warpdotdev/issue/PLAT-428/crash-reporting-on-web
 FEATURES="release_bundle,gui"
+FEATURES_ADDITIONS=()
 DEBUG=false
 append_features() {
   local feature
