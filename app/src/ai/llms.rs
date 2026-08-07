@@ -186,9 +186,17 @@ pub fn model_leading_icon(llm: &LLMInfo, flags: ModelIconFlags) -> Icon {
         Icon::Aws
     } else if flags.is_using_gemini_enterprise {
         Icon::GeminiEnterpriseAgentPlatform
+    } else if is_kimi_model(llm) {
+        Icon::KimiLogo
     } else {
         llm.provider.icon().unwrap_or(Icon::Agent)
     }
+}
+
+/// Kimi is Fireworks-hosted, which the server reports as `LLMProvider::Unknown`,
+/// so the provider enum can't carry its logo.
+pub fn is_kimi_model(llm: &LLMInfo) -> bool {
+    llm.id.as_str().starts_with("kimi-")
 }
 
 /// Key for cached LLM metadata in user preferences.
