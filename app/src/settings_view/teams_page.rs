@@ -2236,10 +2236,10 @@ impl TeamsWidget {
         let current_user_email = view.auth_state.user_email().unwrap_or_default();
         let has_admin_permissions = team_metadata.has_admin_permissions(&current_user_email);
         let is_owner = team_metadata.has_owner_permissions(&current_user_email);
-        let remaining_workspace_credits =
-            ai_request_usage_model.total_current_workspace_bonus_credits_remaining(app);
+        let remaining_workspace_and_team_credits =
+            ai_request_usage_model.total_current_workspace_and_team_bonus_credits_remaining(app);
         let delete_disabled_reason = team_metadata
-            .get_delete_disabled_reason(&current_user_email, remaining_workspace_credits);
+            .get_delete_disabled_reason(&current_user_email, remaining_workspace_and_team_credits);
 
         let mut main_content = Flex::column();
         let chip_editor_style = UiComponentStyles::default()

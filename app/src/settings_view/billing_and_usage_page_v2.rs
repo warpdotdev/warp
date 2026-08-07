@@ -1794,7 +1794,7 @@ impl BillingAndUsagePageV2View {
         if show_addon_credits_panel {
             let is_payg_zero = ws.is_some_and(|ws| {
                 ws.billing_metadata.is_enterprise_pay_as_you_go_enabled()
-                    && ai_model.total_workspace_bonus_credits_remaining(ws.uid) == 0
+                    && ai_model.total_workspace_and_team_bonus_credits_remaining(ws.uid) == 0
             });
 
             if !is_payg_zero {

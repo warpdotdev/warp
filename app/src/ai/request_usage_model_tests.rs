@@ -744,7 +744,7 @@ fn test_has_any_ai_remaining_true_with_workspace_bonus_credits() {
 }
 
 #[test]
-fn test_total_workspace_bonus_credits_counts_team_and_workspace_scopes() {
+fn test_total_workspace_and_team_bonus_credits_counts_both_scopes() {
     App::test((), |mut app| async move {
         let (uid, workspace) = create_test_workspace();
         let other_uid = WorkspaceUid::from(crate::server::ids::ServerId::from(2_i64));
@@ -770,7 +770,10 @@ fn test_total_workspace_bonus_credits_counts_team_and_workspace_scopes() {
                 make(BonusGrantScope::Team(other_uid), 13),
             ];
 
-            assert_eq!(model.total_workspace_bonus_credits_remaining(uid), 18);
+            assert_eq!(
+                model.total_workspace_and_team_bonus_credits_remaining(uid),
+                18
+            );
             assert_eq!(model.total_user_interactive_bonus_credits_remaining(), 5);
         });
     });
