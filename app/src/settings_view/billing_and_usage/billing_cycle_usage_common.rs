@@ -202,10 +202,9 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
 ///
 /// `Workspace.billingCycleUsageHistory` spans every team in the workspace, so
 /// a workspace admin looking at team A would otherwise see team B's usage.
-/// Mirrors `filterEntriesByAttributedTeam` in warp-server's
-/// `client/src/components/admin/team/billing/utils.ts`: only entries the
-/// server attributed to this exact team survive, so unattributed rows are
-/// dropped rather than shown under whichever team happens to be selected.
+/// Only entries the server attributed to this exact team survive, so
+/// unattributed rows are dropped rather than shown under whichever team happens
+/// to be selected.
 pub fn filter_entries_by_attributed_team(
     entries: &[BillingCycleUsageEntry],
     team_uid: &str,

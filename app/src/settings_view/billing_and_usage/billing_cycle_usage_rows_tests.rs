@@ -162,6 +162,55 @@ fn per_member_rows_cover_exactly_the_supplied_roster() {
 }
 
 #[test]
+fn per_member_rows_mark_departed_users_as_former_members() {
+    let entries = vec![
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageSource::Local,
+            10,
+            5,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(OTHER_UID),
+            AiCreditsUsageSource::Local,
+            20,
+            10,
+        ),
+    ];
+
+    let rows = MemberUsageRow::for_each_member(&entries, &[member(VIEWER_UID)], SourceFilter::All);
+
+    assert!(
+        rows.iter()
+            .find(|row| row.subject_uid.as_deref() == Some(VIEWER_UID))
+            .is_some_and(|row| row.is_current_member)
+    );
+    assert!(
+        rows.iter()
+            .find(|row| row.subject_uid.as_deref() == Some(OTHER_UID))
+            .is_some_and(|row| !row.is_current_member)
+    );
+}
+
+#[test]
+fn per_member_rows_do_not_mark_service_accounts_as_former_members() {
+    let entries = vec![entry(
+        AiCreditsUsageAndCostSubjectType::ServiceAccount,
+        Some("agent-uid"),
+        AiCreditsUsageSource::Cloud,
+        20,
+        10,
+    )];
+
+    let rows = MemberUsageRow::for_each_member(&entries, &[], SourceFilter::All);
+
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].is_current_member);
+}
+
+#[test]
 fn build_own_usage_row_cloud_filter_drops_local_entries() {
     let entries = vec![
         entry(

@@ -81,6 +81,7 @@ pub struct MemberUsageRow {
     pub segments: Vec<BarSegment>,
     /// Denominator the row's stacked bar fills against.
     pub bar_max_credits: i64,
+    pub is_current_member: bool,
 }
 
 fn viewer_identity(app: &AppContext) -> (Option<String>, String) {
@@ -128,6 +129,7 @@ impl MemberUsageRow {
             total_cost_cents,
             segments,
             bar_max_credits: total_credits.max(1),
+            is_current_member: true,
         }
     }
 
@@ -158,6 +160,7 @@ impl MemberUsageRow {
             total_cost_cents: 0,
             segments,
             bar_max_credits: used.max(1),
+            is_current_member: true,
         }
     }
 
@@ -178,6 +181,7 @@ impl MemberUsageRow {
             total_cost_cents,
             segments,
             bar_max_credits: total_credits.max(1),
+            is_current_member: true,
         }
     }
 
@@ -248,6 +252,7 @@ impl MemberUsageRow {
                 total_cost_cents,
                 segments,
                 bar_max_credits: 0,
+                is_current_member: true,
             });
         }
 
@@ -259,6 +264,8 @@ impl MemberUsageRow {
             // All entries in a group share the same subject_uid by construction
             // (it's part of the grouping key), so first.is representative.
             let subject_uid = group.entries.first().and_then(|e| e.subject_uid.clone());
+            let is_current_member = group.subject_type != AiCreditsUsageAndCostSubjectType::User
+                || subject_uid.is_none();
             let (segments, total_credits, total_cost_cents) =
                 aggregate_segments(group.entries.iter());
             rows.push(Self {
@@ -270,6 +277,7 @@ impl MemberUsageRow {
                 total_cost_cents,
                 segments,
                 bar_max_credits: 0,
+                is_current_member,
             });
         }
 
@@ -462,6 +470,7 @@ fn render_row_card(
     let theme = appearance.theme();
     let card_bg = theme.background().into_solid();
     let main = blended_colors::text_main(theme, card_bg);
+    let is_former_member = !row.is_current_member;
 
     let bar = render_stacked_bar(
         &row.segments,
@@ -502,7 +511,11 @@ fn render_row_card(
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )
-        .with_color(main)
+        .with_color(if is_former_member {
+            theme.sub_text_color(theme.background()).into()
+        } else {
+            main
+        })
         .finish()
     };
 
@@ -538,6 +551,26 @@ fn render_row_card(
         })
         .finish();
         name_row.add_child(Container::new(info_icon).with_margin_left(6.).finish());
+    }
+    if is_former_member {
+        let badge_color = theme.sub_text_color(theme.background());
+        name_row.add_child(
+            Container::new(
+                Text::new_inline(
+                    "Former member",
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size() - 1.,
+                )
+                .with_color(badge_color.into())
+                .finish(),
+            )
+            .with_horizontal_padding(6.)
+            .with_vertical_padding(2.)
+            .with_border(Border::all(1.).with_border_color(theme.outline().into_solid()))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+            .with_margin_left(6.)
+            .finish(),
+        );
     }
 
     let credits_text = Text::new_inline(
@@ -596,7 +629,7 @@ fn render_row_card(
     .with_uniform_padding(ROW_PADDING)
     .finish();
 
-    Container::new(
+    let mut card = Container::new(
         Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(bar)
@@ -605,8 +638,11 @@ fn render_row_card(
     )
     .with_background_color(card_bg)
     .with_border(Border::all(ROW_BORDER_WIDTH).with_border_color(theme.outline().into_solid()))
-    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_BORDER_RADIUS)))
-    .finish()
+    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_BORDER_RADIUS)));
+    if is_former_member {
+        card = card.with_foreground_overlay(theme.background().with_opacity(40));
+    }
+    card.finish()
 }
 
 /// Row card wrapped in a Hoverable that opens the breakdown tooltip.
