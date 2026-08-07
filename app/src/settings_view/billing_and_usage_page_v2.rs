@@ -244,8 +244,6 @@ impl ClassifiedGrants {
             if grant.grant_type == BonusGrantType::AmbientOnly {
                 continue;
             }
-            // Team- and workspace-scoped grants only belong to the current
-            // workspace's balance when their uid matches it.
             match grant.scope {
                 BonusGrantScope::User => personal.push(grant.clone()),
                 BonusGrantScope::Team(uid) if workspace_uid == Some(uid) => {

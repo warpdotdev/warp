@@ -721,7 +721,7 @@ impl BonusGrant {
         Self::from_gql_bonus_grant(bonus_grant, None)
     }
 
-    pub fn from_gql_workspace_bonus_grant(
+    pub fn from_gql_workspace_or_team_bonus_grant(
         bonus_grant: GqlBonusGrant,
         workspace_uid: WorkspaceUid,
     ) -> Self {

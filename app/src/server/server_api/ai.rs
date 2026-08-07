@@ -1779,7 +1779,7 @@ impl AIClient for ServerApi {
             warp_graphql::queries::get_request_limit_info::UserResult::UserOutput(user_output) => {
                 let request_limit_info = user_output.user.request_limit_info.into();
 
-                let workspace_bonus_grants = user_output
+                let workspace_and_team_bonus_grants = user_output
                     .user
                     .workspaces
                     .into_iter()
@@ -1792,7 +1792,10 @@ impl AIClient for ServerApi {
                             .grants
                             .into_iter()
                             .map(move |grant| {
-                                BonusGrant::from_gql_workspace_bonus_grant(grant, workspace_uid)
+                                BonusGrant::from_gql_workspace_or_team_bonus_grant(
+                                    grant,
+                                    workspace_uid,
+                                )
                             })
                     });
 
@@ -1801,7 +1804,7 @@ impl AIClient for ServerApi {
                     .bonus_grants
                     .into_iter()
                     .map(BonusGrant::from_gql_user_bonus_grant)
-                    .chain(workspace_bonus_grants)
+                    .chain(workspace_and_team_bonus_grants)
                     .collect();
 
                 Ok(RequestUsageInfo {
