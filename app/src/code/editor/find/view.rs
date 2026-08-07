@@ -82,6 +82,8 @@ pub struct CodeEditorFind {
     searcher: ModelHandle<Searcher>,
     button_mouse_states: ButtonMouseStates,
     find_editor_mouse_state: MouseStateHandle,
+    /// Save position of the find input, so its bounds can be resolved for mouse events.
+    find_editor_position_id: String,
     preserve_case_enabled: bool,
     is_open: bool,
     is_replace_open: bool,
@@ -233,6 +235,7 @@ impl CodeEditorFind {
             searcher,
             button_mouse_states: Default::default(),
             find_editor_mouse_state: Default::default(),
+            find_editor_position_id: format!("code_editor_find_query_{}", ctx.view_id()),
             preserve_case_enabled: false,
             is_open: false,
             is_replace_open: false,
@@ -781,9 +784,15 @@ impl CodeEditorFind {
         .finish();
 
         let find_editor = Hoverable::new(self.find_editor_mouse_state.clone(), |_| {
-            ConstrainedBox::new(Clipped::new(ChildView::new(&self.find_editor).finish()).finish())
+            SavePosition::new(
+                ConstrainedBox::new(
+                    Clipped::new(ChildView::new(&self.find_editor).finish()).finish(),
+                )
                 .with_height(editor_height)
-                .finish()
+                .finish(),
+                &self.find_editor_position_id,
+            )
+            .finish()
         })
         .on_mouse_down(|ctx, _, _| {
             ctx.dispatch_typed_action(FindAction::FocusFindInput);
@@ -909,6 +918,10 @@ impl CodeEditorFind {
 impl CodeEditorFind {
     pub fn find_editor_for_test(&self) -> ViewHandle<EditorView> {
         self.find_editor.clone()
+    }
+
+    pub fn find_editor_position_id_for_test(&self) -> &str {
+        &self.find_editor_position_id
     }
 }
 
