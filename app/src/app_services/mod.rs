@@ -14,11 +14,16 @@ pub mod windows;
 
 use warpui::AppContext;
 
-pub fn init(_ctx: &mut AppContext) {
+/// Initializes application services.
+///
+/// `owns_desktop_application_service` controls whether this process registers the desktop
+/// application service that a local launch forwards to. Only the user's primary desktop instance
+/// may own it. It is consumed by the Linux/FreeBSD backend only.
+pub fn init(_owns_desktop_application_service: bool, _ctx: &mut AppContext) {
     log::info!("Initializing app services");
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    linux::init(_ctx);
+    linux::init(_owns_desktop_application_service, _ctx);
     #[cfg(target_os = "macos")]
     mac::init();
     #[cfg(windows)]

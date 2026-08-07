@@ -570,6 +570,27 @@ impl LaunchMode {
         }
     }
 
+    /// Returns `true` if this process may own the desktop application service
+    /// (on Linux, the `org.freedesktop.Application` service published under the
+    /// desktop-scoped D-Bus application name).
+    ///
+    /// Only the user's primary desktop instance may own it. A local launch forwards its URLs to
+    /// whichever process holds that name, and a process that requests the name while another one
+    /// owns it is queued by the bus and silently inherits ownership once that owner exits.
+    ///
+    /// `CommandLine` is excluded even for `agent run --gui`, which does render windows: an agent
+    /// run is not the user's desktop session, so a later `warp-terminal` opens its own window
+    /// rather than being absorbed by it.
+    fn owns_desktop_application_service(&self) -> bool {
+        match self {
+            LaunchMode::App { .. } | LaunchMode::Test { .. } => true,
+            LaunchMode::CommandLine { .. }
+            | LaunchMode::RemoteServerProxy
+            | LaunchMode::RemoteServerDaemon { .. }
+            | LaunchMode::Tui { .. } => false,
+        }
+    }
+
     /// Returns `true` if Warp should run headlessly, without a visible UI.
     fn is_headless(&self) -> bool {
         match self {
@@ -2019,7 +2040,7 @@ pub(crate) fn initialize_app(
 
     // Register initial keybindings prior to creating menus
     ai::init(ctx);
-    app_services::init(ctx);
+    app_services::init(launch_mode.owns_desktop_application_service(), ctx);
     // // TODO: Temporarily disabling keybindings for WASM builds. Will be implemented in future WASM support.
     #[cfg(not(target_family = "wasm"))]
     code::editor::find::view::init(ctx);

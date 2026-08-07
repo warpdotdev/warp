@@ -10,12 +10,31 @@ use zbus::{interface, proxy, zvariant};
 use crate::channel::ChannelState;
 
 /// Initializes application services.
-pub fn init(ctx: &mut AppContext) {
+///
+/// The `org.freedesktop.Application` service is hosted under a desktop-scoped well-known name
+/// that a local launch uses to reach the running GUI, so only the user's primary desktop instance
+/// may register it. The name is requested with default (empty) [`zbus::fdo::RequestNameFlags`], so
+/// a second requester does not take the name from the current owner: the bus queues it and hands
+/// it over as soon as the owner exits. A long-lived non-desktop process (the SSH remote-server
+/// daemon and proxy, the CLI, the TUI) that inherits the name that way then swallows every later
+/// local launch, which exits successfully without opening a window.
+pub fn init(owns_desktop_application_service: bool, ctx: &mut AppContext) {
+    if !owns_desktop_application_service {
+        log::info!(
+            "Skipping org.freedesktop.Application D-Bus service registration for a launch mode that is not the primary desktop instance"
+        );
+        return;
+    }
+
     ctx.add_singleton_model(DBusServiceHost::new);
 }
 
 /// Tears down application services.
 pub fn teardown(ctx: &mut AppContext) {
+    if !ctx.has_singleton_model::<DBusServiceHost>() {
+        return;
+    }
+
     DBusServiceHost::handle(ctx).update(ctx, |service_host, _| {
         service_host.terminate();
     });
@@ -254,3 +273,7 @@ impl warpui::Entity for DBusServiceHost {
 }
 
 impl SingletonEntity for DBusServiceHost {}
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

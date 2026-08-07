@@ -1,4 +1,14 @@
+use clap::{Args as _, FromArgMatches as _};
+use warp_cli::agent::RunAgentArgs;
+
 use super::*;
+
+fn agent_run_args(argv: &[&str]) -> RunAgentArgs {
+    let matches = RunAgentArgs::augment_args(clap::Command::new("run"))
+        .try_get_matches_from(argv)
+        .expect("agent run args should parse");
+    RunAgentArgs::from_arg_matches(&matches).expect("agent run args should convert")
+}
 
 #[test]
 fn app_api_key_requires_validation() {
@@ -91,6 +101,63 @@ fn app_keeps_default_secure_storage_service_name() {
     assert_eq!(
         launch_mode.secure_storage_service_name("dev.warp.Warp-Dev"),
         "dev.warp.Warp-Dev"
+    );
+}
+
+#[test]
+fn only_the_primary_desktop_instance_owns_the_desktop_application_service() {
+    let app = LaunchMode::App {
+        args: Default::default(),
+        api_key: None,
+    };
+    let test = LaunchMode::Test {
+        driver: Box::new(None),
+        is_integration_test: false,
+    };
+    let tui = LaunchMode::Tui {
+        entrypoint: TuiEntryPoint::Interactive {
+            mount: Box::new(|_| {}),
+            api_key: None,
+        },
+    };
+    let daemon = LaunchMode::RemoteServerDaemon {
+        identity_key: "test".to_owned(),
+    };
+
+    assert!(app.owns_desktop_application_service());
+    assert!(test.owns_desktop_application_service());
+    assert!(!tui.owns_desktop_application_service());
+    assert!(!daemon.owns_desktop_application_service());
+    assert!(!LaunchMode::RemoteServerProxy.owns_desktop_application_service());
+}
+
+/// `agent run --gui` is the one non-headless mode kept out of the desktop
+/// application service, so the exclusion is asserted rather than left to be
+/// "corrected" by a reader who notices the divergence from `is_headless`.
+#[test]
+fn command_line_never_owns_the_desktop_application_service() {
+    let command_line = |command| LaunchMode::CommandLine {
+        command,
+        global_options: GlobalOptions::default(),
+        debug: false,
+        is_sandboxed: false,
+        computer_use_override: None,
+    };
+
+    let headless_cli = command_line(CliCommand::Whoami);
+    let gui_agent_run = command_line(CliCommand::Agent(AgentCommand::Run(agent_run_args(&[
+        "run",
+        "--prompt",
+        "do something",
+        "--gui",
+    ]))));
+
+    assert!(!headless_cli.owns_desktop_application_service());
+    assert!(!gui_agent_run.owns_desktop_application_service());
+    assert!(
+        !gui_agent_run.is_headless(),
+        "`agent run --gui` renders windows, so this exclusion is deliberate rather than a \
+         restatement of `is_headless`"
     );
 }
 
