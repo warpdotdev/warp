@@ -253,8 +253,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::PRCommentsV2,
         #[cfg(feature = "pr_comments_skill")]
         FeatureFlag::PRCommentsSkill,
-        #[cfg(feature = "selection_as_context")]
-        FeatureFlag::SelectionAsContext,
         #[cfg(feature = "code_mode_chip")]
         FeatureFlag::CodeModeChip,
         #[cfg(feature = "github_pr_prompt_chip")]
