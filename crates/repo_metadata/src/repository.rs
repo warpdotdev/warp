@@ -63,6 +63,7 @@ pub struct StartWatching {
     pub registration_future: BoxFuture<'static, Result<(), RepoMetadataError>>,
 }
 struct RepositorySubscription {
+    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     mode: RepositoryWatchMode,
     subscriber: Box<dyn RepositorySubscriber>,
 }
@@ -366,6 +367,7 @@ impl Repository {
         paths
     }
 
+    #[cfg(feature = "local_fs")]
     pub(crate) fn has_git_repository_subscribers(&self) -> bool {
         self.subscribers
             .values()
