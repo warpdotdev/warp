@@ -48,8 +48,9 @@ use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::execution_profiles::resolve_cloud_agent_computer_use_state;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::orchestration::{
-    CloudAgentStartupIssue, classify_cloud_agent_startup_error, oz_run_url,
-    resolve_default_environment_id, resolve_default_host_slug, should_disable_snapshot,
+    CloudAgentStartupBlocker, CloudAgentStartupFailure, CloudAgentStartupIssue,
+    classify_cloud_agent_startup_error, oz_run_url, resolve_default_environment_id,
+    resolve_default_host_slug, should_disable_snapshot,
 };
 use crate::cloud_object::CloudObjectLookup as _;
 use crate::server::ids::{ServerId, SyncId};
@@ -637,6 +638,21 @@ pub enum HandoffCommitOutcome {
     Cancelled,
     /// The cloud run was created and is ready for frontend monitoring.
     Created(HandoffCreated),
+}
+
+pub fn handoff_dispatch_error(issue: &CloudAgentStartupIssue) -> String {
+    match issue {
+        CloudAgentStartupIssue::Blocked(CloudAgentStartupBlocker::GitHubAuthRequired {
+            message,
+            ..
+        })
+        | CloudAgentStartupIssue::Failed(
+            CloudAgentStartupFailure::Capacity { message }
+            | CloudAgentStartupFailure::OutOfCredits { message }
+            | CloudAgentStartupFailure::ServerOverloaded { message }
+            | CloudAgentStartupFailure::Other { message },
+        ) => message.clone(),
+    }
 }
 
 /// State after selecting or creating the server-side conversation fork.

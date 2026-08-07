@@ -5,10 +5,10 @@ use ai::agent::orchestration_config::{
     OrchestrationConfig, OrchestrationConfigStatus, OrchestrationExecutionMode,
 };
 use warp::tui_export::{
-    AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, Appearance,
-    AuthSecretSelection, OptionRow, OptionSnapshot, OptionSourceStatus, OrchestrationConfigState,
-    OrchestrationEditState, RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest,
-    TaskId,
+    AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId,
+    Appearance, AuthSecretSelection, OptionRow, OptionSnapshot, OptionSourceStatus,
+    OrchestrationConfigState, OrchestrationEditState, RunAgentsAgentRunConfig,
+    RunAgentsExecutionMode, RunAgentsRequest, TaskId,
 };
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, App, ViewHandle};
@@ -313,18 +313,21 @@ impl OrchestrationBlockController for TestController {
         }
     }
 
+    fn accept_disabled_reason(
+        &self,
+        _state: &OrchestrationConfigState,
+        _ctx: &warpui::AppContext,
+    ) -> Option<String> {
+        self.accept_error.borrow().clone()
+    }
+
     fn accept(
         &self,
         _action_id: &AIAgentActionId,
         request: RunAgentsRequest,
-        _state: &OrchestrationConfigState,
         _ctx: &mut warpui::AppContext,
-    ) -> Result<(), String> {
-        if let Some(reason) = self.accept_error.borrow().clone() {
-            return Err(reason);
-        }
+    ) {
         self.executed_requests.borrow_mut().push(request);
-        Ok(())
     }
 }
 
@@ -345,6 +348,7 @@ fn test_block(
     request: &RunAgentsRequest,
 ) -> (ViewHandle<TuiOrchestrationBlock>, Rc<TestController>) {
     app.add_singleton_model(|_| Appearance::mock());
+    app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
     let action = AIAgentAction {
         id: AIAgentActionId::from("run-agents-1".to_string()),
         task_id: TaskId::new("task-1".to_string()),
@@ -364,6 +368,7 @@ fn test_block(
         );
         ctx.add_typed_action_tui_view(window_id, move |ctx| {
             TuiOrchestrationBlock::from_parts(
+                AIConversationId::new(),
                 action,
                 &request,
                 None,

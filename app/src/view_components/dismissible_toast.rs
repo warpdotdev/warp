@@ -435,6 +435,12 @@ impl<A: Action + Clone> DismissibleToast<A> {
         Self::new(main_text, ToastFlavor::Default)
     }
 
+    /// Returns the main text of this toast. Only available in tests.
+    #[cfg(test)]
+    pub fn main_text(&self) -> &str {
+        &self.main_text
+    }
+
     pub fn success(main_text: String) -> Self {
         Self::new(main_text, ToastFlavor::Success)
     }

@@ -784,7 +784,13 @@ impl TemplatableMCPServerManager {
         let is_active = self.is_server_active_or_pending(installation_uuid);
 
         if !eligible {
-            if is_active {
+            // Only tear down a built-in this manager attached itself
+            // (tracked in `builtin_server_uuids`). CLI agent runs spawn a
+            // run-scoped installation with the same UUID through the
+            // AgentDriver (see `AgentDriver::builtin_factory_mcp_for_run`),
+            // and auth events delivered in SDK mode (e.g. a mid-run token
+            // refresh) must not shut that driver-owned server down.
+            if is_active && self.builtin_server_uuids.contains(&installation_uuid) {
                 log::info!("Shutting down the built-in Factory MCP server (no longer eligible)");
                 self.shutdown_server(installation_uuid, ctx);
             }

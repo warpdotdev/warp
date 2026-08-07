@@ -1,11 +1,20 @@
 use super::*;
 
 #[test]
-fn app_and_tui_accept_api_keys() {
+fn app_api_key_requires_validation() {
     let app = LaunchMode::App {
         args: Default::default(),
         api_key: Some("app-api-key".to_owned()),
     };
+
+    assert!(matches!(
+        app.auth_initialization(),
+        AuthInitialization::PendingApiKey(api_key) if api_key == "app-api-key"
+    ));
+}
+
+#[test]
+fn tui_api_key_requires_validation() {
     let tui = LaunchMode::Tui {
         entrypoint: TuiEntryPoint::Interactive {
             mount: Box::new(|_| {}),
@@ -13,14 +22,42 @@ fn app_and_tui_accept_api_keys() {
         },
     };
 
-    assert_eq!(
-        api_key_from_launch_mode(&app).as_deref(),
-        Some("app-api-key")
-    );
-    assert_eq!(
-        api_key_from_launch_mode(&tui).as_deref(),
-        Some("tui-api-key")
-    );
+    assert!(matches!(
+        tui.auth_initialization(),
+        AuthInitialization::PendingApiKey(api_key) if api_key == "tui-api-key"
+    ));
+}
+
+#[test]
+fn command_line_api_key_requires_validation() {
+    let command_line = LaunchMode::CommandLine {
+        command: CliCommand::Whoami,
+        global_options: GlobalOptions {
+            api_key: Some("cli-api-key".to_owned()),
+            ..Default::default()
+        },
+        debug: false,
+        is_sandboxed: false,
+        computer_use_override: None,
+    };
+
+    assert!(matches!(
+        command_line.auth_initialization(),
+        AuthInitialization::PendingApiKey(api_key) if api_key == "cli-api-key"
+    ));
+}
+
+#[test]
+fn startup_without_api_key_loads_persisted_auth() {
+    let app = LaunchMode::App {
+        args: Default::default(),
+        api_key: None,
+    };
+
+    assert!(matches!(
+        app.auth_initialization(),
+        AuthInitialization::Persisted
+    ));
 }
 
 #[test]
@@ -85,6 +122,48 @@ fn launch_intent_url_classification() {
         assert!(
             !is_launch_intent_url(&parse(&s)),
             "expected no launch intent: {s}"
+        );
+    }
+}
+
+#[test]
+fn startup_auth_is_non_blocking_only_for_tui() {
+    // Only the TUI front-end skips the startup IAP wait; every other launch mode
+    // keeps the blocking behavior so this scope can't widen beyond the TUI.
+    let tui = LaunchMode::Tui {
+        entrypoint: TuiEntryPoint::Interactive {
+            mount: Box::new(|_| {}),
+            api_key: None,
+        },
+    };
+    assert!(startup_auth_is_non_blocking(&tui));
+
+    let blocking_modes = [
+        LaunchMode::App {
+            args: Default::default(),
+            api_key: None,
+        },
+        LaunchMode::CommandLine {
+            command: CliCommand::Whoami,
+            global_options: GlobalOptions::default(),
+            debug: false,
+            is_sandboxed: false,
+            computer_use_override: None,
+        },
+        LaunchMode::Test {
+            driver: Box::new(None),
+            is_integration_test: false,
+        },
+        LaunchMode::RemoteServerProxy,
+        LaunchMode::RemoteServerDaemon {
+            identity_key: "test".to_owned(),
+        },
+    ];
+    for mode in blocking_modes {
+        assert!(
+            !startup_auth_is_non_blocking(&mode),
+            "{} must block startup auth on IAP",
+            mode.as_str_for_tracing()
         );
     }
 }

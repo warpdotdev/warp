@@ -2080,8 +2080,7 @@ fn save_workspaces(
         .into_iter()
         .flat_map(|workspace| {
             workspace.teams.into_iter().filter_map(|team| {
-                let serialized_settings_json =
-                    serde_json::to_string(&team.organization_settings).ok()?;
+                let serialized_settings_json = serde_json::to_string(&team.settings).ok()?;
                 let team_id_match = teams_by_server_uid.get(&team.uid.uid())?;
                 Some(NewTeamSettings {
                     team_id: *team_id_match,
@@ -2846,7 +2845,7 @@ fn read_sqlite_data(
         Vec::new()
     };
 
-    let user_profiles = if data_scope.gui_only_data() {
+    let user_profiles = if data_scope.user_profiles() {
         schema::user_profiles::dsl::user_profiles
             .load_iter::<model::UserProfile, DefaultLoadingMode>(conn)?
             .filter_map(|user_profile| user_profile.ok())

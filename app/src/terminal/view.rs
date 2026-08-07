@@ -431,8 +431,8 @@ use crate::terminal::model::block::{
 };
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::blocks::{
-    BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, Gap,
-    RemovableBlocklistItem,
+    AgentTranscriptNavigableItem, BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList,
+    BlockListPoint, Gap, RemovableBlocklistItem,
 };
 use crate::terminal::model::escape_sequences::{
     self, C1, EscCodes, ToEscapeSequence, alt_screen_scroll_to_pty_bytes,
@@ -457,6 +457,7 @@ use crate::terminal::session_settings::{
     SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
 };
 use crate::terminal::settings::{TerminalSettings, TerminalSettingsChangedEvent};
+use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::role_change_modal::{
     RoleChangeCloseSource, RoleChangeOpenSource,
 };
@@ -500,7 +501,7 @@ use crate::terminal::{
     AudibleBell, BlockListSettings, BlockListSettingsChangedEvent, CellSizeAndWindowPadding,
     History, HistoryEntry, ShellHost, ShellLaunchData, SizeInfo, SizeUpdate, SizeUpdateReason,
     color, element_size_at_last_frame, height_in_range_approx, heights_approx_eq,
-    heights_approx_gt, prompt,
+    heights_approx_gt, heights_approx_gte, prompt,
 };
 use crate::terminal::{
     TerminalModel,
@@ -2431,6 +2432,12 @@ pub(in crate::terminal::view) enum PendingUserQueryKind {
     CloudMode,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AgentTranscriptNavigationDirection {
+    Previous,
+    Next,
+}
+
 #[derive(Debug, Clone)]
 pub struct TerminalDropTargetData {
     pub terminal_view: WeakViewHandle<TerminalView>,
@@ -2503,6 +2510,14 @@ pub struct TerminalView {
     hovered_block_index: Option<BlockIndex>,
 
     selected_blocks: SelectedBlocks,
+
+    /// Focused navigable transcript item in the active agent view (prompt or user shell block).
+    agent_transcript_selection: Option<AgentTranscriptNavigableItem>,
+
+    /// The AI block currently flagged as the transcript navigation target (i.e. rendering the
+    /// user-query navigation ring). Tracked so the flag can be cheaply cleared or moved when the
+    /// navigation cursor changes.
+    agent_transcript_marked_ai_block: Option<EntityId>,
 
     // Whether any session contains blocks from a remote session. Cached to improve performance.
     // Blocks don't necessarily need to be finished for this to be true (e.g. it's true for
@@ -2855,8 +2870,8 @@ pub struct TerminalView {
     /// consumed without opening.
     conversation_details_panel_auto_open_policy: ConversationDetailsPanelAutoOpenPolicy,
     /// Mouse state handle for the conversation details panel toggle button in the pane header.
-    /// Only available on non-WASM platforms (WASM uses a per-window button instead).
-    #[cfg(not(target_arch = "wasm32"))]
+    /// On WASM this is used by the workspace-level transcript panel toggle; on desktop, it is used
+    /// by the pane-level details panel toggle.
     conversation_details_panel_toggle_mouse_state: warpui::elements::MouseStateHandle,
     /// Mouse state handle for the ambient agent cancel button in the pane header.
     ambient_agent_cancel_mouse_state: warpui::elements::MouseStateHandle,
@@ -3257,6 +3272,11 @@ impl TerminalView {
                 } => {
                     // Prompt suggestions should not follow the user back to terminal view.
                     me.clear_prompt_suggestions(ctx);
+                    // The transcript navigation cursor is agent-view-scoped; drop it so its
+                    // visual feedback doesn't linger into the terminal view or a re-entered
+                    // agent view.
+                    me.agent_transcript_selection = None;
+                    me.sync_agent_transcript_navigation_target(ctx);
                     // For ambient agent sessions, pop the pane stack to return to the parent terminal.
                     // Skip the pop when this exit is immediately followed by re-entering agent view
                     // for a different conversation (e.g. a restored conversation taking over the
@@ -4275,6 +4295,8 @@ impl TerminalView {
             open_secret_tool_tip: None,
             hovered_block_index: None,
             selected_blocks: Default::default(),
+            agent_transcript_selection: None,
+            agent_transcript_marked_ai_block: None,
             block_list_mouse_states,
             any_session_contains_remote_blocks: false,
             any_session_contains_restored_remote_blocks: false,
@@ -4401,7 +4423,6 @@ impl TerminalView {
             has_auto_opened_conversation_details_panel: false,
             conversation_details_panel_auto_open_policy: Default::default(),
             pending_cloud_followup_task_id: None,
-            #[cfg(not(target_arch = "wasm32"))]
             conversation_details_panel_toggle_mouse_state: Default::default(),
             ambient_agent_cancel_mouse_state: Default::default(),
             active_init_project_model: None,
@@ -6335,6 +6356,19 @@ impl TerminalView {
                     &ai_block_model,
                     ctx,
                 );
+                // Streaming exchanges can gain a displayable user query after mount (e.g.
+                // cloud-mode queued prompts). Keep the navigable-user-query flag in sync so
+                // Cmd-Up treats the segment as a stop once the query is renderable.
+                if let Some(ai_block) = self.ai_block_for_exchange(exchange_id).cloned() {
+                    let is_user_query = ai_block.as_ref(ctx).has_user_input(ctx);
+                    self.model
+                        .lock()
+                        .block_list_mut()
+                        .set_agent_transcript_user_query_for_rich_content(
+                            ai_block.id(),
+                            is_user_query,
+                        );
+                }
                 self.update_context_blocks_and_exchanges(ctx);
             }
             BlocklistAIHistoryEvent::SetActiveConversation { .. } => {
@@ -8048,6 +8082,55 @@ impl TerminalView {
     fn can_show_conversation_details_ui(&self, app: &AppContext) -> bool {
         let model = self.model.lock();
         self.can_show_conversation_details_ui_from_model(&model, app)
+    }
+
+    /// Whether the WASM workspace-level conversation details panel should be shown for this
+    /// terminal view. This is the authoritative predicate: `Workspace::should_show_conversation_details_panel`
+    /// delegates here. The `#[cfg(any(test, target_arch = "wasm32"))]` gate allows this logic
+    /// to be exercised by host-target unit tests even though the WASM render path is compiled out.
+    ///
+    /// Note: the pane-header `(i)` button uses a narrower gate
+    /// ([`Self::should_show_wasm_pane_header_details_button`]) that additionally excludes shared
+    /// sessions and transcript viewers, so it only appears on surfaces without a tab-bar
+    /// affordance. This predicate is intentionally broader so the panel renders for all three
+    /// surfaces.
+    ///
+    /// Returns `true` for:
+    /// - Restored ambient cloud tasks
+    /// - Conversation transcript viewers
+    /// - Shared sessions with an active conversation
+    #[cfg(any(test, target_arch = "wasm32"))]
+    pub(crate) fn should_show_wasm_conversation_details_panel(&self, app: &AppContext) -> bool {
+        if self.ambient_agent_task_id_for_details_panel(app).is_some() {
+            return true;
+        }
+        let model = self.model.lock();
+        if model.is_conversation_transcript_viewer() {
+            return true;
+        }
+        if model.shared_session_status().is_sharer_or_viewer() {
+            drop(model);
+            return BlocklistAIHistoryModel::as_ref(app)
+                .active_conversation(self.view_id)
+                .is_some();
+        }
+        false
+    }
+
+    /// Whether the WASM pane-header `(i)` details toggle should be shown for this terminal view.
+    /// Narrower than [`Self::should_show_wasm_conversation_details_panel`]: the pane-header button
+    /// appears only on ambient-task panes that lack a tab-bar `(i)` affordance, so shared sessions
+    /// and conversation-transcript viewers — which already show the simplified WASM tab-bar `(i)`
+    /// via `get_simplified_wasm_tab_bar_content` — are excluded to avoid a duplicate button. The
+    /// `#[cfg(any(test, target_arch = "wasm32"))]` gate lets host-target unit tests exercise this
+    /// even though the render path is compiled out on the host.
+    #[cfg(any(test, target_arch = "wasm32"))]
+    pub(crate) fn should_show_wasm_pane_header_details_button(&self, app: &AppContext) -> bool {
+        let model = self.model.lock();
+        self.ambient_agent_task_id_for_details_panel_from_model(&model, app)
+            .is_some()
+            && !model.shared_session_status().is_sharer_or_viewer()
+            && !model.is_conversation_transcript_viewer()
     }
 
     /// Consume the one-shot conversation details panel auto-open for this
@@ -11266,12 +11349,13 @@ impl TerminalView {
     }
 
     /// Sends telemetry if an AI-requested command caused the shell to exit, and
-    /// returns the conversation that issued that command so the caller can
-    /// finalize it as a shell-exit failure.
+    /// returns the conversation that issued that command along with the
+    /// (secret-redacted) command text so the caller can finalize it as a
+    /// shell-exit failure.
     fn maybe_send_agent_exited_shell_telemetry(
         &self,
         ctx: &mut ViewContext<Self>,
-    ) -> Option<AIConversationId> {
+    ) -> Option<(AIConversationId, String)> {
         let model = self.model.lock();
         let block_list = model.block_list();
         let blocks = block_list.blocks();
@@ -11310,12 +11394,12 @@ impl TerminalView {
         });
         send_telemetry_from_ctx!(
             TelemetryEvent::AgentExitedShellProcess {
-                command,
+                command: command.clone(),
                 server_output_id,
             },
             ctx
         );
-        conversation_id
+        conversation_id.map(|conversation_id| (conversation_id, command))
     }
 
     /// Updates the back button's state and label. For child agents the
@@ -11700,15 +11784,20 @@ impl TerminalView {
             }
             ModelEvent::Exit { reason } => {
                 if !self.manual_pty_shutdown_requested
-                    && let Some(conversation_id) = self.maybe_send_agent_exited_shell_telemetry(ctx)
+                    && let Some((conversation_id, command)) =
+                        self.maybe_send_agent_exited_shell_telemetry(ctx)
                 {
                     // The agent's command caused the shell to exit. Finalize the
-                    // conversation as a failure (with a message) before the pane is
-                    // torn down, so the Oz run reports the failure instead of
-                    // "Cancelled by user" (which the pane-close cancellation would
-                    // otherwise produce).
+                    // conversation as a failure (with a message naming the command)
+                    // before the pane is torn down, so the Oz run reports the
+                    // failure instead of "Cancelled by user" (which the pane-close
+                    // cancellation would otherwise produce).
                     self.ai_controller.update(ctx, |controller, ctx| {
-                        controller.fail_conversation_due_to_shell_exit(conversation_id, ctx);
+                        controller.fail_conversation_due_to_shell_exit(
+                            conversation_id,
+                            command,
+                            ctx,
+                        );
                     });
                 }
 
@@ -16754,9 +16843,12 @@ impl TerminalView {
                             .block_at(tail_block_index)
                             .is_none_or(|b| b.is_restored());
 
-                    items.extend(
-                        self.session_sharing_context_menu_items(&model, is_share_session_disabled),
-                    );
+                    let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+                    items.extend(self.session_sharing_context_menu_items(
+                        &model,
+                        is_share_session_disabled,
+                        has_session_link,
+                    ));
                 }
 
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
@@ -16964,7 +17056,12 @@ impl TerminalView {
                 if FeatureFlag::CreatingSharedSessions.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled()
                 {
-                    items.extend(self.session_sharing_context_menu_items(&model, false));
+                    let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+                    items.extend(self.session_sharing_context_menu_items(
+                        &model,
+                        false,
+                        has_session_link,
+                    ));
                 }
 
                 items
@@ -17435,7 +17532,8 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            items.extend(self.session_sharing_context_menu_items(&model, false));
+            let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+            items.extend(self.session_sharing_context_menu_items(&model, false, has_session_link));
         }
 
         // Section 2: AI Command Search, Ask Warp AI
@@ -17673,7 +17771,12 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            menu_items.extend(self.session_sharing_context_menu_items(&model, false));
+            let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+            menu_items.extend(self.session_sharing_context_menu_items(
+                &model,
+                false,
+                has_session_link,
+            ));
         }
         let current_shell = model.shell_launch_state().available_shell();
         let mut pane_context_menu_items = self.pane_context_menu_items(current_shell, ctx);
@@ -19718,6 +19821,11 @@ impl TerminalView {
             self.close_context_menu(ctx, true);
         }
 
+        if !is_shift_down && self.should_use_agent_transcript_navigation(ctx) {
+            self.navigate_agent_transcript(AgentTranscriptNavigationDirection::Previous, ctx);
+            return;
+        }
+
         if let Some(selected_block_index) = self.selected_blocks.tail() {
             let new_block_index = self
                 .model
@@ -19772,6 +19880,12 @@ impl TerminalView {
         if self.is_context_menu_open() {
             self.close_context_menu(ctx, true);
         }
+
+        if !is_shift_down && self.should_use_agent_transcript_navigation(ctx) {
+            self.navigate_agent_transcript(AgentTranscriptNavigationDirection::Next, ctx);
+            return;
+        }
+
         let input_mode = *InputModeSettings::as_ref(ctx).input_mode.value();
         let is_inverted_blocklist = input_mode.is_inverted_blocklist();
         let is_most_recent_block_visible = {
@@ -19895,6 +20009,9 @@ impl TerminalView {
         block_index: BlockIndex,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.agent_transcript_selection =
+            Some(AgentTranscriptNavigableItem::ShellBlock(block_index));
+        self.sync_agent_transcript_navigation_target(ctx);
         self.change_block_selections(
             |selected_blocks| {
                 selected_blocks.reset_to_single(block_index);
@@ -19905,6 +20022,8 @@ impl TerminalView {
     }
 
     fn clear_selected_blocks(&mut self, ctx: &mut ViewContext<Self>) {
+        self.agent_transcript_selection = None;
+        self.sync_agent_transcript_navigation_target(ctx);
         self.change_block_selections(
             |selected_blocks| {
                 selected_blocks.reset();
@@ -19912,6 +20031,187 @@ impl TerminalView {
             ctx,
         );
         ctx.notify();
+    }
+
+    fn should_use_agent_transcript_navigation(&self, ctx: &AppContext) -> bool {
+        FeatureFlag::AgentView.is_enabled() && self.agent_view_controller.as_ref(ctx).is_active()
+    }
+
+    fn navigate_agent_transcript(
+        &mut self,
+        direction: AgentTranscriptNavigationDirection,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let navigable_items = {
+            let model = self.model.lock();
+            model.block_list().agent_transcript_navigable_items()
+        };
+        if navigable_items.is_empty() {
+            return;
+        }
+
+        let current = self.agent_transcript_selection.or_else(|| {
+            self.selected_blocks
+                .tail()
+                .map(AgentTranscriptNavigableItem::ShellBlock)
+        });
+
+        let target = match direction {
+            AgentTranscriptNavigationDirection::Previous => match current {
+                Some(current) => match navigable_items.iter().position(|item| *item == current) {
+                    // Stay on the oldest item, matching ordinary block navigation.
+                    Some(0) => Some(current),
+                    Some(index) => Some(navigable_items[index - 1]),
+                    // Absent/stale cursor: start from the newest navigable item.
+                    None => navigable_items.last().copied(),
+                },
+                None => navigable_items.last().copied(),
+            },
+            AgentTranscriptNavigationDirection::Next => {
+                // Without a cursor the user is already past the newest stop, so there is
+                // nothing more recent to move to: do nothing, matching ordinary block
+                // navigation. Selecting the newest stop here would make repeated Cmd-Down
+                // presses oscillate between selecting and clearing it.
+                let Some(current) = current else {
+                    return;
+                };
+                let next = navigable_items
+                    .iter()
+                    .position(|item| *item == current)
+                    .and_then(|index| navigable_items.get(index + 1).copied());
+                if next.is_none() {
+                    self.scroll_to_end_of_blocklist_if_not_at_end(ctx);
+                    self.clear_selected_blocks(ctx);
+                    ctx.focus(&self.input);
+                    ctx.notify();
+                    return;
+                }
+                next
+            }
+        };
+
+        let Some(target) = target else {
+            return;
+        };
+        self.apply_agent_transcript_selection(target, direction, ctx);
+    }
+
+    fn apply_agent_transcript_selection(
+        &mut self,
+        target: AgentTranscriptNavigableItem,
+        direction: AgentTranscriptNavigationDirection,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.agent_transcript_selection = Some(target);
+        match target {
+            AgentTranscriptNavigableItem::ShellBlock(block_index) => {
+                self.reset_selection_to_single_block(block_index, ctx);
+                self.scroll_to_if_not_visible(block_index, ctx);
+            }
+            AgentTranscriptNavigableItem::AiBlock { view_id } => {
+                self.change_block_selections(
+                    |selected_blocks| {
+                        selected_blocks.reset();
+                    },
+                    ctx,
+                );
+                self.scroll_to_rich_content_view(view_id, ctx);
+            }
+        }
+        self.sync_agent_transcript_navigation_target(ctx);
+
+        let (delta, is_cmd_down) = match direction {
+            AgentTranscriptNavigationDirection::Previous => (BlockSelectionDelta::Previous, false),
+            AgentTranscriptNavigationDirection::Next => (BlockSelectionDelta::Next, true),
+        };
+        send_telemetry_from_ctx!(
+            TelemetryEvent::BlockSelection(BlockSelectionDetails {
+                cardinality: self.selected_blocks.cardinality(),
+                delta,
+                is_cmd_down,
+                is_shift_down: false,
+            }),
+            ctx
+        );
+
+        self.tips_completed.update(ctx, |tips, ctx| {
+            mark_feature_used_and_write_to_user_defaults(
+                Tip::Hint(TipHint::BlockSelect),
+                tips,
+                ctx,
+            );
+            ctx.notify();
+        });
+        ctx.notify();
+    }
+
+    /// Cmd-Down past the newest navigable transcript item should land the user on the true end
+    /// of the blocklist (latest content), not wherever the last stop left the viewport.
+    fn scroll_to_end_of_blocklist_if_not_at_end(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_at_end = {
+            let input_mode = *InputModeSettings::as_ref(ctx).input_mode.value();
+            let model = self.model.lock();
+            let viewport = self.viewport_state(model.block_list(), input_mode, ctx);
+            heights_approx_gte(
+                viewport.scroll_top_in_lines(),
+                viewport.max_scroll_top_in_lines(),
+            )
+        };
+        if !is_at_end {
+            self.update_scroll_position_locking(ScrollPositionUpdate::AfterEnd, ctx);
+        }
+    }
+
+    /// The AI rich-content view currently targeted by agent-view transcript navigation.
+    /// `None` outside an active agent view or when the cursor is on a shell block.
+    fn agent_transcript_navigated_ai_block(&self, app: &AppContext) -> Option<EntityId> {
+        if !self.should_use_agent_transcript_navigation(app) {
+            return None;
+        }
+        match self.agent_transcript_selection {
+            Some(AgentTranscriptNavigableItem::AiBlock { view_id }) => Some(view_id),
+            _ => None,
+        }
+    }
+
+    /// Propagates the transcript navigation cursor to the targeted [`AIBlock`], which renders a
+    /// navigation ring around its user-query row. Clears the flag from the previously targeted
+    /// block when the cursor moves or resets.
+    fn sync_agent_transcript_navigation_target(&mut self, ctx: &mut ViewContext<Self>) {
+        let target = self.agent_transcript_navigated_ai_block(ctx);
+        if target == self.agent_transcript_marked_ai_block {
+            return;
+        }
+        for rich_content in self.rich_content_views.iter() {
+            let Some(ai_metadata) = rich_content.ai_block_metadata() else {
+                continue;
+            };
+            let handle = &ai_metadata.ai_block_handle;
+            let should_mark = Some(handle.id()) == target;
+            let was_marked = Some(handle.id()) == self.agent_transcript_marked_ai_block;
+            if should_mark != was_marked {
+                handle.update(ctx, |ai_block, ctx| {
+                    ai_block.set_agent_transcript_navigation_target(should_mark, ctx);
+                });
+            }
+        }
+        self.agent_transcript_marked_ai_block = target;
+    }
+
+    fn scroll_to_rich_content_view(&mut self, view_id: EntityId, ctx: &mut ViewContext<Self>) {
+        let Some(index) = self
+            .model
+            .lock()
+            .block_list()
+            .removable_blocklist_item_position(&RemovableBlocklistItem::RichContent(view_id))
+            .copied()
+        else {
+            return;
+        };
+        self.update_scroll_position_locking(
+            ScrollPositionUpdate::ScrollToTopOfRichContent { index },
+            ctx,
+        );
     }
 
     /// Clears selected text across all types of blocks and handles side effects (i.e. Agent Mode
@@ -22657,6 +22957,11 @@ impl TerminalView {
     #[cfg(any(test, feature = "integration_tests"))]
     pub fn selected_blocks_tail_index(&self) -> Option<BlockIndex> {
         self.selected_blocks.tail()
+    }
+
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn agent_transcript_selection_for_test(&self) -> Option<AgentTranscriptNavigableItem> {
+        self.agent_transcript_selection
     }
 
     #[cfg(any(test, feature = "integration_tests"))]

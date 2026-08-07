@@ -75,7 +75,6 @@ warp = { workspace = true, features = [
   "nld_classifier_v3",
   "nld_heuristic_v2",
   "tui",
-  "voice_input",
 ] }
 warp_channel_config.workspace = true
 warp_completer.workspace = true
@@ -105,7 +104,14 @@ arboard = { workspace = true }
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 arboard = { workspace = true, features = ["wayland-data-control"] }
 
+# `dunce::simplified` strips the Win32 extended-length (`\\?\`) prefix that
+# `Path::canonicalize` produces, which the Inno Setup updater rejects in its
+# `/DIR` argument. Windows-only, so it stays out of the portable dependency set.
+[target.'cfg(windows)'.dependencies]
+dunce.workspace = true
+
 [dev-dependencies]
+criterion = { version = "0.5.1", features = ["html_reports"] }
 tempfile.workspace = true
 # `test-util` exposes `Appearance::mock()`, used to register the `Appearance`
 # singleton that the editor-backed TUI input view depends on in tests.
@@ -117,8 +123,22 @@ warp_editor = { workspace = true, features = ["test-util"] }
 command.workspace = true
 pathfinder_color.workspace = true
 warp = { workspace = true, features = ["tui", "test-util"] }
+[[bench]]
+name = "transcript_bench"
+harness = false
+required-features = ["test-util"]
+
+[[bench]]
+name = "zero_state_bench"
+harness = false
+required-features = ["test-util"]
 
 [features]
+# Enables native microphone capture and transcription support. Keep this
+# opt-in so portable Linux builds do not require the host ALSA runtime.
+voice_input = ["warp/voice_input"]
+# Exposes deterministic, production-shaped transcript fixtures to benchmarks.
+test-util = ["warp/test-util", "warp_core/test-util"]
 # Declared so the `warp_channel_config::load_config!` macro's
 # `cfg(feature = "release_bundle")` branch is a known cfg in this crate. Today it
 # stays off and the local bin uses the runtime generator; wiring the embedded

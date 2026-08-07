@@ -570,6 +570,10 @@ fn model_menu_blocks_slash_command_activation() {
 fn skill_menu_blocks_slash_command_activation() {
     assert_explicit_menu_blocks_slash_commands(TuiInputSuggestionsMode::SkillMenu);
 }
+#[test]
+fn mcp_install_flow_blocks_slash_command_activation() {
+    assert_explicit_menu_blocks_slash_commands(TuiInputSuggestionsMode::McpInstall);
+}
 
 #[test]
 fn accepting_a_result_does_not_disable_input_driven_lifecycle() {

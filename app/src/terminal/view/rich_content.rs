@@ -319,11 +319,18 @@ impl TerminalView {
                 false,
             )
         };
-        let item = RichContentItem::new(
+        let is_agent_transcript_user_query = match &metadata {
+            Some(RichContentMetadata::AIBlock(AIBlockMetadata {
+                ai_block_handle, ..
+            })) => ai_block_handle.as_ref(ctx).has_user_input(ctx),
+            _ => false,
+        };
+        let item = RichContentItem::new_with_agent_transcript_user_query(
             content_type,
             handle.id(),
             agent_view_conversation_id,
             should_hide,
+            is_agent_transcript_user_query,
         );
 
         match position {

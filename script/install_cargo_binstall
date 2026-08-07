@@ -1,12 +1,119 @@
 #!/usr/bin/env bash
 #
-# Installs cargo-binstall if not present, or updates it if already installed.
+# Installs cargo-binstall at the pinned version if it isn't already present.
 
 # This script should be platform-agnostic (eg. no unix-only references like /dev/null).
 
-# Install cargo-binstall, then/or use it to update itself.
-if ! command -v cargo-binstall; then
-    cargo install cargo-binstall@1.14.3 --locked
+set -eo pipefail
+
+# Keep in sync with the cargo-bins/cargo-binstall action pin in .github/workflows/ci.yml
+# so local bootstraps and CI resolve binaries with the same binstall version.
+BINSTALL_VERSION="1.18.1"
+
+# Every archive this script may run, keyed by asset name, with the SHA-256 that
+# GitHub publishes for it. The download URL and the release it points at are both
+# mutable, so the digest — reviewed here, in the repo — is what authenticates the
+# binary before it executes. A mismatch aborts the install.
+#
+# Regenerate when bumping BINSTALL_VERSION:
+#
+#   curl -sSfL https://api.github.com/repos/cargo-bins/cargo-binstall/releases/tags/v<version> \
+#     | jq -r '.assets[] | "\(.name) \(.digest)"'
+archive_sha256() {
+    case "$1" in
+        cargo-binstall-universal-apple-darwin.zip)
+            echo "5cc5d6d502924623a491c4ed77fb925193f05106252cffd3be979cbb94a0cd01" ;;
+        cargo-binstall-x86_64-unknown-linux-musl.tgz)
+            echo "cf2a4b54494ea8555d6349685e9a301efc1051d9fba6308c76914b2486f8700f" ;;
+        cargo-binstall-aarch64-unknown-linux-musl.tgz)
+            echo "c55962a0115f9716b709216de7f8bdd59d6ba8738779e60b051b4593f677717a" ;;
+        cargo-binstall-x86_64-pc-windows-msvc.zip)
+            echo "89706aa5215c164d8d091597a470fee72308ac87e8553af395ea77db844a888c" ;;
+    esac
+}
+
+# The macOS archive is a universal binary, so it serves both darwin architectures.
+archive_for_platform() {
+    case "$(uname -s)" in
+        Darwin)
+            echo "cargo-binstall-universal-apple-darwin.zip" ;;
+        Linux)
+            echo "cargo-binstall-$(uname -m)-unknown-linux-musl.tgz" ;;
+        *)
+            if [ "${OS-}" = "Windows_NT" ]; then
+                echo "cargo-binstall-$(uname -m)-pc-windows-msvc.zip"
+            fi
+            ;;
+    esac
+}
+
+sha256_of() {
+    if [ -n "$(command -v sha256sum || true)" ]; then
+        sha256sum "$1" | cut -d ' ' -f 1
+    elif [ -n "$(command -v shasum || true)" ]; then
+        shasum -a 256 "$1" | cut -d ' ' -f 1
+    else
+        openssl dgst -sha256 "$1" | awk '{print $NF}'
+    fi
+}
+
+# bsdtar reads zip archives, which is what keeps unzip optional on macOS and
+# Windows. GNU tar cannot, but Linux downloads a .tgz.
+extract() {
+    case "$1" in
+        *.zip)
+            if [ -n "$(command -v unzip || true)" ]; then
+                unzip -o "$1"
+            else
+                tar -xf "$1"
+            fi
+            ;;
+        *)
+            tar -xzf "$1" ;;
+    esac
+}
+
+# cargo-binstall is installed from its own prebuilt release rather than with
+# `cargo install`, which compiles it and its whole dependency tree from source and
+# dominates the runtime of a fresh bootstrap.
+INSTALLED_VERSION=""
+if command -v cargo-binstall; then
+    INSTALLED_VERSION="$(cargo-binstall -V)"
 fi
 
-cargo binstall --no-confirm cargo-binstall
+if [ "$INSTALLED_VERSION" != "$BINSTALL_VERSION" ]; then
+    echo "Installing cargo-binstall v${BINSTALL_VERSION} from its prebuilt release..."
+
+    ARCHIVE="$(archive_for_platform)"
+    EXPECTED_SHA256="$(archive_sha256 "$ARCHIVE")"
+    if [ -z "$EXPECTED_SHA256" ]; then
+        echo "error: no pinned cargo-binstall release for $(uname -s) $(uname -m)." >&2
+        echo "Add its archive and SHA-256 to script/install_cargo_binstall to support this platform." >&2
+        exit 1
+    fi
+
+    WORKDIR="$(mktemp -d)"
+    # shellcheck disable=SC2064 # Expand WORKDIR now so the trap still resolves it later.
+    trap "rm -rf \"$WORKDIR\"" EXIT
+
+    curl -L --proto '=https' --tlsv1.2 -sSf \
+        "https://github.com/cargo-bins/cargo-binstall/releases/download/v${BINSTALL_VERSION}/${ARCHIVE}" \
+        --output "$WORKDIR/$ARCHIVE"
+
+    ACTUAL_SHA256="$(sha256_of "$WORKDIR/$ARCHIVE")"
+    if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+        echo "error: $ARCHIVE failed verification, refusing to run it." >&2
+        echo "  expected SHA-256 $EXPECTED_SHA256" >&2
+        echo "  actual SHA-256   $ACTUAL_SHA256" >&2
+        exit 1
+    fi
+
+    (cd "$WORKDIR" && extract "$ARCHIVE")
+
+    BINSTALL="$WORKDIR/cargo-binstall"
+    if [ -f "${BINSTALL}.exe" ]; then
+        BINSTALL="${BINSTALL}.exe"
+    fi
+    chmod +x "$BINSTALL"
+    "$BINSTALL" --self-install
+fi

@@ -76,6 +76,10 @@ use warp_graphql::queries::free_available_models::{
     FreeAvailableModels, FreeAvailableModelsInput, FreeAvailableModelsResult,
     FreeAvailableModelsVariables,
 };
+#[cfg(not(feature = "agent_mode_evals"))]
+use warp_graphql::queries::get_ai_credit_availability::{
+    GetAICreditAvailability, GetAICreditAvailabilityVariables,
+};
 use warp_graphql::queries::get_available_harnesses::{
     GetAvailableHarnesses, GetAvailableHarnessesVariables,
 };
@@ -117,7 +121,6 @@ use super::download::write_response_body_to_path;
 use super::harness_support::{UploadField, UploadFieldValue, UploadTarget};
 #[cfg(not(feature = "agent_mode_evals"))]
 use crate::ai::BonusGrant;
-use crate::ai::RequestUsageInfo;
 pub use crate::ai::agent::UserQueryMode;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
@@ -127,7 +130,8 @@ use crate::ai::agent::conversation::{
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 // Re-export ambient agent types for backwards compatibility
 pub use crate::ai::ambient_agents::{
-    AgentConfigSnapshot, AgentSource, AmbientAgentTask, AmbientAgentTaskState, TaskStatusMessage,
+    AgentConfigSnapshot, AgentSource, AmbientAgentTask, AmbientAgentTaskState, ExecutionLocation,
+    TaskStatusMessage,
     task::{AttachmentInput, TaskAttachment},
 };
 use crate::ai::artifacts::Artifact;
@@ -141,6 +145,7 @@ use crate::ai::llms::{
 };
 #[cfg(feature = "agent_mode_evals")]
 use crate::ai::request_usage_model::RequestLimitInfo;
+use crate::ai::{AICreditAvailability, RequestUsageInfo};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::ai_assistant::requests::GenerateDialogueResult;
 use crate::ai_assistant::utils::TranscriptPart;
@@ -151,7 +156,6 @@ use crate::server::graphql::{get_request_context, get_user_facing_error_message}
 use crate::terminal::model::block::SerializedBlock;
 #[cfg(not(feature = "agent_mode_evals"))]
 use crate::{
-    ai::request_usage_model::BonusGrantScope,
     server::ids::ServerId,
     workspaces::{gql_convert::PLACEHOLDER_WORKSPACE_UID, workspace::WorkspaceUid},
 };
@@ -622,7 +626,26 @@ pub struct ListHandoffSnapshotAttachmentsResponse {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct AttachmentUploadInfo {
     pub attachment_id: String,
+    /// Presigned URL form of [`Self::upload_target`], kept for compatibility.
+    /// It only describes a plain `PUT`, so it cannot express the presigned POST
+    /// form that self-hosted S3 storage requires.
     pub upload_url: String,
+    /// Absent when the server predates the upload-target contract.
+    #[serde(default)]
+    pub upload_target: Option<UploadTarget>,
+}
+
+impl AttachmentUploadInfo {
+    /// The target to upload this attachment to, synthesizing a presigned `PUT`
+    /// from [`Self::upload_url`] when the server did not send an upload target.
+    pub fn resolve_upload_target(&self, content_type: &str) -> UploadTarget {
+        self.upload_target.clone().unwrap_or_else(|| UploadTarget {
+            url: self.upload_url.clone(),
+            method: "PUT".to_string(),
+            headers: HashMap::from([("Content-Type".to_string(), content_type.to_string())]),
+            fields: Vec::new(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -706,22 +729,6 @@ pub struct TaskListFilter {
     pub sort_by: Option<RunSortBy>,
     pub sort_order: Option<RunSortOrder>,
     pub cursor: Option<String>,
-}
-
-/// Execution location filter values accepted by the public API.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExecutionLocation {
-    Local,
-    Remote,
-}
-
-impl ExecutionLocation {
-    pub fn as_query_param(&self) -> &'static str {
-        match self {
-            ExecutionLocation::Local => "LOCAL",
-            ExecutionLocation::Remote => "REMOTE",
-        }
-    }
 }
 
 /// Artifact type filter values accepted by the public API.
@@ -1156,6 +1163,10 @@ pub trait AIClient: 'static + Send + Sync {
     ) -> Result<GeneratedCommandMetadata, GeneratedCommandMetadataError>;
 
     async fn get_request_limit_info(&self) -> Result<RequestUsageInfo, anyhow::Error>;
+
+    /// Fetches the server-authoritative decision on whether the authenticated
+    /// user can start an interactive AI request.
+    async fn get_ai_credit_availability(&self) -> Result<AICreditAvailability, anyhow::Error>;
 
     /// Returns conversation usage history for the current user over the requested number of days.
     ///
@@ -1768,7 +1779,7 @@ impl AIClient for ServerApi {
             warp_graphql::queries::get_request_limit_info::UserResult::UserOutput(user_output) => {
                 let request_limit_info = user_output.user.request_limit_info.into();
 
-                let workspace_bonus_grants = user_output
+                let workspace_and_team_bonus_grants = user_output
                     .user
                     .workspaces
                     .into_iter()
@@ -1781,9 +1792,9 @@ impl AIClient for ServerApi {
                             .grants
                             .into_iter()
                             .map(move |grant| {
-                                BonusGrant::from_gql_bonus_grant(
+                                BonusGrant::from_gql_workspace_or_team_bonus_grant(
                                     grant,
-                                    BonusGrantScope::Workspace(workspace_uid),
+                                    workspace_uid,
                                 )
                             })
                     });
@@ -1792,8 +1803,8 @@ impl AIClient for ServerApi {
                     .user
                     .bonus_grants
                     .into_iter()
-                    .map(|grant| BonusGrant::from_gql_bonus_grant(grant, BonusGrantScope::User))
-                    .chain(workspace_bonus_grants)
+                    .map(BonusGrant::from_gql_user_bonus_grant)
+                    .chain(workspace_and_team_bonus_grants)
                     .collect();
 
                 Ok(RequestUsageInfo {
@@ -1806,6 +1817,34 @@ impl AIClient for ServerApi {
             }
             warp_graphql::queries::get_request_limit_info::UserResult::Unknown => {
                 Err(anyhow!("failed to get request limit info"))
+            }
+        }
+    }
+
+    #[cfg(feature = "agent_mode_evals")]
+    async fn get_ai_credit_availability(&self) -> Result<AICreditAvailability, anyhow::Error> {
+        Ok(AICreditAvailability::available_with_source(Some(
+            crate::ai::AICreditSource::BaseLimit,
+        )))
+    }
+
+    #[cfg(not(feature = "agent_mode_evals"))]
+    async fn get_ai_credit_availability(&self) -> Result<AICreditAvailability, anyhow::Error> {
+        let variables = GetAICreditAvailabilityVariables {
+            request_context: get_request_context(),
+        };
+        let operation = GetAICreditAvailability::build(variables);
+        let response = self.send_graphql_request(operation, None).await?;
+
+        match response.user {
+            warp_graphql::queries::get_ai_credit_availability::UserResult::UserOutput(output) => {
+                Ok(output.user.ai_credit_availability.into())
+            }
+            warp_graphql::queries::get_ai_credit_availability::UserResult::UserFacingError(e) => {
+                Err(anyhow!(get_user_facing_error_message(e)))
+            }
+            warp_graphql::queries::get_ai_credit_availability::UserResult::Unknown => {
+                Err(anyhow!("failed to get AI credit availability"))
             }
         }
     }

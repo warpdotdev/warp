@@ -66,6 +66,46 @@ fn renders_from_the_requested_logical_row() {
 }
 
 #[test]
+fn direct_paint_does_not_escape_the_clipped_viewport() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut layout_ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let mut child = TuiText::new("hidden\nvisible\nmust not leak")
+                .truncate()
+                .finish();
+            child.layout(
+                TuiConstraint::loose(TuiSize::new(13, u16::MAX)),
+                &mut layout_ctx,
+                app_ctx,
+            );
+            let mut clipped = TuiClipped::from_laid_out_child(child, 1, TuiSize::new(13, 1));
+
+            let mut buffer = crate::elements::tui::TuiBuffer::empty(TuiRect::new(0, 0, 13, 3));
+            buffer.set_string(
+                0,
+                1,
+                "input footer ",
+                crate::elements::tui::TuiStyle::default(),
+            );
+            let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+            let mut surface = TuiPaintSurface::new(&mut buffer);
+            clipped.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+
+            assert_eq!(
+                crate::elements::tui::TuiBufferExt::to_lines(&buffer),
+                vec![
+                    "visible      ".to_owned(),
+                    "input footer ".to_owned(),
+                    "             ".to_owned(),
+                ],
+            );
+        });
+    });
+}
+#[test]
 fn layout_preserves_child_width_and_reports_visible_height() {
     App::test((), |app| async move {
         app.read(|app_ctx| {

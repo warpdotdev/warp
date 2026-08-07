@@ -145,7 +145,7 @@ function GetBinDir(Param: string): string;
 var
   RequestedBinDir: string;
 begin
-  RequestedBinDir := ExpandConstant('{param:WARP_BIN_DIR|}');
+  RequestedBinDir := ExpandConstant('{param:warp_bin_dir|}');
   if RequestedBinDir <> '' then
   begin
     Result := RequestedBinDir;
@@ -160,7 +160,7 @@ function SkipPathUpdate(): Boolean;
 var
   Value: string;
 begin
-  Value := Lowercase(ExpandConstant('{param:SKIP_PATH_UPDATE|false}'));
+  Value := Lowercase(ExpandConstant('{param:skip_path_update|false}'));
   Result := (Value = '1') or (Value = 'true');
 end;
 
@@ -168,7 +168,7 @@ function AllowDowngrade(): Boolean;
 var
   Value: string;
 begin
-  Value := Lowercase(ExpandConstant('{param:ALLOW_DOWNGRADE|false}'));
+  Value := Lowercase(ExpandConstant('{param:allow_downgrade|false}'));
   Result := (Value = '1') or (Value = 'true');
 end;
 
@@ -296,7 +296,7 @@ begin
   begin
     Result :=
       'Warp Agent CLI ' + CurrentVersion +
-      ' is newer than {#MyAppVersion}. Pass /ALLOW_DOWNGRADE=1 to install an older version.';
+      ' is newer than {#MyAppVersion}. Pass /allow_downgrade=1 to install an older version.';
     exit;
   end;
 

@@ -6,12 +6,14 @@ use warp_errors::report_error;
 use warp_graphql::billing::{
     AiAutonomyPolicy as GqlAiAutonomyPolicy, AmbientAgentsPolicy as GqlAmbientAgentsPolicy,
     BillingCycleUsageHistory as GqlBillingCycleUsageHistory, BillingMetadata as GqlBillingMetadata,
-    BonusGrant as GqlBonusGrant, ByoApiKeyPolicy as GqlByoApiKeyPolicy,
-    ByoEndpointPolicy as GqlByoEndpointPolicy, CodebaseContextPolicy as GqlCodebaseContextPolicy,
-    CustomerType as GqlCustomerType, DelinquencyStatus as GqlDelinquencyStatus,
+    BonusGrant as GqlBonusGrant, BonusGrantScope as GqlBonusGrantScope,
+    ByoApiKeyPolicy as GqlByoApiKeyPolicy, ByoEndpointPolicy as GqlByoEndpointPolicy,
+    CodebaseContextPolicy as GqlCodebaseContextPolicy, CustomerType as GqlCustomerType,
+    DelinquencyStatus as GqlDelinquencyStatus,
     EnterpriseCreditsAutoReloadPolicy as GqlEnterpriseCreditsAutoReloadPolicy,
     EnterprisePayAsYouGoPolicy as GqlEnterprisePayAsYouGoPolicy, InstanceShape as GqlInstanceShape,
     ManagedByokByoePolicy as GqlManagedByokByoePolicy, MultiAdminPolicy as GqlMultiAdminPolicy,
+    NativeWorkspacesPolicy as GqlNativeWorkspacesPolicy,
     PurchaseAddOnCreditsPolicy as GqlPurchaseAddOnCreditsPolicy, ServiceAgreementType,
     SessionSharingPolicy as GqlSessionSharingPolicy,
     SharedNotebooksPolicy as GqlSharedNotebooksPolicy,
@@ -37,8 +39,9 @@ use warp_graphql::workspace::{
     ComputerUseAutonomyValue as GqlComputerUseAutonomyValue, EmailInvite as GqlEmailInvite,
     HostEnablementSetting as GqlHostEnablementSetting,
     InviteLinkDomainRestriction as GqlInviteLinkDomainRestriction,
-    MembershipRole as GqlMembershipRole, Team as GqlTeam, TeamByoSettings as GqlTeamByoSettings,
-    TeamMember as GqlTeamMember,
+    MembershipRole as GqlMembershipRole, StringListSettingInfo as GqlStringListSettingInfo,
+    Team as GqlTeam, TeamByoSettings as GqlTeamByoSettings, TeamMember as GqlTeamMember,
+    TeamSettings as GqlTeamSettings,
     UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting, Workspace as GqlWorkspace,
     WorkspaceMember as GqlWorkspaceMember, WorkspaceMemberUsageInfo as GqlWorkspaceMemberUsageInfo,
     WorkspaceSettings as GqlWorkspaceSettings,
@@ -52,13 +55,16 @@ use super::workspace::{
     AiPermissionsSettings, AmbientAgentsPolicy, BillingCycleUsageData, BillingCycleUsageEntry,
     BillingCycleUsageSummary, BillingMetadata, ByoEndpointMetadata, ByoEndpointModelMetadata,
     ByoFirstPartyKey, CloudConversationStorageSettings, CodebaseContextSettings, CustomerType,
-    DelinquencyStatus, EmailInvite, EnterpriseSecretRegex, HostEnablementSetting, InstanceShape,
-    InviteLinkDomainRestriction, LinkSharingSettings, LlmSettings, MaxPriorCycles,
-    SandboxedAgentSettings, SecretRedactionSettings, SessionSharingPolicy, SharedNotebooksPolicy,
-    SharedWorkflowsPolicy, TeamByoSettings, TelemetryDataCollectionPolicy, TelemetrySettings, Tier,
-    UgcCollectionEnablementSetting, UgcCollectionSettings, UgcDataCollectionPolicy,
-    UsageBasedPricingPolicy, UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy,
-    Workspace, WorkspaceInviteCode, WorkspaceMember, WorkspaceMemberUsageInfo, WorkspaceSettings,
+    DelinquencyStatus, EmailInvite, EnforceableSetting, EnterpriseSecretRegex,
+    HostEnablementSetting, InstanceShape, InviteLinkDomainRestriction, LinkSharingSettings,
+    LlmSettings, MaxPriorCycles, SandboxedAgentSettings, SecretRedactionSettings,
+    SessionSharingPolicy, SharedNotebooksPolicy, SharedWorkflowsPolicy, SplitListSetting,
+    TeamAiAutonomySettings, TeamAiPermissionsSettings, TeamByoSettings, TeamLinkSharingSettings,
+    TeamSandboxedAgentSettings, TeamSecretRedactionSettings, TeamSettings,
+    TelemetryDataCollectionPolicy, TelemetrySettings, Tier, UgcCollectionEnablementSetting,
+    UgcCollectionSettings, UgcDataCollectionPolicy, UsageBasedPricingPolicy,
+    UsageVisibilityGranularity, UsageVisibilityPolicy, WarpAiPolicy, Workspace,
+    WorkspaceInviteCode, WorkspaceMember, WorkspaceMemberUsageInfo, WorkspaceSettings,
     WorkspaceSizePolicy,
 };
 use crate::ai::blocklist::usage::conversation_usage_view::ConversationUsageInfo;
@@ -76,7 +82,8 @@ use crate::settings::AgentModeCommandExecutionPredicate;
 use crate::workspaces::workspace::{
     AiOverages, BonusGrantsPurchased, ByoApiKeyPolicy, ByoEndpointPolicy, CodebaseContextPolicy,
     EnterpriseCreditsAutoReloadPolicy, EnterprisePayAsYouGoPolicy, ManagedByokByoePolicy,
-    MultiAdminPolicy, PurchaseAddOnCreditsPolicy, UsageBasedPricingSettings,
+    MultiAdminPolicy, NativeWorkspacesPolicy, PurchaseAddOnCreditsPolicy,
+    UsageBasedPricingSettings, WorkspaceUid,
 };
 
 pub const PLACEHOLDER_WORKSPACE_UID: &str = "NOT_A_REAL_WORKSPACE_UID";
@@ -91,12 +98,17 @@ impl From<GqlTeamMember> for TeamMember {
     }
 }
 
-fn order_authenticated_teams_first(workspace: &mut Workspace, user_uid: UserUid) {
-    let (member_teams, non_member_teams): (Vec<_>, Vec<_>) = workspace
+/// Narrows a workspace to the teams the authenticated user actually belongs to.
+///
+/// The server hands workspace admins every team in the workspace so admin
+/// surfaces can manage them, but a team the user is not a member of is not one
+/// they can operate as in the client. Filtering here keeps every consumer of
+/// `Workspace::teams` (team switcher, team spaces, warp drive teams, ...)
+/// scoped to real memberships.
+fn retain_authenticated_teams(workspace: &mut Workspace, user_uid: UserUid) {
+    workspace
         .teams
-        .drain(..)
-        .partition(|team| team.members.iter().any(|member| member.uid == user_uid));
-    workspace.teams = member_teams.into_iter().chain(non_member_teams).collect();
+        .retain(|team| team.members.iter().any(|member| member.uid == user_uid));
 }
 
 impl From<GqlManagedByokByoePolicy> for ManagedByokByoePolicy {
@@ -476,6 +488,8 @@ impl From<GqlPurchaseAddOnCreditsPolicy> for PurchaseAddOnCreditsPolicy {
     ) -> PurchaseAddOnCreditsPolicy {
         Self {
             enabled: gql_purchase_add_on_credits_policy.enabled,
+            premium_enabled: gql_purchase_add_on_credits_policy.premium_enabled,
+            price_premium_bps: gql_purchase_add_on_credits_policy.price_premium_bps,
         }
     }
 }
@@ -498,6 +512,14 @@ impl From<GqlEnterpriseCreditsAutoReloadPolicy> for EnterpriseCreditsAutoReloadP
 
 impl From<GqlMultiAdminPolicy> for MultiAdminPolicy {
     fn from(gql_policy: GqlMultiAdminPolicy) -> MultiAdminPolicy {
+        Self {
+            enabled: gql_policy.enabled,
+        }
+    }
+}
+
+impl From<GqlNativeWorkspacesPolicy> for NativeWorkspacesPolicy {
+    fn from(gql_policy: GqlNativeWorkspacesPolicy) -> NativeWorkspacesPolicy {
         Self {
             enabled: gql_policy.enabled,
         }
@@ -629,6 +651,7 @@ impl From<GqlTier> for Tier {
                 .enterprise_credits_auto_reload_policy
                 .map(From::from),
             multi_admin_policy: gql_tier.multi_admin_policy.map(From::from),
+            native_workspaces_policy: gql_tier.native_workspaces_policy.map(From::from),
             ambient_agents_policy: gql_tier.ambient_agents_policy.map(From::from),
             usage_visibility_policy: gql_tier.usage_visibility_policy.map(From::from),
         }
@@ -667,8 +690,49 @@ impl From<GqlDelinquencyStatus> for DelinquencyStatus {
     }
 }
 
+fn bonus_grant_scope_from_gql(
+    scope: GqlBonusGrantScope,
+    workspace_uid: Option<WorkspaceUid>,
+) -> BonusGrantScope {
+    match (scope, workspace_uid) {
+        (GqlBonusGrantScope::User, _) => BonusGrantScope::User,
+        (GqlBonusGrantScope::Team, Some(uid)) => BonusGrantScope::Team(uid),
+        (GqlBonusGrantScope::Workspace, Some(uid)) => BonusGrantScope::Workspace(uid),
+        // A team/workspace-scoped grant is always fetched under a workspace, so a
+        // missing uid means an unexpected server shape; fall back to user scope.
+        (GqlBonusGrantScope::Team | GqlBonusGrantScope::Workspace, None) => {
+            report_error!(
+                anyhow!(
+                    "Team/Workspace-scoped bonus grant fetched without a workspace uid; treating as user scope"
+                ),
+                warp_errors::ReportErrorLogMode::OncePerRun
+            );
+            BonusGrantScope::User
+        }
+        // Unknown scope from a newer server: preserve the pre-scope behavior by
+        // attributing it to the workspace it was fetched under when available.
+        (GqlBonusGrantScope::Other, Some(uid)) => BonusGrantScope::Workspace(uid),
+        (GqlBonusGrantScope::Other, None) => BonusGrantScope::User,
+    }
+}
+
 impl BonusGrant {
-    pub fn from_gql_bonus_grant(bonus_grant: GqlBonusGrant, scope: BonusGrantScope) -> Self {
+    pub fn from_gql_user_bonus_grant(bonus_grant: GqlBonusGrant) -> Self {
+        Self::from_gql_bonus_grant(bonus_grant, None)
+    }
+
+    pub fn from_gql_workspace_or_team_bonus_grant(
+        bonus_grant: GqlBonusGrant,
+        workspace_uid: WorkspaceUid,
+    ) -> Self {
+        Self::from_gql_bonus_grant(bonus_grant, Some(workspace_uid))
+    }
+
+    fn from_gql_bonus_grant(
+        bonus_grant: GqlBonusGrant,
+        workspace_uid: Option<WorkspaceUid>,
+    ) -> Self {
+        let scope = bonus_grant_scope_from_gql(bonus_grant.scope, workspace_uid);
         Self {
             created_at: bonus_grant.created_at.utc(),
             cost_cents: bonus_grant.cost_cents,
@@ -1017,6 +1081,218 @@ impl From<GqlWorkspaceSettings> for WorkspaceSettings {
     }
 }
 
+/// Converts a GraphQL `StringListSettingInfo` into the app list setting,
+/// preserving the workspace/team split entries alongside the merged values.
+fn split_string_list(info: GqlStringListSettingInfo) -> SplitListSetting<String> {
+    SplitListSetting {
+        values: info.values,
+        workspace_entries: info.workspace_entries,
+        team_entries: info.team_entries,
+    }
+}
+
+impl From<GqlTeamSettings> for TeamSettings {
+    fn from(gql_team_settings: GqlTeamSettings) -> TeamSettings {
+        let map_regexes =
+            |regexes: Vec<warp_graphql::workspace::SecretRedactionRegex>| -> Vec<EnterpriseSecretRegex> {
+                regexes
+                    .into_iter()
+                    .map(|gql_regex| EnterpriseSecretRegex {
+                        pattern: gql_regex.pattern,
+                        name: gql_regex.name,
+                    })
+                    .collect()
+            };
+        Self {
+            ugc_collection: EnforceableSetting {
+                value: UgcCollectionEnablementSetting::from(gql_team_settings.ugc_collection.value),
+                is_enforced_by_workspace: gql_team_settings.ugc_collection.is_enforced_by_workspace,
+            },
+            cloud_conversation_storage: EnforceableSetting {
+                value: gql_team_settings.cloud_conversation_storage.value.into(),
+                is_enforced_by_workspace: gql_team_settings
+                    .cloud_conversation_storage
+                    .is_enforced_by_workspace,
+            },
+            codebase_context: EnforceableSetting {
+                value: gql_team_settings.codebase_context.value.into(),
+                is_enforced_by_workspace: gql_team_settings
+                    .codebase_context
+                    .is_enforced_by_workspace,
+            },
+            ai_permissions: TeamAiPermissionsSettings {
+                allow_ai_in_remote_sessions: EnforceableSetting {
+                    value: gql_team_settings
+                        .ai_permissions
+                        .allow_ai_in_remote_sessions
+                        .value,
+                    is_enforced_by_workspace: gql_team_settings
+                        .ai_permissions
+                        .allow_ai_in_remote_sessions
+                        .is_enforced_by_workspace,
+                },
+                remote_session_regex_list: split_string_list(
+                    gql_team_settings.ai_permissions.remote_session_regex_list,
+                ),
+            },
+            secret_redaction: TeamSecretRedactionSettings {
+                enabled: EnforceableSetting {
+                    value: gql_team_settings.secret_redaction.enabled.value,
+                    is_enforced_by_workspace: gql_team_settings
+                        .secret_redaction
+                        .enabled
+                        .is_enforced_by_workspace,
+                },
+                regexes: SplitListSetting {
+                    values: map_regexes(gql_team_settings.secret_redaction.regexes.values),
+                    workspace_entries: map_regexes(
+                        gql_team_settings.secret_redaction.regexes.workspace_entries,
+                    ),
+                    team_entries: map_regexes(
+                        gql_team_settings.secret_redaction.regexes.team_entries,
+                    ),
+                },
+            },
+            ai_autonomy: TeamAiAutonomySettings {
+                apply_code_diffs: EnforceableSetting {
+                    value: convert_gql_ai_autonomy_value_to_action_permission(
+                        gql_team_settings.ai_autonomy.apply_code_diffs.value,
+                    ),
+                    is_enforced_by_workspace: gql_team_settings
+                        .ai_autonomy
+                        .apply_code_diffs
+                        .is_enforced_by_workspace,
+                },
+                read_files: EnforceableSetting {
+                    value: convert_gql_ai_autonomy_value_to_action_permission(
+                        gql_team_settings.ai_autonomy.read_files.value,
+                    ),
+                    is_enforced_by_workspace: gql_team_settings
+                        .ai_autonomy
+                        .read_files
+                        .is_enforced_by_workspace,
+                },
+                create_plans: EnforceableSetting {
+                    value: convert_gql_ai_autonomy_value_to_action_permission(
+                        gql_team_settings.ai_autonomy.create_plans.value,
+                    ),
+                    is_enforced_by_workspace: gql_team_settings
+                        .ai_autonomy
+                        .create_plans
+                        .is_enforced_by_workspace,
+                },
+                execute_commands: EnforceableSetting {
+                    value: convert_gql_ai_autonomy_value_to_action_permission(
+                        gql_team_settings.ai_autonomy.execute_commands.value,
+                    ),
+                    is_enforced_by_workspace: gql_team_settings
+                        .ai_autonomy
+                        .execute_commands
+                        .is_enforced_by_workspace,
+                },
+                write_to_pty: EnforceableSetting {
+                    value: convert_gql_write_to_pty_autonomy_value_to_write_to_pty_permission(
+                        gql_team_settings.ai_autonomy.write_to_pty.value,
+                    ),
+                    is_enforced_by_workspace: gql_team_settings
+                        .ai_autonomy
+                        .write_to_pty
+                        .is_enforced_by_workspace,
+                },
+                computer_use: EnforceableSetting {
+                    value: convert_gql_computer_use_autonomy_value_to_computer_use_permission(
+                        gql_team_settings.ai_autonomy.computer_use.value,
+                    ),
+                    is_enforced_by_workspace: gql_team_settings
+                        .ai_autonomy
+                        .computer_use
+                        .is_enforced_by_workspace,
+                },
+                read_files_allowlist: split_string_list(
+                    gql_team_settings.ai_autonomy.read_files_allowlist,
+                ),
+                execute_commands_allowlist: split_string_list(
+                    gql_team_settings.ai_autonomy.execute_commands_allowlist,
+                ),
+                execute_commands_denylist: split_string_list(
+                    gql_team_settings.ai_autonomy.execute_commands_denylist,
+                ),
+            },
+            link_sharing: TeamLinkSharingSettings {
+                anyone_with_link_sharing_enabled: EnforceableSetting {
+                    value: gql_team_settings
+                        .link_sharing
+                        .anyone_with_link_sharing_enabled
+                        .value,
+                    is_enforced_by_workspace: gql_team_settings
+                        .link_sharing
+                        .anyone_with_link_sharing_enabled
+                        .is_enforced_by_workspace,
+                },
+                direct_link_sharing_enabled: EnforceableSetting {
+                    value: gql_team_settings
+                        .link_sharing
+                        .direct_link_sharing_enabled
+                        .value,
+                    is_enforced_by_workspace: gql_team_settings
+                        .link_sharing
+                        .direct_link_sharing_enabled
+                        .is_enforced_by_workspace,
+                },
+            },
+            sandboxed_agent: TeamSandboxedAgentSettings {
+                execute_commands_denylist: split_string_list(
+                    gql_team_settings.sandboxed_agent.execute_commands_denylist,
+                ),
+            },
+            llm_settings: gql_team_settings.llm_settings.into(),
+            telemetry_settings: TelemetrySettings {
+                force_enabled: gql_team_settings.telemetry_settings.force_enabled,
+            },
+            usage_based_pricing_settings: UsageBasedPricingSettings {
+                enabled: gql_team_settings.usage_based_pricing_settings.enabled,
+                max_monthly_spend_cents: gql_team_settings
+                    .usage_based_pricing_settings
+                    .max_monthly_spend_cents
+                    .and_then(|cents| {
+                        if cents < 0 {
+                            report_error!(
+                                "Usage-based pricing has a negative max monthly spend",
+                                extra: { "cents" => %cents }
+                            );
+                            None
+                        } else {
+                            Some(cents as u32)
+                        }
+                    }),
+            },
+            addon_credits_settings: gql_team_settings.addon_credits_settings.into(),
+            enable_warp_attribution: gql_team_settings
+                .ambient_agent_settings
+                .as_ref()
+                .map(|s| s.enable_warp_attribution.clone().into())
+                .unwrap_or_default(),
+            default_host_slug: gql_team_settings
+                .ambient_agent_settings
+                .as_ref()
+                .and_then(|s| s.default_host_slug.clone()),
+            team_byo: gql_team_settings.team_byo.map(From::from),
+        }
+    }
+}
+
+/// Derives a team's effective settings from the GraphQL payload. The settings
+/// always come from the **team** payload (`gql_team.settings`), never from a
+/// clone of the workspace settings. Workspace-scoped flags such as
+/// invite-link/discoverability are intentionally not part of `TeamSettings` and
+/// are read from the workspace settings at their call sites.
+///
+/// Extracted from [`Team::from_gql`] so the team-payload sourcing is
+/// unit-testable without constructing a full `GqlWorkspace`.
+pub(crate) fn team_settings_from_gql(team_settings: GqlTeamSettings) -> TeamSettings {
+    team_settings.into()
+}
+
 impl Team {
     pub fn from_gql(gql_workspace: GqlWorkspace, gql_team: GqlTeam) -> Team {
         Self {
@@ -1058,7 +1334,11 @@ impl Team {
                 .stripe_customer_id
                 .as_ref()
                 .map(|id| id.clone().into_inner()),
-            organization_settings: gql_workspace.settings.clone().into(),
+            // Team-effective settings come from the team payload, not from a
+            // clone of the workspace settings. Invite-link / discoverability are
+            // workspace-level and are read from the workspace settings at their
+            // call sites, so they are not surfaced on `Team`.
+            settings: team_settings_from_gql(gql_team.settings),
             is_eligible_for_discovery: gql_workspace.is_eligible_for_discovery,
             has_billing_history: gql_workspace.has_billing_history,
         }
@@ -1142,10 +1422,7 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
             })
             .map(|gql_workspace| {
                 let mut workspace = gql_workspace.into();
-                // TODO(isaiah): this is a temporary measure while the client doesn't support many teams per user.
-                // Workspace admins technically have access to every team in their workspace, but when they're on the
-                // client, they should only see the 1 team they're formally a part of.
-                order_authenticated_teams_first(&mut workspace, user_uid);
+                retain_authenticated_teams(&mut workspace, user_uid);
                 workspace
             })
             .collect();
@@ -1161,12 +1438,24 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
             .experiments
             .and_then(|experiments| convert_to_server_experiment!(experiments));
 
+        // A teamless user's only workspace is the placeholder filtered out
+        // above, so the user-level policy is the only place their add-on
+        // credits purchase policy — gating and premium pricing alike —
+        // survives (see
+        // [`crate::workspaces::user_workspaces::UserWorkspaces::purchase_policy`]).
+        let user_purchase_policy = gql_user
+            .billing_metadata
+            .and_then(|billing_metadata| billing_metadata.tier.purchase_add_on_credits_policy)
+            .map(Into::into);
+
         // TODO(skambashi) refactor to return back workspaces, and not teams
         WorkspacesMetadataResponse {
             workspaces,
             joinable_teams,
             experiments,
             feature_model_choices,
+            ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
+            user_purchase_policy,
         }
     }
 }

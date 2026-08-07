@@ -49,7 +49,9 @@ pub use crate::ai::agent_conversations_model::{
     query_conversation_entries,
 };
 pub use crate::ai::ambient_agents::AmbientAgentTaskId;
-pub use crate::ai::ambient_agents::telemetry::{HandoffEntryPoint, HandoffSurface};
+pub use crate::ai::ambient_agents::telemetry::{
+    CloudAgentTelemetryEvent, HandoffEntryPoint, HandoffSurface,
+};
 pub use crate::ai::blocklist::agent_view::{
     AgentViewController, AgentViewDisplayMode, AgentViewEntryOrigin, EnterAgentViewError,
     EphemeralMessageModel,
@@ -76,11 +78,12 @@ pub use crate::ai::blocklist::handoff::{
     HandoffCommitFailure, HandoffCommitOutcome, HandoffCreated, HandoffLaunchAttachments,
     HandoffPrepareError, HandoffPrepareInput, HandoffPresentationSnapshot, HandoffRestoration,
     HandoffTargetMaterialization, MaterializeHandoffTarget, PendingCloudLaunch, PendingHandoff,
-    SnapshotUploadTarget, execute_handoff, prepare_handoff, suggest_handoff_environment,
+    SnapshotUploadTarget, execute_handoff, handoff_dispatch_error, prepare_handoff,
+    suggest_handoff_environment,
 };
 pub use crate::ai::blocklist::history_model::{
     AIQueryHistory, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
-    ConversationStatusUpdate,
+    ConversationStatusUpdate, FORK_PREFIX, ForkConversationError,
 };
 pub use crate::ai::blocklist::inline_action::code_diff_view::convert_file_edits_to_file_diffs;
 pub use crate::ai::blocklist::orchestration_event_streamer::{
@@ -92,6 +95,11 @@ pub use crate::ai::blocklist::orchestration_topology::{
     descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
     orchestration_root_conversation_id, orchestrator_agent_id_for_conversation,
     resolve_orchestration_participant,
+};
+pub use crate::ai::blocklist::telemetry::{
+    BlocklistOrchestrationTelemetryEvent, OrchestrationEnteredEvent, OrchestrationEntrySource,
+    PillBarActionKind, PillBarInteractionEvent, PillBarPillKind, PillSwitchOutcome,
+    RunAgentsCardDecision, run_agents_card_decision_event,
 };
 pub use crate::ai::blocklist::view_util::{
     FAILED_OUTPUT_USAGE_NOTICE_TEXT, FailedOutputPresentation, OUT_OF_CREDITS_SUBSCRIBE_LABEL,
@@ -129,7 +137,8 @@ pub use crate::ai::harness_availability::{
     HarnessAvailabilityModel, HarnessModelInfo,
 };
 pub use crate::ai::llms::{
-    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, should_show_key_icon_for_model,
+    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, should_show_bedrock_icon_for_model,
+    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
 };
 pub use crate::ai::orchestration::{
     AuthSecretSelection, CloudAgentStartupAuthFlow, CloudAgentStartupBlocker,
@@ -151,6 +160,7 @@ pub use crate::ai::skills::{SkillManager, SkillManagerEvent, SkillReference};
 #[cfg(not(target_family = "wasm"))]
 pub use crate::ai::tui_api_keys::notify_tui_api_keys_changed;
 pub use crate::appearance::Appearance;
+pub use crate::auth::AuthStateProvider;
 pub use crate::banner::BannerState;
 pub use crate::changelog_model::{
     ChangelogModel, ChangelogRequestType, ChangelogState, Event as ChangelogModelEvent,
@@ -178,14 +188,15 @@ pub use crate::server::server_api::TranscribeError;
 pub use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, AttachmentInput, SpawnAgentRequest, SpawnAgentResponse,
 };
-pub use crate::settings::AISettingsChangedEvent;
+pub use crate::server::telemetry::{SlashMenuSource, TelemetryEvent};
+pub use crate::settings::{AISettingsChangedEvent, InputSettings};
 pub use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
 pub use crate::terminal::color::{Colors as TerminalColors, List as TerminalColorList};
 pub use crate::terminal::conversation_restoration::{
     ConversationBlockRestorationPlan, RestoredConversationExchange,
     prepare_conversation_block_restoration,
 };
-pub use crate::terminal::event::AfterBlockCompletedEvent;
+pub use crate::terminal::event::{AfterBlockCompletedEvent, BlockType, UserBlockCompleted};
 pub use crate::terminal::input::CommandExecutionSource;
 pub use crate::terminal::input::decorations::parse_current_commands_and_tokens;
 pub use crate::terminal::input::models::{ModelPickerChoice, query_model_picker_choices};
@@ -220,10 +231,11 @@ pub use crate::terminal::model::blocks::{
 pub use crate::terminal::model::escape_sequences::{KeystrokeWithDetails, ToEscapeSequence};
 pub use crate::terminal::model::grid::grid_handler::{GridHandler, TermMode};
 pub use crate::terminal::model::rich_content::RichContentType;
-pub use crate::terminal::model::session::Sessions;
 pub use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
+pub use crate::terminal::model::session::{Session, Sessions, SessionsEvent};
 pub use crate::terminal::model::terminal_model::BlockIndex;
 pub use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+pub use crate::terminal::session_settings::SessionSettings;
 pub use crate::terminal::shared_session::IsSharedSessionCreator;
 pub use crate::terminal::terminal_manager::BlockSpacing;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
@@ -236,15 +248,21 @@ pub use crate::terminal::{
 pub use crate::themes::default_themes::{dark_theme, light_theme};
 pub use crate::throttle::throttle;
 pub use crate::tui::{
-    TuiMcpAction, TuiMcpConfigState, TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId,
-    TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport, TuiUserInfoManager,
-    TuiUserInfoManagerEvent, TuiUserInfoSnapshot, log_out_tui,
+    TuiMcpAction, TuiMcpConfigDiagnostic, TuiMcpFileScope, TuiMcpFileSource, TuiMcpInstallRequest,
+    TuiMcpManager, TuiMcpManagerEvent, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerSource,
+    TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpSyncedTemplateProvenance, TuiMcpTemplateVariable,
+    TuiMcpTransport, TuiMcpVariableValue, TuiUserInfoManager, TuiUserInfoManagerEvent,
+    TuiUserInfoSnapshot, log_out_tui,
+};
+pub use crate::tui_onboarding_markers::{
+    TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
 };
 #[cfg(any(test, feature = "test-util"))]
 pub use crate::tui_test_support::{
     add_tui_history_test_models, append_tui_history_test_command,
-    blocklist_ai_history_model_with_queries, queue_tui_permission_action,
-    register_tui_input_mode_test_settings, register_tui_session_view_test_singletons,
+    blocklist_ai_history_model_with_queries, forkable_tui_conversation_for_test,
+    queue_tui_permission_action, register_tui_input_mode_test_settings,
+    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test,
 };
 pub use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 pub use crate::util::image::{

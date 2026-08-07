@@ -215,6 +215,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(UndoCloseStack::new);
     app.add_singleton_model(|_| IgnoredSuggestionsModel::new(vec![]));
     app.add_singleton_model(|_| PricingInfoModel::new());
+    app.add_singleton_model(crate::ai::pricing_promotion::PricingPromotionState::new);
     app.add_singleton_model(AIDocumentModel::new);
     app.add_singleton_model(|_| History::new(vec![]));
     app.add_singleton_model(|_| GitHubAuthNotifier::new());
@@ -299,6 +300,7 @@ fn ambient_agent_task_for_current_user(task_id: AmbientAgentTaskId) -> AmbientAg
         run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: Some(AgentSource::CloudMode),
+        execution_location: None,
         session_id: None,
         session_link: None,
         executor: None,
@@ -352,6 +354,7 @@ fn test_server_conversation_metadata(
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
+            total_provider_cost_in_cents: None,
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),

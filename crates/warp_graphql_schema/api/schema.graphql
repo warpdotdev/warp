@@ -79,6 +79,29 @@ type AIConversationFormat {
   hasTaskList: Boolean!
 }
 
+type AICreditAvailability {
+  available: Boolean!
+  creditSource: AICreditAvailabilitySource
+  denialReason: AICreditAvailabilityDenialReason!
+}
+
+enum AICreditAvailabilityDenialReason {
+  DELINQUENT
+  ENTERPRISE_PER_USER_SPEND_LIMIT_HIT
+  ENTERPRISE_TEAM_SPEND_LIMIT_HIT
+  ENTERPRISE_WORKSPACE_SPEND_LIMIT_HIT
+  NONE
+  OUT_OF_CREDITS
+}
+
+enum AICreditAvailabilitySource {
+  AMBIENT_BONUS_GRANT
+  BASE_LIMIT
+  BONUS_GRANT
+  OVERAGE
+  PAYG
+}
+
 enum AICreditsUsageAndCostSubjectType {
   SERVICE_ACCOUNT
   TEAM
@@ -555,7 +578,15 @@ type BonusGrant {
   reason: String!
   requestCreditsGranted: Int!
   requestCreditsRemaining: Int!
+  scope: BonusGrantScope!
   userFacingMessage: String
+}
+
+"""The credit pool a bonus grant belongs to."""
+enum BonusGrantScope {
+  USER
+  TEAM
+  WORKSPACE
 }
 
 type BonusGrantSpendingInfo {
@@ -855,6 +886,8 @@ type ConversationUsageMetadata {
 
   """The total number of platform credits spent so far in the conversation."""
   platformCreditsSpent: Float!
+  """The cumulative provider cost in US cents, when available."""
+  totalProviderCostInCents: Float
   summarized: Boolean!
 
   """
@@ -1342,6 +1375,8 @@ enum Experiment {
   MULTI_ARM_REVERSE_AI_TRIAL_FIVE_HUNDRED_REQUESTS
   MULTI_ARM_REVERSE_AI_TRIAL_ONE_THOUSAND_FIVE_HUNDRED_REQUESTS
   MULTI_ARM_REVERSE_AI_TRIAL_ONE_THOUSAND_REQUESTS
+  ONBOARDING_CHOOSE_HOW_TO_START_CONTROL
+  ONBOARDING_CHOOSE_HOW_TO_START_EXPERIMENT
   OVERLIMIT_AGENT_MODE_CONTROL
   OVERLIMIT_AGENT_MODE_GRADUAL_ROLLOUT_EXPERIMENT
   OZ_MULTI_HARNESS_CONTROL
@@ -2403,6 +2438,10 @@ type MultiAdminPolicy {
   enabled: Boolean!
 }
 
+type NativeWorkspacesPolicy {
+  enabled: Boolean!
+}
+
 scalar NodeHash
 
 type Notebook {
@@ -2661,6 +2700,7 @@ type PricingInfo {
   addonCreditsOptions: [AddonCreditsOption!]!
   overages: OveragesPricing!
   plans: [PlanPricing!]!
+  promotionMessage: String
 }
 
 type PricingInfoOutput implements Response {
@@ -2703,19 +2743,32 @@ type PullRequestArtifact {
 
 type PurchaseAddOnCreditsPolicy {
   enabled: Boolean!
+  premiumEnabled: Boolean!
+  pricePremiumBps: Int!
+}
+
+"""
+The purchase could not be charged synchronously because the customer has no
+saved payment method. The user must complete the purchase in the browser at
+`checkoutUrl`; credits are granted via webhook after checkout completes.
+"""
+type PurchaseAddonCreditsCheckoutOutput implements Response {
+  checkoutUrl: String!
+  responseContext: ResponseContext!
 }
 
 input PurchaseAddonCreditsInput {
   credits: Int!
-  teamUid: ID!
+  teamUid: ID
 }
 
+"""The purchase was charged synchronously and credits were granted."""
 type PurchaseAddonCreditsOutput implements Response {
   responseContext: ResponseContext!
   success: Boolean!
 }
 
-union PurchaseAddonCreditsResult = PurchaseAddonCreditsOutput | UserFacingError
+union PurchaseAddonCreditsResult = PurchaseAddonCreditsCheckoutOutput | PurchaseAddonCreditsOutput | UserFacingError
 
 """
 The request contains a UTC timestamp of when the action occurred. The JSON data
@@ -2895,6 +2948,13 @@ type ResetInviteLinksOutput implements Response {
 }
 
 union ResetInviteLinksResult = ResetInviteLinksOutput | UserFacingError
+type TuiOnboardingMarkersOutput implements Response {
+  firstZeroStateShown: Boolean!
+  firstCreditGateShown: Boolean!
+  responseContext: ResponseContext!
+}
+
+union TuiOnboardingMarkersResult = TuiOnboardingMarkersOutput | UserFacingError
 
 interface Response {
   responseContext: ResponseContext!
@@ -3207,6 +3267,7 @@ type RootQuery {
   task(input: TaskInput!, requestContext: RequestContext!): TaskResult!
   taskGitCredentials(input: TaskGitCredentialsInput!, requestContext: RequestContext!): TaskGitCredentialsResult!
   taskSecrets(input: TaskSecretsInput!, requestContext: RequestContext!): TaskSecretsResult!
+  tuiOnboardingMarkers(requestContext: RequestContext!): TuiOnboardingMarkersResult!
   updatedCloudObjects(input: UpdatedCloudObjectsInput!, requestContext: RequestContext!): UpdatedCloudObjectsResult!
   user(requestContext: RequestContext!): UserResult!
   userGithubInfo(requestContext: RequestContext!): UserGithubInfoResult!
@@ -3720,7 +3781,108 @@ type Team {
   memberSpendLimits: [MemberSpendLimit!]
   members: [TeamMember!]!
   name: String!
+  """
+  The effective settings that apply to the team, combining the workspace layer
+  with the team's own configuration. Workspace-governable groups carry an
+  indicator for whether their value is enforced by the workspace layer.
+  """
+  settings: TeamSettings!
   uid: ID!
+}
+
+"""
+The effective settings that apply to a team, combining the workspace layer with
+the team's own configuration. This is a curated client-side subset of the server
+`TeamSettings` type — it only defines the fields the Rust client selects.
+"""
+type TeamSettings {
+  ugcCollection: UgcCollectionSettingInfo!
+  cloudConversationStorage: AdminEnablementSettingInfo!
+  codebaseContext: AdminEnablementSettingInfo!
+  aiPermissions: AiPermissionsSettingsInfo!
+  secretRedaction: SecretRedactionSettingsInfo!
+  aiAutonomy: AiAutonomySettingsInfo!
+  linkSharing: LinkSharingSettingsInfo!
+  sandboxedAgent: SandboxedAgentSettingsInfo!
+  llmSettings: LlmSettings!
+  telemetrySettings: TelemetrySettings!
+  usageBasedPricingSettings: UsageBasedPricingSettings!
+  addonCreditsSettings: AddonCreditsSettings!
+  ambientAgentSettings: AmbientAgentSettings
+  teamByo: TeamByoSettings
+}
+
+type UgcCollectionSettingInfo {
+  value: UgcCollectionEnablementSetting!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type AdminEnablementSettingInfo {
+  value: AdminEnablementSetting!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type BooleanSettingInfo {
+  value: Boolean!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type AiAutonomySettingInfo {
+  value: AiAutonomyValue!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type WriteToPtySettingInfo {
+  value: WriteToPtyAutonomyValue!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type ComputerUseSettingInfo {
+  value: ComputerUseAutonomyValue!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type StringListSettingInfo {
+  values: [String!]!
+  workspaceEntries: [String!]!
+  teamEntries: [String!]!
+}
+
+type SecretRedactionRegexListInfo {
+  values: [SecretRedactionRegex!]!
+  workspaceEntries: [SecretRedactionRegex!]!
+  teamEntries: [SecretRedactionRegex!]!
+}
+
+type AiPermissionsSettingsInfo {
+  allowAiInRemoteSessions: BooleanSettingInfo!
+  remoteSessionRegexList: StringListSettingInfo!
+}
+
+type SecretRedactionSettingsInfo {
+  enabled: BooleanSettingInfo!
+  regexes: SecretRedactionRegexListInfo!
+}
+
+type AiAutonomySettingsInfo {
+  applyCodeDiffs: AiAutonomySettingInfo!
+  readFiles: AiAutonomySettingInfo!
+  createPlans: AiAutonomySettingInfo!
+  executeCommands: AiAutonomySettingInfo!
+  writeToPty: WriteToPtySettingInfo!
+  computerUse: ComputerUseSettingInfo!
+  readFilesAllowlist: StringListSettingInfo!
+  executeCommandsAllowlist: StringListSettingInfo!
+  executeCommandsDenylist: StringListSettingInfo!
+}
+
+type LinkSharingSettingsInfo {
+  anyoneWithLinkSharingEnabled: BooleanSettingInfo!
+  directLinkSharingEnabled: BooleanSettingInfo!
+}
+
+type SandboxedAgentSettingsInfo {
+  executeCommandsDenylist: StringListSettingInfo!
 }
 
 enum TeamDiscoveryEntrypoint {
@@ -3799,6 +3961,7 @@ type Tier {
   managedByokByoePolicy: ManagedByokByoePolicy
   multiAdminPolicy: MultiAdminPolicy
   name: String!
+  nativeWorkspacesPolicy: NativeWorkspacesPolicy
   pricing: TierPricing
   purchaseAddOnCreditsPolicy: PurchaseAddOnCreditsPolicy
   sessionSharingPolicy: SessionSharingPolicy
@@ -4322,6 +4485,7 @@ The User type is the primary way of interacting with our graph.
 Nearly all data is scoped to the currently logged-in user.
 """
 type User {
+  aiCreditAvailability: AICreditAvailability!
   anonymousUserInfo: AnonymousUserInfo
   availableHarnesses: AvailableHarnesses!
   billingMetadata: BillingMetadata

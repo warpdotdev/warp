@@ -28,6 +28,133 @@ struct TextElement {
     origin: Option<TuiScreenPoint>,
 }
 
+#[test]
+fn blocking_runtime_continues_repaint_deadlines_while_unfocused_by_default() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| RepaintingView));
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut runtime = TuiRuntime::with_terminal(&app, window_id, root, terminal);
+
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(runtime.pending_repaint.is_some());
+
+        runtime
+            .screen
+            .terminal
+            .events
+            .push_back(CrosstermEvent::FocusLost);
+        runtime.poll_and_dispatch(&mut app, Duration::ZERO).unwrap();
+        assert!(!runtime.focused);
+        assert!(
+            runtime.pending_repaint.is_some(),
+            "unfocused repaint suspension should be opt-in"
+        );
+
+        runtime.dirty.set(true);
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(runtime.pending_repaint.is_some());
+    });
+}
+
+#[test]
+fn blocking_runtime_suspends_and_resumes_repaint_deadlines_when_enabled() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| RepaintingView));
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut runtime = TuiRuntime::with_terminal(&app, window_id, root, terminal);
+        runtime.freeze_repaints_when_unfocused = true;
+
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(runtime.pending_repaint.is_some());
+
+        runtime
+            .screen
+            .terminal
+            .events
+            .push_back(CrosstermEvent::FocusLost);
+        runtime.poll_and_dispatch(&mut app, Duration::ZERO).unwrap();
+        assert!(!runtime.focused);
+        assert!(runtime.pending_repaint.is_none());
+
+        runtime.dirty.set(true);
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(
+            runtime.pending_repaint.is_none(),
+            "ordinary invalidations may draw while blurred but must not restart animation"
+        );
+
+        runtime
+            .screen
+            .terminal
+            .events
+            .push_back(CrosstermEvent::FocusGained);
+        runtime.poll_and_dispatch(&mut app, Duration::ZERO).unwrap();
+        assert!(runtime.focused);
+        assert!(runtime.dirty.get());
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(runtime.pending_repaint.is_some());
+    });
+}
+
+#[test]
+fn invalidation_driver_does_not_schedule_repaints_while_unfocused() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| RepaintingView));
+        let screen = Rc::new(RefCell::new(TuiScreen::new(
+            window_id,
+            root,
+            TestTerminal::new(TuiSize::new(20, 3)),
+        )));
+        let timer = Rc::new(RefCell::new(None));
+        let focused = Rc::new(Cell::new(true));
+        let freeze_repaints_when_unfocused = Rc::new(Cell::new(true));
+
+        app.update(|ctx| {
+            draw_and_schedule_repaint(
+                &screen,
+                &timer,
+                &focused,
+                &freeze_repaints_when_unfocused,
+                ctx,
+            )
+        })
+        .unwrap();
+        assert!(timer.borrow().is_some());
+
+        focused.set(false);
+        app.update(|ctx| {
+            draw_and_schedule_repaint(
+                &screen,
+                &timer,
+                &focused,
+                &freeze_repaints_when_unfocused,
+                ctx,
+            )
+        })
+        .unwrap();
+        assert!(timer.borrow().is_none());
+
+        freeze_repaints_when_unfocused.set(false);
+        app.update(|ctx| {
+            draw_and_schedule_repaint(
+                &screen,
+                &timer,
+                &focused,
+                &freeze_repaints_when_unfocused,
+                ctx,
+            )
+        })
+        .unwrap();
+        assert!(
+            timer.borrow().is_some(),
+            "disabling the opt-in should resume repaint scheduling while unfocused"
+        );
+    });
+}
+
 impl TuiElement for TextElement {
     fn layout(
         &mut self,
@@ -89,6 +216,59 @@ impl TuiView for TextView {
 }
 
 impl TypedActionView for TextView {
+    type Action = ();
+}
+
+struct RepaintingElement {
+    size: Option<TuiSize>,
+}
+
+impl TuiElement for RepaintingElement {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        let size = constraint.clamp(TuiSize::new(1, 1));
+        self.size = Some(size);
+        size
+    }
+
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        if let Some(cell) = surface.cell_mut(origin) {
+            cell.set_char('*');
+        }
+        ctx.repaint_after(Duration::from_secs(1));
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+}
+
+struct RepaintingView;
+
+impl Entity for RepaintingView {
+    type Event = ();
+}
+
+impl TuiView for RepaintingView {
+    fn ui_name() -> &'static str {
+        "RepaintingView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
+        Box::new(RepaintingElement { size: None })
+    }
+}
+
+impl TypedActionView for RepaintingView {
     type Action = ();
 }
 
@@ -262,8 +442,7 @@ fn repeats_dispatch_keymaps_while_modifier_events_bypass_them() {
             })
         });
         let terminal = TestTerminal::new(TuiSize::new(20, 3));
-        let mut screen =
-            TuiScreen::new(window_id, root.clone(), terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root.clone(), terminal);
         app.update(|ctx| screen.draw(ctx)).unwrap();
 
         let modifier = screen
@@ -293,7 +472,7 @@ fn shift_lifecycle_restores_shift_and_normalizes_symbol_keystrokes() {
         let (window_id, root) =
             app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
         let terminal = TestTerminal::new(TuiSize::new(20, 3));
-        let mut screen = TuiScreen::new(window_id, root, terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
 
         screen
             .convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
@@ -351,7 +530,7 @@ fn shift_remains_active_until_both_shift_keys_are_released() {
         let (window_id, root) =
             app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
         let terminal = TestTerminal::new(TuiSize::new(20, 3));
-        let mut screen = TuiScreen::new(window_id, root, terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
 
         for modifier in [ModifierKeyCode::LeftShift, ModifierKeyCode::RightShift] {
             screen.convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
@@ -397,7 +576,7 @@ fn stale_shift_state_is_cleared_by_events_that_report_shift_accurately() {
         let (window_id, root) =
             app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
         let terminal = TestTerminal::new(TuiSize::new(20, 3));
-        let mut screen = TuiScreen::new(window_id, root, terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
 
         let shift_press = || {
             CrosstermEvent::Key(KeyEvent::new_with_kind(
@@ -631,8 +810,7 @@ fn synthetic_mouse_move_after_redraw_updates_hover() {
             })
         });
         let terminal = TestTerminal::new(TuiSize::new(20, 5));
-        let mut screen =
-            TuiScreen::new(window_id, root.clone(), terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root.clone(), terminal);
         app.update(|ctx| screen.draw(ctx)).unwrap();
 
         let mouse_moved = TuiEvent::MouseMoved {
@@ -700,7 +878,7 @@ fn terminal_screen_lifecycle_toggles_bracketed_paste() {
     );
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, true).unwrap();
+    leave_terminal_screen(&mut leave_output).unwrap();
     assert!(
         leave_output
             .windows(b"\x1b[?2004l".len())
@@ -721,7 +899,7 @@ fn terminal_screen_lifecycle_toggles_focus_reporting() {
     );
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, true).unwrap();
+    leave_terminal_screen(&mut leave_output).unwrap();
     assert!(
         leave_output
             .windows(b"\x1b[?1004l".len())
@@ -730,32 +908,6 @@ fn terminal_screen_lifecycle_toggles_focus_reporting() {
     );
 }
 
-#[test]
-fn terminal_background_probe_only_runs_on_quiet_active_focus_gain() {
-    let key = CrosstermEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()));
-
-    assert!(should_probe_after_event(
-        &CrosstermEvent::FocusGained,
-        true,
-        false,
-    ));
-    assert!(!should_probe_after_event(
-        &CrosstermEvent::FocusGained,
-        false,
-        false,
-    ));
-    assert!(!should_probe_after_event(
-        &CrosstermEvent::FocusGained,
-        true,
-        true,
-    ));
-    assert!(!should_probe_after_event(
-        &CrosstermEvent::FocusLost,
-        true,
-        false,
-    ));
-    assert!(!should_probe_after_event(&key, true, false));
-}
 /// Enhancement-capable terminals report standalone modifier event types while
 /// preserving shifted text through Crossterm's alternate-key decoding (CSI
 /// `>15u`), then restore the previous protocol on exit.
@@ -771,7 +923,7 @@ fn terminal_screen_lifecycle_toggles_keyboard_enhancement() {
     enter_terminal_screen(&mut enter_output, true, true).unwrap();
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, true).unwrap();
+    leave_terminal_screen(&mut leave_output).unwrap();
 
     #[cfg(not(windows))]
     {
@@ -824,22 +976,63 @@ fn terminal_screen_lifecycle_reconfigures_modifier_reporting() {
 }
 
 #[test]
-fn terminal_screen_lifecycle_skips_unsupported_keyboard_enhancement() {
+fn terminal_screen_lifecycle_uses_baseline_keyboard_enhancement_when_unconfirmed() {
     let mut enter_output = Vec::new();
     enter_terminal_screen(&mut enter_output, false, true).unwrap();
-    assert!(
-        !enter_output
-            .windows(b"\x1b[>15u".len())
-            .any(|window| window == b"\x1b[>15u")
-    );
+
+    #[cfg(not(windows))]
+    {
+        assert!(
+            enter_output
+                .windows(b"\x1b[>3u".len())
+                .any(|window| window == b"\x1b[>3u"),
+            "unconfirmed terminals should still receive safe baseline keyboard enhancements"
+        );
+        assert!(
+            !enter_output
+                .windows(b"\x1b[>15u".len())
+                .any(|window| window == b"\x1b[>15u"),
+            "unconfirmed terminals should not receive all-key reporting"
+        );
+    }
 
     let mut leave_output = Vec::new();
-    leave_terminal_screen(&mut leave_output, false).unwrap();
+    leave_terminal_screen(&mut leave_output).unwrap();
+    #[cfg(not(windows))]
     assert!(
-        !leave_output
+        leave_output
             .windows(b"\x1b[<1u".len())
-            .any(|window| window == b"\x1b[<1u")
+            .any(|window| window == b"\x1b[<1u"),
+        "leaving should pop the baseline keyboard enhancement request"
     );
+}
+
+#[test]
+fn keyboard_enhancement_probe_retries_a_negative_result_once() {
+    let mut results = VecDeque::from([Ok(false), Ok(true)]);
+    assert!(probe_keyboard_enhancement_support(|| {
+        results.pop_front().expect("probe should run at most twice")
+    }));
+    assert!(results.is_empty());
+}
+
+#[test]
+fn keyboard_enhancement_probe_does_not_retry_success_or_error() {
+    let mut successful_results = VecDeque::from([Ok(true), Ok(false)]);
+    assert!(probe_keyboard_enhancement_support(|| {
+        successful_results
+            .pop_front()
+            .expect("successful probe should run once")
+    }));
+    assert_eq!(successful_results.len(), 1);
+
+    let mut failed_results = VecDeque::from([Err(io::Error::other("probe failed")), Ok(true)]);
+    assert!(!probe_keyboard_enhancement_support(|| {
+        failed_results
+            .pop_front()
+            .expect("failed probe should run once")
+    }));
+    assert_eq!(failed_results.len(), 1);
 }
 #[test]
 fn raw_mode_guard_restores_on_drop() {

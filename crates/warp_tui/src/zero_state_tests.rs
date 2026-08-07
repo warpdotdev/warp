@@ -6,8 +6,9 @@ use channel_versions::{Changelog, MarkdownSection, Section};
 use chrono::DateTime;
 use uuid::Uuid;
 use warp::tui_export::{
-    TuiMcpConfigState, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerStatus, TuiMcpSnapshot,
-    TuiMcpTransport, register_tui_session_view_test_singletons,
+    TuiMcpConfigDiagnostic, TuiMcpServerId, TuiMcpServerSnapshot, TuiMcpServerSource,
+    TuiMcpServerStatus, TuiMcpSnapshot, TuiMcpTransport, TuiUserInfoSnapshot,
+    register_tui_session_view_test_singletons,
 };
 use warpui::{EntityIdMap, SingletonEntity};
 use warpui_core::elements::animation::AnimationClock;
@@ -18,20 +19,25 @@ use warpui_core::elements::tui::{
 use warpui_core::{App, AppContext};
 
 use super::{
-    ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, build_zero_state_layout, build_zero_state_overlay,
-    changelog_bullets_from_changelog, mcp_status_label,
+    ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, ZeroStateSectionVisibility, autoupdate_status_label,
+    build_zero_state_layout, build_zero_state_overlay, build_zero_state_stack_layout,
+    changelog_bullets_from_changelog, mcp_status_label, render_first_run_top_section,
 };
+use crate::autoupdate::TuiAutoupdateStatus;
 use crate::tui_builder::TuiUiBuilder;
 use crate::zero_state_animation::{
-    WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationElement, ZeroStateStarfieldElement,
+    WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationElement,
+    ZeroStateInteractionHandle, ZeroStateStarfieldElement,
 };
 
 fn server(id: u64, status: TuiMcpServerStatus) -> TuiMcpServerSnapshot {
     TuiMcpServerSnapshot {
-        id: TuiMcpServerId(id),
-        installation_uuid: Uuid::from_u128(id as u128),
+        id: TuiMcpServerId::Installation(Uuid::from_u128(id as u128)),
+        installation_uuid: Some(Uuid::from_u128(id as u128)),
         name: format!("server-{id}"),
-        transport: TuiMcpTransport::Stdio,
+        description: None,
+        source: TuiMcpServerSource::Installation,
+        transport: Some(TuiMcpTransport::Stdio),
         status,
         tool_count: 2,
         resource_count: 0,
@@ -72,24 +78,78 @@ fn changelog_bullets_are_empty_when_only_other_surfaces_have_updates() {
 }
 
 #[test]
-fn mcp_summary_keeps_missing_config_action_short() {
+fn failed_autoupdate_status_has_visible_label() {
+    assert_eq!(
+        autoupdate_status_label(TuiAutoupdateStatus::Failed),
+        Some("automatic update failed")
+    );
+}
+
+#[test]
+fn first_zero_state_matches_welcome_design_copy() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+
+        let lines = app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            render_element_lines(
+                render_first_run_top_section(&builder, ZeroStateSectionVisibility::default(), ctx)
+                    .finish(),
+                ctx,
+                LEFT_COLUMN_COLS,
+                16,
+            )
+        });
+        let rendered = lines.join("\n");
+        for expected in [
+            "Welcome to Warp",
+            "What’s different about Warp",
+            "✶ State of the art coding agents",
+            "✶ Frontier and open-weight models",
+            "✶ Fully customizable model routers",
+            "✶ Orchestration for fleets of agents",
+            "✶ Better shell command support",
+        ] {
+            assert!(
+                rendered.contains(expected),
+                "first zero state should contain {expected:?}:\n{rendered}"
+            );
+        }
+        for unexpected in [
+            "/natural-language-detection",
+            "/modify-settings",
+            "/orchestrate",
+            "Run full-screen terminal apps",
+            "Orchestrate fleets of agents",
+            "Work with shell commands like in a native terminal",
+        ] {
+            assert!(
+                !rendered.contains(unexpected),
+                "first zero state should not contain {unexpected:?}:\n{rendered}"
+            );
+        }
+        assert!(!rendered.contains("What's new"));
+        assert!(!rendered.contains("████"));
+    });
+}
+
+#[test]
+fn mcp_summary_keeps_empty_catalog_action_short() {
     let snapshot = TuiMcpSnapshot {
-        config_path: PathBuf::from("/tmp/.mcp.json"),
-        config_state: TuiMcpConfigState::Missing,
+        diagnostics: Vec::new(),
         servers: Vec::new(),
     };
 
     assert_eq!(
         mcp_status_label(&snapshot),
-        ("Not configured · /mcp".to_string(), false)
+        ("No servers available · run /mcp".to_string(), false)
     );
 }
 
 #[test]
 fn mcp_summary_reports_mixed_runtime_states() {
     let snapshot = TuiMcpSnapshot {
-        config_path: PathBuf::from("/tmp/.mcp.json"),
-        config_state: TuiMcpConfigState::Ready,
+        diagnostics: Vec::new(),
         servers: vec![
             server(1, TuiMcpServerStatus::Running),
             server(2, TuiMcpServerStatus::Starting),
@@ -102,13 +162,14 @@ fn mcp_summary_reports_mixed_runtime_states() {
                 },
             ),
             server(6, TuiMcpServerStatus::Offline),
+            server(7, TuiMcpServerStatus::Available),
         ],
     };
 
     assert_eq!(
         mcp_status_label(&snapshot),
         (
-            "1 connected · 1 starting · 1 needs auth · 1 stopping · 1 failed · 1 offline · /mcp"
+            "1 connected · 1 starting · 1 needs auth · 1 stopping · 1 failed · 1 offline · 1 available · /mcp"
                 .to_string(),
             false
         )
@@ -118,16 +179,24 @@ fn mcp_summary_reports_mixed_runtime_states() {
 #[test]
 fn mcp_summary_marks_config_errors() {
     let snapshot = TuiMcpSnapshot {
-        config_path: PathBuf::from("/tmp/.mcp.json"),
-        config_state: TuiMcpConfigState::Invalid {
-            message: "invalid JSON".to_string(),
-        },
+        diagnostics: vec![
+            TuiMcpConfigDiagnostic {
+                provider: "Claude".to_owned(),
+                config_path: PathBuf::from("/tmp/.claude.json"),
+                message: "invalid JSON".to_owned(),
+            },
+            TuiMcpConfigDiagnostic {
+                provider: "Codex".to_owned(),
+                config_path: PathBuf::from("/tmp/config.toml"),
+                message: "invalid TOML".to_owned(),
+            },
+        ],
         servers: Vec::new(),
     };
 
     assert_eq!(
         mcp_status_label(&snapshot),
-        ("Config error · run /mcp".to_string(), true)
+        ("2 config errors · /mcp".to_string(), true)
     );
 }
 
@@ -184,6 +253,50 @@ fn render_element_lines(
     height: u16,
 ) -> Vec<String> {
     render_to_buffer(element, ctx, width, height).to_lines()
+}
+
+fn static_zero_state_layers(
+    width: u16,
+    height: u16,
+) -> (
+    Box<dyn TuiElement>,
+    Box<dyn TuiElement>,
+    Box<dyn TuiElement>,
+) {
+    let stars = (0..height)
+        .map(|_| "*".repeat(usize::from(width)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (
+        TuiText::new(stars).finish(),
+        TuiText::new("animation").finish(),
+        TuiText::new("copy here\n\nsecond line").finish(),
+    )
+}
+
+#[test]
+fn direct_zero_state_layers_match_scratch_composition() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            for (width, height) in [(60, 12), (80, 24), (120, 40), (240, 80)] {
+                let (stars, animation, overlay) = static_zero_state_layers(width, height);
+                let direct = render_to_buffer(
+                    build_zero_state_layout(stars, animation, overlay),
+                    ctx,
+                    width,
+                    height,
+                );
+                let (stars, animation, overlay) = static_zero_state_layers(width, height);
+                let scratch = render_to_buffer(
+                    build_zero_state_stack_layout(stars, animation, overlay),
+                    ctx,
+                    width,
+                    height,
+                );
+                assert_eq!(direct, scratch, "layout differs at {width}x{height}");
+            }
+        });
+    });
 }
 
 #[test]
@@ -258,6 +371,7 @@ fn zero_state_animation_is_centered_in_remaining_space_and_hidden_when_space_is_
                 ZeroStateAnimationElement::new(
                     AnimationClock::starting_at(Duration::ZERO),
                     Arc::new(ZeroStateAnimationConfig::default()),
+                    ZeroStateInteractionHandle::default(),
                     WarpLogoStyles {
                         front: style,
                         back: style,
@@ -397,6 +511,30 @@ fn login_line_shows_signed_in_account_email() {
             lines.join("\n")
         );
     });
+}
+
+#[test]
+fn login_line_never_claims_signed_in_without_an_identity() {
+    let snapshot = TuiUserInfoSnapshot {
+        is_logged_in: true,
+        ..Default::default()
+    };
+
+    assert_eq!(super::login_line_label("Signed in as", snapshot), None);
+}
+
+#[test]
+fn login_line_falls_back_to_validated_user_id() {
+    let snapshot = TuiUserInfoSnapshot {
+        is_logged_in: true,
+        user_id: Some("user-123".to_owned()),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        super::login_line_label("Signed in as", snapshot),
+        Some("Signed in as user-123".to_owned())
+    );
 }
 
 /// At a narrow terminal the complete displayed path must wrap across rows

@@ -10,6 +10,12 @@
 //! (attach on login, re-attach on token rotation, detach on logout), gated by
 //! [`warp_core::features::FeatureFlag::FactoryMcp`].
 //!
+//! CLI agent runs (`oz agent run`, including the cloud workers behind
+//! `oz agent run-cloud`) bypass that manager path; the agent driver attaches
+//! the same installation per-run instead (see
+//! `AgentDriver::builtin_factory_mcp_for_run`), with the token pinned for the
+//! duration of the run.
+//!
 //! [`TemplatableMCPServerManager::sync_builtin_servers`]: super::TemplatableMCPServerManager::sync_builtin_servers
 
 use std::collections::HashMap;

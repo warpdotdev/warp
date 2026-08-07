@@ -12,7 +12,7 @@ use warp::tui_export::{
 };
 use warp_core::command::ExitCode;
 use warpui_core::AppContext;
-use warpui_core::elements::tui::TuiStyle;
+use warpui_core::elements::tui::{Modifier, TuiStyle};
 
 use self::ToolCallDisplayState as State;
 use crate::tui_builder::TuiUiBuilder;
@@ -94,6 +94,22 @@ impl ToolCallDisplayState {
                 builder.primary_text_style()
             }
         }
+    }
+}
+
+/// Styles the first word of a tool-call label as the action and the rest as details.
+pub(crate) fn styled_tool_call_label_spans(
+    label: &str,
+    builder: &TuiUiBuilder,
+) -> Vec<(String, TuiStyle)> {
+    let action_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
+    let details_style = builder.neutral_7_text_style();
+    match label.find(char::is_whitespace) {
+        Some(first_word_end) => vec![
+            (label[..first_word_end].to_owned(), action_style),
+            (label[first_word_end..].to_owned(), details_style),
+        ],
+        None => vec![(label.to_owned(), action_style)],
     }
 }
 
