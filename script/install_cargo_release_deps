@@ -24,5 +24,9 @@ if [ "$NO_BUILD_DEPS" = false ]; then
   "$PWD"/script/install_cargo_build_deps
 fi
 
+# Needed even with --no-build-deps, which skips the script that would otherwise
+# provide binstall.
+"$PWD"/script/install_cargo_binstall
+
 # Install cargo-about for generating third-party license attribution.
-cargo install --locked cargo-about@0.8.4
+cargo binstall --no-confirm cargo-about@0.8.4

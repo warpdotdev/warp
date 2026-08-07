@@ -14,17 +14,33 @@ use warp_graphql::queries::get_workspaces_metadata_for_user::{
 use warp_graphql::workspace::{
     AddonCreditsSettings as GqlAddonCreditsSettings,
     AdminEnablementSetting as GqlAdminEnablementSetting,
-    AiAutonomySettings as GqlAiAutonomySettings, AiPermissionsSettings as GqlAiPermissionsSettings,
-    AvailableLlms as GqlAvailableLlms,
+    AdminEnablementSettingInfo as GqlAdminEnablementSettingInfo,
+    AiAutonomySettingInfo as GqlAiAutonomySettingInfo, AiAutonomySettings as GqlAiAutonomySettings,
+    AiAutonomySettingsInfo as GqlAiAutonomySettingsInfo, AiAutonomyValue as GqlAiAutonomyValue,
+    AiPermissionsSettings as GqlAiPermissionsSettings,
+    AiPermissionsSettingsInfo as GqlAiPermissionsSettingsInfo, AvailableLlms as GqlAvailableLlms,
+    BooleanSettingInfo as GqlBooleanSettingInfo,
     CloudConversationStorageSettings as GqlCloudConversationStorageSettings,
     CodebaseContextSettings as GqlCodebaseContextSettings,
+    ComputerUseAutonomyValue as GqlComputerUseAutonomyValue,
+    ComputerUseSettingInfo as GqlComputerUseSettingInfo,
     FeatureModelChoice as GqlFeatureModelChoice, LinkSharingSettings as GqlLinkSharingSettings,
-    LlmSettings as GqlLlmSettings, SecretRedactionSettings as GqlSecretRedactionSettings,
+    LinkSharingSettingsInfo as GqlLinkSharingSettingsInfo, LlmSettings as GqlLlmSettings,
+    MembershipRole as GqlMembershipRole,
+    SandboxedAgentSettingsInfo as GqlSandboxedAgentSettingsInfo,
+    SecretRedactionRegexListInfo as GqlSecretRedactionRegexListInfo,
+    SecretRedactionSettings as GqlSecretRedactionSettings,
+    SecretRedactionSettingsInfo as GqlSecretRedactionSettingsInfo,
+    StringListSettingInfo as GqlStringListSettingInfo, Team as GqlTeam,
+    TeamMember as GqlTeamMember, TeamSettings as GqlTeamSettings,
     TelemetrySettings as GqlTelemetrySettings,
     UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting,
+    UgcCollectionSettingInfo as GqlUgcCollectionSettingInfo,
     UgcCollectionSettings as GqlUgcCollectionSettings,
     UsageBasedPricingSettings as GqlUsageBasedPricingSettings, Workspace as GqlWorkspace,
     WorkspaceSettings as GqlWorkspaceSettings,
+    WriteToPtyAutonomyValue as GqlWriteToPtyAutonomyValue,
+    WriteToPtySettingInfo as GqlWriteToPtySettingInfo,
 };
 use warpui::{AddSingletonModel, App, WindowId};
 use warpui_extras::user_preferences;
@@ -1844,6 +1860,255 @@ fn gql_workspace(
         },
         total_requests_used_since_last_refresh: 0,
     }
+}
+
+/// Team settings with every group at its neutral value, so a fixture only has to
+/// override the field the test cares about.
+fn gql_team_settings() -> GqlTeamSettings {
+    fn admin_info() -> GqlAdminEnablementSettingInfo {
+        GqlAdminEnablementSettingInfo {
+            value: GqlAdminEnablementSetting::RespectUserSetting,
+            is_enforced_by_workspace: false,
+        }
+    }
+
+    fn bool_info(value: bool) -> GqlBooleanSettingInfo {
+        GqlBooleanSettingInfo {
+            value,
+            is_enforced_by_workspace: false,
+        }
+    }
+
+    fn autonomy_info() -> GqlAiAutonomySettingInfo {
+        GqlAiAutonomySettingInfo {
+            value: GqlAiAutonomyValue::RespectUserSetting,
+            is_enforced_by_workspace: false,
+        }
+    }
+
+    fn str_list() -> GqlStringListSettingInfo {
+        GqlStringListSettingInfo {
+            values: vec![],
+            workspace_entries: vec![],
+            team_entries: vec![],
+        }
+    }
+
+    GqlTeamSettings {
+        ugc_collection: GqlUgcCollectionSettingInfo {
+            value: GqlUgcCollectionEnablementSetting::RespectUserSetting,
+            is_enforced_by_workspace: false,
+        },
+        cloud_conversation_storage: admin_info(),
+        codebase_context: admin_info(),
+        ai_permissions: GqlAiPermissionsSettingsInfo {
+            allow_ai_in_remote_sessions: bool_info(true),
+            remote_session_regex_list: str_list(),
+        },
+        secret_redaction: GqlSecretRedactionSettingsInfo {
+            enabled: bool_info(false),
+            regexes: GqlSecretRedactionRegexListInfo {
+                values: vec![],
+                workspace_entries: vec![],
+                team_entries: vec![],
+            },
+        },
+        ai_autonomy: GqlAiAutonomySettingsInfo {
+            apply_code_diffs: autonomy_info(),
+            read_files: autonomy_info(),
+            create_plans: autonomy_info(),
+            execute_commands: autonomy_info(),
+            write_to_pty: GqlWriteToPtySettingInfo {
+                value: GqlWriteToPtyAutonomyValue::RespectUserSetting,
+                is_enforced_by_workspace: false,
+            },
+            computer_use: GqlComputerUseSettingInfo {
+                value: GqlComputerUseAutonomyValue::RespectUserSetting,
+                is_enforced_by_workspace: false,
+            },
+            read_files_allowlist: str_list(),
+            execute_commands_allowlist: str_list(),
+            execute_commands_denylist: str_list(),
+        },
+        link_sharing: GqlLinkSharingSettingsInfo {
+            anyone_with_link_sharing_enabled: bool_info(true),
+            direct_link_sharing_enabled: bool_info(true),
+        },
+        sandboxed_agent: GqlSandboxedAgentSettingsInfo {
+            execute_commands_denylist: str_list(),
+        },
+        llm_settings: GqlLlmSettings {
+            enabled: false,
+            host_configs: vec![],
+        },
+        telemetry_settings: GqlTelemetrySettings {
+            force_enabled: false,
+        },
+        usage_based_pricing_settings: GqlUsageBasedPricingSettings {
+            enabled: false,
+            max_monthly_spend_cents: None,
+        },
+        addon_credits_settings: GqlAddonCreditsSettings {
+            auto_reload_enabled: false,
+            max_monthly_spend_cents: None,
+            selected_auto_reload_credit_denomination: None,
+        },
+        ambient_agent_settings: None,
+        team_byo: None,
+    }
+}
+
+fn gql_team(uid: &str, name: &str, member_uids: &[&str]) -> GqlTeam {
+    GqlTeam {
+        // `ServerId` rejects anything but a 22-character id.
+        uid: format!("{uid:0>22}").into(),
+        name: name.to_string(),
+        color: None,
+        members: member_uids
+            .iter()
+            .map(|member_uid| GqlTeamMember {
+                uid: (*member_uid).into(),
+                email: format!("{member_uid}@example.com"),
+                role: GqlMembershipRole::User,
+            })
+            .collect(),
+        settings: gql_team_settings(),
+    }
+}
+
+fn apply_workspaces_metadata(app: &mut App, metadata: WorkspacesMetadataResponse) {
+    UserWorkspaces::handle(app).update(app, |user_workspaces, ctx| {
+        user_workspaces.on_workspaces_updated(
+            Ok(WorkspacesMetadataWithPricing {
+                metadata,
+                pricing_info: None,
+            }),
+            ctx,
+        );
+    });
+}
+
+fn current_team_names(user_workspaces: &UserWorkspaces) -> Vec<String> {
+    user_workspaces
+        .current_workspace()
+        .map(|workspace| {
+            workspace
+                .teams
+                .iter()
+                .map(|team| team.name.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn test_team_switcher_drops_teams_the_admin_is_not_a_member_of() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+        register_ai_usage_model(&mut app);
+
+        // The server hands a workspace admin every team in the workspace, but only
+        // the team they actually joined is one they can operate as in the client.
+        let mut workspace = gql_workspace("workspace_uid123456789", None);
+        workspace.teams = vec![
+            gql_team("member-team", "Member Team", &["test-user"]),
+            gql_team("other-team", "Other Team", &["someone-else"]),
+        ];
+
+        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(current_team_names(user_workspaces), ["Member Team"]);
+            assert!(
+                !user_workspaces.can_switch_teams(),
+                "a single membership should hide the switcher"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_team_switcher_keeps_every_team_the_user_is_a_member_of() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+        register_ai_usage_model(&mut app);
+
+        let mut workspace = gql_workspace("workspace_uid123456789", None);
+        workspace.teams = vec![
+            gql_team("first-team", "First Team", &["test-user"]),
+            gql_team("other-team", "Other Team", &["someone-else"]),
+            gql_team("second-team", "Second Team", &["test-user"]),
+        ];
+
+        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                current_team_names(user_workspaces),
+                ["First Team", "Second Team"]
+            );
+            assert!(
+                user_workspaces.can_switch_teams(),
+                "multiple memberships should keep the switcher visible"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_teamless_user_falls_back_to_workspace_settings() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+        register_ai_usage_model(&mut app);
+
+        // A workspace admin who joined none of the workspace's teams is teamless
+        // in the client, so the workspace's own settings supply their defaults.
+        let mut workspace = gql_workspace("workspace_uid123456789", None);
+        workspace.settings.llm_settings.enabled = true;
+        workspace.teams = vec![gql_team("other-team", "Other Team", &["someone-else"])];
+
+        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert!(
+                !user_workspaces.has_teams(),
+                "an admin with no membership should end up teamless"
+            );
+            assert!(
+                user_workspaces.is_custom_llm_enabled_for_team(None),
+                "workspace settings should supply the teamless default"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_member_team_settings_win_over_workspace_settings() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+        register_ai_usage_model(&mut app);
+
+        let mut workspace = gql_workspace("workspace_uid123456789", None);
+        workspace.settings.llm_settings.enabled = true;
+        let mut team = gql_team("member-team", "Member Team", &["test-user"]);
+        team.settings.llm_settings.enabled = false;
+        workspace.teams = vec![team];
+
+        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let team = user_workspaces.sole_team();
+            assert!(team.is_some(), "the member team should survive filtering");
+            assert!(
+                !user_workspaces.is_custom_llm_enabled_for_team(team),
+                "the team's own settings should win when the user has a team"
+            );
+        });
+    })
 }
 
 fn gql_premium_purchase_policy() -> GqlPurchaseAddOnCreditsPolicy {

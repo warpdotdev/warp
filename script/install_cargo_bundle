@@ -1,18 +1,22 @@
 #!/bin/bash
-
-# Script to install cargo-bundle for CI. This is used as an optimization to speed up CI instead of having to install and
-# compile cargo-bundle on each CI workflow run.
+#
+# Installs cargo-bundle, which packages the macOS .app bundle.
 
 # This script should be platform-agnostic (eg. no unix-only references like /dev/null).
 
-cargo_location=$(dirname "$(which cargo)")
-if test -f "$cargo_location/cargo-bundle"; then
-    echo "cargo-bundle already exists, not installing."
-else
-    set -e
-    curl https://storage.googleapis.com/cached_crates/cargo-bundle.zip --output cargo-bundle.zip
-    unzip -o cargo-bundle.zip
-    chmod 755 cargo-bundle
-    cp cargo-bundle "$cargo_location"
-    echo "Successfully moved cached cargo-bundle to location $cargo_location"
-fi
+set -eo pipefail
+
+# Both local bootstrap and release CI install through this script so that the .app
+# bundles developers produce come from the same cargo-bundle as the shipped ones.
+#
+# 0.11.0 supports the two features script/macos/bundle depends on: the `--profile`
+# flag and CARGO_BUNDLE_SKIP_BUILD.
+CARGO_BUNDLE_VERSION="0.11.0"
+
+"$PWD"/script/install_cargo_binstall
+
+# burtonageo/cargo-bundle publishes no release assets, so binstall resolves this
+# through cargo-quickinstall, which covers both apple-darwin targets. Where no
+# prebuilt is available binstall compiles from source, which is left enabled: a
+# slow bootstrap is a better outcome than one that can't finish.
+cargo binstall --no-confirm "cargo-bundle@${CARGO_BUNDLE_VERSION}"

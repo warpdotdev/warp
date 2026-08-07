@@ -4462,6 +4462,11 @@ impl TuiTerminalSessionView {
                 self.api_keys_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
+            SlashCommandKind::ConnectGrok => {
+                self.api_keys_menu
+                    .update(ctx, |menu, ctx| menu.open_and_connect_grok(ctx));
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
             SlashCommandKind::Upgrade => {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 ctx.open_url(&upgrade_url(ctx));

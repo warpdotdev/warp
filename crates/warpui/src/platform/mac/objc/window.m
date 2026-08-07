@@ -472,8 +472,8 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
         case NSEventTypeLeftMouseDown: {
             NSButton *windowButton = [self standardWindowButtonAtEvent:event];
             if (windowButton) {
-                _leftMouseDownStartedInNativeWindowChrome = NO;
-                [windowButton mouseDown:event];
+                _leftMouseDownStartedInNativeWindowChrome = YES;
+                [super sendEvent:event];
                 break;
             }
             _leftMouseDownStartedInNativeWindowChrome = [self eventIsOverResizeEdge:event];
