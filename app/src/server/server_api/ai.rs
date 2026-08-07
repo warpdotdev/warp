@@ -1773,7 +1773,7 @@ impl AIClient for ServerApi {
                             .grants
                             .into_iter()
                             .map(move |grant| {
-                                BonusGrant::from_gql_bonus_grant(grant, Some(workspace_uid))
+                                BonusGrant::from_gql_workspace_bonus_grant(grant, workspace_uid)
                             })
                     });
 
@@ -1781,7 +1781,7 @@ impl AIClient for ServerApi {
                     .user
                     .bonus_grants
                     .into_iter()
-                    .map(|grant| BonusGrant::from_gql_bonus_grant(grant, None))
+                    .map(BonusGrant::from_gql_user_bonus_grant)
                     .chain(workspace_bonus_grants)
                     .collect();
 

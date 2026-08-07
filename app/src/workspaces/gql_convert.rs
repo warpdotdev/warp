@@ -712,7 +712,18 @@ fn bonus_grant_scope_from_gql(
 }
 
 impl BonusGrant {
-    pub fn from_gql_bonus_grant(
+    pub fn from_gql_user_bonus_grant(bonus_grant: GqlBonusGrant) -> Self {
+        Self::from_gql_bonus_grant(bonus_grant, None)
+    }
+
+    pub fn from_gql_workspace_bonus_grant(
+        bonus_grant: GqlBonusGrant,
+        workspace_uid: WorkspaceUid,
+    ) -> Self {
+        Self::from_gql_bonus_grant(bonus_grant, Some(workspace_uid))
+    }
+
+    fn from_gql_bonus_grant(
         bonus_grant: GqlBonusGrant,
         workspace_uid: Option<WorkspaceUid>,
     ) -> Self {
