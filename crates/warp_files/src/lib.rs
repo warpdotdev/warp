@@ -21,7 +21,7 @@ use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
 use remote_server::manager::RemoteServerManager;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
-use repo_metadata::{CanonicalizedPath, Repository, RepositoryUpdate};
+use repo_metadata::{CanonicalizedPath, Repository, RepositoryUpdate, RepositoryWatchMode};
 use warp_core::HostId;
 use warp_util::content_version::ContentVersion;
 use warp_util::file::{FileId, FileLoadError, FileSaveError};
@@ -963,6 +963,7 @@ impl FileModel {
         let (repository_update_tx, repository_update_rx) = async_channel::unbounded();
         let start = repository.update(ctx, |repo, ctx| {
             repo.start_watching(
+                RepositoryWatchMode::FilesystemOnly,
                 Box::new(FileRepositorySubscriber {
                     repository_update_tx,
                 }),

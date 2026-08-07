@@ -293,8 +293,8 @@ impl DirectoryWatcher {
         if let Some(repository_handle) = self.directories.get(&repository_path).cloned() {
             log::debug!("Using already-registered repository");
             if let Some(external_git_directory) = external_git_directory {
-                repository_handle.update(ctx, |repository, _ctx| {
-                    repository.enrich_external_git_directory(external_git_directory)
+                repository_handle.update(ctx, |repository, ctx| {
+                    repository.enrich_external_git_directory(external_git_directory, ctx)
                 });
             }
             return Ok(repository_handle);
@@ -453,7 +453,12 @@ impl DirectoryWatcher {
         repos_to_refresh_tracked_remote_ref: &mut HashSet<ModelHandle<Repository>>,
         ctx: &ModelContext<Self>,
     ) {
-        let affected = self.find_repos_for_git_event(path, ctx);
+        let mut affected = self.find_repos_for_git_event(path, ctx);
+        affected.retain(|repository| {
+            repository.read(ctx, |repository, _| {
+                repository.has_git_repository_subscribers()
+            })
+        });
         let is_commit = is_commit_related_git_file(path);
         let is_lock = is_index_lock_file(path);
         let is_remote_ref = is_remote_tracking_ref(path);
@@ -609,12 +614,13 @@ impl DirectoryWatcher {
 
         self.processing_queue.update(ctx, |queue, ctx| {
             for (repo_handle, repo_update) in repo_updates {
-                let subscriber_ids = repo_handle.read(ctx, |repo, _| repo.get_subscriber_ids());
-                for subscriber_id in subscriber_ids {
+                let subscriber_updates =
+                    repo_handle.read(ctx, |repo, _| repo.subscriber_updates(&repo_update));
+                for (subscriber_id, subscriber_update) in subscriber_updates {
                     queue.enqueue_incremental_update(
                         repo_handle.downgrade(),
                         subscriber_id,
-                        repo_update.clone(),
+                        subscriber_update,
                         ctx,
                     );
                 }

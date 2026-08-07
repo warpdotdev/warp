@@ -13,7 +13,7 @@ use warpui_core::r#async::Timer;
 use warpui_core::{App, ModelContext, ModelHandle};
 
 use crate::repositories::stub_git_repository;
-use crate::repository::{RepositorySubscriber, TrackedRemoteRef};
+use crate::repository::{RepositorySubscriber, RepositoryWatchMode, TrackedRemoteRef};
 use crate::watcher::{DirectoryWatcher, TaskQueue};
 use crate::{CanonicalizedPath, RepoMetadataError, Repository, RepositoryUpdate};
 
@@ -249,7 +249,11 @@ fn test_task_queue_processes_all_tasks() {
                     TestSubscriber::new(scan_tx.clone(), update_tx.clone(), active_tasks.clone());
 
                 let start = repo1_handle.update(&mut app, |repo, ctx| {
-                    repo.start_watching(Box::new(subscriber1), ctx)
+                    repo.start_watching(
+                        RepositoryWatchMode::FilesystemOnly,
+                        Box::new(subscriber1),
+                        ctx,
+                    )
                 });
                 start
                     .registration_future
@@ -257,7 +261,11 @@ fn test_task_queue_processes_all_tasks() {
                     .expect("Failed to add subscriber");
 
                 let start = repo2_handle.update(&mut app, |repo, ctx| {
-                    repo.start_watching(Box::new(subscriber2), ctx)
+                    repo.start_watching(
+                        RepositoryWatchMode::FilesystemOnly,
+                        Box::new(subscriber2),
+                        ctx,
+                    )
                 });
                 start
                     .registration_future
@@ -319,7 +327,11 @@ fn test_scan_queue_handles_nonexistent_subscriber() {
             let subscriber = TestSubscriber::new(tx, update_tx, active_scans.clone());
 
             std::mem::drop(repo_handle.update(&mut app, |repo, ctx| {
-                repo.start_watching(Box::new(subscriber), ctx)
+                repo.start_watching(
+                    RepositoryWatchMode::FilesystemOnly,
+                    Box::new(subscriber),
+                    ctx,
+                )
             }));
 
             // Wait for processing to complete
@@ -372,7 +384,11 @@ fn test_file_updates_delivered() {
                 let subscriber =
                     TestSubscriber::new(scan_tx.clone(), update_tx.clone(), task_count.clone());
                 let start = repo_handle.update(&mut app, |repo, ctx| {
-                    repo.start_watching(Box::new(subscriber), ctx)
+                    repo.start_watching(
+                        RepositoryWatchMode::FilesystemOnly,
+                        Box::new(subscriber),
+                        ctx,
+                    )
                 });
                 start
                     .registration_future
@@ -609,7 +625,11 @@ fn test_commit_related_files_excluded_from_update_lists() {
 
             log::info!("Start setting up watcher");
             let start = repo_handle.update(&mut app, |repo, ctx| {
-                repo.start_watching(Box::new(subscriber), ctx)
+                repo.start_watching(
+                    RepositoryWatchMode::GitRepository,
+                    Box::new(subscriber),
+                    ctx,
+                )
             });
             start
                 .registration_future
