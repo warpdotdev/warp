@@ -81,6 +81,7 @@ pub struct CodeEditorFind {
     replace_editor: ViewHandle<EditorView>,
     searcher: ModelHandle<Searcher>,
     button_mouse_states: ButtonMouseStates,
+    find_editor_mouse_state: MouseStateHandle,
     preserve_case_enabled: bool,
     is_open: bool,
     is_replace_open: bool,
@@ -101,6 +102,8 @@ pub enum FindAction {
     ToggleReplaceOpen,
     ReplaceAll,
     TogglePreserveCase,
+    /// The find input was clicked, so it should become editable and take focus again.
+    FocusFindInput,
 }
 
 pub fn init(app: &mut AppContext) {
@@ -229,6 +232,7 @@ impl CodeEditorFind {
             replace_editor,
             searcher,
             button_mouse_states: Default::default(),
+            find_editor_mouse_state: Default::default(),
             preserve_case_enabled: false,
             is_open: false,
             is_replace_open: false,
@@ -279,6 +283,17 @@ impl CodeEditorFind {
             editor.set_interaction_state(state, ctx);
         });
     }
+
+    /// Makes the find input editable, selects its current query, and focuses it.
+    fn activate_find_input(&mut self, ctx: &mut ViewContext<Self>) {
+        self.find_editor.update(ctx, |editor, ctx| {
+            editor.set_interaction_state(InteractionState::Editable, ctx);
+            editor.select_all(ctx);
+        });
+        ctx.focus(&self.find_editor);
+        ctx.notify();
+    }
+
     fn handle_find_editor_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
         match event {
             EditorEvent::Edited(_) => {
@@ -765,19 +780,19 @@ impl CodeEditorFind {
         )
         .finish();
 
+        let find_editor = Hoverable::new(self.find_editor_mouse_state.clone(), |_| {
+            ConstrainedBox::new(Clipped::new(ChildView::new(&self.find_editor).finish()).finish())
+                .with_height(editor_height)
+                .finish()
+        })
+        .on_mouse_down(|ctx, _, _| {
+            ctx.dispatch_typed_action(FindAction::FocusFindInput);
+        })
+        .finish();
+
         let mut query_editor_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Shrinkable::new(
-                    1.,
-                    ConstrainedBox::new(
-                        Clipped::new(ChildView::new(&self.find_editor).finish()).finish(),
-                    )
-                    .with_height(editor_height)
-                    .finish(),
-                )
-                .finish(),
-            );
+            .with_child(Shrinkable::new(1., find_editor).finish());
         query_editor_row.add_child(regex_icon);
         query_editor_row.add_child(case_sensitive_icon);
 
@@ -890,6 +905,13 @@ impl CodeEditorFind {
     }
 }
 
+#[cfg(test)]
+impl CodeEditorFind {
+    pub fn find_editor_for_test(&self) -> ViewHandle<EditorView> {
+        self.find_editor.clone()
+    }
+}
+
 impl Entity for CodeEditorFind {
     type Event = Event;
 }
@@ -913,6 +935,15 @@ impl TypedActionView for CodeEditorFind {
             FindAction::TogglePreserveCase => {
                 self.preserve_case_enabled = !self.preserve_case_enabled;
                 ctx.notify();
+            }
+            FindAction::FocusFindInput => {
+                // While Vim owns the editor caret the find input is disabled, so the editor
+                // element ignores mouse events and the click can only be handled here. When the
+                // input is already editable the editor element handles the click itself, placing
+                // the caret where the user clicked.
+                if !self.is_find_input_editable(ctx) {
+                    self.activate_find_input(ctx);
+                }
             }
         }
     }
@@ -955,12 +986,7 @@ impl View for CodeEditorFind {
             searcher.set_auto_select(true);
         });
         if focus_ctx.is_self_focused() {
-            self.find_editor.update(ctx, |editor, ctx| {
-                editor.set_interaction_state(InteractionState::Editable, ctx);
-                editor.select_all(ctx);
-            });
-            ctx.focus(&self.find_editor);
-            ctx.notify();
+            self.activate_find_input(ctx);
         }
     }
 

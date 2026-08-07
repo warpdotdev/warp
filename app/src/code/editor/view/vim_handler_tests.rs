@@ -19,7 +19,9 @@ use warpui::{App, SingletonEntity, TypedActionView, UpdateModel, ViewHandle};
 
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::code::editor::find::view::{CodeEditorFind, FindAction};
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction};
+use crate::editor::EditorAction;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
@@ -161,6 +163,18 @@ fn set_viewport_lines(editor: &ViewHandle<CodeEditorView>, lines: usize, app: &m
         );
     });
     line_height
+}
+
+/// Helper to get the find bar owned by a CodeEditorView.
+fn find_bar(editor: &ViewHandle<CodeEditorView>, app: &App) -> ViewHandle<CodeEditorFind> {
+    editor.read(app, |view, _| {
+        view.find_bar.clone().expect("find bar should exist")
+    })
+}
+
+/// Helper to check whether the find bar's query input can be edited.
+fn is_find_input_editable(find_bar: &ViewHandle<CodeEditorFind>, app: &App) -> bool {
+    find_bar.read(app, |find_bar, ctx| find_bar.is_find_input_editable(ctx))
 }
 
 /// Read the current vertical scroll position.
@@ -2123,5 +2137,58 @@ fn test_vim_indent_dot_repeat_repeats_last_indent() {
         vim_user_insert(&editor, ".", &mut app);
         assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2\n    line 3");
         assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_find_input_becomes_editable_again_when_clicked_after_vim_enter() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("hello world\nhello again", &mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::ShowFindBar, ctx);
+        });
+        let find_bar = find_bar(&editor, &app);
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.set_find_query(ctx, "hello");
+        });
+        assert!(is_find_input_editable(&find_bar, &app));
+
+        // In Vim mode, Enter commits the query and hands the caret back to the editor, which
+        // leaves the find input disabled.
+        let find_editor = find_bar.read(&app, |find_bar, _| find_bar.find_editor_for_test());
+        find_editor.update(&mut app, |find_editor, ctx| {
+            find_editor.handle_action(&EditorAction::Enter, ctx);
+        });
+        assert!(!is_find_input_editable(&find_bar, &app));
+
+        // Clicking the find input must make it editable again.
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.handle_action(&FindAction::FocusFindInput, ctx);
+        });
+        assert!(is_find_input_editable(&find_bar, &app));
+    });
+}
+
+#[test]
+fn test_find_input_becomes_editable_again_when_clicked_after_vim_search_word() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("hello world\nhello again", &mut app);
+
+        // `*` searches for the word under the cursor and leaves the find input disabled.
+        vim_user_insert(&editor, "*", &mut app);
+        let find_bar = find_bar(&editor, &app);
+        assert!(!is_find_input_editable(&find_bar, &app));
+
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.handle_action(&FindAction::FocusFindInput, ctx);
+        });
+        assert!(is_find_input_editable(&find_bar, &app));
     });
 }
