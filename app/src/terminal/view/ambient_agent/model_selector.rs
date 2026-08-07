@@ -22,7 +22,7 @@ use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::harness_availability::{HarnessAvailabilityEvent, HarnessAvailabilityModel};
 use crate::ai::harness_display::icon_for as harness_icon_for;
-use crate::ai::llms::{LLMId, LLMPreferences, LLMPreferencesEvent};
+use crate::ai::llms::{LLMId, LLMPreferences, LLMPreferencesEvent, model_provider_icon};
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions,
@@ -510,7 +510,7 @@ impl ModelSelector {
                 let leading_icon = if is_custom_router_id(llm.id.as_str()) {
                     Icon::Dataflow
                 } else {
-                    llm.provider.icon().unwrap_or(Icon::Agent)
+                    model_provider_icon(llm)
                 };
                 let fields = MenuItemFields::new(display_name)
                     .with_icon(leading_icon)
