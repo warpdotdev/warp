@@ -38,6 +38,8 @@ pub struct DirectoryWatcher {
     /// The filesystem watcher for monitoring changes.
     #[cfg(feature = "local_fs")]
     watcher: Option<ModelHandle<BulkFilesystemWatcher>>,
+    #[cfg(test)]
+    stopped_watching_paths: Vec<StandardizedPath>,
 
     /// Handle to the internal processing queue model that orders scan & update tasks.
     processing_queue: ModelHandle<TaskQueue>,
@@ -73,6 +75,8 @@ impl DirectoryWatcher {
             directories: Default::default(),
             #[cfg(feature = "local_fs")]
             watcher: Some(fs_watcher),
+            #[cfg(test)]
+            stopped_watching_paths: Vec::new(),
             processing_queue,
             force_included_paths: Vec::new(),
         }
@@ -98,6 +102,8 @@ impl DirectoryWatcher {
             directories: Default::default(),
             #[cfg(feature = "local_fs")]
             watcher: Some(fs_watcher),
+            #[cfg(test)]
+            stopped_watching_paths: Vec::new(),
             processing_queue,
             force_included_paths: Vec::new(),
         }
@@ -397,6 +403,8 @@ impl DirectoryWatcher {
         directory_path: &StandardizedPath,
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = Result<(), anyhow::Error>> {
+        #[cfg(test)]
+        self.stopped_watching_paths.push(directory_path.clone());
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_fs")] {
                 let local_path = directory_path.to_local_path();
@@ -428,6 +436,29 @@ impl DirectoryWatcher {
                 })
             } else {
                 async { Ok(()) }
+            }
+        }
+    }
+    #[cfg(feature = "local_fs")]
+    pub(crate) fn stop_watching_unused_git_directories(
+        &mut self,
+        repository_root_to_stop: &StandardizedPath,
+        directory_paths: Vec<StandardizedPath>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        for path in directory_paths {
+            let is_still_used = self
+                .directories
+                .iter()
+                .any(|(root_dir, repository_handle)| {
+                    root_dir != repository_root_to_stop
+                        && repository_handle.read(ctx, |repository, _| {
+                            repository.has_git_repository_subscribers()
+                                && repository.git_watch_paths().contains(&path)
+                        })
+                });
+            if !is_still_used {
+                std::mem::drop(self.stop_watching_directory(&path, ctx));
             }
         }
     }

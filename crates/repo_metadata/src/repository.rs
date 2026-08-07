@@ -346,7 +346,7 @@ impl Repository {
     }
 
     #[cfg(feature = "local_fs")]
-    fn git_watch_paths(&self) -> Vec<StandardizedPath> {
+    pub(crate) fn git_watch_paths(&self) -> Vec<StandardizedPath> {
         let mut paths = Vec::new();
         if let Some(external_git_dir) = &self.external_git_directory {
             paths.push(external_git_dir.clone());
@@ -466,35 +466,29 @@ impl Repository {
             self.tracked_remote_ref = None;
         }
 
-        if self.subscribers.is_empty() {
+        let should_stop_filesystem_watching = self.subscribers.is_empty();
+        if should_stop_filesystem_watching {
             // If this was the last subscriber, notify the RepWatcher to stop watching.
             log::debug!(
                 "All subscribers removed for {}, stopping watcher",
                 self.root_dir
             );
+        }
 
-            #[cfg(feature = "local_fs")]
-            {
-                let mut paths = vec![self.root_dir.clone()];
-                if should_stop_git_watching {
-                    paths.extend(self.git_watch_paths());
+        #[cfg(feature = "local_fs")]
+        if should_stop_filesystem_watching || should_stop_git_watching {
+            let root_dir = self.root_dir.clone();
+            let git_paths = if should_stop_git_watching {
+                self.git_watch_paths()
+            } else {
+                Vec::new()
+            };
+            DirectoryWatcher::handle(ctx).update(ctx, |watcher, ctx| {
+                if should_stop_filesystem_watching {
+                    std::mem::drop(watcher.stop_watching_directory(&root_dir, ctx));
                 }
-                DirectoryWatcher::handle(ctx).update(ctx, |watcher, ctx| {
-                    for path in paths {
-                        std::mem::drop(watcher.stop_watching_directory(&path, ctx));
-                    }
-                });
-            }
-        } else {
-            #[cfg(feature = "local_fs")]
-            if should_stop_git_watching {
-                let git_paths = self.git_watch_paths();
-                DirectoryWatcher::handle(ctx).update(ctx, |watcher, ctx| {
-                    for path in git_paths {
-                        std::mem::drop(watcher.stop_watching_directory(&path, ctx));
-                    }
-                });
-            }
+                watcher.stop_watching_unused_git_directories(&root_dir, git_paths, ctx);
+            });
         }
     }
 

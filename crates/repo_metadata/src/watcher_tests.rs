@@ -103,6 +103,97 @@ fn test_existing_directory_registration_is_enriched_with_external_git_directory(
         },
     );
 }
+#[test]
+fn test_shared_git_paths_remain_watched_until_last_worktree_stops() {
+    VirtualFS::test("shared_git_paths_remain_watched", |dirs, mut vfs| {
+        stub_git_repository(&mut vfs, "repo");
+        vfs.mkdir("repo/.git/refs");
+        vfs.mkdir("repo/.git/worktrees/worktree-1");
+        vfs.mkdir("repo/.git/worktrees/worktree-2");
+        vfs.mkdir("worktree-1");
+        vfs.mkdir("worktree-2");
+
+        let worktree_1_path = dirs.tests().join("worktree-1");
+        let worktree_2_path = dirs.tests().join("worktree-2");
+        let external_git_dir_1 = dirs.tests().join("repo/.git/worktrees/worktree-1");
+        let external_git_dir_2 = dirs.tests().join("repo/.git/worktrees/worktree-2");
+        let shared_refs_dir = dirs.tests().join("repo/.git/refs");
+        let shared_config = dirs.tests().join("repo/.git/config");
+
+        App::test((), |mut app| async move {
+            let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+            let worktree_1_handle = watcher_handle
+                .update(&mut app, |watcher, ctx| {
+                    watcher.add_directory_with_git_dir(
+                        StandardizedPath::from_local_canonicalized(&worktree_1_path).unwrap(),
+                        Some(
+                            StandardizedPath::from_local_canonicalized(&external_git_dir_1)
+                                .unwrap(),
+                        ),
+                        ctx,
+                    )
+                })
+                .unwrap();
+            let worktree_2_handle = watcher_handle
+                .update(&mut app, |watcher, ctx| {
+                    watcher.add_directory_with_git_dir(
+                        StandardizedPath::from_local_canonicalized(&worktree_2_path).unwrap(),
+                        Some(
+                            StandardizedPath::from_local_canonicalized(&external_git_dir_2)
+                                .unwrap(),
+                        ),
+                        ctx,
+                    )
+                })
+                .unwrap();
+
+            let (scan_tx, _) = mpsc::unbounded();
+            let (update_tx, _) = mpsc::unbounded();
+            let active_tasks = Arc::new(AtomicUsize::new(0));
+            let worktree_1_start = worktree_1_handle.update(&mut app, |repository, ctx| {
+                repository.start_watching(
+                    RepositoryWatchMode::GitRepository,
+                    Box::new(TestSubscriber::new(
+                        scan_tx.clone(),
+                        update_tx.clone(),
+                        active_tasks.clone(),
+                    )),
+                    ctx,
+                )
+            });
+            let worktree_2_start = worktree_2_handle.update(&mut app, |repository, ctx| {
+                repository.start_watching(
+                    RepositoryWatchMode::GitRepository,
+                    Box::new(TestSubscriber::new(scan_tx, update_tx, active_tasks)),
+                    ctx,
+                )
+            });
+            std::mem::drop(worktree_1_start.registration_future);
+            std::mem::drop(worktree_2_start.registration_future);
+
+            worktree_1_handle.update(&mut app, |repository, ctx| {
+                repository.stop_watching(worktree_1_start.subscriber_id, ctx);
+            });
+
+            let shared_refs_dir =
+                StandardizedPath::from_local_canonicalized(&shared_refs_dir).unwrap();
+            let shared_config = StandardizedPath::from_local_canonicalized(&shared_config).unwrap();
+            watcher_handle.read(&app, |watcher, _| {
+                assert!(!watcher.stopped_watching_paths.contains(&shared_refs_dir));
+                assert!(!watcher.stopped_watching_paths.contains(&shared_config));
+            });
+
+            worktree_2_handle.update(&mut app, |repository, ctx| {
+                repository.stop_watching(worktree_2_start.subscriber_id, ctx);
+            });
+
+            watcher_handle.read(&app, |watcher, _| {
+                assert!(watcher.stopped_watching_paths.contains(&shared_refs_dir));
+                assert!(watcher.stopped_watching_paths.contains(&shared_config));
+            });
+        });
+    });
+}
 
 #[test]
 fn test_add_repository_non_existent() {
