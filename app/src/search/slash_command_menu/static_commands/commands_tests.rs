@@ -124,7 +124,10 @@ fn api_keys_command_is_tui_only_and_has_no_arguments() {
     assert!(!command.auto_enter_ai_mode);
     assert_eq!(command.availability, Availability::AI_ENABLED);
     assert!(command.argument.is_none());
-    assert_eq!(command.description, "View and manage API keys");
+    assert_eq!(
+        command.description,
+        "Manage your API keys and AI subscriptions"
+    );
     assert!(
         all_commands(settings::SettingsMode::Gui)
             .iter()

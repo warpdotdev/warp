@@ -405,6 +405,32 @@ fn api_keys_slash_command_opens_inline_and_clears_the_input() {
 }
 
 #[test]
+fn connect_slash_command_opens_the_api_keys_menu() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        view.update(&mut app, |view, ctx| {
+            view.input_view
+                .update(ctx, |input, ctx| input.set_text("/connect", ctx));
+            view.execute_tui_slash_command(&slash_commands::CONNECT, None, ctx);
+        });
+
+        view.read(&app, |view, ctx| {
+            assert!(view.api_keys_menu.as_ref(ctx).is_open(ctx));
+            assert_eq!(
+                view.suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::ApiKeys
+            );
+            assert!(view.input_view.as_ref(ctx).is_empty(ctx));
+        });
+        let rendered = render_session(&mut app, &view, 100, 40).join("\n");
+        assert!(rendered.contains("API keys"), "{rendered}");
+        assert!(rendered.contains("Anthropic API key"), "{rendered}");
+        assert!(!rendered.contains("/connect"), "{rendered}");
+    });
+}
+
+#[test]
 fn mcp_primary_action_hints_match_available_actions() {
     let id = TuiMcpServerId::FileBased(1);
     assert_eq!(

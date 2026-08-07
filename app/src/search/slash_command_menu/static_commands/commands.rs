@@ -120,7 +120,7 @@ pub const NATURAL_LANGUAGE_DETECTION: StaticCommand = StaticCommand {
 
 pub const API_KEYS: StaticCommand = StaticCommand {
     name: "/api-keys",
-    description: "View and manage API keys",
+    description: "Manage your API keys and AI subscriptions",
     kind: SlashCommandKind::ApiKeys,
     supported_surfaces: SlashCommandSurfaces::TuiOnly,
     availability: Availability::AI_ENABLED,
@@ -128,6 +128,15 @@ pub const API_KEYS: StaticCommand = StaticCommand {
     argument: None,
 };
 
+pub const CONNECT: StaticCommand = StaticCommand {
+    name: "/connect",
+    description: "Manage your API keys and AI subscriptions (alias for /api-keys)",
+    kind: SlashCommandKind::Connect,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
 pub const MANAGE_BILLING: StaticCommand = StaticCommand {
     name: "/manage-billing",
     description: "Open the team billing page in your browser",
@@ -959,6 +968,7 @@ fn all_commands_for_all_surfaces() -> Vec<StaticCommand> {
         INDEX,
         INIT,
         API_KEYS,
+        CONNECT,
         UPGRADE,
         MANAGE_BILLING,
         LOGOUT,

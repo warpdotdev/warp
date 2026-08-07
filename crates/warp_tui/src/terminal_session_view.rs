@@ -4458,7 +4458,7 @@ impl TuiTerminalSessionView {
             SlashCommandKind::ResetStatusline => {
                 self.reset_statusline(command.name, ctx);
             }
-            SlashCommandKind::ApiKeys => {
+            SlashCommandKind::ApiKeys | SlashCommandKind::Connect => {
                 self.api_keys_menu.update(ctx, |menu, ctx| menu.open(ctx));
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
