@@ -6,6 +6,7 @@ pub mod cli_agent_protocol;
 pub mod command;
 pub mod context_flag;
 pub mod execution_mode;
+pub mod factory_config;
 pub mod features;
 pub mod interval_timer;
 #[cfg(target_os = "macos")]

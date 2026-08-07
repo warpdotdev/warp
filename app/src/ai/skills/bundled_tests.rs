@@ -27,6 +27,18 @@ fn unavailable_bundled_context_path_renders_as_empty_string() {
     assert_eq!(display_optional_path(None), "");
 }
 
+#[test]
+fn factory_config_file_path_variable_is_exposed_and_renders() {
+    let context = build_bundled_skill_context(Path::new("/resources"), Path::new("/skill"));
+    let expected = display_optional_path(warp_core::paths::factory_config_file_path());
+
+    assert_eq!(context.get("factory_config_file_path"), Some(&expected));
+    assert_eq!(
+        handlebars::render_template("path={{factory_config_file_path}}", &context),
+        format!("path={expected}")
+    );
+}
+
 fn remote_content<'a>(bundled_skills: &'a BundledSkills, host_id: &HostId) -> Option<&'a str> {
     bundled_skills
         .remote(host_id)?

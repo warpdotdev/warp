@@ -157,6 +157,12 @@ pub(super) enum CliTelemetryEvent {
     RunnerUpdate,
     /// Executing `warp runner delete`
     RunnerDelete,
+    /// Executing `warp factory default get`
+    FactoryDefaultGet,
+    /// Executing `warp factory default set`
+    FactoryDefaultSet,
+    /// Executing `warp factory default clear`
+    FactoryDefaultClear,
 }
 
 impl TelemetryEvent for CliTelemetryEvent {
@@ -255,6 +261,9 @@ impl TelemetryEvent for CliTelemetryEvent {
             CliTelemetryEvent::RunnerCreate => None,
             CliTelemetryEvent::RunnerUpdate => None,
             CliTelemetryEvent::RunnerDelete => None,
+            CliTelemetryEvent::FactoryDefaultGet => None,
+            CliTelemetryEvent::FactoryDefaultSet => None,
+            CliTelemetryEvent::FactoryDefaultClear => None,
         }
     }
 
@@ -381,6 +390,11 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::RunnerCreate => "CLI.Execute.Runner.Create",
             CliTelemetryEventDiscriminants::RunnerUpdate => "CLI.Execute.Runner.Update",
             CliTelemetryEventDiscriminants::RunnerDelete => "CLI.Execute.Runner.Delete",
+            CliTelemetryEventDiscriminants::FactoryDefaultGet => "CLI.Execute.Factory.Default.Get",
+            CliTelemetryEventDiscriminants::FactoryDefaultSet => "CLI.Execute.Factory.Default.Set",
+            CliTelemetryEventDiscriminants::FactoryDefaultClear => {
+                "CLI.Execute.Factory.Default.Clear"
+            }
         }
     }
 
@@ -545,6 +559,15 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::RunnerCreate => "Created a runner from the Warp CLI",
             CliTelemetryEventDiscriminants::RunnerUpdate => "Updated a runner from the Warp CLI",
             CliTelemetryEventDiscriminants::RunnerDelete => "Deleted a runner from the Warp CLI",
+            CliTelemetryEventDiscriminants::FactoryDefaultGet => {
+                "Read the default factory from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::FactoryDefaultSet => {
+                "Set the default factory from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::FactoryDefaultClear => {
+                "Cleared the default factory from the Warp CLI"
+            }
         }
     }
 
@@ -565,6 +588,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             Self::RunnerList | Self::RunnerCreate | Self::RunnerUpdate | Self::RunnerDelete => {
                 EnablementState::Flag(FeatureFlag::CloudAgentRunners)
+            }
+            Self::FactoryDefaultGet | Self::FactoryDefaultSet | Self::FactoryDefaultClear => {
+                EnablementState::Flag(FeatureFlag::FactoryMcp)
             }
             Self::RunMessageWatch
             | Self::RunMessageSend

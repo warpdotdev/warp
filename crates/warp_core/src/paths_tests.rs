@@ -114,6 +114,30 @@ fn test_warp_home_skills_and_mcp_paths() {
 }
 
 #[test]
+fn test_factory_config_paths_are_under_warp_home_config_dir() {
+    let Some(config_dir) = warp_home_config_dir() else {
+        panic!("Should be able to compute Warp home config directory");
+    };
+
+    assert_eq!(factory_config_dir(), Some(config_dir.join("factory")));
+    assert_eq!(
+        factory_config_file_path(),
+        Some(config_dir.join("factory").join("config.json"))
+    );
+
+    // The shared contract requires the same file for the GUI, the TUI, and 3p
+    // harnesses, so it must live under the home-based dir and never under the
+    // TUI-only `tui_config_local_dir`. On non-macOS platforms it must also stay
+    // out of the GUI-only XDG/AppData `config_local_dir`; on macOS the two
+    // coincide at `~/.warp*`, so that divergence check only applies elsewhere.
+    let factory_file = factory_config_file_path().expect("factory config path should resolve");
+    assert!(factory_file.starts_with(&config_dir));
+    assert!(!factory_file.starts_with(tui_config_local_dir()));
+    #[cfg(not(target_os = "macos"))]
+    assert!(!factory_file.starts_with(config_local_dir()));
+}
+
+#[test]
 fn test_tui_mcp_config_path_is_separate_from_gui() {
     let tui_mcp_path = tui_mcp_config_file_path();
 

@@ -75,6 +75,21 @@ pub fn warp_home_mcp_config_file_path() -> Option<PathBuf> {
     warp_home_config_dir().map(|warp_config_dir| warp_config_dir.join(".mcp.json"))
 }
 
+/// Returns the shared factory config directory (`<warp home config dir>/factory`).
+///
+/// Home-based and channel-aware, so the GUI, the TUI, and an external harness all
+/// resolve the same `.warp*/factory` directory on every platform — the property
+/// `config_local_dir` and `tui_config_local_dir` deliberately lack.
+pub fn factory_config_dir() -> Option<PathBuf> {
+    warp_home_config_dir().map(|warp_config_dir| warp_config_dir.join("factory"))
+}
+
+/// Returns the path to the shared default-factory config file
+/// (`<warp home config dir>/factory/config.json`).
+pub fn factory_config_file_path() -> Option<PathBuf> {
+    factory_config_dir().map(|factory_dir| factory_dir.join("config.json"))
+}
+
 /// Returns the macOS config directory name for the current channel and data
 /// profile.
 ///

@@ -462,6 +462,7 @@ fn display_optional_path(path: Option<PathBuf>) -> String {
 /// - `{{tui_settings_file_path}}` - Path to the TUI settings TOML file
 /// - `{{gui_mcp_config_file_path}}` - Path to the GUI global MCP config
 /// - `{{tui_mcp_config_file_path}}` - Path to the TUI global MCP config
+/// - `{{factory_config_file_path}}` - Path to the shared factory default config (GUI/TUI-shared)
 pub(crate) fn build_bundled_skill_context(
     resources_dir: &Path,
     skill_dir: &Path,
@@ -524,6 +525,10 @@ pub(crate) fn build_bundled_skill_context(
                 .to_string(),
         ),
         (
+            "factory_config_file_path".to_owned(),
+            display_optional_path(warp_core::paths::factory_config_file_path()),
+        ),
+        (
             "settings_schema_path".to_owned(),
             resources_dir
                 .join("settings_schema.json")
@@ -560,6 +565,10 @@ pub(crate) fn activation_for_bundled_skill(
         }
         "tui-migrate-setup" => BundledSkillActivation::TuiOnly,
         "warpctrl" => BundledSkillActivation::RequiresFeature(FeatureFlag::WarpControlCli),
+        // Gate the Factory MCP skill on the same flag that attaches the
+        // Factory MCP server, so the skill and the server it documents roll
+        // out together.
+        "factory-mcp" => BundledSkillActivation::RequiresFeature(FeatureFlag::FactoryMcp),
         _ => BundledSkillActivation::Always,
     }
 }

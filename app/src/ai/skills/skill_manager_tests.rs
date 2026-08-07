@@ -680,7 +680,7 @@ fn test_build_bundled_skill_context() {
     let skill_dir = resources_dir.join("bundled/skills/test-skill");
     let context = build_bundled_skill_context(resources_dir, &skill_dir);
 
-    assert_eq!(context.len(), 13);
+    assert_eq!(context.len(), 14);
     assert!(context.contains_key("warp_server_url"));
     assert!(context.contains_key("warp_cli_binary_name"));
     assert!(context.contains_key("warpctrl_binary_name"));
@@ -713,6 +713,13 @@ fn test_build_bundled_skill_context() {
     assert_eq!(
         context.get("tui_mcp_config_file_path").unwrap(),
         &warp_core::paths::tui_mcp_config_file_path()
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        context.get("factory_config_file_path").unwrap(),
+        &warp_core::paths::factory_config_file_path()
+            .unwrap_or_default()
             .display()
             .to_string()
     );
@@ -1163,6 +1170,27 @@ fn warp_control_bundled_skill_activations_track_warp_control_feature() {
             assert!(settings.read(&app, |_, ctx| activation.is_enabled(ctx)));
         }
         drop(warp_control_cli_enabled);
+    });
+}
+
+#[test]
+fn factory_mcp_bundled_skill_activation_tracks_factory_mcp_feature() {
+    assert!(matches!(
+        activation_for_bundled_skill("factory-mcp", Path::new("/resources")),
+        BundledSkillActivation::RequiresFeature(FeatureFlag::FactoryMcp)
+    ));
+
+    App::test((), |app| async move {
+        let settings = app.add_singleton_model(AISettings::new_with_defaults);
+        let activation = activation_for_bundled_skill("factory-mcp", Path::new("/resources"));
+
+        let factory_mcp_disabled = FeatureFlag::FactoryMcp.override_enabled(false);
+        assert!(!settings.read(&app, |_, ctx| activation.is_enabled(ctx)));
+        drop(factory_mcp_disabled);
+
+        let factory_mcp_enabled = FeatureFlag::FactoryMcp.override_enabled(true);
+        assert!(settings.read(&app, |_, ctx| activation.is_enabled(ctx)));
+        drop(factory_mcp_enabled);
     });
 }
 

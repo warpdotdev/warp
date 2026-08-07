@@ -25,6 +25,7 @@ pub mod completions;
 pub mod config_file;
 mod date_time;
 pub mod environment;
+pub mod factory;
 pub mod federate;
 pub mod harness_support;
 pub mod integration;
@@ -288,6 +289,15 @@ impl Args {
                     }
                 }
 
+                if !FeatureFlag::FactoryMcp.is_enabled() {
+                    let args: Vec<String> = env::args().collect();
+                    if args.len() > 1 && args[1] == "factory" {
+                        eprintln!("error: unrecognized subcommand 'factory'\n");
+                        eprintln!("For more information, try '--help'");
+                        std::process::exit(2);
+                    }
+                }
+
                 let command = Self::clap_command();
 
                 command.try_get_matches()
@@ -359,6 +369,11 @@ impl Args {
         // Hide the provider subcommand from help text
         if !FeatureFlag::ProviderCommand.is_enabled() {
             command = command.mut_subcommand("provider", |c| c.hide(true));
+        }
+
+        // Hide the factory subcommand from help text
+        if !FeatureFlag::FactoryMcp.is_enabled() {
+            command = command.mut_subcommand("factory", |c| c.hide(true));
         }
 
         // Hide the integration subcommand from help text
@@ -612,6 +627,10 @@ pub enum CliCommand {
     /// Manage cloud agent runners.
     #[command(subcommand)]
     Runner(crate::runner::RunnerCommand),
+
+    /// Manage the default factory used by Factory MCP workflows.
+    #[command(subcommand)]
+    Factory(crate::factory::FactoryCommand),
 }
 
 impl CliCommand {
@@ -637,6 +656,7 @@ impl CliCommand {
             CliCommand::MemoryStore(command) => command.as_str_for_tracing(),
             CliCommand::Memory(command) => command.as_str_for_tracing(),
             CliCommand::Runner(command) => command.as_str_for_tracing(),
+            CliCommand::Factory(command) => command.as_str_for_tracing(),
         }
     }
 }

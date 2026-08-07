@@ -20,6 +20,7 @@ use warp_cli::agent::{
 use warp_cli::api_key::ApiKeyCommand;
 use warp_cli::artifact::ArtifactCommand;
 use warp_cli::environment::{EnvironmentCommand, ImageCommand};
+use warp_cli::factory::{FactoryCommand, FactoryDefaultCommand};
 use warp_cli::federate::FederateCommand;
 use warp_cli::harness_support::{HarnessSupportCommand, ReportArtifactCommand, TaskStatus};
 use warp_cli::integration::IntegrationCommand;
@@ -87,6 +88,7 @@ mod common;
 mod config_file;
 pub(crate) mod driver;
 mod environment;
+mod factory;
 mod federate;
 mod harness_support;
 #[cfg(not(target_family = "wasm"))]
@@ -220,6 +222,12 @@ fn dispatch_command(
                 return Err(anyhow::anyhow!("invalid value 'runner'"));
             }
             runner::run(ctx, global_options, runner_cmd)
+        }
+        CliCommand::Factory(factory_cmd) => {
+            if !FeatureFlag::FactoryMcp.is_enabled() {
+                return Err(anyhow::anyhow!("invalid value 'factory'"));
+            }
+            factory::run(factory_cmd)
         }
     }
 }
@@ -1594,6 +1602,8 @@ fn command_requires_auth(command: &CliCommand) -> bool {
         CliCommand::Artifact(_) => true,
         CliCommand::ApiKey(_) => true,
         CliCommand::Runner(_) => true,
+        // Reads/writes a local config file only; no server call, so no login.
+        CliCommand::Factory(_) => false,
     }
 }
 
@@ -1906,6 +1916,13 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
             RunnerCommand::Create(_) => CliTelemetryEvent::RunnerCreate,
             RunnerCommand::Update(_) => CliTelemetryEvent::RunnerUpdate,
             RunnerCommand::Delete(_) => CliTelemetryEvent::RunnerDelete,
+        },
+        CliCommand::Factory(factory_cmd) => match factory_cmd {
+            FactoryCommand::Default(default_cmd) => match default_cmd {
+                FactoryDefaultCommand::Get => CliTelemetryEvent::FactoryDefaultGet,
+                FactoryDefaultCommand::Set(_) => CliTelemetryEvent::FactoryDefaultSet,
+                FactoryDefaultCommand::Clear => CliTelemetryEvent::FactoryDefaultClear,
+            },
         },
     }
 }

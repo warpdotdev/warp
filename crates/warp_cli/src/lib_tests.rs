@@ -6,12 +6,44 @@ use super::*;
 use crate::agent::{AgentCommand, Harness, OutputFormat};
 use crate::artifact::ArtifactCommand;
 use crate::environment::{EnvironmentCommand, ImageCommand};
+use crate::factory::{FactoryCommand, FactoryDefaultCommand};
 use crate::harness_support::{HarnessSupportCommand, TaskStatus};
 use crate::integration::IntegrationCommand;
 use crate::memory_store::{MemoryCommand, MemoryStoreCommand};
 use crate::schedule::ScheduleSubcommand;
 use crate::secret::{CodexMethod, CreateProvider, SecretCommand};
 use crate::task::{MessageCommand, TaskCommand};
+
+fn parse_cli_command(args: &[&str]) -> CliCommand {
+    let full: Vec<&str> = std::iter::once("warp")
+        .chain(args.iter().copied())
+        .collect();
+    let parsed = Args::try_parse_from(full).expect("args should parse");
+    let Some(Command::CommandLine(boxed)) = parsed.command else {
+        panic!("Expected a CLI command");
+    };
+    *boxed
+}
+
+#[test]
+fn factory_default_subcommands_parse() {
+    match parse_cli_command(&["factory", "default", "set", "fac_abc", "--name", "Acme"]) {
+        CliCommand::Factory(FactoryCommand::Default(FactoryDefaultCommand::Set(args))) => {
+            assert_eq!(args.uid, "fac_abc");
+            assert_eq!(args.name.as_deref(), Some("Acme"));
+        }
+        other => panic!("expected `factory default set`, got {other:?}"),
+    }
+
+    assert!(matches!(
+        parse_cli_command(&["factory", "default", "get"]),
+        CliCommand::Factory(FactoryCommand::Default(FactoryDefaultCommand::Get))
+    ));
+    assert!(matches!(
+        parse_cli_command(&["factory", "default", "clear"]),
+        CliCommand::Factory(FactoryCommand::Default(FactoryDefaultCommand::Clear))
+    ));
+}
 
 #[test]
 fn identifies_worker_subcommands() {
