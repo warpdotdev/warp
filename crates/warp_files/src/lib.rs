@@ -414,7 +414,6 @@ impl FileModel {
         };
 
         let file_path_buf = file_path.to_owned();
-        let file_path_clone = file_path_buf.clone();
         let use_individual_watcher = watcher_type == WatcherType::Individual;
         let future = ctx.spawn(
             async move {
@@ -423,42 +422,42 @@ impl FileModel {
                     .map_err(FileLoadError::from);
                 (file_id, contents)
             },
-            move |me, (file_id, load_result), ctx| match load_result {
-                Ok(content) => {
-                    let version = ContentVersion::new();
-                    me.set_version(file_id, version);
+            move |me, (file_id, load_result), ctx| {
+                // A read can land after the caller unsubscribed (closing or reopening the file
+                // cancels, but the completion may already be queued). Registering a watcher or
+                // emitting for a file that is no longer tracked would resurrect state that its
+                // owner already tore down.
+                if me.file_state.get(file_id).is_none() {
+                    return;
+                }
+                match load_result {
+                    Ok(content) => {
+                        let version = ContentVersion::new();
+                        me.set_version(file_id, version);
 
-                    // Only register individual watcher if not using repo subscription.
-                    // Watch the parent directory (NonRecursive) instead of the file
-                    // itself so the watch survives editors that use a
-                    // delete+create/rename pattern (vim, sed -i, etc.). Watching
-                    // the file directly would lose the inotify watch when the
-                    // original inode is deleted.
-                    if use_individual_watcher {
-                        let watch_path = file_path_clone
-                            .parent()
-                            .map(|p| p.to_path_buf())
-                            .unwrap_or_else(|| file_path_clone.clone());
-                        me.watcher.update(ctx, |watcher, _ctx| {
-                            std::mem::drop(watcher.register_path(
-                                &watch_path,
-                                WatchFilter::accept_all(),
-                                RecursiveMode::NonRecursive,
-                            ));
+                        // Only register individual watcher if not using repo subscription.
+                        if use_individual_watcher && let Some(watch_path) = me.watch_path(file_id) {
+                            me.watcher.update(ctx, |watcher, _ctx| {
+                                std::mem::drop(watcher.register_path(
+                                    &watch_path,
+                                    WatchFilter::accept_all(),
+                                    RecursiveMode::NonRecursive,
+                                ));
+                            });
+                        }
+
+                        ctx.emit(FileModelEvent::FileLoaded {
+                            content,
+                            id: file_id,
+                            version,
                         });
                     }
-
-                    ctx.emit(FileModelEvent::FileLoaded {
-                        content,
-                        id: file_id,
-                        version,
-                    });
-                }
-                Err(err) => {
-                    ctx.emit(FileModelEvent::FailedToLoad {
-                        id: file_id,
-                        error: Rc::new(err),
-                    });
+                    Err(err) => {
+                        ctx.emit(FileModelEvent::FailedToLoad {
+                            id: file_id,
+                            error: Rc::new(err),
+                        });
+                    }
                 }
             },
         );
@@ -468,6 +467,27 @@ impl FileModel {
 
         self.abort_handles.insert(file_id, future);
         file_id
+    }
+
+    /// The directory an individually-watched file is watched through.
+    ///
+    /// The parent directory is watched (rather than the file) so the watch survives editors that
+    /// replace a file with delete+create or rename (vim, `sed -i`, ...), which would otherwise
+    /// drop the watch along with the original inode.
+    ///
+    /// Derived from the stored path so registration and unregistration always agree. `None` when
+    /// the file's path has no usable parent — a bare relative name such as `README.md` yields an
+    /// empty parent, which platform watchers resolve to Warp's own process directory.
+    fn watch_path(&self, file_id: FileId) -> Option<PathBuf> {
+        Self::watch_path_for(self.file_state.get_local(file_id)?.path.as_deref()?)
+    }
+
+    /// See [`Self::watch_path`].
+    fn watch_path_for(path: &Path) -> Option<PathBuf> {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())?;
+        Some(parent.to_path_buf())
     }
 
     pub async fn read_content_for_file(file_path: &Path) -> Result<String, FileLoadError> {
@@ -647,26 +667,23 @@ impl FileModel {
             {
                 match watcher_type {
                     WatcherType::Individual => {
-                        // Unwatch the parent directory (matching the register
-                        // in open() which watches the parent, not the file).
-                        // Only unregister if no other individually-watched
-                        // files share the same parent directory.
-                        let watch_path = path
-                            .parent()
-                            .map(|p| p.to_path_buf())
-                            .unwrap_or_else(|| path.clone());
-                        let other_files_share_parent = self.file_state.local_values().any(|f| {
-                            f.watcher_type == WatcherType::Individual
-                                && f.path
-                                    .as_deref()
-                                    .and_then(|p| p.parent())
-                                    .map(|p| p == watch_path)
-                                    .unwrap_or(false)
-                        });
-                        if !other_files_share_parent {
-                            self.watcher.update(ctx, |watcher, _ctx| {
-                                std::mem::drop(watcher.unregister_path(&watch_path));
-                            });
+                        // Unwatch the parent directory (matching the register in open() which
+                        // watches the parent, not the file). Only unregister if no other
+                        // individually-watched files share the same parent directory.
+                        if let Some(watch_path) = Self::watch_path_for(path) {
+                            let other_files_share_parent =
+                                self.file_state.local_values().any(|f| {
+                                    f.watcher_type == WatcherType::Individual
+                                        && f.path
+                                            .as_deref()
+                                            .and_then(Self::watch_path_for)
+                                            .is_some_and(|p| p == watch_path)
+                                });
+                            if !other_files_share_parent {
+                                self.watcher.update(ctx, |watcher, _ctx| {
+                                    std::mem::drop(watcher.unregister_path(&watch_path));
+                                });
+                            }
                         }
                     }
                     WatcherType::Repository => {

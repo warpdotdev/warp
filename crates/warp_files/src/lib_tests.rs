@@ -252,4 +252,56 @@ fn test_save_missing_directory() {
     });
 }
 
+/// APP-5243: a bare relative file name has an empty parent, which platform watchers resolve to
+/// Warp's own process directory. Watching (or worse, unwatching) that directory is never what the
+/// caller asked for, so such files get no individual watcher at all.
+#[test]
+fn test_watch_path_ignores_empty_parents() {
+    assert_eq!(FileModel::watch_path_for(Path::new("README.md")), None);
+    assert_eq!(FileModel::watch_path_for(Path::new("")), None);
+    assert_eq!(
+        FileModel::watch_path_for(Path::new("docs/README.md")),
+        Some(PathBuf::from("docs"))
+    );
+
+    let directory = std::env::temp_dir().join("app-5243");
+    assert_eq!(
+        FileModel::watch_path_for(&directory.join("README.md")),
+        Some(directory)
+    );
+}
+
+/// Registration and unregistration must derive the watch directory from the same stored path, so
+/// tearing a file down cannot leave a watch behind or remove one Warp never registered.
+#[test]
+fn test_watch_path_matches_stored_path() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        let files = app.add_singleton_model(FileModel::new);
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("watched.md");
+        std::fs::write(&path, "# watched").expect("write file");
+
+        let file_id = files.update(app, |model, ctx| model.open(&path, true, ctx));
+        let (watch_path, file_path) = files.read(app, |model, _| {
+            (model.watch_path(file_id), model.file_path(file_id))
+        });
+        assert_eq!(
+            watch_path,
+            file_path.and_then(|path| FileModel::watch_path_for(&path))
+        );
+
+        files.update(app, |model, ctx| {
+            model.cancel(file_id);
+            model.unsubscribe(file_id, ctx);
+        });
+
+        // Everything the file id owned is gone, so a late read completion has nothing to act on.
+        assert_eq!(files.read(app, |model, _| model.file_path(file_id)), None);
+        assert_eq!(files.read(app, |model, _| model.watch_path(file_id)), None);
+    });
+}
+
 static TEST_FILE_CONTENT: &[u8] = include_bytes!("../test_data/test_file.rs");
