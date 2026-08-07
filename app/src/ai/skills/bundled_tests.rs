@@ -4,6 +4,15 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::*;
 
+/// The repository's `resources/` root, which is what ships as the app
+/// bundle's resources directory.
+fn repo_resources_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the app crate always has a repository root")
+        .join("resources")
+}
+
 fn bundled_skill(content: &str) -> BundledSkill {
     let mut bundled_skill = BundledSkill::default();
     bundled_skill.insert_for_testing(
@@ -25,6 +34,45 @@ fn bundled_skill(content: &str) -> BundledSkill {
 #[test]
 fn unavailable_bundled_context_path_renders_as_empty_string() {
     assert_eq!(display_optional_path(None), "");
+}
+
+#[test]
+fn bundled_warp_intro_tour_skill_covers_every_tour_surface() {
+    let resources_dir = repo_resources_dir();
+    let skills_dir = resources_dir.join("bundled").join("skills");
+    let skills = futures::executor::block_on(read_bundled_skills(&skills_dir, &resources_dir));
+
+    let skill = skills
+        .get("warp-intro-tour")
+        .expect("the intro tour skill ships in resources/bundled/skills");
+    assert_eq!(skill.name, "warp-intro-tour");
+    assert!(!skill.description.is_empty());
+
+    // Every handlebars variable the tour uses must be one the bundled context
+    // supplies, otherwise the agent is handed a literal `{{...}}` to run.
+    assert!(
+        !skill.content.contains("{{"),
+        "the intro tour skill contains an unrendered template variable"
+    );
+    assert!(
+        skill
+            .content
+            .contains(ChannelState::channel().warpctrl_command_name()),
+        "the intro tour skill must invoke the channel's warpctrl command"
+    );
+
+    // The tour's required stops, as named in the ticket's acceptance criteria.
+    for command in [
+        "surface settings open",
+        "pane split --direction right",
+        "surface keybindings open",
+        "surface warp-drive open",
+    ] {
+        assert!(
+            skill.content.contains(command),
+            "the intro tour skill must demonstrate `{command}`"
+        );
+    }
 }
 
 fn remote_content<'a>(bundled_skills: &'a BundledSkills, host_id: &HostId) -> Option<&'a str> {

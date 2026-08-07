@@ -559,7 +559,11 @@ pub(crate) fn activation_for_bundled_skill(
             BundledSkillActivation::RequiresFile(resources_dir.join("settings_schema.json"))
         }
         "tui-migrate-setup" => BundledSkillActivation::TuiOnly,
-        "warpctrl" => BundledSkillActivation::RequiresFeature(FeatureFlag::WarpControlCli),
+        // Both skills drive the running app through the `warpctrl` CLI, so
+        // they are only useful on builds where Warp Control is available.
+        "warpctrl" | "warp-intro-tour" => {
+            BundledSkillActivation::RequiresFeature(FeatureFlag::WarpControlCli)
+        }
         _ => BundledSkillActivation::Always,
     }
 }

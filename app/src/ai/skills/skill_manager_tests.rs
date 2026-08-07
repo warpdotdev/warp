@@ -1151,7 +1151,7 @@ fn warp_control_bundled_skill_activations_track_warp_control_feature() {
     App::test((), |app| async move {
         let settings = app.add_singleton_model(AISettings::new_with_defaults);
         let warp_control_cli = FeatureFlag::WarpControlCli.override_enabled(false);
-        let activations = ["warpctrl"]
+        let activations = ["warpctrl", "warp-intro-tour"]
             .map(|skill_id| activation_for_bundled_skill(skill_id, Path::new("/resources")));
         for activation in &activations {
             assert!(!settings.read(&app, |_, ctx| activation.is_enabled(ctx)));
