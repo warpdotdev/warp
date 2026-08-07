@@ -409,7 +409,7 @@ impl EnvironmentSelector {
                 .map(|environment| environment.name.clone())
                 .unwrap_or_else(|| "New environment".to_string())
         } else if is_configuring {
-            "Choose an environment".to_string()
+            "New environment".to_string()
         } else {
             "Empty environment".to_string()
         };
