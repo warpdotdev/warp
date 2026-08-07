@@ -345,7 +345,7 @@ impl EnvironmentSelector {
         ctx.notify();
     }
 
-    fn auto_select_default_environment_if_new_session(&self, ctx: &AppContext) -> bool {
+    fn auto_select_default_environment_if_new_session(&mut self, ctx: &mut ViewContext<Self>) {
         if self.should_auto_select_default_environment(ctx) {
             self.ensure_default_selection(ctx);
         }
