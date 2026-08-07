@@ -332,6 +332,10 @@ pub struct RenameConversationResponse {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RunFollowupRequest {
     pub message: String,
+    /// IDs of attachments uploaded during this follow-up. Omitted from the
+    /// wire payload when empty so the server contract stays backward-compatible.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attachment_ids: Vec<String>,
 }
 
 // --- Orchestrations V2 messaging types ---

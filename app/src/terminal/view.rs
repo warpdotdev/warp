@@ -21495,6 +21495,7 @@ impl TerminalView {
     fn try_submit_pending_cloud_followup(
         &mut self,
         prompt: String,
+        attachment_ids: Vec<String>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         if !FeatureFlag::HandoffCloudCloud.is_enabled() {
@@ -21536,10 +21537,10 @@ impl TerminalView {
             self.restore_followup_prompt_after_failed_submission(&prompt, ctx);
             self.show_error_toast("Couldn't continue this cloud task.".to_string(), ctx);
             return true;
-        }
+        };
 
         ambient_agent_view_model.update(ctx, |model, ctx| {
-            model.submit_cloud_followup(prompt, ctx);
+            model.submit_cloud_followup(prompt, attachment_ids, ctx);
         });
 
         self.input.update(ctx, |input, ctx| {
@@ -21610,9 +21611,16 @@ impl TerminalView {
                     attachments: attachments.clone(),
                 });
             }
-            InputEvent::SubmitCloudFollowup { prompt } => {
+            InputEvent::SubmitCloudFollowup {
+                prompt,
+                attachment_ids,
+            } => {
                 if FeatureFlag::HandoffCloudCloud.is_enabled()
-                    && self.try_submit_pending_cloud_followup(prompt.clone(), ctx)
+                    && self.try_submit_pending_cloud_followup(
+                        prompt.clone(),
+                        attachment_ids.clone(),
+                        ctx,
+                    )
                 {
                     return;
                 }

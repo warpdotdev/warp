@@ -9581,6 +9581,195 @@ fn should_upload_cloud_followup_attachments_matches_cloud_mode_image_context_fla
     );
 }
 
+/// Exercises the full async success path of `upload_files_then_submit_cloud_followup`:
+/// a `MockAIClient` stubs `prepare_attachments_for_upload` with an upload slot
+/// pointing at a local mockito server that returns 200, and the foreground callback
+/// must emit `Event::SubmitCloudFollowup` carrying the server-issued attachment ID.
+/// This catches regressions that drop, replace, or reorder IDs between upload
+/// completion and event emission.
+#[test]
+fn upload_files_then_submit_cloud_followup_emits_event_with_attachment_ids_on_success() {
+    use base64::Engine as _;
+
+    use crate::server::server_api::ai::{
+        AttachmentUploadInfo, MockAIClient, PrepareAttachmentUploadsResponse,
+    };
+
+    let task_id: crate::ai::ambient_agents::AmbientAgentTaskId =
+        "11111111-1111-1111-1111-111111111112".parse().unwrap();
+    let expected_attachment_id = "server-issued-followup-attachment-id";
+    let upload_path = "/upload/cloud-followup-success";
+
+    // Stand up a mock HTTP server to absorb the presigned PUT and return 200.
+    let mut server = mockito::Server::new();
+    let upload_url = format!("{}{}", server.url(), upload_path);
+    let upload_mock = server
+        .mock("PUT", upload_path)
+        .with_status(200)
+        .expect(1)
+        .create();
+
+    // Stub prepare_attachments_for_upload to return the mock upload URL.
+    let mut mock_ai = MockAIClient::new();
+    mock_ai
+        .expect_prepare_attachments_for_upload()
+        .times(1)
+        .return_once(move |_, _| {
+            Ok(PrepareAttachmentUploadsResponse {
+                attachments: vec![AttachmentUploadInfo {
+                    attachment_id: expected_attachment_id.to_string(),
+                    upload_url,
+                }],
+            })
+        });
+
+    let ai_client: Arc<dyn AIClient> = Arc::new(mock_ai);
+    let http_client = Arc::new(http_client::Client::new_for_test());
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        terminal.update(&mut app, |view, _| {
+            view.model.lock().block_list_mut().set_bootstrapped();
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        // Capture every SubmitCloudFollowup event emitted by the input view.
+        let events: Rc<RefCell<Vec<(String, Vec<String>)>>> = Rc::new(RefCell::new(vec![]));
+        let events_cb = events.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &super::Event, _| {
+                if let super::Event::SubmitCloudFollowup {
+                    prompt,
+                    attachment_ids,
+                } = event
+                {
+                    events_cb
+                        .borrow_mut()
+                        .push((prompt.clone(), attachment_ids.clone()));
+                }
+            });
+        });
+
+        let prompt = "cloud follow-up with a file".to_string();
+        let attachment = PendingAttachment::Image(ImageContext {
+            data: base64::engine::general_purpose::STANDARD.encode(b"fake image bytes"),
+            mime_type: "image/png".to_string(),
+            file_name: "followup.png".to_string(),
+            is_figma: false,
+        });
+
+        // Call the injectable variant to bypass ServerApiProvider.
+        let await_future = input.update(&mut app, |input, ctx| {
+            let handle = input.upload_files_then_submit_cloud_followup_with_clients(
+                task_id,
+                prompt.clone(),
+                vec![attachment],
+                ai_client,
+                http_client,
+                ctx,
+            );
+            ctx.await_spawned_future(handle.future_id())
+        });
+        await_future.await;
+
+        let captured = events.borrow();
+        assert_eq!(
+            captured.len(),
+            1,
+            "exactly one SubmitCloudFollowup event must be emitted on success"
+        );
+        let (emitted_prompt, emitted_ids) = &captured[0];
+        assert_eq!(
+            emitted_prompt, &prompt,
+            "emitted prompt must match the original prompt"
+        );
+        assert_eq!(
+            emitted_ids,
+            &["server-issued-followup-attachment-id".to_string()],
+            "attachment_ids in the event must preserve the server-issued upload IDs"
+        );
+    });
+
+    upload_mock.assert();
+}
+
+/// Unit test for `upload_pending_attachments_to_task` on the success path.
+/// A mockito server handles the presigned PUT and returns 200; a `MockAIClient`
+/// stubs `prepare_attachments_for_upload` with an upload slot pointing at that
+/// mock server. The function must return a single `Uploaded` outcome whose
+/// `attachment_id` matches the server-issued value, proving that IDs are
+/// collected and returned correctly before the callback emits the event.
+#[test]
+fn upload_pending_attachments_to_task_returns_server_issued_ids_on_success() {
+    use base64::Engine as _;
+
+    use crate::server::server_api::ai::{
+        AttachmentUploadInfo, MockAIClient, PrepareAttachmentUploadsResponse,
+    };
+
+    let mut server = mockito::Server::new();
+    let expected_id = "server-issued-attachment-id-abc123";
+    let upload_path = "/upload-target";
+    let upload_url = format!("{}{}", server.url(), upload_path);
+
+    let put_mock = server
+        .mock("PUT", upload_path)
+        .with_status(200)
+        .expect(1)
+        .create();
+
+    let expected_id_str = expected_id.to_string();
+    let expected_url = upload_url.clone();
+    let mut mock_ai = MockAIClient::new();
+    mock_ai
+        .expect_prepare_attachments_for_upload()
+        .times(1)
+        .returning(move |_, _| {
+            Ok(PrepareAttachmentUploadsResponse {
+                attachments: vec![AttachmentUploadInfo {
+                    attachment_id: expected_id_str.clone(),
+                    upload_url: expected_url.clone(),
+                }],
+            })
+        });
+
+    let attachment = PendingAttachment::Image(ImageContext {
+        data: base64::engine::general_purpose::STANDARD.encode(b"fake-image-bytes"),
+        mime_type: "image/png".to_string(),
+        file_name: "test.png".to_string(),
+        is_figma: false,
+    });
+    let task_id: crate::ai::ambient_agents::AmbientAgentTaskId =
+        "11111111-1111-1111-1111-111111111111".parse().unwrap();
+    let http_client = Arc::new(http_client::Client::new_for_test());
+
+    let outcomes = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(upload_pending_attachments_to_task(
+            std::sync::Arc::new(mock_ai),
+            http_client,
+            task_id,
+            vec![attachment],
+        ))
+        .expect("upload_pending_attachments_to_task must not return an outer error on success");
+
+    assert_eq!(outcomes.len(), 1, "one outcome expected for one attachment");
+    assert!(
+        matches!(
+            &outcomes[0],
+            TaskAttachmentUploadOutcome::Uploaded { attachment_id, .. }
+            if attachment_id == expected_id
+        ),
+        "successful upload must yield an Uploaded outcome with the server-issued attachment_id"
+    );
+    put_mock.assert();
+}
+
 /// Exercises the async failure path of `upload_files_then_submit_cloud_followup`:
 /// when the server API rejects the attachment upload (the test HTTP client never
 /// connects to a real server), the callback must restore the prompt text so the

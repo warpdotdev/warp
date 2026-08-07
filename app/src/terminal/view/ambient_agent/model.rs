@@ -911,7 +911,12 @@ impl AmbientAgentViewModel {
         ctx.emit(AmbientAgentViewModelEvent::ExecutionSessionReady { session_id });
     }
 
-    pub fn submit_cloud_followup(&mut self, prompt: String, ctx: &mut ModelContext<Self>) {
+    pub fn submit_cloud_followup(
+        &mut self,
+        prompt: String,
+        attachment_ids: Vec<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if !FeatureFlag::HandoffCloudCloud.is_enabled() {
             log::warn!("Attempted to submit cloud follow-up while HandoffCloudCloud is disabled");
             return;
@@ -928,6 +933,7 @@ impl AmbientAgentViewModel {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let stream = submit_run_followup(
             prompt.clone(),
+            attachment_ids,
             task_id,
             previous_session_id,
             ai_client,

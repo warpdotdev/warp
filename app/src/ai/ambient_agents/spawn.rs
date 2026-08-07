@@ -162,13 +162,14 @@ pub fn monitor_spawned_task(
 
 pub fn submit_run_followup(
     message: String,
+    attachment_ids: Vec<String>,
     run_id: AmbientAgentTaskId,
     previous_session_id: Option<SessionId>,
     ai_client: Arc<dyn AIClient>,
     timeout: Option<Duration>,
 ) -> impl Stream<Item = Result<AmbientAgentEvent, anyhow::Error>> {
     async_stream::stream! {
-        let request = RunFollowupRequest { message };
+        let request = RunFollowupRequest { message, attachment_ids };
         if let Err(err) = ai_client.submit_run_followup(&run_id, request).await {
             yield Err(err);
             return;

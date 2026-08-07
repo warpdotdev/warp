@@ -2573,7 +2573,7 @@ fn pending_cloud_followup_without_ambient_model_restores_prompt() {
         terminal.update(&mut app, |view, ctx| {
             view.pending_cloud_followup_task_id = Some(task_id);
 
-            assert!(view.try_submit_pending_cloud_followup("follow up".to_string(), ctx));
+            assert!(view.try_submit_pending_cloud_followup("follow up".to_string(), vec![], ctx,));
         });
 
         terminal.read(&app, |view, ctx| {
@@ -2968,7 +2968,7 @@ fn cloud_mode_followup_dispatched_inserts_queued_user_query() {
                 .expect("cloud mode terminal should have ambient model")
                 .update(ctx, |model, ctx| {
                     model.enter_viewing_existing_session(task_id, ctx);
-                    model.submit_cloud_followup("follow up".to_string(), ctx);
+                    model.submit_cloud_followup("follow up".to_string(), vec![], ctx);
                 });
             view.handle_ambient_agent_event(&AmbientAgentViewModelEvent::FollowupDispatched, ctx);
 

@@ -1116,9 +1116,29 @@ fn build_run_followup_url_routes_to_run_followups() {
 }
 
 #[test]
-fn serialize_run_followup_request() {
+fn serialize_run_followup_request_omits_empty_attachment_ids() {
     let request = RunFollowupRequest {
         message: "continue from here".to_string(),
+        attachment_ids: vec![],
+    };
+
+    let json = serde_json::to_value(request).unwrap();
+
+    // Empty attachment_ids must be omitted from the wire payload for backward compatibility.
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "message": "continue from here",
+        })
+    );
+    assert!(json.get("attachment_ids").is_none());
+}
+
+#[test]
+fn serialize_run_followup_request_includes_attachment_ids_when_non_empty() {
+    let request = RunFollowupRequest {
+        message: "here are the files".to_string(),
+        attachment_ids: vec!["attach-1".to_string(), "attach-2".to_string()],
     };
 
     let json = serde_json::to_value(request).unwrap();
@@ -1126,7 +1146,8 @@ fn serialize_run_followup_request() {
     assert_eq!(
         json,
         serde_json::json!({
-            "message": "continue from here",
+            "message": "here are the files",
+            "attachment_ids": ["attach-1", "attach-2"],
         })
     );
 }
