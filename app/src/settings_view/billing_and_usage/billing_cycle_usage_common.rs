@@ -18,9 +18,10 @@ use crate::settings_view::billing_and_usage_page_v2::{
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
 use crate::ui_components::blended_colors;
+use crate::workspaces::team::Team;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    BillingCycleUsageEntry,
+    BillingCycleUsageEntry, WorkspaceMember,
 };
 
 // for a bunch of this (min fill ratio, cost type order, ... )
@@ -193,6 +194,45 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
             e.usage_bucket != AiCreditsUsageBucket::Voice
                 && e.usage_bucket != AiCreditsUsageBucket::SuggestedCodeDiffs
         })
+        .cloned()
+        .collect()
+}
+
+/// Restricts workspace-wide usage entries to the team currently being viewed.
+///
+/// `Workspace.billingCycleUsageHistory` spans every team in the workspace, so
+/// a workspace admin looking at team A would otherwise see team B's usage.
+/// Mirrors `filterEntriesByAttributedTeam` in warp-server's
+/// `client/src/components/admin/team/billing/utils.ts`: only entries the
+/// server attributed to this exact team survive, so unattributed rows are
+/// dropped rather than shown under whichever team happens to be selected.
+pub fn filter_entries_by_attributed_team(
+    entries: &[BillingCycleUsageEntry],
+    team_uid: &str,
+) -> Vec<BillingCycleUsageEntry> {
+    entries
+        .iter()
+        .filter(|e| e.attributed_team_uid.as_deref() == Some(team_uid))
+        .cloned()
+        .collect()
+}
+
+/// The workspace members that belong to `team`, used as the roster for the
+/// per-member usage rows so members of other teams never get a row (not even
+/// a zero-usage one).
+///
+/// Mirrors `individualUsageMembers` in warp-server's `BillingSettingsV2.tsx`,
+/// including its fallback: when the selected team is unknown we can't scope
+/// the roster, so every workspace member is kept.
+pub fn members_for_team(members: &[WorkspaceMember], team: Option<&Team>) -> Vec<WorkspaceMember> {
+    let Some(team) = team else {
+        return members.to_vec();
+    };
+    let team_member_uids: std::collections::HashSet<_> =
+        team.members.iter().map(|member| &member.uid).collect();
+    members
+        .iter()
+        .filter(|member| team_member_uids.contains(&member.uid))
         .cloned()
         .collect()
 }

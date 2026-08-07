@@ -1,7 +1,9 @@
 use super::{MemberUsageRow, SourceFilter};
+use crate::auth::UserUid;
+use crate::workspaces::team::MembershipRole;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    AiCreditsUsageSource, BillingCycleUsageEntry,
+    AiCreditsUsageSource, BillingCycleUsageEntry, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 const VIEWER_UID: &str = "viewer-uid";
@@ -23,6 +25,7 @@ fn entry(
         usage_source,
         credits_used,
         cost_cents,
+        attributed_team_uid: None,
     }
 }
 
@@ -109,6 +112,53 @@ fn build_own_usage_row_local_filter_drops_cloud_entries() {
         SourceFilter::Local,
     );
     assert_eq!(row.total_credits, 10);
+}
+
+fn member(uid: &str) -> WorkspaceMember {
+    WorkspaceMember {
+        uid: UserUid::new(uid),
+        email: format!("{uid}@warp.dev"),
+        role: MembershipRole::User,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: false,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    }
+}
+
+#[test]
+fn per_member_rows_cover_exactly_the_supplied_roster() {
+    // Callers pass the selected team's roster, so a workspace member from
+    // another team gets no row at all — not even a zero-usage one.
+    let entries = vec![entry(
+        AiCreditsUsageAndCostSubjectType::User,
+        Some(VIEWER_UID),
+        AiCreditsUsageSource::Local,
+        10,
+        5,
+    )];
+
+    let rows = MemberUsageRow::for_each_member(
+        &entries,
+        &[member(VIEWER_UID), member(OTHER_UID)],
+        SourceFilter::All,
+    );
+
+    let named: Vec<_> = rows.iter().map(|r| r.display_name.as_str()).collect();
+    assert_eq!(named, vec!["viewer-uid@warp.dev", "other-uid@warp.dev"]);
+    assert_eq!(rows[0].total_credits, 10);
+    assert_eq!(rows[1].total_credits, 0, "zero-usage roster member");
+
+    let rows = MemberUsageRow::for_each_member(&entries, &[member(VIEWER_UID)], SourceFilter::All);
+    assert_eq!(
+        rows.iter()
+            .map(|r| r.display_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["viewer-uid@warp.dev"],
+        "members outside the roster must not get a row"
+    );
 }
 
 #[test]

@@ -389,6 +389,10 @@ pub struct UsageEntry {
     pub usage_source: AiCreditsUsageSource,
     pub credits_used: i32,
     pub cost_cents: i32,
+    /// Team the usage is attributed to. `None` for pre-attribution rows and
+    /// for the synthetic aggregate rows the server emits below
+    /// `FullBreakdown` visibility.
+    pub attributed_team_uid: Option<String>,
 }
 
 #[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]
