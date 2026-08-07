@@ -362,14 +362,12 @@ fn test_file_notebook_mermaid_blocks_default_to_rendered() {
     });
 }
 
-/// APP-5243: retrying and then closing a failed open must not panic, and each attempt must release
-/// the file state it opened rather than stacking it on the shared [`FileModel`].
+/// APP-5243: retrying and then discarding a failed open must not panic, and each attempt must
+/// release the file state it opened rather than stacking it on the shared [`FileModel`].
 #[cfg(feature = "local_fs")]
 #[test]
-fn test_reload_and_close_after_failed_open() {
+fn test_reload_and_discard_after_failed_open() {
     use warpui::TypedActionView;
-
-    use crate::pane_group::BackingView;
 
     /// Opens the notebook's current file and waits for the read to settle.
     async fn await_open(
@@ -428,15 +426,16 @@ fn test_reload_and_close_after_failed_open() {
             );
         });
 
-        // Closing the failed pane.
+        // Discarding the pane for good. Releasing is idempotent, so every teardown path can run it.
         handle.update(&mut app, |file_notebook, ctx| {
-            file_notebook.close(ctx);
+            file_notebook.release_file_model(ctx);
+            file_notebook.release_file_model(ctx);
             assert!(file_notebook.file_id.is_none());
         });
         app.read(|ctx| {
             assert!(
                 FileModel::as_ref(ctx).file_path(second_id).is_none(),
-                "closing should release the open file id"
+                "discarding the pane should release the open file id"
             );
         });
     });

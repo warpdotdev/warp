@@ -507,6 +507,12 @@ impl FileNotebookView {
         }
     }
 
+    /// The [`FileId`] this view currently holds open, if any.
+    #[cfg(all(test, feature = "local_fs"))]
+    pub(crate) fn file_id_for_test(&self) -> Option<FileId> {
+        self.file_id
+    }
+
     /// Releases everything this view holds in the shared [`FileModel`]: the in-flight read, the
     /// file's watcher registration, and this view's subscription to the model's events.
     ///
@@ -1019,7 +1025,7 @@ impl TypedActionView for FileNotebookView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             FileNotebookAction::Focus => ctx.focus_self(),
-            // Route through `BackingView::close` so this shares the header close button's cleanup.
+            // Route through `BackingView::close` so this takes the header close button's path.
             FileNotebookAction::Close => BackingView::close(self, ctx),
             FileNotebookAction::FocusTerminalInput => {
                 ctx.emit(FileNotebookEvent::Pane(PaneEvent::FocusActiveSession))
@@ -1156,9 +1162,11 @@ impl BackingView for FileNotebookView {
         actions
     }
 
+    /// Requests that the pane close. The file itself is released by
+    /// `FilePane::detach(DetachType::Closed)`, once the pane is permanently discarded: with
+    /// undo-close the pane is only hidden, and the same view is reattached without reopening its
+    /// file, so releasing here would leave a restored pane showing content that never updates.
     fn close(&mut self, ctx: &mut ViewContext<Self>) {
-        #[cfg(feature = "local_fs")]
-        self.release_file_model(ctx);
         ctx.emit(FileNotebookEvent::Pane(PaneEvent::Close));
     }
 
