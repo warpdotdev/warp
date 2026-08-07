@@ -39,6 +39,12 @@ pub(crate) fn bundled_skill_snapshot_protos(catalog: &BundledSkill) -> Vec<Remot
                     }
                     None
                 }
+                BundledSkillActivation::RequiresInteractiveApp => {
+                    // Interactive-only skills (e.g. pr-comments) require a user-facing
+                    // desktop app, so they never belong on a headless remote/daemon host
+                    // and are excluded from the remote catalog snapshot.
+                    return None;
+                }
             };
             Some(RemoteSkillProto {
                 path: skill.path.display_path(),
