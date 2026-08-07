@@ -51,24 +51,16 @@ RUN set -eux; \
   echo "Installed protoc-gen-go-grpc"; \
   rm go1.26.5.linux-$ARCH.tar.gz
 
-# Install golangci-lint. Keep this version in step with warp-server's CI
-# (.github/workflows/ci.yml), which is also the floor for what will run at all:
-# golangci-lint refuses to load a config whose target Go version is newer than
-# the Go release golangci-lint itself was built with.
+# Install golangci-lint. It refuses to load a config that targets a newer Go
+# release than the one golangci-lint itself was built with, so this pin has to
+# keep up with the Go toolchain above.
 RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b /usr/local/go/bin v2.12.2 \
     && golangci-lint --version
 
-# Preinstall the static tokenizers library that warp-server links through cgo.
-# Its huggingface package links -ltokenizers against a checkout-local libs/
-# directory that only exists once warp-server's ./script/install-tokenizer-assets
-# has run, so an unbootstrapped checkout fails to link with
-# "cannot find -ltokenizers". Installing the same release archive into
-# /usr/local/lib makes the linker's default search path satisfy it instead. A
-# checkout that has run the bootstrap still wins, because cgo passes its -L
-# directory ahead of the default paths.
-#
-# Keep this version in step with TOKENIZERS_VERSION in warp-server's
-# script/install-tokenizer-assets.
+# Preinstall the static tokenizers library so Go cgo builds that link
+# -ltokenizers resolve it from the default search path. A checkout that ships its
+# own copy still wins, since cgo passes its -L first. Keep the pin in step with
+# what consuming builds expect.
 RUN set -eux; \
   tokenizers_version=v1.27.0; \
   case "$(dpkg --print-architecture)" in \
