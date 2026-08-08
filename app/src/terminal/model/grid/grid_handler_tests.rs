@@ -1820,6 +1820,23 @@ fn test_delete_chars_at_wide_char_spacer_boundary() {
 }
 
 #[test]
+fn test_delete_chars_large_count_preserves_cells_before_cursor() {
+    let mut grid = GridHandler::new_for_test(1, 5);
+    for c in "abcde".chars() {
+        grid.input(c);
+    }
+    grid.goto(VisibleRow(0), 3);
+
+    grid.delete_chars(10);
+
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][0].c, 'a');
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][1].c, 'b');
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][2].c, 'c');
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][3].c, '\0');
+    assert_eq!(grid.grid_storage()[VisibleRow(0)][4].c, '\0');
+}
+
+#[test]
 fn test_insert_blank_at_wide_char_spacer_boundary() {
     // Input a wide char at col 0-1, move cursor to col 1 (spacer), and
     // insert a blank.  The WIDE_CHAR at col 0 must be cleared.

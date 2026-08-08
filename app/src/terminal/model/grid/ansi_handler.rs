@@ -678,11 +678,14 @@ impl ansi::Handler for GridHandler {
         let cols = self.columns();
         let cursor = &self.grid.cursor();
         let bg = cursor.template.bg;
+        let start = cursor.point.col;
 
         // Ensure deleting within terminal bounds.
-        let count = min(count, cols);
+        let count = min(count, cols.saturating_sub(start));
+        if count == 0 {
+            return;
+        }
 
-        let start = cursor.point.col;
         let end = min(start + count, cols - 1);
         let num_cells = cols - end;
 
