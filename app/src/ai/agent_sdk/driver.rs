@@ -2905,11 +2905,6 @@ impl AgentDriver {
         window: Duration,
         ctx: &mut ModelContext<Self>,
     ) {
-        // The terminal only reports viewer input once asked, so that a session nobody is
-        // debugging does not emit on every keystroke.
-        let terminal_view = self.terminal_driver.as_ref(ctx).terminal_view().clone();
-        terminal_view.update(ctx, |view, _| view.start_reporting_viewer_input());
-
         // Recorded on the timer rather than captured below, so re-arming supersedes it.
         idle_timeout.arm_refreshable(window, value);
 

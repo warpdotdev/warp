@@ -221,22 +221,6 @@ impl TerminalView {
         ctx.notify();
     }
 
-    /// Starts reporting viewer input as [`Event::SharedSessionViewerInput`].
-    ///
-    /// Called by the agent driver when it opens a post-failure debug window. There is no paired
-    /// disable: see the field docs on `report_viewer_input`.
-    pub(crate) fn start_reporting_viewer_input(&mut self) {
-        self.report_viewer_input = true;
-    }
-
-    /// Emits [`Event::SharedSessionViewerInput`] if anything has asked for it.
-    pub(crate) fn emit_shared_session_viewer_input(&self, ctx: &mut ViewContext<Self>) {
-        if !self.report_viewer_input {
-            return;
-        }
-        ctx.emit(Event::SharedSessionViewerInput);
-    }
-
     /// Clears the finished/read-only state a pane accumulates when its shared session ends, so it
     /// can host a live session again. Idempotent.
     ///

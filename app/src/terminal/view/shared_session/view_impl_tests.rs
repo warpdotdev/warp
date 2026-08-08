@@ -1864,30 +1864,6 @@ fn test_restored_owned_tombstone_hides_input_until_continue() {
     });
 }
 
-/// Viewer-input reporting is off until something asks for it, so an ordinary shared session does
-/// not emit on every keystroke. The agent driver turns it on when it opens a post-failure debug
-/// window; if that wiring is dropped the window silently stops refreshing under whoever is
-/// debugging.
-#[test]
-fn test_viewer_input_is_only_reported_once_requested() {
-    App::test((), |mut app| async move {
-        let terminal = cloud_mode_terminal_for_test(&mut app);
-
-        terminal.update(&mut app, |view, _| {
-            assert!(
-                !view.report_viewer_input,
-                "a shared session must not report viewer input before anything asks for it"
-            );
-
-            view.start_reporting_viewer_input();
-            assert!(
-                view.report_viewer_input,
-                "opening a debug window must start reporting viewer input"
-            );
-        });
-    })
-}
-
 /// REMOTE-2208: a cloud run whose environment is retained after a failure keeps a reachable
 /// shared session, but the pane may already have been switched to the ended-run view
 /// (`FinishedViewer` status, ended-conversation tombstone, non-editable input). Reattaching to

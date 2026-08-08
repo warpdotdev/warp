@@ -2720,15 +2720,6 @@ pub struct TerminalView {
     // and [`SharedSessionKind::Viewer`] to store some common struct for common fields.
     shared_session: Option<SharedSessionAdapter>,
 
-    /// Whether to emit [`Event::SharedSessionViewerInput`] when a viewer sends input.
-    ///
-    /// Off until something asks for the signal, because these would otherwise fire at keystroke
-    /// frequency for every shared session with nothing listening. Enabled by the agent driver
-    /// when it opens a post-failure debug window, and left on for the rest of the process: a
-    /// stuck-on flag only costs the emit, while a wrongly-cleared one would silently stop the
-    /// window from refreshing under someone mid-debug.
-    report_viewer_input: bool,
-
     /// Stashed source from `attempt_to_share_session` so `on_session_share_started`
     /// can decide whether to auto-copy the link vs open the sharing dialog.
     pending_share_source: Option<SharedSessionActionSource>,
@@ -4367,7 +4358,6 @@ impl TerminalView {
             ai_render_context,
             get_relevant_files_controller,
             shared_session: None,
-            report_viewer_input: false,
             pending_share_source: None,
             auto_stop_sharing_on_cli_end: false,
             conversation_ended_tombstone_view_id: None,
