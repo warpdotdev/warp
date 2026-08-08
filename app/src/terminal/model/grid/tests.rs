@@ -1299,3 +1299,53 @@ fn wrap_cell(c: char) -> Cell {
     cell.flags.insert(Flags::WRAPLINE);
     cell
 }
+
+// DCH (CSI Pn P) with a count larger than the cells remaining from the cursor
+// to end-of-line must only blank the tail; it must never erase characters
+// before the cursor (#12820).
+#[test]
+fn delete_chars_large_count_keeps_text_before_cursor() {
+    let mut grid = GridHandler::new_for_test_with_scroll_limit(1, 5, 2);
+    grid.input_at_cursor("abcde");
+    grid.goto(VisibleRow(0), 3);
+    grid.delete_chars(10); // 10 >> the 2 cells from col 3 to end-of-line
+
+    let row = grid.row(0).unwrap();
+    assert_eq!(row[0], cell('a'));
+    assert_eq!(row[1], cell('b'));
+    assert_eq!(row[2], cell('c'));
+    assert_eq!(row[3], Cell::default());
+    assert_eq!(row[4], Cell::default());
+}
+
+// DCH within bounds shifts the trailing cells left and blanks the freed tail.
+#[test]
+fn delete_chars_shifts_trailing_cells_left() {
+    let mut grid = GridHandler::new_for_test_with_scroll_limit(1, 5, 2);
+    grid.input_at_cursor("abcde");
+    grid.goto(VisibleRow(0), 1);
+    grid.delete_chars(2); // delete 'b','c'; 'd','e' shift left
+
+    let row = grid.row(0).unwrap();
+    assert_eq!(row[0], cell('a'));
+    assert_eq!(row[1], cell('d'));
+    assert_eq!(row[2], cell('e'));
+    assert_eq!(row[3], Cell::default());
+    assert_eq!(row[4], Cell::default());
+}
+
+// DCH count exactly equal to the cells remaining clears them with no shift.
+#[test]
+fn delete_chars_count_equals_remaining() {
+    let mut grid = GridHandler::new_for_test_with_scroll_limit(1, 5, 2);
+    grid.input_at_cursor("abcde");
+    grid.goto(VisibleRow(0), 3);
+    grid.delete_chars(2); // delete 'd','e' (exactly the cells to end-of-line)
+
+    let row = grid.row(0).unwrap();
+    assert_eq!(row[0], cell('a'));
+    assert_eq!(row[1], cell('b'));
+    assert_eq!(row[2], cell('c'));
+    assert_eq!(row[3], Cell::default());
+    assert_eq!(row[4], Cell::default());
+}
