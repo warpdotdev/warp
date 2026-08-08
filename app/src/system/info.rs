@@ -46,6 +46,9 @@ pub struct SystemInfo {
     system: sysinfo::System,
     /// Whether or not we've already emitted an event due to high memory usage.
     has_emitted_memory_warning_event: bool,
+    /// Whether an allocator purge started by the excessive-memory check is
+    /// still running, so that successive refreshes don't stack up purges.
+    is_purging_allocator: bool,
     /// A circular buffer storing resource usage data.
     stats: StatsBuffer,
     /// A helper structure for reporting resource usage via telemetry events.
@@ -64,6 +67,7 @@ impl SystemInfo {
         let mut me = Self {
             system: sysinfo::System::new(),
             has_emitted_memory_warning_event: false,
+            is_purging_allocator: false,
             stats: Default::default(),
             resource_usage_reporter: Default::default(),
             long_os_version: sysinfo::System::long_os_version(),
@@ -161,33 +165,92 @@ impl SystemInfo {
         }
     }
 
-    /// Checks for excessive memory usage.  This may send a telemetry event
-    /// and trigger a Sentry heap profile dump if excessive usage is detected.
+    /// The footprint at or above which memory usage is considered excessive.
+    fn memory_warning_threshold() -> Byte {
+        MEMORY_USAGE_WARNING_THRESHOLD.expect("Threshold should not overflow u64")
+    }
+
+    /// Checks for excessive memory usage, purging the allocator's retained
+    /// pages first so that the decision is made on live memory.
     ///
     /// The threshold check uses `memory_footprint` (which includes swapped
     /// and compressed pages) so we actually detect high memory situations.
-    /// The Rudderstack telemetry event still reports `rss` so existing
-    /// dashboards are unaffected.
+    /// That also means it counts pages the allocator has already reclaimed
+    /// from the app but not yet handed back to the OS, which on an idle macOS
+    /// process routinely accounts for most of the footprint (see
+    /// [`crate::alloc::purge_unused_pages`]).  Purging first keeps us from
+    /// reporting allocator bookkeeping as a leak.
     fn check_for_excessive_memory_usage(
         &mut self,
         rss: Byte,
         memory_footprint: Byte,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.has_emitted_memory_warning_event {
+        if self.has_emitted_memory_warning_event || self.is_purging_allocator {
             return;
         }
 
         // Use footprint (not RSS) for the threshold so we catch memory
         // that has been swapped out or compressed by the OS.
-        if memory_footprint
-            < MEMORY_USAGE_WARNING_THRESHOLD.expect("Threshold should not overflow u64")
-        {
+        if memory_footprint < Self::memory_warning_threshold() {
             return;
         }
 
-        // Collect a detailed memory breakdown for diagnostics.
-        let memory_breakdown = memory_footprint::memory_breakdown();
+        self.is_purging_allocator = true;
+        ctx.spawn(
+            async { crate::alloc::purge_unused_pages() },
+            move |me, did_purge, ctx| {
+                me.is_purging_allocator = false;
+                me.report_excessive_memory_usage(rss, memory_footprint, did_purge, ctx);
+            },
+        );
+    }
+
+    /// Sends a telemetry event and triggers a Sentry heap profile dump for a
+    /// footprint that crossed the threshold, unless purging the allocator's
+    /// retained pages already brought it back down.
+    ///
+    /// The Rudderstack telemetry event reports `rss` so existing dashboards
+    /// are unaffected.
+    fn report_excessive_memory_usage(
+        &mut self,
+        rss: Byte,
+        footprint_before_purge: Byte,
+        did_purge: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let footprint = self.memory_footprint();
+        let reclaimed_bytes = footprint_before_purge
+            .as_u64()
+            .saturating_sub(footprint.as_u64());
+
+        // Deliberately leave `has_emitted_memory_warning_event` unset here: the
+        // footprint was never really excessive, and a genuine leak later in the
+        // session still needs to report.
+        if did_purge && footprint < Self::memory_warning_threshold() {
+            log::info!(
+                "Purging unused allocator pages reclaimed {reclaimed_bytes} bytes and brought the \
+                 memory footprint from {} to {} bytes; not reporting excessive memory usage",
+                footprint_before_purge.as_u64(),
+                footprint.as_u64(),
+            );
+            return;
+        }
+
+        // Collect a detailed memory breakdown for diagnostics.  The breakdown
+        // describes the post-purge state, so record what the purge reclaimed
+        // alongside it to distinguish live memory from allocator retention.
+        let mut memory_breakdown = memory_footprint::memory_breakdown();
+        if let serde_json::Value::Object(fields) = &mut memory_breakdown {
+            fields.insert(
+                "pre_purge_total_footprint".to_owned(),
+                footprint_before_purge.as_u64().into(),
+            );
+            fields.insert(
+                "reclaimed_by_allocator_purge".to_owned(),
+                reclaimed_bytes.into(),
+            );
+        }
 
         // If we're tracking heap usage and detect excessive memory usage,
         // dump and upload the current heap profiling data.
