@@ -18,7 +18,7 @@ use string_offset::CharOffset;
 use syntax_tree::{ColorMap, DecorationStateEvent, SyntaxTreeState};
 use vec1::{Vec1, vec1};
 use vim::vim::{
-    BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion,
+    BracketChar, BracketType, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion,
     InsertPosition, LineMotion, MotionType, TextObjectInclusion, TextObjectType, VimOperator,
     VimTextObject, WordBound, WordMotion, WordType,
 };
@@ -40,7 +40,9 @@ use warp_editor::content::edit::EditDelta;
 use warp_editor::content::find::{SearchConfig, SearchResults};
 use warp_editor::content::hidden_lines_model::HiddenLinesModel;
 use warp_editor::content::selection_model::BufferSelectionModel;
-use warp_editor::content::text::{BufferBlockStyle, IndentBehavior, IndentUnit};
+use warp_editor::content::text::{
+    BufferBlockStyle, IndentBehavior, IndentUnit, LineCount as ContentLineCount,
+};
 use warp_editor::content::version::BufferVersion;
 use warp_editor::decoration::DecorationLayer;
 use warp_editor::editor::TextDecoration;
@@ -124,6 +126,13 @@ enum IndentMode {
     NewlineBelow,
     LinewiseChange,
     Enter,
+}
+
+#[derive(Clone)]
+struct ManualFold {
+    start: Anchor,
+    end: Anchor,
+    closed: bool,
 }
 
 struct IndentResult {
@@ -291,6 +300,7 @@ pub struct CodeEditorModel {
     syntax_tree: ModelHandle<SyntaxTreeState>,
     comments: ModelHandle<EditorCommentsModel>,
     hidden_lines: ModelHandle<HiddenLinesModel>,
+    manual_folds: Vec<ManualFold>,
     /// The current state of diff navigation (collapsed, expanded, or focused on a specific hunk)
     diff_navigation_state: DiffNavigationState,
     interaction_state: InteractionState,
@@ -459,6 +469,7 @@ impl CodeEditorModel {
             syntax_tree,
             comments,
             hidden_lines,
+            manual_folds: vec![],
             diff_navigation_state: DiffNavigationState::Collapsed,
             interaction_state: InteractionState::Editable,
             show_current_line_highlights,
@@ -726,6 +737,140 @@ impl CodeEditorModel {
 
     pub fn hidden_ranges(&self, ctx: &AppContext) -> RangeSet<CharOffset> {
         self.hidden_lines.as_ref(ctx).hidden_ranges_at_latest(ctx)
+    }
+
+    fn manual_fold_range(&self, fold: &ManualFold, ctx: &AppContext) -> Option<Range<usize>> {
+        let selections = self.selection_model.as_ref(ctx);
+        let start = selections
+            .line_number_from_anchor(&fold.start, ctx)?
+            .saturating_sub(1);
+        let end = selections
+            .line_number_from_anchor(&fold.end, ctx)?
+            .saturating_sub(1);
+        (start < end).then_some(start..end)
+    }
+
+    fn cursor_line(&self, ctx: &AppContext) -> usize {
+        self.selection_model
+            .as_ref(ctx)
+            .selection_offsets()
+            .first()
+            .head
+            .to_buffer_point(self.content.as_ref(ctx))
+            .row
+            .saturating_sub(1) as usize
+    }
+
+    fn fold_line_range(&mut self, range: Range<usize>, ctx: &mut ModelContext<Self>) {
+        if range.start >= range.end {
+            return;
+        }
+
+        if let Some(index) = self
+            .manual_folds
+            .iter()
+            .position(|fold| self.manual_fold_range(fold, ctx) == Some(range.clone()))
+        {
+            self.manual_folds[index].closed = true;
+        } else {
+            let buffer = self.content.as_ref(ctx);
+            let start_offset = buffer.line_start(ContentLineCount::from(range.start + 1));
+            let end_offset = buffer.line_start(ContentLineCount::from(range.end + 1));
+            let (start, end) = self.selection_model.update(ctx, |selections, ctx| {
+                (
+                    selections.anchor(start_offset, ctx),
+                    selections.anchor(end_offset, ctx),
+                )
+            });
+            self.manual_folds.push(ManualFold {
+                start,
+                end,
+                closed: true,
+            });
+        }
+
+        let start_offset = self
+            .content
+            .as_ref(ctx)
+            .line_start(ContentLineCount::from(range.start + 1));
+        self.cursor_at(start_offset, ctx);
+        self.calculate_hidden_lines(ctx);
+        self.rebuild_layout_and_refresh_diff(ctx);
+    }
+
+    pub fn fold(&mut self, ctx: &mut ModelContext<Self>) {
+        let selections = self.selection_model.as_ref(ctx).selection_offsets();
+        if selections
+            .iter()
+            .any(|selection| selection.head != selection.tail)
+        {
+            self.fold_selected_ranges(ctx);
+            return;
+        }
+
+        let cursor = selections.first().head;
+        let buffer = self.content.as_ref(ctx);
+        let range = [
+            BracketType::CurlyBrace,
+            BracketType::SquareBracket,
+            BracketType::Parenthesis,
+        ]
+        .into_iter()
+        .filter_map(|bracket| vim_a_block(buffer, cursor, bracket))
+        .filter(|range| range.start <= cursor && cursor < range.end)
+        .filter_map(|range| {
+            let start = range.start.to_buffer_point(buffer).row.saturating_sub(1) as usize;
+            let end = (range.end - 1)
+                .to_buffer_point(buffer)
+                .row
+                .saturating_sub(1) as usize;
+            (start < end).then_some(start..end)
+        })
+        .min_by_key(|range| range.end - range.start);
+
+        if let Some(range) = range {
+            self.fold_line_range(range, ctx);
+        }
+    }
+
+    pub fn fold_selected_ranges(&mut self, ctx: &mut ModelContext<Self>) {
+        let lines = self.selection_model.as_ref(ctx).selected_lines(ctx);
+        let start = (*lines.first()).saturating_sub(1);
+        let end = (*lines.last()).saturating_sub(1);
+        self.fold_line_range(start..end, ctx);
+    }
+
+    pub fn unfold(&mut self, ctx: &mut ModelContext<Self>) {
+        let cursor = self.cursor_line(ctx);
+        let target = self
+            .manual_folds
+            .iter()
+            .enumerate()
+            .filter(|(_, fold)| fold.closed)
+            .filter_map(|(index, fold)| {
+                let range = self.manual_fold_range(fold, ctx)?;
+                (range.contains(&cursor) || range.start == cursor)
+                    .then_some((index, range.end - range.start))
+            })
+            .min_by_key(|(_, len)| *len)
+            .map(|(index, _)| index);
+
+        if let Some(index) = target {
+            self.manual_folds[index].closed = false;
+            self.calculate_hidden_lines(ctx);
+            self.rebuild_layout_and_refresh_diff(ctx);
+        }
+    }
+
+    pub fn unfold_all(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.manual_folds.iter().any(|fold| fold.closed) {
+            return;
+        }
+        for fold in &mut self.manual_folds {
+            fold.closed = false;
+        }
+        self.calculate_hidden_lines(ctx);
+        self.rebuild_layout_and_refresh_diff(ctx);
     }
 
     // Set the following hidden line ranges to be visible. This is no-op if the lines are already visible.
@@ -1458,9 +1603,20 @@ impl CodeEditorModel {
         }
     }
 
-    /// Re-calculate the hidden line ranges given the active diff state. No-op
-    /// unless [`Self::hide_lines_outside_of_active_diff`] enabled hiding.
+    /// Re-calculate hidden line ranges from active diff state and manual folds.
     fn calculate_hidden_lines(&mut self, ctx: &mut ModelContext<Self>) {
+        let mut hidden_ranges = self
+            .manual_folds
+            .iter()
+            .filter(|fold| fold.closed)
+            .filter_map(|fold| self.manual_fold_range(fold, ctx))
+            .filter_map(|range| {
+                let start = range.start + 1;
+                (start < range.end)
+                    .then(|| ContentLineCount::from(start)..ContentLineCount::from(range.end))
+            })
+            .collect::<RangeSet<ContentLineCount>>();
+
         if let Some(context_line) = self.hide_lines_outside_of_active_diff {
             let line_count = self.line_count(ctx);
 
@@ -1485,12 +1641,12 @@ impl CodeEditorModel {
                     ..warp_editor::content::text::LineCount::from(line_count);
 
             // Find gaps in the visible ranges
-            let hidden_ranges = visible_ranges
-                .gaps(&all_lines)
-                .collect::<RangeSet<warp_editor::content::text::LineCount>>();
-
-            self.set_hidden_lines(hidden_ranges, ctx);
+            for range in visible_ranges.gaps(&all_lines) {
+                hidden_ranges.insert(range);
+            }
         }
+
+        self.set_hidden_lines(hidden_ranges, ctx);
     }
 
     fn handle_diff_model_event(&mut self, event: &DiffModelEvent, ctx: &mut ModelContext<Self>) {
