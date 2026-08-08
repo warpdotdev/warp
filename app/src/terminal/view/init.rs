@@ -58,6 +58,25 @@ pub const CLI_AGENT_SESSION_ACTIVE_KEY: &str = "CLIAgentSessionActive";
 pub const ROOT_CLOUD_MODE_PANE_KEY: &str = "RootCloudModePane";
 pub const CAN_SHOW_CONVERSATION_DETAILS_KEY: &str = "CanShowConversationDetails";
 
+/// Context predicate shared by the line-editing bindings that forward a legacy control sequence to
+/// the foreground program (`cmd`/`alt` + arrows, backspace and delete).
+///
+/// `LongRunningCommand` is suppressed while the alternate screen is active, so the alt screen has
+/// to be matched explicitly for these chords to reach TUIs such as `fzf` or `less` (see #14835).
+///
+/// The alt-screen arm additionally excludes sessions that negotiated the Kitty keyboard protocol.
+/// `AltScreenElement::dispatch_event` only reaches the KKP encoder when no binding claimed the
+/// keystroke, so matching there would hijack these chords in KKP TUIs and undo the modifier
+/// encoding added in #14012. The `LongRunningCommand` arm is deliberately left alone: it is
+/// pre-existing behavior on the normal screen and outside the scope of #14835.
+fn executing_command_editing_context() -> ContextPredicate {
+    use warpui::keymap::macros::*;
+
+    id!("Terminal")
+        & !id!("IMEOpen")
+        & (id!("LongRunningCommand") | (id!("AltScreen") & !id!(KEYBOARD_PROTOCOL_ENABLED_KEY)))
+}
+
 /// Some keybindings will do different things in different contexts. We break
 /// these into their own function to ensure we pay special attention to
 /// these overlaps, and ensure only 1 action is taken.
@@ -475,7 +494,7 @@ pub fn init(app: &mut AppContext) {
         )
         .with_mac_key_binding("alt-left")
         .with_linux_or_windows_key_binding("ctrl-left")
-        .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand")),
+        .with_context_predicate(executing_command_editing_context()),
         EditableBinding::new(
             "terminal:executing_command_move_cursor_word_right",
             "Move cursor one word to the right within an executing command",
@@ -483,7 +502,7 @@ pub fn init(app: &mut AppContext) {
         )
         .with_mac_key_binding("alt-right")
         .with_linux_or_windows_key_binding("ctrl-right")
-        .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand")),
+        .with_context_predicate(executing_command_editing_context()),
         EditableBinding::new(
             "terminal:executing_command_move_cursor_home",
             "Move cursor home within an executing command",
@@ -492,14 +511,14 @@ pub fn init(app: &mut AppContext) {
         // We already have bindings for home/end (the keybindings for this on Linux and Mac) that
         // send the correct control sequence to the PTY.
         .with_mac_key_binding("cmd-left")
-        .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand")),
+        .with_context_predicate(executing_command_editing_context()),
         EditableBinding::new(
             "terminal:executing_command_move_cursor_end",
             "Move cursor end within an executing command",
             TerminalAction::ControlSequence(vec![escape_sequences::C0::ENQ]),
         )
         .with_mac_key_binding("cmd-right")
-        .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand")),
+        .with_context_predicate(executing_command_editing_context()),
         EditableBinding::new(
             "terminal:executing_command_delete_word_left",
             "Delete word left within an executing command",
@@ -507,13 +526,13 @@ pub fn init(app: &mut AppContext) {
         )
         .with_mac_key_binding("alt-backspace")
         .with_linux_or_windows_key_binding("ctrl-backspace")
-        .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand")),
+        .with_context_predicate(executing_command_editing_context()),
         EditableBinding::new(
             "terminal:executing_command_delete_line_start",
             "Delete to line start within an executing command",
             TerminalAction::ControlSequence(vec![escape_sequences::C0::NAK]),
         )
-        .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand"))
+        .with_context_predicate(executing_command_editing_context())
         // Set this for mac-only. The default binding for this on Linux / Windows is `ctrl-y`, which
         // we can't hijack because it is already reserved for the PTY.
         .with_mac_key_binding("cmd-backspace"),
@@ -522,7 +541,7 @@ pub fn init(app: &mut AppContext) {
             "Delete to line end within an executing command",
             TerminalAction::ControlSequence(vec![escape_sequences::C0::VT]),
         )
-        .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand"))
+        .with_context_predicate(executing_command_editing_context())
         // Set this for mac-only since the corresponding editor action is also Mac-only.
         .with_mac_key_binding("cmd-delete"),
         EditableBinding::new(
