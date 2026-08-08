@@ -11956,6 +11956,7 @@ impl Workspace {
         } else {
             let matching = self.vertical_tabs_panel.matching_tab_indices(
                 &self.tabs,
+                &self.tab_groups,
                 self.active_tab_index,
                 ctx,
             );
@@ -11980,6 +11981,7 @@ impl Workspace {
         } else {
             let matching = self.vertical_tabs_panel.matching_tab_indices(
                 &self.tabs,
+                &self.tab_groups,
                 self.active_tab_index,
                 ctx,
             );
