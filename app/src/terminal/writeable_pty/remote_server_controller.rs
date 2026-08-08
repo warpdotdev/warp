@@ -29,6 +29,7 @@ use crate::{TelemetryEvent, send_telemetry_from_ctx};
 ///
 /// Every active state carries `setup_start` so that the total setup duration
 /// can be measured when the flow reaches `SessionConnected`.
+#[allow(dead_code)]
 enum SshInitState {
     Idle,
     /// Stash held, `check_binary` in flight.
@@ -352,6 +353,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn handle_ssh_remote_server_install(
         &mut self,
         session_id: SessionId,
@@ -476,6 +478,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         self.flush_stashed_bootstrap(session_info, ctx);
     }
 
+    #[allow(dead_code)]
     pub fn handle_ssh_remote_server_skip(
         &mut self,
         session_id: SessionId,

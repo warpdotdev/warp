@@ -94,6 +94,7 @@ pub struct TerminalManager<S> {
     pty_controller: ModelHandle<PtyController>,
 
     /// The manager is responsible for managing the lifetime of the remote server controller.
+    #[allow(dead_code)]
     remote_server_controller: ModelHandle<RemoteServerController>,
 
     /// The process ID of the PTY. Purely used for integration tests. None if the PTY has not yet
@@ -194,6 +195,7 @@ impl<S> Drop for TerminalManager<S> {
 impl<S> TerminalManager<S> {
     /// Creates a local terminal manager model and terminal surface.
     #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)]
     pub(crate) fn create_model<PostWire>(
         startup_directory: Option<PathBuf>,
         env_vars: HashMap<OsString, OsString>,
@@ -500,6 +502,7 @@ impl<S> TerminalManager<S> {
     }
 
     /// Returns the remote server controller owned by this manager.
+    #[allow(dead_code)]
     pub(super) fn remote_server_controller(&self) -> ModelHandle<RemoteServerController> {
         self.remote_server_controller.clone()
     }

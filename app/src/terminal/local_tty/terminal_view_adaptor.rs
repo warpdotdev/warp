@@ -71,6 +71,7 @@ use crate::terminal::writeable_pty::terminal_manager_util::wire_up_remote_server
 use crate::terminal::{TerminalManager as TerminalManagerTrait, TerminalModel, TerminalView};
 use crate::view_components::ToastFlavor;
 
+#[allow(dead_code)]
 const ACL_UPDATE_FAILURE_RESPONSE: &str = "Something went wrong. Please try again.";
 
 /// Whether the given CRDT operation should be dropped when broadcasting
@@ -78,11 +79,13 @@ const ACL_UPDATE_FAILURE_RESPONSE: &str = "Something went wrong. Please try agai
 /// headless worker — forwarding its selection ops would produce a phantom
 /// cursor on the viewer side. Content ops (Edit / Undo) are kept so the
 /// buffer stays in sync.
+#[allow(dead_code)]
 fn should_skip_sharer_op(is_ambient_session: bool, op: &CrdtOperation) -> bool {
     is_ambient_session && matches!(op, CrdtOperation::UpdateSelections(_))
 }
 
 /// Configuration for constructing the GUI terminal surface.
+#[allow(dead_code)]
 pub(crate) struct TerminalViewSurfaceConfig {
     pub(crate) resources: TerminalViewResources,
     pub(crate) model_event_sender: Option<SyncSender<ModelEvent>>,
@@ -96,6 +99,7 @@ pub(crate) struct TerminalViewSurfaceConfig {
 }
 
 /// Resolves the block list used by the GUI `TerminalView` surface.
+#[allow(dead_code)]
 pub(crate) fn terminal_view_restored_blocks(
     restored_blocks: Option<&Vec<SerializedBlockListItem>>,
     conversation_restoration: &Option<ConversationRestorationInNewPaneType>,
@@ -122,6 +126,7 @@ pub(crate) fn terminal_view_restored_blocks(
 }
 
 /// Creates the GUI terminal surface and its manager-owned post-wiring closure.
+#[allow(dead_code)]
 pub(crate) fn create_terminal_view_surface(
     config: TerminalViewSurfaceConfig,
     surface_init: TerminalSurfaceInit,
@@ -240,6 +245,7 @@ pub(crate) fn create_terminal_view_surface(
 /// remain unchanged; this helper groups the `TerminalView`-dependent wiring so it is
 /// easy to identify and work on separately from the generic manager.
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 fn wire_up_terminal_view_session_sharing(
     view: &ViewHandle<TerminalView>,
     current_prompt: ModelHandle<CurrentPrompt>,
@@ -613,6 +619,7 @@ fn wire_up_terminal_view_session_sharing(
     session_sharer
 }
 
+#[allow(dead_code)]
 impl TerminalManager<TerminalView> {
     /// Streams all historical agent conversations from this terminal to viewers.
     /// This is called when starting a shared  session mid-conversation so that viewers
