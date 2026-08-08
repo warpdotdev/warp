@@ -24,7 +24,7 @@ use warpui::platform::Cursor;
 use warpui::ui_components::button::{Button, ButtonVariant};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
-use warpui::{Action, AppContext, SingletonEntity, ViewContext, ViewHandle};
+use warpui::{Action, AppContext, SingletonEntity, View, ViewContext, ViewHandle};
 
 use super::SettingsSection;
 use super::about_page::AboutPageView;
@@ -49,9 +49,7 @@ use crate::settings::CloudPreferencesSettings;
 use crate::themes::theme::Fill;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
-use crate::view_components::{
-    Dropdown, DropdownItemAction, FilterableDropdown, SubmittableTextInput,
-};
+use crate::view_components::{DropdownItemAction, FilterableDropdown, SubmittableTextInput};
 
 pub const TOGGLE_BUTTON_RIGHT_PADDING: f32 = 5.;
 pub const HEADER_PADDING: f32 = 15.;
@@ -915,14 +913,14 @@ pub fn render_dropdown_item_label(
     }
 }
 
-pub(crate) fn render_dropdown_item<T: DropdownItemAction>(
+pub(crate) fn render_dropdown_item<T: View>(
     appearance: &Appearance,
     label: &str,
     secondary_text: Option<&str>,
     dropdown_subtext: Option<Box<dyn Element>>,
     local_only_icon_state: LocalOnlyIconState,
     color_override: Option<Fill>,
-    handle: &ViewHandle<Dropdown<T>>,
+    handle: &ViewHandle<T>,
 ) -> Box<dyn Element> {
     let row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 

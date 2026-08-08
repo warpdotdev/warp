@@ -85,7 +85,9 @@ use crate::ui_components::icons::Icon;
 use crate::user_config::WarpConfig;
 use crate::util::bindings;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
-use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
+use crate::view_components::{
+    Dropdown, DropdownItem, EditableDropdown, EditableDropdownEvent, FilterableDropdown,
+};
 use crate::window_settings::{
     BackgroundBlurRadius, BackgroundBlurTexture, BackgroundOpacity, LeftPanelVisibilityAcrossTabs,
     OpenWindowsAtCustomSize, WindowSettings, WindowSettingsChangedEvent, ZoomLevel,
@@ -579,7 +581,7 @@ pub struct AppearanceSettingsPageView {
     app_icon_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     workspace_decorations_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     tab_close_button_position_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
-    zoom_level_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
+    zoom_level_dropdown: ViewHandle<EditableDropdown<AppearancePageAction>>,
     zoom_reset_button_mouse_state: MouseStateHandle,
     available_families: HashMap<String, (Option<FamilyId>, FontType)>,
     view_font_type: FontType,
@@ -1045,6 +1047,7 @@ impl AppearanceSettingsPageView {
                     let zoom_level = *WindowSettings::as_ref(ctx).zoom_level;
 
                     me.zoom_level_dropdown.update(ctx, |dropdown, ctx| {
+                        dropdown.set_value_text(&format!("{zoom_level}%"), ctx);
                         dropdown.set_selected_by_action(
                             AppearancePageAction::SetZoomLevel(zoom_level),
                             ctx,
@@ -2662,12 +2665,19 @@ impl AppearanceSettingsPageView {
 
     fn build_zoom_level_dropdown(
         ctx: &mut ViewContext<Self>,
-    ) -> ViewHandle<Dropdown<AppearancePageAction>> {
-        ctx.add_typed_action_view(|ctx| {
-            let mut dropdown = Dropdown::new(ctx);
+    ) -> ViewHandle<EditableDropdown<AppearancePageAction>> {
+        let dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = EditableDropdown::new(ctx);
+            dropdown.set_top_bar_max_width(80.);
+            dropdown.set_menu_width(80., ctx);
+            dropdown.set_placeholder("100%", ctx);
+            dropdown.set_validation(
+                |input| ZoomLevel::parse_percentage(input).map(AppearancePageAction::SetZoomLevel),
+                |app| format!("{}%", *WindowSettings::as_ref(app).zoom_level.value()),
+            );
 
             dropdown.set_items(
-                crate::window_settings::ZoomLevel::VALUES
+                ZoomLevel::VALUES
                     .iter()
                     .map(|&value| {
                         DropdownItem::new(
@@ -2680,10 +2690,17 @@ impl AppearanceSettingsPageView {
             );
 
             let current_value = *WindowSettings::as_ref(ctx).zoom_level.value();
+            dropdown.set_value_text(&format!("{current_value}%"), ctx);
             dropdown.set_selected_by_action(AppearancePageAction::SetZoomLevel(current_value), ctx);
 
             dropdown
-        })
+        });
+        ctx.subscribe_to_view(&dropdown, |_, _, event, ctx| {
+            if let EditableDropdownEvent::Escape = event {
+                ctx.emit(SettingsPageEvent::FocusModal);
+            }
+        });
+        dropdown
     }
 
     fn handle_directory_color_add_picker_event(

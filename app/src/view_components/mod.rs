@@ -11,6 +11,7 @@ pub mod compactible_split_action_button;
 pub mod copyable_text_field;
 mod dismissible_toast;
 pub mod dropdown;
+mod editable_dropdown;
 mod feature_popup;
 mod filterable_dropdown;
 pub mod find;
@@ -25,6 +26,7 @@ pub use compact_dropdown::{CompactDropdown, CompactDropdownEvent, CompactDropdow
 pub use copyable_text_field::*;
 pub use dismissible_toast::*;
 pub use dropdown::{Dropdown, DropdownAction, DropdownEvent, DropdownItem, DropdownItemAction};
+pub use editable_dropdown::{EditableDropdown, EditableDropdownEvent};
 pub use feature_popup::*;
 pub use filterable_dropdown::{
     FilterableDropdown, FilterableDropdownEvent, FilterableDropdownOrientation,
