@@ -1018,6 +1018,168 @@ pub fn init(app: &mut AppContext) {
                 & id!("Workspace_ActiveOrSelectedTabsInGroup")
                 & !id!("Workspace_PaneDragging"),
         ),
+        EditableBinding::new(
+            "workspace:activate_first_tab_group",
+            "Switch to 1st tab group",
+            WorkspaceAction::ActivateTabGroupByNumber(1),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging")),
+        EditableBinding::new(
+            "workspace:activate_second_tab_group",
+            "Switch to 2nd tab group",
+            WorkspaceAction::ActivateTabGroupByNumber(2),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging")),
+        EditableBinding::new(
+            "workspace:activate_third_tab_group",
+            "Switch to 3rd tab group",
+            WorkspaceAction::ActivateTabGroupByNumber(3),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging")),
+        EditableBinding::new(
+            "workspace:activate_fourth_tab_group",
+            "Switch to 4th tab group",
+            WorkspaceAction::ActivateTabGroupByNumber(4),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging")),
+        EditableBinding::new(
+            "workspace:activate_fifth_tab_group",
+            "Switch to 5th tab group",
+            WorkspaceAction::ActivateTabGroupByNumber(5),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging")),
+        EditableBinding::new(
+            "workspace:activate_sixth_tab_group",
+            "Switch to 6th tab group",
+            WorkspaceAction::ActivateTabGroupByNumber(6),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging")),
+        EditableBinding::new(
+            "workspace:activate_seventh_tab_group",
+            "Switch to 7th tab group",
+            WorkspaceAction::ActivateTabGroupByNumber(7),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging")),
+        EditableBinding::new(
+            "workspace:activate_eighth_tab_group",
+            "Switch to 8th tab group",
+            WorkspaceAction::ActivateTabGroupByNumber(8),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging")),
+        EditableBinding::new(
+            "workspace:activate_ninth_tab_group",
+            "Switch to 9th tab group",
+            WorkspaceAction::ActivateTabGroupByNumber(9),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging")),
+        EditableBinding::new(
+            "workspace:activate_first_tab_in_current_group",
+            "Switch to 1st tab in current group",
+            WorkspaceAction::ActivateTabInCurrentGroupByNumber(1),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace") & id!("Workspace_ActiveTabInGroup") & !id!("Workspace_PaneDragging"),
+        ),
+        EditableBinding::new(
+            "workspace:activate_second_tab_in_current_group",
+            "Switch to 2nd tab in current group",
+            WorkspaceAction::ActivateTabInCurrentGroupByNumber(2),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace") & id!("Workspace_ActiveTabInGroup") & !id!("Workspace_PaneDragging"),
+        ),
+        EditableBinding::new(
+            "workspace:activate_third_tab_in_current_group",
+            "Switch to 3rd tab in current group",
+            WorkspaceAction::ActivateTabInCurrentGroupByNumber(3),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace") & id!("Workspace_ActiveTabInGroup") & !id!("Workspace_PaneDragging"),
+        ),
+        EditableBinding::new(
+            "workspace:activate_fourth_tab_in_current_group",
+            "Switch to 4th tab in current group",
+            WorkspaceAction::ActivateTabInCurrentGroupByNumber(4),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace") & id!("Workspace_ActiveTabInGroup") & !id!("Workspace_PaneDragging"),
+        ),
+        EditableBinding::new(
+            "workspace:activate_fifth_tab_in_current_group",
+            "Switch to 5th tab in current group",
+            WorkspaceAction::ActivateTabInCurrentGroupByNumber(5),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace") & id!("Workspace_ActiveTabInGroup") & !id!("Workspace_PaneDragging"),
+        ),
+        EditableBinding::new(
+            "workspace:activate_sixth_tab_in_current_group",
+            "Switch to 6th tab in current group",
+            WorkspaceAction::ActivateTabInCurrentGroupByNumber(6),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace") & id!("Workspace_ActiveTabInGroup") & !id!("Workspace_PaneDragging"),
+        ),
+        EditableBinding::new(
+            "workspace:activate_seventh_tab_in_current_group",
+            "Switch to 7th tab in current group",
+            WorkspaceAction::ActivateTabInCurrentGroupByNumber(7),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace") & id!("Workspace_ActiveTabInGroup") & !id!("Workspace_PaneDragging"),
+        ),
+        EditableBinding::new(
+            "workspace:activate_eighth_tab_in_current_group",
+            "Switch to 8th tab in current group",
+            WorkspaceAction::ActivateTabInCurrentGroupByNumber(8),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace") & id!("Workspace_ActiveTabInGroup") & !id!("Workspace_PaneDragging"),
+        ),
+        EditableBinding::new(
+            "workspace:activate_ninth_tab_in_current_group",
+            "Switch to 9th tab in current group",
+            WorkspaceAction::ActivateTabInCurrentGroupByNumber(9),
+        )
+        .with_enabled(|| FeatureFlag::GroupedTabs.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace") & id!("Workspace_ActiveTabInGroup") & !id!("Workspace_PaneDragging"),
+        ),
     ]);
 
     // Tab/group pinning bindings (keyless by default; gated on `PinnedTabs`).

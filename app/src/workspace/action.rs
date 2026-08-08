@@ -228,6 +228,12 @@ pub enum WorkspaceAction {
     /// removes the multi-selection from its shared group when 2+ tabs are
     /// selected, otherwise removes the active tab.
     RemoveActiveOrSelectedTabsFromGroup,
+    /// Activates the first tab in the Nth tab group, where groups are counted
+    /// in tab bar order and `num` is one-based.
+    ActivateTabGroupByNumber(usize),
+    /// Activates the Nth tab in the active tab's group, where `num` is
+    /// one-based.
+    ActivateTabInCurrentGroupByNumber(usize),
     ToggleTabGroupRightClickMenu {
         group_id: TabGroupId,
         anchor: TabContextMenuAnchor,
@@ -968,6 +974,8 @@ impl WorkspaceAction {
             | MoveSelectedTabsToGroup { .. }
             | RemoveSelectedTabsFromGroup
             | RemoveActiveOrSelectedTabsFromGroup
+            | ActivateTabGroupByNumber(_)
+            | ActivateTabInCurrentGroupByNumber(_)
             | UngroupTabs(_)
             | NewTabInGroup(_)
             | MoveTabGroupUp(_)

@@ -23860,6 +23860,10 @@ impl TypedActionView for Workspace {
         match action {
             ActivateTab(index) => self.activate_tab(*index, ctx),
             ActivateTabByNumber(num) => self.activate_tab(num.saturating_sub(1), ctx),
+            ActivateTabGroupByNumber(num) => self.activate_tab_group_by_number(*num, ctx),
+            ActivateTabInCurrentGroupByNumber(num) => {
+                self.activate_tab_in_current_group_by_number(*num, ctx)
+            }
             ActivatePrevTab => self.activate_prev_tab(ctx),
             OpenLaunchConfigSaveModal => self.open_launch_config_save_modal(ctx),
             ActivateNextTab => self.activate_next_tab(ctx),

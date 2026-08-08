@@ -195,6 +195,50 @@ impl Workspace {
         }
     }
 
+    /// Activates the first member of the Nth tab group, where `num` is one-based
+    /// and groups are counted in their current tab bar order.
+    pub(super) fn activate_tab_group_by_number(&mut self, num: usize, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::GroupedTabs.is_enabled() || num == 0 {
+            return;
+        }
+        let Some(group_id) = self
+            .tabs
+            .iter()
+            .filter_map(|tab| tab.group_id)
+            .dedup()
+            .nth(num - 1)
+        else {
+            return;
+        };
+        let Some(tab_index) = group_member_indices(&self.tabs, group_id).next() else {
+            return;
+        };
+        self.activate_tab(tab_index, ctx);
+    }
+
+    /// Activates the Nth member of the active tab's group, where `num` is
+    /// one-based. Ungrouped active tabs and out-of-range indices are no-ops.
+    pub(super) fn activate_tab_in_current_group_by_number(
+        &mut self,
+        num: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::GroupedTabs.is_enabled() || num == 0 {
+            return;
+        }
+        let Some(group_id) = self
+            .tabs
+            .get(self.active_tab_index)
+            .and_then(|tab| tab.group_id)
+        else {
+            return;
+        };
+        let Some(tab_index) = group_member_indices(&self.tabs, group_id).nth(num - 1) else {
+            return;
+        };
+        self.activate_tab(tab_index, ctx);
+    }
+
     /// "Create group from tabs" menu action. Group membership requires
     /// tabs to be contiguous in the bar, so we gather the selected tabs into
     /// a single block anchored at the earliest selected tab's position before

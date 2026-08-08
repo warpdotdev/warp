@@ -4263,6 +4263,81 @@ fn test_toggle_tab_group_collapsed_flips_state() {
 }
 
 #[test]
+fn test_activate_tab_group_by_number_activates_first_member_in_group_order() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Build [loose0, group_a1, group_a2, loose3, group_b4, group_b5].
+            for _ in 0..5 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+            assert_eq!(workspace.tab_count(), 6);
+
+            let group_a = TabGroup::new();
+            let group_a_id = group_a.id;
+            workspace.tab_groups.insert(group_a_id, group_a);
+            workspace.tabs[1].group_id = Some(group_a_id);
+            workspace.tabs[2].group_id = Some(group_a_id);
+
+            let group_b = TabGroup::new();
+            let group_b_id = group_b.id;
+            workspace.tab_groups.insert(group_b_id, group_b);
+            workspace.tabs[4].group_id = Some(group_b_id);
+            workspace.tabs[5].group_id = Some(group_b_id);
+
+            workspace.activate_tab(0, ctx);
+            workspace.handle_action(&WorkspaceAction::ActivateTabGroupByNumber(2), ctx);
+            assert_eq!(workspace.active_tab_index(), 4);
+
+            // Out-of-range group indices do not move the active tab.
+            workspace.handle_action(&WorkspaceAction::ActivateTabGroupByNumber(3), ctx);
+            assert_eq!(workspace.active_tab_index(), 4);
+        });
+    });
+}
+
+#[test]
+fn test_activate_tab_in_current_group_by_number_activates_member_in_group_order() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Build [loose0, group1, group2, group3, loose4].
+            for _ in 0..4 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+            assert_eq!(workspace.tab_count(), 5);
+
+            let group = TabGroup::new();
+            let group_id = group.id;
+            workspace.tab_groups.insert(group_id, group);
+            for index in 1..=3 {
+                workspace.tabs[index].group_id = Some(group_id);
+            }
+
+            workspace.activate_tab(2, ctx);
+            workspace.handle_action(&WorkspaceAction::ActivateTabInCurrentGroupByNumber(3), ctx);
+            assert_eq!(workspace.active_tab_index(), 3);
+
+            // Out-of-range indices do not move the active tab.
+            workspace.handle_action(&WorkspaceAction::ActivateTabInCurrentGroupByNumber(4), ctx);
+            assert_eq!(workspace.active_tab_index(), 3);
+
+            // Ungrouped active tabs are no-ops.
+            workspace.activate_tab(0, ctx);
+            workspace.handle_action(&WorkspaceAction::ActivateTabInCurrentGroupByNumber(1), ctx);
+            assert_eq!(workspace.active_tab_index(), 0);
+        });
+    });
+}
+#[test]
 fn test_close_tab_group_removes_group_and_members() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
 
