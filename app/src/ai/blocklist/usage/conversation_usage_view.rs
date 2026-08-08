@@ -49,6 +49,10 @@ pub struct ConversationUsageInfo {
     pub tool_calls: i32,
     pub models: Vec<ModelTokenUsage>,
     pub context_window_usage: f32,
+    /// Absolute token count currently used in the context window.
+    pub context_window_tokens: Option<u32>,
+    /// The configured context window limit (e.g. 1M tokens).
+    pub context_window_limit: Option<u32>,
     /// Per-segment breakdown of the context window. Scaled so the segments
     /// sum to `context_window_usage`. Empty when the server did not emit it.
     pub context_window_segments: Vec<ContextWindowSegment>,
@@ -466,19 +470,51 @@ impl ConversationUsageView {
         }
 
         labels.push(render_label_text("Context window used", appearance));
+
+        // Build display string: absolute tokens as primary, percentage as secondary.
+        // Examples: "112k / 1M (11%)", "112k (41%)"
         let context_usage_pct = self.usage_info.context_window_usage * 100.;
-        let context_usage_str = if context_window_breakdown_enabled && self.context_window_expanded
-        {
-            format!("{context_usage_pct:.2}%")
+        let pct_str = if context_usage_pct.fract() == 0.0 {
+            format!("{}%", context_usage_pct as u32)
         } else {
-            format!("{}%", context_usage_pct.round())
+            format!("{:.1}%", context_usage_pct)
         };
+
+        let context_display_str =
+            if let (Some(tokens), Some(limit)) =
+                (self.usage_info.context_window_tokens, self.usage_info.context_window_limit)
+            {
+                // Show absolute tokens with limit: "112k / 1M (41%)"
+                let limit_str = format_token_count(limit);
+                let tokens_str = format_token_count(tokens);
+                if context_window_breakdown_enabled && self.context_window_expanded {
+                    format!("{tokens_str} / {limit_str} ({context_usage_pct:.2}%)")
+                } else {
+                    format!("{tokens_str} / {limit_str} ({pct_str})")
+                }
+            } else if let Some(tokens) = self.usage_info.context_window_tokens {
+                // Show absolute tokens without limit: "112k (41%)"
+                let tokens_str = format_token_count(tokens);
+                if context_window_breakdown_enabled && self.context_window_expanded {
+                    format!("{tokens_str} ({context_usage_pct:.2}%)")
+                } else {
+                    format!("{tokens_str} ({pct_str})")
+                }
+            } else {
+                // Fallback to percentage only when no segment data is available.
+                if context_window_breakdown_enabled && self.context_window_expanded {
+                    format!("{context_usage_pct:.2}%")
+                } else {
+                    pct_str
+                }
+            };
+
         let mut context_window_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(4.)
             .with_child(
-                Text::new(context_usage_str, appearance.ui_font_family(), font_size)
+                Text::new(context_display_str, appearance.ui_font_family(), font_size)
                     .with_color(text_color)
                     .finish(),
             )
@@ -1181,6 +1217,27 @@ const CONTEXT_WINDOW_SEGMENT_PERCENT_DECIMAL_PLACES: usize = 2;
 
 /// Maximum width of the context-window "Other" tooltip before wrapping.
 const CONTEXT_WINDOW_OTHER_TOOLTIP_MAX_WIDTH: f32 = 280.;
+
+/// Formats a token count into a human-readable string (e.g. 112k, 1.2M).
+fn format_token_count(tokens: u32) -> String {
+    if tokens < 1_000 {
+        tokens.to_string()
+    } else if tokens < 1_000_000 {
+        let k = tokens as f64 / 1_000.0;
+        if k.fract() == 0.0 {
+            format!("{}k", k as u64)
+        } else {
+            format!("{:.1}k", k)
+        }
+    } else {
+        let m = tokens as f64 / 1_000_000.0;
+        if m.fract() == 0.0 {
+            format!("{}M", m as u64)
+        } else {
+            format!("{:.1}M", m)
+        }
+    }
+}
 
 #[cfg(test)]
 #[path = "conversation_usage_view_tests.rs"]
