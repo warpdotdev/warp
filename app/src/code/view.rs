@@ -123,6 +123,17 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("CodeEditorView"))
         .with_key_binding("cmdorctrl-r u"),
     ]);
+
+    // Toggle a markdown code pane back to its rendered preview. Mirrors the
+    // `FileNotebookView` binding so the same shortcut toggles both directions.
+    #[cfg(feature = "local_fs")]
+    app.register_editable_bindings([EditableBinding::new(
+        "code_view:toggle_markdown_display_mode",
+        "Toggle Markdown rendered/raw view",
+        CodeViewAction::RenderMarkdown,
+    )
+    .with_context_predicate(text_entry)
+    .with_key_binding("cmdorctrl-e")]);
 }
 
 const PADDING: f32 = 4.;
@@ -2337,9 +2348,26 @@ impl TypedActionView for CodeView {
             }
             #[cfg(feature = "local_fs")]
             CodeViewAction::RenderMarkdown => {
+                // The keybinding is registered for all code panes, but only files that
+                // render in the notebook viewer have a rendered preview to switch to.
+                // Drop the path otherwise so the action is a no-op. This is the same
+                // predicate the header segmented control and the "View Markdown preview"
+                // context-menu entry use, so those existing entry points (including
+                // Jupyter notebooks) keep working unchanged.
+                //
+                // Detect the file type from the standardized path component (always
+                // `/`-separated) rather than display_path(), which is local-OS
+                // oriented and would misparse a remote file's path on a cross-OS
+                // session. The predicate takes impl AsRef<Path> and only inspects the
+                // extension/file name, so feed it the standardized &str directly.
                 let lor_path = self
                     .tab_at(self.active_tab_index)
-                    .and_then(|t| t.location.clone());
+                    .and_then(|t| t.location.clone())
+                    .filter(|p| {
+                        crate::util::openable_file_type::renders_in_warp_notebook_viewer(
+                            p.path_component().as_str(),
+                        )
+                    });
 
                 if let Some(lor_path) = lor_path {
                     let source = self.source.clone();

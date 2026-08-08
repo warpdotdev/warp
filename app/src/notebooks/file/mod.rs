@@ -227,6 +227,13 @@ pub fn init(app: &mut AppContext) {
             FileNotebookAction::ReloadFile,
         )
         .with_context_predicate(id!("FileNotebookView")),
+        EditableBinding::new(
+            "notebookview:toggle_markdown_display_mode",
+            "Toggle Markdown rendered/raw view",
+            FileNotebookAction::ToggleMarkdownDisplayMode(MarkdownDisplayMode::Raw),
+        )
+        .with_context_predicate(id!("FileNotebookView"))
+        .with_key_binding("cmdorctrl-e"),
     ])
 }
 
@@ -1054,6 +1061,14 @@ impl TypedActionView for FileNotebookView {
                 self.context_menu.handle_action(action, ctx);
             }
             FileNotebookAction::ToggleMarkdownDisplayMode(mode) => {
+                // The keybinding is registered view-wide, but only panes that actually
+                // expose the rendered/raw toggle have something to switch to. Reuse the
+                // exact predicate that gates the header segmented control (markdown, plus
+                // Jupyter notebooks when their feature flag is on) so this action behaves
+                // identically for every entry point that dispatches it.
+                if !self.shows_markdown_toggle() {
+                    return;
+                }
                 self.markdown_display_mode = *mode;
                 self.display_mode_segmented_control
                     .update(ctx, |control, ctx| {
