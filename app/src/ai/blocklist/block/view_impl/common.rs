@@ -172,6 +172,10 @@ pub struct WarpingProps<'a, V> {
     pub terminal_model: &'a TerminalModel,
     pub default_warping_text: String,
     pub secondary_element: Option<Box<dyn Element>>,
+    /// Inline "Configure router" link rendered on the primary warping row for a
+    /// model-router turn. `None` for non-router turns, built-in auto routers,
+    /// or local routers without a `source_path`.
+    pub router_config_link: Option<Box<dyn Element>>,
     /// When an LRC subagent has sent at least one snapshot, the timestamp of the most recent snapshot.
     pub last_snapshot_at: Option<instant::Instant>,
 }
@@ -201,7 +205,7 @@ pub struct ForceRefreshButtonProps<'a> {
 }
 
 pub fn render_warping_indicator<V: View>(
-    props: WarpingProps<'_, V>,
+    mut props: WarpingProps<'_, V>,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let output_status = props.model.status(app);
@@ -282,6 +286,11 @@ pub fn render_warping_indicator<V: View>(
 
     let mut should_render_waiting_icon = false;
     let mut non_shimmering_text = None;
+    // Inline "Configure router" link for a model-router turn. Only surfaced when
+    // the primary text falls through to `default_warping_text` (the generic
+    // warping state), so sub-action messages ("Searching codebase...", etc.) keep
+    // the warping row to themselves.
+    let mut router_config_link: Option<Box<dyn Element>> = None;
     let message = if let Some(summarization_type) = summarization_type {
         // Choose the appropriate message based on summarization type
         let base_message = match summarization_type {
@@ -416,6 +425,7 @@ pub fn render_warping_indicator<V: View>(
                         }
                     }
                 } else {
+                    router_config_link = props.router_config_link.take();
                     props.default_warping_text.clone()
                 }
             }
@@ -502,6 +512,7 @@ pub fn render_warping_indicator<V: View>(
             },
             is_passive_code_diff: props.model.request_type(app).is_passive_code_diff(),
             secondary_element: props.secondary_element,
+            router_config_link,
         },
         app,
     )
@@ -525,6 +536,9 @@ pub struct WarpingIndicatorProps {
     pub buttons: Option<Box<dyn Element>>,
     pub is_passive_code_diff: bool,
     pub secondary_element: Option<Box<dyn Element>>,
+    /// Inline "Configure router" link rendered on the primary warping row.
+    /// `None` unless the active turn is a model-router turn with a config link.
+    pub router_config_link: Option<Box<dyn Element>>,
 }
 
 /// Computes the fixed height of the warping-indicator footer.
@@ -560,6 +574,7 @@ pub fn render_warping_indicator_base(
         buttons,
         is_passive_code_diff,
         secondary_element,
+        router_config_link,
     } = props;
     // Whether a secondary element (an agent tip or fallback-model explanation)
     // will be rendered on a second line below the warping text. Captured before
@@ -593,6 +608,16 @@ pub fn render_warping_indicator_base(
 
         if let Some(suffix) = non_shimmering_suffix {
             row = row.with_child(Shrinkable::new(1., suffix).finish());
+        }
+
+        if let Some(router_link) = router_config_link {
+            row = row.with_child(
+                Shrinkable::new(
+                    1.,
+                    Container::new(router_link).with_margin_left(4.).finish(),
+                )
+                .finish(),
+            );
         }
 
         row.finish()
