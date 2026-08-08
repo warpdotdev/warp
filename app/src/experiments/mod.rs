@@ -375,15 +375,28 @@ pub trait Experiment<T: Experiment<T>>: FromStr {
     }
 }
 
-/// Creates the experiment-layer mappings given a list of layers. This method assumes
-/// that each experiment is included in a single layer, which should be asserted by
-/// the validation tests.
-fn create_experiment_layer_mappings(layers: &[&'static Layer]) {
+/// Populates `mappings` with the experiment-layer mappings for `layers`. This method
+/// assumes that each experiment is included in a single layer, which should be asserted
+/// by the validation tests.
+///
+/// Takes the destination map as a parameter so tests can build mappings into a local
+/// map instead of the process-global [`EXPERIMENT_LAYER_MAPPINGS`], which any test
+/// calling [`init`] may concurrently repopulate.
+fn build_experiment_layer_mappings(
+    layers: &[&'static Layer],
+    mappings: &DashMap<&'static str, &'static Layer>,
+) {
     for layer in layers.iter() {
         for group_id in layer.traffic_allocations.keys() {
-            EXPERIMENT_LAYER_MAPPINGS.insert(group_id.experiment, layer);
+            mappings.insert(group_id.experiment, layer);
         }
     }
+}
+
+/// Creates the experiment-layer mappings given a list of layers, storing them in the
+/// process-global [`EXPERIMENT_LAYER_MAPPINGS`].
+fn create_experiment_layer_mappings(layers: &[&'static Layer]) {
+    build_experiment_layer_mappings(layers, &EXPERIMENT_LAYER_MAPPINGS);
 }
 
 /// Reads in the user overrides. Overrides should be a comma delimited list of

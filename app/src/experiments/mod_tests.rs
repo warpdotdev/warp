@@ -144,21 +144,28 @@ fn test_from_group_id_errors_if_incorrect_experiment() {
     assert!(res.is_err())
 }
 
+// Builds into a local map rather than the process-global
+// `EXPERIMENT_LAYER_MAPPINGS`: any concurrently-running test that calls
+// `experiments::init` (e.g. via `test_util::terminal`) writes the real layers
+// into that global, so its exact contents are not assertable in a shared
+// process regardless of clearing or serialization.
 #[test]
 fn test_create_experiment_layer_mappings() {
-    let layers = vec![&*TEST_LAYER];
-    create_experiment_layer_mappings(&layers);
+    let mappings = DashMap::new();
 
-    assert_eq!(EXPERIMENT_LAYER_MAPPINGS.len(), 2);
+    let layers = vec![&*TEST_LAYER];
+    build_experiment_layer_mappings(&layers, &mappings);
+
+    assert_eq!(mappings.len(), 2);
     assert_eq!(
-        EXPERIMENT_LAYER_MAPPINGS
+        mappings
             .get(TestExperiment::name())
             .expect("Layer mapping should have been created for TestExperiment.")
             .name(),
         TEST_LAYER.name()
     );
     assert_eq!(
-        EXPERIMENT_LAYER_MAPPINGS
+        mappings
             .get(FooExperiment::name())
             .expect("Layer mapping should have been created for FooExperiment.")
             .name(),

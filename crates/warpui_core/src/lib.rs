@@ -39,7 +39,7 @@ pub mod util;
 pub mod windowing;
 pub mod zoom;
 
-pub use assets::AssetProvider;
+pub use assets::{AssetCacheKey, AssetProvider};
 pub use clipboard::Clipboard;
 pub use elements::Element;
 pub use event::Event;
