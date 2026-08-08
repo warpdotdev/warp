@@ -4,6 +4,7 @@ mod mixer;
 mod search_item;
 pub(super) mod view;
 
+use std::ops::Range;
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
 
@@ -11,6 +12,7 @@ use ai::skills::SkillReference;
 pub use cloud_mode_v2_view::{CloudModeV2SlashCommandView, Section as CloudModeV2Section};
 pub use data_source::*;
 pub use mixer::{SlashCommandMixer, build_slash_command_mixer, slash_command_query};
+use string_offset::ByteOffset;
 pub use view::{CloseReason, InlineSlashCommandView, SlashCommandsEvent};
 #[cfg(not(target_family = "wasm"))]
 use warp_cli::agent::Harness;
@@ -112,6 +114,31 @@ pub fn slash_command_selection_behavior(command: &StaticCommand) -> SlashCommand
     } else {
         SlashCommandSelectionBehavior::Execute
     }
+}
+
+/// Computes the pre-filled `/rename-conversation` input buffer and the byte range of the
+/// title to select, so selecting the command with no argument pre-populates the current
+/// conversation title (fully selected) for granular edits or whole-title replacement.
+///
+/// Returns `None` when there is no title to pre-fill (no active conversation, or an
+/// empty/whitespace-only title); the caller then falls back to the default `/<command-name> `
+/// insertion so the existing explicit-argument and validation paths stay intact.
+pub(super) fn rename_conversation_prefill(
+    command_name: &str,
+    current_title: Option<&str>,
+) -> Option<(String, Range<usize>)> {
+    let title = current_title?.trim();
+    if title.is_empty() {
+        return None;
+    }
+    // Mirror `slash_command_selection_behavior`'s `InsertCommandText` prefix
+    // (`format!("{} ", command.name)`) so the slash command parser still detects the
+    // command and extracts the edited title as the argument on Enter, routing submission
+    // through the existing `rename_conversation` validation/API flow.
+    let prefix = format!("{} ", command_name);
+    let title_start = prefix.len();
+    let title_end = title_start + title.len();
+    Some((format!("{prefix}{title}"), title_start..title_end))
 }
 
 /// Whether an already-open slash command menu should close after the input becomes an exact
@@ -259,6 +286,19 @@ impl Input {
             .command_is_active(command, ctx)
     }
 
+    /// Returns the selected (active) conversation's current title, if any, so the
+    /// `/rename-conversation` slash command can pre-fill the rename input with the
+    /// current name for granular edits or whole-title replacement.
+    fn active_conversation_title(&self, ctx: &AppContext) -> Option<String> {
+        let conversation_id = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)?;
+        BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .and_then(|conversation| conversation.title())
+    }
+
     pub(super) fn select_slash_command(
         &mut self,
         command: &StaticCommand,
@@ -294,8 +334,29 @@ impl Input {
                 );
             }
             SlashCommandSelectionBehavior::InsertCommandText(text) => {
-                self.editor.update(ctx, |editor, ctx| {
-                    editor.set_buffer_text(&text, ctx);
+                // For `/rename-conversation` with no argument, pre-fill the current
+                // conversation's title (fully selected) so the user can immediately type
+                // to replace the whole name or make granular edits inline. Falls back to
+                // the default `/<command> ` insertion when there is no active conversation
+                // title, preserving the existing explicit-argument and validation paths.
+                let prefill = if command.kind == SlashCommandKind::RenameConversation {
+                    self.active_conversation_title(ctx)
+                        .and_then(|title| rename_conversation_prefill(command.name, Some(&title)))
+                } else {
+                    None
+                };
+                self.editor.update(ctx, |editor, ctx| match prefill {
+                    Some((buffer, title_range)) => {
+                        editor.set_buffer_text(&buffer, ctx);
+                        editor.select_ranges_by_byte_offset(
+                            [ByteOffset::from(title_range.start)
+                                ..ByteOffset::from(title_range.end)],
+                            ctx,
+                        );
+                    }
+                    None => {
+                        editor.set_buffer_text(&text, ctx);
+                    }
                 });
             }
         }
