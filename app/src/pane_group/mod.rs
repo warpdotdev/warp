@@ -1205,6 +1205,68 @@ impl PaneGroup {
         }
     }
 
+    fn reload_shell_in_pane(
+        &mut self,
+        terminal_pane_id: TerminalPaneId,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let pane_id = terminal_pane_id.into();
+        if !self.pane_contents.contains_key(&pane_id)
+            || !self.panes.is_pane_in_tree(pane_id)
+            || self.panes.is_pane_hidden(&pane_id)
+        {
+            return false;
+        }
+
+        let Some(terminal_view) = self.terminal_view_from_pane_id(terminal_pane_id, ctx) else {
+            return false;
+        };
+
+        let terminal_view_id = terminal_view.id();
+        let chosen_shell = terminal_view.read(ctx, |view, _ctx| {
+            view.model.lock().shell_launch_state().available_shell()
+        });
+        let startup_directory = self.startup_path_for_new_session(Some(terminal_pane_id), ctx);
+
+        self.remove_child_agent_panes(terminal_view_id, ctx);
+        self.child_agent_panes
+            .retain(|_, child_pane_id| *child_pane_id != pane_id);
+        if self.is_split_off_child_agent_pane(pane_id, ctx) {
+            self.child_agent_origin = None;
+        }
+
+        let pane_id = if self.panes.is_temporary_replacement(pane_id) {
+            let Some(original_pane_id) = self.close_temporary_replacement_pane(pane_id, ctx) else {
+                return false;
+            };
+            original_pane_id
+        } else {
+            pane_id
+        };
+
+        let (pane_data, _) = self.create_terminal_pane_data(
+            startup_directory,
+            HashMap::new(),
+            IsSharedSessionCreator::No,
+            chosen_shell,
+            None,
+            ctx,
+        );
+
+        let replaced = self.replace_pane(pane_id, pane_data, false, ctx);
+        if replaced {
+            ctx.emit(Event::TerminalViewStateChanged);
+            ctx.emit(Event::ActiveSessionChanged);
+        }
+        replaced
+    }
+
+    fn is_split_off_child_agent_pane(&self, pane_id: PaneId, ctx: &AppContext) -> bool {
+        self.child_agent_origin.as_ref().is_some_and(|origin| {
+            self.pane_id_for_conversation_owner(origin.conversation_id, ctx) == Some(pane_id)
+        })
+    }
+
     fn handle_pane_view_event(
         &mut self,
         pane_id: PaneId,

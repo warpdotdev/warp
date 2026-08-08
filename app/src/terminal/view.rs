@@ -1666,6 +1666,7 @@ pub enum Event {
     Escape,
     Exited,
     BlockListCleared,
+    ReloadShellRequested,
     ShareModalOpened(BlockIndex),
     SendNotification(BlockNotification),
     BlockCompleted {
@@ -17181,25 +17182,26 @@ impl TerminalView {
                 | BlockListMenuSource::RichContentTextRightClick { .. }
                 | BlockListMenuSource::OutsideBlockRightClick { .. }
         ) {
-            // Surface "Clear Blocks" in the right-click menu so it's
-            // discoverable without the keyboard shortcut. We skip
-            // text-selection contexts (`Regular*TextRightClick` /
-            // `RichContentTextRightClick`) because those menus are scoped to
-            // actions on the selected text.
-            let include_clear = matches!(
+            // Surface terminal-wide actions in the right-click menu so they're
+            // discoverable without keyboard shortcuts.
+            let include_terminal_actions = matches!(
                 menu_source,
                 BlockListMenuSource::RegularBlockRightClick { .. }
                     | BlockListMenuSource::RichContentBlockRightClick { .. }
                     | BlockListMenuSource::OutsideBlockRightClick { .. }
             );
-            let clear_menu_item = include_clear
-                .then(|| self.clear_buffer_menu_item(&model, ctx))
-                .flatten();
-            if let Some(clear_menu_item) = clear_menu_item {
+            let mut terminal_action_items = Vec::new();
+            if include_terminal_actions {
+                if let Some(clear_menu_item) = self.clear_buffer_menu_item(&model, ctx) {
+                    terminal_action_items.push(clear_menu_item);
+                }
+                terminal_action_items.push(self.reload_shell_menu_item(ctx));
+            }
+            if !terminal_action_items.is_empty() {
                 if !items.is_empty() {
                     items.push(MenuItem::Separator);
                 }
-                items.push(clear_menu_item);
+                items.extend(terminal_action_items);
             }
 
             let current_shell = model.shell_launch_state().available_shell();
@@ -17214,6 +17216,15 @@ impl TerminalView {
         }
 
         items
+    }
+
+    #[cfg(test)]
+    pub(crate) fn context_menu_items_for_test(
+        &self,
+        menu_source: &BlockListMenuSource,
+        ctx: &mut ViewContext<Self>,
+    ) -> Vec<MenuItem<TerminalAction>> {
+        self.context_menu_items(menu_source, ctx)
     }
 
     /// Builds the "Clear Blocks" entry for the terminal right-click context
@@ -17237,6 +17248,17 @@ impl TerminalView {
                 ))
                 .into_item(),
         )
+    }
+
+    /// Builds the "Reload Shell" entry for the terminal right-click context menu.
+    fn reload_shell_menu_item(&self, ctx: &AppContext) -> MenuItem<TerminalAction> {
+        MenuItemFields::new("Reload Shell")
+            .with_on_select_action(TerminalAction::ReloadShell)
+            .with_key_shortcut_label(keybinding_name_to_display_string(
+                "terminal:reload_shell",
+                ctx,
+            ))
+            .into_item()
     }
 
     fn copy_prompt_menu_items(
@@ -17544,6 +17566,8 @@ impl TerminalView {
             let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
             items.extend(self.session_sharing_context_menu_items(&model, false, has_session_link));
         }
+        items.push(MenuItem::Separator);
+        items.push(self.reload_shell_menu_item(ctx));
 
         // Section 2: AI Command Search, Ask Warp AI
         items.extend([
@@ -17787,6 +17811,10 @@ impl TerminalView {
                 has_session_link,
             ));
         }
+        if !menu_items.is_empty() {
+            menu_items.push(MenuItem::Separator);
+        }
+        menu_items.push(self.reload_shell_menu_item(ctx));
         let current_shell = model.shell_launch_state().available_shell();
         let mut pane_context_menu_items = self.pane_context_menu_items(current_shell, ctx);
         if !menu_items.is_empty() && !pane_context_menu_items.is_empty() {
@@ -26453,6 +26481,7 @@ impl TypedActionView for TerminalView {
             | ReinputCommands
             | ReinputCommandsWithSudo
             | ClearBuffer
+            | ReloadShell
             | Focus
             | ShowFindBar
             | PageUp
@@ -26775,6 +26804,7 @@ impl TypedActionView for TerminalView {
             ReinputCommands => self.reinput_commands(false, ctx),
             ReinputCommandsWithSudo => self.reinput_commands(true, ctx),
             ClearBuffer => self.clear_buffer(ctx),
+            ReloadShell => ctx.emit(Event::ReloadShellRequested),
             Focus => self.redetermine_global_focus(ctx),
             FocusInputAndClearSelection => self.focus_input_and_clear_selections(ctx),
             ShowFindBar => self.show_find_bar(ctx),
