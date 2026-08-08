@@ -30,7 +30,10 @@ use crate::terminal::cli_agent_sessions::{
 /// server conversation token is persisted as soon as the streamed `Init`
 /// event arrives). It also handles
 /// `BlocklistAIHistoryEvent::LocalSharedSessionEstablished` to link
-/// shared session IDs to the task row.
+/// shared session IDs to the task row, including the race-condition case
+/// where `/remote-control` is started before the conversation's task_id
+/// has been assigned: the session_id is stored in `pending_session_ids`
+/// and flushed on the next `ConversationServerTokenAssigned` event.
 ///
 /// For third-party harnesses (e.g. Claude Code), status is derived from
 /// `CLIAgentSessionsModelEvent::StatusChanged`. Because these sessions do
@@ -45,6 +48,11 @@ pub struct LocalAgentTaskSyncModel {
     cli_session_task_ids: HashMap<EntityId, AmbientAgentTaskId>,
     /// Serializes and coalesces model-owned updates independently per task.
     update_queue: LocalTaskUpdateQueue,
+    /// Session IDs from `/remote-control` sessions that arrived before the
+    /// conversation's server-assigned `task_id` was known. Keyed by
+    /// `AIConversationId`; drained when `ConversationServerTokenAssigned`
+    /// fires and the task_id becomes available, so the link is sent then.
+    pending_session_ids: HashMap<AIConversationId, SessionId>,
 }
 
 pub enum LocalAgentTaskSyncModelEvent {}
@@ -95,6 +103,7 @@ impl LocalAgentTaskSyncModel {
             ai_client,
             cli_session_task_ids: HashMap::new(),
             update_queue: LocalTaskUpdateQueue::default(),
+            pending_session_ids: HashMap::new(),
         }
     }
 
@@ -169,6 +178,11 @@ impl LocalAgentTaskSyncModel {
             // conversation, report its current status. This handles the race
             // where ConversationStatus::InProgress fires before task_id is
             // available — we catch up here once the task_id arrives.
+            //
+            // It also flushes any `pending_session_ids` entry that was stored
+            // when a `/remote-control` shared session was established before
+            // the task_id was known — the session_id is included in that
+            // same catch-up update.
             BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
                 conversation_id, ..
             } => {
@@ -180,9 +194,18 @@ impl LocalAgentTaskSyncModel {
             } => {
                 self.on_local_shared_session_established(*conversation_id, *session_id, ctx);
             }
-            BlocklistAIHistoryEvent::RemoveConversation { run_id, .. }
-            | BlocklistAIHistoryEvent::DeletedConversation { run_id, .. } => {
+            BlocklistAIHistoryEvent::RemoveConversation {
+                conversation_id,
+                run_id,
+                ..
+            }
+            | BlocklistAIHistoryEvent::DeletedConversation {
+                conversation_id,
+                run_id,
+                ..
+            } => {
                 self.remove_queued_update_state_for_run_id(run_id.as_deref());
+                self.pending_session_ids.remove(conversation_id);
             }
             _ => {}
         }
@@ -215,7 +238,7 @@ impl LocalAgentTaskSyncModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some((task_id, Some(update))) =
+        let Some((task_id, Some(mut update))) =
             with_local_conversation(conversation_id, ctx, |conversation| {
                 // When the conversation transitions to Error but the last exchange is
                 // still streaming, the stream hasn't finished processing the error yet.
@@ -246,6 +269,13 @@ impl LocalAgentTaskSyncModel {
             return;
         };
 
+        // Drain any session_id that was stored when a `/remote-control` shared
+        // session was established before the conversation's task_id was known.
+        // Only consume it now that we have confirmed the update will be sent,
+        // so the session_id is not silently dropped if the closure returns None
+        // (e.g. mid-stream Error guard above).
+        update.session_id = self.pending_session_ids.remove(&conversation_id);
+
         self.enqueue_update(task_id, update, ctx);
     }
 
@@ -255,16 +285,32 @@ impl LocalAgentTaskSyncModel {
         session_id: SessionId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some((task_id, update)) =
+        // Fast path: conversation already has a task_id — link immediately.
+        if let Some((task_id, update)) =
             with_local_conversation(conversation_id, ctx, |_| LocalTaskUpdate {
                 session_id: Some(session_id),
                 ..LocalTaskUpdate::default()
             })
-        else {
+        {
+            self.enqueue_update(task_id, update, ctx);
             return;
-        };
+        }
 
-        self.enqueue_update(task_id, update, ctx);
+        // Slow path: the task_id has not been assigned yet (the server's Init
+        // stream event hasn't arrived).  Store the session_id so it can be
+        // included when `ConversationServerTokenAssigned` fires and
+        // `on_conversation_status_updated` picks it up.
+        //
+        // Only store when the conversation is a locally-owned non-remote-child
+        // that simply hasn't received its task_id yet.  Skip viewers,
+        // remote-children, and unknown conversations — those are the same
+        // guards that `with_local_conversation` already enforces.
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        if let Some(conversation) = history.conversation(&conversation_id) {
+            if !conversation.is_viewing_shared_session() && !conversation.is_remote_child() {
+                self.pending_session_ids.insert(conversation_id, session_id);
+            }
+        }
     }
 
     fn on_cli_session_status_changed(
