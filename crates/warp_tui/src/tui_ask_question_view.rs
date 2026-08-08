@@ -144,20 +144,11 @@ impl TuiAskQuestionView {
             if event.action_id() != &me.action_id {
                 return;
             }
-            if matches!(
-                event,
-                BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
-            ) {
-                ctx.focus(&me.selector);
-            }
             if matches!(event, BlocklistAIActionEvent::FinishedAction { .. }) {
                 me.abort_auto_advance();
             }
             me.invalidate_layout(ctx);
         });
-        if view.is_waiting_on_answers(ctx) {
-            ctx.focus(&selector);
-        }
         view
     }
 
