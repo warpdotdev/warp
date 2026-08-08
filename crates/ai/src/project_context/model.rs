@@ -14,6 +14,7 @@ cfg_if::cfg_if! {
         use repo_metadata::{
             RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier, StandingQueryContent,
         };
+        use super::global_rules::read_rule_file_capped;
         use warp_util::remote_path::RemotePath;
         use warp_util::standardized_path::StandardizedPath;
     }
@@ -587,18 +588,21 @@ impl ProjectContextModel {
         let mut rules: HashMap<LocalOrRemotePath, ProjectRules> = HashMap::new();
 
         for rule in rule_paths {
-            match async_fs::read_to_string(&rule.path).await {
-                Ok(content) => {
+            // Use read_rule_file_capped to guard against memory spikes from
+            // pathologically large WARP.md / AGENTS.md files: on macOS,
+            // `read_to_string` reserves the file's full metadata size up front
+            // which can be GiB for a sparse or corrupted file.
+            match read_rule_file_capped(&rule.path).await {
+                Some(content) => {
                     let existing_rules = rules
                         .entry(LocalOrRemotePath::Local(rule.project_root))
                         .or_default();
                     existing_rules.upsert_rule(&LocalOrRemotePath::Local(rule.path), content);
                 }
-                Err(e) => {
+                None => {
                     log::debug!(
-                        "Failed to read rule file from persistence {}: {}",
-                        rule.path.display(),
-                        e
+                        "Skipped rule file from persistence (missing, unreadable, or oversized): {}",
+                        rule.path.display()
                     );
                     // Continue processing other files even if one fails
                 }
