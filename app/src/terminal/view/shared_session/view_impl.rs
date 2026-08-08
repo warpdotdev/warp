@@ -210,6 +210,13 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.pending_cloud_followup_task_id = Some(task_id);
+        // Reset the action model's view-only flag when transitioning from a shared session viewer
+        // to an interactive follow-up state. The view-only flag is set during session replay
+        // (in on_shared_init) to prevent viewers from accepting AI actions during an active run,
+        // but must be cleared when the session ends and the user becomes the owner of the follow-up.
+        self.ai_action_model.update(ctx, |action_model, _| {
+            action_model.set_view_only(false);
+        });
         self.input.update(ctx, |input, ctx| {
             input.reset_after_cloud_followup_submission(ctx);
             input.set_input_mode_agent(true, ctx);
