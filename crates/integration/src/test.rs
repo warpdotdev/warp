@@ -6920,7 +6920,6 @@ pub fn test_pass_control_sequences_to_long_running_block() -> Builder {
 /// 4. Close the window before grace period expires
 /// 5. Verify cleanup handles missing window gracefully
 pub fn test_undo_close_stack_timeout_cleanup() -> Builder {
-    FeatureFlag::UndoClosedPanes.set_enabled(true);
     new_builder()
         // This test is Mac-only due to differences in window management on Linux
         .set_should_run_test(|| cfg!(target_os = "macos"))
