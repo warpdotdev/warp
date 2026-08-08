@@ -4858,16 +4858,33 @@ impl EditorView {
         action: PlainTextEditorViewAction,
         ctx: &mut ViewContext<Self>,
     ) {
+        let text = self.text_without_line_breaks_if_single_line(text);
         self.edit(
             ctx,
             Edits::new().with_update_buffer(
                 action,
                 EditOrigin::UserInitiated,
                 |editor_model, ctx| {
-                    editor_model.insert(text, None, ctx);
+                    editor_model.insert(&text, None, ctx);
                 },
             ),
         );
+    }
+
+    /// Removes line breaks from text about to be inserted into a single-line editor.
+    ///
+    /// Line breaks reach an editor as inserted *text*, not only through the newline
+    /// action: clipboard payloads copied on Windows carry `\r\n`, and a platform
+    /// reports `"\r"` as the typed characters of an Enter press that no keybinding
+    /// handled. They paint as nothing, so in a single-line field they silently corrupt
+    /// a value the user sees as correct. A single-line buffer can never legitimately
+    /// hold one, so drop them on the way in.
+    fn text_without_line_breaks_if_single_line<'a>(&self, text: &'a str) -> Cow<'a, str> {
+        if self.single_line && text.contains(['\r', '\n']) {
+            Cow::Owned(text.replace(['\r', '\n'], ""))
+        } else {
+            Cow::Borrowed(text)
+        }
     }
 
     pub fn system_insert(
@@ -5019,14 +5036,15 @@ impl EditorView {
     pub fn user_insert(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
         let should_autocomplete_symbols =
             self.autocomplete_symbols_allowed && self.autocomplete_symbols_setting;
-        let action = PlainTextEditorViewAction::from_inserted_str(text);
+        let text = self.text_without_line_breaks_if_single_line(text);
+        let action = PlainTextEditorViewAction::from_inserted_str(&text);
         self.edit(
             ctx,
             Edits::new().with_update_buffer(action, EditOrigin::UserTyped, |editor_model, ctx| {
                 if should_autocomplete_symbols {
-                    editor_model.insert_and_maybe_autocomplete_symbols(text, ctx);
+                    editor_model.insert_and_maybe_autocomplete_symbols(&text, ctx);
                 } else {
-                    editor_model.insert_internal(text, None, SelectionInsertion::No, ctx);
+                    editor_model.insert_internal(&text, None, SelectionInsertion::No, ctx);
                 }
             }),
         );

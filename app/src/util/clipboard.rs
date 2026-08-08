@@ -12,7 +12,13 @@ pub fn clipboard_content_with_escaped_paths(
 ) -> String {
     if replace_newlines_with_spaces {
         content = ClipboardContent {
-            plain_text: content.plain_text.replace("\n", " ").to_string(),
+            // Collapse CRLF first: replacing only `\n` would leave the `\r` of a
+            // clipboard payload copied on Windows behind, and a lone `\r` paints as
+            // nothing, so it silently corrupts the pasted value.
+            plain_text: content
+                .plain_text
+                .replace("\r\n", "\n")
+                .replace(['\n', '\r'], " "),
             ..content
         }
     }

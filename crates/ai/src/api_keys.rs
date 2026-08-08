@@ -125,6 +125,77 @@ impl CustomEndpointModel {
             _ => &self.name,
         }
     }
+
+    /// Normalizes the user-entered name and alias. An alias that normalizes to empty
+    /// is dropped so [`Self::display_label`] falls back to the model name.
+    fn normalize(&mut self) {
+        self.name = normalize_user_entered_field(&self.name);
+        self.alias = self
+            .alias
+            .as_deref()
+            .map(normalize_user_entered_field)
+            .filter(|alias| !alias.is_empty());
+    }
+}
+
+impl CustomEndpoint {
+    /// Builds an endpoint from the values entered in the Custom Inference form,
+    /// normalizing them and assigning a `config_key` to every model that doesn't
+    /// already have one.
+    fn from_params(params: CustomEndpointParams) -> Self {
+        let CustomEndpointParams {
+            name,
+            url,
+            api_key,
+            models,
+            schema,
+        } = params;
+        let mut endpoint = Self {
+            name,
+            url,
+            api_key,
+            schema,
+            models: models
+                .into_iter()
+                .map(|(name, alias, config_key)| CustomEndpointModel {
+                    name,
+                    alias,
+                    config_key: config_key
+                        .filter(|k| !k.is_empty())
+                        .unwrap_or_else(|| Uuid::new_v4().to_string()),
+                })
+                .collect(),
+        };
+        endpoint.normalize();
+        endpoint
+    }
+
+    /// Normalizes every user-entered field on this endpoint and its models.
+    fn normalize(&mut self) {
+        self.name = normalize_user_entered_field(&self.name);
+        self.url = normalize_user_entered_field(&self.url);
+        self.api_key = normalize_user_entered_field(&self.api_key);
+        for model in &mut self.models {
+            model.normalize();
+        }
+    }
+}
+
+/// Strips control characters and surrounding whitespace from a value typed or pasted
+/// into the Custom Inference settings form.
+///
+/// Control characters paint as nothing, so a stray one — a `\r` from a CRLF clipboard
+/// payload, or the `\r` a platform reports as the typed characters of an unhandled
+/// Enter — is invisible in every UI that shows the value while still being sent
+/// verbatim. A model name carrying one goes out as the request's model slug and the
+/// provider rejects it with a "model not found" error that looks exactly like a typo.
+fn normalize_user_entered_field(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect::<String>()
+        .trim()
+        .to_owned()
 }
 
 impl ApiKeys {
@@ -471,29 +542,9 @@ impl ApiKeyManager {
         params: CustomEndpointParams,
         ctx: &mut ModelContext<Self>,
     ) {
-        let CustomEndpointParams {
-            name,
-            url,
-            api_key,
-            models,
-            schema,
-        } = params;
-        self.keys.custom_endpoints.push(CustomEndpoint {
-            name,
-            url,
-            api_key,
-            schema,
-            models: models
-                .into_iter()
-                .map(|(name, alias, config_key)| CustomEndpointModel {
-                    name,
-                    alias,
-                    config_key: config_key
-                        .filter(|k| !k.is_empty())
-                        .unwrap_or_else(|| Uuid::new_v4().to_string()),
-                })
-                .collect(),
-        });
+        self.keys
+            .custom_endpoints
+            .push(CustomEndpoint::from_params(params));
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
@@ -507,29 +558,7 @@ impl ApiKeyManager {
         if index >= self.keys.custom_endpoints.len() {
             return;
         }
-        let CustomEndpointParams {
-            name,
-            url,
-            api_key,
-            models,
-            schema,
-        } = params;
-        self.keys.custom_endpoints[index] = CustomEndpoint {
-            name,
-            url,
-            api_key,
-            schema,
-            models: models
-                .into_iter()
-                .map(|(name, alias, config_key)| CustomEndpointModel {
-                    name,
-                    alias,
-                    config_key: config_key
-                        .filter(|k| !k.is_empty())
-                        .unwrap_or_else(|| Uuid::new_v4().to_string()),
-                })
-                .collect(),
-        };
+        self.keys.custom_endpoints[index] = CustomEndpoint::from_params(params);
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
@@ -725,8 +754,16 @@ impl ApiKeyManager {
             }
         };
 
-        match serde_json::from_str(&key_json) {
-            Ok(keys) => keys,
+        match serde_json::from_str::<ApiKeys>(&key_json) {
+            Ok(mut keys) => {
+                // Endpoints persisted before the form normalized its inputs can hold
+                // invisible control characters, so heal them on the way in rather than
+                // making the user re-save the endpoint to get working requests back.
+                for endpoint in &mut keys.custom_endpoints {
+                    endpoint.normalize();
+                }
+                keys
+            }
             Err(e) => {
                 report_error!(anyhow::Error::new(e).context("Failed to deserialize API keys"));
                 ApiKeys::default()
