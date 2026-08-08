@@ -261,7 +261,7 @@ impl CLIAgent {
             CLIAgent::Auggie => Some(Icon::AuggieLogo),
             CLIAgent::CursorCli => Some(Icon::CursorLogo),
             CLIAgent::Goose => Some(Icon::GooseLogo),
-            CLIAgent::Hermes => None,
+            CLIAgent::Hermes => Some(Icon::HermesLogo),
             // Vibe is recognized but ships without a brand asset. The brand color
             // still drives the toolbar tile; an `Icon::MistralLogo` can be wired
             // up in a follow-up once an officially licensed SVG is available.
