@@ -27827,17 +27827,11 @@ impl View for Workspace {
                         return DispatchEventResult::PropagateToParent;
                     }
 
-                    // If the control key is being held, scrolling should scale the zoom level or font size
-                    if FeatureFlag::UIZoom.is_enabled() {
-                        if delta.y() > 0.0 {
-                            ctx.dispatch_typed_action(WorkspaceAction::IncreaseZoom);
-                        } else if delta.y() < 0.0 {
-                            ctx.dispatch_typed_action(WorkspaceAction::DecreaseZoom);
-                        }
-                    } else if delta.y() > 0.0 {
-                        ctx.dispatch_typed_action(WorkspaceAction::IncreaseFontSize);
+                    // If the control key is being held, scrolling should scale the zoom level
+                    if delta.y() > 0.0 {
+                        ctx.dispatch_typed_action(WorkspaceAction::IncreaseZoom);
                     } else if delta.y() < 0.0 {
-                        ctx.dispatch_typed_action(WorkspaceAction::DecreaseFontSize);
+                        ctx.dispatch_typed_action(WorkspaceAction::DecreaseZoom);
                     }
                     DispatchEventResult::StopPropagation
                 });

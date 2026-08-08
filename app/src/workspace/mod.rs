@@ -357,48 +357,29 @@ pub fn init(app: &mut AppContext) {
     .with_custom_action(CustomAction::NewFile)
     .with_context_predicate(id!("Workspace") & !id!("Workspace_ViewOnlySharedSession"))]);
 
-    if FeatureFlag::UIZoom.is_enabled() {
-        app.register_fixed_bindings([
-            FixedBinding::custom(
-                CustomAction::IncreaseZoom,
-                WorkspaceAction::IncreaseZoom,
-                "Zoom In",
-                id!("Workspace"),
-            )
-            .with_group(bindings::BindingGroup::Settings.as_str()),
-            FixedBinding::custom(
-                CustomAction::DecreaseZoom,
-                WorkspaceAction::DecreaseZoom,
-                "Zoom Out",
-                id!("Workspace"),
-            )
-            .with_group(bindings::BindingGroup::Settings.as_str()),
-            FixedBinding::custom(
-                CustomAction::ResetZoom,
-                WorkspaceAction::ResetZoom,
-                "Reset Zoom",
-                id!("Workspace"),
-            )
-            .with_group(bindings::BindingGroup::Settings.as_str()),
-        ]);
-    } else {
-        app.register_fixed_bindings([
-            FixedBinding::custom(
-                CustomAction::IncreaseFontSize,
-                WorkspaceAction::IncreaseFontSize,
-                "Increase font size",
-                id!("Workspace"),
-            )
-            .with_group(bindings::BindingGroup::Settings.as_str()),
-            FixedBinding::custom(
-                CustomAction::DecreaseFontSize,
-                WorkspaceAction::DecreaseFontSize,
-                "Decrease font size",
-                id!("Workspace"),
-            )
-            .with_group(bindings::BindingGroup::Settings.as_str()),
-        ]);
-    }
+    app.register_fixed_bindings([
+        FixedBinding::custom(
+            CustomAction::IncreaseZoom,
+            WorkspaceAction::IncreaseZoom,
+            "Zoom In",
+            id!("Workspace"),
+        )
+        .with_group(bindings::BindingGroup::Settings.as_str()),
+        FixedBinding::custom(
+            CustomAction::DecreaseZoom,
+            WorkspaceAction::DecreaseZoom,
+            "Zoom Out",
+            id!("Workspace"),
+        )
+        .with_group(bindings::BindingGroup::Settings.as_str()),
+        FixedBinding::custom(
+            CustomAction::ResetZoom,
+            WorkspaceAction::ResetZoom,
+            "Reset Zoom",
+            id!("Workspace"),
+        )
+        .with_group(bindings::BindingGroup::Settings.as_str()),
+    ]);
 
     if ContextFlag::LaunchConfigurations.is_enabled() {
         app.register_fixed_bindings([FixedBinding::custom(
@@ -435,84 +416,54 @@ pub fn init(app: &mut AppContext) {
         ]);
     }
 
-    if FeatureFlag::UIZoom.is_enabled() {
-        app.register_editable_bindings([
-            EditableBinding::new(
-                "workspace:increase_zoom",
-                "Increase zoom level",
-                WorkspaceAction::IncreaseZoom,
-            )
-            .with_context_predicate(id!("Workspace"))
-            .with_group(bindings::BindingGroup::Settings.as_str())
-            .with_key_binding("cmdorctrl-="),
-            EditableBinding::new(
-                "workspace:decrease_zoom",
-                "Decrease zoom level",
-                WorkspaceAction::DecreaseZoom,
-            )
-            .with_context_predicate(id!("Workspace"))
-            .with_group(bindings::BindingGroup::Settings.as_str())
-            .with_key_binding("cmdorctrl--"),
-            EditableBinding::new(
-                "workspace:reset_zoom",
-                "Reset zoom level to default",
-                WorkspaceAction::ResetZoom,
-            )
-            .with_group(bindings::BindingGroup::Settings.as_str())
-            .with_context_predicate(id!("Workspace")),
-            EditableBinding::new(
-                "workspace:increase_font_size",
-                "Increase font size",
-                WorkspaceAction::IncreaseFontSize,
-            )
-            .with_context_predicate(id!("Workspace"))
-            .with_group(bindings::BindingGroup::Settings.as_str())
-            .with_key_binding("alt-shift->"),
-            EditableBinding::new(
-                "workspace:decrease_font_size",
-                "Decrease font size",
-                WorkspaceAction::DecreaseFontSize,
-            )
-            .with_context_predicate(id!("Workspace"))
-            .with_group(bindings::BindingGroup::Settings.as_str())
-            .with_key_binding("alt-shift-<"),
-            EditableBinding::new(
-                "workspace:reset_font_size",
-                "Reset font size to default",
-                WorkspaceAction::ResetFontSize,
-            )
-            .with_group(bindings::BindingGroup::Settings.as_str())
-            .with_context_predicate(id!("Workspace")),
-        ]);
-    } else {
-        app.register_editable_bindings([
-            EditableBinding::new(
-                "workspace:increase_font_size",
-                "Increase font size",
-                WorkspaceAction::IncreaseFontSize,
-            )
-            .with_context_predicate(id!("Workspace"))
-            .with_group(bindings::BindingGroup::Settings.as_str())
-            .with_key_binding("cmdorctrl-="),
-            EditableBinding::new(
-                "workspace:decrease_font_size",
-                "Decrease font size",
-                WorkspaceAction::DecreaseFontSize,
-            )
-            .with_context_predicate(id!("Workspace"))
-            .with_group(bindings::BindingGroup::Settings.as_str())
-            .with_key_binding("cmdorctrl--"),
-            EditableBinding::new(
-                "workspace:reset_font_size",
-                "Reset font size to default",
-                WorkspaceAction::ResetFontSize,
-            )
-            .with_group(bindings::BindingGroup::Settings.as_str())
-            .with_context_predicate(id!("Workspace"))
-            .with_key_binding("cmdorctrl-0")
-            .with_custom_action(CustomAction::ResetFontSize),
-        ]);
-    }
+    app.register_editable_bindings([
+        EditableBinding::new(
+            "workspace:increase_zoom",
+            "Increase zoom level",
+            WorkspaceAction::IncreaseZoom,
+        )
+        .with_context_predicate(id!("Workspace"))
+        .with_group(bindings::BindingGroup::Settings.as_str())
+        .with_key_binding("cmdorctrl-="),
+        EditableBinding::new(
+            "workspace:decrease_zoom",
+            "Decrease zoom level",
+            WorkspaceAction::DecreaseZoom,
+        )
+        .with_context_predicate(id!("Workspace"))
+        .with_group(bindings::BindingGroup::Settings.as_str())
+        .with_key_binding("cmdorctrl--"),
+        EditableBinding::new(
+            "workspace:reset_zoom",
+            "Reset zoom level to default",
+            WorkspaceAction::ResetZoom,
+        )
+        .with_group(bindings::BindingGroup::Settings.as_str())
+        .with_context_predicate(id!("Workspace")),
+        EditableBinding::new(
+            "workspace:increase_font_size",
+            "Increase font size",
+            WorkspaceAction::IncreaseFontSize,
+        )
+        .with_context_predicate(id!("Workspace"))
+        .with_group(bindings::BindingGroup::Settings.as_str())
+        .with_key_binding("alt-shift->"),
+        EditableBinding::new(
+            "workspace:decrease_font_size",
+            "Decrease font size",
+            WorkspaceAction::DecreaseFontSize,
+        )
+        .with_context_predicate(id!("Workspace"))
+        .with_group(bindings::BindingGroup::Settings.as_str())
+        .with_key_binding("alt-shift-<"),
+        EditableBinding::new(
+            "workspace:reset_font_size",
+            "Reset font size to default",
+            WorkspaceAction::ResetFontSize,
+        )
+        .with_group(bindings::BindingGroup::Settings.as_str())
+        .with_context_predicate(id!("Workspace")),
+    ]);
 
     app.register_fixed_bindings([
         // Menu dispatch for the "Open File Picker" custom action.

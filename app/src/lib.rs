@@ -1496,9 +1496,7 @@ pub(crate) fn initialize_app(
     let user_defaults_on_startup = settings::init(startup_toml_parse_error, ctx);
     timer.mark_interval_end("READ_USER_DEFAULTS_AND_INITIALIZE_SETTINGS");
 
-    if FeatureFlag::UIZoom.is_enabled() {
-        ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());
-    }
+    ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());
 
     let (auth_state, pending_api_key) = match launch_mode.auth_initialization() {
         AuthInitialization::Persisted => (AuthState::initialize(ctx), None),
