@@ -27,7 +27,6 @@ use crate::editor::{
     EditorView, Event as EditorEvent, InteractionState, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions,
 };
-use crate::features::FeatureFlag;
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{FindOption, TelemetryEvent};
 use crate::settings::AppEditorSettings;
@@ -294,8 +293,7 @@ impl CodeEditorFind {
                 ctx.notify();
             }
             EditorEvent::Enter => {
-                let vim_enabled = FeatureFlag::VimCodeEditor.is_enabled()
-                    && AppEditorSettings::as_ref(ctx).vim_mode_enabled();
+                let vim_enabled = AppEditorSettings::as_ref(ctx).vim_mode_enabled();
 
                 if !vim_enabled {
                     self.focus_next_match(FindDirection::Down, ctx);
@@ -309,8 +307,7 @@ impl CodeEditorFind {
                 }
             }
             EditorEvent::ShiftEnter | EditorEvent::AltEnter => {
-                let vim_enabled = FeatureFlag::VimCodeEditor.is_enabled()
-                    && AppEditorSettings::as_ref(ctx).vim_mode_enabled();
+                let vim_enabled = AppEditorSettings::as_ref(ctx).vim_mode_enabled();
                 if !vim_enabled {
                     self.focus_next_match(FindDirection::Up, ctx);
                 }
@@ -980,8 +977,7 @@ impl View for CodeEditorFind {
         // Exception: in vim mode, Enter moves focus back to the editor while the find bar stays
         // open as a status indicator; we want to preserve the selected match so it stays
         // highlighted and n/N can cycle from it.
-        let vim_enabled = FeatureFlag::VimCodeEditor.is_enabled()
-            && AppEditorSettings::as_ref(ctx).vim_mode_enabled();
+        let vim_enabled = AppEditorSettings::as_ref(ctx).vim_mode_enabled();
         let keep_selection_for_vim = vim_enabled && self.is_open;
 
         if !is_focus_within_find_bar && !keep_selection_for_vim {
