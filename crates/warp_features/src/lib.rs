@@ -355,9 +355,6 @@ pub enum FeatureFlag {
     /// as model selectors are always shown when this flag is enabled.
     ProfilesDesignRevamp,
 
-    /// Enables new Search Codebase UI
-    SearchCodebaseUI,
-
     /// Enables us to render linked code blocks
     LinkedCodeBlocks,
 
