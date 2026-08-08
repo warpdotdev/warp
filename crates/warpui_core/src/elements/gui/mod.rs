@@ -31,6 +31,7 @@ mod size_constraint_switch;
 mod stack;
 pub mod table;
 mod text;
+mod tooltip_hysteresis;
 mod uniform_list;
 mod viewported_list;
 
@@ -78,6 +79,7 @@ pub use table::{
     TableVerticalSizing,
 };
 pub use text::*;
+pub use tooltip_hysteresis::*;
 pub use uniform_list::*;
 pub use viewported_list::*;
 

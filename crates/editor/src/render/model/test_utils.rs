@@ -14,9 +14,9 @@ use warpui_core::text_layout::{CaretPosition, Glyph, Line, Run, TextFrame};
 use warpui_core::units::{IntoPixels, Pixels};
 
 use super::{
-    BlockItem, BrokenLinkStyle, CheckBoxStyle, DEFAULT_BLOCK_SPACINGS, HorizontalRuleStyle,
-    InlineCodeStyle, OffsetMap, PARAGRAPH_MIN_HEIGHT, Paragraph, ParagraphStyles, RichTextStyles,
-    TEXT_SPACING, TableStyle,
+    BlockItem, BrokenImageStyle, BrokenLinkStyle, CheckBoxStyle, DEFAULT_BLOCK_SPACINGS,
+    HorizontalRuleStyle, InlineCodeStyle, OffsetMap, PARAGRAPH_MIN_HEIGHT, Paragraph,
+    ParagraphStyles, RichTextStyles, TEXT_SPACING, TableStyle,
 };
 use crate::content::text::BufferBlockStyle;
 
@@ -193,6 +193,10 @@ pub const TEST_STYLES: RichTextStyles = RichTextStyles {
     },
     broken_link_style: BrokenLinkStyle {
         icon_path: "bundled/svg/link-broken-02.svg",
+        icon_color: WHITE,
+    },
+    broken_image_style: BrokenImageStyle {
+        icon_path: "bundled/svg/image-01.svg",
         icon_color: WHITE,
     },
     block_spacings: DEFAULT_BLOCK_SPACINGS,

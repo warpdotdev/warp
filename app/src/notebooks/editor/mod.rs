@@ -10,8 +10,8 @@ use warp_editor::content::text::{
     BlockHeaderSize, BlockType as ContentBlockType, BufferBlockStyle, CodeBlockType,
 };
 use warp_editor::render::model::{
-    BrokenLinkStyle, CheckBoxStyle, EmbeddedItem, HorizontalRuleStyle, InlineCodeStyle,
-    ParagraphStyles, RichTextStyles, TableStyle,
+    BrokenImageStyle, BrokenLinkStyle, CheckBoxStyle, EmbeddedItem, HorizontalRuleStyle,
+    InlineCodeStyle, ParagraphStyles, RichTextStyles, TableStyle,
 };
 use warp_util::user_input::UserInput;
 use warpui::elements::{Border, ListIndentLevel};
@@ -266,6 +266,10 @@ pub fn rich_text_styles(appearance: &Appearance, font_settings: &FontSettings) -
         },
         broken_link_style: BrokenLinkStyle {
             icon_path: "bundled/svg/link-broken-02.svg",
+            icon_color: theme.terminal_colors().normal.red.into(),
+        },
+        broken_image_style: BrokenImageStyle {
+            icon_path: "bundled/svg/image-01.svg",
             icon_color: theme.terminal_colors().normal.red.into(),
         },
         block_spacings: Default::default(),
