@@ -2161,7 +2161,7 @@ impl AIBlock {
                     id: action_id,
                     action: AIAgentActionType::AskUserQuestion { questions },
                     ..
-                } if FeatureFlag::AskUserQuestion.is_enabled() => {
+                } => {
                     self.handle_ask_user_question_stream_update(action_id, questions, ctx);
                 }
                 AIAgentAction {
@@ -2902,7 +2902,6 @@ impl AIBlock {
                 }
             } else if matches!(action.action, AIAgentActionType::AskUserQuestion { .. })
                 && !self.model.is_restored()
-                && FeatureFlag::AskUserQuestion.is_enabled()
                 && is_agent_mode_autonomy_allowed(ctx)
                 && *AISettings::as_ref(ctx).should_show_agent_mode_ask_user_question_speedbump
             {

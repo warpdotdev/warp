@@ -391,8 +391,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AsyncFind,
         #[cfg(feature = "list_skills")]
         FeatureFlag::ListSkills,
-        #[cfg(feature = "ask_user_question")]
-        FeatureFlag::AskUserQuestion,
         #[cfg(feature = "lsp_as_a_tool")]
         FeatureFlag::LSPAsATool,
         #[cfg(feature = "inline_profile_selector")]

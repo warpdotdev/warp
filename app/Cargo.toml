@@ -483,7 +483,6 @@ agent_mode_pre_plan_xml = []
 agent_onboarding = []
 account_first_onboarding = []
 agent_shared_sessions = []
-ask_user_question = []
 async_find = []
 changelog = []
 clear_autosuggestion_on_escape = []
@@ -618,7 +617,6 @@ default = [
     "global_search",
     "cloud_conversations",
     "list_skills",
-    "ask_user_question",
     "bundled_skills",
     "ambient_agents_rtc",
     "cloud_mode",

@@ -687,7 +687,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                             action: AIAgentActionType::AskUserQuestion { .. },
                             id,
                             ..
-                        }) if FeatureFlag::AskUserQuestion.is_enabled() => {
+                        }) => {
                             should_render_footer = false;
                             should_render_suggestions = false;
                             if let Some(rendered_ask_user_question) =

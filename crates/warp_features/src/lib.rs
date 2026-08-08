@@ -804,9 +804,6 @@ pub enum FeatureFlag {
     /// Enables Warp local control through the standalone warpctrl CLI.
     WarpControlCli,
 
-    /// Enables the ask_user_question tool allowing the agent to ask clarifying questions.
-    AskUserQuestion,
-
     /// When enabled, solo users (not on a team) can use BYO API keys.
     SoloUserByok,
 
