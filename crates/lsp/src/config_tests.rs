@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use lsp_types::Uri;
 
-use crate::config::{lsp_uri_to_path, path_to_lsp_uri};
+use crate::config::{LanguageId, lsp_uri_to_path, path_to_lsp_uri};
+use crate::supported_servers::LSPServerType;
 
 // Unix-specific tests use Unix paths
 #[cfg(not(windows))]
@@ -215,4 +216,14 @@ fn test_path_to_lsp_uri_rejects_relative_path() {
     let result = path_to_lsp_uri(&path);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("must be absolute"));
+}
+
+#[test]
+fn test_dart_path_uses_dart_analysis_server() {
+    let language = LanguageId::from_path(&PathBuf::from("lib/main.dart"))
+        .expect("`.dart` files should resolve to an LSP language");
+
+    assert_eq!(language, LanguageId::Dart);
+    assert_eq!(language.lsp_language_identifier(), "dart");
+    assert_eq!(language.server_type(), LSPServerType::DartAnalysisServer);
 }
