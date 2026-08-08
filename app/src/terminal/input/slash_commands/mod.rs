@@ -1301,6 +1301,7 @@ impl Input {
             | SlashCommandKind::Exit
             | SlashCommandKind::Logout
             | SlashCommandKind::Clear
+            | SlashCommandKind::Resume
             | SlashCommandKind::Status => {
                 debug_assert!(
                     false,

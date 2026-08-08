@@ -804,6 +804,16 @@ pub const CONVERSATIONS: StaticCommand = StaticCommand {
     argument: None,
 };
 
+pub const RESUME: StaticCommand = StaticCommand {
+    name: "/resume",
+    description: "Resume a previous conversation (alias for /conversations)",
+    kind: SlashCommandKind::Resume,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub static PROMPTS: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/prompts",
     description: "Search saved prompts",
@@ -991,6 +1001,7 @@ fn all_commands_for_all_surfaces() -> Vec<StaticCommand> {
         VIM_MODE,
         USAGE,
         CONVERSATIONS,
+        RESUME,
         EXPORT_TO_CLIPBOARD,
         COPY_DEBUGGING_ID,
         MODEL.clone(),

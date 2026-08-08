@@ -427,6 +427,38 @@ fn connect_grok_slash_command_opens_the_api_keys_menu_in_grok_flow() {
 }
 
 #[test]
+fn resume_slash_command_opens_the_same_conversation_picker_as_conversations() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        view.update(&mut app, |view, ctx| {
+            view.input_view
+                .update(ctx, |input, ctx| input.set_text("/resume", ctx));
+            assert!(matches!(
+                view.slash_commands_source
+                    .as_ref(ctx)
+                    .parse_input("/resume", ctx),
+                ParsedSlashCommandInput::SlashCommand(_)
+            ));
+            view.execute_tui_slash_command(&slash_commands::RESUME, None, ctx);
+        });
+
+        view.read(&app, |view, ctx| {
+            assert!(view.conversation_menu.as_ref(ctx).is_open(ctx));
+            assert_eq!(
+                view.suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::ConversationMenu
+            );
+            assert!(view.input_view.as_ref(ctx).is_empty(ctx));
+        });
+        let rendered = render_session(&mut app, &view, 100, 40).join("\n");
+        assert!(rendered.contains("Conversations"), "{rendered}");
+        assert!(!rendered.contains("/resume"), "{rendered}");
+    });
+}
+
+#[test]
 fn mcp_primary_action_hints_match_available_actions() {
     let id = TuiMcpServerId::FileBased(1);
     assert_eq!(
