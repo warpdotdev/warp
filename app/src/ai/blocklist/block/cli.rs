@@ -16,7 +16,7 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
-use warp_errors::report_error;
+use warp_errors::{ReportErrorLogMode, report_error};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::SingleAxisConfig;
@@ -50,8 +50,9 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::icons::yellow_stop_icon;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessageType, AIAgentPtyWriteMode,
-    AIAgentText, AIAgentTextSection, CancellationReason, ProgrammingLanguage, WebSearchStatus,
+    AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessageType,
+    AIAgentPtyWriteMode, AIAgentText, AIAgentTextSection, CancellationReason, ProgrammingLanguage,
+    WebSearchStatus,
 };
 use crate::ai::blocklist::block::TextLocation;
 use crate::ai::blocklist::block::view_impl::common::{
@@ -194,7 +195,7 @@ struct StateHandles {
 
 pub struct CLISubagentView {
     block_id: BlockId,
-    model: Rc<dyn AIBlockModel<View = CLISubagentView>>,
+    model: Option<Rc<dyn AIBlockModel<View = CLISubagentView>>>,
     subagent_controller: ModelHandle<CLISubagentController>,
     action_model: ModelHandle<BlocklistAIActionModel>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
@@ -229,6 +230,27 @@ pub struct CLISubagentView {
 }
 
 impl CLISubagentView {
+    /// Resolves the latest exchange id for `task_id` within `conversation_id`
+    /// from the agent history, returning `None` when the conversation, task, or
+    /// any exchange is absent.
+    ///
+    /// A stale `SpawnedSubagent` event (or a race with conversation clearing)
+    /// can reference a task/exchange that no longer exists. The previous code
+    /// `.expect`ed this lookup and crashed the app; callers now use this to
+    /// drop the event gracefully instead of constructing a view with no
+    /// exchange to render.
+    pub fn latest_exchange_id_for_task(
+        conversation_id: &AIConversationId,
+        task_id: &TaskId,
+        app: &AppContext,
+    ) -> Option<AIAgentExchangeId> {
+        BlocklistAIHistoryModel::as_ref(app)
+            .conversation(conversation_id)
+            .and_then(|conversation| conversation.get_task(task_id))
+            .and_then(|task| task.last_exchange())
+            .map(|exchange| exchange.id)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         block_id: BlockId,
@@ -371,7 +393,7 @@ impl CLISubagentView {
                                 }),
                                 ctx,
                             );
-                            me.model = Rc::new(model);
+                            me.model = Some(Rc::new(model));
                             me.code_editor_views = Default::default();
                             me.code_editor_buttons = Default::default();
                             me.table_section_handles = Default::default();
@@ -417,28 +439,48 @@ impl CLISubagentView {
                 }
             },
         );
-        let exchange_id = history_model
-            .as_ref(ctx)
-            .conversation(&conversation_id)
-            .and_then(|c| {
-                c.get_task(&task_id)
-                    .and_then(|t| t.last_exchange().map(|e| e.id))
-            })
-            .expect("Exchange exists.");
-        let model = AIBlockModelImpl::<CLISubagentView>::new(
-            exchange_id,
-            conversation_id,
-            false,
-            false,
-            ctx,
-        )
-        .expect("Exchange exists.");
-        model.on_updated_output(
-            Box::new(|me, ctx| {
-                me.handle_updated_exchange_output(ctx);
-            }),
-            ctx,
-        );
+        let model: Option<Rc<dyn AIBlockModel<View = Self>>> =
+            match Self::latest_exchange_id_for_task(&conversation_id, &task_id, ctx) {
+                Some(exchange_id) => match AIBlockModelImpl::<Self>::new(
+                    exchange_id,
+                    conversation_id,
+                    false,
+                    false,
+                    ctx,
+                ) {
+                    Ok(model) => {
+                        model.on_updated_output(
+                            Box::new(|me, ctx| {
+                                me.handle_updated_exchange_output(ctx);
+                            }),
+                            ctx,
+                        );
+                        Some(Rc::new(model))
+                    }
+                    Err(_) => {
+                        report_error!(
+                            "CLISubagent view not created: agent exchange data is missing",
+                            extra: {
+                                "exchange_id" => ?exchange_id,
+                                "conversation_id" => ?conversation_id,
+                            },
+                            ReportErrorLogMode::OncePerRun
+                        );
+                        None
+                    }
+                },
+                None => {
+                    report_error!(
+                        "CLISubagent view not created: agent exchange data is missing",
+                        extra: {
+                            "conversation_id" => ?conversation_id,
+                            "task_id" => ?task_id,
+                        },
+                        ReportErrorLogMode::OncePerRun
+                    );
+                    None
+                }
+            };
 
         ctx.subscribe_to_model(&subagent_controller, |me, _, event, ctx| match event {
             CLISubagentEvent::UpdatedControl { block_id, .. } => {
@@ -455,7 +497,7 @@ impl CLISubagentView {
 
         let mut view = Self {
             block_id,
-            model: Rc::new(model),
+            model,
             action_model,
             terminal_model,
             subagent_controller,
@@ -488,7 +530,10 @@ impl CLISubagentView {
     }
 
     fn execute_pending_action(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(blocked_action) = self.model.blocked_action(&self.action_model, ctx) else {
+        let Some(model) = self.model.as_ref() else {
+            return;
+        };
+        let Some(blocked_action) = model.blocked_action(&self.action_model, ctx) else {
             return;
         };
 
@@ -500,14 +545,16 @@ impl CLISubagentView {
     }
 
     fn has_pending_transfer_control_action(&self, app: &AppContext) -> bool {
-        self.model
-            .blocked_action(&self.action_model, app)
-            .is_some_and(|action| {
-                matches!(
-                    action.action,
-                    AIAgentActionType::TransferShellCommandControlToUser { .. }
-                )
-            })
+        self.model.as_ref().is_some_and(|model| {
+            model
+                .blocked_action(&self.action_model, app)
+                .is_some_and(|action| {
+                    matches!(
+                        action.action,
+                        AIAgentActionType::TransferShellCommandControlToUser { .. }
+                    )
+                })
+        })
     }
 
     fn handle_execute_blocked_action(
@@ -555,7 +602,10 @@ impl CLISubagentView {
         }
     }
     fn reject_blocked_action(&mut self, should_user_take_over: bool, ctx: &mut ViewContext<Self>) {
-        let Some(blocked_action) = self.model.blocked_action(&self.action_model, ctx) else {
+        let Some(model) = self.model.as_ref() else {
+            return;
+        };
+        let Some(blocked_action) = model.blocked_action(&self.action_model, ctx) else {
             return;
         };
 
@@ -654,7 +704,10 @@ impl CLISubagentView {
     }
 
     fn handle_updated_exchange_output(&mut self, ctx: &mut ViewContext<Self>) {
-        match self.model.status(ctx) {
+        let Some(model) = self.model.as_ref() else {
+            return;
+        };
+        match model.status(ctx) {
             AIBlockOutputStatus::Pending => {
                 self.secret_redaction_state.reset();
             }
@@ -827,11 +880,12 @@ impl CLISubagentView {
             handle.abort();
         }
 
-        let has_user_input = self
-            .model
-            .inputs_to_render(ctx)
-            .iter()
-            .any(|input| input.is_user_query());
+        let has_user_input = self.model.as_ref().is_some_and(|model| {
+            model
+                .inputs_to_render(ctx)
+                .iter()
+                .any(|input| input.is_user_query())
+        });
         let should_hide_responses = self
             .terminal_model
             .lock()
@@ -860,7 +914,9 @@ impl CLISubagentView {
         self.reset_input_dismiss_timer(ctx);
 
         // Detect links in all user queries
-        for (input_index, input) in self.model.inputs_to_render(ctx).iter().enumerate() {
+        let model = self.model.as_ref();
+        let inputs: &[AIAgentInput] = model.map(|m| m.inputs_to_render(ctx)).unwrap_or(&[]);
+        for (input_index, input) in inputs.iter().enumerate() {
             if let AIAgentInput::UserQuery { query, .. } = input {
                 detect_links(
                     &mut self.link_detection_state,
@@ -964,6 +1020,12 @@ impl View for CLISubagentView {
             return Empty::new().finish();
         }
 
+        // A spawn event whose agent exchange is missing from history produces a
+        // view with no model; there is nothing to render for it.
+        let Some(model) = self.model.as_ref() else {
+            return Empty::new().finish();
+        };
+
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let semantic_selection = SemanticSelection::handle(app).as_ref(app);
@@ -978,7 +1040,7 @@ impl View for CLISubagentView {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
         // Render user queries/follow-ups with avatar and interactive text
-        let inputs = self.model.inputs_to_render(app);
+        let inputs = model.inputs_to_render(app);
         for (input_index, input) in inputs.iter().enumerate() {
             if let AIAgentInput::UserQuery { query, .. } = input {
                 let text = render_query_text(
@@ -1058,8 +1120,8 @@ impl View for CLISubagentView {
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
-        let status = self.model.status(app);
-        let blocked_action = self.model.blocked_action(&self.action_model, app);
+        let status = model.status(app);
+        let blocked_action = model.blocked_action(&self.action_model, app);
         let should_hide_responses = block.should_hide_responses();
 
         if let Some(output) = status.output_to_render() {
@@ -1086,7 +1148,7 @@ impl View for CLISubagentView {
                         let text_color = blended_colors::text_main(theme, theme.surface_1());
                         output_items.add_child(render_text_sections(
                             TextSectionsProps {
-                                model: self.model.as_ref(),
+                                model: model.as_ref(),
                                 starting_text_section_index: &mut text_section_index,
                                 starting_code_section_index: &mut code_section_index,
                                 starting_table_section_index: &mut table_section_index,
@@ -1213,7 +1275,7 @@ impl View for CLISubagentView {
                     app,
                 ));
 
-                if !self.model.is_restored() && !error.is_invalid_api_key() {
+                if !model.is_restored() && !error.is_invalid_api_key() {
                     output_items.add_child(
                         Container::new(render_informational_footer(
                             app,
@@ -1228,8 +1290,8 @@ impl View for CLISubagentView {
                     output_items.add_child(
                         Container::new(render_debug_footer(
                             DebugFooterProps {
-                                conversation: self.model.conversation(app),
-                                model: self.model.as_ref(),
+                                conversation: model.conversation(app),
+                                model: model.as_ref(),
                                 debug_copy_button_handle: self
                                     .state_handles
                                     .debug_copy_button_handle
@@ -2180,3 +2242,7 @@ fn render_blocked_action(props: BlockedActionProps<'_>, app: &AppContext) -> Box
     )
     .finish()
 }
+
+#[cfg(test)]
+#[path = "cli_tests.rs"]
+mod tests;
