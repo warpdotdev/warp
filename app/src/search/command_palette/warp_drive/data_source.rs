@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
 use warp_errors::report_error;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WindowId};
 
 use super::env_var_collection_search_item::EnvVarCollectionSearchItem;
 use super::notebook_search_item::NotebookSearchItem;
 use super::workflow_search_item::WorkflowSearchItem;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::{
-    CloudObject, CloudObjectLocation, GenericStringObjectFormat, JsonObjectType, ObjectType,
+    CloudObject, CloudObjectLocation, GenericStringObjectFormat, JsonObjectType, ObjectType, Space,
 };
 use crate::drive::folders::CloudFolder;
 use crate::env_vars::CloudEnvVarCollection;
@@ -23,46 +23,140 @@ use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
 use crate::server::ids::{ObjectUid, SyncId};
 use crate::settings::AISettings;
 use crate::workflows::CloudWorkflow;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
-/// Datasource that searches against all Warp Drive objects
+/// The Warp Drive spaces a window can see: its team, plus the user's personal and
+/// shared-with-me objects.
+struct WindowScope {
+    window_id: WindowId,
+    spaces: Vec<Space>,
+}
+
+impl WindowScope {
+    fn new(window_id: WindowId, app: &AppContext) -> Self {
+        Self {
+            window_id,
+            spaces: Self::resolve_spaces(window_id, app),
+        }
+    }
+
+    fn resolve_spaces(window_id: WindowId, app: &AppContext) -> Vec<Space> {
+        UserWorkspaces::as_ref(app).spaces_for_window(window_id, app)
+    }
+
+    fn contains(&self, object: &dyn CloudObject, app: &AppContext) -> bool {
+        self.spaces.contains(&object.space(app))
+    }
+}
+
+/// Datasource that searches the Warp Drive objects visible in a single window.
 pub struct DataSource {
     searcher: Box<dyn WarpDriveSearcher>,
+    scope: WindowScope,
 }
 
 impl DataSource {
     #[cfg(not(target_family = "wasm"))]
-    pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+    pub fn new(window_id: WindowId, ctx: &mut ModelContext<Self>) -> Self {
         if warp_core::features::FeatureFlag::UseTantivySearch.is_enabled() {
-            Self::new_full_text(ctx)
+            Self::new_full_text(window_id, ctx)
         } else {
-            Self::new_fuzzy(ctx)
+            Self::new_fuzzy(window_id, ctx)
         }
     }
 
     #[cfg(target_family = "wasm")]
-    pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        Self::new_fuzzy(ctx)
+    pub fn new(window_id: WindowId, ctx: &mut ModelContext<Self>) -> Self {
+        Self::new_fuzzy(window_id, ctx)
     }
 
-    pub fn new_fuzzy(ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&CloudModel::handle(ctx), Self::handle_cloud_object_updated);
-        let mut searcher = Box::new(FuzzyWarpDriveSearcher::default());
-        searcher.refresh_search_index(ctx).unwrap_or_else(|err| {
-            report_error!(err.context("Error refreshing search index"));
-        });
-        DataSource { searcher }
+    pub fn new_fuzzy(window_id: WindowId, ctx: &mut ModelContext<Self>) -> Self {
+        Self::new_with_searcher(window_id, Box::new(FuzzyWarpDriveSearcher::default()), ctx)
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn new_full_text(ctx: &mut ModelContext<Self>) -> Self {
-        ctx.subscribe_to_model(&CloudModel::handle(ctx), Self::handle_cloud_object_updated);
-        let mut searcher = Box::new(full_text_searcher::FullTextWarpDriveSearcher::new(
+    fn new_full_text(window_id: WindowId, ctx: &mut ModelContext<Self>) -> Self {
+        let searcher = Box::new(full_text_searcher::FullTextWarpDriveSearcher::new(
             ctx.background_executor(),
         ));
-        searcher.refresh_search_index(ctx).unwrap_or_else(|err| {
-            report_error!(err.context("Error refreshing search index"));
-        });
-        DataSource { searcher }
+        Self::new_with_searcher(window_id, searcher, ctx)
+    }
+
+    fn new_with_searcher(
+        window_id: WindowId,
+        searcher: Box<dyn WarpDriveSearcher>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        ctx.subscribe_to_model(&CloudModel::handle(ctx), Self::handle_cloud_object_updated);
+        ctx.subscribe_to_model(
+            &UserWorkspaces::handle(ctx),
+            Self::handle_user_workspaces_updated,
+        );
+
+        let mut data_source = DataSource {
+            searcher,
+            scope: WindowScope::new(window_id, ctx),
+        };
+        data_source.rebuild_index(ctx);
+        data_source
+    }
+
+    /// Re-resolves the window's spaces, returning whether they changed.
+    fn resync_scope(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        let spaces = WindowScope::resolve_spaces(self.scope.window_id, ctx);
+        let changed = spaces != self.scope.spaces;
+        self.scope.spaces = spaces;
+        changed
+    }
+
+    fn rebuild_index(&mut self, ctx: &mut ModelContext<Self>) {
+        self.searcher
+            .refresh_search_index(&self.scope, ctx)
+            .unwrap_or_else(|err| {
+                report_error!(err.context("Error refreshing Warp Drive search index"));
+            });
+    }
+
+    fn handle_user_workspaces_updated(
+        &mut self,
+        _: ModelHandle<UserWorkspaces>,
+        event: &UserWorkspacesEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let may_affect_scope = match event {
+            UserWorkspacesEvent::WindowTeamChanged { window_id } => {
+                *window_id == self.scope.window_id
+            }
+            // Team membership decides whether an object's owner resolves to a team space or to
+            // the shared space, so it can change what this window sees without reassigning it.
+            UserWorkspacesEvent::TeamsChanged => true,
+            _ => false,
+        };
+
+        if may_affect_scope && self.resync_scope(ctx) {
+            self.rebuild_index(ctx);
+        }
+    }
+
+    /// Indexes the object when the window can see it, and removes it when it cannot, so an object
+    /// that moves out of scope leaves the index instead of being re-inserted.
+    fn apply_object_change(
+        &mut self,
+        object_uid: ObjectUid,
+        object_type: ObjectType,
+        ctx: &mut ModelContext<Self>,
+    ) -> anyhow::Result<()> {
+        let Some(object) = CloudModel::as_ref(ctx).get_by_uid(&object_uid) else {
+            anyhow::bail!("Object with ID {object_uid:?} not found in CloudModel");
+        };
+
+        if self.scope.contains(object, ctx) {
+            self.searcher
+                .insert_searchable_object(object, object_type, &self.scope, ctx)
+        } else {
+            self.searcher
+                .delete_searchable_object(object_uid, object_type, ctx)
+        }
     }
 
     fn handle_cloud_object_updated(
@@ -75,11 +169,9 @@ impl DataSource {
         // Per-object events are suppressed at the source during initial load, so this
         // is the only event we receive from that batch.
         if let CloudModelEvent::InitialLoadCompleted = event {
-            self.searcher
-                .refresh_search_index(ctx)
-                .unwrap_or_else(|err| {
-                    report_error!(err.context("Error refreshing search index after initial load"));
-                });
+            // The load can bring in the first shared-with-me object, which widens the scope.
+            self.resync_scope(ctx);
+            self.rebuild_index(ctx);
             return;
         }
 
@@ -87,18 +179,14 @@ impl DataSource {
             CloudModelEvent::ObjectCreated { type_and_id }
             | CloudModelEvent::ObjectUntrashed { type_and_id, .. }
             | CloudModelEvent::ObjectMoved { type_and_id, .. }
-            | CloudModelEvent::ObjectUpdated { type_and_id, .. } => {
-                if let Some(obj) = CloudModel::as_ref(ctx).get_by_uid(&type_and_id.uid()) {
-                    // Insertion will overwrite the object if it already exists.
-                    self.searcher
-                        .insert_searchable_object(obj, type_and_id.object_type(), ctx)
-                        .unwrap_or_else(|err| {
-                            report_error!(err.context("Error inserting object into search index"));
-                        });
-                } else {
-                    report_error!("Object not found in CloudModel", extra: { "id" => ?type_and_id });
-                }
-            }
+            | CloudModelEvent::ObjectUpdated { type_and_id, .. }
+            // An object's space comes from its owner, so a permissions change can move it in or
+            // out of this window.
+            | CloudModelEvent::ObjectPermissionsUpdated { type_and_id, .. } => self
+                .apply_object_change(type_and_id.uid(), type_and_id.object_type(), ctx)
+                .unwrap_or_else(|err| {
+                    report_error!(err.context("Error updating object in search index"));
+                }),
             CloudModelEvent::ObjectTrashed { type_and_id, .. } => self
                 .searcher
                 .delete_searchable_object(type_and_id.uid(), type_and_id.object_type(), ctx)
@@ -110,11 +198,6 @@ impl DataSource {
                 client_id,
                 server_id,
             } => {
-                let Some(cloud_object) = CloudModel::as_ref(ctx).get_by_uid(&server_id.uid())
-                else {
-                    return;
-                };
-
                 // Ensure the index is updated with the new server ID (any operations using old client ID will fail
                 // when reading from the CloudModel once the object is synced).
                 self.searcher
@@ -123,10 +206,9 @@ impl DataSource {
                         log::warn!("Error deleting object from search index: {err:?}");
                     });
 
-                self.searcher
-                    .insert_searchable_object(cloud_object, type_and_id.object_type(), ctx)
+                self.apply_object_change(server_id.uid(), type_and_id.object_type(), ctx)
                     .unwrap_or_else(|err| {
-                        log::warn!("Error inserting object into search index: {err:?}");
+                        log::warn!("Error updating object in search index: {err:?}");
                     });
             }
             _ => {}
@@ -142,6 +224,7 @@ impl DataSource {
     ) -> anyhow::Result<Vec<WorkflowSearchItem>> {
         self.searcher.search_workflow(
             &query.text.to_lowercase(),
+            &self.scope,
             app,
             should_include_agent_mode_prompts,
             should_include_command_workflows,
@@ -164,7 +247,7 @@ impl crate::search::mixer::SyncDataSource for DataSource {
         if query.filters.contains(&QueryFilter::Notebooks) || should_include_all_drive_objects {
             filtered_cloud_objects.extend(
                 self.searcher
-                    .search_notebook(&query.text.to_lowercase(), app)
+                    .search_notebook(&query.text.to_lowercase(), &self.scope, app)
                     .map_err(|err| {
                         Box::new(DataSourceSearchError::new(err.to_string()))
                             as DataSourceRunErrorWrapper
@@ -177,7 +260,7 @@ impl crate::search::mixer::SyncDataSource for DataSource {
         if query.filters.contains(&QueryFilter::Plans) || should_include_all_drive_objects {
             filtered_cloud_objects.extend(
                 self.searcher
-                    .search_plans(&query.text.to_lowercase(), app)
+                    .search_plans(&query.text.to_lowercase(), &self.scope, app)
                     .map_err(|err| {
                         Box::new(DataSourceSearchError::new(err.to_string()))
                             as DataSourceRunErrorWrapper
@@ -216,7 +299,7 @@ impl crate::search::mixer::SyncDataSource for DataSource {
         {
             filtered_cloud_objects.extend(
                 self.searcher
-                    .search_env_var(&query.text.to_lowercase(), app)
+                    .search_env_var(&query.text.to_lowercase(), &self.scope, app)
                     .map_err(|err| {
                         Box::new(DataSourceSearchError::new(err.to_string()))
                             as DataSourceRunErrorWrapper
@@ -244,6 +327,10 @@ impl DataSource {
         app: &AppContext,
     ) -> Option<QueryResult<CommandPaletteItemAction>> {
         let object = CloudModel::as_ref(app).get_by_uid(&sync_id.uid())?;
+        if !self.scope.contains(object, app) {
+            return None;
+        }
+
         let workflow: Option<&CloudWorkflow> = object.into();
         if let Some(workflow) = workflow {
             return Some(QueryResult::from(WorkflowSearchItem {
@@ -276,11 +363,14 @@ impl Entity for DataSource {
     type Event = ();
 }
 
+/// Every method is scoped to a single window: the index only ever holds objects the window can
+/// see, and the searchers that read [`CloudModel`] directly filter to the same set.
 trait WarpDriveSearcher {
     fn insert_searchable_object(
         &mut self,
         object: &dyn CloudObject,
         object_type: ObjectType,
+        scope: &WindowScope,
         app: &AppContext,
     ) -> anyhow::Result<()>;
 
@@ -291,18 +381,21 @@ trait WarpDriveSearcher {
         app: &AppContext,
     ) -> anyhow::Result<()>;
 
-    /// Clear and rebuild the search index.
-    fn refresh_search_index(&mut self, app: &AppContext) -> anyhow::Result<()>;
+    /// Clear and rebuild the search index from the objects in `scope`.
+    fn refresh_search_index(&mut self, scope: &WindowScope, app: &AppContext)
+    -> anyhow::Result<()>;
 
     fn search_notebook(
         &self,
         query: &str,
+        scope: &WindowScope,
         app: &AppContext,
     ) -> anyhow::Result<Vec<NotebookSearchItem>>;
 
     fn search_workflow(
         &self,
         query: &str,
+        scope: &WindowScope,
         app: &AppContext,
         should_include_am_prompts: bool,
         should_include_command_workflow: bool,
@@ -311,12 +404,14 @@ trait WarpDriveSearcher {
     fn search_env_var(
         &self,
         query: &str,
+        scope: &WindowScope,
         app: &AppContext,
     ) -> anyhow::Result<Vec<EnvVarCollectionSearchItem>>;
 
     fn search_plans(
         &self,
         query: &str,
+        scope: &WindowScope,
         app: &AppContext,
     ) -> anyhow::Result<Vec<NotebookSearchItem>>;
 }
@@ -333,6 +428,7 @@ impl WarpDriveSearcher for FuzzyWarpDriveSearcher {
         &mut self,
         object: &dyn CloudObject,
         object_type: ObjectType,
+        scope: &WindowScope,
         app: &AppContext,
     ) -> anyhow::Result<()> {
         match object_type {
@@ -368,8 +464,9 @@ impl WarpDriveSearcher for FuzzyWarpDriveSearcher {
                     let location = CloudObjectLocation::Folder(folder.id);
                     for obj in CloudModel::as_ref(app)
                         .active_cloud_objects_in_location_without_descendents(location, app)
+                        .filter(|obj| scope.contains(*obj, app))
                     {
-                        self.insert_searchable_object(obj, obj.object_type(), app)?
+                        self.insert_searchable_object(obj, obj.object_type(), scope, app)?
                     }
                 } else {
                     anyhow::bail!("Expected CloudFolder, got {:?}", object);
@@ -422,7 +519,11 @@ impl WarpDriveSearcher for FuzzyWarpDriveSearcher {
         Ok(())
     }
 
-    fn refresh_search_index(&mut self, app: &AppContext) -> anyhow::Result<()> {
+    fn refresh_search_index(
+        &mut self,
+        scope: &WindowScope,
+        app: &AppContext,
+    ) -> anyhow::Result<()> {
         self.workflows.clear();
         self.notebooks.clear();
         self.env_vars.clear();
@@ -430,7 +531,7 @@ impl WarpDriveSearcher for FuzzyWarpDriveSearcher {
         // Single pass with memoized is_trashed: O(N) instead of O(3×N×D).
         let active_uids = model.active_object_uids();
         for object in model.cloud_objects() {
-            if !active_uids.contains(&object.uid()) {
+            if !active_uids.contains(&object.uid()) || !scope.contains(object.as_ref(), app) {
                 continue;
             }
             if let Some(workflow) = <Option<&CloudWorkflow>>::from(object.as_ref()) {
@@ -447,9 +548,12 @@ impl WarpDriveSearcher for FuzzyWarpDriveSearcher {
     fn search_notebook(
         &self,
         query: &str,
+        scope: &WindowScope,
         app: &AppContext,
     ) -> anyhow::Result<Vec<NotebookSearchItem>> {
-        let cloud_notebooks = CloudModel::as_ref(app).get_all_active_notebooks();
+        let cloud_notebooks = CloudModel::as_ref(app)
+            .get_all_active_notebooks()
+            .filter(|notebook| scope.contains(*notebook, app));
         Ok(cloud_notebooks
             .filter_map(|cloud_notebook| {
                 FuzzyMatchNotebookResult::try_match(query, cloud_notebook, app).map(
@@ -465,11 +569,15 @@ impl WarpDriveSearcher for FuzzyWarpDriveSearcher {
     fn search_plans(
         &self,
         query: &str,
+        scope: &WindowScope,
         app: &AppContext,
     ) -> anyhow::Result<Vec<NotebookSearchItem>> {
-        let cloud_notebooks = CloudModel::as_ref(app)
-            .get_all_active_notebooks()
-            .filter(|notebook| notebook.model().ai_document_id.is_some());
+        let cloud_notebooks =
+            CloudModel::as_ref(app)
+                .get_all_active_notebooks()
+                .filter(|notebook| {
+                    notebook.model().ai_document_id.is_some() && scope.contains(*notebook, app)
+                });
         Ok(cloud_notebooks
             .filter_map(|cloud_notebook| {
                 FuzzyMatchNotebookResult::try_match(query, cloud_notebook, app).map(
@@ -485,11 +593,14 @@ impl WarpDriveSearcher for FuzzyWarpDriveSearcher {
     fn search_workflow(
         &self,
         query: &str,
+        scope: &WindowScope,
         app: &AppContext,
         should_include_am_prompts: bool,
         should_include_command_workflow: bool,
     ) -> anyhow::Result<Vec<WorkflowSearchItem>> {
-        let cloud_workflows = CloudModel::as_ref(app).get_all_active_workflows();
+        let cloud_workflows = CloudModel::as_ref(app)
+            .get_all_active_workflows()
+            .filter(|workflow| scope.contains(*workflow, app));
 
         Ok(cloud_workflows
             .filter_map(move |cloud_workflow| {
@@ -516,10 +627,12 @@ impl WarpDriveSearcher for FuzzyWarpDriveSearcher {
     fn search_env_var(
         &self,
         query: &str,
+        scope: &WindowScope,
         app: &AppContext,
     ) -> anyhow::Result<Vec<EnvVarCollectionSearchItem>> {
-        let cloud_env_var_collections =
-            CloudModel::as_ref(app).get_all_active_env_var_collections();
+        let cloud_env_var_collections = CloudModel::as_ref(app)
+            .get_all_active_env_var_collections()
+            .filter(|collection| scope.contains(*collection, app));
 
         Ok(cloud_env_var_collections
             .filter_map(|cloud_env_var_collection| {
@@ -555,7 +668,7 @@ mod full_text_searcher {
     use crate::env_vars::CloudEnvVarCollection;
     use crate::notebooks::CloudNotebook;
     use crate::notebooks::manager::NotebookManager;
-    use crate::search::command_palette::warp_drive::data_source::WarpDriveSearcher;
+    use crate::search::command_palette::warp_drive::data_source::{WarpDriveSearcher, WindowScope};
     use crate::search::command_palette::warp_drive::env_var_collection_search_item::{
         ENV_VAR_NAME_SEPARATOR, EnvVarCollectionSearchItem,
     };
@@ -703,6 +816,7 @@ mod full_text_searcher {
             &mut self,
             object: &dyn CloudObject,
             object_type: ObjectType,
+            scope: &WindowScope,
             app: &AppContext,
         ) -> anyhow::Result<()> {
             match object_type {
@@ -796,8 +910,9 @@ mod full_text_searcher {
                         let location = CloudObjectLocation::Folder(folder.id);
                         for obj in CloudModel::as_ref(app)
                             .active_cloud_objects_in_location_without_descendents(location, app)
+                            .filter(|obj| scope.contains(*obj, app))
                         {
-                            self.insert_searchable_object(obj, obj.object_type(), app)?
+                            self.insert_searchable_object(obj, obj.object_type(), scope, app)?
                         }
                         Ok(())
                     } else {
@@ -855,7 +970,11 @@ mod full_text_searcher {
             }
         }
 
-        fn refresh_search_index(&mut self, app: &AppContext) -> anyhow::Result<()> {
+        fn refresh_search_index(
+            &mut self,
+            scope: &WindowScope,
+            app: &AppContext,
+        ) -> anyhow::Result<()> {
             let model = CloudModel::as_ref(app);
             // Pre-compute active UIDs in a single O(N) pass with memoized is_trashed,
             // instead of 3 separate O(N×D) passes.
@@ -864,7 +983,7 @@ mod full_text_searcher {
             self.notebook_searcher.clear_search_index_async()?;
             let notebook_docs = model
                 .cloud_objects()
-                .filter(|obj| active_uids.contains(&obj.uid()))
+                .filter(|obj| active_uids.contains(&obj.uid()) && scope.contains(obj.as_ref(), app))
                 .filter_map(|obj| {
                     let notebook: Option<&CloudNotebook> = obj.as_ref().into();
                     notebook.map(|notebook| {
@@ -888,7 +1007,7 @@ mod full_text_searcher {
             self.workflow_searcher.clear_search_index_async()?;
             let workflow_docs = model
                 .cloud_objects()
-                .filter(|obj| active_uids.contains(&obj.uid()))
+                .filter(|obj| active_uids.contains(&obj.uid()) && scope.contains(obj.as_ref(), app))
                 .filter_map(|obj| {
                     let cloud_workflow: Option<&CloudWorkflow> = obj.as_ref().into();
                     cloud_workflow.map(|cloud_workflow| {
@@ -914,7 +1033,7 @@ mod full_text_searcher {
             self.env_var_searcher.clear_search_index_async()?;
             let env_var_docs = model
                 .cloud_objects()
-                .filter(|obj| active_uids.contains(&obj.uid()))
+                .filter(|obj| active_uids.contains(&obj.uid()) && scope.contains(obj.as_ref(), app))
                 .filter_map(|obj| {
                     let cloud_env_var: Option<&CloudEnvVarCollection> = obj.as_ref().into();
                     cloud_env_var.map(|cloud_env_var| {
@@ -953,6 +1072,7 @@ mod full_text_searcher {
         fn search_notebook(
             &self,
             query: &str,
+            _scope: &WindowScope,
             app: &AppContext,
         ) -> anyhow::Result<Vec<NotebookSearchItem>> {
             self.search_notebooks_with_filter(query, false, app)
@@ -961,6 +1081,7 @@ mod full_text_searcher {
         fn search_plans(
             &self,
             query: &str,
+            _scope: &WindowScope,
             app: &AppContext,
         ) -> anyhow::Result<Vec<NotebookSearchItem>> {
             self.search_notebooks_with_filter(query, true, app)
@@ -969,6 +1090,7 @@ mod full_text_searcher {
         fn search_workflow(
             &self,
             query: &str,
+            _scope: &WindowScope,
             app: &AppContext,
             should_include_am_prompts: bool,
             should_include_command_workflow: bool,
@@ -1050,6 +1172,7 @@ mod full_text_searcher {
         fn search_env_var(
             &self,
             query: &str,
+            _scope: &WindowScope,
             app: &AppContext,
         ) -> anyhow::Result<Vec<EnvVarCollectionSearchItem>> {
             if query.is_empty() {
