@@ -1675,17 +1675,28 @@ impl LocalRepoMetadataModel {
                     };
 
                     // If the file already exists in the tree, just update its ignored flag
-                    // to preserve the existing FileId.
-                    if let Some(entry) = root_entry.get_mut(&std_path) {
-                        entry.set_ignored(is_ignored);
-                    } else {
-                        let file_state = FileTreeEntryState::File(FileTreeFileMetadata {
-                            path: Arc::new(std_path.clone()),
-                            file_id: FileId::new(),
-                            extension: extension.clone(),
-                            ignored: is_ignored,
-                        });
-                        root_entry.insert_child_state(&parent_dir, file_state);
+                    // to preserve the existing FileId. Read the current flag first and only
+                    // take the mutable (`get_mut` -> `Arc::make_mut`) path when it actually
+                    // changes: `make_mut` deep-clones the entire file-tree store when it is
+                    // shared with a reader snapshot, so a no-op flag write on an unchanged,
+                    // already-present file would otherwise copy multiple GB per watcher event.
+                    match root_entry.get(&std_path).map(FileTreeEntryState::ignored) {
+                        Some(current_ignored) => {
+                            if current_ignored != is_ignored {
+                                if let Some(entry) = root_entry.get_mut(&std_path) {
+                                    entry.set_ignored(is_ignored);
+                                }
+                            }
+                        }
+                        None => {
+                            let file_state = FileTreeEntryState::File(FileTreeFileMetadata {
+                                path: Arc::new(std_path.clone()),
+                                file_id: FileId::new(),
+                                extension: extension.clone(),
+                                ignored: is_ignored,
+                            });
+                            root_entry.insert_child_state(&parent_dir, file_state);
+                        }
                     }
                     if emit {
                         update_entries.push(FileTreeEntryUpdate {
