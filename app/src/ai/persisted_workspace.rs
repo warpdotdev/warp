@@ -367,6 +367,18 @@ impl PersistedWorkspace {
         self.set_lsp_server_for_path(path, server_type, EnablementState::No);
     }
 
+    /// Removes all persisted and suggested LSP configuration for a workspace.
+    pub fn remove_workspace_language_servers(&mut self, path: &Path) {
+        let Some(workspace) = self.workspaces.get_mut(path) else {
+            return;
+        };
+        workspace.language_servers.clear();
+
+        self.save_to_db(vec![ModelEvent::DeleteWorkspaceLanguageServers {
+            workspace_path: path.to_path_buf(),
+        }]);
+    }
+
     /// Returns the enabled LSP server type (if any) for this file path.
     pub fn has_enabled_lsp_server_for_file_path(&self, path: &Path) -> LSPEnablementResultForFile {
         let Some(language_id) = LanguageId::from_path(path) else {
@@ -1287,3 +1299,7 @@ pub fn all_working_directories(app: &AppContext) -> HashSet<PathBuf> {
     }
     working_directories
 }
+
+#[cfg(test)]
+#[path = "persisted_workspace_tests.rs"]
+mod tests;

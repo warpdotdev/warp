@@ -1,6 +1,45 @@
 use remote_server::codebase_index_proto::{RemoteCodebaseIndexState, RemoteCodebaseIndexStatus};
 
-use super::remote_codebase_index_limit_reached;
+use super::{
+    IndexingDeleteAction, local_indexing_delete_action, remote_codebase_index_limit_reached,
+    should_render_initialized_folder,
+};
+
+#[test]
+fn lsp_only_workspace_has_delete_action() {
+    assert_eq!(
+        local_indexing_delete_action(false, true),
+        Some(IndexingDeleteAction::LspOnlyWorkspace)
+    );
+}
+
+#[test]
+fn suggestion_only_workspace_has_no_delete_action() {
+    assert_eq!(local_indexing_delete_action(false, false), None);
+}
+
+#[test]
+fn indexed_workspace_keeps_index_delete_action() {
+    assert_eq!(
+        local_indexing_delete_action(true, true),
+        Some(IndexingDeleteAction::Index)
+    );
+}
+
+#[test]
+fn suggestion_only_workspace_is_not_rendered_as_initialized() {
+    assert!(!should_render_initialized_folder(false, false));
+}
+
+#[test]
+fn persisted_lsp_workspace_is_rendered_as_initialized() {
+    assert!(should_render_initialized_folder(false, true));
+}
+
+#[test]
+fn indexed_workspace_is_rendered_as_initialized() {
+    assert!(should_render_initialized_folder(true, false));
+}
 
 fn remote_status_with_failure(failure_message: Option<&str>) -> RemoteCodebaseIndexStatus {
     RemoteCodebaseIndexStatus {
