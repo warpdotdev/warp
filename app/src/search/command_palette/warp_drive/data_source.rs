@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use warp_errors::report_error;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WindowId};
@@ -20,7 +20,7 @@ use crate::search::env_var_collections::fuzzy_match::FuzzyMatchEnvVarCollectionR
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::notebooks::fuzzy_match::FuzzyMatchNotebookResult;
 use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
-use crate::server::ids::{ObjectUid, SyncId};
+use crate::server::ids::{ObjectUid, ServerId, SyncId};
 use crate::settings::AISettings;
 use crate::workflows::CloudWorkflow;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
@@ -30,18 +30,28 @@ use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 struct WindowScope {
     window_id: WindowId,
     spaces: Vec<Space>,
+    /// Team membership decides whether an owner resolves to that team's space or to the shared
+    /// space, so losing a team remaps its objects without changing `spaces` and without any
+    /// per-object event.
+    known_team_uids: HashSet<ServerId>,
 }
 
 impl WindowScope {
     fn new(window_id: WindowId, app: &AppContext) -> Self {
+        let (spaces, known_team_uids) = Self::resolve(window_id, app);
         Self {
             window_id,
-            spaces: Self::resolve_spaces(window_id, app),
+            spaces,
+            known_team_uids,
         }
     }
 
-    fn resolve_spaces(window_id: WindowId, app: &AppContext) -> Vec<Space> {
-        UserWorkspaces::as_ref(app).spaces_for_window(window_id, app)
+    fn resolve(window_id: WindowId, app: &AppContext) -> (Vec<Space>, HashSet<ServerId>) {
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        (
+            user_workspaces.spaces_for_window(window_id, app),
+            user_workspaces.team_uids_across_all_workspaces(),
+        )
     }
 
     fn contains(&self, object: &dyn CloudObject, app: &AppContext) -> bool {
@@ -101,11 +111,12 @@ impl DataSource {
         data_source
     }
 
-    /// Re-resolves the window's spaces, returning whether they changed.
+    /// Re-resolves what the window can see, returning whether the corpus needs rebuilding.
     fn resync_scope(&mut self, ctx: &mut ModelContext<Self>) -> bool {
-        let spaces = WindowScope::resolve_spaces(self.scope.window_id, ctx);
-        let changed = spaces != self.scope.spaces;
+        let (spaces, known_team_uids) = WindowScope::resolve(self.scope.window_id, ctx);
+        let changed = spaces != self.scope.spaces || known_team_uids != self.scope.known_team_uids;
         self.scope.spaces = spaces;
+        self.scope.known_team_uids = known_team_uids;
         changed
     }
 
@@ -169,8 +180,15 @@ impl DataSource {
         // Per-object events are suppressed at the source during initial load, so this
         // is the only event we receive from that batch.
         if let CloudModelEvent::InitialLoadCompleted = event {
-            // The load can bring in the first shared-with-me object, which widens the scope.
             self.resync_scope(ctx);
+            self.rebuild_index(ctx);
+            return;
+        }
+
+        // The shared space is in scope only while at least one directly shared object exists,
+        // so an object change can widen or narrow the scope itself. Rebuilding then also indexes
+        // the object that caused it.
+        if self.resync_scope(ctx) {
             self.rebuild_index(ctx);
             return;
         }

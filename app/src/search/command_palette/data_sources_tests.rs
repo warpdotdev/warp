@@ -3,15 +3,18 @@ use std::time::Duration;
 
 use chrono::Utc;
 use cloud_object_client::MockObjectClient;
+use instant::Instant;
 use settings::manager::SettingsManager;
+use warp_graphql::object_permissions::AccessLevel;
 use warpui::{App, SingletonEntity, WindowId};
 
 use super::*;
-use crate::auth::AuthStateProvider;
+use crate::auth::{AuthStateProvider, UserUid};
 use crate::cloud_object::model::persistence::{CloudModel, UpdateSource};
 use crate::cloud_object::model::view::CloudViewModel;
 use crate::cloud_object::{
-    Owner, Revision, ServerMetadata, ServerNotebook, ServerPermissions, ServerWorkflow,
+    Owner, Revision, ServerGuestSubject, ServerMetadata, ServerNotebook, ServerObjectGuest,
+    ServerPermissions, ServerWorkflow,
 };
 use crate::features::FeatureFlag;
 use crate::network::NetworkStatus;
@@ -25,7 +28,7 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
-use crate::settings::AISettings;
+use crate::settings::{AISettings, PrivacySettings};
 use crate::system::SystemStats;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflowModel, WorkflowId};
@@ -142,6 +145,8 @@ fn initialize_app(app: &mut App, workspaces: Vec<Workspace>) {
         )
     });
     app.add_singleton_model(TeamTesterStatus::new);
+    // `update_workspaces` pushes enterprise settings into PrivacySettings.
+    app.add_singleton_model(PrivacySettings::mock);
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(CloudModel::mock);
     app.add_singleton_model(|ctx| UpdateManager::new(None, Arc::new(MockObjectClient::new()), ctx));
@@ -352,8 +357,13 @@ fn test_drive_data_source_correctly_filters_notebook_filter() {
     })
 }
 
-/// The full-text index is written on the background executor.
-const INDEX_SETTLE: Duration = Duration::from_millis(750);
+/// Upper bound on how long the background indexer may take before a test gives up. Only a
+/// broken assertion ever waits this long; the poll below exits as soon as the state matches.
+const INDEX_TIMEOUT: Duration = Duration::from_secs(10);
+const INDEX_POLL_INTERVAL: Duration = Duration::from_millis(5);
+
+/// First id reserved for index markers, kept clear of the ids the tests assert on.
+const INDEX_MARKER_ID: i64 = 900;
 
 fn workflow_labels(
     mixer: &ModelHandle<CommandPaletteMixer>,
@@ -383,6 +393,44 @@ fn workflow_labels(
 
 fn workflow_label(name: &str) -> String {
     format!("Workflow: {name}")
+}
+
+/// Polls the palette until it reports `expected`, so tests synchronise on the background indexer
+/// instead of racing a fixed delay.
+fn assert_workflow_labels_eventually(
+    mixer: &ModelHandle<CommandPaletteMixer>,
+    query: &str,
+    expected: &[String],
+    app: &mut App,
+) {
+    let deadline = Instant::now() + INDEX_TIMEOUT;
+    let mut observed = workflow_labels(mixer, query, app);
+    while observed != expected && Instant::now() < deadline {
+        std::thread::sleep(INDEX_POLL_INTERVAL);
+        observed = workflow_labels(mixer, query, app);
+    }
+    assert_eq!(observed, expected);
+}
+
+/// Indexes a fresh in-scope workflow and waits for it to become searchable.
+///
+/// The searcher drains its queue in order, so once the marker is visible every operation queued
+/// before it has been applied. Without this, asserting that something is *absent* from the index
+/// would pass simply because the indexer had not run yet.
+fn drain_index(marker_id: i64, mixer: &ModelHandle<CommandPaletteMixer>, app: &mut App) {
+    let marker_name = format!("indexmarker{marker_id}");
+    CloudModel::handle(app).update(app, |model, ctx| {
+        model.upsert_from_server_workflow(
+            mock_named_server_workflow(
+                marker_id.into(),
+                Owner::mock_current_user(),
+                marker_name.clone(),
+                "echo marker",
+            ),
+            ctx,
+        );
+    });
+    assert_workflow_labels_eventually(mixer, &marker_name, &[workflow_label(&marker_name)], app);
 }
 
 fn prompt_or_workflow_uid(id: i64) -> ObjectUid {
@@ -502,14 +550,15 @@ fn test_full_text_drive_data_source_finds_in_window_objects_outranked_by_another
 
         let mixer = app.add_model(|_| CommandPaletteMixer::new());
         let data_source_handle = app.add_model(|ctx| warp_drive::DataSource::new(window_id, ctx));
-        std::thread::sleep(INDEX_SETTLE);
         mixer.update(&mut app, |mixer, _| {
             mixer.add_sync_source(data_source_handle, [QueryFilter::Workflows]);
         });
 
-        assert_eq!(
-            workflow_labels(&mixer, "deploy", &mut app),
-            vec![workflow_label("release notes generator")]
+        assert_workflow_labels_eventually(
+            &mixer,
+            "deploy",
+            &[workflow_label("release notes generator")],
+            &mut app,
         );
     })
 }
@@ -545,15 +594,12 @@ fn test_full_text_drive_data_source_indexes_an_object_that_moves_into_the_window
 
         let mixer = app.add_model(|_| CommandPaletteMixer::new());
         let data_source_handle = app.add_model(|ctx| warp_drive::DataSource::new(window_id, ctx));
-        std::thread::sleep(INDEX_SETTLE);
         mixer.update(&mut app, |mixer, _| {
             mixer.add_sync_source(data_source_handle, [QueryFilter::Workflows]);
         });
 
-        assert!(
-            workflow_labels(&mixer, "migrating", &mut app).is_empty(),
-            "another team's workflow should not be in this window's corpus"
-        );
+        drain_index(INDEX_MARKER_ID, &mixer, &mut app);
+        assert_workflow_labels_eventually(&mixer, "migrating", &[], &mut app);
 
         // The server reassigns the workflow to this window's team.
         CloudModel::handle(&app).update(&mut app, |model, ctx| {
@@ -566,11 +612,12 @@ fn test_full_text_drive_data_source_indexes_an_object_that_moves_into_the_window
                 ctx,
             );
         });
-        std::thread::sleep(INDEX_SETTLE);
 
-        assert_eq!(
-            workflow_labels(&mixer, "migrating", &mut app),
-            vec![workflow_label("migrating workflow")]
+        assert_workflow_labels_eventually(
+            &mixer,
+            "migrating",
+            &[workflow_label("migrating workflow")],
+            &mut app,
         );
     })
 }
@@ -606,14 +653,15 @@ fn test_full_text_drive_data_source_removes_an_object_that_moves_out_of_the_wind
 
         let mixer = app.add_model(|_| CommandPaletteMixer::new());
         let data_source_handle = app.add_model(|ctx| warp_drive::DataSource::new(window_id, ctx));
-        std::thread::sleep(INDEX_SETTLE);
         mixer.update(&mut app, |mixer, _| {
             mixer.add_sync_source(data_source_handle, [QueryFilter::Workflows]);
         });
 
-        assert_eq!(
-            workflow_labels(&mixer, "departing", &mut app),
-            vec![workflow_label("departing workflow")]
+        assert_workflow_labels_eventually(
+            &mixer,
+            "departing",
+            &[workflow_label("departing workflow")],
+            &mut app,
         );
 
         // The user moves the workflow into the other team's drive.
@@ -627,12 +675,9 @@ fn test_full_text_drive_data_source_removes_an_object_that_moves_out_of_the_wind
                 ctx,
             );
         });
-        std::thread::sleep(INDEX_SETTLE);
 
-        assert!(
-            workflow_labels(&mixer, "departing", &mut app).is_empty(),
-            "a workflow that leaves the window's spaces should be removed from its index"
-        );
+        drain_index(INDEX_MARKER_ID, &mixer, &mut app);
+        assert_workflow_labels_eventually(&mixer, "departing", &[], &mut app);
     })
 }
 
@@ -664,21 +709,22 @@ fn test_full_text_drive_data_source_rebuilds_when_the_windows_team_changes() {
         let window_id = WindowId::new();
         let mixer = app.add_model(|_| CommandPaletteMixer::new());
         let data_source_handle = app.add_model(|ctx| warp_drive::DataSource::new(window_id, ctx));
-        std::thread::sleep(INDEX_SETTLE);
         mixer.update(&mut app, |mixer, _| {
             mixer.add_sync_source(data_source_handle, [QueryFilter::Workflows]);
         });
 
-        assert!(workflow_labels(&mixer, "second", &mut app).is_empty());
+        drain_index(INDEX_MARKER_ID, &mixer, &mut app);
+        assert_workflow_labels_eventually(&mixer, "second", &[], &mut app);
 
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
             user_workspaces.set_team_for_window(window_id, second_team.uid, ctx);
         });
-        std::thread::sleep(INDEX_SETTLE);
 
-        assert_eq!(
-            workflow_labels(&mixer, "second", &mut app),
-            vec![workflow_label("second team workflow")]
+        assert_workflow_labels_eventually(
+            &mixer,
+            "second",
+            &[workflow_label("second team workflow")],
+            &mut app,
         );
     })
 }
@@ -744,6 +790,157 @@ fn test_drive_data_sources_for_different_windows_stay_independent() {
         assert_eq!(
             workflow_labels(&second_mixer, "workflow", &mut app),
             vec![workflow_label("second team workflow")]
+        );
+    })
+}
+
+fn mock_shared_server_permissions(shared_with: UserUid) -> ServerPermissions {
+    ServerPermissions {
+        space: Owner::User {
+            user_uid: UserUid::new("someone-else"),
+        },
+        guests: vec![ServerObjectGuest {
+            subject: ServerGuestSubject::User {
+                firebase_uid: shared_with.as_string(),
+            },
+            access_level: AccessLevel::Viewer,
+            source: None,
+        }],
+        anyone_link_sharing: None,
+        permissions_last_updated_ts: Utc::now().into(),
+    }
+}
+
+fn current_user_uid(app: &App) -> UserUid {
+    app.read(|app| {
+        AuthStateProvider::as_ref(app)
+            .get()
+            .user_id()
+            .expect("test user should be authenticated")
+    })
+}
+
+/// The shared space is only in scope while a directly shared object exists, so the very first one
+/// widens the scope of an index that already exists.
+#[test]
+fn test_full_text_drive_data_source_indexes_the_first_directly_shared_object() {
+    let _shared_with_me = FeatureFlag::SharedWithMe.override_enabled(true);
+    let _tantivy = FeatureFlag::UseTantivySearch.override_enabled(true);
+    let team = team_for_test(123, "selected");
+    let workspace = workspace_for_test(vec![team.clone()]);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app, vec![workspace]);
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, team.uid, ctx);
+        });
+
+        // No shared object exists yet, so the data source starts without the shared space.
+        let mixer = app.add_model(|_| CommandPaletteMixer::new());
+        let data_source_handle = app.add_model(|ctx| warp_drive::DataSource::new(window_id, ctx));
+        mixer.update(&mut app, |mixer, _| {
+            mixer.add_sync_source(data_source_handle, [QueryFilter::Workflows]);
+        });
+        drain_index(INDEX_MARKER_ID, &mixer, &mut app);
+        assert_workflow_labels_eventually(&mixer, "bequeathed", &[], &mut app);
+
+        let shared_with = current_user_uid(&app);
+        CloudModel::handle(&app).update(&mut app, |model, ctx| {
+            model.upsert_from_server_workflow(
+                ServerWorkflow::new(
+                    SyncId::ServerId(WorkflowId::from(1).into()),
+                    CloudWorkflowModel::new(Workflow::new("bequeathed workflow", "echo shared")),
+                    mock_server_metadata(),
+                    mock_shared_server_permissions(shared_with),
+                ),
+                ctx,
+            );
+        });
+
+        assert_workflow_labels_eventually(
+            &mixer,
+            "bequeathed",
+            &[workflow_label("bequeathed workflow")],
+            &mut app,
+        );
+    })
+}
+
+/// Leaving a team remaps its objects to the shared space without touching the objects themselves
+/// and without changing which spaces the window can see, so the visible space list alone cannot
+/// tell the corpus it is stale.
+#[test]
+fn test_full_text_drive_data_source_reindexes_when_a_team_stops_being_a_member_team() {
+    let _shared_with_me = FeatureFlag::SharedWithMe.override_enabled(true);
+    let _tantivy = FeatureFlag::UseTantivySearch.override_enabled(true);
+    let window_team = team_for_test(123, "window");
+    let departing_team = team_for_test(456, "departing");
+    let workspace = workspace_for_test(vec![window_team.clone(), departing_team.clone()]);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app, vec![workspace]);
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, window_team.uid, ctx);
+        });
+
+        // A directly shared object puts the shared space in scope up front, so the window's
+        // visible space list is identical before and after the membership change.
+        let shared_with = current_user_uid(&app);
+        CloudModel::handle(&app).update(&mut app, |model, ctx| {
+            model.upsert_from_server_workflow(
+                ServerWorkflow::new(
+                    SyncId::ServerId(WorkflowId::from(1).into()),
+                    CloudWorkflowModel::new(Workflow::new("preexisting shared", "echo shared")),
+                    mock_server_metadata(),
+                    mock_shared_server_permissions(shared_with),
+                ),
+                ctx,
+            );
+            model.upsert_from_server_workflow(
+                mock_named_server_workflow(
+                    2.into(),
+                    Owner::Team {
+                        team_uid: departing_team.uid,
+                    },
+                    "remapped workflow",
+                    "echo remapped",
+                ),
+                ctx,
+            );
+        });
+
+        let mixer = app.add_model(|_| CommandPaletteMixer::new());
+        let data_source_handle = app.add_model(|ctx| warp_drive::DataSource::new(window_id, ctx));
+        mixer.update(&mut app, |mixer, _| {
+            mixer.add_sync_source(data_source_handle, [QueryFilter::Workflows]);
+        });
+
+        let spaces_before =
+            app.read(|app| UserWorkspaces::as_ref(app).spaces_for_window(window_id, app));
+        drain_index(INDEX_MARKER_ID, &mixer, &mut app);
+        assert_workflow_labels_eventually(&mixer, "remapped", &[], &mut app);
+
+        // The user leaves the departing team; its objects now resolve to the shared space.
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![workspace_for_test(vec![window_team])], ctx);
+        });
+
+        app.read(|app| {
+            assert_eq!(
+                UserWorkspaces::as_ref(app).spaces_for_window(window_id, app),
+                spaces_before,
+                "the visible space list must be unchanged for this test to be meaningful"
+            );
+        });
+        assert_workflow_labels_eventually(
+            &mixer,
+            "remapped",
+            &[workflow_label("remapped workflow")],
+            &mut app,
         );
     })
 }

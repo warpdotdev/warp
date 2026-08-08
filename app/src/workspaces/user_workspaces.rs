@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -383,6 +383,17 @@ impl UserWorkspaces {
             .iter()
             .flat_map(|w| w.teams.iter())
             .find(|t| t.uid == team_uid)
+    }
+
+    /// The teams [`Self::owner_to_space`] recognizes. An owner naming a team outside this set
+    /// resolves to the shared space instead of that team's space, so a change here remaps
+    /// objects between spaces without any of them changing.
+    pub fn team_uids_across_all_workspaces(&self) -> HashSet<ServerId> {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .map(|team| team.uid)
+            .collect()
     }
 
     pub fn workspace_from_uid(&self, workspace_uid: WorkspaceUid) -> Option<&Workspace> {
