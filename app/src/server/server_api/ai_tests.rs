@@ -404,6 +404,7 @@ fn test_deserialize_list_tasks_response_with_artifacts() {
         artifact_uid,
         filepath,
         filename,
+        title,
         mime_type,
         description,
         size_bytes,
@@ -414,6 +415,7 @@ fn test_deserialize_list_tasks_response_with_artifacts() {
     assert_eq!(artifact_uid, "artifact-file-1");
     assert_eq!(filepath, "outputs/report.txt");
     assert_eq!(filename, "report.txt");
+    assert!(title.is_none());
     assert_eq!(mime_type, "text/plain");
     assert_eq!(*description, Some("Daily summary".to_string()));
     assert_eq!(*size_bytes, Some(42));
@@ -972,6 +974,7 @@ fn test_artifact_file_serialize_deserialize_roundtrip() {
         artifact_uid: "artifact-file-1".to_string(),
         filepath: "outputs/report.txt".to_string(),
         filename: "report.txt".to_string(),
+        title: None,
         mime_type: "text/plain".to_string(),
         description: Some("Daily summary".to_string()),
         size_bytes: Some(42),
@@ -1001,6 +1004,7 @@ fn test_artifact_vec_serialize_deserialize_roundtrip() {
             artifact_uid: "artifact-file-1".to_string(),
             filepath: "outputs/report.txt".to_string(),
             filename: "report.txt".to_string(),
+            title: None,
             mime_type: "text/plain".to_string(),
             description: Some("Daily summary".to_string()),
             size_bytes: Some(42),

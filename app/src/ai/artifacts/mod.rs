@@ -4,12 +4,14 @@ use std::path::PathBuf;
 
 use anyhow::anyhow;
 use ui_components::lightbox::{LightboxImage, LightboxImageSource};
+use warp_core::channel::ChannelState;
 use warp_errors::report_error;
 use warp_multi_agent_api as api;
 use warpui::SingletonEntity;
 #[cfg(feature = "local_fs")]
 use warpui::platform::SaveFilePickerConfiguration;
 
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 #[cfg(feature = "local_fs")]
 use crate::ai::artifact_download::default_download_filename;
 use crate::ai::artifact_download::sanitized_basename;
@@ -65,6 +67,7 @@ pub enum Artifact {
         artifact_uid: String,
         filepath: String,
         filename: String,
+        title: Option<String>,
         mime_type: String,
         description: Option<String>,
         size_bytes: Option<i32>,
@@ -100,6 +103,7 @@ enum ArtifactHelper {
         artifact_uid: String,
         filepath: String,
         filename: String,
+        title: Option<String>,
         mime_type: String,
         description: Option<String>,
         size_bytes: Option<i32>,
@@ -155,6 +159,7 @@ impl<'de> serde::Deserialize<'de> for Artifact {
                 artifact_uid,
                 filepath,
                 filename,
+                title,
                 mime_type,
                 description,
                 size_bytes,
@@ -162,6 +167,7 @@ impl<'de> serde::Deserialize<'de> for Artifact {
                 artifact_uid,
                 filepath,
                 filename,
+                title: title.filter(|title| !title.trim().is_empty()),
                 mime_type,
                 description,
                 size_bytes,
@@ -207,6 +213,7 @@ impl From<api::message::artifact_event::FileArtifact> for Artifact {
                 .filter(|file_name| !file_name.trim().is_empty())
                 .unwrap_or("File")
                 .to_string(),
+            title: None,
             mime_type: file.mime_type,
             description: if file.description.is_empty() {
                 None
@@ -268,6 +275,7 @@ impl TryFrom<warp_graphql::ai::AIConversationArtifact> for Artifact {
                 artifact_uid: file.artifact_uid.into_inner(),
                 filepath: file.filepath.clone(),
                 filename: sanitized_basename(&file.filepath).unwrap_or(file.filepath),
+                title: file.title.filter(|title| !title.trim().is_empty()),
                 mime_type: file.mime_type,
                 description: file.description,
                 size_bytes: file.size_bytes,
@@ -311,7 +319,10 @@ where
         .collect())
 }
 
-pub fn file_button_label(filename: &str, filepath: &str) -> String {
+pub fn file_button_label(title: Option<&str>, filename: &str, filepath: &str) -> String {
+    if let Some(title) = title.and_then(non_empty_trimmed) {
+        return title.to_string();
+    }
     if let Some(filename) = non_empty_trimmed(filename) {
         return filename.to_string();
     }
@@ -322,6 +333,67 @@ pub fn file_button_label(filename: &str, filepath: &str) -> String {
         return filepath_basename.to_string();
     }
     "File".to_string()
+}
+
+pub fn is_recording_mime_type(mime_type: &str) -> bool {
+    mime_type.trim().to_ascii_lowercase().starts_with("video/")
+}
+
+/// Builds the authenticated Oz run-page URL for a recording artifact.
+///
+/// When a task ID is unavailable, callers should fall back to the signed artifact
+/// download URL returned by the artifact endpoint.
+pub fn recording_artifact_view_url(
+    task_id: Option<AmbientAgentTaskId>,
+    artifact_uid: &str,
+) -> Option<String> {
+    let task_id = task_id?;
+    Some(format!(
+        "{}/runs/{task_id}?artifact={}",
+        ChannelState::oz_root_url(),
+        urlencoding::encode(artifact_uid),
+    ))
+}
+
+/// Open a recording in the authenticated run viewer when possible, falling back to
+/// the artifact endpoint's short-lived signed URL for conversations without a task ID.
+pub fn open_recording_artifact<V: warpui::View>(
+    artifact_uid: &str,
+    task_id: Option<AmbientAgentTaskId>,
+    ctx: &mut warpui::ViewContext<V>,
+) {
+    if let Some(url) = recording_artifact_view_url(task_id, artifact_uid) {
+        ctx.open_url(&url);
+        return;
+    }
+
+    let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
+    let artifact_uid = artifact_uid.to_string();
+    let artifact_uid_for_error = artifact_uid.clone();
+    ctx.spawn(
+        async move { ai_client.get_artifact_download(&artifact_uid).await },
+        move |_, result, ctx| match result {
+            Ok(ArtifactDownloadResponse::File { data, .. }) => {
+                ctx.open_url(&data.download_url);
+            }
+            Ok(ArtifactDownloadResponse::Screenshot { .. }) => {
+                log::warn!("Artifact {artifact_uid_for_error} was not a recording file");
+            }
+            Err(error) => {
+                log::warn!(
+                    "Failed to prepare recording artifact {artifact_uid_for_error}: {error:#}"
+                );
+                let window_id = ctx.window_id();
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::error("Failed to open recording.".to_string()),
+                        window_id,
+                        ctx,
+                    );
+                });
+            }
+        },
+    );
 }
 
 pub fn open_screenshot_lightbox<V: warpui::View>(
