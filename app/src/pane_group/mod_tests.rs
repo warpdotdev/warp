@@ -402,6 +402,7 @@ fn persisted_remote_child_conversation(
                 autoexecute_override: None,
                 last_event_sequence: None,
                 pinned: false,
+                cloud_handoff_task_id: None,
             })
             .expect("conversation data should serialize"),
             last_modified_at: Utc::now().naive_utc(),

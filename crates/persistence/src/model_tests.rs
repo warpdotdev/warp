@@ -273,6 +273,7 @@ fn agent_conversation_data_roundtrips_last_event_sequence() {
         autoexecute_override: None,
         last_event_sequence: Some(42),
         pinned: false,
+        cloud_handoff_task_id: None,
     };
     let json = serde_json::to_string(&data).expect("serialize");
     let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
@@ -310,6 +311,7 @@ fn agent_conversation_data_roundtrips_remote_child_marker() {
         autoexecute_override: None,
         last_event_sequence: None,
         pinned: false,
+        cloud_handoff_task_id: None,
     };
     let json = serde_json::to_string(&data).expect("serialize");
     let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
@@ -334,6 +336,7 @@ fn agent_conversation_data_roundtrips_optimistic_root_marker() {
         autoexecute_override: None,
         last_event_sequence: None,
         pinned: false,
+        cloud_handoff_task_id: None,
     };
     let json = serde_json::to_string(&data).expect("serialize");
     let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
@@ -370,6 +373,7 @@ fn agent_conversation_data_skips_serializing_none_last_event_sequence() {
         autoexecute_override: None,
         last_event_sequence: None,
         pinned: false,
+        cloud_handoff_task_id: None,
     };
     let json = serde_json::to_string(&data).expect("serialize");
     assert!(
@@ -396,6 +400,7 @@ fn agent_conversation_data_roundtrips_pinned() {
         autoexecute_override: None,
         last_event_sequence: None,
         pinned: true,
+        cloud_handoff_task_id: None,
     };
     let json = serde_json::to_string(&data).expect("serialize");
     let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
@@ -420,6 +425,7 @@ fn agent_conversation_data_skips_serializing_unpinned() {
         autoexecute_override: None,
         last_event_sequence: None,
         pinned: false,
+        cloud_handoff_task_id: None,
     };
     let json = serde_json::to_string(&data).expect("serialize");
     assert!(

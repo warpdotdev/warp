@@ -944,6 +944,7 @@ impl TerminalView {
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            cloud_handoff_task_id: None,
         };
 
         // We already early-return for empty `tasks` above, so the strict
