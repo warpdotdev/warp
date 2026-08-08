@@ -3840,7 +3840,8 @@ impl Workspace {
             }
             | TabSettingsChangedEvent::VerticalTabsShowPrLink { .. }
             | TabSettingsChangedEvent::VerticalTabsShowDiffStats { .. }
-            | TabSettingsChangedEvent::HideTitleBarSearchBarInVerticalTabs { .. } => {
+            | TabSettingsChangedEvent::HideTitleBarSearchBarInVerticalTabs { .. }
+            | TabSettingsChangedEvent::TabGroupAutoColor { .. } => {
                 ctx.notify();
             }
             TabSettingsChangedEvent::VerticalTabsShowDetailsOnHover { .. } => {
@@ -7371,7 +7372,13 @@ impl Workspace {
         };
         let previous_group_id = tab.group_id;
 
-        let group = TabGroup::new();
+        let auto_color = *TabSettings::as_ref(ctx).tab_group_auto_color.value();
+        let color = auto_color.then(|| self.pick_tab_group_color());
+
+        let mut group = TabGroup::new();
+        if let Some(c) = color {
+            group.color = SelectedTabColor::Color(c);
+        }
         let group_id = group.id;
         self.tab_groups.insert(group_id, group);
 
@@ -23200,6 +23207,9 @@ impl Workspace {
         }
         if *tab_settings.preserve_active_tab_color.value() {
             context.set.insert(flags::PRESERVE_ACTIVE_TAB_COLOR_FLAG);
+        }
+        if *tab_settings.tab_group_auto_color.value() {
+            context.set.insert(flags::TAB_GROUP_AUTO_COLOR_FLAG);
         }
         if *tab_settings
             .show_vertical_tab_panel_in_restored_windows

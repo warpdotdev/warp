@@ -1,14 +1,18 @@
 use std::collections::HashSet;
 
 use itertools::{Either, Itertools};
+use settings::Setting as _;
 use warp_core::features::FeatureFlag;
-use warpui::{EntityId, UpdateView, ViewContext};
+use warp_core::ui::theme::AnsiColorIdentifier;
+use warpui::{EntityId, SingletonEntity, UpdateView, ViewContext};
 
 use super::{Workspace, group_member_indices};
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::tab::{MOVE_TO_GROUP_LABEL, TabData};
+use crate::tab::{MOVE_TO_GROUP_LABEL, SelectedTabColor, TabData};
+use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 use crate::workspace::action::{TabContextMenuAnchor, WorkspaceAction};
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
+use crate::workspace::tab_settings::TabSettings;
 use crate::workspace::util::PaneViewLocator;
 
 // TODO(johnturcoo) move tab grouping helpers here from workspace/view.rs.
@@ -195,6 +199,27 @@ impl Workspace {
         }
     }
 
+    /// Returns the first color from `TAB_COLOR_OPTIONS` not already in use by
+    /// an existing tab group, cycling back to the start if all are taken.
+    pub(super) fn pick_tab_group_color(&self) -> AnsiColorIdentifier {
+        let used_colors: Vec<AnsiColorIdentifier> = self
+            .tab_groups
+            .values()
+            .filter_map(|g| {
+                if let SelectedTabColor::Color(c) = g.color {
+                    Some(c)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        TAB_COLOR_OPTIONS
+            .iter()
+            .copied()
+            .find(|c| !used_colors.contains(c))
+            .unwrap_or(TAB_COLOR_OPTIONS[0])
+    }
+
     /// "Create group from tabs" menu action. Group membership requires
     /// tabs to be contiguous in the bar, so we gather the selected tabs into
     /// a single block anchored at the earliest selected tab's position before
@@ -224,7 +249,13 @@ impl Workspace {
             .filter_map(|index| self.tabs[*index].group_id)
             .collect();
 
-        let group = TabGroup::new();
+        let auto_color = *TabSettings::as_ref(ctx).tab_group_auto_color.value();
+        let color = auto_color.then(|| self.pick_tab_group_color());
+
+        let mut group = TabGroup::new();
+        if let Some(c) = color {
+            group.color = SelectedTabColor::Color(c);
+        }
         let group_id = group.id;
         self.tab_groups.insert(group_id, group);
 
