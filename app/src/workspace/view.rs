@@ -90,13 +90,15 @@ use warpui::clipboard::ClipboardContent;
 #[cfg(target_family = "wasm")]
 use warpui::elements::Percentage;
 use warpui::elements::{
-    Align, Border, CacheOption, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult, DragAxis, Draggable,
-    DraggableState, DropTarget, Element, Empty, EventHandler, Expanded, Fill as ElementFill, Flex,
-    Highlight, Hoverable, Icon as WarpUiIcon, Image, MainAxisAlignment, MainAxisSize,
-    MouseInBehavior, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect,
-    SavePosition, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
+    Align, Border, CacheOption, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle,
+    ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
+    DispatchEventResult, DragAxis, DragBarSide, Draggable, DraggableState, DropTarget, Element,
+    Empty, EventHandler, Expanded, Fill as ElementFill, Flex, Highlight, Hoverable,
+    Icon as WarpUiIcon, Image, MainAxisAlignment, MainAxisSize, MouseInBehavior, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, Rect, Resizable, ResizableStateHandle, SavePosition,
+    ScrollbarWidth, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
+    resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::geometry::vector::{Vector2F, vec2f};
@@ -149,8 +151,9 @@ use super::rewind_confirmation_dialog::{
     RewindConfirmationDialog, RewindConfirmationEvent, RewindDialogSource,
 };
 use super::tab_settings::{
-    HeaderToolbarChipSelection, NewTabPlacement, TabSettings, TabSettingsChangedEvent,
-    VerticalTabsDisplayGranularity, WorkspaceDecorationVisibility,
+    HeaderToolbarChipSelection, NewTabPlacement, TabLineCount, TabSettings,
+    TabSettingsChangedEvent, VerticalTabsDisplayGranularity, WorkspaceDecorationVisibility,
+    project_layout_active, vertical_tabs_layout_active,
 };
 use super::util::{
     PaneViewLocator, TabMovement, TerminalSessionFallbackBehavior, WelcomeTipsViewState,
@@ -163,7 +166,7 @@ use crate::ai::agent::CancellationReason;
 use crate::ai::agent::api::ServerConversationToken;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::conversation::AIAgentHarness;
-use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentInput, EntrypointType};
 #[cfg(target_family = "wasm")]
 use crate::ai::agent_conversations_model::AgentConversationsModelEvent;
@@ -211,6 +214,7 @@ use crate::ai::blocklist::{
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 #[cfg(target_family = "wasm")]
 use crate::ai::conversation_details_panel::ConversationDetailsPanel;
+use crate::ai::conversation_status_ui::render_status_element;
 use crate::ai::conversation_utils;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
 use crate::ai::execution_profiles::ExecutionProfileId;
@@ -387,6 +391,9 @@ use crate::terminal::available_shells::AvailableShells;
 use crate::terminal::block_list_viewport::InputMode;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
+use crate::terminal::cli_agent_sessions::session_scan::{
+    self, ClaudeSessionScanModel, ScannedSession,
+};
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
 use crate::terminal::enable_auto_reload_modal::{
     EnableAutoReloadModal, EnableAutoReloadModalEvent,
@@ -431,14 +438,16 @@ use crate::terminal::view::{
     SyncInputType, TerminalAction,
 };
 use crate::terminal::warpify::settings::WarpifySettings;
-use crate::terminal::{self, BlockListSettings, SizeInfo, TerminalModel, TerminalView};
+use crate::terminal::{self, BlockListSettings, CLIAgent, SizeInfo, TerminalModel, TerminalView};
 use crate::themes::theme::{AnsiColorIdentifier, RespectSystemTheme, ThemeKind};
 use crate::themes::theme_chooser::{ThemeChooser, ThemeChooserEvent, ThemeChooserMode};
 use crate::themes::theme_creator_modal::{ThemeCreatorModal, ThemeCreatorModalEvent};
 use crate::themes::theme_deletion_modal::{ThemeDeletionModal, ThemeDeletionModalEvent};
 use crate::tips::{TipsEvent, TipsView};
+use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
 use crate::ui_components::buttons::{combo_inner_button, icon_button_with_color};
+use crate::ui_components::icon_with_status::{IconWithStatusVariant, render_icon_with_status};
 use crate::ui_components::red_notification_dot::RedNotificationDot;
 use crate::ui_components::window_focus_dimming::WindowFocusDimming;
 use crate::ui_components::{blended_colors, icons};
@@ -496,6 +505,7 @@ use crate::workspace::cross_window_tab_drag::{
 use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::one_time_modal_model::OneTimeModalModel;
+use crate::workspace::project_layout::{self, ProjectId, ProjectLayout};
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::TabCloseButtonPosition;
@@ -556,9 +566,31 @@ const MAX_FONT_SIZE: f32 = 25.0;
 const FONT_SIZE_INCREMENT: f32 = 1.0;
 
 pub const TAB_BAR_HEIGHT: f32 = 34.;
-/// Height for all panel headers (tab bar, warp drive, resource center, theme chooser, etc.).
-/// This ensures consistent header heights across all UI panels.
-pub const PANEL_HEADER_HEIGHT: f32 = TAB_BAR_HEIGHT;
+/// Tab bar height when tabs show a second line of information
+/// ([`TabLineCount::TwoLine`]). Tab height itself is content-driven, so this
+/// only has to give the taller pill room; the extra is the 10pt subtitle line
+/// plus its 1px spacing.
+pub const TAB_BAR_TWO_LINE_HEIGHT: f32 = 48.;
+/// Height for all panel headers (warp drive, resource center, theme chooser,
+/// etc.).
+///
+/// Deliberately its own constant rather than an alias of [`TAB_BAR_HEIGHT`]:
+/// the tab bar grows when tabs are two-line, and those panels must not grow
+/// with it.
+pub const PANEL_HEADER_HEIGHT: f32 = 34.;
+
+/// Starting width of the project rail, before the user drags it.
+const RAIL_DEFAULT_WIDTH: f32 = 168.;
+/// How narrow the rail may be dragged. Deliberately well below
+/// [`RAIL_DEFAULT_WIDTH`] — [`ResizableState::clamp_size`] applies these bounds
+/// on the first layout pass, so a minimum above the default would silently
+/// *widen* the rail instead of leaving it where it starts. Project names
+/// ellipsize and task labels wrap, so a narrow rail stays usable.
+const RAIL_MIN_WIDTH: f32 = 120.;
+/// The rail is a navigation aid, never the main event: cap it at half the
+/// window so it cannot crowd out the terminal.
+const RAIL_MAX_WIDTH_RATIO: f32 = 0.5;
+
 /// The hover area height for states where the tab bar is revealed on hover.
 const TAB_BAR_HOVER_HEIGHT: f32 = 12.;
 const TAB_BAR_PADDING_LEFT: f32 = 4.;
@@ -566,8 +598,23 @@ const TAB_BAR_PADDING_RIGHT: f32 = 8.;
 const TITLE_BAR_SEARCH_BAR_MAX_WIDTH: f32 = 320.;
 const TITLE_BAR_SEARCH_BAR_SLOT_PADDING: f32 = 8.;
 
-// The total height taken up by the tab bar, including its bottom border.
+// The total height taken up by the single-line tab bar, including its bottom border.
 pub const TOTAL_TAB_BAR_HEIGHT: f32 = TAB_BAR_HEIGHT + TAB_BAR_BORDER_HEIGHT;
+
+/// The tab bar's height for the configured line count.
+pub fn tab_bar_height(ctx: &AppContext) -> f32 {
+    match TabSettings::as_ref(ctx).tab_line_count {
+        TabLineCount::SingleLine => TAB_BAR_HEIGHT,
+        TabLineCount::TwoLine => TAB_BAR_TWO_LINE_HEIGHT,
+    }
+}
+
+/// The tab bar's total height including its bottom border, for the configured
+/// line count. The macOS titlebar is sized from this, which is what positions
+/// the traffic lights.
+pub fn total_tab_bar_height(ctx: &AppContext) -> f32 {
+    tab_bar_height(ctx) + TAB_BAR_BORDER_HEIGHT
+}
 
 const TAB_BAR_ICON_PADDING: f32 = 4.;
 
@@ -1013,6 +1060,11 @@ pub struct Workspace {
     /// Tracks tab activation order (most-recently-used first).
     /// Each entry is the `pane_group.id()` of the corresponding tab.
     tab_mru_order: Vec<EntityId>,
+    /// The project currently selected in the project rail (Herdr-style
+    /// Projects × Tasks layout, gated by `FeatureFlag::Projects`). This is a
+    /// derived runtime value kept equal to the project of the active tab; it is
+    /// not persisted (reconstructed from the restored active tab).
+    selected_project: Option<ProjectId>,
     pub(crate) hovered_tab_index: Option<TabBarHoverIndex>,
     tab_bar_hover_state: MouseStateHandle,
     tab_fixed_width: Option<f32>,
@@ -1021,6 +1073,22 @@ pub struct Workspace {
     pub(crate) tab_groups: HashMap<TabGroupId, TabGroup>,
     /// Per-group hover state for the horizontal tab bar.
     horizontal_tab_group_mouse_states: RefCell<HashMap<TabGroupId, HorizontalTabGroupMouseStates>>,
+    /// Per-project hover/click state for the project rail (created once per
+    /// project and persisted across renders, per the MouseStateHandle rule).
+    project_rail_mouse_states: RefCell<HashMap<ProjectId, MouseStateHandle>>,
+    /// Per-task hover/click state for the project rail's task rows, keyed by
+    /// pane group so it survives reordering.
+    rail_task_mouse_states: RefCell<HashMap<EntityId, MouseStateHandle>>,
+    /// Hover/click state for the rail's dormant task rows, keyed by task
+    /// identity (agent + session id) — a dormant task has no pane group.
+    rail_dormant_mouse_states: RefCell<HashMap<(CLIAgent, String), MouseStateHandle>>,
+    /// Scroll position of the project rail. Held here rather than rebuilt each
+    /// render so the scroll offset survives repaints.
+    project_rail_scroll_state: ClippedScrollStateHandle,
+    /// Dragged width of the project rail. Session-lived, matching the vertical
+    /// tabs panel, which likewise owns its handle rather than registering with
+    /// [`ResizableData`] — the rail width is not part of session restoration.
+    project_rail_resizable_state: ResizableStateHandle,
     tab_rename_editor: ViewHandle<EditorView>,
     pane_rename_editor: ViewHandle<EditorView>,
     tab_group_rename_editor: ViewHandle<EditorView>,
@@ -1216,7 +1284,7 @@ impl Workspace {
         self.suppress_detach_panes_on_window_close = value;
     }
     fn tab_rename_editor_font_size(ctx: &AppContext, appearance: &Appearance) -> f32 {
-        if FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs {
+        if vertical_tabs_layout_active(ctx) {
             match *TabSettings::as_ref(ctx)
                 .vertical_tabs_display_granularity
                 .value()
@@ -2377,7 +2445,7 @@ impl Workspace {
     /// Opens the vertical tabs panel if the setting was enabled.
     /// Called from the onboarding flow before the session config modal is shown.
     pub(crate) fn open_vertical_tabs_panel_if_enabled(&mut self, ctx: &mut ViewContext<Self>) {
-        if FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs {
+        if vertical_tabs_layout_active(ctx) {
             self.vertical_tabs_panel_open = true;
             self.sync_window_button_visibility(ctx);
             ctx.notify();
@@ -2931,6 +2999,16 @@ impl Workspace {
             ctx.notify();
         });
 
+        // The on-disk session scan lands asynchronously; without this the rail
+        // would keep showing the pre-scan rows until some other event repainted
+        // it. Also kicked once here so the rail is populated on the first
+        // paint after a restart, before the user touches anything.
+        if ctx.has_singleton_model::<ClaudeSessionScanModel>() {
+            ctx.observe(&ClaudeSessionScanModel::handle(ctx), |_, _, ctx| {
+                ctx.notify();
+            });
+        }
+
         let changelog_model = ChangelogModel::handle(ctx);
         ctx.subscribe_to_model(&changelog_model, |me, _, event, ctx| {
             me.handle_changelog_event(event, ctx);
@@ -3385,11 +3463,17 @@ impl Workspace {
             tabs: Vec::new(),
             active_tab_index: 0,
             tab_mru_order: Vec::new(),
+            selected_project: None,
             hovered_tab_index: None,
             tab_bar_hover_state: Default::default(),
             traffic_light_mouse_states: Default::default(),
             tab_groups: HashMap::new(),
             horizontal_tab_group_mouse_states: RefCell::default(),
+            project_rail_mouse_states: RefCell::default(),
+            rail_task_mouse_states: RefCell::default(),
+            rail_dormant_mouse_states: RefCell::default(),
+            project_rail_scroll_state: ClippedScrollStateHandle::new(),
+            project_rail_resizable_state: resizable_state_handle(RAIL_DEFAULT_WIDTH),
             tab_rename_editor: Self::tab_rename_editor(ctx),
             pane_rename_editor: Self::pane_rename_editor(ctx),
             tab_group_rename_editor: Self::tab_group_rename_editor(ctx),
@@ -3801,9 +3885,43 @@ impl Workspace {
                 self.sync_window_button_visibility(ctx);
                 ctx.notify();
             }
+            TabSettingsChangedEvent::TabPrimaryInfo { .. }
+            | TabSettingsChangedEvent::TabSecondaryInfo { .. }
+            | TabSettingsChangedEvent::RailShowTasks { .. }
+            | TabSettingsChangedEvent::RailTaskInfo { .. } => {
+                // Tab text is derived at render time, so a repaint is enough.
+                ctx.notify();
+            }
+            TabSettingsChangedEvent::TabLineCount { .. } => {
+                // Changing the line count changes the tab bar's height, which the
+                // macOS titlebar (and therefore the traffic lights) is sized from.
+                self.update_titlebar_height(ctx);
+                ctx.notify();
+            }
+            TabSettingsChangedEvent::UseProjectLayout { .. } => {
+                if project_layout_active(ctx) {
+                    // Seed the rail selection from the active tab so the
+                    // active-in-selected invariant holds as soon as the layout
+                    // is switched on. Project mode owns the left rail and puts
+                    // tasks on the top bar, so the vertical panel stays closed.
+                    self.selected_project = self
+                        .tabs
+                        .get(self.active_tab_index)
+                        .map(|tab| ProjectLayout::project_of_tab_data(tab, ctx));
+                    self.vertical_tabs_panel_open = false;
+                    // The rail has just become visible; populate its dormant
+                    // rows from disk rather than waiting for the first click.
+                    self.refresh_claude_session_scan(ctx);
+                } else {
+                    self.selected_project = None;
+                    self.vertical_tabs_panel_open = vertical_tabs_layout_active(ctx);
+                }
+                self.sync_panel_positions_from_config(ctx);
+                self.sync_window_button_visibility(ctx);
+                ctx.notify();
+            }
             TabSettingsChangedEvent::ShowVerticalTabPanelInRestoredWindows { .. } => {
-                if FeatureFlag::VerticalTabs.is_enabled()
-                    && *TabSettings::as_ref(ctx).use_vertical_tabs
+                if vertical_tabs_layout_active(ctx)
                     && *TabSettings::as_ref(ctx).show_vertical_tab_panel_in_restored_windows
                 {
                     self.vertical_tabs_panel_open = true;
@@ -4146,8 +4264,7 @@ impl Workspace {
         workspace_setting: &NewWorkspaceSource,
         ctx: &AppContext,
     ) -> bool {
-        let should_default_open =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let should_default_open = vertical_tabs_layout_active(ctx);
 
         match workspace_setting {
             NewWorkspaceSource::Restored {
@@ -5194,6 +5311,10 @@ impl Workspace {
     }
 
     fn tab_navigation_data(&self, window_id: WindowId, ctx: &AppContext) -> Vec<TabNavigationData> {
+        // In project mode the Ctrl-Tab palette lists only the selected project's
+        // tasks, so most-recently-used cycling stays inside the project the user
+        // is working in rather than jumping across projects.
+        let project_visible = self.project_visible_indices(ctx);
         self.tab_mru_order
             .iter()
             .filter_map(|&pane_group_id| {
@@ -5202,6 +5323,11 @@ impl Workspace {
                     .iter()
                     .enumerate()
                     .find(|(_, t)| t.pane_group.id() == pane_group_id)?;
+                if let Some(visible) = &project_visible
+                    && !visible.contains(&tab_index)
+                {
+                    return None;
+                }
                 let title = tab.pane_group.as_ref(ctx).display_title(ctx);
                 let subtitle = tab
                     .pane_group
@@ -5401,6 +5527,257 @@ impl Workspace {
         }
     }
 
+    /// When project mode is active and a project is selected, the raw
+    /// `Workspace::tabs` indices visible under it (in tab order). `None` means
+    /// no project filtering — the feature is off or nothing is selected — and
+    /// callers fall back to operating over all tabs. This is the single filter
+    /// every navigation/render path consults, so what renders and what
+    /// navigates always agree.
+    fn project_visible_indices(&self, ctx: &AppContext) -> Option<Vec<usize>> {
+        if !project_layout_active(ctx) {
+            return None;
+        }
+        let selected = self.selected_project.as_ref()?;
+        Some(ProjectLayout::compute(&self.tabs, ctx).visible_tab_indices(selected))
+    }
+
+    /// The most-recently-used tab among `indices`, by consulting
+    /// `tab_mru_order`. Indices not present in the MRU order sort last.
+    fn mru_tab_index(&self, indices: &[usize]) -> Option<usize> {
+        indices.iter().copied().min_by_key(|&index| {
+            let pane_group_id = self.tabs[index].pane_group.id();
+            self.tab_mru_order
+                .iter()
+                .position(|id| *id == pane_group_id)
+                .unwrap_or(usize::MAX)
+        })
+    }
+
+    /// Selects a project in the rail by activating that project's
+    /// most-recently-used visible tab, preserving the invariant that the active
+    /// tab belongs to the selected project. If the project has no open tabs, the
+    /// selection is set directly.
+    pub(crate) fn select_project(&mut self, project: &ProjectId, ctx: &mut ViewContext<Self>) {
+        self.refresh_claude_session_scan(ctx);
+        let visible = ProjectLayout::compute(&self.tabs, ctx).visible_tab_indices(project);
+        match self.mru_tab_index(&visible) {
+            Some(index) => self.set_active_tab_index(index, ctx),
+            None => self.selected_project = Some(project.clone()),
+        }
+    }
+
+    /// The sessions the last on-disk scan found, or an empty slice when the
+    /// scan model is not registered (headless/test harnesses).
+    fn scanned_sessions(ctx: &AppContext) -> Vec<ScannedSession> {
+        if !ctx.has_singleton_model::<ClaudeSessionScanModel>() {
+            return Vec::new();
+        }
+        ClaudeSessionScanModel::as_ref(ctx).sessions().to_vec()
+    }
+
+    /// Kicks an off-thread rescan of Claude's state for every directory the
+    /// rail could show a task for: each open tab's directory plus every stored
+    /// handle's. Those are exactly the paths the projection buckets by, which
+    /// is why the scan never has to reverse a `~/.claude/projects` directory
+    /// name back into a cwd — that mapping is lossy and would guess wrong on
+    /// any path whose separators and `-` are indistinguishable after encoding.
+    ///
+    /// Called from user actions rather than a watcher or a timer, so a session
+    /// started in another terminal shows up on the next project interaction
+    /// rather than instantly. That is the deliberate cost of adding no new
+    /// background machinery.
+    fn refresh_claude_session_scan(&self, ctx: &mut ViewContext<Self>) {
+        use crate::terminal::cli_agent_sessions::handle_store::AgentSessionHandlesModel;
+
+        if !FeatureFlag::ResumeProjectTasks.is_enabled()
+            || !ctx.has_singleton_model::<ClaudeSessionScanModel>()
+        {
+            return;
+        }
+        let mut dirs: Vec<PathBuf> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| {
+                let pane_group = tab.pane_group.as_ref(ctx);
+                // Falls back to the restored startup directory so a tab whose
+                // shell has not started yet (lazy startup) still contributes.
+                pane_group
+                    .active_session_path(ctx)
+                    .or_else(|| pane_group.restored_terminal_startup_directory())
+            })
+            .collect();
+        dirs.extend(
+            AgentSessionHandlesModel::as_ref(ctx)
+                .handles()
+                .iter()
+                .map(|handle| PathBuf::from(&handle.cwd)),
+        );
+        dirs.sort();
+        dirs.dedup();
+        if dirs.is_empty() {
+            return;
+        }
+        ClaudeSessionScanModel::handle(ctx).update(ctx, |model, ctx| {
+            model.refresh(dirs, ctx);
+        });
+    }
+
+    /// Resumes a dormant agent task from the project rail: opens a new tab at
+    /// the handle's stored cwd with the agent's resume command **prefilled,
+    /// never executed** — the user reviews the exact command and submits it
+    /// themselves. The new tab becomes active, and the active∈selected
+    /// invariant re-points the rail at the task's project.
+    ///
+    /// A new tab is always used, never an existing pane: a pane's project is
+    /// derived from its cwd, so restoring into a pane of another project would
+    /// silently re-bucket that tab.
+    ///
+    /// The authority split is enforced here by *lookup order*, not by a check:
+    /// the "resume in place" pane is derived from the stored handle, so a
+    /// session Warp never witnessed — which has no handle — cannot reach that
+    /// branch and always opens a fresh tab at its scanned directory.
+    fn resume_dormant_agent_task(
+        &mut self,
+        agent: CLIAgent,
+        session_id: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::terminal::cli_agent_sessions::handle_store::AgentSessionHandlesModel;
+
+        if !FeatureFlag::ResumeProjectTasks.is_enabled() {
+            return;
+        }
+        let handle = AgentSessionHandlesModel::as_ref(ctx)
+            .get(agent, &session_id)
+            .cloned();
+        let cwd = match &handle {
+            Some(handle) => handle.cwd.clone(),
+            // Unwitnessed: the scan is the only thing that knows this session
+            // exists, and all it knows is a directory — never a pane.
+            None => {
+                // The scan only ever produces Claude sessions, so another
+                // agent reaching here is a row with no source at all.
+                if agent != CLIAgent::Claude || !ctx.has_singleton_model::<ClaudeSessionScanModel>()
+                {
+                    return;
+                }
+                let Some(scanned) = ClaudeSessionScanModel::as_ref(ctx)
+                    .session(&session_id)
+                    .cloned()
+                else {
+                    return;
+                };
+                // A row can outlive the transcript it was built from, and
+                // resuming a session Claude has pruned fails outright. Cheap
+                // stat, and only on the click.
+                if !session_scan::transcript_exists(Path::new(&scanned.cwd), &session_id) {
+                    log::warn!("Scanned session transcript vanished before resume");
+                    return;
+                }
+                scanned.cwd
+            }
+        };
+        // Validation lives inside resume_command: an id that fails it yields
+        // no command, and the click does nothing rather than guessing.
+        let Some(command) = crate::terminal::cli_agent_resume::resume_command(agent, &session_id)
+        else {
+            return;
+        };
+        // Resume in place when the pane that ran this session is still open AND
+        // still sits in the session's directory: opening a second tab for work
+        // already in front of the user would be noise.
+        //
+        // The directory check is not optional. An agent's resume lookup is
+        // scoped to the working directory, so prefilling into a pane that has
+        // `cd`-ed elsewhere (or restored to a different startup directory)
+        // fails with "No conversation found with session ID". When the pane has
+        // drifted, fall through to a new tab opened at the stored cwd.
+        let owning_pane = handle.and_then(|handle| {
+            let pane_uuid = handle.pane_uuid.clone();
+            self.tabs.iter().position(|tab| {
+                let pane_group = tab.pane_group.as_ref(ctx);
+                pane_group
+                    .find_terminal_pane_by_session_uuid(&pane_uuid)
+                    .is_some()
+                    && pane_group
+                        .active_session_path(ctx)
+                        .is_some_and(|path| path.to_str() == Some(cwd.as_str()))
+            })
+        });
+        if let Some(tab_index) = owning_pane {
+            self.activate_tab_internal(tab_index, ctx);
+            match self
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .active_session_view(ctx)
+            {
+                Some(terminal_view) => terminal_view.update(ctx, |terminal, ctx| {
+                    terminal.prefill_command(&command, ctx);
+                }),
+                None => log::warn!("No terminal view to prefill when resuming in place"),
+            }
+            return;
+        }
+
+        // The cwd is load-bearing: the agent's own resume lookup is scoped to
+        // the directory the session ran in. If it is gone (deleted worktree),
+        // surface that instead of resuming somewhere wrong.
+        let directory = PathBuf::from(&cwd);
+        if !directory.is_dir() {
+            let window_id = ctx.window_id();
+            WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                let toast =
+                    DismissibleToast::error(format!("Can't resume here — {cwd} no longer exists."));
+                toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+            });
+            return;
+        }
+
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                initial_directory: Some(directory),
+                hide_homepage: true,
+                ..Default::default()
+            })),
+            Arc::new(HashMap::new()),
+            None, /*custom_tab_title*/
+            ctx,
+        );
+        match self
+            .active_tab_pane_group()
+            .as_ref(ctx)
+            .active_session_view(ctx)
+        {
+            Some(terminal_view) => terminal_view.update(ctx, |terminal, ctx| {
+                terminal.prefill_command(&command, ctx);
+            }),
+            None => log::warn!("No terminal view to prefill after resuming a dormant agent task"),
+        }
+    }
+
+    /// The directory a new tab should open in so it becomes a task under the
+    /// selected project, rather than landing in another project (or "Other").
+    ///
+    /// Uses the working directory of the project's most-recently-used tab,
+    /// which keeps `+` inside the specific worktree the user was last in —
+    /// the project key is the repo's shared git dir, which for a linked
+    /// worktree points at the *main* checkout, so it is not a usable cwd.
+    /// Returns `None` (falling back to the default startup directory) when the
+    /// feature is off, nothing is selected, or the project is remote.
+    fn selected_project_startup_directory(&self, ctx: &AppContext) -> Option<PathBuf> {
+        if !project_layout_active(ctx) {
+            return None;
+        }
+        let selected = self.selected_project.as_ref()?;
+        let visible = ProjectLayout::compute(&self.tabs, ctx).visible_tab_indices(selected);
+        let index = self.mru_tab_index(&visible)?;
+        self.tabs[index]
+            .pane_group
+            .as_ref(ctx)
+            .active_session_path(ctx)
+            .filter(|path| path.is_dir())
+    }
+
     /// Change the active tab index. This must be used instead of setting `self.active_tab_index`
     /// directly, as it updates related state.
     pub(crate) fn set_active_tab_index(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
@@ -5425,10 +5802,26 @@ impl Workspace {
             self.tab_mru_order.retain(|id| *id != pane_group_id);
             self.tab_mru_order.insert(0, pane_group_id);
         }
-        if self.vertical_tabs_panel_open
-            && FeatureFlag::VerticalTabs.is_enabled()
-            && *TabSettings::as_ref(ctx).use_vertical_tabs
-        {
+
+        // Projects × Tasks invariant: the active tab always belongs to the
+        // selected project, so activating any tab re-points the rail selection
+        // at that tab's project. Only maintained when the feature is enabled.
+        if project_layout_active(ctx) {
+            let project = self
+                .tabs
+                .get(index)
+                .map(|tab| ProjectLayout::project_of_tab_data(tab, ctx));
+            if let Some(project) = project {
+                self.selected_project = Some(project);
+            }
+            // Doubles as the startup kick: the first tab activation after a
+            // restore is the earliest `&mut` moment at which the tab set (and
+            // therefore the set of directories worth scanning) is known. The
+            // model's own per-directory interval keeps repeated tab switches
+            // from re-reading anything.
+            self.refresh_claude_session_scan(ctx);
+        }
+        if self.vertical_tabs_panel_open && vertical_tabs_layout_active(ctx) {
             self.vertical_tabs_panel.scroll_to_tab(index);
         }
 
@@ -6990,8 +7383,7 @@ impl Workspace {
         anchor: NewSessionMenuAnchor,
         ctx: &ViewContext<Self>,
     ) -> f32 {
-        let use_vertical_tabs =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let use_vertical_tabs = vertical_tabs_layout_active(ctx);
         match anchor {
             NewSessionMenuAnchor::AddTabButton(position)
                 if use_vertical_tabs && self.vertical_tabs_panel_open =>
@@ -7019,8 +7411,7 @@ impl Workspace {
     }
 
     fn toggle_tab_configs_menu(&mut self, ctx: &mut ViewContext<Self>) {
-        let use_vertical_tabs =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let use_vertical_tabs = vertical_tabs_layout_active(ctx);
         if self.show_new_session_dropdown_menu.is_some() {
             self.close_new_session_dropdown_menu(ctx);
             return;
@@ -11947,6 +12338,11 @@ impl Workspace {
     }
 
     pub fn activate_prev_tab(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(visible) = self.project_visible_indices(ctx) {
+            let index = project_layout::cycle_prev(&visible, self.active_tab_index);
+            self.activate_tab(index, ctx);
+            return;
+        }
         let index = if self.vertical_tabs_panel.search_query.is_empty() {
             if self.active_tab_index > 0 {
                 self.active_tab_index - 1
@@ -11971,6 +12367,11 @@ impl Workspace {
     }
 
     pub fn activate_next_tab(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(visible) = self.project_visible_indices(ctx) {
+            let index = project_layout::cycle_next(&visible, self.active_tab_index);
+            self.activate_tab(index, ctx);
+            return;
+        }
         let index = if self.vertical_tabs_panel.search_query.is_empty() {
             if self.active_tab_index + 1 < self.tabs.len() {
                 self.active_tab_index + 1
@@ -11997,6 +12398,19 @@ impl Workspace {
         if self.tabs.len() > 1 {
             let target_index = self.tabs.len() - 1;
             self.activate_tab(target_index, ctx);
+        }
+    }
+
+    /// Activates the `num`-th tab (1-based). In project mode this counts within
+    /// the selected project's visible tabs; otherwise it is the raw index.
+    pub fn activate_tab_by_number(&mut self, num: usize, ctx: &mut ViewContext<Self>) {
+        let nth = num.saturating_sub(1);
+        let index = match self.project_visible_indices(ctx) {
+            Some(visible) => visible.get(nth).or_else(|| visible.last()).copied(),
+            None => Some(nth),
+        };
+        if let Some(index) = index {
+            self.activate_tab(index, ctx);
         }
     }
 
@@ -12310,10 +12724,15 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         // Figure out what indices we want to delete for the "other tabs" case.
-        let indices_to_remove = (0..self.tabs.len()).filter(|i| *i != index);
+        // In project mode this is scoped to the selected project's visible tabs,
+        // so it never closes tabs belonging to another project.
+        let indices_to_remove: Vec<usize> = match self.project_visible_indices(ctx) {
+            Some(visible) => visible.into_iter().filter(|i| *i != index).collect(),
+            None => (0..self.tabs.len()).filter(|i| *i != index).collect(),
+        };
 
         let tabs_closed = self.close_tabs(
-            indices_to_remove,
+            indices_to_remove.into_iter(),
             OpenDialogSource::CloseOtherTabs { tab_index: index },
             skip_confirmation,
             true,
@@ -12340,12 +12759,24 @@ impl Workspace {
         skip_confirmation: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        let indices_to_remove = match direction {
-            TabMovement::Left => 0..index,
-            TabMovement::Right => (index + 1)..self.tabs.len(),
+        // In project mode, "left/right" is relative to the tab's position within
+        // its project's visible tabs, so other projects' tabs are never closed.
+        let indices_to_remove: Vec<usize> = match self.project_visible_indices(ctx) {
+            Some(visible) => {
+                let pos = visible.iter().position(|&i| i == index);
+                match (direction, pos) {
+                    (TabMovement::Left, Some(p)) => visible[..p].to_vec(),
+                    (TabMovement::Right, Some(p)) => visible[p + 1..].to_vec(),
+                    _ => Vec::new(),
+                }
+            }
+            None => match direction {
+                TabMovement::Left => (0..index).collect(),
+                TabMovement::Right => ((index + 1)..self.tabs.len()).collect(),
+            },
         };
         let tabs_closed = self.close_tabs(
-            indices_to_remove,
+            indices_to_remove.into_iter(),
             OpenDialogSource::CloseTabsDirection {
                 tab_index: index,
                 direction,
@@ -12692,14 +13123,19 @@ impl Workspace {
             .map(PathBuf::from)
             .filter(|path| path.is_dir());
 
-        let startup_directory = startup_directory_from_conversation.or_else(|| {
-            self.get_new_tab_startup_directory(
-                new_session_source,
-                previous_session_window_id,
-                chosen_shell.as_ref(),
-                ctx,
-            )
-        });
+        // In project mode, `+` creates a task inside the selected project, so the
+        // new tab shows up under the project the user is looking at. A restored
+        // conversation's own directory still wins.
+        let startup_directory = startup_directory_from_conversation
+            .or_else(|| self.selected_project_startup_directory(ctx))
+            .or_else(|| {
+                self.get_new_tab_startup_directory(
+                    new_session_source,
+                    previous_session_window_id,
+                    chosen_shell.as_ref(),
+                    ctx,
+                )
+            });
 
         self.add_tab_with_pane_layout(
             PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
@@ -14270,9 +14706,8 @@ impl Workspace {
             || self.traffic_light_mouse_states.are_traffic_lights_hovered();
 
         // Check if any of the menus/popups rendered relative to the tab bar are open.
-        let is_vertical_tabs_active = FeatureFlag::VerticalTabs.is_enabled()
-            && *TabSettings::as_ref(app).use_vertical_tabs
-            && self.vertical_tabs_panel_open;
+        let is_vertical_tabs_active =
+            vertical_tabs_layout_active(app) && self.vertical_tabs_panel_open;
         let is_tab_menu_open = self.show_tab_bar_overflow_menu
             || (self.show_tab_right_click_menu.is_some() && !is_vertical_tabs_active)
             || (self.show_new_session_dropdown_menu.is_some() && !is_vertical_tabs_active)
@@ -14334,7 +14769,7 @@ impl Workspace {
     /// Updates the titlebar height to match the scaled tab bar height.
     pub fn update_titlebar_height(&self, ctx: &mut ViewContext<Self>) {
         let zoom_factor = WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor();
-        let scaled_tab_bar_height = (TOTAL_TAB_BAR_HEIGHT * zoom_factor) as f64;
+        let scaled_tab_bar_height = (total_tab_bar_height(ctx) * zoom_factor) as f64;
 
         if let Some(platform_window) = ctx.windows().platform_window(ctx.window_id()) {
             platform_window
@@ -19898,7 +20333,7 @@ impl Workspace {
                 // Insertion divider before this member when a pane drop lands
                 // here (into the group at `idx`).
                 if show_before_indicator(self.hovered_tab_index, idx, Some(group.id)) {
-                    row.add_child(self.render_tab_hover_indicator(appearance));
+                    row.add_child(self.render_tab_hover_indicator(appearance, ctx));
                 }
                 let tab = &self.tabs[idx];
                 let effective_color = tab.color();
@@ -19926,7 +20361,7 @@ impl Workspace {
                 first_index + run_len,
                 Some(group.id),
             ) {
-                row.add_child(self.render_tab_hover_indicator(appearance));
+                row.add_child(self.render_tab_hover_indicator(appearance, ctx));
             }
         }
 
@@ -20391,8 +20826,7 @@ impl Workspace {
         appearance: &Appearance,
         ctx: &AppContext,
     ) -> Box<dyn Element> {
-        let vertical_tabs_active =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let vertical_tabs_active = vertical_tabs_layout_active(ctx);
 
         let (is_active, tooltip_text, action, keybinding_name, save_position_id) =
             if vertical_tabs_active {
@@ -20663,13 +21097,20 @@ impl Workspace {
             .finish()
     }
 
-    fn render_tab_hover_indicator(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_tab_hover_indicator(
+        &self,
+        appearance: &Appearance,
+        ctx: &AppContext,
+    ) -> Box<dyn Element> {
+        // Inset slightly from the bar so the indicator reads as sitting between
+        // tabs rather than butting into the border, at either line count.
+        let height = (tab_bar_height(ctx) - 2.).max(0.);
         ConstrainedBox::new(
             Rect::new()
                 .with_background(appearance.theme().accent())
                 .finish(),
         )
-        .with_height(32.)
+        .with_height(height)
         .with_width(4.)
         .finish()
     }
@@ -20861,8 +21302,7 @@ impl Workspace {
         }
 
         // Check if vertical tabs mode is active
-        let vertical_tabs_active =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let vertical_tabs_active = vertical_tabs_layout_active(ctx);
 
         // Render config-driven left-side toolbar buttons (both horizontal and vertical tabs)
         let knowledge_center_closed = true;
@@ -20983,8 +21423,10 @@ impl Workspace {
 
             // Collapse tabs into render slots: each ungrouped tab is a
             // `Single`, and each contiguous run of same-group tabs is one
-            // `Group`.
-            let slots = self.tab_bar_slots();
+            // `Group`. In project mode the bar is filtered to the selected
+            // project's visible tabs.
+            let project_visible = self.project_visible_indices(ctx);
+            let slots = self.tab_bar_slots(project_visible.as_deref());
 
             // Render each slot in the tab bar, either an individual tab or tab group.
             for slot in &slots {
@@ -21010,7 +21452,7 @@ impl Workspace {
                         // Ungrouped insertion just before the group; a drop into
                         // the group highlights the group itself instead.
                         if show_before_indicator(self.hovered_tab_index, *first_index, None) {
-                            tab_bar.add_child(self.render_tab_hover_indicator(appearance));
+                            tab_bar.add_child(self.render_tab_hover_indicator(appearance, ctx));
                         }
                         // Filtered above; the group must exist in `tab_groups`.
                         let group = self.tab_groups[group_id].clone();
@@ -21031,7 +21473,7 @@ impl Workspace {
                         // only matches an ungrouped insertion.
                         if !is_transferred && show_before_indicator(self.hovered_tab_index, i, None)
                         {
-                            tab_bar.add_child(self.render_tab_hover_indicator(appearance));
+                            tab_bar.add_child(self.render_tab_hover_indicator(appearance, ctx));
                         }
                         if is_transferred {
                             tab_bar.add_child(
@@ -21057,7 +21499,7 @@ impl Workspace {
             {
                 tab_bar.add_child(self.render_ghost_tab_slot(appearance, ctx));
             } else if show_before_indicator(self.hovered_tab_index, self.tabs.len(), None) {
-                tab_bar.add_child(self.render_tab_hover_indicator(appearance));
+                tab_bar.add_child(self.render_tab_hover_indicator(appearance, ctx));
             }
 
             if ContextFlag::CreateNewSession.is_enabled() {
@@ -21105,8 +21547,7 @@ impl Workspace {
         if !item.is_available(ctx) {
             return None;
         }
-        let vertical_tabs_active =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let vertical_tabs_active = vertical_tabs_layout_active(ctx);
         let inner = match item {
             HeaderToolbarItemKind::TabsPanel => self.render_left_toggle_button(appearance, ctx),
             HeaderToolbarItemKind::ToolsPanel => {
@@ -22041,8 +22482,7 @@ impl Workspace {
             None => active_content,
         };
 
-        let vertical_tabs_active =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(app).use_vertical_tabs;
+        let vertical_tabs_active = vertical_tabs_layout_active(app);
         let pane_group = self.active_tab_pane_group().as_ref(app);
         let is_right_open = pane_group.right_panel_open;
         let is_right_maximized = is_right_open && pane_group.is_right_panel_maximized;
@@ -22587,8 +23027,7 @@ impl Workspace {
         let mut contents = contents;
 
         let traffic_light_data = traffic_light_data(app, self.window_id);
-        let vertical_tabs_active =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(app).use_vertical_tabs;
+        let vertical_tabs_active = vertical_tabs_layout_active(app);
         // Add a spacer for the traffic light buttons on Windows/Linux.
         if traffic_light_data.is_some_and(|data| data.side == TrafficLightSide::Right)
             && *side == PanelPosition::Right
@@ -22653,6 +23092,358 @@ impl Workspace {
         }
     }
 
+    /// The agent status of a single tab, matching what the tab itself displays:
+    /// a long-running shell command reads as in-progress, otherwise the focused
+    /// session's active conversation status (ignoring empty/passive ones).
+    fn tab_conversation_status(tab: &TabData, ctx: &AppContext) -> Option<ConversationStatus> {
+        let terminal_view = tab.pane_group.as_ref(ctx).focused_session_view(ctx)?;
+        let terminal_view_ref = terminal_view.as_ref(ctx);
+        if terminal_view_ref.is_long_running() {
+            return Some(ConversationStatus::InProgress);
+        }
+        let conversation =
+            BlocklistAIHistoryModel::as_ref(ctx).active_conversation(terminal_view_ref.id())?;
+        if conversation.is_empty() || conversation.is_entirely_passive() {
+            return None;
+        }
+        Some(conversation.status().clone())
+    }
+
+    /// Aggregates the agent status of a project's tasks into the one status
+    /// worth showing on its rail row.
+    ///
+    /// A task that needs the user (blocked on an approval, or waiting for
+    /// input) wins over one that is merely working — with many projects open,
+    /// "which project is waiting on me?" is the question the rail should answer
+    /// at a glance. Projects with no agent activity get no indicator.
+    fn project_status(&self, indices: &[usize], ctx: &AppContext) -> Option<ConversationStatus> {
+        let mut working = None;
+        for tab in indices.iter().filter_map(|index| self.tabs.get(*index)) {
+            match Self::tab_conversation_status(tab, ctx) {
+                Some(
+                    status @ (ConversationStatus::Blocked { .. }
+                    | ConversationStatus::WaitingForEvents),
+                ) => return Some(status),
+                Some(status @ ConversationStatus::InProgress) => working = Some(status),
+                _ => {}
+            }
+        }
+        working
+    }
+
+    /// Renders the project rail (Herdr-style Projects × Tasks layout): one
+    /// clickable row per open project. Clicking a project dispatches
+    /// `WorkspaceAction::SelectProject`, which activates that project's
+    /// most-recently-used tab (and, via the active∈selected invariant, filters
+    /// the top tab bar to it). The selected project row is highlighted, and rows
+    /// highlight on hover. Only shown when the feature is enabled and more than
+    /// one project is open.
+    fn render_project_rail(&self, ctx: &AppContext) -> Box<dyn Element> {
+        const ROW_CORNER_RADIUS: f32 = 6.;
+        const ROW_SIDE_MARGIN: f32 = 6.;
+        const PROJECT_STATUS_ICON_SIZE: f32 = 10.;
+        const TASK_ICON_SIZE: f32 = 14.;
+        // Matches TAB_GROUP_MEMBER_INDENT, so nesting reads the same as the
+        // vertical tabs' grouped members.
+        const TASK_ROW_INDENT: f32 = 12.;
+        /// Dormant rows per project. The rail is a navigation aid: past tasks
+        /// must never push a project's live tasks out of view.
+        const MAX_DORMANT_TASK_ROWS: usize = 5;
+
+        let appearance = Appearance::as_ref(ctx);
+        let theme = appearance.theme();
+        let font_family = appearance.ui_font_family();
+        let text_color = theme.main_text_color(theme.background());
+        let muted_color = theme.sub_text_color(theme.background());
+        let selected_bg = internal_colors::fg_overlay_2(theme);
+        let hover_bg = internal_colors::fg_overlay_1(theme);
+        // Dormant rows come from the durable handle store plus the on-disk scan
+        // of Claude's own state, so a project with no open tabs still appears —
+        // which is what keeps the rail populated after a restart, where
+        // `compute`'s tabs-only projection is empty. Both are read from cached
+        // models here; the scan itself never runs on the render path.
+        let layout = if FeatureFlag::ResumeProjectTasks.is_enabled() {
+            use crate::terminal::cli_agent_sessions::handle_store::AgentSessionHandlesModel;
+            let live = CLIAgentSessionsModel::as_ref(ctx).live_session_ids();
+            let handles = AgentSessionHandlesModel::as_ref(ctx).handles().to_vec();
+            let scanned = Self::scanned_sessions(ctx);
+            ProjectLayout::compute_with_handles(&self.tabs, &handles, &live, &scanned, ctx)
+        } else {
+            ProjectLayout::compute(&self.tabs, ctx)
+        };
+        let selected = self.selected_project.clone();
+        let show_tasks = *TabSettings::as_ref(ctx).rail_show_tasks;
+
+        // Header stays put; only the project/task list scrolls.
+        let header = Container::new(
+            Text::new_inline("Projects".to_string(), font_family, 11.)
+                .with_color(muted_color.into())
+                .finish(),
+        )
+        .with_padding_left(12.)
+        .with_padding_top(10.)
+        .with_padding_bottom(6.)
+        .finish();
+
+        let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
+
+        for entry in layout.projects() {
+            let is_selected = selected.as_ref() == Some(&entry.id);
+            let mouse_state = self
+                .project_rail_mouse_states
+                .borrow_mut()
+                .entry(entry.id.clone())
+                .or_default()
+                .clone();
+            let label = entry.display_name.clone();
+            let dispatch_id = entry.id.clone();
+            // Surfaces the project's aggregate agent status, so a project that
+            // is blocked on the user is visible without selecting it.
+            let status = self.project_status(&layout.visible_tab_indices(&entry.id), ctx);
+            let row = Hoverable::new(mouse_state, move |state| {
+                let mut row_content = Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_child(
+                        Expanded::new(
+                            1.,
+                            Text::new_inline(label, font_family, 13.)
+                                .with_clip(ClipConfig::ellipsis())
+                                .with_color(text_color.into())
+                                .finish(),
+                        )
+                        .finish(),
+                    );
+                if let Some(status) = &status {
+                    row_content.add_child(render_status_element(
+                        status,
+                        PROJECT_STATUS_ICON_SIZE,
+                        appearance,
+                    ));
+                }
+                let mut container = Container::new(row_content.finish())
+                    .with_padding_left(10.)
+                    .with_padding_right(10.)
+                    .with_padding_top(5.)
+                    .with_padding_bottom(5.)
+                    .with_margin_left(ROW_SIDE_MARGIN)
+                    .with_margin_right(ROW_SIDE_MARGIN)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)));
+                if is_selected {
+                    container = container.with_background(selected_bg);
+                } else if state.is_hovered() {
+                    container = container.with_background(hover_bg);
+                }
+                container.finish()
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::SelectProject(dispatch_id.clone()));
+            })
+            .finish();
+            column.add_child(row);
+
+            if !show_tasks {
+                continue;
+            }
+            // One row per task, each with its own status. The project row's
+            // aggregate can only say "something here needs you"; these say
+            // which one.
+            for index in layout.visible_tab_indices(&entry.id) {
+                let Some(tab) = self.tabs.get(index) else {
+                    continue;
+                };
+                let pane_group = tab.pane_group.as_ref(ctx);
+                let pane_group_id = tab.pane_group.id();
+                let is_active = index == self.active_tab_index;
+                let task_mouse_state = self
+                    .rail_task_mouse_states
+                    .borrow_mut()
+                    .entry(pane_group_id)
+                    .or_default()
+                    .clone();
+                let task_label = crate::workspace::tab_title::rail_task_label(pane_group, ctx);
+                // A tab whose agent has exited but whose session is stored is
+                // resumable in place; clicking it prefills the resume command
+                // rather than merely focusing a dead shell.
+                let resumable = crate::workspace::tab_title::stored_handle_for_tab(pane_group, ctx)
+                    .map(|(agent, session_id, _)| (agent, session_id));
+                let task_icon = pane_group
+                    .focused_session_view(ctx)
+                    .and_then(|view| terminal_view_agent_icon_variant(view.as_ref(ctx), ctx))
+                    .map(|variant| {
+                        render_icon_with_status(
+                            variant,
+                            TASK_ICON_SIZE,
+                            0.,
+                            theme,
+                            theme.background(),
+                        )
+                    });
+                let task_row = Hoverable::new(task_mouse_state, move |state| {
+                    let mut row_content = Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                        .with_spacing(6.);
+                    if let Some(icon) = task_icon {
+                        row_content.add_child(icon);
+                    }
+                    row_content.add_child(
+                        Expanded::new(
+                            1.,
+                            // `Text::new` soft-wraps, so a long session name or
+                            // instruction spills onto another line instead of
+                            // being cut off.
+                            Text::new(task_label, font_family, 12.)
+                                .with_color(if is_active {
+                                    text_color.into()
+                                } else {
+                                    muted_color.into()
+                                })
+                                .finish(),
+                        )
+                        .finish(),
+                    );
+                    let mut container = Container::new(row_content.finish())
+                        .with_padding_left(10.)
+                        .with_padding_right(10.)
+                        .with_padding_top(4.)
+                        .with_padding_bottom(4.)
+                        .with_margin_left(ROW_SIDE_MARGIN + TASK_ROW_INDENT)
+                        .with_margin_right(ROW_SIDE_MARGIN)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                            ROW_CORNER_RADIUS,
+                        )));
+                    if is_active {
+                        container = container.with_background(selected_bg);
+                    } else if state.is_hovered() {
+                        container = container.with_background(hover_bg);
+                    }
+                    container.finish()
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| match &resumable {
+                    // The tab's agent has exited but its session is stored:
+                    // clicking resumes it right here, in the pane that ran it.
+                    Some((agent, session_id)) => {
+                        ctx.dispatch_typed_action(WorkspaceAction::ResumeDormantAgentTask {
+                            agent: *agent,
+                            session_id: session_id.clone(),
+                        })
+                    }
+                    None => ctx.dispatch_typed_action(WorkspaceAction::ActivateTaskByPaneGroupId(
+                        pane_group_id,
+                    )),
+                })
+                .finish();
+                column.add_child(task_row);
+            }
+
+            // Dormant tasks: sessions with no open tab, listed after the live
+            // ones. Same row shape — "live" is a property of the row, not a
+            // separate section — distinguished only by a muted label and a
+            // status-less icon. Capped so they can never bury live tasks.
+            for task in layout
+                .dormant_tasks_for_project(&entry.id)
+                .into_iter()
+                .take(MAX_DORMANT_TASK_ROWS)
+            {
+                let key = (task.agent, task.session_id.clone());
+                let dormant_mouse_state = self
+                    .rail_dormant_mouse_states
+                    .borrow_mut()
+                    .entry(key.clone())
+                    .or_default()
+                    .clone();
+                let label = task.label.clone();
+                let icon = render_icon_with_status(
+                    IconWithStatusVariant::CLIAgent {
+                        agent: task.agent,
+                        // No status: the session is not running.
+                        status: None,
+                        is_ambient: false,
+                    },
+                    TASK_ICON_SIZE,
+                    0.,
+                    theme,
+                    theme.background(),
+                );
+                let (agent, session_id) = key;
+                let dormant_row = Hoverable::new(dormant_mouse_state, move |state| {
+                    let mut row_content = Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                        .with_spacing(6.);
+                    row_content.add_child(icon);
+                    row_content.add_child(
+                        Expanded::new(
+                            1.,
+                            Text::new(label, font_family, 12.)
+                                .with_color(muted_color.into())
+                                .finish(),
+                        )
+                        .finish(),
+                    );
+                    let mut container = Container::new(row_content.finish())
+                        .with_padding_left(10.)
+                        .with_padding_right(10.)
+                        .with_padding_top(4.)
+                        .with_padding_bottom(4.)
+                        .with_margin_left(ROW_SIDE_MARGIN + TASK_ROW_INDENT)
+                        .with_margin_right(ROW_SIDE_MARGIN)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                            ROW_CORNER_RADIUS,
+                        )));
+                    // Never `selected_bg`: a dormant row can never be active.
+                    if state.is_hovered() {
+                        container = container.with_background(hover_bg);
+                    }
+                    container.finish()
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(WorkspaceAction::ResumeDormantAgentTask {
+                        agent,
+                        session_id: session_id.clone(),
+                    });
+                })
+                .finish();
+                column.add_child(dormant_row);
+            }
+        }
+
+        let scrollable_rows = ClippedScrollable::vertical(
+            self.project_rail_scroll_state.clone(),
+            column.finish(),
+            ScrollbarWidth::Custom(4.),
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            ElementFill::None,
+        )
+        .with_overlayed_scrollbar()
+        .finish();
+
+        // `MainAxisSize::Max` + the `Shrinkable` are load-bearing: a scrollable
+        // inside an unbounded column does not scroll.
+        let rail = Flex::column()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(header)
+            .with_child(Shrinkable::new(1., scrollable_rows).finish())
+            .finish();
+
+        // Dragging the right edge sets the rail's width, the same way the
+        // vertical tabs panel is resized. `on_resize` -> `notify()` is
+        // load-bearing: without a repaint the drag has no visible effect.
+        Resizable::new(self.project_rail_resizable_state.clone(), rail)
+            .with_dragbar_side(DragBarSide::Right)
+            .on_resize(|ctx, _| {
+                ctx.notify();
+            })
+            .with_bounds_callback(Box::new(|window_size| {
+                let max_width = window_size.x() * RAIL_MAX_WIDTH_RATIO;
+                (RAIL_MIN_WIDTH, max_width.max(RAIL_MIN_WIDTH))
+            }))
+            .finish()
+    }
+
     fn render_panels(
         &self,
         app: &AppContext,
@@ -22662,12 +23453,20 @@ impl Workspace {
         let mut panels_view = Flex::row();
         let mut prev_panel_added = false;
 
+        // Project rail (Herdr-style Projects × Tasks layout) sits at the far
+        // left, as an outer sibling of the existing panels. Shown whenever the
+        // layout is on — including with a single project — so the rail is a
+        // stable part of the window rather than something that appears and
+        // disappears as projects are opened and closed.
+        if !hide_vertical_tabs && project_layout_active(app) {
+            panels_view.add_child(self.render_project_rail(app));
+            panels_view.add_child(Self::render_panel_separator(app));
+        }
+
         // Config-driven vertical-tabs-era panels (left side).
         // Hidden for simplified WASM views (notebooks, shared sessions, etc.)
         // where these panels are unnecessary.
-        let vertical_tabs_active = !hide_vertical_tabs
-            && FeatureFlag::VerticalTabs.is_enabled()
-            && *TabSettings::as_ref(app).use_vertical_tabs;
+        let vertical_tabs_active = !hide_vertical_tabs && vertical_tabs_layout_active(app);
 
         // In vertical tabs mode, config-driven panels are rendered here.
         // In horizontal tabs mode, they're rendered inside render_banner_and_active_tab.
@@ -22986,6 +23785,10 @@ impl Workspace {
 
         if *session_settings.honor_ps1 {
             context.set.insert(flags::HONOR_PS1_CONTEXT_FLAG);
+        }
+
+        if *tab_settings.use_project_layout {
+            context.set.insert(flags::PROJECT_LAYOUT_CONTEXT_FLAG);
         }
 
         if session_settings
@@ -23859,7 +24662,7 @@ impl TypedActionView for Workspace {
 
         match action {
             ActivateTab(index) => self.activate_tab(*index, ctx),
-            ActivateTabByNumber(num) => self.activate_tab(num.saturating_sub(1), ctx),
+            ActivateTabByNumber(num) => self.activate_tab_by_number(*num, ctx),
             ActivatePrevTab => self.activate_prev_tab(ctx),
             OpenLaunchConfigSaveModal => self.open_launch_config_save_modal(ctx),
             ActivateNextTab => self.activate_next_tab(ctx),
@@ -23898,6 +24701,13 @@ impl TypedActionView for Workspace {
                 );
             }
             SetActiveTabName(name) => self.set_active_tab_name(name, ctx),
+            SelectProject(project) => self.select_project(project, ctx),
+            ActivateTaskByPaneGroupId(pane_group_id) => {
+                self.activate_tab_by_pane_group_id(*pane_group_id, ctx)
+            }
+            ResumeDormantAgentTask { agent, session_id } => {
+                self.resume_dormant_agent_task(*agent, session_id.clone(), ctx)
+            }
             SetActiveTabColor(color) => {
                 // When the active tab is in a group, redirect to the group's color.
                 // The tab color selection menu is hidden when a tab is part of a group
@@ -24723,10 +25533,7 @@ impl TypedActionView for Workspace {
                 }
             }
             ToggleVerticalTabsSettingsPopup => {
-                if FeatureFlag::VerticalTabs.is_enabled()
-                    && *TabSettings::as_ref(ctx).use_vertical_tabs
-                    && self.vertical_tabs_panel_open
-                {
+                if vertical_tabs_layout_active(ctx) && self.vertical_tabs_panel_open {
                     self.vertical_tabs_panel.show_settings_popup =
                         !self.vertical_tabs_panel.show_settings_popup;
                     ctx.notify();
@@ -26646,8 +27453,7 @@ impl View for Workspace {
         );
 
         if !use_simplified_wasm_tab_bar
-            && FeatureFlag::VerticalTabs.is_enabled()
-            && *TabSettings::as_ref(app).use_vertical_tabs
+            && vertical_tabs_layout_active(app)
             && self.vertical_tabs_panel_open
             && self.vertical_tabs_panel.show_settings_popup
         {
@@ -26668,8 +27474,7 @@ impl View for Workspace {
             );
         }
 
-        if FeatureFlag::VerticalTabs.is_enabled()
-            && *TabSettings::as_ref(app).use_vertical_tabs
+        if vertical_tabs_layout_active(app)
             && self.vertical_tabs_panel_open
             && let Some(vertical_tabs::DetailSidecarOverlay {
                 anchor_position_id,
@@ -26811,9 +27616,7 @@ impl View for Workspace {
         }
 
         if let Some((tab_idx, right_click_menu_anchor)) = self.show_tab_right_click_menu {
-            let is_vertical = FeatureFlag::VerticalTabs.is_enabled()
-                && *TabSettings::as_ref(app).use_vertical_tabs
-                && self.vertical_tabs_panel_open;
+            let is_vertical = vertical_tabs_layout_active(app) && self.vertical_tabs_panel_open;
             if tab_bar_mode.has_tab_bar() || is_vertical {
                 let positioning = if is_vertical {
                     match right_click_menu_anchor {
@@ -26873,9 +27676,7 @@ impl View for Workspace {
         // Rendered for both the horizontal tab bar and the vertical tabs panel
         // — the right-click handlers on both surfaces dispatch the same action.
         if let Some((_tab_idx, anchor)) = self.show_tab_selection_right_click_menu {
-            let is_vertical = FeatureFlag::VerticalTabs.is_enabled()
-                && *TabSettings::as_ref(app).use_vertical_tabs
-                && self.vertical_tabs_panel_open;
+            let is_vertical = vertical_tabs_layout_active(app) && self.vertical_tabs_panel_open;
             if tab_bar_mode.has_tab_bar() || is_vertical {
                 let position = match anchor {
                     TabContextMenuAnchor::Pointer(position) => position,
@@ -26905,9 +27706,7 @@ impl View for Workspace {
 
         // Tab group more-options menu (reuses the `tab_right_click_menu` view).
         if let Some((group_id, anchor)) = self.show_tab_group_right_click_menu {
-            let is_vertical = FeatureFlag::VerticalTabs.is_enabled()
-                && *TabSettings::as_ref(app).use_vertical_tabs
-                && self.vertical_tabs_panel_open;
+            let is_vertical = vertical_tabs_layout_active(app) && self.vertical_tabs_panel_open;
             let positioning = match (is_vertical, anchor) {
                 (true, TabContextMenuAnchor::VerticalTabsKebab) => {
                     let tabs_side = Self::tabs_panel_side(
@@ -26960,9 +27759,7 @@ impl View for Workspace {
         // Render the new session dropdown menu. This is outside the tab bar visibility
         // gate because it can also be opened from the vertical tabs panel.
         if let Some(menu_anchor) = self.show_new_session_dropdown_menu {
-            let is_vertical = FeatureFlag::VerticalTabs.is_enabled()
-                && *TabSettings::as_ref(app).use_vertical_tabs
-                && self.vertical_tabs_panel_open;
+            let is_vertical = vertical_tabs_layout_active(app) && self.vertical_tabs_panel_open;
 
             match (is_vertical, menu_anchor) {
                 (true, NewSessionMenuAnchor::AddTabButton(_)) => {
@@ -27234,9 +28031,7 @@ impl View for Workspace {
         }
 
         if self.should_show_session_config_tab_config_chip() {
-            let use_vertical = FeatureFlag::VerticalTabs.is_enabled()
-                && *TabSettings::as_ref(app).use_vertical_tabs
-                && self.vertical_tabs_panel_open;
+            let use_vertical = vertical_tabs_layout_active(app) && self.vertical_tabs_panel_open;
             let chip =
                 self.render_session_config_tab_config_chip(use_vertical, Appearance::as_ref(app));
             if use_vertical {
@@ -27782,8 +28577,7 @@ impl View for Workspace {
         }
 
         // Add workspace-wide UI event handling.
-        let stack = if FeatureFlag::VerticalTabs.is_enabled()
-            && *TabSettings::as_ref(app).use_vertical_tabs
+        let stack = if vertical_tabs_layout_active(app)
             && self.vertical_tabs_panel_open
             // The vertical-tabs detail sidecar can become stale if the pointer moves through a
             // covered region (for example, its scrollbar gutter) and the row/sidecar hoverables
@@ -28028,10 +28822,20 @@ impl Workspace {
     /// Collapses `self.tabs` into layout slots: each ungrouped tab is a `Single`,
     /// and each contiguous run of same-group tabs becomes one `Group`. Shared by
     /// tab/group rendering and insertion index calculations.
-    fn tab_bar_slots(&self) -> Vec<TabBarSlot> {
-        let grouped_tabs_enabled = FeatureFlag::GroupedTabs.is_enabled();
+    /// Builds the top tab bar's layout slots. When `visible` is `Some` (project
+    /// mode), only those raw `Workspace::tabs` indices are shown and manual
+    /// tab-groups are suppressed — the project is the grouping dimension, and
+    /// suppressing groups also avoids the contiguous-run hazard of interleaving
+    /// projects within a group. `TabBarSlot` still carries the real tab index.
+    fn tab_bar_slots(&self, visible: Option<&[usize]>) -> Vec<TabBarSlot> {
+        let grouped_tabs_enabled = FeatureFlag::GroupedTabs.is_enabled() && visible.is_none();
         let mut slots: Vec<TabBarSlot> = Vec::with_capacity(self.tabs.len());
         for (idx, tab) in self.tabs.iter().enumerate() {
+            if let Some(visible) = visible
+                && !visible.contains(&idx)
+            {
+                continue;
+            }
             let group_id = if grouped_tabs_enabled {
                 tab.group_id.filter(|gid| self.tab_groups.contains_key(gid))
             } else {
@@ -28105,7 +28909,10 @@ impl Workspace {
         // group, never inside; each ungrouped tab keeps its own row. Rects
         // clipped by overflow or outside the tab bar are dropped.
         let mut visible_tabs: Vec<(usize, RectF)> = Vec::with_capacity(self.tabs.len());
-        for slot in self.tab_bar_slots() {
+        // Use the same project filter the tab bar renders with, so drag
+        // insertion geometry matches what is on screen in project mode.
+        let project_visible = self.project_visible_indices(ctx);
+        for slot in self.tab_bar_slots(project_visible.as_deref()) {
             match slot {
                 TabBarSlot::Single { index } => {
                     if let Some(tab_position) =
@@ -28465,8 +29272,7 @@ impl Workspace {
                     // the normal reorder path below: the placeholder is
                     // detached mid cross-window drag and shouldn't churn group
                     // membership.
-                    let use_vertical_tabs = FeatureFlag::VerticalTabs.is_enabled()
-                        && *TabSettings::as_ref(ctx).use_vertical_tabs;
+                    let use_vertical_tabs = vertical_tabs_layout_active(ctx);
                     let new_index = if use_vertical_tabs {
                         self.calculate_updated_tab_index_vertical(current_index, position, ctx)
                     } else {
@@ -28607,8 +29413,7 @@ impl Workspace {
             return;
         }
 
-        let use_vertical_tabs =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let use_vertical_tabs = vertical_tabs_layout_active(ctx);
         let groups_enabled = FeatureFlag::GroupedTabs.is_enabled();
 
         if groups_enabled {

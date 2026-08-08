@@ -382,6 +382,17 @@ pub enum FeatureFlag {
     /// Enables Projects and Project management
     Projects,
 
+    /// Durable CLI-agent session handles: the project rail lists past agent
+    /// tasks by conversation name and lets the user resume one in place.
+    /// Depends on [`FeatureFlag::Projects`] being active.
+    ResumeProjectTasks,
+
+    /// Restored tabs do not spawn their shell until the tab is opened.
+    /// Restoring a window full of tabs otherwise starts every shell at once,
+    /// which is most of the startup cost and is wasted for tabs the user
+    /// never touches.
+    LazyShellStartup,
+
     /// Enables selection-as-context functionality in the code editor.
     SelectionAsContext,
 
@@ -989,6 +1000,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::ContextLineReviewComments,
     FeatureFlag::RunGeneratorsWithCmdExe,
     FeatureFlag::Projects,
+    FeatureFlag::ResumeProjectTasks,
     FeatureFlag::ProviderCommand,
     FeatureFlag::MarkdownImages,
     FeatureFlag::FileAndDiffSetComments,
