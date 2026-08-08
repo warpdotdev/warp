@@ -118,7 +118,7 @@ jobs:
       - name: Create GitHub release
         if: ${{ steps.set_publish.outputs.should_publish == 'true' }}
         id: create_release
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           name: ${{ steps.get-config.outputs.release_base_name }} ${{ steps.create_branch_and_tag.outputs.tag }}
           tag_name: ${{ steps.create_branch_and_tag.outputs.tag }}
@@ -202,7 +202,7 @@ jobs:
 
       - name: Add DMG to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -353,7 +353,7 @@ jobs:
       - name: Add DMG to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         # Continue if the upload fails; the next step will retry it.
         continue-on-error: true
         with:
@@ -367,7 +367,7 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.upload_github_assets.outcome == 'failure' }}
         # Continue if the upload fails; the next step will retry it.
         continue-on-error: true
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -377,7 +377,7 @@ jobs:
         id: upload_github_assets_retry2
         # If the first attempt failed, try again.
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.upload_github_assets_retry.outcome == 'failure' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.dmg_path }}
@@ -468,7 +468,7 @@ jobs:
 
       - name: Add CLI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -599,7 +599,7 @@ jobs:
 
       - name: Add TUI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -708,7 +708,7 @@ jobs:
 
       - name: Add TUI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
@@ -868,7 +868,7 @@ jobs:
       - name: Add packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.packages_dir }}/*
@@ -1027,7 +1027,7 @@ jobs:
       - name: Add CLI packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_cli.outputs.packages_dir }}/*
@@ -1050,7 +1050,7 @@ jobs:
 
       - name: Add CLI tar.gz to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: oz-${{ steps.get-config.outputs.channel }}-linux-x86_64.tar.gz
@@ -1443,14 +1443,14 @@ jobs:
 
       - name: Add app packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.packages_dir }}/*
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add CLI packages to GitHub release assets
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.bundle_cli.outputs.packages_dir != steps.bundle_app.outputs.packages_dir }}
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
@@ -1459,7 +1459,7 @@ jobs:
 
       - name: Add CLI tar.gz to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: oz-${{ steps.get-config.outputs.channel }}-linux-aarch64.tar.gz
@@ -1570,7 +1570,7 @@ jobs:
       - name: Add packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.packages_dir }}/*
@@ -1712,7 +1712,7 @@ jobs:
           SIGN_TOOL_CMD: ${{ steps.setup_signing.outputs.sign_tool_cmd }}
       - name: Add TUI installer to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_tui.outputs.installer_path }}
@@ -1872,7 +1872,7 @@ jobs:
       - name: Add installer to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ needs.prepare_release.outputs.release_tag }}
           files: ${{ steps.bundle_app.outputs.installer_path }}
