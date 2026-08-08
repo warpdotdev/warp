@@ -53,6 +53,17 @@ pub enum CodeViewEvent {
     OpenLspLogs {
         log_path: PathBuf,
     },
+    /// Never emitted on WASM (the stub view has no editor), but the variant is
+    /// mirrored from the native `CodeViewEvent` so navigation-stack handling in
+    /// `CodePane` stays target-agnostic.
+    UserScrolled {
+        pre_scroll_snapshot: warp_editor::render::model::viewport::ScrollPositionSnapshot,
+    },
+    /// Never emitted on WASM (the stub view has no LSP), mirrored for the same
+    /// reason as [`CodeViewEvent::UserScrolled`].
+    LspNavigated {
+        pre_scroll_snapshot: warp_editor::render::model::viewport::ScrollPositionSnapshot,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +177,24 @@ impl CodeView {
 
     pub fn pane_configuration(&self) -> ModelHandle<PaneConfiguration> {
         self.pane_configuration.clone()
+    }
+
+    /// Stub: the WASM code view has no tabs, so there is no editor render state
+    /// to snapshot or restore for the navigation stack.
+    pub fn active_editor_render_state(
+        &self,
+        _ctx: &AppContext,
+    ) -> Option<ModelHandle<warp_editor::render::model::RenderState>> {
+        None
+    }
+
+    /// Stub: the WASM code view has no tabs, so there is no editor view to
+    /// restore a navigation-stack scroll position into.
+    pub fn active_code_editor_view(
+        &self,
+        _ctx: &AppContext,
+    ) -> Option<ViewHandle<super::editor::view::CodeEditorView>> {
+        None
     }
 
     pub fn contains_unsaved_changes(&self, _ctx: &AppContext) -> bool {

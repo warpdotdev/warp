@@ -43,6 +43,10 @@ impl ScrollState {
         self.position
     }
 
+    pub fn set_position(&mut self, position: ScrollPosition) {
+        self.position = position;
+    }
+
     /// Possibly updates the scroll position, returning whether it was actually changed.
     pub fn update(
         &mut self,
@@ -131,6 +135,19 @@ impl ScrollLines {
             }
         }
     }
+
+    /// Whether two scroll positions measured from the same edge are within
+    /// `threshold_lines` of each other.
+    fn is_within_lines(&self, other: &Self, threshold_lines: f32) -> bool {
+        match (self, other) {
+            (ScrollLines::ScrollTop(a), ScrollLines::ScrollTop(b))
+            | (ScrollLines::ScrollBottom(a), ScrollLines::ScrollBottom(b)) => {
+                (a.as_f64() - b.as_f64()).abs() <= f64::from(threshold_lines)
+            }
+            (ScrollLines::ScrollTop(_), ScrollLines::ScrollBottom(_))
+            | (ScrollLines::ScrollBottom(_), ScrollLines::ScrollTop(_)) => false,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -164,6 +181,31 @@ pub enum ScrollPosition {
         /// at the time that the scroll position was set.
         num_output_lines_truncated: u64,
     },
+}
+
+impl ScrollPosition {
+    /// Whether two fixed scroll positions are within `threshold_lines` of each
+    /// other. Non-fixed positions (and mismatched variants) fall back to exact
+    /// equality. Used to suppress near-duplicate navigation history anchors.
+    pub fn is_within_lines(&self, other: &Self, threshold_lines: f32) -> bool {
+        match (self, other) {
+            (
+                ScrollPosition::FixedAtPosition { scroll_lines: a },
+                ScrollPosition::FixedAtPosition { scroll_lines: b },
+            ) => a.is_within_lines(b, threshold_lines),
+            (
+                ScrollPosition::FixedWithinLongRunningBlock {
+                    scroll_lines: a,
+                    num_output_lines_truncated: truncated_a,
+                },
+                ScrollPosition::FixedWithinLongRunningBlock {
+                    scroll_lines: b,
+                    num_output_lines_truncated: truncated_b,
+                },
+            ) => truncated_a == truncated_b && a.is_within_lines(b, threshold_lines),
+            _ => self == other,
+        }
+    }
 }
 
 /// Represents the location of a find match to be used for calculating scroll position.

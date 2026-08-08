@@ -1,7 +1,10 @@
 use warpui::integration::{AssertionCallback, AssertionOutcome, TestStep};
-use warpui::{App, ViewHandle, WindowId, async_assert};
+use warpui::units::Pixels;
+use warpui::{App, TypedActionView, UpdateView, ViewHandle, WindowId, async_assert};
 
-use crate::code_review::code_review_view::{CodeReviewView, CodeReviewVisibleAnchorForTest};
+use crate::code_review::code_review_view::{
+    CodeReviewAction, CodeReviewView, CodeReviewVisibleAnchorForTest,
+};
 
 /// Expected scroll region type for assertions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +87,26 @@ pub fn scroll_code_review_to_line(file_path: impl Into<String>, line_number: usi
         let code_review_view = single_code_review_view(app, window_id);
         code_review_view.update(app, |code_review_view, ctx| {
             let _ = code_review_view.scroll_to_line_for_test(&file_path, line_number, ctx);
+        });
+    })
+}
+
+/// Dispatches the action the code review list emits when the **user** scrolls
+/// it. `scroll_to_line_for_test` and friends drive the scrollable directly,
+/// which is intentionally treated as a system-driven scroll and records no
+/// navigation history, so tests that need the user-scroll path must go through
+/// this instead.
+pub fn user_scroll_code_review(scroll_index: usize, scroll_offset_px: f32) -> TestStep {
+    TestStep::new("User-scroll the code review list").with_action(move |app, window_id, _| {
+        let code_review_view = single_code_review_view(app, window_id);
+        app.update_view(&code_review_view, |view, ctx| {
+            view.handle_action(
+                &CodeReviewAction::ListScrolled {
+                    scroll_index,
+                    scroll_offset_px: Pixels::new(scroll_offset_px),
+                },
+                ctx,
+            );
         });
     })
 }

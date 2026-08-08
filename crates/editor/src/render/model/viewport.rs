@@ -62,7 +62,7 @@ pub struct ViewportItem {
 
 /// A snapshot of the scroll position. This may only be used to scroll back to the original
 /// position, and cannot be inspected.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollPositionSnapshot {
     /// The offset of the top left character in the viewport. We use this to represent the scroll
     /// position, rather than a line count, to be resilient to soft-wrapping changes. If the
@@ -96,7 +96,7 @@ impl ScrollPositionSnapshot {
         }
     }
 
-    #[cfg(test)]
+    /// The offset of the first (top-left) character captured by this snapshot.
     pub fn first_character_offset(self) -> CharOffset {
         self.first_character_offset
     }

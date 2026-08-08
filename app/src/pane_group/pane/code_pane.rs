@@ -156,6 +156,26 @@ impl PaneContent for CodePane {
                 }
                 #[cfg(target_family = "wasm")]
                 CodeViewEvent::OpenLspLogs { .. } => {}
+                CodeViewEvent::UserScrolled {
+                    pre_scroll_snapshot,
+                } => {
+                    ctx.emit(crate::pane_group::Event::PaneUserScrolled {
+                        pane_id,
+                        pre_scroll_snapshot: crate::workspace::nav_stack::ScrollSnapshot::Editor(
+                            *pre_scroll_snapshot,
+                        ),
+                    });
+                }
+                CodeViewEvent::LspNavigated {
+                    pre_scroll_snapshot,
+                } => {
+                    ctx.emit(crate::pane_group::Event::PaneLspNavigated {
+                        pane_id,
+                        pre_scroll_snapshot: crate::workspace::nav_stack::ScrollSnapshot::Editor(
+                            *pre_scroll_snapshot,
+                        ),
+                    });
+                }
             },
         );
 
@@ -242,5 +262,37 @@ impl PaneContent for CodePane {
 
     fn is_pane_being_dragged(&self, ctx: &AppContext) -> bool {
         self.view.as_ref(ctx).is_being_dragged()
+    }
+
+    fn scroll_snapshot(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<crate::workspace::nav_stack::ScrollSnapshot> {
+        let code_view = self.file_view(ctx);
+        let render_state = code_view.as_ref(ctx).active_editor_render_state(ctx)?;
+        let snapshot = render_state.as_ref(ctx).snapshot_scroll_position();
+        Some(crate::workspace::nav_stack::ScrollSnapshot::Editor(
+            snapshot,
+        ))
+    }
+
+    fn restore_scroll(
+        &self,
+        snapshot: &crate::workspace::nav_stack::ScrollSnapshot,
+        ctx: &mut ViewContext<PaneGroup>,
+    ) {
+        if let crate::workspace::nav_stack::ScrollSnapshot::Editor(editor_snapshot) = snapshot {
+            let code_view = self.file_view(ctx);
+            if let Some(editor_view) = code_view.as_ref(ctx).active_code_editor_view(ctx) {
+                editor_view.update(ctx, |editor, ctx| {
+                    editor.restore_scroll_position_with_caret(*editor_snapshot, ctx);
+                });
+            } else if let Some(render_state) = code_view.as_ref(ctx).active_editor_render_state(ctx)
+            {
+                render_state.update(ctx, |rs, _| {
+                    rs.scroll_to(*editor_snapshot);
+                });
+            }
+        }
     }
 }
