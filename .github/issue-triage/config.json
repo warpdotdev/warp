@@ -8,6 +8,10 @@
       "color": "a2eeef",
       "description": "New feature or request."
     },
+    "feature": {
+      "color": "f47f64",
+      "description": "This issue is a feature request, not a bug report."
+    },
     "documentation": {
       "color": "0075ca",
       "description": "Improvements or additions to documentation."
