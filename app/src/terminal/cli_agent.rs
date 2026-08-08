@@ -13,7 +13,7 @@ use pathfinder_color::ColorU;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use warp_cli::agent::Harness;
-use warp_completer::parsers::simple::top_level_command;
+use warp_completer::parsers::simple::{command_without_leading_env_vars, top_level_command};
 use warp_editor::content::buffer::Buffer;
 use warp_editor::content::markdown::MarkdownStyle;
 use warp_util::path::EscapeChar;
@@ -135,7 +135,7 @@ const MISTRAL_ORANGE: ColorU = ColorU {
     a: 255,
 };
 
-/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe)
+/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe, OpenClaw)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
 pub enum CLIAgent {
     Claude,
@@ -152,6 +152,7 @@ pub enum CLIAgent {
     Goose,
     Hermes,
     Vibe,
+    OpenClaw,
     Antigravity,
     /// Warp's own headless TUI.
     WarpTui,
@@ -177,6 +178,7 @@ impl CLIAgent {
             CLIAgent::Goose => &["goose"],
             CLIAgent::Hermes => &["hermes"],
             CLIAgent::Vibe => &["vibe", "vibe-acp"],
+            CLIAgent::OpenClaw => &["openclaw"],
             CLIAgent::Antigravity => &["agy"],
             CLIAgent::WarpTui => &[
                 "warp",
@@ -240,6 +242,7 @@ impl CLIAgent {
             CLIAgent::Goose => "Goose",
             CLIAgent::Hermes => "Hermes",
             CLIAgent::Vibe => "Mistral Vibe",
+            CLIAgent::OpenClaw => "OpenClaw",
             CLIAgent::Antigravity => "Antigravity",
             CLIAgent::WarpTui => "Warp TUI",
             CLIAgent::Unknown => "CLI Agent",
@@ -266,6 +269,7 @@ impl CLIAgent {
             // still drives the toolbar tile; an `Icon::MistralLogo` can be wired
             // up in a follow-up once an officially licensed SVG is available.
             CLIAgent::Vibe => None,
+            CLIAgent::OpenClaw => None,
             CLIAgent::Antigravity => Some(Icon::AntigravityLogo),
             CLIAgent::WarpTui => Some(Icon::Warp),
             CLIAgent::Unknown => None,
@@ -299,6 +303,7 @@ impl CLIAgent {
             CLIAgent::Goose => &[SkillProvider::Agents],
             CLIAgent::Hermes => &[SkillProvider::Agents],
             CLIAgent::Vibe => &[SkillProvider::Agents],
+            CLIAgent::OpenClaw => &[SkillProvider::Agents],
             CLIAgent::Antigravity => &[],
             CLIAgent::WarpTui => &[],
             CLIAgent::Unknown => &[],
@@ -349,6 +354,7 @@ impl CLIAgent {
             CLIAgent::Goose => Some(GOOSE_COLOR),
             CLIAgent::Hermes => Some(HERMES_PURPLE),
             CLIAgent::Vibe => Some(MISTRAL_ORANGE),
+            CLIAgent::OpenClaw => None,
             CLIAgent::Antigravity => Some(ANTIGRAVITY_COLOR),
             CLIAgent::WarpTui => Some(ColorU::black()),
             CLIAgent::Unknown => None,
@@ -429,9 +435,29 @@ impl CLIAgent {
             .filter(|agent| !matches!(agent, CLIAgent::Unknown))
             .find(|agent| {
                 agent.matches_command(&resolved_command, escape_char)
+                    || (matches!(agent, CLIAgent::OpenClaw)
+                        && Self::is_ollama_launch_openclaw(&resolved_command, escape_char))
                     || (matches!(agent, CLIAgent::Claude)
                         && Self::is_aifx_agent_run_claude(&resolved_command, ctx))
             })
+    }
+
+    /// Returns true if the resolved command launches OpenClaw through Ollama.
+    /// OpenClaw commonly runs as `ollama launch openclaw`, so the agent name is
+    /// the launched model argument rather than the executable name.
+    fn is_ollama_launch_openclaw(resolved_command: &str, escape_char: Option<EscapeChar>) -> bool {
+        let command_without_env_vars = escape_char
+            .and_then(|esc| command_without_leading_env_vars(resolved_command, esc))
+            .unwrap_or_else(|| resolved_command.trim_start().to_string());
+        let mut parts = command_without_env_vars.split_whitespace();
+        let Some(first_word) = parts.next() else {
+            return false;
+        };
+        let basename = first_word.rsplit(['/', '\\']).next().unwrap_or(first_word);
+        matches!(
+            (basename, parts.next(), parts.next()),
+            ("ollama", Some("launch"), Some("openclaw"))
+        )
     }
 
     /// Returns true if the resolved command is `aifx agent run claude` (Uber's
@@ -625,6 +651,7 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::Goose => CLIAgentType::Goose,
             CLIAgent::Hermes => CLIAgentType::Hermes,
             CLIAgent::Vibe => CLIAgentType::Vibe,
+            CLIAgent::OpenClaw => CLIAgentType::OpenClaw,
             CLIAgent::Antigravity => CLIAgentType::Antigravity,
             CLIAgent::WarpTui => CLIAgentType::WarpTui,
             CLIAgent::Unknown => CLIAgentType::Unknown,
