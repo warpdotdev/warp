@@ -47,6 +47,7 @@ impl RegisteredDiffStorage for TestStorage {
             deleted_files: Vec::new(),
             lines_added: 0,
             lines_removed: 0,
+            notes: Vec::new(),
         })
         .boxed()
     }
@@ -121,12 +122,15 @@ fn on_diffs_applied_seeds_registered_storage() {
         let (tx, _rx) = oneshot::channel();
         executor.update(&mut app, |executor, ctx| {
             executor.on_diffs_applied(
-                Ok(vec![AIRequestedCodeDiff {
-                    file_name: "/tmp/x.rs".to_owned(),
-                    diff_type: DiffType::creation("fn main() {}\n".to_owned()),
-                    failures: None,
-                    original_content: String::new(),
-                }]),
+                Ok(AppliedEdits {
+                    diffs: vec![AIRequestedCodeDiff {
+                        file_name: "/tmp/x.rs".to_owned(),
+                        diff_type: DiffType::creation("fn main() {}\n".to_owned()),
+                        failures: None,
+                        original_content: String::new(),
+                    }],
+                    notes: Vec::new(),
+                }),
                 action_id.clone(),
                 tx,
                 ctx,

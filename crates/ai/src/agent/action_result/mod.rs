@@ -663,6 +663,10 @@ pub enum RequestFileEditsResult {
         deleted_files: Vec<String>,
         lines_added: usize,
         lines_removed: usize,
+        /// Notices about how the edits were applied (e.g. a `create_file` coerced into an
+        /// overwrite of an existing file). Client-side only: the API result schema has no
+        /// free-text field, so these surface through [`Display`] (transcripts, exports).
+        notes: Vec<String>,
     },
     Cancelled,
     /// Diff application failed.
@@ -709,13 +713,18 @@ impl Display for RequestFileEditsResult {
             RequestFileEditsResult::Success {
                 diff,
                 updated_files,
+                notes,
                 ..
             } => {
                 write!(
                     f,
                     "File edits completed:\n\tDiff:\n{diff}\n\tUpdatedFiles: [{}]",
                     updated_files.iter().format(", ")
-                )
+                )?;
+                for note in notes {
+                    write!(f, "\n\tNote: {note}")?;
+                }
+                Ok(())
             }
             RequestFileEditsResult::Cancelled => write!(f, "File edits cancelled"),
             RequestFileEditsResult::DiffApplicationFailed { error } => {

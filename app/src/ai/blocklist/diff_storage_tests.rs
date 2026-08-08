@@ -80,10 +80,12 @@ fn accept_resolves_with_computed_diffs_once_saves_complete() {
             deleted_files,
             lines_added,
             lines_removed,
+            notes,
         } = future.await
         else {
             panic!("expected accept to succeed");
         };
+        assert_eq!(notes, Vec::<String>::new());
         assert!(diff.contains("+fn main() {}"));
         assert_eq!(lines_added, 1);
         assert_eq!(lines_removed, 0);

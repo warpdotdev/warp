@@ -13,6 +13,7 @@ use crate::ai::agent::{
     ReadFilesRequest, ReadFilesResult,
 };
 use crate::ai::blocklist::BlocklistAIPermissions;
+use crate::ai::blocklist::observed_file_contents::record_whole_file_reads;
 use crate::ai::paths::host_native_absolute_path;
 use crate::terminal::model::session::SessionType;
 use crate::terminal::model::session::active_session::ActiveSession;
@@ -222,9 +223,12 @@ impl ReadFilesExecutor {
                         failed_files,
                     })
                 }),
-                on_complete: Box::new(|res: Result<ReadFilesResult, anyhow::Error>, _ctx| {
+                on_complete: Box::new(move |res: Result<ReadFilesResult, anyhow::Error>, ctx| {
                     let action_result =
                         res.unwrap_or_else(|e| ReadFilesResult::Error(e.to_string()));
+                    if let ReadFilesResult::Success { files, .. } = &action_result {
+                        record_whole_file_reads(conversation_id, files, ctx);
+                    }
                     AIAgentActionResultType::ReadFiles(action_result)
                 }),
             };
@@ -258,8 +262,11 @@ impl ReadFilesExecutor {
                     })
                 }
             }),
-            on_complete: Box::new(|res: Result<ReadFilesResult, anyhow::Error>, _ctx| {
+            on_complete: Box::new(move |res: Result<ReadFilesResult, anyhow::Error>, ctx| {
                 let action_result = res.unwrap_or_else(|e| ReadFilesResult::Error(e.to_string()));
+                if let ReadFilesResult::Success { files, .. } = &action_result {
+                    record_whole_file_reads(conversation_id, files, ctx);
+                }
                 AIAgentActionResultType::ReadFiles(action_result)
             }),
         }

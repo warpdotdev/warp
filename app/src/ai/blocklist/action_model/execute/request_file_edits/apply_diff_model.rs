@@ -8,15 +8,15 @@
 //! - **Local**: calls [`apply_edits`] with a `std::fs`-backed closure.
 //! - **Remote**: calls [`apply_edits`] with a [`RemoteServerClient`]-backed closure.
 
-use ai::diff_validation::AIRequestedCodeDiff;
 use futures::FutureExt;
 use vec1::Vec1;
 use warpui::r#async::BoxFuture;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
-use super::diff_application::{DiffApplicationError, FileReadResult, apply_edits};
+use super::diff_application::{AppliedEdits, DiffApplicationError, FileReadResult, apply_edits};
 use crate::ai::agent::{AIIdentifiers, FileEdit};
 use crate::ai::blocklist::SessionContext;
+use crate::ai::blocklist::observed_file_contents::ObservedFileContents;
 use crate::auth::AuthStateProvider;
 use crate::terminal::model::session::active_session::ActiveSession;
 
@@ -44,11 +44,13 @@ impl ApplyDiffModel {
         ai_identifiers: &AIIdentifiers,
         passive_diff: bool,
         ctx: &mut ModelContext<Self>,
-    ) -> BoxFuture<'static, Result<Vec<AIRequestedCodeDiff>, Vec1<DiffApplicationError>>> {
+    ) -> BoxFuture<'static, Result<AppliedEdits, Vec1<DiffApplicationError>>> {
         let session_context = SessionContext::from_session(self.active_session.as_ref(ctx), ctx);
         let background_executor = ctx.background_executor();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
         let ai_identifiers = ai_identifiers.clone();
+        let observed =
+            ObservedFileContents::as_ref(ctx).snapshot(ai_identifiers.client_conversation_id);
 
         let host_request_handle = session_context.host_id().map(|host_id| {
             remote_server::manager::RemoteServerManager::as_ref(ctx).host_request_handle(host_id)
@@ -62,6 +64,7 @@ impl ApplyDiffModel {
                         apply_edits(
                             edits,
                             &session_context,
+                            &observed,
                             &ai_identifiers,
                             background_executor,
                             auth_state,
@@ -81,6 +84,7 @@ impl ApplyDiffModel {
                 apply_edits(
                     edits,
                     &session_context,
+                    &observed,
                     &ai_identifiers,
                     background_executor,
                     auth_state,
