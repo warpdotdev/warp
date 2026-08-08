@@ -293,8 +293,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::DiffSetAsContext,
         #[cfg(feature = "discard_per_file_and_all_changes")]
         FeatureFlag::DiscardPerFileAndAllChanges,
-        #[cfg(feature = "summarization_cancellation_confirmation")]
-        FeatureFlag::SummarizationCancellationConfirmation,
         #[cfg(feature = "code_review_find")]
         FeatureFlag::CodeReviewFind,
         #[cfg(feature = "ui_zoom")]

@@ -260,25 +260,21 @@ pub fn render_warping_indicator<V: View>(
     });
 
     let summarization_type: Option<SummarizationType> =
-        if FeatureFlag::SummarizationCancellationConfirmation.is_enabled() {
-            output_to_render.as_ref().and_then(|output| {
-                let output = output.get();
-                output.messages.last().and_then(|m| {
-                    if let AIAgentOutputMessageType::Summarization {
-                        finished_duration: None,
-                        summarization_type,
-                        ..
-                    } = m.message
-                    {
-                        Some(summarization_type)
-                    } else {
-                        None
-                    }
-                })
+        output_to_render.as_ref().and_then(|output| {
+            let output = output.get();
+            output.messages.last().and_then(|m| {
+                if let AIAgentOutputMessageType::Summarization {
+                    finished_duration: None,
+                    summarization_type,
+                    ..
+                } = m.message
+                {
+                    Some(summarization_type)
+                } else {
+                    None
+                }
             })
-        } else {
-            None
-        };
+        });
 
     let mut should_render_waiting_icon = false;
     let mut non_shimmering_text = None;
