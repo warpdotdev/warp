@@ -3,7 +3,6 @@ use std::fmt::Debug;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
 use sharing::SharedPaneContent;
-use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
 use warp_errors::report_error;
 use warpui::elements::{
@@ -440,8 +439,7 @@ impl<P: BackingView> PaneHeader<P> {
         // We should only trigger this if we are in a git repository,
         // but the pane header will only render if we are already in one.
         let auth_state = crate::auth::AuthStateProvider::as_ref(app).get();
-        let should_show_tooltip = FeatureFlag::CodeLaunchModal.is_enabled()
-            && !auth_state.is_onboarded().unwrap_or_default() // We only want to show the tooltip for new users.
+        let should_show_tooltip = !auth_state.is_onboarded().unwrap_or_default() // We only want to show the tooltip for new users.
             && !*CodeSettings::as_ref(app)
                 .dismissed_code_toolbelt_new_feature_popup
                 .value()
