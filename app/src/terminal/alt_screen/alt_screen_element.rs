@@ -273,13 +273,35 @@ impl AltScreenElement {
             SelectionType::from_click_count(click_count)
         };
 
-        if should_intercept_mouse(&self.model.lock(), mouse_state.modifiers().shift, app) {
-            ctx.dispatch_typed_action(TerminalAction::AltSelect(SelectAction::Begin {
-                point,
-                side,
-                selection_type,
-                position: local_position,
-            }));
+        let (should_intercept, has_selection) = {
+            let model = self.model.lock();
+            (
+                should_intercept_mouse(&model, mouse_state.modifiers().shift, app),
+                model.alt_screen().selection().is_some(),
+            )
+        };
+
+        if should_intercept {
+            let should_extend_selection = mouse_state.modifiers().shift
+                && selection_type == SelectionType::Simple
+                && self.highlighted_url.is_none()
+                && self.hovered_secret.is_none()
+                && has_selection;
+
+            if should_extend_selection {
+                ctx.dispatch_typed_action(TerminalAction::AltSelect(SelectAction::Extend {
+                    point,
+                    side,
+                    position: local_position,
+                }));
+            } else {
+                ctx.dispatch_typed_action(TerminalAction::AltSelect(SelectAction::Begin {
+                    point,
+                    side,
+                    selection_type,
+                    position: local_position,
+                }));
+            }
         } else {
             ctx.dispatch_typed_action(TerminalAction::MaybeClearAltSelect);
             ctx.dispatch_typed_action(TerminalAction::AltMouseAction(mouse_state.set_point(point)));
