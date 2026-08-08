@@ -1130,9 +1130,6 @@ fn resolve_fallback_warping_message<V: View>(
     model: &dyn AIBlockModel<View = V>,
     app: &AppContext,
 ) -> Option<String> {
-    if !FeatureFlag::FallbackModelLoadOutputMessaging.is_enabled() {
-        return None;
-    }
     let mut is_fallback = current_is_fallback;
     let mut display_name = current_display_name;
     let is_new_user_query = model
