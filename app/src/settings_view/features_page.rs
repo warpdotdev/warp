@@ -299,8 +299,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             )),
             context,
             flags::SHOW_AUTOSUGGESTION_IGNORE_BUTTON_FLAG,
-        )
-        .with_enabled(|| FeatureFlag::AllowIgnoringInputSuggestions.is_enabled()),
+        ),
     ];
 
     toggle_binding_pairs.push(ToggleSettingActionPair::new(
@@ -2948,9 +2947,7 @@ impl FeaturesPageView {
 
         editor_widgets.push(Box::new(AutosuggestionKeybindingHintWidget::default()));
 
-        if FeatureFlag::AllowIgnoringInputSuggestions.is_enabled() {
-            editor_widgets.push(Box::new(AutosuggestionIgnoreButtonWidget::default()));
-        }
+        editor_widgets.push(Box::new(AutosuggestionIgnoreButtonWidget::default()));
 
         if input_settings
             .at_context_menu_in_terminal_mode
