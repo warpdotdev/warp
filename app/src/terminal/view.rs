@@ -1678,11 +1678,8 @@ pub enum Event {
     /// to be processed on the way back down through the view hierarchy.
     SyncInput(SyncEvent),
     /// A shared-session viewer sent input into this (sharer-side) session: raw PTY bytes,
-    /// a command execution, or an edit to the shared input buffer.
-    ///
-    /// Emitted so the agent driver can treat a human working in the session as activity and
-    /// refresh a failed run's post-failure debug window. Distinct from sharer-local input,
-    /// which cannot occur for a headless cloud agent.
+    /// a command execution, or an edit to the shared input buffer. Distinct from sharer-local
+    /// input, which cannot occur for a headless cloud agent.
     SharedSessionViewerInput,
     /// Event used to propagate a state change for one of the terminal views
     /// inside this pane group.
@@ -2722,6 +2719,15 @@ pub struct TerminalView {
     // and adding a `Unshared` variant to it. This would require [`SharedSessionKind::Sharer`]
     // and [`SharedSessionKind::Viewer`] to store some common struct for common fields.
     shared_session: Option<SharedSessionAdapter>,
+
+    /// Whether to emit [`Event::SharedSessionViewerInput`] when a viewer sends input.
+    ///
+    /// Off until something asks for the signal, because these would otherwise fire at keystroke
+    /// frequency for every shared session with nothing listening. Enabled by the agent driver
+    /// when it opens a post-failure debug window, and left on for the rest of the process: a
+    /// stuck-on flag only costs the emit, while a wrongly-cleared one would silently stop the
+    /// window from refreshing under someone mid-debug.
+    report_viewer_input: bool,
 
     /// Stashed source from `attempt_to_share_session` so `on_session_share_started`
     /// can decide whether to auto-copy the link vs open the sharing dialog.
@@ -4361,6 +4367,7 @@ impl TerminalView {
             ai_render_context,
             get_relevant_files_controller,
             shared_session: None,
+            report_viewer_input: false,
             pending_share_source: None,
             auto_stop_sharing_on_cli_end: false,
             conversation_ended_tombstone_view_id: None,

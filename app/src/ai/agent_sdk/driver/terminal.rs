@@ -123,8 +123,8 @@ pub(crate) enum TerminalDriverEvent {
         session_id: session_sharing_protocol::common::SessionId,
         join_url: String,
     },
-    /// A shared-session viewer sent input into this session. Used by the agent driver to treat
-    /// a human debugging in the session as activity that refreshes a post-failure debug window.
+    /// A shared-session viewer sent input into this session: a command run in it, raw PTY bytes,
+    /// or an edit to the shared input. Emitted regardless of whether anything is listening.
     SharedSessionViewerInput,
 }
 

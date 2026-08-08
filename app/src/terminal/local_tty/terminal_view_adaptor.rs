@@ -1181,7 +1181,7 @@ impl TerminalManager<TerminalView> {
                     view.input().update(ctx, |input, ctx| {
                         input.process_remote_edits(block_id, operations.clone(), ctx);
                     });
-                    ctx.emit(TerminalViewEvent::SharedSessionViewerInput);
+                    view.emit_shared_session_viewer_input(ctx);
                 });
             }
             NetworkEvent::CommandExecutionRequested {
@@ -1241,7 +1241,7 @@ impl TerminalManager<TerminalView> {
                             ctx,
                         );
                     });
-                    ctx.emit(TerminalViewEvent::SharedSessionViewerInput);
+                    view.emit_shared_session_viewer_input(ctx);
                 });
             }
             NetworkEvent::WriteToPtyRequested { id, bytes } => {
@@ -1287,7 +1287,7 @@ impl TerminalManager<TerminalView> {
 
                 terminal_view.update(ctx, |view, ctx| {
                     view.write_viewer_bytes_to_pty(bytes.clone(), ctx);
-                    ctx.emit(TerminalViewEvent::SharedSessionViewerInput);
+                    view.emit_shared_session_viewer_input(ctx);
                 });
             }
             NetworkEvent::AgentPromptRequested {
