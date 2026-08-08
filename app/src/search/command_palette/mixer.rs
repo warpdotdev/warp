@@ -11,6 +11,7 @@ use crate::launch_configs::launch_config::LaunchConfig;
 use crate::search::command_palette::new_session::{NewSessionOption, NewSessionOptionId};
 use crate::search::mixer::SearchMixer;
 use crate::server::ids::SyncId;
+use crate::terminal::CLIAgent;
 use crate::util::bindings::CommandBinding;
 use crate::workspace::PaneViewLocator;
 
@@ -81,6 +82,14 @@ pub enum CommandPaletteItemAction {
     },
     /// Start a new AI conversation
     NewConversation,
+    /// Resume a known CLI-agent session, identified by task identity so the
+    /// action cannot go stale if the candidate list is rebuilt between paint
+    /// and click. The workspace decides whether that means activating the tab
+    /// the session is already open in or opening a new one.
+    ResumeAgentSession {
+        agent: CLIAgent,
+        session_id: String,
+    },
     /// No-op action (used for non-interactable separator items that don't do anything on click).
     NoOp,
 }
@@ -146,6 +155,12 @@ impl CommandPaletteItemAction {
                 ItemSummary::Project { path: path.clone() }
             }
             CommandPaletteItemAction::NewConversation => ItemSummary::NewConversation,
+            CommandPaletteItemAction::ResumeAgentSession { agent, session_id } => {
+                ItemSummary::AgentSession {
+                    agent: *agent,
+                    session_id: session_id.clone(),
+                }
+            }
             CommandPaletteItemAction::NoOp => ItemSummary::NoOp,
         }
     }
@@ -204,6 +219,11 @@ pub enum ItemSummary {
     },
     Conversation {
         id: AIConversationId,
+    },
+    /// A CLI-agent session offered by the session-search popup.
+    AgentSession {
+        agent: CLIAgent,
+        session_id: String,
     },
     ForkConversation,
     NewConversation,

@@ -1962,6 +1962,13 @@ impl TerminalManagerTrait for TerminalManager<TerminalView> {
         self.model.clone()
     }
 
+    fn ensure_shell_started(
+        &mut self,
+        ctx: &mut warpui::ModelContext<Box<dyn TerminalManagerTrait>>,
+    ) {
+        TerminalManager::<TerminalView>::ensure_shell_started(self, ctx);
+    }
+
     fn on_view_detached(
         &self,
         // The detach type is intentionally ignored: a sharer always stops sharing immediately,

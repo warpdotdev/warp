@@ -42,6 +42,12 @@ pub(super) struct WorkspaceMouseStates {
     pub(super) session_config_tab_config_chip_close: MouseStateHandle,
     pub(super) tools_panel_icon: MouseStateHandle,
     pub(super) title_bar_search_bar: MouseStateHandle,
+    /// The rail header's "+" button, which starts a new project.
+    pub(super) rail_new_project_button: MouseStateHandle,
+    /// The rail header's magnifier, which opens the session-search popup.
+    pub(super) rail_session_search_button: MouseStateHandle,
+    /// The rail header's broom, which closes the shells with no agent on them.
+    pub(super) rail_clear_shells_button: MouseStateHandle,
     pub(super) team_switcher_pill: MouseStateHandle,
     #[cfg(target_family = "wasm")]
     pub(super) warp_logo: MouseStateHandle,
@@ -82,6 +88,9 @@ impl WelcomeTipsViewState {
 pub struct WorkspaceState {
     pub is_palette_open: bool,
     pub is_ctrl_tab_palette_open: bool,
+    /// The session-search popup, which is a third instance of the command
+    /// palette and therefore has a flag of its own.
+    pub is_session_search_palette_open: bool,
     pub is_theme_chooser_open: bool,
     pub is_theme_creator_modal_open: bool,
     pub is_theme_deletion_modal_open: bool,
@@ -173,11 +182,13 @@ impl WorkspaceState {
         self.is_any_non_palette_modal_open(app)
             || self.is_palette_open
             || self.is_ctrl_tab_palette_open
+            || self.is_session_search_palette_open
     }
 
     pub fn close_all_modals(&mut self) {
         self.is_palette_open = false;
         self.is_ctrl_tab_palette_open = false;
+        self.is_session_search_palette_open = false;
         self.is_theme_creator_modal_open = false;
         self.is_theme_deletion_modal_open = false;
         self.is_changelog_modal_open = false;

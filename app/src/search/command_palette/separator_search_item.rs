@@ -11,11 +11,28 @@ use crate::search::result_renderer::ItemHighlightState;
 #[derive(Debug)]
 pub struct SeparatorSearchItem {
     pub title: String,
+    priority_tier: u8,
 }
 
 impl SeparatorSearchItem {
     pub fn new(title: String) -> Self {
-        Self { title }
+        Self {
+            title,
+            priority_tier: 0,
+        }
+    }
+
+    /// Places this separator in a specific tier.
+    ///
+    /// The mixer sorts ascending on `(priority_tier, score, source_order)` and
+    /// a `TopDown` search bar then reverses, so a **higher** tier renders
+    /// higher: a section header belongs one tier above the rows it heads.
+    /// Without this, a separator can only be positioned by insertion order
+    /// under an equal sort key, which stops working the moment anything else
+    /// shares the tier.
+    pub fn with_priority_tier(mut self, priority_tier: u8) -> Self {
+        self.priority_tier = priority_tier;
+        self
     }
 }
 
@@ -49,6 +66,10 @@ impl SearchItem for SeparatorSearchItem {
                 .into_solid(),
         )
         .finish()
+    }
+
+    fn priority_tier(&self) -> u8 {
+        self.priority_tier
     }
 
     fn score(&self) -> OrderedFloat<f64> {

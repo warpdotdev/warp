@@ -1,15 +1,18 @@
 use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::time::Duration;
 
+use async_channel::Sender;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use warp_core::r#async::debounce;
 use warp_core::send_telemetry_from_app_ctx;
 use warp_util::path::LineAndColumnArg;
 use warpui::elements::{
     Align, Border, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, Dismiss, DispatchEventResult, Empty, EventHandler, Fill, Flex,
-    ParentElement, Radius, SavePosition, Shrinkable,
+    ParentElement, Radius, SavePosition, Shrinkable, Text,
 };
 use warpui::event::KeyState;
 use warpui::keymap::BindingId;
@@ -43,8 +46,10 @@ use crate::server::ids::SyncId;
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
 use crate::session_management::SessionSource;
 use crate::settings::CtrlTabBehavior;
+use crate::terminal::cli_agent_sessions::transcript_digest::{DigestStatus, TranscriptDigestModel};
 use crate::terminal::keys_settings::KeysSettings;
 use crate::themes::theme::WarpTheme;
+use crate::ui_components::blended_colors;
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ForkedConversationDestination, WorkspaceAction, active_terminal_in_window};
 use crate::{ToastStack, send_telemetry_from_ctx};
@@ -71,6 +76,26 @@ const MAX_SEARCH_RESULTS: usize = 250;
 
 /// Number of recently selected items to show in the zero state.
 const NUM_RECENT_ITEMS_IN_ZERO_STATE: usize = 3;
+
+/// How long typing must pause before the session-search popup asks the digest
+/// for transcript content.
+///
+/// The name half of the popup is **not** debounced — it is an in-memory fuzzy
+/// match and runs on every keystroke. This delay is only for the half that
+/// reads the disk, and matches the one global search settled on for the same
+/// job.
+const CONTENT_SEARCH_DEBOUNCE_PERIOD: Duration = Duration::from_millis(300);
+
+/// What the session-search popup's content search can and cannot see.
+///
+/// Not optional and not decoration. The digest holds conversation text only —
+/// tool output and pasted file bodies are deliberately excluded — it is built
+/// from this machine's disk, Codex and the other CLI agents keep no per-cwd
+/// transcript store to read, and the scan behind the corpus lists the sixteen
+/// newest sessions per project. A search that silently half-answers is worse
+/// than one that says what it covers.
+const CONTENT_SEARCH_SCOPE_LABEL: &str =
+    "conversation text · this device only · Claude sessions · 16 most recent per project";
 
 struct ViewState {
     clipped_scroll_state: ClippedScrollStateHandle,
@@ -112,6 +137,12 @@ pub enum NavigationMode {
 
     // Palette was entered via ctrl-tab for quick session switching.
     CtrlTab,
+
+    /// Palette is the session-search popup: names from memory, transcript
+    /// content from the digest model. Everything the digest drives — the
+    /// debounced query, the footer, the suppressed placeholder — is gated on
+    /// this, so the two ordinary palettes carry none of it.
+    SessionSearch,
 }
 
 /// A view that renders the command palette and allows users to optionally apply a [`QueryFilter`]
@@ -138,6 +169,20 @@ pub struct View {
     /// Whether the active session is a shared session viewer.
     /// This is set by the workspace when opening the palette.
     is_shared_session_viewer: bool,
+
+    /// Pings the debounced transcript-content search. Carries `()` rather than
+    /// the query text so the handler reads whatever is in the search box when
+    /// it fires — the debounce can only ever be behind the editor, never ahead
+    /// of it.
+    content_search_tx: Sender<()>,
+
+    /// The offset [`SelectionUpdate::Top`] lands on, remembered so the
+    /// digest-finished re-run can borrow it for exactly one pass.
+    initial_selection_offset: isize,
+
+    /// Set while a digest-finished re-run is in flight. See
+    /// [`Self::handle_transcript_digest_finished`].
+    restore_selection_offset: bool,
 }
 
 impl Entity for View {
@@ -179,11 +224,19 @@ impl warpui::View for View {
         };
 
         let mut palette = Flex::column();
-        if matches!(self.navigation_mode, NavigationMode::Normal) {
-            // Don't show the search bar when navigating with ctrl-tab.
+        if matches!(
+            self.navigation_mode,
+            NavigationMode::Normal | NavigationMode::SessionSearch
+        ) {
+            // Don't show the search bar when navigating with ctrl-tab. Session
+            // search is driven entirely by typing, so it needs the bar as much
+            // as the normal palette does.
             palette.add_child(self.render_search_bar());
         }
         palette.add_child(Shrinkable::new(1., body).finish());
+        if let Some(footer) = self.render_session_search_footer(app) {
+            palette.add_child(footer);
+        }
 
         EventHandler::new(
             Align::new(
@@ -264,7 +317,31 @@ impl View {
             me.handle_zero_state_event(event, ctx);
         });
 
-        ctx.observe(&search_bar_state, |_, _, ctx| ctx.notify());
+        ctx.observe(&search_bar_state, |me, _, ctx| {
+            me.on_search_bar_state_changed(ctx)
+        });
+
+        // The session-search popup's second half: transcript content, searched
+        // by a model of its own so this palette's mixer can stay entirely
+        // synchronous. Only that popup pays for any of it.
+        let (content_search_tx, content_search_rx) = async_channel::unbounded();
+        if matches!(navigation_mode, NavigationMode::SessionSearch) {
+            ctx.spawn_stream_local(
+                debounce(CONTENT_SEARCH_DEBOUNCE_PERIOD, content_search_rx),
+                Self::handle_debounced_content_search,
+                |_, _| {},
+            );
+
+            if ctx.has_singleton_model::<TranscriptDigestModel>() {
+                let digest = TranscriptDigestModel::handle(ctx);
+                // Notify only: the footer's "searching…" line has to appear
+                // when a pass starts, and the model notifies then.
+                ctx.observe(&digest, |_, _, ctx| ctx.notify());
+                ctx.subscribe_to_model(&digest, |me, _, _event, ctx| {
+                    me.handle_transcript_digest_finished(ctx);
+                });
+            }
+        }
 
         // Compute the list of binding IDs that we should show the suggested actions for based. Key
         // bindings are only registered once, so we only need to do this in the constructor.
@@ -318,6 +395,9 @@ impl View {
             suggested_binding_ids,
             zero_state_items,
             is_shared_session_viewer: false,
+            content_search_tx,
+            initial_selection_offset: 0,
+            restore_selection_offset: false,
         }
     }
 
@@ -345,6 +425,13 @@ impl View {
     }
 
     pub fn set_initial_selection_offset(&mut self, offset: isize, ctx: &mut ViewContext<Self>) {
+        self.initial_selection_offset = offset;
+        self.apply_selection_offset(offset, ctx);
+    }
+
+    /// Applies an offset without recording it as the palette's own — used to
+    /// lend it out for one re-run and take it back.
+    fn apply_selection_offset(&self, offset: isize, ctx: &mut ViewContext<Self>) {
         self.search_bar_state.update(ctx, move |state, _ctx| {
             state.offset_initial_selection_by(offset);
         });
@@ -388,6 +475,7 @@ impl View {
                 | (PaletteMode::Files, QueryFilter::Files)
                 | (PaletteMode::Conversations, QueryFilter::Conversations)
                 | (PaletteMode::WarpDrive, QueryFilter::Drive)
+                | (PaletteMode::SessionSearch, QueryFilter::AgentSessions)
         )
     }
 
@@ -501,6 +589,137 @@ impl View {
         });
 
         self.compute_recent_items_for_zero_state(ctx);
+    }
+
+    /// The results — and therefore, one keystroke earlier, the query — changed.
+    ///
+    /// The search bar has no "query changed" event, but it re-runs its query on
+    /// every keystroke and every run ends here, so this is the hook the content
+    /// search hangs off.
+    fn on_search_bar_state_changed(&mut self, ctx: &mut ViewContext<Self>) {
+        if matches!(self.navigation_mode, NavigationMode::SessionSearch) {
+            // The offset was lent to the digest's re-run and this is the
+            // results change that re-run produced, so take it back — otherwise
+            // the *next* keystroke would select a row from the middle of the
+            // list instead of the first one.
+            if self.restore_selection_offset {
+                self.restore_selection_offset = false;
+                self.apply_selection_offset(self.initial_selection_offset, ctx);
+            }
+            // The digest drops a query it has already answered, so the re-run
+            // this ping will eventually cause cannot start another search.
+            let _ = self.content_search_tx.try_send(());
+        }
+        ctx.notify();
+    }
+
+    /// Typing has paused: search transcript content for whatever is in the box.
+    ///
+    /// Reads the query here rather than carrying it through the channel, so a
+    /// ping that was queued behind two more keystrokes still asks about the
+    /// text the user is actually looking at.
+    fn handle_debounced_content_search(&mut self, _ping: (), ctx: &mut ViewContext<Self>) {
+        if !ctx.has_singleton_model::<TranscriptDigestModel>() {
+            return;
+        }
+        let query = self.search_bar.as_ref(ctx).query(ctx);
+        TranscriptDigestModel::handle(ctx).update(ctx, |digest, ctx| {
+            digest.set_query(query, ctx);
+        });
+    }
+
+    /// A content search finished: publish its hits and show them.
+    ///
+    /// The mixer has no idea the digest exists — the content data source only
+    /// ever serves what it has been handed — so the hits are pushed in and the
+    /// query is re-run once. This is the only re-run the digest ever causes.
+    fn handle_transcript_digest_finished(&mut self, ctx: &mut ViewContext<Self>) {
+        if !matches!(self.navigation_mode, NavigationMode::SessionSearch)
+            || !ctx.has_singleton_model::<TranscriptDigestModel>()
+        {
+            return;
+        }
+
+        let digest = TranscriptDigestModel::as_ref(ctx);
+        let (query, hits) = (digest.query().to_owned(), digest.hits().to_vec());
+        self.data_source_store.update(ctx, |store, ctx| {
+            store.set_agent_session_content_results(query, hits, ctx);
+        });
+
+        // Re-running the query makes the search bar reselect its top row, which
+        // would yank the selection out from under a user who has already
+        // arrowed down. Content rows sort strictly *below* the name rows, so an
+        // index that named a row before the re-run names the same row after it
+        // — point the offset at that row and the reselect becomes a no-op.
+        // `on_search_bar_state_changed` takes the offset back on the very
+        // results change this re-run produces. That handshake is safe in both
+        // orderings: if the observer runs *before* the deferred selection
+        // update, the offset is already back and the selection resets exactly
+        // as it did before this phase existed — it can never land on an
+        // unrelated row, and the offset can never be left lent out.
+        if let Some(selected_index) = self.search_bar_state.as_ref(ctx).selected_index()
+            && selected_index as isize != self.initial_selection_offset
+        {
+            self.restore_selection_offset = true;
+            self.apply_selection_offset(selected_index as isize, ctx);
+        }
+
+        self.search_bar.update(ctx, |search_bar, ctx| {
+            search_bar.run_query(ctx);
+        });
+    }
+
+    /// Whether the transcript-content search is still running.
+    ///
+    /// While it is, the palette must not claim there is nothing to find.
+    fn is_content_search_running(&self, app: &AppContext) -> bool {
+        matches!(self.navigation_mode, NavigationMode::SessionSearch)
+            && app.has_singleton_model::<TranscriptDigestModel>()
+            && matches!(
+                TranscriptDigestModel::as_ref(app).status(),
+                DigestStatus::Searching
+            )
+    }
+
+    /// The session-search popup's footer: what the content search is doing, and
+    /// then what it can see.
+    fn render_session_search_footer(&self, app: &AppContext) -> Option<Box<dyn Element>> {
+        if !matches!(self.navigation_mode, NavigationMode::SessionSearch) {
+            return None;
+        }
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+
+        let progress = app.has_singleton_model::<TranscriptDigestModel>().then(|| {
+            let digest = TranscriptDigestModel::as_ref(app);
+            (digest.status(), digest.progress())
+        });
+        let label = match progress {
+            // `scanned` steps straight from 0 to the total: this phase publishes
+            // once, at completion, and throttled progress milestones are a
+            // deliberate later phase.
+            Some((DigestStatus::Searching, (scanned, total))) => {
+                format!("searching… {scanned}/{total}")
+            }
+            Some((DigestStatus::Idle | DigestStatus::Finished, _)) | None => {
+                CONTENT_SEARCH_SCOPE_LABEL.to_owned()
+            }
+        };
+
+        Some(
+            Container::new(
+                Text::new_inline(
+                    label,
+                    appearance.ui_font_family(),
+                    appearance.monospace_font_size() - 2.,
+                )
+                .with_color(blended_colors::text_sub(theme, theme.surface_2()))
+                .finish(),
+            )
+            .with_padding_top(6.)
+            .with_horizontal_padding(styles::RESULT_PADDING_HORIZONTAL)
+            .finish(),
+        )
     }
 
     fn on_session_source_changed(&mut self, ctx: &mut ViewContext<Self>) {
@@ -683,6 +902,13 @@ impl View {
     fn render_palette_list(&self, theme: &WarpTheme, app: &AppContext) -> Box<dyn Element> {
         match self.search_bar_state.as_ref(app).query_result_renderers() {
             None => Empty::new().finish(),
+            // "No results found" is a claim, and while the content search is
+            // still reading transcripts the palette is not entitled to make it:
+            // rows may be about to appear underneath. Say nothing instead — the
+            // footer is already counting.
+            Some(renderers) if renderers.is_empty() && self.is_content_search_running(app) => {
+                Empty::new().finish()
+            }
             Some(renderers) if renderers.is_empty() => {
                 self.placeholder_query_renderer
                     .render(0, true /* is_selected */, app)
@@ -726,9 +952,15 @@ impl View {
     ) {
         // Tab navigations don't appear in the main command palette to avoid confusion with session
         // navigations, so they can't evict real recent items from SelectedItems.
+        //
+        // Agent sessions are excluded for the same reason and one more: their
+        // data source only exists while the session-search popup is open, so
+        // `query_result_from_summary` cannot rebuild one — a remembered session
+        // would occupy a recent slot and then render as nothing at all.
         if !matches!(
             result_action,
             CommandPaletteItemAction::NavigateToTab { .. }
+                | CommandPaletteItemAction::ResumeAgentSession { .. }
         ) {
             let selected_items_handle = SelectedItems::handle(ctx);
             selected_items_handle.update(ctx, |selected_items, _ctx| {
@@ -777,6 +1009,27 @@ impl View {
                     source: _,
                 }) => {
                     self.close(ctx, Some(result_action.result_type()));
+                    return;
+                }
+                Some(WorkspaceAction::TogglePalette {
+                    mode: mode @ PaletteMode::SessionSearch,
+                    source,
+                }) => {
+                    // Not a filter switch like the arms above: session search
+                    // lives in its own palette instance, and this one has no
+                    // data source for it.
+                    //
+                    // The open is deferred so it lands *after* this palette's
+                    // close. Dispatching it inline would run the workspace's
+                    // `open_palette` first and its `close_palette` second,
+                    // and the close clears the flag the open just set — the
+                    // popup would never appear.
+                    let action = WorkspaceAction::TogglePalette {
+                        mode: *mode,
+                        source: *source,
+                    };
+                    self.close(ctx, Some(result_action.result_type()));
+                    ctx.dispatch_typed_action_deferred(action);
                     return;
                 }
                 _ => {}
@@ -998,6 +1251,16 @@ impl View {
                         terminal_view_id,
                     });
                 }
+            }
+            CommandPaletteItemAction::ResumeAgentSession { agent, session_id } => {
+                // The workspace owns the activate-existing-tab vs. new-tab
+                // decision (and the feature-flag gate), so this dispatches the
+                // same action the project rail's rows do rather than deciding
+                // anything here.
+                ctx.dispatch_typed_action(&WorkspaceAction::ResumeDormantAgentTask {
+                    agent,
+                    session_id,
+                });
             }
             CommandPaletteItemAction::NoOp => {
                 // No-op action (used for non-interactable separator items that don't do anything on click).

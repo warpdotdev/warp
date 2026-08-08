@@ -27,6 +27,30 @@ fn encode_cwd_replaces_slashes_and_dots() {
 }
 
 #[test]
+fn encode_cwd_replaces_every_non_alphanumeric_character() {
+    // Verified against this machine's real transcript directories: a path
+    // segment `cse_market_analysis` is filed under `cse-market-analysis`, so
+    // `_` is encoded exactly like `/` and `.` — the case the slashes-and-dots
+    // rule used to get wrong.
+    assert_eq!(
+        encode_cwd(Path::new("/Users/sam/dev/cse_market_analysis")),
+        "-Users-sam-dev-cse-market-analysis"
+    );
+    assert_eq!(
+        encode_cwd(Path::new("/Users/sam/My Projects/app")),
+        "-Users-sam-My-Projects-app"
+    );
+    // Digits survive; every other byte does not.
+    assert_eq!(
+        encode_cwd(Path::new("/tmp/claude-502/x")),
+        "-tmp-claude-502-x"
+    );
+    assert_eq!(encode_cwd(Path::new("/a+b/c~d")), "-a-b-c-d");
+    // ASCII-only class, matching Claude's own `[^a-zA-Z0-9]` replace.
+    assert_eq!(encode_cwd(Path::new("/caf\u{e9}/x")), "-caf--x");
+}
+
+#[test]
 fn read_envelope_main_only() {
     let tmp = TempDir::new().unwrap();
     let cwd = Path::new("/my/project");
