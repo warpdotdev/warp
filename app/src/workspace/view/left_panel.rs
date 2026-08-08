@@ -1240,7 +1240,7 @@ impl LeftPanelView {
 
     /// When the conversation list view's visibility changes,
     /// we need to update the conversation and tasks model to reflect the new state
-    /// (this information is used to decide whether or not we should poll for new tasks).
+    /// (this information is used to decide how to handle incoming task updates).
     fn on_conversation_list_view_visibility_changed(
         &self,
         is_now_open: bool,
@@ -1254,7 +1254,7 @@ impl LeftPanelView {
             if is_now_open && is_available {
                 model.register_view_open(window_id, view_id, ctx);
             } else {
-                model.register_view_closed(window_id, view_id, ctx);
+                model.register_view_closed(window_id, view_id);
             }
         });
     }
