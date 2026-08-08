@@ -1,4 +1,4 @@
-use markdown_parser::FormattedTextFragment;
+use markdown_parser::InlineMarkdownSourceMap;
 use string_offset::CharOffset;
 
 /// Maps between linear CharOffset positions and table cell coordinates.
@@ -71,18 +71,7 @@ pub enum TablePosition {
 
 #[derive(Debug, Clone)]
 pub struct TableCellOffsetMap {
-    fragment_ranges: Vec<TableCellFragmentRange>,
-    rendered_length: CharOffset,
-    source_length: CharOffset,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TableCellFragmentRange {
-    rendered_start: CharOffset,
-    rendered_end: CharOffset,
-    source_end: CharOffset,
-    visible_source_start: CharOffset,
-    visible_source_end: CharOffset,
+    source_map: InlineMarkdownSourceMap,
 }
 impl TableOffsetMap {
     /// Build a new TableOffsetMap from cell text lengths.
@@ -284,138 +273,28 @@ impl TableOffsetMap {
 // whole table on every edit. The current embedded-text-plus-cached-parse model is
 // sufficient for read-only tables; see PR #24326 discussion for context.
 impl TableCellOffsetMap {
-    /// Build a cell offset map from the raw cell `source` text and the parsed `inline`
-    /// fragments produced by the Markdown parser.
-    ///
-    /// This walks `source` character-by-character alongside the rendered text of each fragment,
-    /// which makes it robust to:
-    /// - backslash escapes (e.g. `\*foo` consumes two source chars for one rendered char),
-    /// - changes to Markdown marker syntax (we don't hardcode `**`, `*`, `<u>`, etc. here), and
-    /// - nested styles where adjacent fragments share outer markers (e.g. `**a *b* c**`), since we
-    ///   attribute each marker to the fragment whose rendered text follows it.
-    pub fn from_inline_and_source(source: &str, inline: &[FormattedTextFragment]) -> Self {
-        let source_chars: Vec<char> = source.chars().collect();
-        let total_source_chars = source_chars.len();
-        let mut fragment_ranges: Vec<TableCellFragmentRange> = Vec::new();
-        let mut rendered_offset = CharOffset::zero();
-        let mut source_idx: usize = 0;
-
-        for fragment in inline {
-            let rendered_chars: Vec<char> = fragment.text.chars().collect();
-            if rendered_chars.is_empty() {
-                continue;
-            }
-
-            let first_rendered = rendered_chars[0];
-            while source_idx < total_source_chars {
-                let sc = source_chars[source_idx];
-                if sc == '\\'
-                    && source_idx + 1 < total_source_chars
-                    && source_chars[source_idx + 1] == first_rendered
-                {
-                    source_idx += 1;
-                    break;
-                }
-                if sc == first_rendered {
-                    break;
-                }
-                source_idx += 1;
-            }
-
-            let visible_source_start = CharOffset::from(source_idx);
-
-            for &rendered_char in &rendered_chars {
-                if source_idx >= total_source_chars {
-                    break;
-                }
-                let sc = source_chars[source_idx];
-                if sc == '\\'
-                    && source_idx + 1 < total_source_chars
-                    && source_chars[source_idx + 1] == rendered_char
-                {
-                    source_idx += 2;
-                } else {
-                    source_idx += 1;
-                }
-            }
-
-            let visible_source_end = CharOffset::from(source_idx);
-            let rendered_start = rendered_offset;
-            let rendered_end = rendered_start + CharOffset::from(rendered_chars.len());
-
-            fragment_ranges.push(TableCellFragmentRange {
-                rendered_start,
-                rendered_end,
-                source_end: visible_source_end,
-                visible_source_start,
-                visible_source_end,
-            });
-
-            rendered_offset = rendered_end;
-        }
-
-        let total_source_offset = CharOffset::from(total_source_chars);
-        let fragment_count = fragment_ranges.len();
-        for i in 0..fragment_count {
-            let next_start = if i + 1 < fragment_count {
-                fragment_ranges[i + 1].visible_source_start
-            } else {
-                total_source_offset
-            };
-            fragment_ranges[i].source_end = next_start;
-        }
-
-        Self {
-            fragment_ranges,
-            rendered_length: rendered_offset,
-            source_length: total_source_offset,
-        }
+    /// Wrap the source mapping produced while the Markdown parser consumes the cell.
+    pub fn from_source_map(source_map: InlineMarkdownSourceMap) -> Self {
+        Self { source_map }
     }
 
     pub fn rendered_length(&self) -> CharOffset {
-        self.rendered_length
+        CharOffset::from(self.source_map.rendered_length())
     }
 
     pub fn source_length(&self) -> CharOffset {
-        self.source_length
+        CharOffset::from(self.source_map.source_length())
     }
 
     pub fn rendered_to_source(&self, rendered_offset: CharOffset) -> CharOffset {
-        if rendered_offset >= self.rendered_length {
-            return self
-                .fragment_ranges
-                .last()
-                .map(|fragment| fragment.visible_source_end)
-                .unwrap_or(self.source_length);
-        }
-
-        for fragment in &self.fragment_ranges {
-            if rendered_offset < fragment.rendered_end {
-                return fragment.visible_source_start + (rendered_offset - fragment.rendered_start);
-            }
-        }
-
-        self.source_length
+        CharOffset::from(
+            self.source_map
+                .rendered_to_source(rendered_offset.as_usize()),
+        )
     }
 
     pub fn source_to_rendered(&self, source_offset: CharOffset) -> CharOffset {
-        if source_offset >= self.source_length {
-            return self.rendered_length;
-        }
-
-        for fragment in &self.fragment_ranges {
-            if source_offset < fragment.source_end {
-                if source_offset <= fragment.visible_source_start {
-                    return fragment.rendered_start;
-                }
-                if source_offset >= fragment.visible_source_end {
-                    return fragment.rendered_end;
-                }
-                return fragment.rendered_start + (source_offset - fragment.visible_source_start);
-            }
-        }
-
-        self.rendered_length
+        CharOffset::from(self.source_map.source_to_rendered(source_offset.as_usize()))
     }
 }
 
