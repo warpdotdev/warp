@@ -2231,6 +2231,27 @@ impl PaneGroup {
             .any(|pane| pane.terminal_view(ctx).id() == terminal_view_id)
     }
 
+    /// Re-issues the current size for every terminal view in this group so they
+    /// re-lay-out and reflow to their available space.
+    ///
+    /// Terminal PTY sizing is driven by layout, and only the active tab's pane
+    /// group is laid out. When a pane is torn out of a tab into another tab, the
+    /// source tab is backgrounded, so the panes left behind never re-lay-out and
+    /// keep their old (pre-removal) dimensions. Calling this when a tab becomes
+    /// active again (or right after a pane is removed for a move) forces those
+    /// terminals to resize to the freed space.
+    pub fn refresh_terminal_sizes(&mut self, ctx: &mut ViewContext<Self>) {
+        let terminal_views: Vec<_> = self
+            .panes_of::<TerminalPane>()
+            .map(|pane| pane.terminal_view(ctx))
+            .collect();
+        for terminal_view in terminal_views {
+            terminal_view.update(ctx, |terminal_view, ctx| {
+                terminal_view.refresh_size(ctx);
+            });
+        }
+    }
+
     /// Returns the [`PaneId`] of the terminal pane whose persistent UUID matches
     /// the given bytes, or `None` if no such pane exists in this group.
     pub fn find_terminal_pane_by_session_uuid(&self, uuid: &[u8]) -> Option<PaneId> {
