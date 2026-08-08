@@ -267,6 +267,9 @@ fn test_detect_known_agents() {
                 ("goose", CLIAgent::Goose),
                 ("vibe", CLIAgent::Vibe),
                 ("agy", CLIAgent::Antigravity),
+                ("grok", CLIAgent::Grok),
+                ("qwen", CLIAgent::QwenCode),
+                ("kimi", CLIAgent::KimiCode),
                 ("omp", CLIAgent::OhMyPi),
                 ("warp", CLIAgent::WarpTui),
                 ("warp-dev", CLIAgent::WarpTui),
@@ -294,6 +297,35 @@ fn test_detect_with_arguments() {
                 CLIAgent::detect("gemini chat", None, None, ctx),
                 Some(CLIAgent::Gemini),
             );
+        });
+    });
+}
+
+#[test]
+fn test_detect_grok_qwen_kimi() {
+    // These three ship as global npm packages whose `bin` entries are `grok`,
+    // `qwen` and `kimi` respectively (@xai-official/grok,
+    // @qwen-code/qwen-code, @moonshot-ai/kimi-code), so plain binary-name
+    // detection is enough. Absolute paths and trailing arguments must not
+    // defeat it, and a longer name that merely starts with one of these
+    // prefixes must not be swallowed.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            assert_eq!(
+                CLIAgent::detect("grok --model grok-4", None, None, ctx),
+                Some(CLIAgent::Grok),
+            );
+            assert_eq!(
+                CLIAgent::detect("/usr/local/bin/qwen", None, None, ctx),
+                Some(CLIAgent::QwenCode),
+            );
+            assert_eq!(
+                CLIAgent::detect("kimi --resume", None, None, ctx),
+                Some(CLIAgent::KimiCode),
+            );
+            // Distinct binary names should not bleed into these agents.
+            assert_eq!(CLIAgent::detect("grokking", None, None, ctx), None);
+            assert_eq!(CLIAgent::detect("qwen-agent", None, None, ctx), None);
         });
     });
 }
