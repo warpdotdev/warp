@@ -163,7 +163,7 @@ fn bottom_center_pill_style_and_dimensions() {
     );
     assert!(ass.contains("PlayResX: 1920"));
     assert!(ass.contains("PlayResY: 1080"));
-    assert!(ass.contains("Style: Pill,DejaVu Sans Mono,48"));
+    assert!(ass.contains("Style: Pill,monospace,48"));
     // The single segment is [750, 3000] (output_start 0); the group displays
     // [1000, 3000] (lingering 1000 ms past finish) and remaps to [250, 2250] ms
     // on the output timeline.

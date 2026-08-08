@@ -39,6 +39,23 @@ pub fn main_display_dimensions() -> (u32, u32) {
     )
 }
 
+/// Returns the main display's bounds in global display points, as
+/// `(origin_x, origin_y, width, height)`.
+///
+/// This is the same point space `kCGWindowBounds` and `CGEvent` locations use, so a window's
+/// bounds can be expressed relative to the captured display.
+pub fn main_display_bounds() -> (f64, f64, f64, f64) {
+    use objc2_core_graphics::{CGDisplayBounds, CGMainDisplayID};
+
+    let bounds = CGDisplayBounds(CGMainDisplayID());
+    (
+        bounds.origin.x,
+        bounds.origin.y,
+        bounds.size.width,
+        bounds.size.height,
+    )
+}
+
 /// Returns the backing scale factor of the display that fully contains a window.
 ///
 /// A window spanning displays with different backing scale factors does not have one valid
