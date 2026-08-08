@@ -2594,10 +2594,14 @@ impl AgentDriver {
         let additional_source_repos = foreground
             .spawn(|me, _| me.additional_source_repos.clone())
             .await?;
-        let setup_commands = environment_opt
+        let mut setup_commands = environment_opt
             .as_ref()
             .map(|environment| environment.setup_commands.clone())
             .unwrap_or_default();
+        // The Factory definition checkout is run-scoped: the dispatch decides
+        // whether this run gets one by attaching the clone variables,
+        // independent of which environment the run executes in.
+        environment::prepend_factory_definition_clone(&mut setup_commands);
         let source_repos = environment::merge_repos_deduped(
             environment_opt
                 .as_ref()
@@ -2606,7 +2610,7 @@ impl AgentDriver {
             additional_source_repos,
         )?;
 
-        if environment_opt.is_some() || !source_repos.is_empty() {
+        if environment_opt.is_some() || !source_repos.is_empty() || !setup_commands.is_empty() {
             log::info!("Loading environment...");
             environment_skill_repos = source_repos.clone();
 
