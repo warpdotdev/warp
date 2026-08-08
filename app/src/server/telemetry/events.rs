@@ -2344,6 +2344,9 @@ pub enum TelemetryEvent {
         /// The original error that was retried
         original_error: String,
     },
+    AgentRunSleepGuardCapExpired {
+        conversation_id: AIConversationId,
+    },
     GrepToolSucceeded,
     GrepToolFailed {
         queries: Option<Vec<String>>,
@@ -3901,6 +3904,9 @@ impl TelemetryEvent {
                 "retry_count": retry_count,
                 "original_error": original_error,
             })),
+            TelemetryEvent::AgentRunSleepGuardCapExpired { conversation_id } => {
+                Some(json!({ "conversation_id": conversation_id }))
+            }
             TelemetryEvent::GrepToolFailed {
                 queries,
                 path,
@@ -5015,6 +5021,7 @@ impl TelemetryEvent {
             | TelemetryEvent::FileExceededContextLimit { .. }
             | TelemetryEvent::AgentModeError { .. }
             | TelemetryEvent::AgentModeRequestRetrySucceeded { .. }
+            | TelemetryEvent::AgentRunSleepGuardCapExpired { .. }
             | TelemetryEvent::ToggleNaturalLanguageAutosuggestionsSetting { .. }
             | TelemetryEvent::ToggleSharedBlockTitleGenerationSetting { .. }
             | TelemetryEvent::ToggleGitOperationsAutogenSetting { .. }
@@ -5564,6 +5571,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::FileExceededContextLimit => EnablementState::Always,
             Self::AgentModeError => EnablementState::Always,
             Self::AgentModeRequestRetrySucceeded => EnablementState::Always,
+            Self::AgentRunSleepGuardCapExpired => EnablementState::Always,
             Self::GrepToolSucceeded => EnablementState::Always,
             Self::GrepToolFailed => EnablementState::Always,
             Self::FileGlobToolSucceeded => EnablementState::Always,
@@ -6089,6 +6097,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::FileExceededContextLimit => "AgentMode.Code.FileExceededContextLimit",
             Self::AgentModeError => "AgentMode.Error",
             Self::AgentModeRequestRetrySucceeded => "AgentMode.RequestRetrySucceeded",
+            Self::AgentRunSleepGuardCapExpired => "AgentMode.SleepGuardCapExpired",
             Self::GrepToolSucceeded => "AgentMode.Grep.Succeeded",
             Self::GrepToolFailed => "AgentMode.Grep.Failed",
             Self::FileGlobToolSucceeded => "AgentMode.FileGlob.Succeeded",
@@ -6866,6 +6875,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AgentModeError => "Received an error when getting Agent Mode response",
             Self::AgentModeRequestRetrySucceeded => {
                 "Agent Mode request succeeded after retrying following an initial error"
+            }
+            Self::AgentRunSleepGuardCapExpired => {
+                "Agent Mode sleep guard cap expired and released the wake assertion"
             }
             Self::GrepToolSucceeded => "The grep tool completed successfully",
             Self::GrepToolFailed => "The grep tool failed to complete",

@@ -1,5 +1,6 @@
 //! This module contains model, controller, and view logic for Blocklist AI.
 mod action_model;
+pub(crate) mod agent_run_sleep_guard_model;
 pub mod agent_view;
 pub mod block;
 mod child_agent_launch;

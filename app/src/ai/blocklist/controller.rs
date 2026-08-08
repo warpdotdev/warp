@@ -31,6 +31,7 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonE
 
 use self::response_stream::{ResponseStream, ResponseStreamEvent};
 use super::action_model::{BlocklistAIActionEvent, BlocklistAIActionModel};
+use super::agent_run_sleep_guard_model::AgentRunSleepGuardModel;
 use super::context_model::{BlocklistAIContextModel, PendingAttachment, PendingFile};
 use super::conversation_selection::{ConversationSelectionEvent, ConversationSelectionHandle};
 use super::history_model::BlocklistAIHistoryModel;
@@ -1591,6 +1592,11 @@ impl BlocklistAIController {
         if finished_results.is_empty() {
             return;
         }
+        if ctx.has_singleton_model::<AgentRunSleepGuardModel>() {
+            AgentRunSleepGuardModel::handle(ctx).update(ctx, |guard, ctx| {
+                guard.refresh(conversation_id, ctx);
+            });
+        }
 
         // Check whether any result will trigger a server-side subagent (e.g. CLI
         // subagent for LRC), or if one is already active. If so, we must not
@@ -2367,6 +2373,11 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<(AIConversationId, ResponseStreamId)> {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
+        if ctx.has_singleton_model::<AgentRunSleepGuardModel>() {
+            AgentRunSleepGuardModel::handle(ctx).update(ctx, |guard, ctx| {
+                guard.refresh(request_input.conversation_id, ctx);
+            });
+        }
         let (
             conversation_id,
             conversation_server_token,
@@ -2895,6 +2906,14 @@ impl BlocklistAIController {
                         };
                         match event {
                             warp_multi_agent_api::response_event::Type::Init(init_event) => {
+                                if ctx.has_singleton_model::<AgentRunSleepGuardModel>() {
+                                    AgentRunSleepGuardModel::handle(ctx).update(
+                                        ctx,
+                                        |guard, ctx| {
+                                            guard.refresh(conversation_id, ctx);
+                                        },
+                                    );
+                                }
                                 history_model.update(ctx, |history_model, ctx| {
                                     history_model.initialize_output_for_response_stream(
                                         &stream_id,

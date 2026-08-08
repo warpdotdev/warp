@@ -52,11 +52,7 @@ pub async fn generate_multi_agent_output(
     let is_passive = is_passive_suggestion_request(request);
     let url = endpoint_url(is_passive);
 
-    let mut request_builder = client
-        .http_client()
-        .post(url)
-        .proto(request)
-        .prevent_sleep("Agent Mode request in-progress");
+    let mut request_builder = client.http_client().post(url).proto(request);
     if let Some(token) = auth_token.as_bearer_token() {
         request_builder = request_builder.bearer_auth(token);
     }

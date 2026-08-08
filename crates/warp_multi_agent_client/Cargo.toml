@@ -18,7 +18,7 @@ prost.workspace = true
 reqwest-eventsource.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tracing-futures.workspace = true
+tracing-futures = { workspace = true, features = ["futures-03"] }
 warp_core.workspace = true
 warp_multi_agent_api.workspace = true
 warp_server_client.workspace = true
