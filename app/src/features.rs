@@ -243,8 +243,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ConversationArtifacts,
         #[cfg(feature = "sync_ambient_plans")]
         FeatureFlag::SyncAmbientPlans,
-        #[cfg(feature = "get_started_tab")]
-        FeatureFlag::GetStartedTab,
         #[cfg(feature = "projects")]
         FeatureFlag::Projects,
         #[cfg(feature = "drive_objects_as_context")]
