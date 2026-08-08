@@ -962,6 +962,11 @@ fn handle_terminal_view_event(
                     pane_id: Some(pane_id),
                 })
             }
+            Event::ShowToast { message, flavor } => ctx.emit(pane_group::Event::ShowToast {
+                message: message.clone(),
+                flavor: *flavor,
+                pane_id: Some(pane_id),
+            }),
             Event::AppStateChanged => {
                 ctx.emit(pane_group::Event::AppStateChanged);
             }
