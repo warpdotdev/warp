@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use handlebars::{get_arguments, render_template};
+use regex::Regex;
 #[cfg(feature = "local_fs")]
 use serde::Deserialize;
 
@@ -10,6 +12,37 @@ use crate::ai::mcp::templatable_installation::{
 };
 #[cfg(feature = "local_fs")]
 use crate::ai::mcp::{JSONMCPServer, JSONTransportType};
+
+static ENV_VAR_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\{([^}]+)\}").expect("Regex is valid"));
+
+/// The name of a `${VAR}` placeholder that could not be resolved.
+#[derive(Debug, thiserror::Error)]
+#[error("Missing or empty environment variable: {0}")]
+pub struct MissingEnvVarError(pub String);
+
+/// Substitutes environment variables in the format ${VAR_NAME} in the given JSON string.
+/// Returns an error if any environment variable is not found, as the server cannot be started.
+pub fn substitute_env_vars(json_content: &str) -> Result<String, MissingEnvVarError> {
+    let mut result = json_content.to_string();
+
+    for capture in ENV_VAR_REGEX.captures_iter(json_content) {
+        if let Some(var_match) = capture.get(1) {
+            let var_name = var_match.as_str();
+            match std::env::var(var_name) {
+                Ok(value) if !value.is_empty() => {
+                    let placeholder = format!("${{{var_name}}}");
+                    result = result.replace(&placeholder, &value);
+                }
+                _ => {
+                    return Err(MissingEnvVarError(var_name.to_string()));
+                }
+            }
+        }
+    }
+
+    Ok(result)
+}
 
 /// Normalize MCP JSON input to ensure it has a server name wrapper.
 ///

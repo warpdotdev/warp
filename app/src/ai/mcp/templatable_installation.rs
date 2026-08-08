@@ -9,10 +9,23 @@ use uuid::Uuid;
 use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 
+use crate::ai::mcp::parsing::{MissingEnvVarError, substitute_env_vars};
 use crate::ai::mcp::{TemplatableMCPServer, TemplateVariable};
 
 lazy_static! {
     static ref HASHER: SipHasher = SipHasher::new_with_keys(0, 0);
+}
+
+/// A `${VAR}` placeholder in an MCP server's `env` or `headers` value that could not be
+/// resolved from the process environment.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "MCP server '{server}' value for '{key}' references a missing or empty environment variable: {variable}"
+)]
+pub struct EnvVarExpansionError {
+    pub server: String,
+    pub key: String,
+    pub variable: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -156,6 +169,35 @@ impl TemplatableMCPServerInstallation {
                 );
             }
         }
+    }
+
+    /// Expand `${VAR}` placeholders in this installation's `env` and `headers` values against
+    /// the process environment, matching the expansion applied to on-disk MCP config files.
+    ///
+    /// Only meaningful for installations built by `ParsedTemplatableMCPServerResult::parse_result`,
+    /// whose variable values are exactly the server's `env` and `headers` entries. Unlike the
+    /// on-disk path, which expands the whole document, `command`, `args` and `url` are left
+    /// untouched: only `env` and `headers` carry canonicalized secret references.
+    pub(crate) fn expand_env_var_placeholders(&mut self) -> Result<(), EnvVarExpansionError> {
+        let server = self.templatable_mcp_server.name.clone();
+
+        // Sorted so a config with several unresolvable placeholders always names the same key,
+        // instead of whichever one the hash map happens to yield first.
+        let mut entries: Vec<_> = self.variable_values.iter_mut().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+
+        for (key, value) in entries {
+            value.value =
+                substitute_env_vars(&value.value).map_err(|MissingEnvVarError(variable)| {
+                    EnvVarExpansionError {
+                        server: server.clone(),
+                        key: key.clone(),
+                        variable,
+                    }
+                })?;
+        }
+
+        Ok(())
     }
 
     pub fn gallery_uuid(&self) -> Option<Uuid> {

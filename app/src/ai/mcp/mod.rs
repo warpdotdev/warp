@@ -62,7 +62,7 @@ pub use cloud_object_models::{
 pub use templatable::{JsonTemplate, TemplatableMCPServer, TemplateVariable};
 pub mod logs;
 pub mod templatable_installation;
-pub use templatable_installation::TemplatableMCPServerInstallation;
+pub use templatable_installation::{EnvVarExpansionError, TemplatableMCPServerInstallation};
 #[cfg(not(target_family = "wasm"))]
 pub use templatable_installation::{VariableType, VariableValue};
 pub mod parsing;
