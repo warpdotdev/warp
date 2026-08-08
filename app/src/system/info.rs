@@ -187,7 +187,19 @@ impl SystemInfo {
         }
 
         // Collect a detailed memory breakdown for diagnostics.
-        let memory_breakdown = memory_footprint::memory_breakdown();
+        let mut memory_breakdown = memory_footprint::memory_breakdown();
+
+        // The OS counters above report how many dirty pages the process owns,
+        // but not whether the application is still using them.  Without the
+        // allocator's own accounting, a genuine leak and gigabytes of
+        // freed-but-unpurged pages produce an identical breakdown, which makes
+        // these reports impossible to triage apart after the fact.
+        if let Some(allocator_stats) = crate::alloc::allocator_stats()
+            && let serde_json::Value::Object(breakdown) = &mut memory_breakdown
+            && let Ok(allocator_stats) = serde_json::to_value(allocator_stats)
+        {
+            breakdown.insert("allocator".to_string(), allocator_stats);
+        }
 
         // If we're tracking heap usage and detect excessive memory usage,
         // dump and upload the current heap profiling data.

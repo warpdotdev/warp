@@ -208,6 +208,9 @@ tabwriter = "1.4"
 tempfile.workspace = true
 thiserror.workspace = true
 thousands = "0.2.0"
+# `stats` is what exposes the `stats::*` counters we report in memory
+# diagnostics; it is off by default and `jemalloc_pprof` does not enable it.
+tikv-jemalloc-ctl = { version = "0.6", optional = true, features = ["stats"] }
 tikv-jemallocator = { version = "0.6", optional = true, features = [
     "override_allocator_on_supported_platforms",
 ] }
@@ -774,7 +777,7 @@ inline_slash_commands = ["agent_view"]
 heap_usage_tracking = ["jemalloc_pprof", "crash_reporting"]
 image_as_context = []
 in_band_generators_ssh = []
-jemalloc = ["dep:tikv-jemallocator", "ai/jemalloc"]
+jemalloc = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl", "ai/jemalloc"]
 jemalloc_with_profiling = ["jemalloc", "tikv-jemallocator/profiling"]
 jemalloc_auto_heap_profiling = ["jemalloc_with_profiling"]
 jemalloc_pprof = ["jemalloc_with_profiling", "dep:jemalloc_pprof"]

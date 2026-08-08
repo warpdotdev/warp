@@ -15337,6 +15337,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "thousands",
+ "tikv-jemalloc-ctl",
  "tikv-jemallocator",
  "tokio",
  "tokio-util",
