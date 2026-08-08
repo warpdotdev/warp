@@ -8,6 +8,7 @@ use ai::agent::action_result::{
     AIAgentActionResultType, CreateDocumentsResult, DocumentContext, EditDocumentsResult,
 };
 use ai::document::{AIDocumentId, AIDocumentVersion};
+use markdown_parser::FormattedTextLine;
 use warp::tui_export::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionType, AIConversationId,
     Appearance, TaskId,
@@ -226,6 +227,9 @@ fn finalized_create_replaces_streamed_payload_and_keeps_action_order() {
 #[test]
 fn finalized_edit_uses_full_result_content() {
     App::test((), |mut app| async move {
+        // The plan pane renders GFM tables only when `MarkdownTables` is enabled
+        // (APP-4917). This test asserts table rendering, so enable the flag.
+        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
         let document_id = AIDocumentId::new();
         let action = edit_action("edit-1", document_id);
         let (view, action_model) = test_plan_view(&mut app, action.clone(), false);
@@ -264,6 +268,100 @@ fn finalized_edit_uses_full_result_content() {
             assert!(joined.contains("Mode"));
             assert!(joined.contains("Focus"));
             assert!(!joined.contains("| --- |"));
+        });
+    });
+}
+
+#[test]
+fn plan_table_renders_when_markdown_tables_enabled() {
+    App::test((), |mut app| async move {
+        // With MarkdownTables enabled (the default on every channel via the
+        // `markdown_tables` Cargo feature), a GFM table in a plan document
+        // parses into a Table block and renders as a table, not literal `|`
+        // text. Verifies spec invariants 1, 3, 4 (APP-4917).
+        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(true);
+        let content = "| Feature | Owner | Status |\n| :--- | :---: | ---: |\n| Tables | **Agent** | `done` |\n| Notes | _User_ | 7 |\n| Escapes | a \\| b | 9 |";
+        let action = create_action("create-1", [("plan.md", content)]);
+        let (view, _) = test_plan_view(&mut app, action, true);
+
+        app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            let formatted = view.documents[0]
+                .formatted
+                .as_ref()
+                .expect("plan parses with MarkdownTables enabled")
+                .clone();
+            assert!(
+                formatted
+                    .lines
+                    .iter()
+                    .any(|line| matches!(line, FormattedTextLine::Table(_))),
+                "expected a Table block when MarkdownTables is enabled, got {:?}",
+                formatted.lines
+            );
+
+            let (lines, _) = render(view, 80, ctx);
+            let joined = lines.join("\n");
+            // Header and body cell text is rendered.
+            for needle in [
+                "Feature", "Owner", "Status", "Tables", "Agent", "done", "Notes", "User",
+            ] {
+                assert!(
+                    joined.contains(needle),
+                    "expected {needle:?} in rendered table, got:\n{joined}"
+                );
+            }
+            // Inline formatting is rendered, not shown as literal markdown.
+            assert!(!joined.contains("**"));
+            // The GFM separator row is consumed by the table parser, not shown
+            // as literal pipe/dash text.
+            assert!(!joined.contains("| --- |"));
+            assert!(!joined.contains(":---:"));
+            assert!(!joined.contains("---:"));
+        });
+    });
+}
+
+#[test]
+fn plan_table_falls_back_to_text_when_markdown_tables_disabled() {
+    App::test((), |mut app| async move {
+        // With MarkdownTables disabled, the TUI plan renderer uses the ordinary
+        // Markdown parser: no Table block is produced and the GFM separator row
+        // is rendered as literal text (the deterministic non-table fallback),
+        // with no content loss and no panic. Verifies spec invariants 7, 8, 10
+        // (APP-4917). This is the regression test for the gate reconciliation:
+        // before the fix the TUI parsed tables unconditionally and this test
+        // would fail (a Table block would be produced even with the flag off).
+        let _flag = warp_core::features::FeatureFlag::MarkdownTables.override_enabled(false);
+        let content = "| Feature | Owner | Status |\n| :--- | :---: | ---: |\n| Tables | **Agent** | `done` |\n| Notes | _User_ | 7 |\n| Escapes | a \\| b | 9 |";
+        let action = create_action("create-1", [("plan.md", content)]);
+        let (view, _) = test_plan_view(&mut app, action, true);
+
+        app.read(|ctx| {
+            let view = view.as_ref(ctx);
+            let formatted = view.documents[0]
+                .formatted
+                .as_ref()
+                .expect("plan still parses with MarkdownTables disabled")
+                .clone();
+            assert!(
+                !formatted
+                    .lines
+                    .iter()
+                    .any(|line| matches!(line, FormattedTextLine::Table(_))),
+                "expected no Table block when MarkdownTables is disabled, got {:?}",
+                formatted.lines
+            );
+
+            let (lines, _) = render(view, 80, ctx);
+            let joined = lines.join("\n");
+            // Cell text is still present (no content loss).
+            assert!(joined.contains("Feature"));
+            assert!(joined.contains("Tables"));
+            assert!(joined.contains("Agent"));
+            // The GFM separator row renders as literal text in the fallback,
+            // instead of being consumed by a table parser.
+            assert!(joined.contains(":---:"));
         });
     });
 }
