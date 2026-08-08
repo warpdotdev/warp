@@ -1254,8 +1254,12 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                     write!(f, "\n\n**Diff:**\n```diff\n{diff}\n```\n\n")
                 }
                 RequestFileEditsResult::Cancelled => write!(f, "\n_File edits cancelled_"),
-                RequestFileEditsResult::DiffApplicationFailed { error } => {
-                    write!(f, "\n_File edits failed: {error} _")
+                RequestFileEditsResult::DiffApplicationFailed { failures } => {
+                    write!(
+                        f,
+                        "\n_File edits failed: {} _",
+                        ai::agent::action_result::diff_application_failure::render(failures)
+                    )
                 }
             },
             AIAgentActionResultType::ReadFiles(result) => match result {

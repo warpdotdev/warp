@@ -7,6 +7,9 @@ use warp_multi_agent_api::{self as api};
 
 use super::*;
 use crate::agent::action_result::ShellCommandError;
+use crate::agent::action_result::diff_application_failure::{
+    DiffApplicationFailure, DiffSearchBlockFailure, MAX_DIFF_MATCH_FAILURE_BYTES, render,
+};
 use crate::agent::convert::ConvertToAPITypeError;
 
 fn local_datetime_to_timestamp(timestamp: DateTime<Local>) -> prost_types::Timestamp {
@@ -299,17 +302,275 @@ impl TryFrom<RequestFileEditsResult> for api::request::input::tool_call_result::
                     },
                 ),
             ),
-            RequestFileEditsResult::DiffApplicationFailed { error } => Ok(
+            RequestFileEditsResult::DiffApplicationFailed { failures } => Ok(
                 api::request::input::tool_call_result::Result::ApplyFileDiffs(
                     api::ApplyFileDiffsResult {
                         result: Some(api::apply_file_diffs_result::Result::Error(
-                            api::apply_file_diffs_result::Error { message: error },
+                            api::apply_file_diffs_result::Error {
+                                // Back-compat: always populate message for old servers that
+                                // don't understand the structured failures field.
+                                message: render(&failures),
+                                failures: failures
+                                    .iter()
+                                    .flat_map(diff_application_failure_to_proto)
+                                    .collect(),
+                            },
                         )),
                     },
                 ),
             ),
             RequestFileEditsResult::Cancelled => Err(ConvertToAPITypeError::Ignore),
         }
+    }
+}
+
+/// Convert one [`DiffApplicationFailure`] to zero or more proto
+/// [`api::apply_file_diffs_result::Failure`] messages.
+///
+/// `UnmatchedDiffs` that also carries `changes_already_applied_count > 0`
+/// emits an additional `ChangesAlreadyApplied` failure so the proto has a
+/// fully-separate entry for each logical failure, while the Rust
+/// `DiffApplicationFailure::UnmatchedDiffs` keeps both counters in one
+/// struct so `render()` can produce the combined single-entry wording.
+fn diff_application_failure_to_proto(
+    failure: &DiffApplicationFailure,
+) -> Vec<api::apply_file_diffs_result::Failure> {
+    use api::apply_file_diffs_result::{Failure, failure as f};
+
+    let make = |kind: f::Kind| Failure { kind: Some(kind) };
+
+    match failure {
+        DiffApplicationFailure::UnmatchedDiffs {
+            file,
+            fuzzy_match_failure_count,
+            changes_already_applied_count,
+            search_block_failures,
+        } => {
+            let mut out = Vec::new();
+            if *fuzzy_match_failure_count > 0 {
+                out.push(make(f::Kind::UnmatchedDiffs(f::UnmatchedDiffs {
+                    file: file.clone(),
+                    fuzzy_match_failure_count: *fuzzy_match_failure_count as u32,
+                    search_block_failures: search_block_failures
+                        .iter()
+                        .map(|b| {
+                            // Apply the byte cap and set `truncated`.
+                            let (search, truncated) =
+                                if b.search.len() > MAX_DIFF_MATCH_FAILURE_BYTES {
+                                    let mut end = MAX_DIFF_MATCH_FAILURE_BYTES;
+                                    while !b.search.is_char_boundary(end) {
+                                        end -= 1;
+                                    }
+                                    (b.search[..end].to_owned(), true)
+                                } else {
+                                    (b.search.clone(), false)
+                                };
+                            // Convert from internal exclusive-end range to
+                            // proto 1-indexed inclusive start/end.
+                            // 0 in the proto means "not applicable".
+                            let (start, end) = match &b.expected_range {
+                                Some(r) if r.start > 0 && r.end > r.start => (
+                                    r.start as u32,
+                                    (r.end - 1) as u32, // exclusive → inclusive
+                                ),
+                                _ => (0, 0),
+                            };
+                            f::SearchBlockFailure {
+                                search,
+                                truncated,
+                                expected_start_line: start,
+                                expected_end_line: end,
+                            }
+                        })
+                        .collect(),
+                })));
+            }
+            if *changes_already_applied_count > 0 {
+                // Emit a separate ChangesAlreadyApplied entry for the same file.
+                out.push(make(f::Kind::ChangesAlreadyApplied(
+                    f::ChangesAlreadyApplied { file: file.clone() },
+                )));
+            }
+            out
+        }
+        DiffApplicationFailure::ChangesAlreadyApplied { file } => {
+            vec![make(f::Kind::ChangesAlreadyApplied(
+                f::ChangesAlreadyApplied { file: file.clone() },
+            ))]
+        }
+        DiffApplicationFailure::MissingFile { file } => {
+            vec![make(f::Kind::MissingFile(f::MissingFile {
+                file: file.clone(),
+            }))]
+        }
+        DiffApplicationFailure::ReadFailed { file } => {
+            vec![make(f::Kind::ReadFailed(f::ReadFailed {
+                file: file.clone(),
+            }))]
+        }
+        DiffApplicationFailure::AlreadyExists { file } => {
+            vec![make(f::Kind::AlreadyExists(f::AlreadyExists {
+                file: file.clone(),
+            }))]
+        }
+        DiffApplicationFailure::MultipleFileCreation { file } => {
+            vec![make(f::Kind::MultipleFileCreation(
+                f::MultipleFileCreation { file: file.clone() },
+            ))]
+        }
+        DiffApplicationFailure::MultipleFileRenames { file } => {
+            vec![make(f::Kind::MultipleFileRenames(f::MultipleFileRenames {
+                file: file.clone(),
+            }))]
+        }
+        DiffApplicationFailure::MutatedDeletedFile { file } => {
+            vec![make(f::Kind::MutatedDeletedFile(f::MutatedDeletedFile {
+                file: file.clone(),
+            }))]
+        }
+        DiffApplicationFailure::NoDiffsApplicable => {
+            vec![make(f::Kind::NoDiffsApplicable(()))]
+        }
+        DiffApplicationFailure::RemoteFileOperationsUnsupported => {
+            vec![make(f::Kind::RemoteFileOperationsUnsupported(()))]
+        }
+        DiffApplicationFailure::Opaque { message } => {
+            vec![make(f::Kind::Opaque(f::Opaque {
+                message: message.clone(),
+            }))]
+        }
+    }
+}
+
+/// Reconstruct a [`Vec<DiffApplicationFailure>`] from a proto
+/// [`api::apply_file_diffs_result::Error`].
+///
+/// When `error.failures` is non-empty, each proto entry is decoded into the
+/// matching [`DiffApplicationFailure`] variant. When `failures` is empty (old
+/// proto) or every entry has an unrecognised `kind` (forward-compat), the
+/// back-compat `message` field is wrapped in `Opaque`.
+///
+/// After decoding, consecutive `ChangesAlreadyApplied` entries are merged back
+/// into the preceding `UnmatchedDiffs` for the same file to restore the
+/// round-trip representation that `diff_application_failure_to_proto` split.
+pub fn failures_from_proto_error(
+    error: &api::apply_file_diffs_result::Error,
+) -> Vec<DiffApplicationFailure> {
+    if error.failures.is_empty() {
+        // Old proto: no structured failures — wrap the back-compat message.
+        return vec![DiffApplicationFailure::Opaque {
+            message: error.message.clone(),
+        }];
+    }
+    let mut failures: Vec<DiffApplicationFailure> = error
+        .failures
+        .iter()
+        .filter_map(proto_failure_to_diff_application_failure)
+        .collect();
+    if failures.is_empty() {
+        // Every structured entry had an unrecognised kind (forward-compat). Fall
+        // back to the back-compat message so render() never returns an empty string.
+        return vec![DiffApplicationFailure::Opaque {
+            message: error.message.clone(),
+        }];
+    }
+    // Merge standalone ChangesAlreadyApplied entries back into the preceding
+    // UnmatchedDiffs for the same file. When diff_application_failure_to_proto encodes
+    // `UnmatchedDiffs { changes_already_applied_count: N > 0 }` it emits two separate
+    // proto entries; this restores the combined single-entry representation so that
+    // render() can produce the expected combined single-line wording after a round-trip.
+    let mut i = 0;
+    while i < failures.len() {
+        if let DiffApplicationFailure::ChangesAlreadyApplied { file: ref caa_file } = failures[i] {
+            let caa_file = caa_file.clone();
+            // Find the most-recent UnmatchedDiffs for the same file at an earlier index.
+            let merge_idx = (0..i).rev().find(|&j| {
+                matches!(
+                    &failures[j],
+                    DiffApplicationFailure::UnmatchedDiffs { file, .. } if file == &caa_file
+                )
+            });
+            if let Some(mi) = merge_idx {
+                if let DiffApplicationFailure::UnmatchedDiffs {
+                    changes_already_applied_count,
+                    ..
+                } = &mut failures[mi]
+                {
+                    *changes_already_applied_count =
+                        changes_already_applied_count.saturating_add(1);
+                }
+                failures.remove(i);
+                continue; // don't increment — element at i is now the next one
+            }
+        }
+        i += 1;
+    }
+    failures
+}
+
+/// Convert one proto [`api::apply_file_diffs_result::Failure`] to a
+/// [`DiffApplicationFailure`].
+///
+/// Returns `None` for entries without a recognised `kind` so they are
+/// silently skipped rather than panicking — future proto additions won't
+/// break old clients.
+fn proto_failure_to_diff_application_failure(
+    proto: &api::apply_file_diffs_result::Failure,
+) -> Option<DiffApplicationFailure> {
+    use api::apply_file_diffs_result::failure::Kind;
+
+    match proto.kind.as_ref()? {
+        Kind::UnmatchedDiffs(u) => Some(DiffApplicationFailure::UnmatchedDiffs {
+            file: u.file.clone(),
+            // Clamp to u8::MAX rather than silently truncating (256 → 0 would
+            // make render_one emit an empty string — PRODUCT 9 violation).
+            fuzzy_match_failure_count: u8::try_from(u.fuzzy_match_failure_count).unwrap_or(u8::MAX),
+            changes_already_applied_count: 0,
+            search_block_failures: u
+                .search_block_failures
+                .iter()
+                .map(|b| DiffSearchBlockFailure {
+                    search: b.search.clone(),
+                    // Convert proto 1-indexed inclusive end back to exclusive end.
+                    expected_range: if b.expected_start_line > 0 && b.expected_end_line > 0 {
+                        Some(
+                            b.expected_start_line as usize
+                                ..(b.expected_end_line as usize).saturating_add(1),
+                        )
+                    } else {
+                        None
+                    },
+                })
+                .collect(),
+        }),
+        Kind::ChangesAlreadyApplied(c) => Some(DiffApplicationFailure::ChangesAlreadyApplied {
+            file: c.file.clone(),
+        }),
+        Kind::MissingFile(m) => Some(DiffApplicationFailure::MissingFile {
+            file: m.file.clone(),
+        }),
+        Kind::ReadFailed(r) => Some(DiffApplicationFailure::ReadFailed {
+            file: r.file.clone(),
+        }),
+        Kind::AlreadyExists(a) => Some(DiffApplicationFailure::AlreadyExists {
+            file: a.file.clone(),
+        }),
+        Kind::MultipleFileCreation(m) => Some(DiffApplicationFailure::MultipleFileCreation {
+            file: m.file.clone(),
+        }),
+        Kind::MultipleFileRenames(m) => Some(DiffApplicationFailure::MultipleFileRenames {
+            file: m.file.clone(),
+        }),
+        Kind::MutatedDeletedFile(m) => Some(DiffApplicationFailure::MutatedDeletedFile {
+            file: m.file.clone(),
+        }),
+        Kind::NoDiffsApplicable(()) => Some(DiffApplicationFailure::NoDiffsApplicable),
+        Kind::RemoteFileOperationsUnsupported(()) => {
+            Some(DiffApplicationFailure::RemoteFileOperationsUnsupported)
+        }
+        Kind::Opaque(o) => Some(DiffApplicationFailure::Opaque {
+            message: o.message.clone(),
+        }),
     }
 }
 

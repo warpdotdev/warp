@@ -6,6 +6,9 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 
+use ai::agent::action_result::diff_application_failure::{
+    DiffApplicationFailure, DiffSearchBlockFailure,
+};
 use ai::diff_validation::{
     AIRequestedCodeDiff, DiffDelta, DiffMatchFailures, DiffType, ParsedDiff, SearchAndReplace,
     V4AHunk, fuzzy_match_diffs, fuzzy_match_v4a_diffs,
@@ -88,69 +91,6 @@ pub(crate) enum DiffApplicationError {
     RemoteFileOperationsUnsupported,
 }
 
-impl DiffApplicationError {
-    /// Format this error for inclusion in the agent conversation. The error should help the LLM
-    /// retry and generate a valid diff.
-    fn to_conversation_message(&self) -> String {
-        match self {
-            DiffApplicationError::UnmatchedDiffs {
-                file,
-                match_failures,
-            } => {
-                use std::fmt::Write;
-                let mut message = String::new();
-                if match_failures.fuzzy_match_failures > 0 {
-                    let _ = write!(message, "Could not apply all diffs to {file}.");
-                }
-
-                if match_failures.noop_deltas > 0 {
-                    if !message.is_empty() {
-                        message.push(' ');
-                    }
-                    let _ = write!(message, "The changes to {file} were already made.");
-                }
-                message
-            }
-            DiffApplicationError::MissingFile { file } => {
-                format!("{file} does not exist. Is the path correct?")
-            }
-            DiffApplicationError::AlreadyExists { file } => {
-                format!("Could not create {file} because it already exists.")
-            }
-            DiffApplicationError::ReadFailed { file, .. } => {
-                format!("Could not read {file}")
-            }
-            DiffApplicationError::MultipleFileCreation { file } => {
-                format!("There can only be one attempt to create {file}.")
-            }
-            DiffApplicationError::MultipleFileRenames { file } => {
-                format!("There can only be one attempt to rename {file}.")
-            }
-            DiffApplicationError::MutatedDeletedFile { file } => {
-                format!("Could not mutate a deleted file {file}.")
-            }
-            DiffApplicationError::EmptyDiff => "No diffs could be applied.".to_string(),
-            DiffApplicationError::RemoteFileOperationsUnsupported => {
-                "The file read/edit tool is not available on this remote session. Try using a different tool.".to_string()
-            }
-        }
-    }
-
-    /// Format a list of errors for inclusion in the agent conversation.
-    pub fn error_for_conversation(errors: &Vec1<DiffApplicationError>) -> String {
-        if errors.len() == 1 {
-            errors.first().to_conversation_message()
-        } else {
-            errors
-                .iter()
-                .format_with("\n", |err, f| {
-                    f(&format_args!("* {}", err.to_conversation_message()))
-                })
-                .to_string()
-        }
-    }
-}
-
 /// Given a list of suggested edits from the server API, parse it into applicable diffs to be shown
 /// to the user as a series of code diffs.
 ///
@@ -185,7 +125,7 @@ where
                     auth_state,
                     RequestFileEditsTelemetryEvent::DiffMatchFailed(DiffMatchFailedEvent {
                         identifiers: ai_identifiers.clone(),
-                        failures: *match_failures,
+                        failures: match_failures.clone(),
                         passive_diff,
                     }),
                     background_executor
@@ -653,7 +593,7 @@ async fn apply_search_replace<F, Fut>(
                 );
                 result.errors.push(DiffApplicationError::UnmatchedDiffs {
                     file: file_path.clone(),
-                    match_failures: *failures,
+                    match_failures: failures.clone(),
                 });
             }
             result.diffs.push(fuzzy_match_diffs);
@@ -751,7 +691,7 @@ async fn apply_v4a_update<F, Fut>(
                 );
                 result.errors.push(DiffApplicationError::UnmatchedDiffs {
                     file: file_path.clone(),
-                    match_failures: *failures,
+                    match_failures: failures.clone(),
                 });
             }
             return;
@@ -813,11 +753,81 @@ async fn apply_v4a_update<F, Fut>(
             );
             result.errors.push(DiffApplicationError::UnmatchedDiffs {
                 file: file_path.clone(),
-                match_failures: *failures,
+                match_failures: failures.clone(),
             });
         }
         result.diffs.push(diffs);
     }
+}
+
+/// Maps one [`DiffApplicationError`] to one or more [`DiffApplicationFailure`] entries.
+///
+/// `UnmatchedDiffs` that carries both fuzzy failures and noop deltas produces a
+/// single `UnmatchedDiffs` failure (so that `render()` keeps the combined
+/// single-entry wording). When `ChangesAlreadyApplied` is emitted as a
+/// stand-alone entry it is distinct; the proto layer separately emits a
+/// `ChangesAlreadyApplied` failure alongside `UnmatchedDiffs` when the counts
+/// are non-zero (see `convert.rs`).
+pub(crate) fn error_to_failures(error: &DiffApplicationError) -> Vec<DiffApplicationFailure> {
+    match error {
+        DiffApplicationError::UnmatchedDiffs {
+            file,
+            match_failures,
+        } => {
+            vec![DiffApplicationFailure::UnmatchedDiffs {
+                file: file.clone(),
+                fuzzy_match_failure_count: match_failures.fuzzy_match_failures,
+                changes_already_applied_count: match_failures.noop_deltas,
+                search_block_failures: match_failures
+                    .search_block_failures
+                    .iter()
+                    .map(|b| {
+                        // Store the raw (pre-truncation) search text so that
+                        // diff_application_failure_to_proto (in convert.rs) can apply
+                        // MAX_DIFF_MATCH_FAILURE_BYTES and set `truncated` correctly.
+                        // Applying the cap here AND in convert.rs would mean the second
+                        // cap never fires and `truncated` is always false (PRODUCT 8).
+                        DiffSearchBlockFailure {
+                            search: b.search.clone(),
+                            expected_range: b.expected_range.clone(),
+                        }
+                    })
+                    .collect(),
+            }]
+        }
+        DiffApplicationError::MissingFile { file } => {
+            vec![DiffApplicationFailure::MissingFile { file: file.clone() }]
+        }
+        DiffApplicationError::ReadFailed { file, .. } => {
+            vec![DiffApplicationFailure::ReadFailed { file: file.clone() }]
+        }
+        DiffApplicationError::AlreadyExists { file } => {
+            vec![DiffApplicationFailure::AlreadyExists { file: file.clone() }]
+        }
+        DiffApplicationError::MultipleFileCreation { file } => {
+            vec![DiffApplicationFailure::MultipleFileCreation { file: file.clone() }]
+        }
+        DiffApplicationError::MultipleFileRenames { file } => {
+            vec![DiffApplicationFailure::MultipleFileRenames { file: file.clone() }]
+        }
+        DiffApplicationError::MutatedDeletedFile { file } => {
+            vec![DiffApplicationFailure::MutatedDeletedFile { file: file.clone() }]
+        }
+        DiffApplicationError::EmptyDiff => {
+            vec![DiffApplicationFailure::NoDiffsApplicable]
+        }
+        DiffApplicationError::RemoteFileOperationsUnsupported => {
+            vec![DiffApplicationFailure::RemoteFileOperationsUnsupported]
+        }
+    }
+}
+
+/// Converts a list of [`DiffApplicationError`]s to a flat
+/// [`Vec<DiffApplicationFailure>`].
+pub(crate) fn errors_to_failures(
+    errors: &Vec1<DiffApplicationError>,
+) -> Vec<DiffApplicationFailure> {
+    errors.iter().flat_map(error_to_failures).collect()
 }
 
 #[cfg(test)]

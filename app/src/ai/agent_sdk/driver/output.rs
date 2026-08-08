@@ -99,8 +99,12 @@ pub mod text {
                     RequestFileEditsResult::Cancelled => {
                         writeln!(w, "{CANCELLED_MESSAGE}")
                     }
-                    RequestFileEditsResult::DiffApplicationFailed { error } => {
-                        writeln!(w, "Editing files failed: {error}")
+                    RequestFileEditsResult::DiffApplicationFailed { failures } => {
+                        writeln!(
+                            w,
+                            "Editing files failed: {}",
+                            ai::agent::action_result::diff_application_failure::render(failures)
+                        )
                     }
                 },
                 AIAgentActionResultType::ReadFiles(result) => match result {
@@ -887,9 +891,12 @@ pub mod json {
                     RequestFileEditsResult::Success { diff, .. } => Some(JsonMessage::ToolResult(
                         JsonToolResult::EditFiles(JsonEditFilesResult { diff }),
                     )),
-                    RequestFileEditsResult::DiffApplicationFailed { error } => {
+                    RequestFileEditsResult::DiffApplicationFailed { failures } => {
                         Some(JsonMessage::ToolError {
-                            error: Cow::Borrowed(error.as_str()),
+                            error: ai::agent::action_result::diff_application_failure::render(
+                                failures,
+                            )
+                            .into(),
                         })
                     }
                     RequestFileEditsResult::Cancelled => Some(JsonMessage::ToolCanceled),

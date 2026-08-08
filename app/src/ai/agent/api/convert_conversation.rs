@@ -800,8 +800,11 @@ pub(crate) fn convert_tool_call_result_to_input(
                     }
                 }
                 Some(api::apply_file_diffs_result::Result::Error(error)) => {
+                    // Read-back: delegate to the canonical conversion in
+                    // crates/ai/src/agent/action_result/convert.rs which is
+                    // also tested from convert_tests.rs.
                     RequestFileEditsResult::DiffApplicationFailed {
-                        error: error.message.clone(),
+                        failures: ai::agent::action_result::failures_from_proto_error(error),
                     }
                 }
                 None => RequestFileEditsResult::Cancelled,

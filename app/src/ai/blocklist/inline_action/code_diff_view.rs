@@ -361,7 +361,11 @@ impl RegisteredDiffStorage for WeakViewHandle<CodeDiffView> {
         let Some(view) = self.upgrade(app) else {
             log::warn!("RequestFileEdits review view vanished before execute");
             return futures::future::ready(RequestFileEditsResult::DiffApplicationFailed {
-                error: "The review surface holding these edits no longer exists".to_string(),
+                failures: vec![
+                    ai::agent::action_result::diff_application_failure::DiffApplicationFailure::Opaque {
+                        message: "The review surface holding these edits no longer exists".to_string(),
+                    }
+                ],
             })
             .boxed();
         };

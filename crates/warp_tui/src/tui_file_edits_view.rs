@@ -476,6 +476,7 @@ impl TuiFileEditsView {
             }
             Some(RequestFileEditsResult::Cancelled) => "File edits cancelled".to_string(),
             Some(RequestFileEditsResult::DiffApplicationFailed { .. }) => {
+                // Keep the TUI label concise; the full error is in the agent conversation.
                 "File edits failed".to_string()
             }
             None => "Preparing edits…".to_string(),
