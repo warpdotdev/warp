@@ -301,6 +301,72 @@ pub fn test_long_running_block_bottom_padding() {
 }
 
 #[test]
+fn finished_cr_progress_output_survives_subsequent_resizes() {
+    let progress_updates = [
+        "PROGRESS-0000 xxxxxxxxxxxxxxxxxxxx",
+        "PROGRESS-0001 xxxxxxxxxxxxxxxxxxxx",
+        "PROGRESS-0002 xxxxxxxxxxxxxxxxxxxx",
+    ];
+    let expected_output = [
+        "PROGRESS-0000 xxxxxx",
+        "PROGRESS-0001 xxxxxx",
+        "PROGRESS-0002 xxxxxxxxxxxxxxxxxxxx",
+    ]
+    .join("\n");
+    let assert_retained_output = |block: &Block| {
+        let output = block.output_grid().contents_to_string(false, None);
+        assert_eq!(output, expected_output);
+        for (row, expected_label) in
+            output
+                .lines()
+                .zip(["PROGRESS-0000", "PROGRESS-0001", "PROGRESS-0002"])
+        {
+            assert!(row.starts_with(expected_label));
+            assert_eq!(row.matches("PROGRESS-").count(), 1);
+        }
+    };
+
+    let mut block = TestBlockBuilder::new()
+        .with_size_info(SizeInfo::new_without_font_metrics(8, 20))
+        .build();
+    block.prompt_only_precmd(PromptMetadata::default());
+    block.start();
+    block.preexec(Default::default());
+
+    for (index, update) in progress_updates.into_iter().enumerate() {
+        if index > 0 {
+            block.carriage_return();
+        }
+        for c in update.chars() {
+            block.input(c);
+        }
+    }
+
+    // Reproduce the original pane-grow path while the block is unfinished.
+    block.resize(SizeInfo::new_without_font_metrics(8, 40));
+    assert_retained_output(&block);
+
+    // Once the block is finished, subsequent reflows must preserve the same
+    // hard line boundaries and must not concatenate retained progress labels.
+    block.finish(0);
+    assert_eq!(block.state(), BlockState::DoneWithExecution);
+
+    block.resize(SizeInfo::new_without_font_metrics(8, 16));
+    assert_retained_output(&block);
+    let output_grid = block.output_grid().grid_handler();
+    let expected_wraps = [true, false, true, false, true, true, false];
+    for (row, expected_wrap) in expected_wraps.into_iter().enumerate() {
+        assert_eq!(output_grid.row_wraps(row), expected_wrap);
+    }
+
+    block.resize(SizeInfo::new_without_font_metrics(8, 40));
+    assert_retained_output(&block);
+    for row in 0..3 {
+        assert!(!block.output_grid().grid_handler().row_wraps(row));
+    }
+}
+
+#[test]
 pub fn empty_pre_bootstrap_block_is_not_long_running() {
     warpui::r#async::block_on(async {
         let mut block = TestBlockBuilder::new()

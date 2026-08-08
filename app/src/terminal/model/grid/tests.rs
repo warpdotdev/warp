@@ -6,7 +6,7 @@ use warp_terminal::model::grid::cell;
 use super::*;
 use crate::features::FeatureFlag;
 use crate::terminal::SizeInfo;
-use crate::terminal::model::ansi::Handler;
+use crate::terminal::model::ansi::{Handler, LineClearMode, Mode};
 use crate::terminal::model::cell::{Cell, Flags};
 use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::index::{Point, VisiblePoint, VisibleRow};
@@ -504,6 +504,101 @@ fn grow_reflow_multiline() {
             assert_eq!(row[c], Cell::default());
         }
     }
+}
+
+#[test]
+fn grow_reflow_does_not_merge_carriage_return_overwritten_soft_wraps() {
+    let mut grid = GridHandler::new_for_test(4, 5);
+
+    for c in "abcdefgh".chars() {
+        grid.input(c);
+    }
+    grid.carriage_return();
+    grid.clear_line(LineClearMode::Right);
+
+    for c in "12345678".chars() {
+        grid.input(c);
+    }
+    // Exercise direct input as the first post-CR mutation; the first CR above
+    // exercises line erase as the first mutation.
+    grid.carriage_return();
+
+    for c in "WXYZ".chars() {
+        grid.input(c);
+    }
+
+    grid.resize(SizeInfo::new_without_font_metrics(4, 10));
+
+    let expected_rows = ["abcde", "12345", "WXYZ"];
+    for (row_idx, expected) in expected_rows.into_iter().enumerate() {
+        let row = grid.row(row_idx).expect("row should exist");
+        let actual = (0..expected.len())
+            .map(|col| row[col].c)
+            .collect::<String>();
+        assert_eq!(actual, expected);
+        assert!(!grid.row_wraps(row_idx));
+    }
+}
+
+/// Regression test for the key correctness invariant: a bare carriage return
+/// that is not followed by any mutation before the resize must NOT break the
+/// soft-wrap logical line. Only an actual write (or erase) should unlink the
+/// WRAPLINE. A lone \r just repositions the cursor; any resize occurring
+/// between the \r and the first mutation must still reflowing the two physical
+/// rows as one logical line.
+#[test]
+fn grow_reflow_preserves_soft_wrap_on_bare_cr_then_resize() {
+    // 5-col grid; "abcdefgh" soft-wraps:
+    //   row 0: "abcde" [WRAPLINE]
+    //   row 1: "fgh"   (cursor at col 3)
+    let mut grid = GridHandler::new_for_test(2, 5);
+    for c in "abcdefgh".chars() {
+        grid.input(c);
+    }
+
+    // Carriage return: cursor → (row 1, col 0). No content mutation.
+    grid.carriage_return();
+
+    // Resize to 10 cols immediately, with no write between CR and resize.
+    // The logical line "abcdefgh" must be preserved as one unit.
+    grid.resize(SizeInfo::new_without_font_metrics(2, 10));
+
+    // Correct reflow: "abcdefgh" (8 chars) fits on row 0 in 10 cols.
+    let row = grid.row(0).expect("row 0 should exist");
+    assert_eq!(row[0].c, 'a');
+    assert_eq!(row[1].c, 'b');
+    assert_eq!(row[2].c, 'c');
+    assert_eq!(row[3].c, 'd');
+    assert_eq!(row[4].c, 'e');
+    assert_eq!(row[5].c, 'f');
+    assert_eq!(row[6].c, 'g');
+    assert_eq!(row[7].c, 'h');
+    // Row 0 should not wrap any further.
+    assert!(!grid.row_wraps(0));
+}
+#[test]
+fn grow_reflow_preserves_soft_wrap_with_line_feed_new_line_mode() {
+    let mut grid = GridHandler::new_for_test(3, 5);
+    for c in "abcdefgh".chars() {
+        grid.input(c);
+    }
+
+    // In LINE_FEED_NEW_LINE mode, newline() performs a linefeed before its
+    // carriage return. The resulting write is on a new hard line and must not
+    // unlink the preceding soft-wrapped logical line.
+    grid.set_mode(Mode::LineFeedNewLine);
+    grid.newline();
+    grid.input('X');
+
+    grid.resize(SizeInfo::new_without_font_metrics(3, 10));
+
+    let first_row = grid.row(0).expect("row 0 should exist");
+    let first_line = (0..8).map(|col| first_row[col].c).collect::<String>();
+    assert_eq!(first_line, "abcdefgh");
+    assert!(!grid.row_wraps(0));
+
+    let second_row = grid.row(1).expect("row 1 should exist");
+    assert_eq!(second_row[0].c, 'X');
 }
 
 #[test]

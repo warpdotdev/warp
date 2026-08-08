@@ -89,6 +89,8 @@ pub(super) struct State {
 
     /// State related to the Reset Grid logic for ConPTY.
     reset_grid_checks: ResetGridChecks,
+    /// Continuation row whose preceding WRAPLINE should be removed on mutation.
+    pending_wrapline_unlink: Option<VisibleRow>,
 
     /// Range of cells that were dirtied during the current run of byte parsing. See
     /// [`Self::finish_byte_processing`] for where this is reset.
@@ -138,6 +140,7 @@ impl State {
             // Assume that the Grid supports emoji presentation selector, until set otherwise.
             supports_emoji_presentation_selector: true,
             reset_grid_checks,
+            pending_wrapline_unlink: None,
             dirty_cells_range: Default::default(),
             pane_size: size_info.pane_size_px(),
             keyboard_mode: KeyboardModes::NO_MODE,
@@ -198,6 +201,7 @@ impl ansi::Handler for GridHandler {
         let Some(width) = c.width() else {
             return;
         };
+        self.unlink_pending_wrapline();
 
         let num_cols = self.columns();
 
@@ -534,10 +538,26 @@ impl ansi::Handler for GridHandler {
 
     fn carriage_return(&mut self) {
         log::trace!("Carriage return");
+        // Note: WRAPLINE unlinking is deferred to the first actual mutation of
+        // the continuation row (input() or clear_line()).  A bare CR without a
+        // following write does not overwrite any content, so a resize that
+        // occurs between CR and the first mutation must still see the intact
+        // soft-wrapped logical line.
         self.update_cursor(|cursor| {
             cursor.point.col = 0;
             cursor.input_needs_wrap = false;
         });
+
+        let cursor_row = self.grid.cursor().point.row;
+        self.ansi_handler_state.pending_wrapline_unlink = (!self.ansi_handler_state.is_alt_screen
+            && cursor_row.0 > 0)
+            .then(|| VisibleRow(cursor_row.0 - 1))
+            .filter(|prev_row| {
+                self.grid[*prev_row][self.columns() - 1]
+                    .flags
+                    .contains(Flags::WRAPLINE)
+            })
+            .map(|_| cursor_row);
     }
 
     fn linefeed(&mut self) -> ScrollDelta {
@@ -747,6 +767,12 @@ impl ansi::Handler for GridHandler {
     fn clear_line(&mut self, mode: ansi::LineClearMode) {
         log::trace!("Clearing line: {mode:?}");
 
+        // When a CR overwrite is pending and erasing starts at column 0
+        // (CSI K / CSI 2 K), break the stale WRAPLINE link before clearing.
+        if matches!(mode, ansi::LineClearMode::Right | ansi::LineClearMode::All) {
+            self.unlink_pending_wrapline();
+        }
+
         let cursor = &self.grid.cursor();
         let bg = cursor.template.bg;
 
@@ -913,6 +939,7 @@ impl ansi::Handler for GridHandler {
         self.active_hyperlink_id = None;
 
         self.ansi_handler_state.active_charset = Default::default();
+        self.ansi_handler_state.pending_wrapline_unlink = None;
         self.ansi_handler_state.cursor_style = CursorStyle::default();
         self.ansi_handler_state.scroll_region = VisibleRow(0)..VisibleRow(self.visible_rows());
         self.ansi_handler_state.tabs = TabStops::new(self.columns());
@@ -1480,6 +1507,18 @@ impl ansi::Handler for GridHandler {
 
 /// Helper functions for the [`ansi::Handler`] implementation.
 impl GridHandler {
+    fn unlink_pending_wrapline(&mut self) {
+        let Some(pending_row) = self.ansi_handler_state.pending_wrapline_unlink.take() else {
+            return;
+        };
+
+        let cursor = self.grid.cursor().point;
+        if cursor.row == pending_row && cursor.col == 0 && cursor.row.0 > 0 {
+            let prev_row = VisibleRow(cursor.row.0 - 1);
+            let last_col = self.columns() - 1;
+            self.grid[prev_row][last_col].flags.remove(Flags::WRAPLINE);
+        }
+    }
     /// Advances the cursor by one cell, handling wrapping appropriately.
     fn advance_cursor_by_one_cell(&mut self) {
         let num_cols = self.columns();
