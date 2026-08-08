@@ -18,6 +18,11 @@ fn test_trim_newline() {
 /// TODO(CORE-3626): write an equivalent test with Windows paths.
 #[cfg(not(windows))]
 #[test]
+// Reads the ambient process PATH; must not race tests elsewhere in the crate that
+// temporarily override PATH (e.g. `local_harness_launch_tests`'s `EnvVarGuard`). Those
+// tests are already `#[serial_test::serial]`, so joining the same (default) serial group
+// here is what actually synchronizes against them. See #13980.
+#[serial_test::serial]
 fn test_resolve_command() {
     use std::path::Path;
 
