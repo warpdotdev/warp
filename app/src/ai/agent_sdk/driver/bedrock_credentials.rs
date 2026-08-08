@@ -35,7 +35,7 @@ pub(crate) const BEDROCK_CREDENTIALS_REFRESH_INTERVAL: Duration = Duration::from
 #[tracing::instrument(
     name = "bedrock_credentials::try_refresh",
     skip_all,
-    err,
+    err(Debug),
     fields(tags.cloud_agent = true, task_id)
 )]
 async fn try_refresh(
