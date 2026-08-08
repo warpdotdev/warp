@@ -78,7 +78,7 @@ use crate::workspaces::team::{DiscoverableTeam, MembershipRole, Team, TeamDelete
 use crate::workspaces::update_manager::{TeamUpdateManager, TeamUpdateManagerEvent};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::{
-    BillingMetadata, CustomerType, DelinquencyStatus, WorkspaceSizePolicy,
+    BillingMetadata, CustomerType, DelinquencyStatus, Workspace, WorkspaceSizePolicy,
 };
 
 const TEAM_MEMBERS_HEADER_POSITION_ID: &str = "team_settings:team_members_header";
@@ -86,6 +86,8 @@ const TEAM_MEMBERS_HEADER_POSITION_ID: &str = "team_settings:team_members_header
 const TEAM_NAME_EDITOR_PLACEHOLDER_TEXT: &str = "Team name";
 const CREATE_TEAM_BUTTON_LEFT_PADDING: f32 = 10.;
 const CREATE_TEAM_DESCRIPTION: &str = "When you create a team, you can collaborate on agent-driven development by sharing cloud agent runs, environments, automations, and artifacts. You can also create a shared knowledge store for teammates and agents alike.";
+const JOIN_TEAM_HEADER_WITH_CREATE: &str = "Or, join an existing team within your company";
+const JOIN_TEAM_HEADER_WITHOUT_CREATE: &str = "Join an existing team within your company";
 
 // Styling for team management page
 const LEAVE_TEAM_BUTTON_LABEL: &str = "Leave team";
@@ -1895,6 +1897,29 @@ impl From<ViewHandle<TeamsPageView>> for SettingsPageViewHandle {
 #[derive(Default)]
 struct TeamsWidget {
     mouse_state_handles: TeamsWidgetMouseHandles,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct CreateTeamPagePresentation {
+    show_create_team_section: bool,
+    show_discovery_separator: bool,
+    discovery_header: &'static str,
+}
+
+impl CreateTeamPagePresentation {
+    fn new(is_native_workspace: bool, is_workspace_admin: Option<bool>) -> Self {
+        let show_create_team_section =
+            !is_native_workspace || is_workspace_admin.unwrap_or_default();
+        Self {
+            show_create_team_section,
+            show_discovery_separator: show_create_team_section,
+            discovery_header: if show_create_team_section {
+                JOIN_TEAM_HEADER_WITH_CREATE
+            } else {
+                JOIN_TEAM_HEADER_WITHOUT_CREATE
+            },
+        }
+    }
 }
 
 impl TeamsWidget {
@@ -4006,74 +4031,85 @@ impl TeamsWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let mut page = Flex::column();
+        let user_workspaces = view.user_workspaces.as_ref(app);
+        let current_workspace = user_workspaces.current_workspace();
+        let is_native_workspace =
+            current_workspace.is_some_and(Workspace::is_native_workspaces_enabled);
+        let current_user_email = view.auth_state.user_email();
+        let is_workspace_admin = current_user_email.as_deref().and_then(|email| {
+            current_workspace.map(|workspace| workspace.is_workspace_admin(email))
+        });
+        let presentation = CreateTeamPagePresentation::new(is_native_workspace, is_workspace_admin);
 
-        // Title, subtitle, and description
         page.add_child(render_sub_header(appearance, "Teams".to_string(), None));
-        page.add_child(
-            self.render_sub_header_with_subtext_color(appearance, "Create a team".to_string()),
-        );
-        page.add_child(
-            Container::new(
-                self.render_description(CREATE_TEAM_DESCRIPTION.to_string(), appearance),
-            )
-            .with_padding_top(6.)
-            .finish(),
-        );
+        if presentation.show_create_team_section {
+            page.add_child(
+                self.render_sub_header_with_subtext_color(appearance, "Create a team".to_string()),
+            );
+            page.add_child(
+                Container::new(
+                    self.render_description(CREATE_TEAM_DESCRIPTION.to_string(), appearance),
+                )
+                .with_padding_top(6.)
+                .finish(),
+            );
 
-        if view.auth_state.is_on_work_domain().unwrap_or_default() {
-            let checkbox = Container::new(
-                appearance
-                    .ui_builder()
-                    .checkbox(self.mouse_state_handles.checkbox_mouse_state.clone(), None)
-                    .check(view.checkbox_value)
-                    .build()
-                    .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(
-                            TeamsPageAction::ToggleTeamDiscoverabilityBeforeCreation,
-                        )
-                    })
-                    .finish(),
-            )
-            .with_margin_left(-4.)
-            .finish();
-            let checkbox_row_text = if let Some(domain) = view.auth_state.user_email_domain() {
-                format!("Allow Warp users with an @{domain} email to find and join the team.")
-            } else {
-                "Allow Warp users with the same email domain as you to find and join the team."
-                    .to_string()
-            };
-            let checkbox_row = Container::new(
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(checkbox)
-                    .with_child(
-                        Shrinkable::new(1., self.render_description(checkbox_row_text, appearance))
+            if view.auth_state.is_on_work_domain().unwrap_or_default() {
+                let checkbox = Container::new(
+                    appearance
+                        .ui_builder()
+                        .checkbox(self.mouse_state_handles.checkbox_mouse_state.clone(), None)
+                        .check(view.checkbox_value)
+                        .build()
+                        .on_click(move |ctx, _, _| {
+                            ctx.dispatch_typed_action(
+                                TeamsPageAction::ToggleTeamDiscoverabilityBeforeCreation,
+                            )
+                        })
+                        .finish(),
+                )
+                .with_margin_left(-4.)
+                .finish();
+                let checkbox_row_text = if let Some(domain) = view.auth_state.user_email_domain() {
+                    format!("Allow Warp users with an @{domain} email to find and join the team.")
+                } else {
+                    "Allow Warp users with the same email domain as you to find and join the team."
+                        .to_string()
+                };
+                let checkbox_row = Container::new(
+                    Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_child(checkbox)
+                        .with_child(
+                            Shrinkable::new(
+                                1.,
+                                self.render_description(checkbox_row_text, appearance),
+                            )
                             .finish(),
-                    )
+                        )
+                        .finish(),
+                )
+                .with_padding_top(6.)
+                .finish();
+                page.add_child(checkbox_row);
+            }
+
+            page.add_child(
+                Container::new(self.render_create_team_actions(view, appearance, app))
+                    .with_padding_top(12.)
+                    .with_padding_bottom(12.)
                     .finish(),
-            )
-            .with_padding_top(6.)
-            .finish();
-            page.add_child(checkbox_row);
+            );
         }
 
-        // Team name editor
-        page.add_child(
-            Container::new(self.render_create_team_actions(view, appearance, app))
-                .with_padding_top(12.)
-                .with_padding_bottom(12.)
-                .finish(),
-        );
-
         if !view.discoverable_teams_states.is_empty() {
-            // Separator and subtitle
-            page.add_child(render_separator(appearance));
+            if presentation.show_discovery_separator {
+                page.add_child(render_separator(appearance));
+            }
             page.add_child(self.render_sub_header_with_subtext_color(
                 appearance,
-                "Or, join an existing team within your company".to_string(),
+                presentation.discovery_header.to_string(),
             ));
-
-            // Team discovery
             page.add_child(self.render_team_discovery_section(view, appearance));
         }
 

@@ -96,10 +96,12 @@ impl Workspace {
     }
 
     pub fn is_native_workspaces_enabled(&self) -> bool {
-        self.billing_metadata
-            .tier
-            .native_workspaces_policy
-            .is_some_and(|policy| policy.enabled)
+        self.teams.len() > 1
+            && self
+                .billing_metadata
+                .tier
+                .native_workspaces_policy
+                .is_some_and(|policy| policy.enabled)
     }
 
     pub fn resolve_usage_visibility(&self, is_admin: bool) -> UsageVisibility {
