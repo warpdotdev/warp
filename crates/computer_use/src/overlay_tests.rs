@@ -55,10 +55,7 @@ fn maps_semantic_labels_in_action_order() {
         screen(Action::KeyDown { key: enter.clone() }),
         screen(Action::KeyUp { key: enter }),
     ];
-    assert_eq!(
-        overlay_labels_for(&actions, "mixed"),
-        ["ctrl+a", "typing\u{2026}", "scroll \u{2193}", "Return"]
-    );
+    assert_eq!(overlay_labels_for(&actions, "mixed"), ["ctrl+a", "Return"]);
 }
 
 #[test]
@@ -71,9 +68,32 @@ fn redacts_printable_keys_and_omits_pointer_actions() {
             key: Key::Char('p'),
         }),
     ];
+    assert!(overlay_labels_for(&printable, "Key \"ctrl+p\"").is_empty());
+
+    let typed = [screen(Action::TypeText {
+        text: "secret".to_string(),
+    })];
+    assert!(overlay_labels_for(&typed, "Type \"secret\"").is_empty());
+    let shortcut_and_typed_text = [
+        screen(Action::KeyDown {
+            key: Key::Keycode(0xFFE3),
+        }),
+        screen(Action::KeyDown {
+            key: Key::Char('a'),
+        }),
+        screen(Action::KeyUp {
+            key: Key::Char('a'),
+        }),
+        screen(Action::KeyUp {
+            key: Key::Keycode(0xFFE3),
+        }),
+        screen(Action::TypeText {
+            text: "secret".to_string(),
+        }),
+    ];
     assert_eq!(
-        overlay_labels_for(&printable, "Key \"ctrl+p\""),
-        ["typing\u{2026}"]
+        overlay_labels_for(&shortcut_and_typed_text, "Key \"ctrl+a\"; Type \"secret\""),
+        ["ctrl+a"]
     );
 
     let omitted = [
@@ -94,18 +114,60 @@ fn redacts_printable_keys_and_omits_pointer_actions() {
 
 #[test]
 fn maps_all_scroll_directions_without_distance() {
-    for (direction, label) in [
-        (ScrollDirection::Up, "scroll \u{2191}"),
-        (ScrollDirection::Down, "scroll \u{2193}"),
-        (ScrollDirection::Left, "scroll \u{2190}"),
-        (ScrollDirection::Right, "scroll \u{2192}"),
+    for direction in [
+        ScrollDirection::Up,
+        ScrollDirection::Down,
+        ScrollDirection::Left,
+        ScrollDirection::Right,
     ] {
         let actions = [screen(Action::MouseWheel {
             at: Vector2I::new(0, 0),
             direction,
             distance: ScrollDistance::Pixels(100),
         })];
-        assert_eq!(overlay_labels_for(&actions, "irrelevant"), [label]);
+        assert!(overlay_labels_for(&actions, "irrelevant").is_empty());
+    }
+}
+
+#[test]
+fn preserves_non_visible_key_overlays() {
+    let ctrl_a = [
+        screen(Action::KeyDown {
+            key: Key::Keycode(0xFFE3),
+        }),
+        screen(Action::KeyDown {
+            key: Key::Char('a'),
+        }),
+        screen(Action::KeyUp {
+            key: Key::Char('a'),
+        }),
+        screen(Action::KeyUp {
+            key: Key::Keycode(0xFFE3),
+        }),
+    ];
+    assert_eq!(overlay_labels_for(&ctrl_a, "Key \"ctrl+a\""), ["ctrl+a"]);
+
+    for (key, label) in [
+        (0xFF0D, "Return"),
+        (0xFF09, "Tab"),
+        (0xFF1B, "Escape"),
+        (0xFF51, "Left"),
+        (0xFF52, "Up"),
+        (0xFF53, "Right"),
+        (0xFF54, "Down"),
+    ] {
+        let actions = [
+            screen(Action::KeyDown {
+                key: Key::Keycode(key),
+            }),
+            screen(Action::KeyUp {
+                key: Key::Keycode(key),
+            }),
+        ];
+        assert_eq!(
+            overlay_labels_for(&actions, &format!("Key \"{label}\"")),
+            [label]
+        );
     }
 }
 
@@ -175,7 +237,7 @@ fn bottom_center_pill_style_and_dimensions() {
 #[test]
 fn labels_in_a_group_share_timing_and_position() {
     let ass = build_overlay_ass(
-        &[entry(1000, 2000, &["ctrl+a", "typing…", "Return"])],
+        &[entry(1000, 2000, &["ctrl+a", "Return"])],
         (1920, 1080),
         SOURCE_TEN_SECS,
         FRAME_RATE_15,
@@ -184,25 +246,24 @@ fn labels_in_a_group_share_timing_and_position() {
         .lines()
         .filter(|line| line.starts_with("Dialogue:"))
         .collect::<Vec<_>>();
-    assert_eq!(dialogue_lines.len(), 3);
+    assert_eq!(dialogue_lines.len(), 2);
     assert!(
         dialogue_lines
             .iter()
             .all(|line| line.contains("0:00:00.25,0:00:02.25"))
     );
-    assert!(dialogue_lines[0].contains("\\pos(715,990)}ctrl+a"));
-    assert!(dialogue_lines[1].contains("\\pos(959,990)}typing…"));
-    assert!(dialogue_lines[2].contains("\\pos(1204,990)}Return"));
+    assert!(dialogue_lines[0].contains("\\pos(845,990)}ctrl+a"));
+    assert!(dialogue_lines[1].contains("\\pos(1075,990)}Return"));
 }
 
 #[test]
 fn entries_are_ordered_by_timecode() {
     let entries = vec![
-        entry(5000, 6000, &["typing…"]),
+        entry(5000, 6000, &["Return"]),
         entry(1000, 2000, &["ctrl+a"]),
     ];
     let ass = build_overlay_ass(&entries, (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
-    assert!(ass.find("ctrl+a").unwrap() < ass.find("typing…").unwrap());
+    assert!(ass.find("ctrl+a").unwrap() < ass.find("Return").unwrap());
 }
 
 #[test]
@@ -630,20 +691,20 @@ fn mixed_group_renders_pill_and_pointer_without_leaking_text() {
     let mixed = pointer_entry(
         1000,
         2000,
-        &["typing\u{2026}"],
+        &["ctrl+a"],
         vec![down(1000, 50, 60), up(1000, 50, 60)],
     );
     let ass = build_overlay_ass(&[mixed], (1280, 720), SOURCE_TEN_SECS, FRAME_RATE_15);
     assert!(
         pill_dialogues(&ass)
             .iter()
-            .any(|line| line.contains("typing\u{2026}")),
+            .any(|line| line.contains("ctrl+a")),
         "{ass}"
     );
     assert_eq!(ring_dialogues(&ass).len(), 1, "{ass}");
     // No typed text leaks into any pointer (Cursor) dialogue.
     for line in cursor_dialogues(&ass) {
-        assert!(!line.contains("typing"), "{line}");
+        assert!(!line.contains("ctrl+a"), "{line}");
     }
 }
 
