@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::fmt;
 
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
@@ -171,7 +172,7 @@ impl ChannelState {
     }
 
     pub fn debug_str() -> String {
-        format!("{:?}", *CHANNEL_STATE.lock())
+        CHANNEL_STATE.lock().to_string()
     }
 
     pub fn logfile_name() -> Cow<'static, str> {
@@ -398,6 +399,59 @@ impl ChannelState {
             Channel::Local => "warplocal",
             Channel::Oss => "warposs",
         }
+    }
+}
+
+impl fmt::Display for ChannelState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "Channel: {}", self.channel)?;
+        if !self.additional_features.is_empty() {
+            writeln!(
+                f,
+                "Channel-specific features: {:?}",
+                self.additional_features
+            )?;
+        }
+        writeln!(f, "App ID: {}", self.config.app_id)?;
+
+        writeln!(f, "Server config:")?;
+        writeln!(f, "    API: {}", self.config.server_config.server_root_url)?;
+        writeln!(f, "    RTC: {}", self.config.server_config.rtc_server_url)?;
+        if let Some(session_sharing_url) = self
+            .config
+            .server_config
+            .session_sharing_server_url
+            .as_ref()
+        {
+            writeln!(f, "    Session sharing: {session_sharing_url}")?;
+        }
+        writeln!(f, "    Oz: {}", self.config.oz_config.oz_root_url)?;
+
+        if self.config.telemetry_config.is_some() || self.config.crash_reporting_config.is_some() {
+            writeln!(f, "Telemetry and crash reporting:")?;
+            if let Some(rudderstack_config) = self
+                .config
+                .telemetry_config
+                .as_ref()
+                .and_then(|c| c.rudderstack_config.as_ref())
+            {
+                writeln!(f, "    RudderStack URL: {}", rudderstack_config.root_url)?;
+            }
+            if let Some(crash_reporting_config) = self.config.crash_reporting_config.as_ref() {
+                writeln!(f, "    Sentry URL: {}", crash_reporting_config.sentry_url)?;
+            }
+        }
+
+        if let Some(static_mcp_config) = self.config.mcp_static_config.as_ref() {
+            if !static_mcp_config.providers.is_empty() {
+                writeln!(f, "Static MCP server providers:")?;
+                for server in static_mcp_config.providers.iter() {
+                    writeln!(f, "    - {} @ {}", server.client_id, server.issuer)?;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
