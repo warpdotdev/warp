@@ -37,8 +37,9 @@ reviewing or editing a file.
    another view of the same path does not satisfy the wait.
 
 4. Reordering or moving the target among panes, workspace tabs, or windows does
-   not complete the wait. If a move merges it into an already-open view of the
-   same path and removes the original logical view, the wait completes.
+   not complete the wait. If a move merges the target into an already-open view
+   of the same path, the wait transfers to the surviving view and completes when
+   that view closes.
 
 5. The wait succeeds when the target leaves the visible layout, whether closed
    directly or through its containing pane, workspace tab, or window. Warp's
