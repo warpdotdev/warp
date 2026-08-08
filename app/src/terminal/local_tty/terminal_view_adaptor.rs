@@ -1369,6 +1369,16 @@ impl TerminalManager<TerminalView> {
   					// (telemetry, draft clear, editor buffer clear, pending-image consumption).
                     terminal_view.update(ctx, |view, ctx| {
                         view.submit_text_to_cli_agent_pty(request.prompt.clone(), ctx);
+
+                        // This path never dispatches through the Oz agent pipeline, so no
+                        // `SentRequest` fires to restore the frozen state and clear the shared
+                        // buffer. Do both explicitly, otherwise an accepted follow-up leaves its
+                        // text sitting in the input for the sharer and, once the requester's
+                        // optimistic display-only clear is materialized, for the requester too.
+                        view.input().update(ctx, |input, ctx| {
+                            input.unfreeze_agent_input(false, ctx);
+                            input.clear_buffer_after_shared_session_agent_prompt(ctx);
+                        });
                     });
                     return;
                 }

@@ -14,8 +14,8 @@ use crate::ai::agent::{
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment, PendingFile, RequestInput,
-    ResponseStream, ResponseStreamId,
+    BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    PendingAttachment, PendingFile, RequestInput, ResponseStream, ResponseStreamId,
 };
 use crate::ai::llms::LLMId;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
@@ -487,5 +487,123 @@ fn optimistic_cli_subagent_completion_with_in_flight_stream_reports_success() {
                 Some(&crate::ai::agent::conversation::ConversationStatus::Success)
             );
         });
+    });
+}
+
+/// A steer submitted into a conversation that is *not* the terminal surface's active (most
+/// recently streamed) conversation must still be dispatched.
+///
+/// `send_query` used to cancel only the active conversation's progress, so a query routed to a
+/// different conversation — a shared-session steer resolved from a server token, a fired queued
+/// row, or a conversation whose stream was started passively — left that conversation's stream in
+/// flight. `send_request_input` then refused the query because of the in-flight request and
+/// discarded it: no error surfaced to the user, and no `SentRequest` fired, so the input was never
+/// cleared either.
+#[test]
+fn steering_a_non_active_conversation_dispatches_the_request() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let user_query_requests = Arc::new(Mutex::new(0usize));
+        let requests_for_subscription = Arc::clone(&user_query_requests);
+        let controller = terminal.read(&app, |view, _| view.ai_controller().clone());
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&controller, move |_, event, _| {
+                if matches!(
+                    event,
+                    BlocklistAIControllerEvent::SentRequest {
+                        contains_user_query: true,
+                        ..
+                    }
+                ) {
+                    *requests_for_subscription.lock().unwrap() += 1;
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            let terminal_surface_id = view.id();
+            let steered_stream_id = ResponseStreamId::new_for_test();
+            let steered_conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    let steered_conversation_id = history.start_new_conversation(
+                        terminal_surface_id,
+                        false,
+                        false,
+                        false,
+                        ctx,
+                    );
+                    let task_id = history
+                        .conversation(&steered_conversation_id)
+                        .unwrap()
+                        .get_root_task_id()
+                        .clone();
+                    history
+                        .update_conversation_for_new_request_input(
+                            RequestInput {
+                                conversation_id: steered_conversation_id,
+                                input_messages: HashMap::from([(task_id, vec![])]),
+                                working_directory: None,
+                                model_id: LLMId::from("test-model"),
+                                coding_model_id: LLMId::from("test-coding-model"),
+                                cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+                                computer_use_model_id: LLMId::from("test-computer-use-model"),
+                                shared_session_response_initiator: None,
+                                request_start_ts: Local::now(),
+                                supported_tools_override: None,
+                            },
+                            steered_stream_id.clone(),
+                            terminal_surface_id,
+                            ctx,
+                        )
+                        .unwrap();
+
+                    // A second conversation on the same surface is the active one, so the steer's
+                    // target and the active conversation diverge.
+                    let other_conversation_id = history.start_new_conversation(
+                        terminal_surface_id,
+                        false,
+                        false,
+                        false,
+                        ctx,
+                    );
+                    history.mark_active_conversation_id(
+                        other_conversation_id,
+                        terminal_surface_id,
+                        ctx,
+                    );
+
+                    steered_conversation_id
+                });
+
+            let stream = ctx.add_model(|_| ResponseStream::new_for_test(steered_stream_id.clone()));
+            view.ai_controller().update(ctx, |controller, ctx| {
+                controller.register_mock_stream_for_test(
+                    steered_stream_id,
+                    steered_conversation_id,
+                    stream,
+                    ctx,
+                );
+                assert!(
+                    controller.has_active_stream_for_conversation(steered_conversation_id, ctx),
+                    "the steered conversation must be mid-response for this regression"
+                );
+
+                controller.send_user_query_in_conversation(
+                    "actually, run the tests first".to_owned(),
+                    steered_conversation_id,
+                    None,
+                    ctx,
+                );
+            });
+        });
+
+        assert_eq!(
+            *user_query_requests.lock().unwrap(),
+            1,
+            "the steer must be dispatched, not dropped, when the target conversation still has \
+             an in-flight stream"
+        );
     });
 }
