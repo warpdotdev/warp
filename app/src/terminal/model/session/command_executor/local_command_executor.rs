@@ -20,6 +20,51 @@ fn kill_all_processes_in_process_group(pid: u32) -> Result<(), nix::Error> {
     // Killing a negative PID kills all processes in this process group
     kill(Pid::from_raw(-(pid as i32)), Signal::SIGKILL)
 }
+#[cfg(unix)]
+fn terminate_process_group(process_group_id: u32) {
+    if let Err(error) = kill_all_processes_in_process_group(process_group_id) {
+        match error {
+            nix::errno::Errno::ESRCH | nix::errno::Errno::EPERM => {}
+            _ => log::warn!("Failed to kill process group {process_group_id}: {error}"),
+        }
+    }
+}
+
+struct SpawnedChildCleanup {
+    child_pid: u32,
+    spawned_children_pids: Arc<Mutex<HashSet<u32>>>,
+    armed: bool,
+}
+
+impl SpawnedChildCleanup {
+    fn new(child_pid: u32, spawned_children_pids: Arc<Mutex<HashSet<u32>>>) -> Self {
+        spawned_children_pids.lock().insert(child_pid);
+        Self {
+            child_pid,
+            spawned_children_pids,
+            armed: true,
+        }
+    }
+
+    fn disarm(mut self) {
+        self.spawned_children_pids.lock().remove(&self.child_pid);
+        self.armed = false;
+    }
+}
+
+impl Drop for SpawnedChildCleanup {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+
+        let mut spawned_children_pids = self.spawned_children_pids.lock();
+        if spawned_children_pids.remove(&self.child_pid) {
+            #[cfg(unix)]
+            terminate_process_group(self.child_pid);
+        }
+    }
+}
 
 enum CommandBuilder<'a> {
     #[cfg(windows)]
@@ -61,6 +106,10 @@ impl CommandBuilder<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "local_command_executor_tests.rs"]
+mod tests;
 
 /// `CommandExecutor` implementation that executes the given `command` in a forked subshell process
 /// where the current working directory is set to `current_dir_path` and $PATH is set
@@ -201,8 +250,8 @@ impl LocalCommandExecutor {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        let child_pid = child.id();
-        self.spawned_children_pids.lock().insert(child_pid);
+        let child_cleanup =
+            SpawnedChildCleanup::new(child.id(), self.spawned_children_pids.clone());
 
         let output = child
             .output()
@@ -215,8 +264,9 @@ impl LocalCommandExecutor {
                 );
                 anyhow!(e)
             });
-
-        self.spawned_children_pids.lock().remove(&child_pid);
+        if output.is_ok() {
+            child_cleanup.disarm();
+        }
         output
     }
 }
@@ -249,19 +299,14 @@ impl CommandExecutor for LocalCommandExecutor {
     }
 
     fn cancel_active_commands(&self) {
-        let spawned_children_pids = std::mem::take(&mut *self.spawned_children_pids.lock());
-        for _pid in spawned_children_pids {
-            // TODO(roland): handle for windows
+        let mut spawned_children_pids = self.spawned_children_pids.lock();
+        for child_pid in spawned_children_pids.drain() {
             #[cfg(unix)]
-            if let Err(e) = kill_all_processes_in_process_group(_pid) {
-                match e {
-                    // Ignore errors that occur when the process is no longer running,
-                    // or if we cannot kill all processes in the process group.  These
-                    // are expected to happen occasionally.
-                    nix::errno::Errno::ESRCH | nix::errno::Errno::EPERM => {}
-                    _ => log::warn!("Failed to kill process {_pid}: {e}"),
-                }
-            }
+            terminate_process_group(child_pid);
+
+            // TODO(roland): handle for windows
+            #[cfg(windows)]
+            let _ = child_pid;
         }
     }
 }
