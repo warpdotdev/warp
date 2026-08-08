@@ -235,6 +235,9 @@ struct InFlightConversationRename {
     previous_root_task_description: String,
     previous_server_metadata_title: Option<String>,
     previous_cached_metadata_title: Option<String>,
+    /// The newest title requested while this rename was still in flight. Only the latest
+    /// request is kept; titles the user has already renamed past are never sent.
+    queued_title: Option<String>,
 }
 
 /// A single agent prompt-history candidate with prompt text and start_ts.
@@ -677,43 +680,84 @@ impl BlocklistAIHistoryModel {
                 previous_root_task_description,
                 previous_server_metadata_title,
                 previous_cached_metadata_title,
+                queued_title: None,
             },
         );
         self.apply_conversation_title(conversation_id, title, ctx);
         Ok(server_conversation_token)
     }
 
+    /// Records `title` as the newest name requested while a rename is already in flight,
+    /// applying it locally so the UI reflects the latest request immediately. The queued
+    /// title is handed back when the in-flight rename settles so the caller can send it to
+    /// the server; without it the earlier name would win the race.
+    ///
+    /// Returns whether the title was queued, which is false when no rename is in flight.
+    pub(crate) fn queue_conversation_rename(
+        &mut self,
+        conversation_id: AIConversationId,
+        title: String,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let Some(rename) = self
+            .in_flight_conversation_renames
+            .get_mut(&conversation_id)
+        else {
+            return false;
+        };
+        rename.queued_title = Some(title.clone());
+        self.apply_conversation_title(conversation_id, title, ctx);
+        true
+    }
+
     /// Completes an in-flight rename and applies any server-normalized title.
+    ///
+    /// Returns the title requested while this rename was in flight, if any. That newer title
+    /// is already applied locally, so the server normalization of the superseded name is
+    /// discarded rather than overwriting it.
     pub(crate) fn complete_conversation_rename(
         &mut self,
         conversation_id: AIConversationId,
         title: String,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> Option<String> {
         let Some(rename) = self.in_flight_conversation_renames.remove(&conversation_id) else {
             log::warn!(
                 "complete_conversation_rename called for conversation {conversation_id:?} with no in-flight rename"
             );
-            return;
+            return None;
         };
+
+        if rename.queued_title.is_some() {
+            return rename.queued_title;
+        }
 
         if rename.attempted_title != title {
             self.apply_conversation_title(conversation_id, title, ctx);
         }
+        None
     }
 
     /// Reverts an in-flight rename to the captured previous title snapshot.
+    ///
+    /// Returns the title requested while this rename was in flight, if any. In that case the
+    /// snapshot is stale — the user has since asked for a newer name — so the newer name is
+    /// kept instead of being reverted.
     pub(crate) fn fail_conversation_rename(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> Option<String> {
         let Some(rename) = self.in_flight_conversation_renames.remove(&conversation_id) else {
             log::warn!(
                 "fail_conversation_rename called for conversation {conversation_id:?} with no in-flight rename"
             );
-            return;
+            return None;
         };
+
+        if rename.queued_title.is_some() {
+            return rename.queued_title;
+        }
 
         let terminal_surface_id = self.terminal_surface_id_for_conversation(&conversation_id);
 
@@ -748,7 +792,7 @@ impl BlocklistAIHistoryModel {
         };
 
         if !updated {
-            return;
+            return None;
         }
 
         ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationTitle {
@@ -756,6 +800,7 @@ impl BlocklistAIHistoryModel {
             conversation_id,
             title,
         });
+        None
     }
 
     /// Applies a conversation title locally and notifies title observers.

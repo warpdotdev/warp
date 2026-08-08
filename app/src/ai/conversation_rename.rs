@@ -4,7 +4,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{BeginConversationRenameError, BlocklistAIHistoryModel};
 use crate::server::server_api::ServerApiProvider;
 use crate::view_components::DismissibleToast;
-use crate::workspace::ToastStack;
+use crate::workspace::{ToastStack, WorkspaceAction};
 
 const CONVERSATION_TITLE_MAX_CHARS: usize = 500;
 
@@ -16,6 +16,16 @@ const RENAME_IN_PROGRESS_MESSAGE: &str = "A rename is already in progress for th
 const CONVERSATION_NOT_READY_MESSAGE: &str =
     "Your conversation is still syncing. Try renaming it again in a moment.";
 
+/// Whether a rename reports its outcome to the user.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RenameFeedback {
+    /// The user asked for this rename, so every outcome is worth a toast.
+    Reported,
+    /// The rename is a side effect of another action, so a conversation that cannot be
+    /// renamed is not a failure the user needs to hear about.
+    Quiet,
+}
+
 /// Renames a conversation locally and triggers a conversation rename on the server.
 ///
 /// Renaming is only exposed for open conversations, so the conversation is expected
@@ -25,13 +35,30 @@ pub(crate) fn rename_conversation<T: View>(
     title: String,
     ctx: &mut ViewContext<T>,
 ) {
+    rename_conversation_with_feedback(conversation_id, title, RenameFeedback::Reported, ctx);
+}
+
+/// Renames a conversation the user renamed indirectly — e.g. by renaming the pane hosting
+/// it — without surfacing any toast. A conversation that cannot be renamed (not yet synced,
+/// empty, still loading) leaves the triggering action intact and reports nothing.
+pub(crate) fn rename_conversation_quietly<T: View>(
+    conversation_id: AIConversationId,
+    title: String,
+    ctx: &mut ViewContext<T>,
+) {
+    rename_conversation_with_feedback(conversation_id, title, RenameFeedback::Quiet, ctx);
+}
+
+fn rename_conversation_with_feedback<T: View>(
+    conversation_id: AIConversationId,
+    title: String,
+    feedback: RenameFeedback,
+    ctx: &mut ViewContext<T>,
+) {
     let title = match validate_conversation_title(title) {
         Ok(title) => title,
         Err(message) => {
-            let window_id = ctx.window_id();
-            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                toast_stack.add_ephemeral_toast(DismissibleToast::error(message), window_id, ctx);
-            });
+            show_toast(feedback, DismissibleToast::error(message), ctx);
             return;
         }
     };
@@ -39,14 +66,11 @@ pub(crate) fn rename_conversation<T: View>(
         .conversation(&conversation_id)
         .is_some_and(|conversation| conversation.is_empty())
     {
-        let window_id = ctx.window_id();
-        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            toast_stack.add_ephemeral_toast(
-                DismissibleToast::error(EMPTY_CONVERSATION_MESSAGE.to_owned()),
-                window_id,
-                ctx,
-            );
-        });
+        show_toast(
+            feedback,
+            DismissibleToast::error(EMPTY_CONVERSATION_MESSAGE.to_owned()),
+            ctx,
+        );
         return;
     }
     if conversation_already_has_title(conversation_id, &title, ctx) {
@@ -54,9 +78,17 @@ pub(crate) fn rename_conversation<T: View>(
     }
 
     let history = BlocklistAIHistoryModel::handle(ctx);
-    let server_conversation_id = match history.update(ctx, |history, ctx| {
+    let begin_result = history.update(ctx, |history, ctx| {
         history.begin_conversation_rename(conversation_id, title.clone(), ctx)
-    }) {
+    });
+    if matches!(
+        begin_result,
+        Err(BeginConversationRenameError::RenameInProgress)
+    ) && queue_rename_behind_in_flight(conversation_id, title.clone(), feedback, ctx)
+    {
+        return;
+    }
+    let server_conversation_id = match begin_result {
         Ok(server_conversation_id) => server_conversation_id,
         Err(err) => {
             let message = match err {
@@ -69,14 +101,7 @@ pub(crate) fn rename_conversation<T: View>(
                     CONVERSATION_NOT_READY_MESSAGE
                 }
             };
-            let window_id = ctx.window_id();
-            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                toast_stack.add_ephemeral_toast(
-                    DismissibleToast::error(message.to_owned()),
-                    window_id,
-                    ctx,
-                );
-            });
+            show_toast(feedback, DismissibleToast::error(message.to_owned()), ctx);
             return;
         }
     };
@@ -89,36 +114,84 @@ pub(crate) fn rename_conversation<T: View>(
                 .await
         },
         move |_, result, ctx| {
-            let window_id = ctx.window_id();
+            let history = BlocklistAIHistoryModel::handle(ctx);
             match result {
                 Ok(response) => {
                     let title = response.title;
-                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                        history.complete_conversation_rename(conversation_id, title.clone(), ctx);
+                    let queued_title = history.update(ctx, |history, ctx| {
+                        history.complete_conversation_rename(conversation_id, title.clone(), ctx)
                     });
-                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                        toast_stack.add_ephemeral_toast(
-                            DismissibleToast::success(format!("Conversation renamed to {title}")),
-                            window_id,
-                            ctx,
-                        );
-                    });
+                    let applied_title = queued_title.clone().unwrap_or(title);
+                    show_toast(
+                        feedback,
+                        DismissibleToast::success(format!(
+                            "Conversation renamed to {applied_title}"
+                        )),
+                        ctx,
+                    );
+                    resume_queued_rename(conversation_id, queued_title, ctx);
                 }
                 Err(e) => {
-                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                        history.fail_conversation_rename(conversation_id, ctx);
+                    let queued_title = history.update(ctx, |history, ctx| {
+                        history.fail_conversation_rename(conversation_id, ctx)
                     });
-                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                        toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(format!("Failed to rename conversation: {e}")),
-                            window_id,
-                            ctx,
-                        );
-                    });
+                    show_toast(
+                        feedback,
+                        DismissibleToast::error(format!("Failed to rename conversation: {e}")),
+                        ctx,
+                    );
+                    resume_queued_rename(conversation_id, queued_title, ctx);
                 }
             }
         },
     );
+}
+
+/// Holds `title` as the conversation's newest requested name while an earlier rename is
+/// still in flight, so a burst of renames settles on the last one instead of the first.
+///
+/// Only an indirect rename is coalesced. A direct rename already tells the user it collided
+/// with an in-flight one, so it keeps reporting that rather than silently deferring.
+/// Returns whether the title was queued.
+fn queue_rename_behind_in_flight<T: View>(
+    conversation_id: AIConversationId,
+    title: String,
+    feedback: RenameFeedback,
+    ctx: &mut ViewContext<T>,
+) -> bool {
+    if feedback != RenameFeedback::Quiet {
+        return false;
+    }
+    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+        history.queue_conversation_rename(conversation_id, title, ctx)
+    })
+}
+
+/// Sends the title that was queued behind the rename that just settled. It is already
+/// applied locally, so this only brings the server in line with what the user sees.
+fn resume_queued_rename<T: View>(
+    conversation_id: AIConversationId,
+    queued_title: Option<String>,
+    ctx: &mut ViewContext<T>,
+) {
+    let Some(title) = queued_title else {
+        return;
+    };
+    rename_conversation_with_feedback(conversation_id, title, RenameFeedback::Quiet, ctx);
+}
+
+fn show_toast<T: View>(
+    feedback: RenameFeedback,
+    toast: DismissibleToast<WorkspaceAction>,
+    ctx: &mut ViewContext<T>,
+) {
+    if feedback == RenameFeedback::Quiet {
+        return;
+    }
+    let window_id = ctx.window_id();
+    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+        toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+    });
 }
 
 /// Returns whether the conversation's current local title already matches `title`,

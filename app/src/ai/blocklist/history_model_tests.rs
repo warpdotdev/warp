@@ -549,6 +549,147 @@ fn begin_conversation_rename_rejects_second_rename_while_in_flight() {
 }
 
 #[test]
+fn queue_conversation_rename_applies_the_newer_title_and_supersedes_the_server_response() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let conversation_id = AIConversationId::new();
+        let conversation = AIConversation::new_restored(
+            conversation_id,
+            vec![warp_multi_agent_api::Task {
+                id: "root-task".to_string(),
+                messages: vec![],
+                dependencies: None,
+                description: "Generated title".to_string(),
+                summary: String::new(),
+                server_data: String::new(),
+            }],
+            None,
+        )
+        .expect("conversation should restore");
+
+        let (queued, resumed_title) = history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.set_server_conversation_token_for_conversation(
+                conversation_id,
+                "server-conversation-token".to_string(),
+            );
+            model
+                .begin_conversation_rename(conversation_id, "Manual title".to_string(), ctx)
+                .expect("rename should begin");
+            let queued =
+                model.queue_conversation_rename(conversation_id, "Second title".to_string(), ctx);
+            let resumed_title = model.complete_conversation_rename(
+                conversation_id,
+                "Normalized title".to_string(),
+                ctx,
+            );
+            (queued, resumed_title)
+        });
+
+        assert!(queued);
+        assert_eq!(resumed_title.as_deref(), Some("Second title"));
+        history_model.read(&app, |model, _| {
+            let conversation = model
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            assert_eq!(conversation.title().as_deref(), Some("Second title"));
+            assert!(
+                !model
+                    .in_flight_conversation_renames
+                    .contains_key(&conversation_id)
+            );
+        });
+    });
+}
+
+#[test]
+fn fail_conversation_rename_keeps_a_queued_title_instead_of_reverting() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let conversation_id = AIConversationId::new();
+        let conversation = AIConversation::new_restored(
+            conversation_id,
+            vec![warp_multi_agent_api::Task {
+                id: "root-task".to_string(),
+                messages: vec![],
+                dependencies: None,
+                description: "Generated title".to_string(),
+                summary: String::new(),
+                server_data: String::new(),
+            }],
+            None,
+        )
+        .expect("conversation should restore");
+
+        let resumed_title = history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.set_server_conversation_token_for_conversation(
+                conversation_id,
+                "server-conversation-token".to_string(),
+            );
+            model
+                .begin_conversation_rename(conversation_id, "Manual title".to_string(), ctx)
+                .expect("rename should begin");
+            model.queue_conversation_rename(conversation_id, "Second title".to_string(), ctx);
+            model.fail_conversation_rename(conversation_id, ctx)
+        });
+
+        assert_eq!(resumed_title.as_deref(), Some("Second title"));
+        history_model.read(&app, |model, _| {
+            let conversation = model
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            assert_eq!(conversation.title().as_deref(), Some("Second title"));
+            assert!(
+                !model
+                    .in_flight_conversation_renames
+                    .contains_key(&conversation_id)
+            );
+        });
+    });
+}
+
+#[test]
+fn queue_conversation_rename_is_a_no_op_without_an_in_flight_rename() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let conversation_id = AIConversationId::new();
+        let conversation = AIConversation::new_restored(
+            conversation_id,
+            vec![warp_multi_agent_api::Task {
+                id: "root-task".to_string(),
+                messages: vec![],
+                dependencies: None,
+                description: "Generated title".to_string(),
+                summary: String::new(),
+                server_data: String::new(),
+            }],
+            None,
+        )
+        .expect("conversation should restore");
+
+        let queued = history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.queue_conversation_rename(conversation_id, "Second title".to_string(), ctx)
+        });
+
+        assert!(!queued);
+        history_model.read(&app, |model, _| {
+            let conversation = model
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            assert_eq!(conversation.title().as_deref(), Some("Generated title"));
+        });
+    });
+}
+
+#[test]
 fn start_new_child_conversation_persists_harness_metadata() {
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);

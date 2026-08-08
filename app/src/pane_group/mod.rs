@@ -59,6 +59,7 @@ use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, InputConfig, SerializedBlockListItem};
+use crate::ai::conversation_rename::rename_conversation_quietly;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
 use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -4409,6 +4410,38 @@ impl PaneGroup {
     /// The generic pane with the given pane ID, if it exists.
     pub fn pane_by_id(&self, pane_id: PaneId) -> Option<&dyn PaneContent> {
         self.content_by_pane_id(pane_id).map(|pane| pane.as_pane())
+    }
+
+    /// Applies a user-chosen name to a pane, also renaming the agent conversation the pane
+    /// hosts so conversation history lists and finds it under that name.
+    pub fn set_custom_pane_name(
+        &self,
+        pane_id: PaneId,
+        title: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(pane_configuration) = self
+            .pane_by_id(pane_id)
+            .map(|pane| pane.pane_configuration())
+        else {
+            log::warn!("Tried to rename a missing pane");
+            return;
+        };
+        let conversation_id = self
+            .terminal_view_from_pane_id(pane_id, ctx)
+            .and_then(|terminal_view| terminal_view.as_ref(ctx).active_conversation_id(ctx));
+
+        pane_configuration.update(ctx, |configuration, ctx| {
+            configuration.set_custom_vertical_tabs_title(title.clone(), ctx);
+        });
+
+        // An empty name clears the custom pane title, and a conversation title has no
+        // equivalent unset state, so only a real name is worth syncing.
+        if let Some(conversation_id) = conversation_id.filter(|_| !title.trim().is_empty()) {
+            rename_conversation_quietly(conversation_id, title, ctx);
+        }
+
+        ctx.emit(Event::AppStateChanged);
     }
 
     /// Get a pane's contents by ID. This returns `None` if the pane does not exist or is of the
