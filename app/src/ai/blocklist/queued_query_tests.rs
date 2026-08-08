@@ -5,11 +5,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use session_sharing_protocol::common::{AgentPromptRequestId, ServerConversationToken, SessionId};
 use warpui::{App, SingletonEntity};
 
 use super::{
-    AutofireAction, QueuedQuery, QueuedQueryEvent, QueuedQueryId, QueuedQueryModel,
-    QueuedQueryOrigin,
+    AutofireAction, DisconnectedViewerTarget, QueuedQuery, QueuedQueryEvent, QueuedQueryId,
+    QueuedQueryModel, QueuedQueryOrigin,
 };
 use crate::ai::agent::ImageContext;
 use crate::ai::agent::conversation::AIConversationId;
@@ -52,6 +53,19 @@ fn initial_cloud_mode_query(text: &str) -> QueuedQuery {
 
 fn command_query(text: &str) -> QueuedQuery {
     QueuedQuery::new_command(text.to_owned(), QueuedQueryOrigin::AutoQueueToggle)
+}
+
+fn disconnected_viewer_target() -> DisconnectedViewerTarget {
+    DisconnectedViewerTarget::new(SessionId::new(), Some(ServerConversationToken::new()))
+}
+
+fn disconnected_viewer_query(text: &str, attachments: Vec<PendingAttachment>) -> QueuedQuery {
+    QueuedQuery::new_disconnected_viewer(
+        text.to_owned(),
+        attachments,
+        AgentPromptRequestId::new(),
+        disconnected_viewer_target(),
+    )
 }
 
 fn image_attachment(file_name: &str) -> PendingAttachment {
@@ -1062,5 +1076,198 @@ fn remove_pending_lrc_rows_no_ops_when_no_pending_rows() {
 
         assert!(events.borrow().is_empty());
         model.read(&app, |m, _| assert_eq!(m.queue(conv).len(), 1));
+    });
+}
+
+#[test]
+fn disconnected_viewer_row_stays_user_managed() {
+    // The row is the user's prompt, not a placeholder the client owns, so every panel control has
+    // to keep working on it while it waits for a retry.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let attachment = image_attachment("screenshot.png");
+        let query = disconnected_viewer_query("retry me", vec![attachment]);
+        let target = query
+            .disconnected_viewer_target()
+            .expect("a disconnected-viewer row carries its retry target")
+            .clone();
+        let query_id = model.update(&mut app, |m, ctx| m.append(conv, query, ctx));
+
+        model.read(&app, |m, _| {
+            let row = &m.queue(conv)[0];
+            assert_eq!(row.origin(), QueuedQueryOrigin::DisconnectedViewer);
+            assert!(!row.is_locked(), "the row must remain editable and movable");
+            assert_eq!(row.attachments().len(), 1);
+            assert_eq!(row.disconnected_viewer_target(), Some(&target));
+        });
+
+        let removed = model.update(&mut app, |m, ctx| m.remove_by_id(conv, query_id, ctx));
+        assert!(
+            removed.is_some(),
+            "deleting the row must cancel the pending retry"
+        );
+    });
+}
+
+#[test]
+fn claiming_the_head_hands_it_to_exactly_one_caller() {
+    // Two lifecycle triggers can fire back to back (a rejoin and a conversation-finished event,
+    // say). Taking the row out of the queue is what stops both from dispatching it.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let first = append_user(&model, &mut app, conv, "first");
+        let second = append_user(&model, &mut app, conv, "second");
+
+        let claim = model
+            .update(&mut app, |m, ctx| m.claim_prompt_head(conv, ctx))
+            .expect("the head is claimable");
+        assert_eq!(claim.query().id(), first);
+
+        let second_claim = model
+            .update(&mut app, |m, ctx| m.claim_prompt_head(conv, ctx))
+            .expect("the next row becomes the head once the first is claimed");
+        assert_eq!(
+            second_claim.query().id(),
+            second,
+            "a second claim must never return the already-claimed row"
+        );
+
+        model.read(&app, |m, _| assert!(m.queue(conv).is_empty()));
+    });
+}
+
+#[test]
+fn restoring_a_claim_puts_the_row_back_at_its_original_position() {
+    // A failed attempt must not reorder the user's queue.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let first = append_user(&model, &mut app, conv, "first");
+        let second = append_user(&model, &mut app, conv, "second");
+
+        let claim = model
+            .update(&mut app, |m, ctx| m.claim_prompt_head(conv, ctx))
+            .expect("the head is claimable");
+        model.update(&mut app, |m, ctx| m.restore_claim(claim, ctx));
+
+        model.read(&app, |m, _| {
+            let queue = m.queue(conv);
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue[0].id(), first);
+            assert_eq!(queue[1].id(), second);
+        });
+    });
+}
+
+#[test]
+fn restoring_a_claim_can_retarget_it_without_losing_the_row() {
+    // A prompt that failed on the viewer path becomes a disconnected-viewer row in place; the user
+    // should see the same row change state, not a duplicate appear.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let attachment = image_attachment("diagram.png");
+        let query_id = model.update(&mut app, |m, ctx| {
+            m.append(
+                conv,
+                QueuedQuery::new_with_attachments(
+                    "needs a retry".to_owned(),
+                    QueuedQueryOrigin::QueueSlashCommand,
+                    vec![attachment],
+                ),
+                ctx,
+            )
+        });
+        append_user(&model, &mut app, conv, "behind it");
+
+        let claim = model
+            .update(&mut app, |m, ctx| m.claim_prompt_head(conv, ctx))
+            .expect("the head is claimable");
+        let target = disconnected_viewer_target();
+        model.update(&mut app, |m, ctx| {
+            m.retarget_claim_to_disconnected_viewer(claim, target.clone(), ctx)
+        });
+
+        model.read(&app, |m, _| {
+            let queue = m.queue(conv);
+            assert_eq!(queue.len(), 2, "retargeting must not duplicate the row");
+            let row = &queue[0];
+            assert_eq!(row.id(), query_id, "the row keeps its identity");
+            assert_eq!(row.text(), "needs a retry");
+            assert_eq!(row.attachments().len(), 1);
+            assert_eq!(row.origin(), QueuedQueryOrigin::DisconnectedViewer);
+            assert_eq!(row.disconnected_viewer_target(), Some(&target));
+        });
+    });
+}
+
+#[test]
+fn a_locked_or_command_head_is_not_claimable() {
+    // Claiming bypasses the autofire gating, so it has to re-apply the same protections.
+    with_model(|mut app, model, _events| {
+        let locked_conv = AIConversationId::new();
+        model.update(&mut app, |m, ctx| {
+            m.append(locked_conv, initial_cloud_mode_query("locked"), ctx)
+        });
+        assert!(
+            model
+                .update(&mut app, |m, ctx| m.claim_prompt_head(locked_conv, ctx))
+                .is_none()
+        );
+
+        let command_conv = AIConversationId::new();
+        model.update(&mut app, |m, ctx| {
+            m.append(command_conv, command_query("ls"), ctx)
+        });
+        assert!(
+            model
+                .update(&mut app, |m, ctx| m.claim_prompt_head(command_conv, ctx))
+                .is_none(),
+            "a shell command is not an agent prompt and must not be claimed as one"
+        );
+
+        let editing_conv = AIConversationId::new();
+        let editing_id = append_user(&model, &mut app, editing_conv, "mid-edit");
+        model.update(&mut app, |m, ctx| {
+            m.enter_edit_mode(editing_conv, editing_id, ctx)
+        });
+        assert!(
+            model
+                .update(&mut app, |m, ctx| m.claim_prompt_head(editing_conv, ctx))
+                .is_none(),
+            "a row the user is editing must not be sent out from under them"
+        );
+    });
+}
+
+#[test]
+fn committing_an_edit_retires_the_rows_request_id() {
+    // An acknowledgement for the text the user just replaced must not be able to resolve — and so
+    // remove — the edited row.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let query_id = append_user(&model, &mut app, conv, "original");
+        let original_request_id = model.read(&app, |m, _| {
+            m.queue(conv)[0]
+                .request_id()
+                .expect("a prompt row carries a request id")
+                .clone()
+        });
+
+        model.update(&mut app, |m, ctx| {
+            m.enter_edit_mode(conv, query_id, ctx);
+            m.commit_edit(conv, "edited".to_owned(), ctx);
+        });
+
+        model.read(&app, |m, _| {
+            assert_eq!(m.queue(conv)[0].text(), "edited");
+            assert!(
+                m.row_for_request_id(conv, &original_request_id).is_none(),
+                "the pre-edit request id must no longer resolve to any row"
+            );
+            let current = m.queue(conv)[0]
+                .request_id()
+                .expect("the edited row has a fresh request id");
+            assert_ne!(current, &original_request_id);
+            assert!(m.row_for_request_id(conv, current).is_some());
+        });
     });
 }

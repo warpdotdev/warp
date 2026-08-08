@@ -11,16 +11,21 @@
 //! `HiddenForClose` (undo-close grace window) and `Moved`.
 
 use async_broadcast::broadcast;
+use futures_util::stream::AbortHandle;
+use session_sharing_protocol::common::AgentPromptRequestId;
+use session_sharing_protocol::viewer::UpstreamMessage;
 use warpui::App;
 
 use super::*;
-use crate::ai::blocklist::QueuedQueryModel;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
+use crate::ai::blocklist::{QueuedQueryModel, QueuedQueryOrigin};
 // Bring the `TerminalManager` trait into scope (named under a different alias
 // since the local `TerminalManager` struct shadows it) so the trait method
 // `on_view_detached` is callable on the struct.
 use crate::terminal::TerminalManager as _;
 use crate::terminal::model::session::Sessions;
+use crate::terminal::shared_session::viewer::network::Stage;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::workspace::ToastStack;
@@ -223,6 +228,232 @@ fn on_view_detached_moved_keeps_orchestration_viewer_model_alive() {
                 me.viewer_mode_consumer_count_for_test(parent),
                 1,
                 "Moved must NOT unregister from the streamer"
+            );
+        });
+    });
+}
+
+/// Builds an executor viewer pane whose network is attached and wired through
+/// `handle_view_events`, the same subscription `connect_session` installs.
+///
+/// `stage` is the whole point of these tests: the pane reports `ActiveViewer` either way, so only
+/// the network's stage separates a deliverable prompt from an undeliverable one.
+fn viewer_pane_with_network(
+    app: &mut App,
+    stage: Stage,
+) -> (
+    ViewHandle<TerminalView>,
+    crate::ai::agent::conversation::AIConversationId,
+    ModelHandle<Network>,
+) {
+    initialize_app_for_terminal_view(app);
+    app.add_singleton_model(|_| ToastStack);
+
+    let terminal_view = add_window_with_terminal(app, None);
+    let terminal_view_id = terminal_view.id();
+    let model = terminal_view.read(app, |view, _| view.model.clone());
+    {
+        let mut model = model.lock();
+        model.block_list_mut().set_bootstrapped();
+        model
+            .block_list_mut()
+            .active_block_for_test()
+            .set_session_id(crate::terminal::model::session::SessionId::from(0));
+        model.set_shared_session_status(SharedSessionStatus::executor());
+    }
+
+    // Entering agent view is what makes a conversation *selected*, which is how the submission
+    // path resolves the queue that owns a fallback row.
+    let conversation_id = terminal_view.update(app, |view, ctx| {
+        view.agent_view_controller().update(ctx, |controller, ctx| {
+            controller
+                .try_enter_agent_view(
+                    None,
+                    AgentViewEntryOrigin::Input {
+                        was_prompt_autodetected: false,
+                    },
+                    ctx,
+                )
+                .expect("the pane can enter agent view")
+        })
+    });
+    BlocklistAIHistoryModel::handle(app).update(app, |history, ctx| {
+        history.set_active_conversation_id(conversation_id, terminal_view_id, ctx);
+    });
+
+    let channel_event_proxy = ChannelEventListener::new_for_test();
+    let (_write_to_pty_tx, write_to_pty_rx) = async_channel::unbounded();
+    let network = app.add_model(|ctx| {
+        Network::new_for_test(
+            channel_event_proxy,
+            terminal_view.downgrade(),
+            model.clone(),
+            write_to_pty_rx,
+            RemoteUpdateGuard::new(),
+            ctx,
+        )
+    });
+    network.update(app, |network, _| {
+        network.stage = stage;
+    });
+
+    let current_network = Arc::new(FairMutex::new(Some(network.clone())));
+    app.update(|ctx| {
+        TerminalManager::handle_view_events(
+            current_network,
+            &terminal_view,
+            model,
+            RemoteUpdateGuard::new(),
+            ctx,
+        );
+    });
+
+    (terminal_view, conversation_id, network)
+}
+
+fn reconnecting_stage() -> Stage {
+    let (abort_handle, _registration) = AbortHandle::new_pair();
+    Stage::Reconnecting { abort_handle }
+}
+
+fn submit_viewer_prompt(app: &mut App, terminal_view: &ViewHandle<TerminalView>, prompt: &str) {
+    let input = terminal_view.read(app, |view, _| view.input().clone());
+    input.update(app, |input, ctx| {
+        input.replace_buffer_content(prompt, ctx);
+    });
+    input.update(app, |input, ctx| {
+        input.maybe_route_ai_query_to_remote_target(ctx);
+    });
+    // The submission emits from `Input`, which `TerminalView` re-emits and the manager consumes;
+    // each hop is delivered on an effect flush.
+    app.update(|_| ());
+    app.update(|_| ());
+}
+
+/// Drains the outbound proxy channel and returns the single agent-prompt request on it. The
+/// channel also carries CRDT input updates for the same submission, so the prompt has to be
+/// picked out rather than assumed to be first.
+fn sent_agent_prompt(
+    network: &ModelHandle<Network>,
+    app: &App,
+) -> session_sharing_protocol::common::AgentPromptRequest {
+    let mut requests = drain_agent_prompts(network, app);
+    assert_eq!(
+        requests.len(),
+        1,
+        "exactly one agent prompt should have reached the network"
+    );
+    requests.remove(0)
+}
+
+fn drain_agent_prompts(
+    network: &ModelHandle<Network>,
+    app: &App,
+) -> Vec<session_sharing_protocol::common::AgentPromptRequest> {
+    let ws_proxy_rx = network.read(app, |network, _| network.ws_proxy_rx.clone());
+    let mut requests = Vec::new();
+    while let Ok(message) = ws_proxy_rx.try_recv() {
+        if let UpstreamMessage::SendAgentPrompt(request) = message {
+            requests.push(request);
+        }
+    }
+    requests
+}
+
+#[test]
+fn viewer_prompt_submitted_while_reconnecting_is_preserved_as_an_editable_queue_row() {
+    // The reported bug. `SharedSessionStatus` still says `ActiveViewer` while the websocket
+    // reconnects, so the prompt was routed to a network that dropped it silently: nothing reached
+    // the sharer, nothing was kept, and the input stayed frozen. The prompt must now survive as
+    // the user's own queue row.
+    App::test((), |mut app| async move {
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        let (terminal_view, conversation_id, network) =
+            viewer_pane_with_network(&mut app, reconnecting_stage());
+        let session_id = network.read(&app, |network, _| network.session_id());
+
+        submit_viewer_prompt(&mut app, &terminal_view, "finish the refactor");
+
+        assert!(
+            drain_agent_prompts(&network, &app).is_empty(),
+            "a reconnecting network cannot carry the prompt"
+        );
+        QueuedQueryModel::handle(&app).read(&app, |queue_model, _| {
+            let queue = queue_model.queue(conversation_id);
+            assert_eq!(
+                queue.len(),
+                1,
+                "the undelivered prompt must be preserved as exactly one queue row"
+            );
+            let row = &queue[0];
+            assert_eq!(row.text(), "finish the refactor");
+            assert_eq!(row.origin(), QueuedQueryOrigin::DisconnectedViewer);
+            assert!(!row.is_locked(), "the row must be editable and deletable");
+            let target = row
+                .disconnected_viewer_target()
+                .expect("the row records where it should be retried");
+            assert_eq!(
+                target.session_id(),
+                session_id,
+                "the row must stay pinned to the session it was addressed to"
+            );
+        });
+    });
+}
+
+#[test]
+fn viewer_prompt_delivered_to_a_joined_session_leaves_no_queue_row() {
+    // The happy path must be untouched: a prompt the sharer acknowledges belongs to the sharer,
+    // and no fallback row should linger in the panel.
+    App::test((), |mut app| async move {
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        let (terminal_view, conversation_id, network) =
+            viewer_pane_with_network(&mut app, Stage::JoinedSuccessfully);
+
+        submit_viewer_prompt(&mut app, &terminal_view, "ship it");
+
+        let request = sent_agent_prompt(&network, &app);
+        assert_eq!(request.prompt, "ship it");
+        QueuedQueryModel::handle(&app).read(&app, |queue_model, _| {
+            assert!(
+                queue_model.queue(conversation_id).is_empty(),
+                "a locally accepted prompt must not produce a visible fallback row"
+            );
+        });
+
+        terminal_view.update(&mut app, |view, ctx| {
+            assert!(
+                view.on_viewer_prompt_acknowledged(&request.id, ctx),
+                "the pane's own request id must resolve"
+            );
+        });
+        QueuedQueryModel::handle(&app).read(&app, |queue_model, _| {
+            assert!(queue_model.queue(conversation_id).is_empty());
+        });
+    });
+}
+
+#[test]
+fn an_unrelated_or_duplicate_acknowledgement_resolves_nothing() {
+    // Matching by request id is what makes a late echo for a retired revision, or a duplicate of
+    // one already handled, incapable of resolving a prompt twice.
+    App::test((), |mut app| async move {
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        let (terminal_view, _conversation_id, network) =
+            viewer_pane_with_network(&mut app, Stage::JoinedSuccessfully);
+
+        submit_viewer_prompt(&mut app, &terminal_view, "ship it");
+        let request = sent_agent_prompt(&network, &app);
+
+        terminal_view.update(&mut app, |view, ctx| {
+            assert!(
+                !view.on_viewer_prompt_acknowledged(&AgentPromptRequestId::new(), ctx),
+                "an acknowledgement for a request this pane never sent must be a no-op"
+            );
+            assert!(view.on_viewer_prompt_acknowledged(&request.id, ctx));
+            assert!(
+                !view.on_viewer_prompt_acknowledged(&request.id, ctx),
+                "a duplicate acknowledgement must be a no-op"
             );
         });
     });

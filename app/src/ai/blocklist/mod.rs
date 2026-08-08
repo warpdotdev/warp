@@ -127,7 +127,8 @@ pub(crate) use persistence::PersistedAIInputType;
 pub use persistence::maybe_build_ai_query_upsert_event;
 pub(crate) use persistence::{PersistedAIInput, SerializedBlockListItem};
 pub(crate) use queued_query::{
-    AutofireAction, QueuedQuery, QueuedQueryId, QueuedQueryOrigin, is_lrc_auto_queue_active,
+    AutofireAction, ClaimedQuery, DisconnectedViewerTarget, QueuedQuery, QueuedQueryId,
+    QueuedQueryOrigin, is_lrc_auto_queue_active,
 };
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use queued_query::{QueuedQueryEvent, QueuedQueryModel};

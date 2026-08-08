@@ -53,7 +53,9 @@ use parking_lot::Mutex;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use session_sharing_protocol::common::{AgentAttachment, ParticipantId, ServerConversationToken};
+use session_sharing_protocol::common::{
+    AgentAttachment, AgentPromptRequestId, ParticipantId, ServerConversationToken,
+};
 use settings::{Setting as _, ToggleableSetting};
 use string_offset::{ByteOffset, CharOffset};
 use vec1::Vec1;
@@ -176,7 +178,7 @@ use crate::ai::blocklist::{
     AttachmentType, BLOCK_CONTEXT_ATTACHMENT_REGEX, BlocklistAIActionModel,
     BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
     BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    BlocklistAIInputEvent, BlocklistAIInputModel, DIFF_HUNK_ATTACHMENT_REGEX,
+    BlocklistAIInputEvent, BlocklistAIInputModel, ClaimedQuery, DIFF_HUNK_ATTACHMENT_REGEX,
     DRIVE_OBJECT_ATTACHMENT_REGEX, InputConfig, InputType, InputTypeAutoDetectionSource,
     PendingAttachment, PendingFile, QueuedQuery, QueuedQueryEvent, QueuedQueryId, QueuedQueryModel,
     QueuedQueryOrigin, SlashCommandRequest, ai_brand_color, ai_indicator_height,
@@ -1036,6 +1038,8 @@ pub enum Event {
     },
     /// A viewer in a shared session is requesting to send an agent prompt.
     SendAgentPrompt {
+        /// Everything needed to recover the prompt if the sharer never receives it.
+        dispatch: Box<ViewerPromptDispatch>,
         server_conversation_token: Option<ServerConversationToken>,
         prompt: String,
         attachments: Vec<AgentAttachment>,
@@ -1126,6 +1130,81 @@ pub enum Event {
     StartRemoteControl,
     OpenHandoffEnvironmentCreationModal,
     OpenCloudModeV2EnvironmentCreationModal,
+}
+
+/// Everything needed to keep one viewer prompt recoverable until the sharer acknowledges it.
+///
+/// The transport payload on [`Event::SendAgentPrompt`] is lossy: attachments have already been
+/// uploaded and reduced to references, and the text has left the editor. This travels alongside
+/// it so a send the client rejects — or one the server never acknowledges — can be turned back
+/// into an editable queue row carrying the user's original intent.
+#[derive(Clone, Debug)]
+pub struct ViewerPromptDispatch {
+    /// Correlates this send with the server's `AgentPromptRequestInFlight` acknowledgement.
+    request_id: AgentPromptRequestId,
+    /// The conversation the prompt belongs to, and therefore the queue that owns its fallback
+    /// row. `None` when no conversation is selected, in which case there is no queue to file to.
+    conversation_id: Option<AIConversationId>,
+    prompt: String,
+    /// The attachments as user intent, retained across the asynchronous upload so a post-upload
+    /// rejection can still file a row that carries them.
+    pending_attachments: Vec<PendingAttachment>,
+    /// Set when this send is retrying a row already claimed out of the queue; restoring the claim
+    /// puts that exact row back rather than filing a duplicate.
+    claim: Option<ClaimedQuery>,
+    /// Whether the conversation was already running a turn when this prompt was submitted. If it
+    /// was, an earlier turn owns the in-progress state and a failed send must not clear it.
+    conversation_was_in_progress: bool,
+}
+
+impl ViewerPromptDispatch {
+    pub fn new(
+        conversation_id: Option<AIConversationId>,
+        prompt: String,
+        pending_attachments: Vec<PendingAttachment>,
+        claim: Option<ClaimedQuery>,
+        conversation_was_in_progress: bool,
+    ) -> Self {
+        // Reuse the claimed row's stable ID so a late acknowledgement for an earlier attempt on
+        // the same unedited row still resolves to it.
+        let request_id = claim
+            .as_ref()
+            .and_then(|claim| claim.query().request_id())
+            .cloned()
+            .unwrap_or_default();
+        Self {
+            request_id,
+            conversation_id,
+            prompt,
+            pending_attachments,
+            claim,
+            conversation_was_in_progress,
+        }
+    }
+
+    pub fn request_id(&self) -> &AgentPromptRequestId {
+        &self.request_id
+    }
+
+    pub fn conversation_was_in_progress(&self) -> bool {
+        self.conversation_was_in_progress
+    }
+
+    pub fn conversation_id(&self) -> Option<AIConversationId> {
+        self.conversation_id
+    }
+
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
+    pub fn pending_attachments(&self) -> &[PendingAttachment] {
+        &self.pending_attachments
+    }
+
+    pub fn take_claim(&mut self) -> Option<ClaimedQuery> {
+        self.claim.take()
+    }
 }
 
 pub enum InputState {
@@ -4187,7 +4266,10 @@ impl Input {
     /// caller should handle the local case (submit locally for Enter, or emit the default
     /// unhandled-cmd-enter action for Cmd+Enter). Also returns `false` for an executor viewer
     /// running a local-action slash command such as `/fork`.
-    fn maybe_route_ai_query_to_remote_target(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+    pub(crate) fn maybe_route_ai_query_to_remote_target(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
         // Nothing to route for an empty buffer; let the caller's normal (no-op) handling run.
         if self.editor.as_ref(ctx).buffer_text(ctx).trim().is_empty() {
             return false;
@@ -14029,15 +14111,28 @@ impl Input {
                 });
 
         if is_ready_for_cloud_followup {
-            // Cloud follow-up does not support attachments; a queued row's attachments are dropped
-            // when the row is removed after dispatch.
-            let drops_attachments = !QueuedQueryModel::as_ref(ctx)
+            let pending_attachments = QueuedQueryModel::as_ref(ctx)
                 .attachments_for(conversation_id, query_id)
-                .is_empty();
-            if drops_attachments {
-                log::warn!(
-                    "Dropping attachments on a queued cloud follow-up prompt; cloud follow-up does not support attachments"
+                .to_vec();
+            let task_id = self
+                .ambient_agent_view_model()
+                .and_then(|ambient_agent_model| ambient_agent_model.as_ref(ctx).task_id());
+            // A new VM execution downloads the task's attachments at startup, so they must reach
+            // the task definition before the follow-up dispatches.
+            if let Some(task_id) = task_id
+                .filter(|_| Self::should_upload_cloud_followup_attachments(&pending_attachments))
+            {
+                let claim = QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.claim_prompt_head(conversation_id, ctx)
+                });
+                self.upload_files_then_submit_queued_cloud_followup(
+                    task_id,
+                    prompt,
+                    pending_attachments,
+                    claim,
+                    ctx,
                 );
+                return;
             }
             ctx.emit(Event::SubmitCloudFollowup { prompt });
             return;
@@ -14078,19 +14173,38 @@ impl Input {
             if self.editor.as_ref(ctx).buffer_text(ctx).is_empty() {
                 self.freeze_input_in_loading_state_with_text(&prompt, ctx);
             }
-            let queued_query_retry = QueuedQueryModel::as_ref(ctx)
-                .queue(conversation_id)
-                .iter()
-                .enumerate()
-                .find(|(_, query)| query.id() == query_id)
-                .map(|(index, query)| (conversation_id, index, query.clone()));
+            // Take the row out of the queue for the duration of this attempt so no concurrent
+            // lifecycle trigger can dispatch it too; it goes back if the send fails.
+            let claim = QueuedQueryModel::handle(ctx)
+                .update(ctx, |model, ctx| {
+                    model.claim_prompt_head(conversation_id, ctx)
+                })
+                .filter(|claim| claim.query().id() == query_id);
+            let pending_attachments = claim
+                .as_ref()
+                .map(|claim| claim.query().attachments().to_vec())
+                .unwrap_or_else(|| {
+                    QueuedQueryModel::as_ref(ctx)
+                        .attachments_for(conversation_id, query_id)
+                        .to_vec()
+                });
+            let conversation_was_in_progress = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .is_some_and(|conversation| conversation.status().is_in_progress());
+            let dispatch = ViewerPromptDispatch::new(
+                Some(conversation_id),
+                prompt.clone(),
+                pending_attachments,
+                claim,
+                conversation_was_in_progress,
+            );
             self.upload_and_send_viewer_prompt(
+                dispatch,
                 server_conversation_token,
                 prompt,
                 vec![],
                 images,
                 files,
-                queued_query_retry,
                 ctx,
             );
             return;
@@ -14550,13 +14664,32 @@ impl Input {
             .cloned()
             .collect();
 
+        let pending_attachments: Vec<PendingAttachment> = pending_images
+            .iter()
+            .cloned()
+            .map(PendingAttachment::Image)
+            .chain(pending_files.iter().cloned().map(PendingAttachment::File))
+            .collect();
+        let conversation_was_in_progress = selected_conv_id.is_some_and(|conversation_id| {
+            BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .is_some_and(|conversation| conversation.status().is_in_progress())
+        });
+        let dispatch = ViewerPromptDispatch::new(
+            selected_conv_id,
+            prompt.clone(),
+            pending_attachments,
+            None,
+            conversation_was_in_progress,
+        );
+
         self.upload_and_send_viewer_prompt(
+            dispatch,
             server_conversation_token,
             prompt,
             attachments,
             pending_images,
             pending_files,
-            None,
             ctx,
         );
 
@@ -14640,12 +14773,12 @@ impl Input {
     #[allow(clippy::too_many_arguments)]
     fn upload_and_send_viewer_prompt(
         &mut self,
+        dispatch: ViewerPromptDispatch,
         server_conversation_token: Option<ServerConversationToken>,
         prompt: String,
         base_attachments: Vec<AgentAttachment>,
         images: Vec<ImageContext>,
         files: Vec<PendingFile>,
-        queued_query_retry: Option<(AIConversationId, usize, QueuedQuery)>,
         ctx: &mut ViewContext<Self>,
     ) {
         let ambient_agent_task_id = self
@@ -14658,12 +14791,12 @@ impl Input {
             // Upload files first, then send prompt with file references in callback
             Self::upload_files_then_send_prompt(
                 task_id,
+                dispatch,
                 server_conversation_token,
                 prompt,
                 base_attachments,
                 &images,
                 &files,
-                queued_query_retry,
                 ctx,
             );
         } else {
@@ -14672,6 +14805,7 @@ impl Input {
                 log::warn!("Cannot upload files: no task_id available");
             }
             ctx.emit(Event::SendAgentPrompt {
+                dispatch: Box::new(dispatch),
                 server_conversation_token,
                 prompt,
                 attachments: base_attachments,
@@ -14679,11 +14813,68 @@ impl Input {
         }
     }
 
+    /// Uploads a claimed queue row's attachments to the task definition, then submits the row as a
+    /// cloud follow-up. The replacement VM downloads those task attachments during startup, so the
+    /// upload has to land before the follow-up dispatches.
+    fn upload_files_then_submit_queued_cloud_followup(
+        &mut self,
+        task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        prompt: String,
+        pending_attachments: Vec<PendingAttachment>,
+        claim: Option<ClaimedQuery>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let server_api = ServerApiProvider::as_ref(ctx).get();
+
+        ctx.spawn(
+            async move {
+                // Fail fast: an attachment the new execution would silently start without is worse
+                // than a restored row the user can retry.
+                let outcomes = upload_pending_attachments_to_task(
+                    ai_client,
+                    server_api,
+                    task_id,
+                    pending_attachments,
+                )
+                .await
+                .map_err(|e| format!("Failed to prepare attachment uploads: {e:#}"))?;
+                for outcome in &outcomes {
+                    if let TaskAttachmentUploadOutcome::Failed { error, .. } = outcome {
+                        return Err(error.clone());
+                    }
+                }
+                Ok::<(), String>(())
+            },
+            move |input, result, ctx| {
+                if let Err(error) = result {
+                    if let Some(claim) = claim {
+                        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.restore_claim(claim, ctx);
+                        });
+                    }
+                    input.unfreeze_agent_input(false, ctx);
+                    let window_id = ctx.window_id();
+                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!("Couldn't upload attachment: {error}")),
+                            window_id,
+                            ctx,
+                        );
+                    });
+                    return;
+                }
+                ctx.emit(Event::SubmitCloudFollowup { prompt });
+            },
+        );
+    }
+
     /// Uploads image and file attachments to GCS via presigned URLs, then emits `SendAgentPrompt`
     /// with the resulting `FileReference` attachments appended.
     #[allow(clippy::too_many_arguments)]
     fn upload_files_then_send_prompt(
         task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        dispatch: ViewerPromptDispatch,
         server_conversation_token: Option<
             session_sharing_protocol::common::ServerConversationToken,
         >,
@@ -14691,7 +14882,6 @@ impl Input {
         base_attachments: Vec<AgentAttachment>,
         pending_images: &[crate::ai::agent::ImageContext],
         pending_files: &[crate::ai::blocklist::PendingFile],
-        queued_query_retry: Option<(AIConversationId, usize, QueuedQuery)>,
         ctx: &mut ViewContext<Self>,
     ) {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
@@ -14758,13 +14948,14 @@ impl Input {
                 Some(uploaded)
             },
             move |input, maybe_uploaded, ctx| {
-                let is_queued_prompt = queued_query_retry.is_some();
+                let mut dispatch = dispatch;
+                let is_queued_prompt = dispatch.claim.is_some();
                 let uploaded_files = match maybe_uploaded {
                     Some(uploaded_files) => uploaded_files,
                     None => {
-                        if let Some((conversation_id, insert_index, query)) = queued_query_retry {
+                        if let Some(claim) = dispatch.take_claim() {
                             QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                                model.restore_fired_row(conversation_id, insert_index, query, ctx);
+                                model.restore_claim(claim, ctx);
                             });
                         }
                         // Prepare request failed (e.g. attachment limit exceeded).
@@ -14796,6 +14987,7 @@ impl Input {
                 all_attachments.extend(uploaded_files);
 
                 ctx.emit(Event::SendAgentPrompt {
+                    dispatch: Box::new(dispatch),
                     server_conversation_token,
                     prompt,
                     attachments: all_attachments,
