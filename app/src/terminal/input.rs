@@ -994,6 +994,9 @@ pub enum InputEmptyStateChangeReason {
 
 pub enum Event {
     AutosuggestionAccepted,
+    /// The user changed the input buffer's contents. Deleting back to an empty buffer counts;
+    /// programmatic rewrites and cursor-only movement do not.
+    UserEditedInput,
     ClearSelectedBlock,
     PageUp,
     PageDown,
@@ -10050,6 +10053,19 @@ impl Input {
         }
     }
 
+    /// Whether the editor event is the user changing the buffer's contents, rather than a
+    /// programmatic rewrite, a selection move, or a menu interaction.
+    fn is_user_buffer_mutation(event: &EditorEvent) -> bool {
+        match event {
+            EditorEvent::Edited(edit_origin) => edit_origin.is_user(),
+            EditorEvent::InsertLastWordPrevCommand
+            | EditorEvent::AutosuggestionAccepted { .. }
+            | EditorEvent::DeleteAllLeft
+            | EditorEvent::MiddleClickPaste => true,
+            _ => false,
+        }
+    }
+
     /// Whether the given event should trigger a request to generate an AI-based natural language
     /// autosuggestion, due to the buffer content meaningfully changing.
     fn is_nl_ai_autosuggestion_triggering_event(event: &EditorEvent) -> bool {
@@ -10192,6 +10208,10 @@ impl Input {
     fn handle_editor_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
         // We want to clear the token description hover on any editor action
         self.hide_x_ray(ctx);
+
+        if Self::is_user_buffer_mutation(event) {
+            ctx.emit(Event::UserEditedInput);
+        }
 
         if !matches!(event, EditorEvent::InsertLastWordPrevCommand) {
             self.update_last_word_insertion_state();

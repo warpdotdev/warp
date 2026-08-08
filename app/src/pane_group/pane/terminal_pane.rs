@@ -965,6 +965,9 @@ fn handle_terminal_view_event(
             Event::AppStateChanged => {
                 ctx.emit(pane_group::Event::AppStateChanged);
             }
+            Event::UserMutatedSession => {
+                ctx.emit(pane_group::Event::UserMutatedTab);
+            }
             Event::BlockCompleted { block, is_local } => {
                 match group.terminal_session_by_id(pane_id) {
                     Some(pane) => {

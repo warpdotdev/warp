@@ -99,7 +99,8 @@ pub(crate) fn tab_close(
     }
     Err(ControlError::new(
         ErrorCode::TargetStateConflict,
-        "tab close was cancelled by an existing app warning",
+        "tab close did not complete: it was cancelled by an existing app warning, or it targeted \
+         an untouched last tab in a window that stays open",
     ))
 }
 

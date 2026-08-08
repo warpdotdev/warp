@@ -319,6 +319,38 @@ pub enum PaneGroupAction {
     HandleFocusChange,
     FocusTerminalView(EntityId),
 }
+
+impl PaneGroupAction {
+    /// True when the action changes the tab's pane structure or geometry rather than only
+    /// moving focus around it.
+    pub fn mutates_pane_layout(&self) -> bool {
+        match self {
+            PaneGroupAction::Add(_)
+            | PaneGroupAction::Remove(_)
+            | PaneGroupAction::RemoveActive
+            | PaneGroupAction::ResizeMove(_)
+            | PaneGroupAction::ResetPaneSizes(_)
+            | PaneGroupAction::Move { .. }
+            | PaneGroupAction::ResizeLeft
+            | PaneGroupAction::ResizeRight
+            | PaneGroupAction::ResizeUp
+            | PaneGroupAction::ResizeDown
+            | PaneGroupAction::ToggleMaximizePane => true,
+            PaneGroupAction::Activate(_, _)
+            | PaneGroupAction::StartResizing(_)
+            | PaneGroupAction::EndResizing
+            | PaneGroupAction::NavigatePrev
+            | PaneGroupAction::NavigateNext
+            | PaneGroupAction::NavigateLeft
+            | PaneGroupAction::NavigateRight
+            | PaneGroupAction::NavigateUp
+            | PaneGroupAction::NavigateDown
+            | PaneGroupAction::HandleFocusChange
+            | PaneGroupAction::FocusTerminalView(_) => false,
+        }
+    }
+}
+
 #[derive(PartialEq)]
 enum PaneRemovalReason {
     // This pane is being removed from the pane group because it is being moved to another tab or becoming a tab of its own
@@ -502,6 +534,9 @@ pub fn init(app: &mut AppContext) {
 
 pub enum Event {
     AppStateChanged,
+    /// A user action mutated this tab's content or pane structure. Drives the one-way pristine
+    /// marker the workspace uses to decide the final-tab close outcome.
+    UserMutatedTab,
     Escape,
     Exited {
         add_to_undo_stack: bool,
@@ -8014,6 +8049,9 @@ impl TypedActionView for PaneGroup {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         use PaneGroupAction::*;
+        if action.mutates_pane_layout() {
+            ctx.emit(Event::UserMutatedTab);
+        }
         match action {
             Add(direction) => {
                 let chosen_shell = {

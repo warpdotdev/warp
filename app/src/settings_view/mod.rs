@@ -488,6 +488,7 @@ pub mod flags {
 
     pub const LINUX_SELECTION_CLIPBOARD_FLAG: &str = "Linux_Selection_Clipboard";
     pub const RESTORE_SESSION_CONTEXT_FLAG: &str = "Restore_Sessions";
+    pub const CLOSE_WINDOW_ON_LAST_TAB_CLOSED_FLAG: &str = "Close_Window_On_Last_Tab_Closed";
     pub const HONOR_PS1_CONTEXT_FLAG: &str = "Honor_PS1";
     pub const GIT_PROMPT_CONTEXT_FLAG: &str = "Git_Prompt";
     pub const AUTOCOMPLETE_SYMBOLS_CONTEXT_FLAG: &str = "Autocomplete_Symbols";

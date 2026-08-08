@@ -190,12 +190,23 @@ pub struct TabData {
     pub in_multi_selection: bool,
     /// True when this tab is pinned to the front of the tab list.
     pub pinned: bool,
+    /// True until the first user action mutates this tab's content, identity, or pane
+    /// structure. The transition is one-way: a tab never becomes pristine again, so typing and
+    /// then deleting back to an empty buffer still leaves the tab non-pristine. Tabs whose
+    /// creation the runtime did not observe (restored, imported, transferred) start
+    /// non-pristine, since emptiness alone never implies untouched.
+    pristine: bool,
 }
 
 const TAB_COLOR_ICON_PATH: &str = "bundled/svg/ellipse.svg";
 const TAB_NO_COLOR_ICON_PATH: &str = "bundled/svg/no_color_ellipse.svg";
 
 impl TabData {
+    /// A tab whose prior state the runtime cannot vouch for: restored from a snapshot, imported
+    /// from an existing pane, transferred from another window, or hydrated from a link. This is
+    /// the default so a creation path added later starts non-pristine — and therefore keeps its
+    /// close affordances working — until someone deliberately opts it into
+    /// [`TabData::new_pristine`].
     pub fn new(pane_group: ViewHandle<PaneGroup>) -> Self {
         Self {
             pane_group,
@@ -210,7 +221,27 @@ impl TabData {
             group_id: None,
             in_multi_selection: false,
             pinned: false,
+            pristine: false,
         }
+    }
+
+    /// A tab the runtime itself is seeding empty and has watched from creation, so it counts as
+    /// untouched until the user mutates it.
+    pub fn new_pristine(pane_group: ViewHandle<PaneGroup>) -> Self {
+        Self {
+            pristine: true,
+            ..Self::new(pane_group)
+        }
+    }
+
+    /// See [`TabData::pristine`].
+    pub fn is_pristine(&self) -> bool {
+        self.pristine
+    }
+
+    /// Records that a user action mutated this tab. One-way.
+    pub fn mark_non_pristine(&mut self) {
+        self.pristine = false;
     }
 
     /// The resolved tab color: manual selection takes priority over directory default.
@@ -593,13 +624,13 @@ impl TabData {
         let mut menu_items = vec![];
         let uses_vertical_tabs = uses_vertical_tabs(ctx);
 
-        if ContextFlag::CloseWindow.is_enabled() || tabs_len != 1 {
-            menu_items.push(
-                MenuItemFields::new("Close tab")
-                    .with_on_select_action(WorkspaceAction::CloseTab(index))
-                    .into_item(),
-            );
-        }
+        // "Close tab" is always offered, including for a single tab in a host that cannot close
+        // its window; the workspace decides whether that close replaces the tab or does nothing.
+        menu_items.push(
+            MenuItemFields::new("Close tab")
+                .with_on_select_action(WorkspaceAction::CloseTab(index))
+                .into_item(),
+        );
         if tabs_len > 1 {
             menu_items.push(
                 MenuItemFields::new("Close other tabs")
@@ -1339,11 +1370,7 @@ impl<'a> TabComponent<'a> {
         is_narrow: bool,
         is_hovered: bool,
     ) -> Box<dyn Element> {
-        let should_render = {
-            let is_last_tab = self.tab_bar.tab_count == 1;
-            ContextFlag::CloseWindow.is_enabled() || !is_last_tab
-        };
-        let button = if is_hovered && should_render {
+        let button = if is_hovered {
             let tab_index = self.tab_index;
             let close_mouse_state = self.tab.close_mouse_state.clone();
             let position_id = tab_position_id(tab_index);
@@ -1938,7 +1965,6 @@ impl UiComponent for TabComponent<'_> {
         let tab_mouse_state = self.tab.tab_mouse_state.clone();
         let tab_index = self.tab_index;
         let is_tab_being_renamed = self.is_tab_being_renamed();
-        let is_last_tab = self.tab_bar.tab_count == 1;
         let hover_fixed_width = self.tab_bar.hover_fixed_width;
         let is_any_tab_dragging = self.tab_bar.is_any_tab_dragging;
         let draggable_state = self.tab.draggable_state.clone();
@@ -2131,11 +2157,9 @@ impl UiComponent for TabComponent<'_> {
                 });
             }
         });
-        if ContextFlag::CloseWindow.is_enabled() || !is_last_tab {
-            tab = tab.on_middle_click(move |ctx, _app, _position| {
-                ctx.dispatch_typed_action(WorkspaceAction::CloseTab(tab_index));
-            });
-        }
+        tab = tab.on_middle_click(move |ctx, _app, _position| {
+            ctx.dispatch_typed_action(WorkspaceAction::CloseTab(tab_index));
+        });
 
         // Note: Tooltip delay is now handled separately in the tooltip overlay
 

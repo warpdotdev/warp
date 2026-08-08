@@ -27,6 +27,16 @@ define_settings_group!(GeneralSettings, settings: [
         toml_path: "general.quit_on_last_window_closed",
         description: "Whether to quit Warp when the last window is closed.",
     },
+    close_window_on_last_tab_closed: CloseWindowOnLastTabClosed {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "general.close_window_on_last_tab_closed",
+        description: "Whether closing the last tab in a window closes the window. When disabled, closing the last tab opens a fresh tab instead.",
+    },
     restore_session: RestoreSession {
         type: bool,
         default: true,

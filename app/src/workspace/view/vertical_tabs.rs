@@ -10,7 +10,6 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
 use settings::Setting as _;
-use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent as _;
 use warp_core::ui::Icon as WarpIcon;
 use warp_core::ui::color::blend::Blend;
@@ -2510,13 +2509,11 @@ fn render_tab_group_internal(
         }
     });
 
-    // Mirror the horizontal-tab behavior: middle-click closes the tab, except when it would
-    // close the last tab in a context that doesn't allow closing the window.
-    if ContextFlag::CloseWindow.is_enabled() || !is_last_tab {
-        group_element = group_element.on_middle_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(WorkspaceAction::CloseTab(tab_index));
-        });
-    }
+    // Mirror the horizontal-tab behavior: middle-click closes the tab. The workspace owns what
+    // closing the final tab does, so the affordance stays available in every host.
+    group_element = group_element.on_middle_click(move |ctx, _, _| {
+        ctx.dispatch_typed_action(WorkspaceAction::CloseTab(tab_index));
+    });
 
     let group_element = group_element.with_defer_events_to_children().finish();
 
