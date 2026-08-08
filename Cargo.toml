@@ -408,6 +408,12 @@ windows = { version = "0.62.2", features = [
   "Win32_System_SecurityCenter",
   "Win32_System_SystemInformation",
   "Win32_System_Console",
+  "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
+  "Win32_UI_Shell_PropertiesSystem",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+  "Win32_Storage_EnhancedStorage",
 ] }
 windows-core = { version = "0.62.2" }
 windows-registry = { version = "0.2.0" }

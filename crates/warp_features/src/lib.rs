@@ -917,6 +917,10 @@ pub enum FeatureFlag {
     /// a flat pretty-printed blob.
     McpJsonTreeView,
 
+    /// Populates the Windows taskbar jump list with a "New Window" task and a
+    /// "Tab Configs" category listing the user's saved Tab Configs.
+    WindowsJumpList,
+
     /// Renders supported solid box-drawing characters (`U+2500..=U+257F`)
     /// procedurally as cell-filling rectangles instead of from the font,
     /// eliminating seams between adjacent box-drawing cells in the terminal.
@@ -1021,6 +1025,8 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::MultiLevelOrchestration,
     FeatureFlag::McpJsonTreeView,
+    #[cfg(windows)]
+    FeatureFlag::WindowsJumpList,
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::WellKnownMcpIds,
     FeatureFlag::FactoryMcp,
