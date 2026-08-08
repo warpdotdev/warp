@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+#
+# Build WarpOss in DEBUG mode and install it to /Applications as a second,
+# fully-isolated "dev" app that can be broken without touching the stable
+# WarpOss install.
+#
+# Usage:  ./script/install-warposs-dev
+#
+# What makes it independent of /Applications/WarpOss.app:
+#   * Its own bundle identifier (dev.warp.WarpOssDev), so macOS treats it as a
+#     separate application — separate Dock entry, keychain access and TCC grants.
+#   * Its own URL scheme (warpossdev://), so deeplinks are unambiguous.
+#   * WARP_DATA_PROFILE=dev, injected via the bundle's LSEnvironment so it
+#     applies when launched from Finder/Dock/`open`. ChannelState::data_profile()
+#     then namespaces all persisted data, giving this app ~/.warp-oss-dev/
+#     instead of the stable app's ~/.warp-oss/.
+#
+# NOTE: data profiles are only honoured in debug builds (see
+# ChannelState::data_profile), which is why the dev app is deliberately a debug
+# build. Debug also rebuilds far faster and keeps debug_assertions enabled.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+cd "${REPO_ROOT}"
+
+# Cargo is not always on the PATH of non-interactive shells; make the script
+# work regardless of how it is invoked.
+if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
+  PATH="$HOME/.cargo/bin:$PATH"
+  export PATH
+fi
+
+APP_SRC="target/debug/bundle/osx/WarpOss.app"
+APP_DST="/Applications/WarpOssDev.app"
+BUNDLE_ID="dev.warp.WarpOssDev"
+DISPLAY_NAME="WarpOss Dev"
+URL_SCHEME="warpossdev"
+DATA_PROFILE="dev"
+PLIST="${APP_DST}/Contents/Info.plist"
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
+echo "==> Building WarpOss (debug)..."
+./script/run --dont-open
+
+if [[ ! -d "${APP_SRC}" ]]; then
+  echo "error: expected bundle at ${APP_SRC} but it does not exist" >&2
+  exit 1
+fi
+
+osascript -e "quit app \"${DISPLAY_NAME}\"" >/dev/null 2>&1 || true
+pkill -f "${APP_DST}/Contents/MacOS/warp-oss" >/dev/null 2>&1 || true
+sleep 1
+
+echo "==> Installing to ${APP_DST}..."
+rm -rf "${APP_DST}"
+cp -R "${APP_SRC}" "${APP_DST}"
+
+echo "==> Giving it a separate identity..."
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${BUNDLE_ID}" "${PLIST}"
+/usr/libexec/PlistBuddy -c "Set :CFBundleName ${DISPLAY_NAME}" "${PLIST}"
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${DISPLAY_NAME}" "${PLIST}" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string ${DISPLAY_NAME}" "${PLIST}"
+/usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLSchemes:0 ${URL_SCHEME}" "${PLIST}"
+
+# Isolate persisted data (settings, DB, logs) from the stable install.
+/usr/libexec/PlistBuddy -c "Delete :LSEnvironment" "${PLIST}" >/dev/null 2>&1 || true
+/usr/libexec/PlistBuddy -c "Add :LSEnvironment dict" "${PLIST}"
+/usr/libexec/PlistBuddy -c "Add :LSEnvironment:WARP_DATA_PROFILE string ${DATA_PROFILE}" "${PLIST}"
+
+# Editing Info.plist invalidates the signature, so re-sign. Prefer the same
+# Apple Development identity script/macos/run uses; fall back to ad-hoc.
+# `grep` exits non-zero when there is no Apple Development identity, which
+# under `set -euo pipefail` would abort the script before the ad-hoc fallback.
+# Prefer a stable signing identity over ad-hoc. This is not about trust -- it
+# is about macOS privacy (TCC) grants surviving a rebuild.
+#
+# TCC remembers permissions against an app's *designated requirement*. Signed
+# with a certificate, that requirement names the certificate, which does not
+# change when the code does. Signed ad-hoc, it is a cdhash -- a hash of the
+# binary -- so every rebuild looks like a brand-new app and macOS re-asks for
+# Documents, Downloads, Keychain and the rest, every time.
+#
+# Any code-signing certificate fixes this, including a self-signed one made in
+# Keychain Access (Certificate Assistant > Create a Certificate, type "Code
+# Signing", Self Signed Root). Name it "Warp Local Signing", or set
+# WARP_SIGNING_IDENTITY to whatever you called it.
+SIGNING_IDENTITY_NAME="${WARP_SIGNING_IDENTITY:-Warp Local Signing}"
+SIGNING_CERT="$(security find-identity -p codesigning -v 2>/dev/null | grep "${SIGNING_IDENTITY_NAME}" | awk '{print $2}' | head -1 || true)"
+if [[ -z "${SIGNING_CERT}" ]]; then
+  SIGNING_CERT="$(security find-identity -p codesigning -v 2>/dev/null | grep "Apple Development" | awk '{print $2}' | head -1 || true)"
+fi
+codesign --force --deep --options runtime --sign "${SIGNING_CERT:--}" "${APP_DST}" \
+  --entitlements script/Debug-Entitlements.plist
+codesign --verify "${APP_DST}" && echo "==> Signature OK"
+
+if [[ -z "${SIGNING_CERT}" ]]; then
+  cat <<'WARN'
+
+    !! Signed AD-HOC (no "Apple Development" identity in the keychain).
+
+    An ad-hoc signature is content-derived, so every reinstall is a brand-new
+    identity as far as macOS privacy (TCC) is concerned -- the Documents-folder
+    grant does NOT carry over.
+
+    That matters because this is a DEBUG build: rust-embed reads assets from
+    the source tree (app/assets, i.e. under ~/Documents) instead of embedding
+    them. On first launch the app therefore blocks inside open() on the very
+    first asset read, showing no window and burning no CPU, until you answer
+    the "would like to access files in your Documents folder" dialog.
+
+    So: after launching, click Allow. If you see no dialog, check
+    System Settings > Privacy & Security > Files and Folders (or Full Disk
+    Access) for "WarpOss Dev".
+
+    To stop this recurring, create a self-signed code-signing certificate in
+    Keychain Access and name it so the grep above finds it -- a stable identity
+    makes the grant persist across reinstalls.
+
+WARN
+fi
+
+echo "==> Registering ${URL_SCHEME}:// ..."
+"${LSREGISTER}" -f "${APP_DST}"
+
+echo
+echo "==> Installed ${DISPLAY_NAME} ($(du -sh "${APP_DST}" | cut -f1)) to ${APP_DST}"
+echo "    data dir : ~/.warp-oss-${DATA_PROFILE}/   (stable app keeps ~/.warp-oss/)"
+echo "    scheme   : ${URL_SCHEME}://"
+echo "    launch   : open -a '${DISPLAY_NAME}'"

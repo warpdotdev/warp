@@ -12,6 +12,7 @@ use warpui::platform::Cursor;
 use warpui::{EntityId, WeakViewHandle, WindowId};
 
 use super::global_actions::{ForkFromExchange, ForkedConversationDestination};
+use super::project_layout::ProjectId;
 use super::tab_settings::{
     VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo,
     VerticalTabsTabItemMode, VerticalTabsViewMode,
@@ -146,6 +147,53 @@ pub enum WorkspaceAction {
     /// (see #9351). The context-menu path keeps using `RenamePane(locator)`.
     RenameActivePane,
     SetActiveTabName(String),
+    /// Selects a project in the project rail (Herdr-style Projects × Tasks
+    /// layout). Activates that project's most-recently-used visible tab.
+    SelectProject(ProjectId),
+    /// Activates the task clicked in the project rail, identified by its pane
+    /// group so it cannot go stale if tabs close between paint and click.
+    ActivateTaskByPaneGroupId(EntityId),
+    /// Opens the project rail's right-click menu for one project row.
+    ShowProjectRailContextMenu {
+        project: ProjectId,
+        position: Vector2F,
+    },
+    /// Puts a project at the top of the priority list (rank 1), promoting it
+    /// if it is already ranked.
+    ///
+    /// `None` targets the rail's selected project. That is how the Command
+    /// Palette reaches these: it re-dispatches a stored action verbatim and so
+    /// cannot supply a row's identity, while the context menu always can.
+    AddProjectToPriorities(Option<ProjectId>),
+    /// Removes a project from the priority list, dropping it into the
+    /// unranked band. `None` targets the selected project.
+    RemoveProjectFromPriorities(Option<ProjectId>),
+    /// Moves a project one rank towards the top. `None` targets the selected
+    /// project. A no-op for an unranked or already-top project.
+    MoveProjectUpInPriorities(Option<ProjectId>),
+    /// Moves a project one rank towards the bottom. `None` targets the
+    /// selected project. A no-op for an unranked or already-last project.
+    MoveProjectDownInPriorities(Option<ProjectId>),
+    /// Resumes a dormant agent task from the project rail: opens a tab at the
+    /// handle's stored cwd with the agent's resume command prefilled — never
+    /// executed. Identified by task identity (agent + session id), so the
+    /// action cannot go stale if the handle list reorders between paint and
+    /// click.
+    ResumeDormantAgentTask {
+        agent: crate::terminal::CLIAgent,
+        session_id: String,
+    },
+    /// Closes every live tab in this window that is a plain shell — one idle
+    /// terminal with no agent on it — after confirming the count.
+    ///
+    /// Destructive on purpose, and confirmed rather than filtered: hiding those
+    /// rows left the shells running behind a switch the user then had to
+    /// remember they had flipped, while this actually reclaims the tab. The
+    /// active tab, anything busy, anything shared and anything agent-backed are
+    /// never touched; see
+    /// [`rail_clear_shells`](crate::workspace::rail_clear_shells) for why each
+    /// is exempt.
+    ClearShellsWithoutAgents,
     /// Sets the manual color override for the active tab.
     ///
     /// - `Color(_)` — apply that color.
@@ -930,8 +978,12 @@ impl WorkspaceAction {
             ContinueConversationLocally { .. } => true,
             #[cfg(not(target_family = "wasm"))]
             ContinueThirdPartyConversationLocally { .. } => true,
+            // Opens a new tab, which changes the restorable window layout.
+            ResumeDormantAgentTask { .. } => true,
             ActivateTab(_)
             | ActivateTabByNumber(_)
+            | SelectProject(_)
+            | ActivateTaskByPaneGroupId(_)
             | ActivatePrevTab
             | ActivateNextTab
             | ActivateLastTab
@@ -957,6 +1009,10 @@ impl WorkspaceAction {
             | CloseNonActiveTabs
             | CloseTabsRight(_)
             | CloseTabsRightActiveTab
+            // Removes tabs from the window layout, exactly like the closes
+            // above it — even though the close itself happens after a
+            // confirmation, so this arm may fire before anything is gone.
+            | ClearShellsWithoutAgents
             | CloseTabGroup(_)
             | ToggleTabGroupCollapsed(_)
             | RenameTabGroup(_)
@@ -1047,6 +1103,13 @@ impl WorkspaceAction {
             | ToggleTabSelectionRightClickMenu { .. }
             | ToggleTabGroupRightClickMenu { .. }
             | ToggleVerticalTabsPaneContextMenu { .. }
+            | ShowProjectRailContextMenu { .. }
+            // Priorities live in settings, which persist themselves; no
+            // window layout changes, so there is no app state to save.
+            | AddProjectToPriorities(_)
+            | RemoveProjectFromPriorities(_)
+            | MoveProjectUpInPriorities(_)
+            | MoveProjectDownInPriorities(_)
             | OpenNewSessionMenu { .. }
             | ToggleTabConfigsMenu
             | ToggleNewSessionMenu { .. }

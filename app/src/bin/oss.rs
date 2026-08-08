@@ -24,6 +24,25 @@ fn main() -> Result<()> {
     if cfg!(debug_assertions) {
         state = state.with_additional_features(warp_core::features::DEBUG_FLAGS);
     }
+    // LOCAL ONLY (do not commit): enable the Projects x Tasks layout in this
+    // personal build. OSS builds don't apply DOGFOOD_FLAGS, so the rail is
+    // otherwise unreachable. Turn it on in Settings > Appearance once running.
+    state = state.with_additional_features(&[
+        warp_core::features::FeatureFlag::Projects,
+        // Same reason: durable agent-task handles live in DOGFOOD_FLAGS, so
+        // without this the rail never records or lists past agent tasks.
+        warp_core::features::FeatureFlag::ResumeProjectTasks,
+        // Likewise: defer a restored tab's shell until the tab is opened.
+        warp_core::features::FeatureFlag::LazyShellStartup,
+        // Without this the rail's waiting/overdue/done colours and the
+        // nag engine are unreachable, not merely off: the flag gates
+        // whether WARP_CLI_AGENT_PROTOCOL_VERSION is exported into the
+        // shell (see local_tty/unix.rs), the Claude Code plugin refuses to
+        // send structured events when it is absent, and without those a
+        // session never earns rich status — so its row can only ever be
+        // neutral. It belongs to no flag list at all, not even DOGFOOD.
+        warp_core::features::FeatureFlag::HOANotifications,
+    ]);
     ChannelState::set(state);
 
     warp::run()

@@ -1635,6 +1635,14 @@ pub(crate) fn initialize_app(
         })
     });
 
+    // Pulled out ahead of the tuple destructure below (which consumes
+    // `sqlite_data`): hydrates the project rail's dormant-task mirror when the
+    // models are registered further down.
+    let agent_session_handle_records = sqlite_data
+        .as_ref()
+        .map(|sqlite_data| sqlite_data.agent_session_handles.clone())
+        .unwrap_or_default();
+
     let (
         cloud_objects,
         cached_workspaces,
@@ -2234,6 +2242,27 @@ pub(crate) fn initialize_app(
     // loads metadata.
     ctx.add_singleton_model(|_| RestoredAgentConversations::new());
     ctx.add_singleton_model(|_| CLIAgentSessionsModel::new());
+    // Read mirror of the durable CLI-agent session handles; the project rail's
+    // dormant task rows come from here, never from sqlite directly.
+    ctx.add_singleton_model(move |_| {
+        crate::terminal::cli_agent_sessions::handle_store::AgentSessionHandlesModel::from_records(
+            &agent_session_handle_records,
+        )
+    });
+    // Cache of Claude Code's own on-disk sessions. Complements the handle
+    // mirror above: that one knows only sessions Warp witnessed, this one
+    // knows everything Claude recorded in a project's directory. Starts empty
+    // and is filled by the rail's off-thread scan.
+    ctx.add_singleton_model(|_| {
+        crate::terminal::cli_agent_sessions::session_scan::ClaudeSessionScanModel::default()
+    });
+    // Digested transcript text for the session-search popup's content search.
+    // Registered beside the scan for the same reason it is: both are caches of
+    // Claude's own on-disk state that must never be built on the render path.
+    // Starts empty; the popup fills it when it opens.
+    ctx.add_singleton_model(|_| {
+        crate::terminal::cli_agent_sessions::transcript_digest::TranscriptDigestModel::default()
+    });
     // ActiveAgentViewsModel is used to track active agent conversations and notify listeners when they change.
     ctx.add_singleton_model(|_| ActiveAgentViewsModel::new());
     ctx.add_singleton_model(AgentNotificationsModel::new);

@@ -8,4 +8,7 @@ pub enum PaletteMode {
     WarpDrive,
     Files,
     Conversations,
+    /// Search every known CLI-agent session by task, project or directory, and
+    /// resume the one that is picked.
+    SessionSearch,
 }

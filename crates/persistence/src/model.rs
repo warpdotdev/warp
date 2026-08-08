@@ -9,10 +9,10 @@ use warp_multi_agent_api::response_event::stream_finished;
 use warp_multi_agent_api::{self as api};
 
 use super::schema::{
-    active_mcp_servers, agent_conversations, agent_tasks, ai_document_panes, ai_memory_panes,
-    ambient_agent_panes, app, blocks, cloud_objects_refreshes, code_pane_tabs, code_panes,
-    code_review_panes, commands, current_user_information, env_var_collection_panes, folders,
-    generic_string_objects, ignored_suggestions, mcp_environment_variables,
+    active_mcp_servers, agent_conversations, agent_session_handles, agent_tasks, ai_document_panes,
+    ai_memory_panes, ambient_agent_panes, app, blocks, cloud_objects_refreshes, code_pane_tabs,
+    code_panes, code_review_panes, commands, current_user_information, env_var_collection_panes,
+    folders, generic_string_objects, ignored_suggestions, mcp_environment_variables,
     mcp_server_installations, mcp_server_panes, notebook_panes, notebooks, object_actions,
     object_metadata, object_permissions, pane_branches, pane_leaves, pane_nodes, panels,
     project_rules, projects, server_experiments, settings_panes, tab_groups, tabs, team_members,
@@ -914,6 +914,32 @@ pub struct AgentConversationRecord {
     /// column existed; readers fall back to deriving from tasks (and
     /// backfill the column).
     pub summary: Option<String>,
+}
+
+/// One durable CLI-agent session handle ("task"). A rebuildable index row:
+/// the agent's own transcript store is the source of truth, so this table may
+/// be dropped and re-derived. `session_id` is `None` while a launch is still
+/// in flight (Codex and Cursor only reveal their id after startup); such rows
+/// are never offered as resumable.
+#[derive(Debug, PartialEq, Queryable, Selectable, Clone)]
+#[diesel(table_name = agent_session_handles)]
+#[diesel(primary_key(id))]
+pub struct AgentSessionHandleRecord {
+    pub id: i32,
+    /// Serialized `CLIAgent` name (`CLIAgent::to_serialized_name`).
+    pub agent: String,
+    pub session_id: Option<String>,
+    /// Canonical working directory. The project bucket is derived from this at
+    /// read time and deliberately never stored (repo detection may reclassify
+    /// a path after the row is written).
+    pub cwd: String,
+    /// `terminal_panes.uuid` of the pane that most recently ran the session.
+    /// Provenance and the in-flight slot key — not part of task identity.
+    pub pane_uuid: Vec<u8>,
+    /// Cache of the last resolved display label; advisory only.
+    pub title: Option<String>,
+    pub created_at: NaiveDateTime,
+    pub last_seen_at: NaiveDateTime,
 }
 
 #[derive(Debug, PartialEq, Queryable, Selectable)]

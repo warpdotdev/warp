@@ -114,6 +114,9 @@ fn create_docker_sandbox_view(
                 initial_size,
                 model_event_sender,
                 chosen_shell,
+                // A sandbox session is created because the user asked for it
+                // right now; there is nothing to defer.
+                false,
                 ctx,
                 |surface_init, ctx| {
                     create_terminal_view_surface(

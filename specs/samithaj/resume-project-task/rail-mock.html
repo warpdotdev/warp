@@ -1,0 +1,366 @@
+<title>Warp project rail — one row list</title>
+
+<style>
+  :root {
+    --ground:#F4F5F7; --chrome:#E9EBEE; --rail:#EDEFF2; --term:#FBFCFD;
+    --line:#D9DDE3; --line-soft:#E4E7EC; --text:#1B1F25; --muted:#5F6975;
+    --faint:#9AA2AD; --accent:#0176A8; --accent-soft:#D7EBF6; --run:#167A45;
+    --warn:#8A6100; --sel:#DBE8F0;
+    --shadow:0 1px 2px rgba(20,30,45,.06), 0 14px 36px rgba(20,30,45,.11);
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:#0D0F12; --chrome:#1B1E23; --rail:#16191D; --term:#0F1114;
+      --line:#282C33; --line-soft:#1F232A; --text:#DCE0E6; --muted:#8B939E;
+      --faint:#5C646E; --accent:#01A0E4; --accent-soft:#0F2C3C; --run:#01A252;
+      --warn:#C79A2E; --sel:#1E2833;
+      --shadow:0 1px 2px rgba(0,0,0,.45), 0 18px 44px rgba(0,0,0,.5);
+    }
+  }
+  :root[data-theme="dark"]{--ground:#0D0F12;--chrome:#1B1E23;--rail:#16191D;--term:#0F1114;
+    --line:#282C33;--line-soft:#1F232A;--text:#DCE0E6;--muted:#8B939E;--faint:#5C646E;
+    --accent:#01A0E4;--accent-soft:#0F2C3C;--run:#01A252;--warn:#C79A2E;--sel:#1E2833;
+    --shadow:0 1px 2px rgba(0,0,0,.45), 0 18px 44px rgba(0,0,0,.5);}
+  :root[data-theme="light"]{--ground:#F4F5F7;--chrome:#E9EBEE;--rail:#EDEFF2;--term:#FBFCFD;
+    --line:#D9DDE3;--line-soft:#E4E7EC;--text:#1B1F25;--muted:#5F6975;--faint:#9AA2AD;
+    --accent:#0176A8;--accent-soft:#D7EBF6;--run:#167A45;--warn:#8A6100;--sel:#DBE8F0;
+    --shadow:0 1px 2px rgba(20,30,45,.06), 0 14px 36px rgba(20,30,45,.11);}
+
+  body { background:var(--ground); color:var(--text); font-family:var(--ui); font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased; }
+  .page { max-width:1140px; margin:0 auto; padding:36px 22px 72px; display:flex; flex-direction:column; gap:24px; }
+  .eyebrow { font-size:11px; font-weight:600; letter-spacing:.11em; text-transform:uppercase; color:var(--accent); margin-bottom:9px; }
+  h1 { font-size:clamp(23px,3.2vw,30px); line-height:1.2; font-weight:640; letter-spacing:-.02em; text-wrap:balance; margin-bottom:9px; }
+  .lede { color:var(--muted); max-width:66ch; }
+  code { font-family:var(--mono); font-size:.88em; }
+  .lede code, .foot code, .note code, .cascade code { color:var(--text); }
+
+  .window { background:var(--chrome); border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow); overflow:hidden; }
+  .titlebar { display:flex; align-items:center; gap:7px; padding:0 12px; height:44px; }
+  .dot { width:11px; height:11px; border-radius:50%; background:var(--line); flex:none; }
+  .icons { display:flex; gap:5px; margin:0 12px 0 8px; }
+  .icons span { width:19px; height:19px; border:1px solid var(--line); border-radius:4px; }
+  .tabbar { display:flex; flex:1; min-width:0; overflow:hidden; }
+  .tab { flex:1 1 0; min-width:0; display:flex; align-items:center; justify-content:center; padding:0 14px;
+         font-size:13px; color:var(--muted); border-left:1px solid var(--line); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tab.on { background:var(--term); color:var(--text); font-weight:600; }
+
+  .split { display:grid; grid-template-columns:210px 1fr; min-height:474px; border-top:1px solid var(--line); }
+  @media (max-width:780px){ .split { grid-template-columns:1fr; } }
+
+  .rail { background:var(--rail); border-right:1px solid var(--line); padding:12px 0; overflow:hidden; font-size:12.5px; }
+  .rail-title { padding:0 14px 10px; font-size:13px; color:var(--muted); }
+  .proj { padding:10px 14px 2px; font-size:13px; font-weight:600; color:var(--text); display:flex; align-items:center; gap:7px; }
+  .pstatus { width:6px; height:6px; border-radius:50%; background:var(--run); flex:none; }
+  .pstatus.none { background:transparent; }
+
+  /* ONE row class. live/dormant are modifiers, not sections. */
+  .row {
+    display:flex; align-items:center; gap:7px; width:100%; text-align:left; font:inherit; font-size:12px;
+    background:none; border:0; border-left:2px solid transparent; padding:5px 10px 5px 20px;
+    color:var(--muted); cursor:pointer; position:relative;
+  }
+  .row .glyph { width:11px; height:11px; border-radius:3px; flex:none; border:1.5px solid var(--muted); position:relative; }
+  .row .label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+  .row:hover { background:var(--line-soft); }
+  .row:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+
+  .row.live { color:var(--text); }
+  .row.live .glyph { border-color:var(--accent); }
+  /* status ring — live only */
+  .row.live .glyph::after {
+    content:""; position:absolute; right:-3px; bottom:-3px; width:5px; height:5px;
+    border-radius:50%; background:var(--run); border:1px solid var(--rail);
+  }
+  .row.live.active { background:var(--sel); border-left-color:var(--accent); font-weight:600; }
+
+  .row.dormant { color:var(--muted); }
+  .row.dormant .glyph { border-color:var(--faint); opacity:.65; }
+  .row.dormant .redo { opacity:0; font-size:11px; color:var(--faint); flex:none; }
+  .row.dormant:hover .redo { opacity:1; }
+  .row.dormant.orphan { cursor:default; }
+  .row.dormant.orphan .label { color:var(--faint); text-decoration:line-through; text-decoration-color:var(--line); }
+
+  .more { padding:3px 10px 3px 20px; font-size:11px; color:var(--faint); background:none; border:0; font:inherit; cursor:pointer; text-align:left; width:100%; }
+  .more:hover { color:var(--accent); }
+
+  /* preview */
+  .prev { background:var(--term); padding:18px 22px; display:flex; flex-direction:column; gap:14px; font-size:13px; }
+  .prev h2 { font-size:15px; font-weight:640; letter-spacing:-.01em; }
+  .meta { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:11.5px; color:var(--faint); font-variant-numeric:tabular-nums; }
+  .meta .k { font-family:var(--mono); }
+  .xchg { border-left:2px solid var(--line); padding-left:13px; display:flex; flex-direction:column; gap:9px; }
+  .xchg .who { font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); margin-bottom:2px; }
+  .xchg p { font-size:12.5px; color:var(--muted); }
+  .xchg .you p { color:var(--text); }
+  .cmdbox { font-family:var(--mono); font-size:11.5px; background:var(--chrome); border:1px solid var(--line);
+            border-radius:6px; padding:8px 11px; color:var(--muted); overflow-x:auto; white-space:nowrap; }
+  .placement { font-size:11.5px; color:var(--faint); }
+  .placement b { color:var(--muted); font-weight:600; }
+  .placement .pref { opacity:.75; }
+  .acts { display:flex; gap:8px; flex-wrap:wrap; margin-top:2px; }
+  .btn { font:inherit; font-size:12px; padding:6px 13px; border-radius:6px; cursor:pointer;
+         border:1px solid var(--line); background:var(--chrome); color:var(--muted); }
+  .btn:hover { color:var(--text); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  :root[data-theme="light"] .btn.primary, :root:not([data-theme="dark"]) .btn.primary { color:#fff; }
+  .btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  .term { background:var(--term); padding:20px 22px; font-family:var(--mono); font-size:12.5px; line-height:1.75; }
+  .term .path { color:var(--accent); }
+  .term .dim { color:var(--faint); }
+  .caret { display:inline-block; width:7px; height:14px; background:var(--accent); vertical-align:-2px; animation:bl 1.1s steps(2,start) infinite; }
+  @keyframes bl { 50% { opacity:0; } }
+  @media (prefers-reduced-motion:reduce){ .caret { animation:none; } }
+  .hint { margin-top:18px; font-size:11px; color:var(--faint); font-family:var(--ui); max-width:54ch; }
+  .kbd { font-family:var(--mono); font-size:10px; border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:1px 5px; color:var(--muted); }
+  .tierbox { margin-top:24px; padding-top:14px; border-top:1px dashed var(--line); font-family:var(--ui); font-size:12px; color:var(--muted); }
+  .tierbox b { color:var(--text); }
+  .tiertag { display:inline-block; font-family:var(--mono); font-size:10px; color:var(--accent); border:1px solid var(--accent); border-radius:3px; padding:0 4px; margin-right:6px; }
+
+  .cascade { background:var(--chrome); border:1px solid var(--line); border-radius:8px; padding:16px 18px; font-size:12.5px; }
+  .cascade h3 { font-size:12px; font-weight:650; margin-bottom:9px; }
+  .cascade ol { margin:0; padding-left:0; list-style:none; counter-reset:t; display:grid; gap:3px; }
+  .cascade li { counter-increment:t; display:flex; gap:9px; align-items:baseline; color:var(--muted); }
+  .cascade li::before { content:"T" counter(t); font-family:var(--mono); font-size:10px; color:var(--faint); min-width:20px; }
+  .cascade li.rejected { color:var(--faint); }
+  .cascade li.rejected b { text-decoration:line-through; }
+  .cascade b { color:var(--text); font-weight:600; }
+
+  .notes { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .note { background:var(--ground); padding:15px 17px; }
+  .note h3 { font-size:12px; font-weight:650; margin-bottom:5px; }
+  .note p { font-size:12.5px; color:var(--muted); }
+  .foot { font-size:13px; color:var(--muted); border-top:1px solid var(--line); padding-top:17px; }
+  .foot b { color:var(--text); font-weight:600; }
+</style>
+
+<div class="page">
+  <header>
+    <div class="eyebrow">Rail design · v4</div>
+    <h1>A row is the task. Whether it has a tab is a detail.</h1>
+    <p class="lede">
+      No second pane, no “Recent” header, no divider. Every row is a task; some happen to have a tab
+      open right now. Clicking a <em>live</em> row activates its tab. Clicking a <em>dormant</em> row only previews it —
+      last exchange, branch, message count — and nothing is created until you press
+      <b>Resume in new tab</b>.
+    </p>
+  </header>
+
+  <div class="window">
+    <div class="titlebar">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <span class="icons"><span></span><span></span></span>
+      <div class="tabbar" id="tabbar"></div>
+    </div>
+    <div class="split">
+      <nav class="rail" id="rail" aria-label="Projects"></nav>
+      <section class="term" id="term"></section>
+    </div>
+  </div>
+
+  <div class="cascade">
+    <h3>Naming cascade — first hit wins</h3>
+    <ol>
+      <li><b>Explicit tab rename</b> — <code>pane_group.custom_title</code>, persisted. Live rows only.</li>
+      <li><b><code>ai-title</code> from the transcript</b> — Claude writes AI-generated titles (and <code>/rename</code> values) straight into the JSONL. Present on <b>87%</b> of sessions with 6+ messages, <b>100%</b> at 20+. The workhorse.</li>
+      <li><b>Session-memory summary</b> — <code>~/.claude/projects/&lt;enc-cwd&gt;/&lt;uuid&gt;/session-memory/summary.md</code>. Borrowed from Orbit; reject unfilled templates.</li>
+      <li><b>Latest user prompt</b> — live sessions, from the event stream.</li>
+      <li><b>First user prompt from the transcript</b> — bounded 256&nbsp;KB head read, mtime-memoised. Works for dormant rows.</li>
+      <li><b>Agent + short id</b> — <code>Claude&nbsp;·&nbsp;998add3f</code>. Last resort, never blank.</li>
+      <li class="rejected"><b>Truncated cwd</b> — today’s behaviour. Rejected outright: it is what makes five rows read identically.</li>
+      <li class="rejected"><b>Permission <code>summary</code></b> — a status blurb wiped on the next prompt, not a name.</li>
+      <li class="rejected"><b>Claude’s auto name</b> <code>&lt;dir&gt;-&lt;2hex&gt;</code> — e.g. <code>poa-agent-0f</code>. Junk; Orbit rejects it too.</li>
+    </ol>
+  </div>
+
+  <div class="notes">
+    <div class="note">
+      <h3>Never reuse another project's pane</h3>
+      <p>A pane's project comes from its cwd, so restoring into a pane belonging to a different project would silently re-bucket that tab. <code>ActivePane</code>/<code>SplitPane</code> placement is only legal inside the target project — otherwise fall back to a new tab.</p>
+    </div>
+    <div class="note">
+      <h3>Preview before commit</h3>
+      <p>Selecting a dormant row has <em>no side effect</em>. Creating a tab is a real action, so it needs its own deliberate one — otherwise a misidentified row leaves a stray tab to close.</p>
+    </div>
+    <div class="note">
+      <h3>Dormant rows never reach the tab bar</h3>
+      <p>They are absent from <code>visible_tab_indices</code>, so they never appear on top and never join <code>cycle_next</code>/<code>cycle_prev</code>.</p>
+    </div>
+    <div class="note">
+      <h3>A quiet project can still have rows</h3>
+      <p><code>project_status</code> reads open tabs only — a project whose rows are all dormant shows no status dot. Correct, but worth seeing.</p>
+    </div>
+    <div class="note">
+      <h3>Five dormant rows, then “N more”</h3>
+      <p>Dormant rows must never bury live ones. Live first in tab order, dormant after by last-seen.</p>
+    </div>
+  </div>
+
+  <p class="foot">
+    <b>Compare with today.</b> In the current build these same rows read
+    <code>..uellig/repos/poa-agent</code> six times over, because
+    <code>agent_session_title()</code> returns <code>None</code> for any non-plugin-backed or exited
+    agent and <code>rail_task_label</code> falls through to the truncated path. The names below are
+    the whole point of the change.
+  </p>
+</div>
+
+<script>
+  const PROJECTS = [
+    { name: "Credit_Management", rows: [
+      { t:"airflow DAG retry backoff", live:true, active:true, tier:4, agent:"claude",
+        cwd:"~/Documents/dev/zuellig/Credit_Management", cmd:null },
+      { t:"pytest fixtures for engine", live:true, tier:4, agent:"claude",
+        cwd:"~/Documents/dev/zuellig/Credit_Management", cmd:null },
+      { t:"Add Jira search and fix orbit dashboard startup", live:false, tier:2, agent:"codex", when:"yesterday",
+        cwd:"~/Documents/dev/zuellig/Credit_Management/dags/devops_handoff",
+        cmd:"codex resume 41d0c2f7-8a19-4c6b-9f22-0b7ac5518e3d" },
+      { t:"Verify and execute Malaysia PROD shadow deployment test", live:false, tier:2, agent:"claude", when:"3d ago",
+        cwd:"~/Documents/dev/zuellig/Credit_Management",
+        cmd:"claude --resume 7c4b6abd-2e55-41aa-8d90-1f6e3b0c9a44" },
+      { t:"Claude · 61f785ca", live:false, tier:6, agent:"claude", when:"6d ago",
+        cwd:"~/Documents/dev/zuellig/Credit_Management/configs",
+        cmd:"claude --resume 61f785ca-1c31-4671-a420-f89c47875750" },
+      { t:"gcp airflow chart bump", live:false, orphan:true, tier:5, agent:"claude", when:"12d ago",
+        cwd:"~/Documents/dev/zuellig/Credit_Management/wt-chart", cmd:null },
+    ], more:3 },
+    { name: "poa-agent", rows: [
+      { t:"Debug cargo install compilation error for imessage-exporter", live:false, tier:2, agent:"claude", when:"5d ago",
+        cwd:"~/Documents/dev/zuellig/repos/poa-agent",
+        cmd:"claude --resume 998add3f-6339-423a-9ea9-2fc6e2d3fe9b" },
+      { t:"per-branch-whatsapp-routing", live:false, tier:1, agent:"claude", when:"5d ago",
+        cwd:"~/Documents/dev/zuellig/repos/poa-agent",
+        cmd:"claude --resume b21c9e40-77aa-4c19-9e33-5d2f18ab07c1" },
+    ], more:0 },
+    { name: "warp", rows: [
+      { t:"project rail resize polish", live:true, tier:1, agent:"claude",
+        cwd:"~/Documents/dev/tools/warp", cmd:null },
+      { t:"Brainstorm task resumption feature for Warp terminal", live:false, tier:2, agent:"codex", when:"2d ago",
+        cwd:"~/Documents/dev/tools/warp/crates/warp_tui",
+        cmd:"codex resume 5f3b8d21-0c47-4e9a-b6d3-2a91c4e70f88" },
+    ], more:0 },
+  ];
+
+  const TIER = {
+    1:"explicit tab rename", 2:"ai-title from transcript", 3:"session-memory summary",
+    4:"latest user prompt", 5:"first prompt from transcript",
+    6:"agent + short id (last resort)"
+  };
+
+  const PLACEMENT = 'new tab';   // NewTab | SplitPane | ActivePane, per the user's setting
+
+  const rail = document.getElementById('rail');
+  const term = document.getElementById('term');
+  const tabbar = document.getElementById('tabbar');
+  let sel = { p:0, r:0 };
+
+  const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+  function renderTabs(){
+    // The tab bar is project-scoped: it shows the SELECTED project's live rows only.
+    const p = PROJECTS[sel.p];
+    const live = p.rows.filter(r => r.live);
+    if (!live.length) {
+      tabbar.innerHTML = `<div class="tab" style="flex:1;color:var(--faint);font-style:italic">no open tabs in ${esc(p.name)}</div>`;
+      return;
+    }
+    tabbar.innerHTML = live.map(r =>
+      `<div class="tab${r.active ? ' on':''}">${esc(r.t)}</div>`).join('');
+  }
+
+  function renderRail(){
+    rail.innerHTML = '<div class="rail-title">Projects</div>' + PROJECTS.map((p,pi) => {
+      const hasLive = p.rows.some(r => r.live);
+      const rows = p.rows.map((r,ri) => {
+        const cls = ['row', r.live ? 'live' : 'dormant'];
+        if (r.live && r.active) cls.push('active');
+        if (r.orphan) cls.push('orphan');
+        return `<button class="${cls.join(' ')}" data-p="${pi}" data-r="${ri}"
+                  title="${esc(r.cwd)}">
+                  <span class="glyph"></span>
+                  <span class="label">${esc(r.t)}</span>
+                  ${r.live ? '' : '<span class="redo">↻</span>'}
+                </button>`;
+      }).join('');
+      const more = p.more ? `<button class="more">${p.more} more…</button>` : '';
+      return `<div class="proj"><span class="pstatus${hasLive?'':' none'}"></span>${esc(p.name)}</div>${rows}${more}`;
+    }).join('');
+
+    rail.querySelectorAll('.row').forEach(b => b.addEventListener('click', () => {
+      const r = PROJECTS[+b.dataset.p].rows[+b.dataset.r];
+      if (r.orphan) return;
+      sel = { p:+b.dataset.p, r:+b.dataset.r };
+      resumed = false;        // selecting a row never spawns a tab
+      renderTabs();           // selecting a row selects its PROJECT; the bar follows
+      renderTerm();
+    }));
+  }
+
+  let resumed = false;
+
+  function renderTerm(){
+    const r = PROJECTS[sel.p].rows[sel.r];
+    const tier = `<span class="tiertag">T${r.tier}</span>named by ${TIER[r.tier]}`;
+
+    if (r.live) {
+      term.className = 'term';
+      term.innerHTML = `<div class="dim">— existing tab activated, nothing new spawned —</div>
+        <div style="margin-top:10px"><span class="path">${esc(r.cwd)}</span></div>
+        <div style="margin-top:4px"><span class="dim">❯</span> <span class="dim">(agent running)</span><span class="caret"></span></div>
+        <p class="hint">A live row is already a tab, so activating it costs nothing and is
+        reversible — it keeps the single-click gesture.</p>
+        <div class="tierbox"><b>${esc(r.t)}</b><br>${tier}</div>`;
+      return;
+    }
+
+    if (resumed) {
+      term.className = 'term';
+      term.innerHTML = `<div class="dim">— new tab, opened in this task's own directory —</div>
+        <div style="margin-top:10px"><span class="path">${esc(r.cwd)}</span></div>
+        <div style="margin-top:4px"><span class="dim">❯</span> ${esc(r.cmd)}<span class="caret"></span></div>
+        <p class="hint">Prefilled, not executed. Press <span class="kbd">↵</span> to resume, or edit
+        it first. The row stays dormant until the agent reports a session.</p>
+        <div class="tierbox"><b>${esc(r.t)}</b><br>${tier}</div>`;
+      return;
+    }
+
+    // Dormant + not yet committed → PREVIEW. No tab has been created.
+    term.className = 'prev';
+    term.innerHTML = `
+      <div>
+        <h2>${esc(r.t)}</h2>
+        <div class="meta">
+          <span><span class="k">${esc(r.agent)}</span></span>
+          <span>${esc(r.when || '')}</span>
+          <span><span class="k">${esc(r.branch || 'main')}</span></span>
+          <span>${r.msgs || 24} messages</span>
+          <span class="k">${esc(r.cwd)}</span>
+        </div>
+      </div>
+      <div class="xchg">
+        <div class="you"><div class="who">Last you said</div><p>${esc(r.lastUser || 'Can you also handle the retry backoff when the upstream task times out?')}</p></div>
+        <div><div class="who">Last reply</div><p>${esc(r.lastAgent || 'Added exponential backoff with a 5-attempt cap in the DAG default_args, and a unit test covering the timeout path. Two files changed.')}</p></div>
+      </div>
+      <div class="cmdbox">${esc(r.cmd)}</div>
+      <div class="placement">Opens in <b>${esc(PROJECTS[sel.p].name)}</b> · ${esc(PLACEMENT)} <span class="pref">(follows <code>open_conversation_layout_preference</code>)</span></div>
+      <div class="acts">
+        <button class="btn primary" id="doResume">Resume</button>
+        <button class="btn">Copy command</button>
+        <button class="btn">Forget</button>
+      </div>
+      <div class="tierbox">${tier}</div>`;
+    const b = document.getElementById('doResume');
+    if (b) b.addEventListener('click', () => {
+      resumed = true;
+      const p = PROJECTS[sel.p];
+      p.rows.forEach(x => { x.active = false; });
+      const row = p.rows[sel.r];
+      row.live = true; row.active = true;   // the task now has a tab, in ITS project
+      renderTabs(); renderRail(); renderTerm();
+    });
+  }
+
+  renderTabs(); renderRail(); renderTerm();
+</script>
