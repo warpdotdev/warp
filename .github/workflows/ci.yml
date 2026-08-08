@@ -87,7 +87,7 @@ jobs:
 
   tests:
     name: Run ${{ matrix.name }} tests
-    timeout-minutes: 25
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     env:
       # When CI runs on a PR from a fork, the GCP OIDC auth used by
       # `google-github-actions/auth` fails because our Workload Identity
@@ -110,6 +110,12 @@ jobs:
             runner: ${{ fromJSON(needs.params.outputs.macos-runner) }}
             is_self_hosted: ${{ contains(fromJSON(needs.params.outputs.macos-runner), 'self-hosted') }}
             extra_test_args: ""
+            # macOS is compile-bound (`Compile tests` alone runs ~9-12m) and had
+            # no headroom under the 25m cap shared with Linux/Windows: measured
+            # p95 was 25.1m, so ~8.5% of macOS runs were cancelled with
+            # "exceeded the maximum execution time of 25m0s". 40m puts p95 at
+            # ~63% of the cap while still catching a genuine hang.
+            timeout_minutes: 40
 
           - os: "linux"
             name: "Linux"
@@ -119,6 +125,8 @@ jobs:
             # We don't (yet) have any self-hosted Linux runners.
             is_self_hosted: false
             extra_test_args: ""
+            # p90 13.8m, no timeouts observed - keep the tighter cap.
+            timeout_minutes: 25
 
           - os: "windows"
             name: "Windows"
@@ -126,6 +134,8 @@ jobs:
             # We don't (yet) have any self-hosted Windows runners.
             is_self_hosted: false
             extra_test_args: "--exclude command-signatures-v2 --exclude warp_js"
+            # p90 17.6m, no timeouts observed - keep the tighter cap.
+            timeout_minutes: 25
     runs-on: ${{ matrix.runner }}
     needs: params
     # Make sure an ID token is created with the necessary permissions to use
@@ -439,10 +449,6 @@ jobs:
         uses: coactions/setup-xvfb@b6b4fcfb9f5a895edadc3bc76318fae0ac17c8b3 # v1
         with:
           run: cargo nextest run --locked -p warp_completer --features v2
-
-    # This is longer than we like and temporary until we speed up integration tests
-    # The maximum timeout for the entire job is 6 hours:
-    # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idstepstimeout-minutes
 
   remote-server-tests:
     name: Run Linux remote-server integration tests
