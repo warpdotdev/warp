@@ -185,12 +185,12 @@ fn per_member_rows_mark_departed_users_as_former_members() {
     assert!(
         rows.iter()
             .find(|row| row.subject_uid.as_deref() == Some(VIEWER_UID))
-            .is_some_and(|row| row.is_current_member)
+            .is_some_and(|row| row.is_current_team_member)
     );
     assert!(
         rows.iter()
             .find(|row| row.subject_uid.as_deref() == Some(OTHER_UID))
-            .is_some_and(|row| !row.is_current_member)
+            .is_some_and(|row| !row.is_current_team_member)
     );
 }
 
@@ -207,7 +207,7 @@ fn per_member_rows_do_not_mark_service_accounts_as_former_members() {
     let rows = MemberUsageRow::for_each_member(&entries, &[], SourceFilter::All);
 
     assert_eq!(rows.len(), 1);
-    assert!(rows[0].is_current_member);
+    assert!(rows[0].is_current_team_member);
 }
 
 #[test]

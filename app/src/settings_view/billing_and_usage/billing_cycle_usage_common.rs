@@ -198,13 +198,6 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
         .collect()
 }
 
-/// Restricts workspace-wide usage entries to the team currently being viewed.
-///
-/// `Workspace.billingCycleUsageHistory` spans every team in the workspace, so
-/// a workspace admin looking at team A would otherwise see team B's usage.
-/// Only entries the server attributed to this exact team survive, so
-/// unattributed rows are dropped rather than shown under whichever team happens
-/// to be selected.
 pub fn filter_entries_by_attributed_team(
     entries: &[BillingCycleUsageEntry],
     team_uid: &str,
@@ -216,13 +209,6 @@ pub fn filter_entries_by_attributed_team(
         .collect()
 }
 
-/// The workspace members that belong to `team`, used as the roster for the
-/// per-member usage rows so members of other teams never get a row (not even
-/// a zero-usage one).
-///
-/// Mirrors `individualUsageMembers` in warp-server's `BillingSettingsV2.tsx`,
-/// including its fallback: when the selected team is unknown we can't scope
-/// the roster, so every workspace member is kept.
 pub fn members_for_team(members: &[WorkspaceMember], team: Option<&Team>) -> Vec<WorkspaceMember> {
     let Some(team) = team else {
         return members.to_vec();

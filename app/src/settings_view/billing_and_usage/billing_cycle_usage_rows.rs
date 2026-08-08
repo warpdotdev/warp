@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use itertools::Itertools as _;
 use pathfinder_color::ColorU;
@@ -81,7 +81,7 @@ pub struct MemberUsageRow {
     pub segments: Vec<BarSegment>,
     /// Denominator the row's stacked bar fills against.
     pub bar_max_credits: i64,
-    pub is_current_member: bool,
+    pub is_current_team_member: bool,
 }
 
 fn viewer_identity(app: &AppContext) -> (Option<String>, String) {
@@ -129,7 +129,7 @@ impl MemberUsageRow {
             total_cost_cents,
             segments,
             bar_max_credits: total_credits.max(1),
-            is_current_member: true,
+            is_current_team_member: true,
         }
     }
 
@@ -160,7 +160,7 @@ impl MemberUsageRow {
             total_cost_cents: 0,
             segments,
             bar_max_credits: used.max(1),
-            is_current_member: true,
+            is_current_team_member: true,
         }
     }
 
@@ -181,7 +181,7 @@ impl MemberUsageRow {
             total_cost_cents,
             segments,
             bar_max_credits: total_credits.max(1),
-            is_current_member: true,
+            is_current_team_member: true,
         }
     }
 
@@ -197,7 +197,7 @@ impl MemberUsageRow {
         source_filter: SourceFilter,
     ) -> Vec<Self> {
         // Group entries by subject for joining against the member list below.
-        let mut grouped: HashMap<String, GroupedSubjectUsage> = HashMap::new();
+        let mut unmatched_usage_by_subject: HashMap<String, GroupedSubjectUsage> = HashMap::new();
         let mut unknown_counter = 0usize;
 
         for entry in entries
@@ -215,7 +215,7 @@ impl MemberUsageRow {
                     format!("{:?}:unknown-{unknown_counter}", entry.subject_type)
                 }
             };
-            let group = grouped.entry(key).or_insert_with(|| GroupedSubjectUsage {
+            let group = unmatched_usage_by_subject.entry(key).or_insert_with(|| GroupedSubjectUsage {
                 subject_type: entry.subject_type.clone(),
                 display_name: entry
                     .subject_display_name
@@ -229,7 +229,7 @@ impl MemberUsageRow {
         let mut rows: Vec<Self> = Vec::with_capacity(members.len());
 
         // One row per workspace member, including zero-usage members.
-        let mut seen_keys: std::collections::HashSet<String> = Default::default();
+        let mut seen_keys: HashSet<String> = Default::default();
         for member in members {
             let key = format!(
                 "{:?}:{}",
@@ -238,7 +238,7 @@ impl MemberUsageRow {
             );
             seen_keys.insert(key.clone());
 
-            let (segments, total_credits, total_cost_cents) = match grouped.remove(&key) {
+            let (segments, total_credits, total_cost_cents) = match unmatched_usage_by_subject.remove(&key) {
                 Some(group) => aggregate_segments(group.entries.iter()),
                 None => (Vec::new(), 0, 0),
             };
@@ -252,32 +252,30 @@ impl MemberUsageRow {
                 total_cost_cents,
                 segments,
                 bar_max_credits: 0,
-                is_current_member: true,
+                is_current_team_member: true,
             });
         }
 
-        // Subjects not in the member list (typically service accounts) render after.
-        for (key, group) in grouped {
+        // Subjects not in the member list (service accounts or former members) render after.
+        for (key, subject_usage) in unmatched_usage_by_subject {
             if seen_keys.contains(&key) {
                 continue;
             }
             // All entries in a group share the same subject_uid by construction
-            // (it's part of the grouping key), so first.is representative.
-            let subject_uid = group.entries.first().and_then(|e| e.subject_uid.clone());
-            let is_current_member = group.subject_type != AiCreditsUsageAndCostSubjectType::User
-                || subject_uid.is_none();
+            // (it's part of the grouping key), so first is representative.
+            let subject_uid = subject_usage.entries.first().and_then(|e| e.subject_uid.clone());
             let (segments, total_credits, total_cost_cents) =
-                aggregate_segments(group.entries.iter());
+                aggregate_segments(subject_usage.entries.iter());
             rows.push(Self {
-                subject_type: group.subject_type,
+                subject_type: subject_usage.subject_type,
                 subject_key: key,
                 subject_uid,
-                display_name: group.display_name,
+                display_name: subject_usage.display_name,
                 total_credits,
                 total_cost_cents,
                 segments,
                 bar_max_credits: 0,
-                is_current_member,
+                is_current_team_member: subject_usage.subject_type != AiCreditsUsageAndCostSubjectType::User,
             });
         }
 
@@ -470,7 +468,7 @@ fn render_row_card(
     let theme = appearance.theme();
     let card_bg = theme.background().into_solid();
     let main = blended_colors::text_main(theme, card_bg);
-    let is_former_member = !row.is_current_member;
+    let is_former_member = !row.is_current_team_member;
 
     let bar = render_stacked_bar(
         &row.segments,

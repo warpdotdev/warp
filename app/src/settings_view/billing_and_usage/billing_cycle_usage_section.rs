@@ -131,20 +131,11 @@ impl BillingCycleUsageSectionView {
             .is_some_and(|email| team.has_admin_permissions(email))
     }
 
-    /// The team this settings window is pointed at. The page always shows a
-    /// single team, so it doubles as the scope for every number rendered
-    /// here.
+    /// The team this settings window is pointed at.
     fn selected_team<'a>(&self, app: &'a AppContext) -> Option<&'a Team> {
         UserWorkspaces::as_ref(app).team_for_view_handle(&self.self_handle, app)
     }
 
-    /// Entries of the selected cycle that belong on this page.
-    ///
-    /// `Workspace.billingCycleUsageHistory` covers every team in the
-    /// workspace, so a viewer who can see more than their own team (e.g. a
-    /// workspace admin) gets other teams' entries in the payload. Narrow
-    /// them to the selected team before anything is aggregated, mirroring
-    /// `filteredEntries` in warp-server's `BillingSettingsV2.tsx`.
     fn visible_entries(
         &self,
         workspace: &Workspace,
