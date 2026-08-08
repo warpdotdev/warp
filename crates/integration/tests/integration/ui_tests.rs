@@ -316,6 +316,8 @@ integration_tests! {
     #[ignore = "Affected by agent_view feature flag UI changes"]
     test_selection_last_to_ai_lines,
     test_restored_ai_block_renders_mermaid_and_local_images,
+    #[ignore = "Manual visual verification: captures real-display status-bar screenshots"]
+    test_credential_refresh_status_bar_visuals,
 
     // Middle-click-paste is only implemented for Linux right now.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

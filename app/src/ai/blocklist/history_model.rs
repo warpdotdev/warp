@@ -1066,7 +1066,7 @@ impl BlocklistAIHistoryModel {
 
     /// Add a new [`AIAgentExchange`] to the [`AIConversation`] with the given [`AIConversationId`].
     /// Emits an event with the new exchange.
-    pub(super) fn update_conversation_for_new_request_input(
+    pub(crate) fn update_conversation_for_new_request_input(
         &mut self,
         request_input: RequestInput,
         stream_id: ResponseStreamId,

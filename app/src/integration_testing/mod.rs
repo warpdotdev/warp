@@ -2,6 +2,8 @@ use std::borrow::Cow;
 
 use warpui::{App, AssetProvider, View, ViewHandle, WindowId};
 
+pub use crate::ai::blocklist::ResponseStreamId;
+
 pub mod agent_mode;
 pub mod ai_document;
 pub mod assertions;

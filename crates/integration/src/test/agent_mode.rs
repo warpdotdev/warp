@@ -10,6 +10,7 @@ use pathfinder_geometry::vector::{Vector2F, vec2f};
 use settings::ToggleableSetting;
 use warp::cmd_or_ctrl_shift;
 use warp::features::FeatureFlag;
+use warp::integration_testing::ResponseStreamId;
 use warp::integration_testing::clipboard::assert_clipboard_contains_string;
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::{
@@ -222,6 +223,71 @@ pub fn test_restored_ai_block_renders_mermaid_and_local_images() -> Builder {
                         async_assert!(
                             view.last_ai_block().is_some(),
                             "Restored AI block should exist"
+                        )
+                    })
+                }),
+        )
+}
+
+pub fn test_credential_refresh_status_bar_visuals() -> Builder {
+    let stream_id = ResponseStreamId::new_for_test();
+    let waiting_stream_id = stream_id.clone();
+    let completed_stream_id = stream_id;
+
+    new_builder()
+        .with_real_display()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        .with_step(
+            TestStep::new("Start request-blocking credential refresh")
+                .with_action(move |app, window_id, _| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.update(app, |view, ctx| {
+                        view.set_credential_refresh_waiting_for_integration_test(
+                            waiting_stream_id.clone(),
+                            true,
+                            ctx,
+                        );
+                    });
+                })
+                .with_take_screenshot("credential_refresh_before_delay.png"),
+        )
+        .with_step(
+            TestStep::new("Wait for credential refresh display delay")
+                .set_post_step_pause(Duration::from_millis(400)),
+        )
+        .with_step(
+            TestStep::new("Capture blocked credential refresh status")
+                .with_take_screenshot("credential_refresh_waiting.png")
+                .add_assertion(|app, window_id| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.read(app, |view, ctx| {
+                        async_assert!(
+                            view.is_credential_refresh_text_visible_for_integration_test(ctx),
+                            "credential refresh text should be visible after the delay"
+                        )
+                    })
+                }),
+        )
+        .with_step(
+            TestStep::new("Complete credential refresh and capture reverted status")
+                .with_action(move |app, window_id, _| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.update(app, |view, ctx| {
+                        view.set_credential_refresh_waiting_for_integration_test(
+                            completed_stream_id.clone(),
+                            false,
+                            ctx,
+                        );
+                    });
+                })
+                .with_take_screenshot("credential_refresh_completed.png")
+                .add_assertion(|app, window_id| {
+                    let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+                    terminal_view.read(app, |view, ctx| {
+                        async_assert!(
+                            !view.is_credential_refresh_text_visible_for_integration_test(ctx),
+                            "credential refresh text should clear immediately"
                         )
                     })
                 }),
