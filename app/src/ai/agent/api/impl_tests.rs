@@ -146,8 +146,7 @@ fn supported_tools_includes_ask_user_question_when_enabled_and_feature_flag_is_e
 }
 
 #[test]
-fn supported_tools_include_upload_artifact_when_feature_flag_is_enabled() {
-    let _flag = FeatureFlag::ArtifactCommand.override_enabled(true);
+fn supported_tools_include_upload_artifact_for_local_sessions() {
     let params = request_params_with_ask_user_question_enabled(false);
     let supported_tools = get_supported_tools(&params);
 
@@ -155,9 +154,8 @@ fn supported_tools_include_upload_artifact_when_feature_flag_is_enabled() {
 }
 
 #[test]
-fn supported_tools_omit_upload_artifact_when_feature_flag_is_disabled() {
-    let _flag = FeatureFlag::ArtifactCommand.override_enabled(false);
-    let params = request_params_with_ask_user_question_enabled(false);
+fn supported_tools_omit_upload_artifact_for_remote_sessions() {
+    let params = request_params_for_remote(Some(HostId::new("host".to_string())));
     let supported_tools = get_supported_tools(&params);
 
     assert!(!supported_tools.contains(&api::ToolType::UploadFileArtifact));

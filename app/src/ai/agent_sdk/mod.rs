@@ -203,12 +203,7 @@ fn dispatch_command(
             }
             harness_support::run(ctx, global_options, args)
         }
-        CliCommand::Artifact(artifact_cmd) => {
-            if !FeatureFlag::ArtifactCommand.is_enabled() {
-                return Err(anyhow::anyhow!("invalid value 'artifact'"));
-            }
-            artifact::run(ctx, global_options, artifact_cmd)
-        }
+        CliCommand::Artifact(artifact_cmd) => artifact::run(ctx, global_options, artifact_cmd),
         CliCommand::ApiKey(api_key_cmd) => {
             if !FeatureFlag::APIKeyManagement.is_enabled() {
                 return Err(anyhow::anyhow!("invalid value 'api-key'"));

@@ -261,15 +261,6 @@ impl Args {
                     }
                 }
 
-                if !FeatureFlag::ArtifactCommand.is_enabled() {
-                    let args: Vec<String> = env::args().collect();
-                    if args.len() > 1 && args[1] == "artifact" {
-                        eprintln!("error: unrecognized subcommand 'artifact'\n");
-                        eprintln!("For more information, try '--help'");
-                        std::process::exit(2);
-                    }
-                }
-
                 if !FeatureFlag::APIKeyManagement.is_enabled() {
                     let args: Vec<String> = env::args().collect();
                     if args.len() > 1 && args[1] == "api-key" {
@@ -395,11 +386,6 @@ impl Args {
                         get_cmd.mut_arg("conversation", |arg| arg.hide(true))
                     })
             });
-        }
-
-        // Hide the artifact subcommand from help text.
-        if !FeatureFlag::ArtifactCommand.is_enabled() {
-            command = command.mut_subcommand("artifact", |c| c.hide(true));
         }
 
         // Hide the api-key subcommand from help text.
