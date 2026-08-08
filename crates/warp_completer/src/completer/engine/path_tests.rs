@@ -688,3 +688,37 @@ pub fn test_sorted_cd_directories_pwd_at_dot_in_middle() {
     .collect();
     assert_eq!(displays, vec!["from-a/", "from-pwd/", "from-b/"]);
 }
+
+#[cfg(unix)]
+#[test]
+fn test_engine_dir_entry_classifies_symlink_targets() {
+    use std::collections::HashMap;
+
+    let base = std::env::temp_dir().join(format!(
+        "warp-app3993-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(base.join("realdir")).unwrap();
+    std::fs::write(base.join("realfile.txt"), b"contents").unwrap();
+    std::os::unix::fs::symlink("realdir", base.join("linkdir")).unwrap();
+    std::os::unix::fs::symlink("realfile.txt", base.join("linkfile")).unwrap();
+
+    let classified: HashMap<String, EngineFileType> = std::fs::read_dir(&base)
+        .unwrap()
+        .map(|entry| {
+            let entry = EngineDirEntry::try_from(entry.unwrap()).unwrap();
+            (entry.file_name.clone(), entry.file_type)
+        })
+        .collect();
+
+    std::fs::remove_dir_all(&base).ok();
+
+    assert_eq!(classified.get("realdir"), Some(&EngineFileType::Directory));
+    assert_eq!(classified.get("linkdir"), Some(&EngineFileType::Directory));
+    assert_eq!(classified.get("realfile.txt"), Some(&EngineFileType::File));
+    assert_eq!(classified.get("linkfile"), Some(&EngineFileType::File));
+}

@@ -1,5 +1,7 @@
 #[cfg(feature = "completions_v2")]
 mod js;
+#[cfg(windows)]
+mod wsl_symlinks;
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
@@ -97,9 +99,15 @@ impl SessionContext {
                     return vec![];
                 };
 
-                read_dir
-                    .filter_map(|res| res.and_then(EngineDirEntry::try_from).ok())
-                    .collect::<Vec<_>>()
+                cfg_if::cfg_if! {
+                    if #[cfg(windows)] {
+                        wsl_symlinks::list_entries(self, directory, read_dir).await
+                    } else {
+                        read_dir
+                            .filter_map(|res| res.and_then(EngineDirEntry::try_from).ok())
+                            .collect::<Vec<_>>()
+                    }
+                }
             }
             SessionType::WarpifiedRemote { .. } => {
                 let env_vars = self
