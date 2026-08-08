@@ -360,6 +360,56 @@ fn attributes_to_text_style(attributes_dictionary: CFDictionary<CFString, CFType
     text_styles
 }
 
+/// Upper bound on the number of characters Core Text will lay out in a single
+/// call.
+///
+/// A single logical line (paragraph) is laid out as one Core Text line, so a
+/// pathologically long line with no break opportunities (for example a
+/// multi-megabyte minified bundle or base64 payload restored into an editor
+/// block) would otherwise materialize one [`Glyph`] and one [`CaretPosition`]
+/// per character. That produces multi-gigabyte `Vec` allocations and can OOM the
+/// app. Real, human-readable lines are orders of magnitude shorter than this, so
+/// clamping the input here bounds peak memory while leaving normal rendering
+/// untouched. See APP-4780 (Sentry issue 7259255054).
+const MAX_LAYOUT_CHARS: usize = 1_000_000;
+
+/// If `text` is longer than [`MAX_LAYOUT_CHARS`], returns a copy truncated to a
+/// character boundary along with `style_runs` whose (character-based) ranges are
+/// clamped to the truncated length. Returns `None` when no clamping is needed so
+/// the common path avoids any allocation.
+fn clamp_layout_input(
+    text: &str,
+    style_runs: &[(Range<usize>, StyleAndFont)],
+) -> Option<(String, Vec<(Range<usize>, StyleAndFont)>)> {
+    // Fast path: byte length is an upper bound on the character count, so when it
+    // is within the cap there is nothing to clamp and we avoid scanning the text
+    // on the (overwhelmingly common) short-line path.
+    if text.len() <= MAX_LAYOUT_CHARS {
+        return None;
+    }
+
+    // `char_indices().nth(MAX_LAYOUT_CHARS)` yields the byte offset of the first
+    // character past the cap, or `None` when the text is already within the cap.
+    let truncate_at = text.char_indices().nth(MAX_LAYOUT_CHARS)?.0;
+    let truncated_text = text[..truncate_at].to_string();
+
+    // Style-run ranges are expressed in character indices. Drop runs that start
+    // beyond the cap and clamp the end of any run that straddles it.
+    let clamped_runs = style_runs
+        .iter()
+        .filter_map(|(range, font)| {
+            (range.start < MAX_LAYOUT_CHARS)
+                .then_some((range.start..range.end.min(MAX_LAYOUT_CHARS), *font))
+        })
+        .collect();
+
+    log::warn!(
+        "Text layout input exceeds {MAX_LAYOUT_CHARS} chars; truncating to bound memory usage (see APP-4780)"
+    );
+
+    Some((truncated_text, clamped_runs))
+}
+
 /// Lays out a *single* line using Core Text.
 pub fn layout_line(
     text: &str,
@@ -387,6 +437,13 @@ fn layout_line_with_offset(
             char_offset,
         )
     } else {
+        // Bound peak memory for pathologically long single lines before Core Text
+        // materializes a glyph and caret per character.
+        let clamped = clamp_layout_input(text, style_runs);
+        let (text, style_runs) = match &clamped {
+            Some((clamped_text, clamped_runs)) => (clamped_text.as_str(), clamped_runs.as_slice()),
+            None => (text, style_runs),
+        };
         let attributed_string =
             create_attributed_string(text, style_runs, font_db, line_style, None);
         let line = CTLine::new_with_attributed_string(attributed_string.as_concrete_TypeRef());
@@ -602,6 +659,13 @@ pub fn layout_text(
     if text.is_empty() {
         TextFrame::empty(line_style.font_size, line_style.line_height_ratio)
     } else {
+        // Bound peak memory for pathologically long single lines before Core Text
+        // materializes a glyph and caret per character.
+        let clamped = clamp_layout_input(text, style_runs);
+        let (text, style_runs) = match &clamped {
+            Some((clamped_text, clamped_runs)) => (clamped_text.as_str(), clamped_runs.as_slice()),
+            None => (text, style_runs),
+        };
         // Ensure the max height is finite--under certain conditions `CTFrameSetter` won't terminate
         // if the height is unbounded.
         let max_height = max_height.min(f32::MAX);
