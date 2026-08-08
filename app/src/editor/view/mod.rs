@@ -5017,6 +5017,18 @@ impl EditorView {
     }
 
     pub fn user_insert(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        // A single-line buffer can never legitimately hold a line break, but some platforms
+        // report one as the "typed text" of a key they also deliver as a key event (winit
+        // reports `\r` for Enter). When that key event goes unhandled, the text is dispatched
+        // here and would otherwise be inserted as a character that is invisible everywhere it
+        // is displayed yet still travels with the field's value.
+        let sanitized = (self.single_line && text.contains(['\r', '\n']))
+            .then(|| text.replace(['\r', '\n'], ""));
+        if sanitized.as_deref().is_some_and(str::is_empty) {
+            return;
+        }
+        let text = sanitized.as_deref().unwrap_or(text);
+
         let should_autocomplete_symbols =
             self.autocomplete_symbols_allowed && self.autocomplete_symbols_setting;
         let action = PlainTextEditorViewAction::from_inserted_str(text);

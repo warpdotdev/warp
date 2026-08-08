@@ -116,6 +116,27 @@ pub struct CustomEndpointModel {
     pub config_key: String,
 }
 
+/// Strips control characters and surrounding whitespace from a user-entered custom
+/// inference field.
+///
+/// Single-line settings fields can end up holding an invisible control character (most
+/// commonly a `\r` produced by an unhandled Enter keypress on Windows, where the
+/// platform reports `\r` as the typed text for that key). Such a character is invisible
+/// everywhere it is displayed and survives `trim`, so a model name that looks correct is
+/// still rejected by the provider as an unknown model.
+pub fn sanitize_custom_model_field(value: &str) -> String {
+    let sanitized: String = value.chars().filter(|c| !c.is_control()).collect();
+    sanitized.trim().to_owned()
+}
+
+/// Applies [`sanitize_custom_model_field`] to an optional field, discarding it when
+/// nothing is left.
+fn sanitize_optional_custom_model_field(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| sanitize_custom_model_field(&value))
+        .filter(|value| !value.is_empty())
+}
+
 impl CustomEndpointModel {
     /// Picker label: prefer the user-provided alias; fall back to the raw model name
     /// so a row is never blank.
@@ -124,6 +145,14 @@ impl CustomEndpointModel {
             Some(alias) if !alias.trim().is_empty() => alias,
             _ => &self.name,
         }
+    }
+
+    /// The model identifier sent to the provider on the wire.
+    ///
+    /// Sanitized rather than returned verbatim so already-persisted values that picked up
+    /// an invisible control character still resolve to a model the provider recognizes.
+    pub fn request_slug(&self) -> String {
+        sanitize_custom_model_field(&self.name)
     }
 }
 
@@ -282,6 +311,36 @@ pub struct CustomEndpointParams {
     pub models: Vec<(String, Option<String>, Option<String>)>,
     pub schema: CustomEndpointSchema,
 }
+
+/// Builds the persisted [`CustomEndpoint`] for an add/save from the settings UI.
+///
+/// Model names and aliases are sanitized here so an invisible control character typed
+/// into (or pasted into) a settings field is never persisted in the first place.
+fn build_custom_endpoint(
+    name: String,
+    url: String,
+    api_key: String,
+    schema: CustomEndpointSchema,
+    models: Vec<(String, Option<String>, Option<String>)>,
+) -> CustomEndpoint {
+    CustomEndpoint {
+        name,
+        url,
+        api_key,
+        schema,
+        models: models
+            .into_iter()
+            .map(|(name, alias, config_key)| CustomEndpointModel {
+                name: sanitize_custom_model_field(&name),
+                alias: sanitize_optional_custom_model_field(alias),
+                config_key: config_key
+                    .filter(|k| !k.is_empty())
+                    .unwrap_or_else(|| Uuid::new_v4().to_string()),
+            })
+            .collect(),
+    }
+}
+
 fn provider_credential_action(is_present: bool) -> ProviderCredentialTelemetryAction {
     if is_present {
         ProviderCredentialTelemetryAction::Added
@@ -478,22 +537,9 @@ impl ApiKeyManager {
             models,
             schema,
         } = params;
-        self.keys.custom_endpoints.push(CustomEndpoint {
-            name,
-            url,
-            api_key,
-            schema,
-            models: models
-                .into_iter()
-                .map(|(name, alias, config_key)| CustomEndpointModel {
-                    name,
-                    alias,
-                    config_key: config_key
-                        .filter(|k| !k.is_empty())
-                        .unwrap_or_else(|| Uuid::new_v4().to_string()),
-                })
-                .collect(),
-        });
+        self.keys
+            .custom_endpoints
+            .push(build_custom_endpoint(name, url, api_key, schema, models));
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
@@ -514,22 +560,8 @@ impl ApiKeyManager {
             models,
             schema,
         } = params;
-        self.keys.custom_endpoints[index] = CustomEndpoint {
-            name,
-            url,
-            api_key,
-            schema,
-            models: models
-                .into_iter()
-                .map(|(name, alias, config_key)| CustomEndpointModel {
-                    name,
-                    alias,
-                    config_key: config_key
-                        .filter(|k| !k.is_empty())
-                        .unwrap_or_else(|| Uuid::new_v4().to_string()),
-                })
-                .collect(),
-        };
+        self.keys.custom_endpoints[index] =
+            build_custom_endpoint(name, url, api_key, schema, models);
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
@@ -585,6 +617,10 @@ impl ApiKeyManager {
     ///
     /// Returns `None` when custom models should not be included or no endpoint has both a
     /// non-empty URL and API key.
+    ///
+    /// Each model's `slug` is the sanitized model name (see
+    /// [`CustomEndpointModel::request_slug`]) so an invisible control character in the
+    /// stored name can never reach the provider.
     pub fn custom_model_providers_for_request(
         &self,
         include_custom_models: bool,
@@ -606,13 +642,16 @@ impl ApiKeyManager {
                     models: endpoint
                         .models
                         .iter()
-                        .filter(|m| !m.name.trim().is_empty() && !m.config_key.is_empty())
-                        .map(
-                            |m| api::request::settings::custom_model_providers::CustomModel {
-                                slug: m.name.clone(),
-                                config_key: m.config_key.clone(),
-                            },
-                        )
+                        .filter(|m| !m.config_key.is_empty())
+                        .filter_map(|m| {
+                            let slug = m.request_slug();
+                            (!slug.is_empty()).then(|| {
+                                api::request::settings::custom_model_providers::CustomModel {
+                                    slug,
+                                    config_key: m.config_key.clone(),
+                                }
+                            })
+                        })
                         .collect(),
                 },
             )

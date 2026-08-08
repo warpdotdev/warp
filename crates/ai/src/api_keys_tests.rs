@@ -460,6 +460,138 @@ fn endpoints_with_only_empty_models_are_skipped() {
     assert!(mgr.custom_model_providers_for_request(true).is_none());
 }
 
+// ── model identifier sanitization (#14782) ──────────────────────
+
+#[test]
+fn custom_model_slug_strips_trailing_carriage_return() {
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![endpoint_with_keys(
+            "ollama",
+            "https://ollama.com/v1",
+            "ep-key",
+            &[("glm-5.2:cloud\r", Some("GLM 5.2"), "uuid-1")],
+        )],
+        ..Default::default()
+    });
+
+    let result = mgr.custom_model_providers_for_request(true).unwrap();
+    let slug = &result.providers[0].models[0].slug;
+    assert_eq!(slug, "glm-5.2:cloud");
+    assert!(!slug.chars().any(char::is_control));
+}
+
+#[test]
+fn custom_model_slug_strips_control_characters_and_surrounding_whitespace() {
+    for raw in [
+        "  glm-5.2:cloud\r\n",
+        "\tglm-5.2:cloud\t",
+        "glm-5.2\u{7f}:cloud",
+        "\u{1b}glm-5.2:cloud",
+    ] {
+        let mgr = make_manager(ApiKeys {
+            custom_endpoints: vec![endpoint_with_keys(
+                "ollama",
+                "https://ollama.com/v1",
+                "ep-key",
+                &[(raw, None, "uuid-1")],
+            )],
+            ..Default::default()
+        });
+
+        let result = mgr.custom_model_providers_for_request(true).unwrap();
+        assert_eq!(
+            result.providers[0].models[0].slug, "glm-5.2:cloud",
+            "unexpected slug for input {raw:?}"
+        );
+    }
+}
+
+#[test]
+fn models_that_sanitize_to_nothing_are_skipped() {
+    let mgr = make_manager(ApiKeys {
+        custom_endpoints: vec![endpoint_with_keys(
+            "ep",
+            "https://a.io",
+            "k",
+            &[("\r\n", None, "uuid-z")],
+        )],
+        ..Default::default()
+    });
+    assert!(mgr.custom_model_providers_for_request(true).is_none());
+}
+
+#[test]
+fn request_slug_leaves_clean_names_untouched() {
+    let model = CustomEndpointModel {
+        name: "glm-5.2:cloud".into(),
+        alias: Some("GLM 5.2".into()),
+        config_key: "k".into(),
+    };
+    assert_eq!(model.request_slug(), "glm-5.2:cloud");
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn saved_custom_endpoint_models_are_sanitized() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+            warp_core::telemetry::testing::MockTelemetryContextProvider::register(ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.add_custom_endpoint(
+                CustomEndpointParams {
+                    name: "ollama".into(),
+                    url: "https://ollama.com/v1".into(),
+                    api_key: "ep-key".into(),
+                    schema: CustomEndpointSchema::OpenaiChatCompletions,
+                    models: vec![(
+                        "glm-5.2:cloud\r".into(),
+                        Some("GLM 5.2\r".into()),
+                        Some("uuid-1".into()),
+                    )],
+                },
+                ctx,
+            );
+        });
+
+        manager.read(&app, |manager, _| {
+            let model = &manager.keys().custom_endpoints[0].models[0];
+            assert_eq!(model.name, "glm-5.2:cloud");
+            assert_eq!(model.alias.as_deref(), Some("GLM 5.2"));
+        });
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.save_custom_endpoint(
+                0,
+                CustomEndpointParams {
+                    name: "ollama".into(),
+                    url: "https://ollama.com/v1".into(),
+                    api_key: "ep-key".into(),
+                    schema: CustomEndpointSchema::OpenaiChatCompletions,
+                    models: vec![(
+                        "glm-5.2:cloud\r".into(),
+                        // An alias that is nothing but control characters is dropped
+                        // rather than persisted as a blank picker label.
+                        Some("\r".into()),
+                        Some("uuid-1".into()),
+                    )],
+                },
+                ctx,
+            );
+        });
+
+        manager.read(&app, |manager, _| {
+            let model = &manager.keys().custom_endpoints[0].models[0];
+            assert_eq!(model.name, "glm-5.2:cloud");
+            assert_eq!(model.alias, None);
+            assert_eq!(model.display_label(), "glm-5.2:cloud");
+        });
+    });
+}
+
 // ── display_label fallback ─────────────────────────────────────
 
 #[test]
