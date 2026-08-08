@@ -100,14 +100,11 @@ pub(in crate::terminal::view) fn resolve_cloud_conversation_continuation_ui_stat
     if task.has_active_execution() {
         return Err(CloudConversationContinuationError::ActiveTaskExecution);
     }
-    let is_environment_setup_failure = task.state.is_failure_like()
-        && task
-            .status_message
-            .as_ref()
-            .is_some_and(|status_message| status_message.is_environment_setup_failure());
-    if is_environment_setup_failure && task.conversation_id().is_none() {
-        return Ok(CloudConversationContinuationUiState::Tombstone { cta: None });
-    }
+    // If the environment setup failed before a conversation started (setup_command failure,
+    // git-clone failure, etc.) the task will have no conversation_id. We intentionally fall
+    // through to the standard access-check path below so that task owners still receive a
+    // "Continue" CTA that lets them retry after fixing their setup commands.  Non-owners
+    // will reach `Err(MissingConversationToken)` → tombstone with no CTA, which is correct.
     let conversation_token = task
         .conversation_id()
         .map(|token| ServerConversationToken::new(token.to_string()));
