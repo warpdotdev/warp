@@ -211,8 +211,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ContextLineReviewComments,
         #[cfg(feature = "fast_forward_autoexecute_button")]
         FeatureFlag::FastForwardAutoexecuteButton,
-        #[cfg(feature = "code_find_replace")]
-        FeatureFlag::CodeFindReplace,
         #[cfg(feature = "command_palette_file_search")]
         FeatureFlag::CommandPaletteFileSearch,
         #[cfg(feature = "ai_context_menu_commands")]
