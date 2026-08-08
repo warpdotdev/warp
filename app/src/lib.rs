@@ -2194,6 +2194,9 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(
         ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer::new,
     );
+    // Pull-based discovery of remote orchestration subtrees. Registered
+    // after the history model since it subscribes to history events.
+    ctx.add_singleton_model(ai::blocklist::remote_subtree_model::RemoteSubtreeModel::new);
 
     if launch_mode.supports_indexing() {
         ctx.add_singleton_model(RepoOutlines::new);

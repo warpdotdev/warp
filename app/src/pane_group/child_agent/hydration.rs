@@ -1,3 +1,4 @@
+use session_sharing_protocol::common::SessionId;
 use warp_errors::report_error;
 use warpui::{SingletonEntity, ViewContext};
 
@@ -19,8 +20,11 @@ use crate::terminal::view::load_ai_conversation::{
 /// [`AmbientAgentTask`]. See [`decide_remote_child_hydration_action`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::pane_group) enum RemoteChildHydrationAction {
-    /// Attachable live session — join it in place.
-    LiveAttach,
+    /// Attachable live session — join it in place. Carries the session the
+    /// dispatch must connect the pane's viewer to: hydration-created panes
+    /// use a deferred (never-connected) viewer manager, unlike spawn-time
+    /// child panes which connect via the spawn stream's `SessionReady`.
+    LiveAttach { session_id: SessionId },
     /// No live session but a server conversation token is available;
     /// `task_is_terminal` controls whether the post-merge step inserts a
     /// conversation-ended tombstone (only terminal runs do).
@@ -41,11 +45,8 @@ pub(in crate::pane_group) fn decide_remote_child_hydration_action(
     task: &AmbientAgentTask,
 ) -> RemoteChildHydrationAction {
     let live_session_state = task.active_live_session_state();
-    if matches!(
-        live_session_state,
-        AmbientAgentLiveSessionState::Attachable { .. }
-    ) {
-        return RemoteChildHydrationAction::LiveAttach;
+    if let AmbientAgentLiveSessionState::Attachable { session_id } = live_session_state {
+        return RemoteChildHydrationAction::LiveAttach { session_id };
     }
 
     let task_is_terminal = matches!(live_session_state, AmbientAgentLiveSessionState::Inactive);
@@ -188,8 +189,14 @@ impl PaneGroup {
         };
 
         match decide_remote_child_hydration_action(&task) {
-            RemoteChildHydrationAction::LiveAttach => {
+            RemoteChildHydrationAction::LiveAttach { session_id } => {
                 self.apply_existing_ambient_task_to_pane(pane_id, child_id, task_id, ctx);
+                // The hidden pane's viewer manager was created deferred and
+                // has never joined a session, so flipping the view-model
+                // state alone leaves the pane empty. Connect the live
+                // session explicitly, mirroring the attach-to-running flow
+                // in `OpenOrAttachAmbientAgentConversation`.
+                self.attach_execution_session_to_ambient_pane(pane_id, session_id, ctx);
             }
             RemoteChildHydrationAction::LoadTranscript {
                 server_token,
@@ -325,10 +332,11 @@ impl PaneGroup {
                         }
                     }
                 }
-                Some(CloudConversationData::CLIAgent(_)) | None => {
-                    // Non-Oz transcript or fetch failure — the post-match
-                    // call handles attach + conditional tombstone.
+                Some(CloudConversationData::CLIAgent(_)) => {
+                    // Non-Oz transcript — the post-match call handles
+                    // attach + conditional tombstone.
                 }
+                None => {}
             }
 
             // Uniform post-match step so the `task_is_terminal` gate

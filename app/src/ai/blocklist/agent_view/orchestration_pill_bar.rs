@@ -52,6 +52,7 @@ use crate::ai::blocklist::orchestration_topology::{
     LoadedSubtreeRollup, aggregated_orchestrator_status, child_conversations_in_pill_order,
     loaded_subtree_rollup, orchestration_root_conversation_id,
 };
+use crate::ai::blocklist::remote_subtree_model::RemoteSubtreeModel;
 use crate::ai::blocklist::telemetry::{
     BlocklistOrchestrationTelemetryEvent, PillBarActionKind, PillBarInteractionEvent,
     PillBarPillKind, PillSwitchOutcome,
@@ -383,6 +384,7 @@ impl OrchestrationPillBar {
             // linkage must refresh when it does.
             | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. } => {
                 this.ensure_mouse_states(ctx);
+                this.sync_remote_subtree_watches(ctx);
                 ctx.notify();
             }
             BlocklistAIHistoryEvent::RemoveConversation {
@@ -422,6 +424,7 @@ impl OrchestrationPillBar {
                 this.menu_open_for = None;
             }
             this.ensure_mouse_states(ctx);
+            this.sync_remote_subtree_watches(ctx);
             ctx.notify();
         });
 
@@ -708,6 +711,40 @@ impl OrchestrationPillBar {
             breadcrumb_parent_id,
             specs,
         })
+    }
+
+    /// Registers the conversations rendered by this bar with
+    /// [`RemoteSubtreeModel`] so cloud-side children of any remote node are
+    /// discovered via pull and rollup badges refresh on its slow poll.
+    fn sync_remote_subtree_watches(&self, ctx: &mut ViewContext<Self>) {
+        let Some(active_id) = self
+            .agent_view_controller
+            .as_ref(ctx)
+            .agent_view_state()
+            .active_conversation_id()
+        else {
+            return;
+        };
+        let watch_ids = {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            let Some(active_conversation) = history.conversation(&active_id) else {
+                return;
+            };
+            let anchor_id = drill_down_anchor_id(active_id, active_conversation, ctx);
+            let mut watch_ids = vec![active_id, anchor_id];
+            watch_ids.extend(
+                history
+                    .child_conversation_ids_of(&anchor_id)
+                    .iter()
+                    .copied(),
+            );
+            watch_ids
+        };
+        RemoteSubtreeModel::handle(ctx).update(ctx, |model, ctx| {
+            for id in watch_ids {
+                model.watch(id, ctx);
+            }
+        });
     }
 }
 

@@ -341,6 +341,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(OrchestrationEventService::new);
     app.add_singleton_model(LocalAgentTaskSyncModel::new);
     app.add_singleton_model(OrchestrationEventStreamer::new);
+    app.add_singleton_model(crate::ai::blocklist::remote_subtree_model::RemoteSubtreeModel::new);
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(|_| GitRepoModels::new());
     app.add_singleton_model(|ctx| {

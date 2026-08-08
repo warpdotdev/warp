@@ -180,6 +180,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(OrchestrationEventService::new);
     app.add_singleton_model(LocalAgentTaskSyncModel::new);
     app.add_singleton_model(OrchestrationEventStreamer::new);
+    app.add_singleton_model(crate::ai::blocklist::remote_subtree_model::RemoteSubtreeModel::new);
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(crate::ai::blocklist::BlocklistAIPermissions::new);
     app.add_singleton_model(AgentNotificationsModel::new);
@@ -3228,9 +3229,14 @@ fn decide_remote_child_hydration_attachable_live_session_chooses_live_attach() {
         },
     );
 
+    // The decision must carry the session id: hydration-created panes have
+    // a never-connected viewer manager, so the dispatch arm attaches this
+    // session explicitly.
     assert_eq!(
         decide_remote_child_hydration_action(&task),
-        RemoteChildHydrationAction::LiveAttach,
+        RemoteChildHydrationAction::LiveAttach {
+            session_id: "11111111-1111-1111-1111-111111111111".parse().unwrap(),
+        },
     );
 }
 

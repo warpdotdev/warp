@@ -565,7 +565,7 @@ impl OrchestrationViewerModel {
 /// pill bar and the conversation list. Working states (queued/pending/claimed/
 /// in-progress) all collapse to [`ConversationStatus::InProgress`] so the
 /// pill badge stays in the loading spinner until the run terminates.
-fn conversation_status_from_state(state: &AmbientAgentTaskState) -> ConversationStatus {
+pub(crate) fn conversation_status_from_state(state: &AmbientAgentTaskState) -> ConversationStatus {
     match state {
         AmbientAgentTaskState::Queued
         | AmbientAgentTaskState::Pending
