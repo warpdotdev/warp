@@ -38,6 +38,11 @@ pub enum FileLoadError {
     DoesNotExist,
     #[error("IO error when loading file.")]
     IOError(#[from] io::Error),
+    /// The file exceeds the maximum size that will be read into memory.
+    /// Guards against multi-GiB memory spikes when loading very large files
+    /// into editor buffers. See `warp_files::MAX_EDITOR_FILE_SIZE_BYTES`.
+    #[error("File is too large to load: {size_bytes} bytes exceeds the {limit_bytes} byte limit")]
+    FileTooLarge { size_bytes: u64, limit_bytes: u64 },
 }
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
