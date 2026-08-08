@@ -215,14 +215,17 @@ impl MemberUsageRow {
                     format!("{:?}:unknown-{unknown_counter}", entry.subject_type)
                 }
             };
-            let group = unmatched_usage_by_subject.entry(key).or_insert_with(|| GroupedSubjectUsage {
-                subject_type: entry.subject_type.clone(),
-                display_name: entry
-                    .subject_display_name
-                    .clone()
-                    .unwrap_or_else(|| "Unknown".to_string()),
-                entries: Vec::new(),
-            });
+            let group =
+                unmatched_usage_by_subject
+                    .entry(key)
+                    .or_insert_with(|| GroupedSubjectUsage {
+                        subject_type: entry.subject_type.clone(),
+                        display_name: entry
+                            .subject_display_name
+                            .clone()
+                            .unwrap_or_else(|| "Unknown".to_string()),
+                        entries: Vec::new(),
+                    });
             group.entries.push(entry.clone());
         }
 
@@ -238,10 +241,11 @@ impl MemberUsageRow {
             );
             seen_keys.insert(key.clone());
 
-            let (segments, total_credits, total_cost_cents) = match unmatched_usage_by_subject.remove(&key) {
-                Some(group) => aggregate_segments(group.entries.iter()),
-                None => (Vec::new(), 0, 0),
-            };
+            let (segments, total_credits, total_cost_cents) =
+                match unmatched_usage_by_subject.remove(&key) {
+                    Some(group) => aggregate_segments(group.entries.iter()),
+                    None => (Vec::new(), 0, 0),
+                };
 
             rows.push(Self {
                 subject_type: AiCreditsUsageAndCostSubjectType::User,
@@ -263,7 +267,12 @@ impl MemberUsageRow {
             }
             // All entries in a group share the same subject_uid by construction
             // (it's part of the grouping key), so first is representative.
-            let subject_uid = subject_usage.entries.first().and_then(|e| e.subject_uid.clone());
+            let subject_uid = subject_usage
+                .entries
+                .first()
+                .and_then(|e| e.subject_uid.clone());
+            let is_current_team_member =
+                subject_usage.subject_type != AiCreditsUsageAndCostSubjectType::User;
             let (segments, total_credits, total_cost_cents) =
                 aggregate_segments(subject_usage.entries.iter());
             rows.push(Self {
@@ -275,7 +284,7 @@ impl MemberUsageRow {
                 total_cost_cents,
                 segments,
                 bar_max_credits: 0,
-                is_current_team_member: subject_usage.subject_type != AiCreditsUsageAndCostSubjectType::User,
+                is_current_team_member,
             });
         }
 

@@ -392,7 +392,7 @@ pub struct UsageEntry {
     pub attributed_team_uid: Option<String>,
 }
 
-#[derive(cynic::Enum, Clone, Debug, PartialEq, Eq, Copy)]
+#[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]
 #[cynic(graphql_type = "AICreditsUsageAndCostSubjectType")]
 pub enum AiCreditsUsageAndCostSubjectType {
     Team,
