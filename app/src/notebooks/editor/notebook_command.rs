@@ -754,7 +754,12 @@ impl RunnableCommandModel for NotebookCommand {
                                 ctx.dispatch_typed_action(WorkspaceAction::OpenLightbox {
                                     images: vec![LightboxImage {
                                         source: LightboxImageSource::Resolved {
-                                            asset_source: mermaid_asset_source(&source),
+                                            asset_source: mermaid_asset_source(
+                                                &source,
+                                                Appearance::as_ref(app)
+                                                    .theme()
+                                                    .inferred_color_scheme(),
+                                            ),
                                         },
                                         description: None,
                                     }],

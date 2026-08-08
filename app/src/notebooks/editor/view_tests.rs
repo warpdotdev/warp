@@ -5,6 +5,7 @@ use async_channel::TryRecvError;
 use parking_lot::Mutex;
 use string_offset::CharOffset;
 use tempfile::tempdir;
+use warp_core::ui::theme::ColorScheme;
 use warp_editor::content::mermaid_diagram::mermaid_asset_source;
 use warp_editor::render::element::RichTextAction;
 use warp_editor::render::model::{
@@ -190,7 +191,7 @@ fn test_loaded_mermaid_diagram_with_placeholder_height_needs_relayout() {
     App::test((), |app| async move {
         let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
         let contents = "graph TD\nA[Start] --> B[Finish]\n";
-        let asset_source = mermaid_asset_source(contents);
+        let asset_source = mermaid_asset_source(contents, ColorScheme::LightOnDark);
 
         let pending = app.read(|ctx| {
             let asset_cache = AssetCache::as_ref(ctx);

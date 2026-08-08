@@ -1514,7 +1514,10 @@ fn lightbox_image_for_mermaid_diagram(
         return None;
     }
 
-    let asset_source = mermaid_asset_source(&diagram.source);
+    let asset_source = mermaid_asset_source(
+        &diagram.source,
+        Appearance::as_ref(app).theme().inferred_color_scheme(),
+    );
     let asset_state = AssetCache::as_ref(app).load_asset::<ImageType>(asset_source.clone());
     if matches!(asset_state, AssetState::FailedToLoad(_)) {
         return None;
@@ -2154,7 +2157,10 @@ fn render_mermaid_diagram_section<A: Action>(
         return render_visual_markdown_fallback(&diagram.markdown_source, text_color, app);
     }
 
-    let asset_source = mermaid_asset_source(&diagram.source);
+    let asset_source = mermaid_asset_source(
+        &diagram.source,
+        Appearance::as_ref(app).theme().inferred_color_scheme(),
+    );
     let asset_state = AssetCache::as_ref(app).load_asset::<ImageType>(asset_source.clone());
     if matches!(asset_state, AssetState::FailedToLoad(_)) {
         return render_visual_markdown_fallback(&diagram.markdown_source, text_color, app);
@@ -2187,7 +2193,7 @@ fn render_mermaid_diagram_section<A: Action>(
         app,
     );
     let mermaid_canvas = Container::new(mermaid_block)
-        .with_background(theme.foreground())
+        .with_background(theme.background())
         .with_uniform_padding(MERMAID_CANVAS_PADDING)
         .finish();
 
