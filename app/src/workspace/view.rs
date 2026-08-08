@@ -365,7 +365,8 @@ use crate::tab::{
     COMPACT_TAB_WIDTH_THRESHOLD, ColorPickerTarget, MOVE_TO_GROUP_LABEL, NewSessionMenuItem,
     PaneNameMenuTarget, SelectedTabColor, TAB_BAR_BORDER_HEIGHT, TAB_INDICATOR_HEIGHT,
     TAB_PIN_INDICATOR_ICON_SIZE, TAB_PIN_VANISH_THRESHOLD, TabBarState, TabComponent, TabData,
-    TabTelemetryAction, color_picker_menu_items, tab_position_id, uses_vertical_tabs,
+    TabTelemetryAction, color_picker_menu_items, next_tab_color, tab_position_id,
+    uses_vertical_tabs,
 };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
@@ -5638,7 +5639,6 @@ impl Workspace {
             return;
         }
         group.color = color;
-        ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
     }
 
@@ -23898,6 +23898,27 @@ impl TypedActionView for Workspace {
                 );
             }
             SetActiveTabName(name) => self.set_active_tab_name(name, ctx),
+            CycleActiveTabColor => {
+                let Some((group_id, tab_color)) = self
+                    .tabs
+                    .get(self.active_tab_index)
+                    .map(|tab| (tab.group_id, tab.color()))
+                else {
+                    return;
+                };
+                if let Some(group_id) = group_id {
+                    let Some(current) = self
+                        .tab_groups
+                        .get(&group_id)
+                        .map(|group| group.color.resolve(None))
+                    else {
+                        return;
+                    };
+                    self.set_tab_group_color(group_id, next_tab_color(current), ctx);
+                } else {
+                    self.set_tab_color(self.active_tab_index, next_tab_color(tab_color), ctx);
+                }
+            }
             SetActiveTabColor(color) => {
                 // When the active tab is in a group, redirect to the group's color.
                 // The tab color selection menu is hidden when a tab is part of a group
