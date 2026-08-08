@@ -10,6 +10,7 @@ unsafe extern "C" {
         environment: &NSString,
         version: &NSString,
         isDogfood: bool,
+        shutdownTimeInterval: f64,
     );
     fn stopSentry();
     #[allow(dead_code)] // Only gets called when built in debug mode.
@@ -43,6 +44,7 @@ pub fn init_cocoa_sentry() {
                 &environment,
                 &release,
                 ChannelState::channel().is_dogfood(),
+                SENTRY_SHUTDOWN_TIMEOUT.as_secs_f64(),
             );
         }
     });
