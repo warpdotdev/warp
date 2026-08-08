@@ -734,6 +734,7 @@ fn test_sqlite_round_trips_tab_groups() {
                 color: SelectedTabColor::Color(AnsiColorIdentifier::Blue),
                 collapsed: true,
                 pinned: false,
+                working_directory: None,
             }],
         }],
         active_window_index: Some(0),
@@ -887,6 +888,7 @@ fn test_sqlite_round_trips_pinned_state() {
                     color: SelectedTabColor::default(),
                     collapsed: false,
                     pinned: true,
+                    working_directory: None,
                 },
                 TabGroupSnapshot {
                     id: unpinned_group_id,
@@ -894,6 +896,7 @@ fn test_sqlite_round_trips_pinned_state() {
                     color: SelectedTabColor::default(),
                     collapsed: false,
                     pinned: false,
+                    working_directory: None,
                 },
             ],
         }],
