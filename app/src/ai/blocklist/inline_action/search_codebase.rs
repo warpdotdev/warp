@@ -1,6 +1,7 @@
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
 
+use ai::agent::file_locations::group_file_contexts_for_display;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     Container, CornerRadius, CrossAxisAlignment, Element, Flex, FormattedTextElement,
@@ -14,8 +15,8 @@ use warpui::{
 use super::search_results_common::{
     CollapsibleSearchResultsState, render_collapsible_search_results,
 };
-use crate::ai::agent::FileContext;
 use crate::ai::agent::icons::yellow_running_icon;
+use crate::ai::agent::{FileContext, FileLocations};
 use crate::ai::blocklist::TextLocation;
 use crate::ai::blocklist::action_model::AIActionStatus;
 use crate::ai::blocklist::block::find::FindState;
@@ -34,6 +35,31 @@ use crate::terminal::view::RichContentLink;
 use crate::util::link_detection::{
     DetectedLinkType, DetectedLinksState, LinkLocation, detect_links,
 };
+
+pub(crate) fn search_codebase_display_files(
+    file_contexts: &[FileContext],
+    shell_launch_data: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
+) -> Vec<String> {
+    file_contexts
+        .iter()
+        .map(|file_context| {
+            FileLocations::from(file_context).to_user_message(
+                shell_launch_data,
+                current_working_directory,
+                None,
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn grouped_search_codebase_display_files(
+    file_contexts: &[FileContext],
+    shell_launch_data: Option<&ShellLaunchData>,
+    current_working_directory: Option<&String>,
+) -> Vec<String> {
+    group_file_contexts_for_display(file_contexts, shell_launch_data, current_working_directory)
+}
 
 pub enum SearchCodebaseViewEvent {
     OpenLinkTooltip {
@@ -132,15 +158,19 @@ impl SearchCodebaseView {
         self.status = status;
 
         self.detected_links_state.detected_links_by_location.clear();
-        for (line_index, file_context) in self.file_contexts.iter().enumerate() {
+        let display_files = search_codebase_display_files(
+            &self.file_contexts,
+            self.shell_launch_data.as_ref(),
+            self.current_working_directory.as_ref(),
+        );
+        for (line_index, file_display) in display_files.iter().enumerate() {
             let text_location = TextLocation::Action {
                 action_index: self.action_index,
                 line_index,
             };
-            let file_display = file_context.to_string();
             detect_links(
                 &mut self.detected_links_state,
-                &file_display,
+                file_display,
                 text_location,
                 self.current_working_directory.as_ref(),
                 self.shell_launch_data.as_ref(),
@@ -187,8 +217,6 @@ impl SearchCodebaseView {
         let appearance = Appearance::as_ref(app);
         let render_read_file_args = RenderReadFileArg::new(
             RenderContext {
-                shell_launch_data: self.shell_launch_data.as_ref(),
-                current_working_directory: self.current_working_directory.as_ref(),
                 detected_links_state: &self.detected_links_state,
                 secret_redaction_state: &self.secret_redaction_state,
             },
@@ -231,9 +259,14 @@ impl SearchCodebaseView {
             };
             self.render_formatted_text("No results found".to_string(), no_results_style, appearance)
         } else {
+            let display_files = search_codebase_display_files(
+                file_contexts,
+                self.shell_launch_data.as_ref(),
+                self.current_working_directory.as_ref(),
+            );
             render_read_files_text(
                 render_read_file_args,
-                file_contexts.iter().map(|fc| fc.to_string()),
+                &display_files,
                 app,
                 appearance,
                 self.action_index,
@@ -504,3 +537,7 @@ impl View for SearchCodebaseView {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "search_codebase_tests.rs"]
+mod tests;
