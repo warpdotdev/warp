@@ -190,9 +190,9 @@ pub(crate) struct CollapsibleSectionStates {
 #[derive(Default)]
 struct CollapsibleSectionState {
     /// Manual collapse override. `None` means the section's default (supplied
-    /// per render by the caller: thinking blocks default to collapsed once
-    /// finished, task lists default to expanded) — a recorded override wins
-    /// permanently.
+    /// per render by the caller: thinking blocks and conversation summaries
+    /// default to collapsed, task lists default to expanded) — a recorded
+    /// override wins permanently.
     collapse_override: Option<bool>,
     /// Hover state for the section header. Owned here (not created inline
     /// during render) so it survives element-tree rebuilds, following the
