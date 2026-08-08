@@ -197,8 +197,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CodebaseIndexPersistence,
         #[cfg(feature = "ai_context_menu")]
         FeatureFlag::AIContextMenuEnabled,
-        #[cfg(feature = "at_menu_outside_of_ai_mode")]
-        FeatureFlag::AtMenuOutsideOfAIMode,
         #[cfg(feature = "ai_resume_button")]
         FeatureFlag::AIResumeButton,
         #[cfg(feature = "figma_detection")]
