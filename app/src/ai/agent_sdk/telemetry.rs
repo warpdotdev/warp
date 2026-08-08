@@ -75,6 +75,8 @@ pub(super) enum CliTelemetryEvent {
     ConversationGet,
     /// Executing `warp run get <id> --conversation`
     RunConversationGet,
+    /// Executing `warp run timeline <run_id>`
+    RunTimelineGet,
     /// Executing `warp run message watch`
     RunMessageWatch { harness: &'static str },
     /// Executing `warp run message send`
@@ -208,6 +210,7 @@ impl TelemetryEvent for CliTelemetryEvent {
             CliTelemetryEvent::TaskGet => None,
             CliTelemetryEvent::ConversationGet => None,
             CliTelemetryEvent::RunConversationGet => None,
+            CliTelemetryEvent::RunTimelineGet => None,
             CliTelemetryEvent::RunMessageWatch { harness } => Some(json!({ "harness": harness })),
             CliTelemetryEvent::RunMessageSend { harness } => Some(json!({ "harness": harness })),
             CliTelemetryEvent::RunMessageList { harness } => Some(json!({ "harness": harness })),
@@ -328,6 +331,7 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             CliTelemetryEventDiscriminants::RunConversationGet => {
                 "CLI.Execute.Run.Conversation.Get"
             }
+            CliTelemetryEventDiscriminants::RunTimelineGet => "CLI.Execute.Run.Timeline.Get",
             CliTelemetryEventDiscriminants::RunMessageWatch => "CLI.Execute.Run.Message.Watch",
             CliTelemetryEventDiscriminants::RunMessageSend => "CLI.Execute.Run.Message.Send",
             CliTelemetryEventDiscriminants::RunMessageList => "CLI.Execute.Run.Message.List",
@@ -453,6 +457,9 @@ impl TelemetryEventDesc for CliTelemetryEventDiscriminants {
             }
             CliTelemetryEventDiscriminants::RunConversationGet => {
                 "Got run conversation from the Warp CLI"
+            }
+            CliTelemetryEventDiscriminants::RunTimelineGet => {
+                "Got run setup timeline from the Warp CLI"
             }
             CliTelemetryEventDiscriminants::RunMessageWatch => {
                 "Watched run messages from the Warp CLI"
