@@ -4492,6 +4492,81 @@ fn test_move_tab_to_group_expands_collapsed_group() {
 }
 
 #[test]
+fn test_grouping_a_tab_preserves_its_title() {
+    // Regression coverage for #14784 ("Tabs lose their title (reset to `New
+    // session`) when moved into a tab group"). Grouping must only change
+    // where a tab sits, so its title has to survive being pulled into a new
+    // group, moved between groups, and removed from a group again.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 2);
+
+            let titled_pane_group = workspace.tabs[1].pane_group.clone();
+            titled_pane_group.update(ctx, |pane_group, ctx| {
+                pane_group.set_title("deploy scripts", ctx);
+            });
+
+            let title_of = |workspace: &Workspace, pane_group_id, ctx: &AppContext| {
+                workspace
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.pane_group.id() == pane_group_id)
+                    .expect("titled tab should still exist")
+                    .pane_group
+                    .as_ref(ctx)
+                    .display_title(ctx)
+            };
+            let titled_id = titled_pane_group.id();
+            assert_eq!(title_of(workspace, titled_id, ctx), "deploy scripts");
+
+            // Group the first tab so there is an existing group to move into.
+            workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(0), ctx);
+            let existing_group_id = workspace.tabs[0]
+                .group_id
+                .expect("tab 0 should be in the new group");
+
+            let titled_index = workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == titled_id)
+                .expect("titled tab should still exist");
+            workspace.handle_action(
+                &WorkspaceAction::MoveTabToGroup {
+                    tab_index: titled_index,
+                    group_id: existing_group_id,
+                },
+                ctx,
+            );
+            assert_eq!(title_of(workspace, titled_id, ctx), "deploy scripts");
+
+            // Pulling it into a group of its own keeps the title too.
+            let titled_index = workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == titled_id)
+                .expect("titled tab should still exist");
+            workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(titled_index), ctx);
+            assert_eq!(title_of(workspace, titled_id, ctx), "deploy scripts");
+
+            // ...as does leaving the group entirely.
+            let titled_index = workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == titled_id)
+                .expect("titled tab should still exist");
+            workspace.handle_action(&WorkspaceAction::RemoveTabFromGroup(titled_index), ctx);
+            assert_eq!(title_of(workspace, titled_id, ctx), "deploy scripts");
+        });
+    });
+}
+
+#[test]
 fn test_move_selected_tabs_to_group_expands_collapsed_group() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
 

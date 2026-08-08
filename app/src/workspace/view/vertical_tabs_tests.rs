@@ -15,10 +15,10 @@ use super::{
     pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
     push_normalized_unique_summary_label, search_fragments_contain_query,
     select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
-    should_show_tab_group_header, shows_synced_inputs_indicator,
-    sort_summary_primary_labels_status_first, summary_overflow_count,
-    summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
-    terminal_pull_request_badge_label, terminal_search_text_fragments,
+    should_show_tab_group_header, should_show_tab_group_member_header,
+    shows_synced_inputs_indicator, sort_summary_primary_labels_status_first,
+    summary_overflow_count, summary_search_text_fragments, terminal_kind_badge_label,
+    terminal_primary_line_data, terminal_pull_request_badge_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
     vtab_diff_stats_text,
 };
@@ -691,6 +691,53 @@ fn tab_group_header_distinguishes_two_auto_named_multi_pane_tabs() {
         should_show_tab_group_header(false, false, 2), // tab 3
     ];
     assert_eq!(renders_header, vec![true, true, true]);
+}
+
+// Regression coverage for #14784 ("Tabs lose their title (reset to `New
+// session`) when moved into a tab group"). Grouping never mutated the title:
+// a grouped member is rendered without the per-tab outer container, so the
+// header carrying `PaneGroup::display_title` was dropped and each member row
+// fell back to its pane's generated title. These assert that a grouped member
+// keeps the same header the tab had before it was grouped.
+#[test]
+fn grouped_member_header_shows_for_custom_title() {
+    // The reported shape: a single-pane tab the user renamed. Ungrouped it
+    // shows its title in the per-tab header; grouped it must keep it instead
+    // of collapsing to the pane row's "New session".
+    assert!(should_show_tab_group_member_header(true, 1));
+    assert!(should_show_tab_group_member_header(true, 3));
+}
+
+#[test]
+fn grouped_member_header_shows_for_multi_pane_tabs_without_custom_title() {
+    assert!(should_show_tab_group_member_header(false, 2));
+    assert!(should_show_tab_group_member_header(false, 5));
+}
+
+#[test]
+fn grouped_member_header_hidden_for_single_pane_without_custom_title() {
+    // This shape has no tab-level title to lose — its only row already shows
+    // the pane title, grouped or not — so no header is added.
+    assert!(!should_show_tab_group_member_header(false, 1));
+    assert!(!should_show_tab_group_member_header(false, 0));
+}
+
+#[test]
+fn grouping_a_tab_does_not_change_whether_its_title_is_rendered() {
+    // "Grouping should only change where it sits in the sidebar, not its
+    // title": for every tab shape, the grouped member gate must agree with
+    // the ungrouped gate. `is_being_renamed` is excluded because the inline
+    // rename editor lives on the pane row for grouped members.
+    for has_custom_title in [false, true] {
+        for visible_pane_count in 0..4 {
+            assert_eq!(
+                should_show_tab_group_member_header(has_custom_title, visible_pane_count),
+                should_show_tab_group_header(has_custom_title, false, visible_pane_count),
+                "grouped and ungrouped title gates disagree for \
+                 has_custom_title={has_custom_title}, visible_pane_count={visible_pane_count}"
+            );
+        }
+    }
 }
 
 #[test]
