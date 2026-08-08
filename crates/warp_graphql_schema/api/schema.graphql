@@ -4451,6 +4451,7 @@ input UsageBasedPricingSettingsInput {
 }
 
 type UsageEntry {
+  attributedTeamUid: String
   costCents: Int!
   costType: AICreditsUsageAndCostType!
   creditsUsed: Int!

@@ -186,11 +186,8 @@ impl TuiHandoffBlock {
     }
 
     fn handle_model_event(&mut self, event: &TuiHandoffModelEvent, ctx: &mut ViewContext<Self>) {
-        if let TuiHandoffModelEvent::Changed { focus_block } = event {
+        if let TuiHandoffModelEvent::Changed { .. } = event {
             self.refresh_selector(ctx);
-            if *focus_block {
-                ctx.focus_self();
-            }
             ctx.notify();
         }
     }

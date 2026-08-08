@@ -19,7 +19,7 @@ use warp::tui_export::{
     GetRelevantFilesController, LLMId, MessageId, ModelEventDispatcher, OutputStatusUpdateCallback,
     ReceivedMessageDisplay, RenderableAIError, RequestCommandOutputResult, ServerOutputId,
     Sessions, Shared, SummarizationType, TaskId, TerminalModel, TodoOperation, TodoStatus,
-    TuiOnboardingMarker, TuiOnboardingMarkers, UserQueryMode,
+    TuiOnboardingMarker, TuiOnboardingMarkers, UserQueryMode, queue_tui_permission_action,
     register_tui_session_view_test_singletons, should_show_failed_output_usage_notice,
 };
 use warp_core::ui::color::blend::Blend;
@@ -1200,6 +1200,112 @@ fn ask_user_question_action_registers_a_stateful_child_view() {
     });
 }
 
+#[test]
+fn materializing_an_already_blocked_question_notifies_the_owner() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action = ask_user_question_action("ask-1", "Which one?");
+        let action_id = action.id.clone();
+        let conversation_id = AIConversationId::new();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: AIBlockOutputStatus::Pending,
+            },
+        );
+        let blocking_state_changes = Rc::new(Cell::new(0));
+        let changes_for_subscription = blocking_state_changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| match event {
+                TuiAIBlockEvent::BlockingStateChanged => {
+                    changes_for_subscription.set(changes_for_subscription.get() + 1);
+                }
+                TuiAIBlockEvent::LayoutInvalidated
+                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+            });
+        });
+        let action_model = block.read(&app, |block, _| block.action_model.clone());
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action.clone(), conversation_id, ctx);
+        });
+        assert_eq!(blocking_state_changes.get(), 0);
+
+        block.update(&mut app, |block, ctx| {
+            block.replace_model(
+                block.conversation_id,
+                Rc::new(FakeAgentBlockModel {
+                    inputs: Vec::new(),
+                    status: complete_output_messages(vec![action_message("message-1", action)]),
+                }),
+            );
+            let action_model = block.action_model.clone();
+            block.sync_action_views(&action_model, ctx);
+        });
+
+        assert_eq!(blocking_state_changes.get(), 1);
+        assert!(block.read(&app, |block, ctx| {
+            let Some(TuiToolCallView::AskQuestion(view)) = block.action_views.get(&action_id)
+            else {
+                return false;
+            };
+            view.as_ref(ctx).is_awaiting_answers(ctx)
+        }));
+    });
+}
+
+#[test]
+fn materializing_an_already_blocked_permission_prompt_notifies_the_owner() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action = test_action("generic-1");
+        let action_id = action.id.clone();
+        let conversation_id = AIConversationId::new();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: AIBlockOutputStatus::Pending,
+            },
+        );
+        let blocking_state_changes = Rc::new(Cell::new(0));
+        let changes_for_subscription = blocking_state_changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| match event {
+                TuiAIBlockEvent::BlockingStateChanged => {
+                    changes_for_subscription.set(changes_for_subscription.get() + 1);
+                }
+                TuiAIBlockEvent::LayoutInvalidated
+                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+            });
+        });
+        let action_model = block.read(&app, |block, _| block.action_model.clone());
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action.clone(), conversation_id, ctx);
+        });
+        assert_eq!(blocking_state_changes.get(), 0);
+
+        block.update(&mut app, |block, ctx| {
+            block.replace_model(
+                block.conversation_id,
+                Rc::new(FakeAgentBlockModel {
+                    inputs: Vec::new(),
+                    status: complete_output_messages(vec![action_message("message-1", action)]),
+                }),
+            );
+            let action_model = block.action_model.clone();
+            block.sync_action_views(&action_model, ctx);
+        });
+
+        assert_eq!(blocking_state_changes.get(), 1);
+        assert!(block.read(&app, |block, ctx| {
+            let Some(TuiToolCallView::Generic(view)) = block.action_views.get(&action_id) else {
+                return false;
+            };
+            view.as_ref(ctx).active_permission_prompt(ctx).is_some()
+        }));
+    });
+}
 #[test]
 fn streamed_ask_user_question_payload_replaces_the_initial_empty_child_view() {
     App::test((), |mut app| async move {
