@@ -87,3 +87,29 @@ fn test_interaction_state_prevents_editing() {
         assert_eq!(text.as_str(), "abc");
     });
 }
+
+#[test]
+fn test_select_to_buffer_boundaries() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view) = initialize_editor(&mut app);
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &CodeEditorViewAction::UserTyped(UserInput::new("first\nsecond")),
+                ctx,
+            );
+            view.handle_action(&CodeEditorViewAction::SelectToBufferStart, ctx);
+        });
+        editor_view.read(&app, |view, ctx| {
+            assert_eq!(view.selected_text(ctx).as_deref(), Some("first\nsecond"));
+        });
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
+            view.handle_action(&CodeEditorViewAction::SelectToBufferEnd, ctx);
+        });
+        editor_view.read(&app, |view, ctx| {
+            assert_eq!(view.selected_text(ctx).as_deref(), Some("first\nsecond"));
+        });
+    });
+}
