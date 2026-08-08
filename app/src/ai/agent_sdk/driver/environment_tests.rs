@@ -641,6 +641,23 @@ fn factory_clone_is_skipped_without_clone_url() {
 
 #[test]
 fn factory_clone_defers_to_a_persisted_environment_copy() {
+    // Environments provisioned before run-scoped cloning persist their own
+    // copy of the clone command in the older, explicit-target-dir shape.
+    // Detection keys off the URL env var name, not the command's exact
+    // shape, so this must still be recognized and left alone rather than
+    // duplicated with the newly emitted bare form.
+    let persisted =
+        "git clone \"$WARP_FACTORY_REPO_CLONE_URL\" \"$WARP_FACTORY_REPO_DIR\"".to_string();
+    let mut setup_commands = vec![persisted.clone(), "make setup".to_string()];
+    super::prepend_factory_definition_clone_for_values(
+        "https://t:token@definitions.example.com/team/factory.git",
+        &mut setup_commands,
+    );
+    assert_eq!(setup_commands, vec![persisted, "make setup".to_string()]);
+}
+
+#[test]
+fn factory_clone_defers_to_a_persisted_bare_clone_copy() {
     let persisted = "git clone \"$WARP_FACTORY_REPO_CLONE_URL\"".to_string();
     let mut setup_commands = vec![persisted.clone(), "make setup".to_string()];
     super::prepend_factory_definition_clone_for_values(
