@@ -1,0 +1,330 @@
+on:
+  pull_request:
+    branches:
+      - master
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+name: macOS Compile Cache Experiment
+concurrency:
+  group: macos-compile-cache-experiment-treatment-volumes
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  NEXTEST_PROFILE: ci
+  WORKSPACE_TEST_ARGS: --workspace --locked --exclude command-signatures-v2
+  RUSTFLAGS: -C debuginfo=line-tables-only --cfg=web_sys_unstable_apis
+
+jobs:
+  parameters:
+    name: Resolve experiment phase
+    if: >-
+      github.repository_owner == 'warpdotdev' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'kevinyang/macos-ci-observability'
+    timeout-minutes: 3
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      block: ${{ steps.resolve.outputs.block }}
+      phase: ${{ steps.resolve.outputs.phase }}
+      seed_attempt: ${{ steps.resolve.outputs.seed_attempt }}
+    steps:
+      - name: Resolve alternating seed and measure attempts
+        id: resolve
+        env:
+          MERGE_SHA: ${{ github.sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          seed_attempt=1
+          if [ "$RUN_ATTEMPT" = "1" ]; then
+            phase=seed
+            block=1
+          else
+            phase=measure
+            block="$((RUN_ATTEMPT - 1))"
+          fi
+          {
+            printf 'block=%s\n' "$block"
+            printf 'phase=%s\n' "$phase"
+            printf 'seed_attempt=%s\n' "$seed_attempt"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "Block: $block"
+            echo "Phase: $phase"
+            echo "Seed attempt: $seed_attempt"
+            echo "Merge SHA: $MERGE_SHA"
+            echo "Source SHA: $SOURCE_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  seed:
+    name: Seed block ${{ needs.parameters.outputs.block }} (${{ matrix.cache_scope }})
+    needs: parameters
+    if: needs.parameters.outputs.phase == 'seed'
+    timeout-minutes: 40
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cache_scope: 50gb
+            runner: 'namespace-profile-mac-ci-tests-50gb;overrides.cache-tag=warp-macos-tests-final-50gb-v1'
+          - cache_scope: 84gb
+            runner: 'namespace-profile-mac-ci-tests-84gb;overrides.cache-tag=warp-macos-tests-final-84gb-v1'
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: ./.github/actions/prepare_environment
+        id: prepare_environment
+        with:
+          target_os: macos
+          is_self_hosted: false
+          install_test_deps: true
+
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419 # v2.82.7
+        with:
+          tool: nextest
+
+      - name: Seed cache
+        uses: ./.github/actions/compile_macos_tests
+        with:
+          workspace_test_args: ${{ env.WORKSPACE_TEST_ARGS }}
+          source_sha: ${{ github.event.pull_request.head.sha }}
+          runner_profile: ${{ matrix.runner }}
+          cache_scope: ${{ matrix.cache_scope }}
+          counted: 'false'
+          cache_provider: ${{ steps.prepare_environment.outputs.rust_cache_provider }}
+          cache_identity: ${{ steps.prepare_environment.outputs.rust_cache_identity }}
+          cache_hit: ${{ steps.prepare_environment.outputs.rust_cache_hit }}
+          artifact_name: macos-compile-cache-${{ matrix.cache_scope }}-seed-${{ github.run_id }}-${{ github.run_attempt }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  validate_block:
+    name: Validate block ${{ needs.parameters.outputs.block }} measurements
+    needs:
+      - parameters
+      - measure
+      - scratch
+    if: >-
+      always() &&
+      needs.parameters.outputs.phase == 'measure' &&
+      needs.measure.result == 'failure' &&
+      needs.scratch.result == 'success'
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download 50 GB measurement
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos-compile-cache-50gb-measure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/measure-50gb
+
+      - name: Download 84 GB measurement
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos-compile-cache-84gb-measure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/measure-84gb
+
+      - name: Download scratch measurement
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos-compile-cache-scratch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/measure-scratch
+
+      - name: Validate matched block
+        env:
+          EXPECTED_SEED_ATTEMPT: ${{ needs.parameters.outputs.seed_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for key in checked_out_tree_sha environment_identity_sha; do
+            expected="$(sed -n "s/^$key=//p" "$RUNNER_TEMP/measure-50gb/metrics.env")"
+            for scope in 84gb scratch; do
+              actual="$(sed -n "s/^$key=//p" "$RUNNER_TEMP/measure-$scope/metrics.env")"
+              if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+                echo "::error::Measurement arms do not share $key"
+                exit 1
+              fi
+            done
+          done
+          for scope in 50gb 84gb; do
+            metrics="$RUNNER_TEMP/measure-$scope/metrics.env"
+            if [ "$(sed -n 's/^compile_status=//p' "$metrics")" != "0" ] ||
+               [ "$(sed -n 's/^measurement_ready_for_discard=//p' "$metrics")" != "true" ] ||
+               [ "$(sed -n 's/^seed_identity_match=//p' "$metrics")" != "true" ] ||
+               [ "$(sed -n 's/^seed_marker_found=//p' "$metrics")" != "true" ] ||
+               [ "$(sed -n 's/^seed_run_id=//p' "$metrics")" != "$GITHUB_RUN_ID" ] ||
+               [ "$(sed -n 's/^seed_run_attempt=//p' "$metrics")" != "$EXPECTED_SEED_ATTEMPT" ]; then
+              echo "::error::$scope did not restore the expected seed generation"
+              exit 1
+            fi
+          done
+          scratch_metrics="$RUNNER_TEMP/measure-scratch/metrics.env"
+          if [ "$(sed -n 's/^cache_provider=//p' "$scratch_metrics")" != "none" ] ||
+             [ "$(sed -n 's/^pre_target_kib=//p' "$scratch_metrics")" != "0" ]; then
+            echo "::error::Scratch arm attached cache state"
+            exit 1
+          fi
+
+  validate_seed:
+    name: Validate block ${{ needs.parameters.outputs.block }} seed
+    needs:
+      - parameters
+      - seed
+    if: needs.parameters.outputs.phase == 'seed' && needs.seed.result == 'success'
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Download 50 GB seed diagnostics
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos-compile-cache-50gb-seed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/seed-50gb
+
+      - name: Download 84 GB seed diagnostics
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: macos-compile-cache-84gb-seed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/seed-84gb
+
+      - name: Compare treatment seed inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for key in checked_out_tree_sha environment_identity_sha; do
+            value_50gb="$(sed -n "s/^$key=//p" "$RUNNER_TEMP/seed-50gb/metrics.env")"
+            value_84gb="$(sed -n "s/^$key=//p" "$RUNNER_TEMP/seed-84gb/metrics.env")"
+            if [ -z "$value_50gb" ] || [ "$value_50gb" != "$value_84gb" ]; then
+              echo "::error::Treatment seeds do not share $key"
+              exit 1
+            fi
+          done
+          for scope in 50gb 84gb; do
+            marker_written="$(sed -n 's/^seed_marker_written=//p' "$RUNNER_TEMP/seed-$scope/metrics.env")"
+            if [ "$marker_written" != "true" ]; then
+              echo "::error::$scope seed did not persist its cache marker"
+              exit 1
+            fi
+          done
+
+
+  measure:
+    name: Measure block ${{ needs.parameters.outputs.block }} (${{ matrix.cache_scope }})
+    needs: parameters
+    if: needs.parameters.outputs.phase == 'measure'
+    timeout-minutes: 40
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cache_scope: 50gb
+            runner: 'namespace-profile-mac-ci-tests-50gb;overrides.cache-tag=warp-macos-tests-final-50gb-v1'
+          - cache_scope: 84gb
+            runner: 'namespace-profile-mac-ci-tests-84gb;overrides.cache-tag=warp-macos-tests-final-84gb-v1'
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
+
+
+      - uses: ./.github/actions/prepare_environment
+        id: prepare_environment
+        with:
+          target_os: macos
+          is_self_hosted: false
+          install_test_deps: true
+
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419 # v2.82.7
+        with:
+          tool: nextest
+
+      - name: Measure restored cache
+        uses: ./.github/actions/compile_macos_tests
+        with:
+          workspace_test_args: ${{ env.WORKSPACE_TEST_ARGS }}
+          source_sha: ${{ github.event.pull_request.head.sha }}
+          runner_profile: ${{ matrix.runner }}
+          cache_scope: ${{ matrix.cache_scope }}
+          counted: 'true'
+          require_seed_marker: 'true'
+          discard_cache_after_measurement: 'true'
+          cache_provider: ${{ steps.prepare_environment.outputs.rust_cache_provider }}
+          cache_identity: ${{ steps.prepare_environment.outputs.rust_cache_identity }}
+          cache_hit: ${{ steps.prepare_environment.outputs.rust_cache_hit }}
+          artifact_name: macos-compile-cache-${{ matrix.cache_scope }}-measure-${{ github.run_id }}-${{ github.run_attempt }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  scratch:
+    name: Measure block ${{ needs.parameters.outputs.block }} scratch
+    needs: parameters
+    if: needs.parameters.outputs.phase == 'measure'
+    timeout-minutes: 40
+    runs-on: namespace-profile-mac-ci-tests-scratch
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
+
+
+      - name: Use ephemeral Rust paths
+        run: |
+          {
+            echo "CARGO_HOME=$RUNNER_TEMP/cargo-home"
+            echo "CARGO_TARGET_DIR=$RUNNER_TEMP/cargo-target"
+          } >> "$GITHUB_ENV"
+
+      - uses: ./.github/actions/prepare_environment
+        id: prepare_environment
+        with:
+          target_os: macos
+          is_self_hosted: false
+          install_test_deps: true
+          enable_rust_cache: false
+          enable_namespace_cache: false
+
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419 # v2.82.7
+        with:
+          tool: nextest
+
+      - name: Measure scratch compile
+        uses: ./.github/actions/compile_macos_tests
+        with:
+          workspace_test_args: ${{ env.WORKSPACE_TEST_ARGS }}
+          source_sha: ${{ github.event.pull_request.head.sha }}
+          runner_profile: namespace-profile-mac-ci-tests-scratch
+          cache_scope: scratch
+          counted: 'true'
+          cache_provider: ${{ steps.prepare_environment.outputs.rust_cache_provider }}
+          cache_identity: ${{ steps.prepare_environment.outputs.rust_cache_identity }}
+          cache_hit: ${{ steps.prepare_environment.outputs.rust_cache_hit }}
+          artifact_name: macos-compile-cache-scratch-${{ github.run_id }}-${{ github.run_attempt }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

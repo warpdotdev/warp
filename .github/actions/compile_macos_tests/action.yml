@@ -1,0 +1,418 @@
+name: Compile macOS tests with diagnostics
+description: Compile the macOS test graph and collect cache and Cargo rebuild diagnostics.
+inputs:
+  workspace_test_args:
+    required: true
+    description: Workspace and lockfile arguments forwarded to cargo nextest.
+  source_sha:
+    required: true
+    description: Source branch or workflow SHA whose content is being compiled.
+  extra_test_args:
+    description: Additional test-selection arguments forwarded to cargo nextest.
+  runner_profile:
+    required: true
+    description: Requested GitHub Actions runner profile or labels.
+  cache_provider:
+    required: true
+    description: Rust cache provider reported by prepare_environment.
+  cache_identity:
+    required: true
+    description: Logical Rust cache identity reported by prepare_environment.
+  cache_hit:
+    description: Exact cache hit reported by prepare_environment, when available.
+  cache_scope:
+    default: shared
+    description: Which cache volume this run reuses ("shared" or "isolated").
+  counted:
+    default: 'true'
+    description: Whether this run's measurements count toward the campaign.
+  expected_tree_sha:
+    description: Checked-out Git tree expected from the seed job.
+  expected_environment_sha:
+    description: macOS toolchain and build-input identity expected from the seed job.
+  expected_target_manifest_sha:
+    description: Fingerprint manifest expected from the seed job.
+  expected_target_kib:
+    description: Target working-set size expected from the seed job.
+  require_seed_marker:
+    default: 'false'
+    description: Require and validate seed identity persisted in the restored target cache.
+  discard_cache_after_measurement:
+    default: 'false'
+    description: Fail after successful diagnostics so Namespace discards the measurement cache fork.
+  artifact_name:
+    required: true
+    description: Name for the uploaded diagnostic artifact.
+
+runs:
+  using: composite
+  steps:
+    - name: Capture pre-compile state
+      id: capture
+      shell: bash
+      env:
+        EXPECTED_TREE_SHA: ${{ inputs.expected_tree_sha }}
+        EXPECTED_ENVIRONMENT_SHA: ${{ inputs.expected_environment_sha }}
+        EXPECTED_TARGET_MANIFEST_SHA: ${{ inputs.expected_target_manifest_sha }}
+        EXPECTED_TARGET_KIB: ${{ inputs.expected_target_kib }}
+        REQUIRE_SEED_MARKER: ${{ inputs.require_seed_marker }}
+      run: |
+        set -euo pipefail
+
+        diagnostics_dir="$RUNNER_TEMP/${{ inputs.artifact_name }}"
+        mkdir -p "$diagnostics_dir"
+
+        cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+        target_dir="${CARGO_TARGET_DIR:-$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')}"
+        cache_hit="${{ inputs.cache_hit }}"
+        if [ -z "$cache_hit" ]; then
+          cache_hit="unknown"
+        fi
+
+        size_kib() {
+          if [ -e "$1" ]; then
+            resolved_path="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1")"
+            du -sk "$resolved_path" | awk '{print $1}'
+          else
+            printf '0\n'
+          fi
+        }
+        pre_cargo_registry_kib="$(size_kib "$cargo_home/registry")"
+        pre_cargo_git_kib="$(size_kib "$cargo_home/git")"
+        pre_cargo_global_cache_kib="$(size_kib "$cargo_home/.global-cache")"
+        pre_cargo_cache_kib="$((pre_cargo_registry_kib + pre_cargo_git_kib + pre_cargo_global_cache_kib))"
+        pre_target_kib="$(size_kib "$target_dir")"
+        read -r pre_target_manifest_sha pre_target_manifest_files < <(
+          python3 "${{ github.action_path }}/target_cache_manifest.py" "$target_dir"
+        )
+        checked_out_sha="$(git rev-parse HEAD)"
+        checked_out_tree_sha="$(git rev-parse 'HEAD^{tree}')"
+        git status --porcelain=v1 --untracked-files=all > "$diagnostics_dir/git-status.txt"
+        git lfs ls-files --long 2>/dev/null | LC_ALL=C sort > "$diagnostics_dir/git-lfs-files.txt"
+        macos_version="$(sw_vers -productVersion)"
+        macos_build="$(sw_vers -buildVersion)"
+        xcode_version="$(xcodebuild -version | paste -sd ' ' -)"
+        sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+        hardware_identity="$(
+          {
+            sysctl -n machdep.cpu.brand_string
+            sysctl -n hw.ncpu
+            sysctl -n hw.memsize
+          } | paste -sd ' ' -
+        )"
+        rustc_version="$(rustc --version --verbose | paste -sd ' ' -)"
+        cargo_version="$(cargo --version)"
+        nextest_version="$(cargo nextest --version)"
+        lfs_manifest_sha="$(shasum -a 256 "$diagnostics_dir/git-lfs-files.txt" | awk '{print $1}')"
+        git_status_sha="$(shasum -a 256 "$diagnostics_dir/git-status.txt" | awk '{print $1}')"
+        environment_identity_sha="$(
+          {
+            printf '%s\n' \
+              "$macos_version" \
+              "$macos_build" \
+              "$xcode_version" \
+              "$sdk_version" \
+              "$hardware_identity" \
+              "$rustc_version" \
+              "$cargo_version" \
+              "$nextest_version" \
+              "$lfs_manifest_sha" \
+              "$git_status_sha" \
+              "$RUSTFLAGS" \
+              "$NEXTEST_PROFILE" \
+              '${{ inputs.workspace_test_args }}' \
+              '${{ inputs.extra_test_args }}'
+          } | shasum -a 256 | awk '{print $1}'
+        )"
+        seed_marker="$target_dir/.warp-cache-seed.env"
+        seed_marker_found=false
+        seed_run_id=
+        seed_run_attempt=
+        if [ "$REQUIRE_SEED_MARKER" = "true" ] && [ -f "$seed_marker" ]; then
+          seed_marker_found=true
+          EXPECTED_TREE_SHA="$(sed -n 's/^checked_out_tree_sha=//p' "$seed_marker")"
+          EXPECTED_ENVIRONMENT_SHA="$(sed -n 's/^environment_identity_sha=//p' "$seed_marker")"
+          EXPECTED_TARGET_MANIFEST_SHA="$(sed -n 's/^target_manifest_sha=//p' "$seed_marker")"
+          EXPECTED_TARGET_KIB="$(sed -n 's/^target_kib=//p' "$seed_marker")"
+          seed_run_id="$(sed -n 's/^seed_run_id=//p' "$seed_marker")"
+          seed_run_attempt="$(sed -n 's/^seed_run_attempt=//p' "$seed_marker")"
+        fi
+        seed_identity_match=not_checked
+        if [ "$REQUIRE_SEED_MARKER" = "true" ] ||
+           [ -n "$EXPECTED_TREE_SHA" ] ||
+           [ -n "$EXPECTED_ENVIRONMENT_SHA" ] ||
+           [ -n "$EXPECTED_TARGET_MANIFEST_SHA" ]; then
+          seed_identity_match=true
+          if { [ "$REQUIRE_SEED_MARKER" = "true" ] && [ "$seed_marker_found" != "true" ]; } ||
+             { [ -n "$EXPECTED_TREE_SHA" ] && [ "$checked_out_tree_sha" != "$EXPECTED_TREE_SHA" ]; } ||
+             { [ -n "$EXPECTED_ENVIRONMENT_SHA" ] && [ "$environment_identity_sha" != "$EXPECTED_ENVIRONMENT_SHA" ]; } ||
+             { [ -n "$EXPECTED_TARGET_MANIFEST_SHA" ] && [ "$pre_target_manifest_sha" != "$EXPECTED_TARGET_MANIFEST_SHA" ]; }; then
+            seed_identity_match=false
+          fi
+        fi
+
+        printf '%s\n' \
+          "diagnostics_dir=$diagnostics_dir" \
+          "cargo_home=$cargo_home" \
+          "target_dir=$target_dir" \
+          "pre_cargo_cache_kib=$pre_cargo_cache_kib" \
+          "pre_cargo_registry_kib=$pre_cargo_registry_kib" \
+          "pre_cargo_git_kib=$pre_cargo_git_kib" \
+          "pre_cargo_global_cache_kib=$pre_cargo_global_cache_kib" \
+          "pre_target_kib=$pre_target_kib" \
+          "pre_target_manifest_sha=$pre_target_manifest_sha" \
+          "pre_target_manifest_files=$pre_target_manifest_files" \
+          "expected_tree_sha=$EXPECTED_TREE_SHA" \
+          "expected_environment_sha=$EXPECTED_ENVIRONMENT_SHA" \
+          "expected_target_manifest_sha=$EXPECTED_TARGET_MANIFEST_SHA" \
+          "expected_target_kib=$EXPECTED_TARGET_KIB" \
+          "seed_marker_found=$seed_marker_found" \
+          "seed_run_id=$seed_run_id" \
+          "seed_run_attempt=$seed_run_attempt" \
+          "seed_identity_match=$seed_identity_match" \
+          > "$diagnostics_dir/metrics.env"
+
+        {
+          printf 'runner_name=%s\n' "$RUNNER_NAME"
+          printf 'runner_os=%s\n' "$RUNNER_OS"
+          printf 'runner_arch=%s\n' "$RUNNER_ARCH"
+          printf 'runner_profile=%s\n' '${{ inputs.runner_profile }}'
+          printf 'cache_provider=%s\n' '${{ inputs.cache_provider }}'
+          printf 'cache_identity=%s\n' '${{ inputs.cache_identity }}'
+          printf 'cache_scope=%s\n' '${{ inputs.cache_scope }}'
+          printf 'counted=%s\n' '${{ inputs.counted }}'
+          printf 'cache_hit=%s\n' "$cache_hit"
+          printf 'repository=%s\n' "$GITHUB_REPOSITORY"
+          printf 'workflow_sha=%s\n' "$GITHUB_SHA"
+          printf 'checked_out_sha=%s\n' "$checked_out_sha"
+          printf 'checked_out_tree_sha=%s\n' "$checked_out_tree_sha"
+          printf 'environment_identity_sha=%s\n' "$environment_identity_sha"
+          printf 'macos_version=%s\n' "$macos_version"
+          printf 'macos_build=%s\n' "$macos_build"
+          printf 'xcode_version=%s\n' "$xcode_version"
+          printf 'sdk_version=%s\n' "$sdk_version"
+          printf 'hardware_identity=%s\n' "$hardware_identity"
+          printf 'rustc_version=%s\n' "$rustc_version"
+          printf 'cargo_version=%s\n' "$cargo_version"
+          printf 'nextest_version=%s\n' "$nextest_version"
+          printf 'lfs_manifest_sha=%s\n' "$lfs_manifest_sha"
+          printf 'git_status_sha=%s\n' "$git_status_sha"
+          printf 'source_sha=%s\n' '${{ inputs.source_sha }}'
+          printf 'run_id=%s\n' "$GITHUB_RUN_ID"
+          printf 'run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
+        } >> "$diagnostics_dir/metrics.env"
+
+        {
+          printf 'MACOS_COMPILE_DIAGNOSTICS_DIR=%s\n' "$diagnostics_dir"
+          printf 'MACOS_COMPILE_CARGO_HOME=%s\n' "$cargo_home"
+          printf 'MACOS_COMPILE_TARGET_DIR=%s\n' "$target_dir"
+        } >> "$GITHUB_ENV"
+        {
+          printf 'diagnostics_dir=%s\n' "$diagnostics_dir"
+          printf 'seed_identity_match=%s\n' "$seed_identity_match"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Compile tests
+      id: compile
+      continue-on-error: true
+      shell: bash
+      env:
+        CARGO_LOG: cargo::core::compiler::fingerprint=info
+      run: |
+        set +e
+        /usr/bin/time -lp -o "$MACOS_COMPILE_DIAGNOSTICS_DIR/resource-usage.txt" \
+          cargo nextest run ${{ inputs.workspace_test_args }} ${{ inputs.extra_test_args }} --no-run \
+          2> >(tee "$MACOS_COMPILE_DIAGNOSTICS_DIR/cargo-stderr.log" \
+            | python3 "${{ github.action_path }}/filter_fingerprint_logs.py" >&2)
+        compile_status=$?
+        set -e
+
+        printf 'compile_status=%s\n' "$compile_status" >> "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env"
+        exit "$compile_status"
+
+    - name: Summarize compile diagnostics
+      if: ${{ always() }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        size_kib() {
+          if [ -e "$1" ]; then
+            resolved_path="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1")"
+            du -sk "$resolved_path" | awk '{print $1}'
+          else
+            printf '0\n'
+          fi
+        }
+
+        clean_stderr="$MACOS_COMPILE_DIAGNOSTICS_DIR/cargo-stderr-clean.log"
+        fingerprint_log="$MACOS_COMPILE_DIAGNOSTICS_DIR/cargo-fingerprint.log"
+        reason_counts="$MACOS_COMPILE_DIAGNOSTICS_DIR/fingerprint-reason-counts.txt"
+        sed $'s/\033\\[[0-9;]*[mK]//g' "$MACOS_COMPILE_DIAGNOSTICS_DIR/cargo-stderr.log" > "$clean_stderr"
+        grep 'cargo::core::compiler::fingerprint' "$clean_stderr" > "$fingerprint_log" || true
+        python3 "${{ github.action_path }}/filter_fingerprint_logs.py" --summarize-reasons \
+          < "$fingerprint_log" > "$reason_counts"
+
+        pre_cargo_cache_kib="$(sed -n 's/^pre_cargo_cache_kib=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        pre_cargo_registry_kib="$(sed -n 's/^pre_cargo_registry_kib=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        pre_cargo_git_kib="$(sed -n 's/^pre_cargo_git_kib=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        pre_cargo_global_cache_kib="$(sed -n 's/^pre_cargo_global_cache_kib=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        pre_target_kib="$(sed -n 's/^pre_target_kib=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        pre_target_manifest_sha="$(sed -n 's/^pre_target_manifest_sha=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        pre_target_manifest_files="$(sed -n 's/^pre_target_manifest_files=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        post_cargo_registry_kib="$(size_kib "$MACOS_COMPILE_CARGO_HOME/registry")"
+        post_cargo_git_kib="$(size_kib "$MACOS_COMPILE_CARGO_HOME/git")"
+        post_cargo_global_cache_kib="$(size_kib "$MACOS_COMPILE_CARGO_HOME/.global-cache")"
+        post_cargo_cache_kib="$((post_cargo_registry_kib + post_cargo_git_kib + post_cargo_global_cache_kib))"
+        post_target_kib="$(size_kib "$MACOS_COMPILE_TARGET_DIR")"
+        read -r post_target_manifest_sha post_target_manifest_files < <(
+          python3 "${{ github.action_path }}/target_cache_manifest.py" "$MACOS_COMPILE_TARGET_DIR"
+        )
+        compiled_units="$(grep -c '^[[:space:]]*Compiling ' "$clean_stderr" || true)"
+        downloading_records="$(grep -c '^[[:space:]]*Downloading ' "$clean_stderr" || true)"
+        downloaded_records="$(grep -c '^[[:space:]]*Downloaded ' "$clean_stderr" || true)"
+        read -r missing_fingerprint_units dirty_units stale_inputs < <(
+          python3 "${{ github.action_path }}/filter_fingerprint_logs.py" --count-signals < "$fingerprint_log"
+        )
+        elapsed_seconds="$(awk '$1 == "real" { print $2; exit }' "$MACOS_COMPILE_DIAGNOSTICS_DIR/resource-usage.txt")"
+        user_seconds="$(awk '$1 == "user" { print $2; exit }' "$MACOS_COMPILE_DIAGNOSTICS_DIR/resource-usage.txt")"
+        system_seconds="$(awk '$1 == "sys" { print $2; exit }' "$MACOS_COMPILE_DIAGNOSTICS_DIR/resource-usage.txt")"
+        max_rss_bytes="$(awk '/maximum resident set size/ { print $1; exit }' "$MACOS_COMPILE_DIAGNOSTICS_DIR/resource-usage.txt")"
+
+        {
+          printf 'post_cargo_cache_kib=%s\n' "$post_cargo_cache_kib"
+          printf 'post_cargo_registry_kib=%s\n' "$post_cargo_registry_kib"
+          printf 'post_cargo_git_kib=%s\n' "$post_cargo_git_kib"
+          printf 'post_cargo_global_cache_kib=%s\n' "$post_cargo_global_cache_kib"
+          printf 'post_target_kib=%s\n' "$post_target_kib"
+          printf 'post_target_manifest_sha=%s\n' "$post_target_manifest_sha"
+          printf 'post_target_manifest_files=%s\n' "$post_target_manifest_files"
+          printf 'compiled_units=%s\n' "$compiled_units"
+          printf 'downloading_records=%s\n' "$downloading_records"
+          printf 'downloaded_records=%s\n' "$downloaded_records"
+          printf 'missing_fingerprint_units=%s\n' "$missing_fingerprint_units"
+          printf 'dirty_units=%s\n' "$dirty_units"
+          printf 'stale_inputs=%s\n' "$stale_inputs"
+          printf 'elapsed_seconds=%s\n' "${elapsed_seconds:-unknown}"
+          printf 'user_seconds=%s\n' "${user_seconds:-unknown}"
+          printf 'system_seconds=%s\n' "${system_seconds:-unknown}"
+          printf 'max_rss_bytes=%s\n' "${max_rss_bytes:-unknown}"
+        } >> "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env"
+
+        kib_to_gib() {
+          awk -v kib="$1" 'BEGIN { printf "%.2f GiB", kib / 1048576 }'
+        }
+
+        bytes_to_gib() {
+          if [ "$1" = "unknown" ] || [ -z "$1" ]; then
+            printf 'unknown'
+          else
+            awk -v bytes="$1" 'BEGIN { printf "%.2f GiB", bytes / 1073741824 }'
+          fi
+        }
+
+        cache_hit="$(sed -n 's/^cache_hit=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        counted="$(sed -n 's/^counted=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        compile_status="$(sed -n 's/^compile_status=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        checked_out_sha="$(sed -n 's/^checked_out_sha=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        checked_out_tree_sha="$(sed -n 's/^checked_out_tree_sha=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        environment_identity_sha="$(sed -n 's/^environment_identity_sha=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        source_sha="$(sed -n 's/^source_sha=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        seed_identity_match="$(sed -n 's/^seed_identity_match=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        seed_marker_found="$(sed -n 's/^seed_marker_found=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        seed_run_id="$(sed -n 's/^seed_run_id=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        seed_run_attempt="$(sed -n 's/^seed_run_attempt=//p' "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env")"
+        seed_marker_written=false
+        if [ "$counted" = "false" ] && [ "$compile_status" = "0" ]; then
+          cat > "$MACOS_COMPILE_TARGET_DIR/.warp-cache-seed.env" <<EOF
+        checked_out_tree_sha=$checked_out_tree_sha
+        environment_identity_sha=$environment_identity_sha
+        target_manifest_sha=$post_target_manifest_sha
+        target_kib=$post_target_kib
+        seed_run_id=$GITHUB_RUN_ID
+        seed_run_attempt=$GITHUB_RUN_ATTEMPT
+        EOF
+          seed_marker_written=true
+        fi
+        printf 'seed_marker_written=%s\n' "$seed_marker_written" >> "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env"
+
+        summary="$MACOS_COMPILE_DIAGNOSTICS_DIR/summary.md"
+        {
+          echo "### macOS compile diagnostics"
+          echo
+          echo "| Metric | Value |"
+          echo "| --- | --- |"
+          echo "| Checked-out SHA | \`$checked_out_sha\` |"
+          echo "| Checked-out tree | \`$checked_out_tree_sha\` |"
+          echo "| Build environment | \`$environment_identity_sha\` |"
+          echo "| Source/head SHA | \`$source_sha\` |"
+          echo "| Runner | \`$RUNNER_NAME\` / \`${{ inputs.runner_profile }}\` / \`$RUNNER_ARCH\` |"
+          echo "| Rust cache | \`${{ inputs.cache_provider }}\` / \`${{ inputs.cache_identity }}\` / hit \`$cache_hit\` |"
+          echo "| Cache volume | scope \`${{ inputs.cache_scope }}\` (profile \`${{ inputs.runner_profile }}\`) |"
+          if [ "$counted" = "false" ]; then
+            echo "| Measurement | **uncounted warm-up — exclude from statistics** |"
+          else
+            echo "| Measurement | counted |"
+          fi
+          echo "| Seed identity match | \`$seed_identity_match\` |"
+          echo "| Seed marker | found \`$seed_marker_found\`; source \`$seed_run_id/$seed_run_attempt\`; written \`$seed_marker_written\` |"
+          echo "| Cargo cache working set | $(kib_to_gib "$pre_cargo_cache_kib") → $(kib_to_gib "$post_cargo_cache_kib") |"
+          echo "| ↳ registry | $(kib_to_gib "$pre_cargo_registry_kib") → $(kib_to_gib "$post_cargo_registry_kib") |"
+          echo "| ↳ git | $(kib_to_gib "$pre_cargo_git_kib") → $(kib_to_gib "$post_cargo_git_kib") |"
+          echo "| ↳ .global-cache | $(kib_to_gib "$pre_cargo_global_cache_kib") → $(kib_to_gib "$post_cargo_global_cache_kib") |"
+          echo "| Target working set | $(kib_to_gib "$pre_target_kib") → $(kib_to_gib "$post_target_kib") |"
+          echo "| Target fingerprint manifest | \`$pre_target_manifest_sha\` ($pre_target_manifest_files files) → \`$post_target_manifest_sha\` ($post_target_manifest_files files) |"
+          echo "| Compile result | exit \`${compile_status:-unknown}\` in \`${elapsed_seconds:-unknown}s\` (user \`${user_seconds:-unknown}s\`, system \`${system_seconds:-unknown}s\`) |"
+          echo "| Peak resident set | $(bytes_to_gib "${max_rss_bytes:-unknown}") |"
+          echo "| Cargo dependency fetch | $downloading_records downloading lines; $downloaded_records downloaded records |"
+          echo "| Cargo rebuild signals | $compiled_units compiling lines; $missing_fingerprint_units missing fingerprints; $dirty_units dirty fingerprints; $stale_inputs stale inputs |"
+          echo
+          echo "Top fingerprint reasons:"
+          if [ -s "$reason_counts" ]; then
+            echo '```text'
+            sed -n '1,10p' "$reason_counts"
+            echo '```'
+          else
+            echo "No Cargo fingerprint dirtiness reasons were emitted."
+          fi
+          echo
+          echo "Complete Cargo stderr, resource statistics, exact fingerprint messages, and raw metrics are in artifact \`${{ inputs.artifact_name }}\`."
+        } > "$summary"
+
+        cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+        if [ "$counted" = "false" ]; then
+          measurement_note=' (uncounted warm-up)'
+        else
+          measurement_note=''
+        fi
+        echo "::notice title=macOS compile diagnostics::${{ inputs.cache_scope }} volume$measurement_note, ${elapsed_seconds:-unknown}s, seed match $seed_identity_match, $dirty_units dirty fingerprints, target $(kib_to_gib "$pre_target_kib") -> $(kib_to_gib "$post_target_kib")"
+        rm "$clean_stderr"
+        printf 'measurement_ready_for_discard=true\n' >> "$MACOS_COMPILE_DIAGNOSTICS_DIR/metrics.env"
+
+    - name: Upload compile diagnostics
+      if: ${{ always() && steps.capture.outcome == 'success' }}
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: ${{ steps.capture.outputs.diagnostics_dir }}
+        if-no-files-found: error
+        retention-days: 14
+
+    - name: Propagate compile failure
+      if: ${{ steps.compile.outcome != 'success' }}
+      shell: bash
+      run: exit 1
+
+    - name: Reject mismatched experiment inputs
+      if: ${{ steps.compile.outcome == 'success' && (inputs.require_seed_marker == 'true' || inputs.expected_tree_sha != '' || inputs.expected_environment_sha != '' || inputs.expected_target_manifest_sha != '') && steps.capture.outputs.seed_identity_match != 'true' }}
+      shell: bash
+      run: |
+        echo "::error::Checked-out tree, build environment, or restored target did not match the serialized seed"
+        exit 1
+
+    - name: Discard measurement cache fork
+      if: ${{ steps.compile.outcome == 'success' && steps.capture.outputs.seed_identity_match == 'true' && inputs.discard_cache_after_measurement == 'true' }}
+      shell: bash
+      run: |
+        echo "::notice::Intentionally failing after diagnostics so Namespace discards this measurement cache fork"
+        exit 1

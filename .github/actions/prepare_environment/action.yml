@@ -15,8 +15,24 @@ inputs:
     description: If true, dependencies needed for building release artifacts will be installed (e.g., cargo-about for license generation).
   cache_key:
     description: If set, the cache key to use.  If unset, the cache key will be derived from the target OS.
+  enable_rust_cache:
+    description: Whether to restore and save Rust build state.
+    default: 'true'
+  enable_namespace_cache:
+    description: Whether Namespace runners should attach their configured cache volume.
+    default: 'true'
   ssh_key:
     description: SSH private key used to clone the private warp-channel-config repository. Only consumed when running in warpdotdev/warp-internal.
+outputs:
+  rust_cache_provider:
+    description: Cache provider used for Rust build state, when one is configured.
+    value: ${{ inputs.enable_rust_cache == 'true' && (startsWith(runner.name, 'nsc-runner') && inputs.enable_namespace_cache == 'true' && 'namespace' || (!startsWith(runner.name, 'nsc-runner') && inputs.is_self_hosted != 'true' && 'github-actions' || 'none')) || 'none' }}
+  rust_cache_identity:
+    description: Logical Rust cache identity available to this action.
+    value: ${{ inputs.enable_rust_cache == 'true' && (startsWith(runner.name, 'nsc-runner') && inputs.enable_namespace_cache == 'true' && 'rust' || (!startsWith(runner.name, 'nsc-runner') && inputs.is_self_hosted != 'true' && (inputs.cache_key != '' && inputs.cache_key || inputs.target_os) || 'none')) || 'none' }}
+  rust_cache_hit:
+    description: Whether the configured Rust cache action reported an exact hit.
+    value: ${{ inputs.enable_rust_cache == 'true' && (startsWith(runner.name, 'nsc-runner') && inputs.enable_namespace_cache == 'true' && steps.namespace-cache.outputs.cache-hit || steps.rust-cache.outputs.cache-hit) || '' }}
 
 runs:
   using: composite
@@ -70,7 +86,8 @@ runs:
         git lfs ls-files --size
 
     - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      if: ${{ inputs.is_self_hosted != 'true' && !startsWith(runner.name, 'nsc-runner') }}
+      id: rust-cache
+      if: ${{ inputs.enable_rust_cache == 'true' && inputs.is_self_hosted != 'true' && !startsWith(runner.name, 'nsc-runner') }}
       with:
         # Make sure x86_64-unknown-linux-gnu and wasm32-unknown-unknown builds
         # don't share a cache, despite running on the same _host_ architecture.
@@ -80,11 +97,12 @@ runs:
         save-if: ${{ github.ref == 'refs/heads/master' }}
 
     - name: Set up Namespace cache
-      if: ${{ startsWith(runner.name, 'nsc-runner') }}
+      id: namespace-cache
+      if: ${{ inputs.enable_namespace_cache == 'true' && startsWith(runner.name, 'nsc-runner') && (inputs.enable_rust_cache == 'true' || inputs.target_os == 'macos') }}
       uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9 # v1.4.2
       with:
         cache: |
-          rust
+          ${{ inputs.enable_rust_cache == 'true' && 'rust' || '' }}
           ${{ inputs.target_os == 'macos' && 'brew' || '' }}
 
     - name: Install cargo-binstall
