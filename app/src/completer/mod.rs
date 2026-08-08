@@ -54,6 +54,16 @@ pub struct SessionContext {
     workflow_aliases: HashMap<String, String>,
 }
 
+/// Maximum number of directory listings retained in `cached_directory_entries`.
+///
+/// The cache is shared for the lifetime of a `SessionContext`, so without a
+/// bound it grew without limit as a session completed paths across many
+/// directories, retaining an `Arc<Vec<EngineDirEntry>>` per directory. Heap
+/// profiles observed this single `DashMap`'s backing table alone holding 6-7 GB
+/// (`RawTable::grow_one`). Bounding the number of cached directories caps that
+/// growth; re-reading an evicted directory from disk is cheap by comparison.
+const MAX_CACHED_DIRECTORIES: usize = 1024;
+
 impl SessionContext {
     /// Lists `directory` fresh from disk and caches the results.
     pub(crate) async fn refresh_directory_entries(
@@ -64,9 +74,30 @@ impl SessionContext {
             self.list_directory_entries_internal(&directory.to_path())
                 .await,
         );
-        self.cached_directory_entries
-            .insert(directory, result.clone());
+        self.cache_directory_entries(directory, result.clone());
         result
+    }
+
+    /// Inserts a directory listing into `cached_directory_entries`, evicting
+    /// existing entries first when the cache would exceed
+    /// `MAX_CACHED_DIRECTORIES` so it stays bounded across a session's lifetime.
+    fn cache_directory_entries(&self, directory: TypedPathBuf, entries: Arc<Vec<EngineDirEntry>>) {
+        let cache = &self.cached_directory_entries;
+        if !cache.contains_key(&directory) && cache.len() >= MAX_CACHED_DIRECTORIES {
+            let evict_count = cache.len() - MAX_CACHED_DIRECTORIES + 1;
+            // `DashMap` has no recency tracking, so evict arbitrary entries. The
+            // iterator is fully collected (releasing shard locks) before we
+            // remove, to avoid deadlocking against our own iteration.
+            let keys_to_evict: Vec<TypedPathBuf> = cache
+                .iter()
+                .take(evict_count)
+                .map(|entry| entry.key().clone())
+                .collect();
+            for key in keys_to_evict {
+                cache.remove(&key);
+            }
+        }
+        cache.insert(directory, entries);
     }
 
     async fn list_directory_entries_internal(
@@ -219,8 +250,7 @@ impl PathCompletionContext for SessionContext {
             .await;
 
         let result = Arc::new(result);
-        self.cached_directory_entries
-            .insert(directory, result.clone());
+        self.cache_directory_entries(directory, result.clone());
         result
     }
 
