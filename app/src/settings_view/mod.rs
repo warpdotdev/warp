@@ -39,7 +39,7 @@ use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty,
     EventHandler, Expanded, Fill, Flex, MainAxisSize, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack,
-    Text,
+    Text, Wrap,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::{ContextPredicate, EnabledPredicate, FixedBinding};
@@ -70,6 +70,7 @@ use crate::ui_components::icons;
 use crate::util::bindings::{BindingGroup, CustomAction, keybinding_name_to_display_string};
 use crate::view_components::ToastFlavor;
 use crate::workspace::WorkspaceAction;
+use crate::workspaces::workspace::{BillingMetadata, CustomerType};
 use crate::{GlobalResourceHandlesProvider, TelemetryEvent};
 
 mod about_page;
@@ -159,6 +160,32 @@ const SECTION_BORDER_WIDTH: f32 = 1.;
 
 const POSITION_ID: &str = "settings_pane";
 
+struct PlanHeaderPresentation {
+    badge_label: Option<String>,
+    show_personal_upgrade: bool,
+}
+
+fn plan_header_presentation(
+    billing_metadata: Option<&BillingMetadata>,
+    has_team: bool,
+    is_anonymous: bool,
+) -> PlanHeaderPresentation {
+    let badge_label = if is_anonymous || billing_metadata.is_none() {
+        Some("Free".to_string())
+    } else {
+        billing_metadata
+            .filter(|billing_metadata| billing_metadata.customer_type != CustomerType::Unknown)
+            .map(|billing_metadata| billing_metadata.customer_type.to_display_string())
+    };
+
+    PlanHeaderPresentation {
+        badge_label,
+        show_personal_upgrade: is_anonymous
+            || (!has_team
+                && billing_metadata.is_none_or(BillingMetadata::can_upgrade_to_build_plan)),
+    }
+}
+
 pub(super) fn editor_text_colors(appearance: &Appearance) -> TextColors {
     let theme = appearance.theme();
     TextColors {
@@ -186,7 +213,8 @@ pub(super) fn render_beta_chip(appearance: &Appearance) -> Box<dyn Element> {
     .finish()
 }
 
-/// Renders a horizontal row of pill-shaped chips for model labels.
+/// Renders a wrapping row of pill-shaped chips for model labels, which flow
+/// onto additional lines instead of overflowing the container horizontally.
 /// Used by custom inference endpoint cards and the remove confirmation dialog.
 pub(super) fn render_model_chips(
     labels: impl IntoIterator<Item = String>,
@@ -209,7 +237,7 @@ pub(super) fn render_model_chips(
         ..Default::default()
     };
 
-    let mut chips = Flex::row().with_spacing(8.);
+    let mut chips = Wrap::row().with_spacing(8.).with_run_spacing(8.);
     for label in labels {
         chips.add_child(Chip::new(label, chip_style).build().finish());
     }

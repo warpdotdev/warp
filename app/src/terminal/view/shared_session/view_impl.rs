@@ -221,6 +221,33 @@ impl TerminalView {
         ctx.notify();
     }
 
+    /// Clears the finished/read-only state a pane accumulates when its shared session ends, so it
+    /// can host a live session again. Idempotent.
+    ///
+    /// A failed run whose environment is retained for debugging leaves the pane read-only with an
+    /// ended-conversation tombstone even though its session is still reachable; reattaching must
+    /// produce a writable terminal rather than that ended-run view.
+    pub(crate) fn prepare_for_live_session_reattach(&mut self, ctx: &mut ViewContext<Self>) {
+        self.remove_conversation_ended_tombstone(ctx);
+
+        {
+            let mut model = self.model.lock();
+            if model.shared_session_status().is_finished_viewer() {
+                // The join performed by the caller moves this to `ViewPending` and then
+                // `ActiveViewer`; clearing it here just lifts `TerminalModel::is_read_only`.
+                model.set_shared_session_status(SharedSessionStatus::NotShared);
+            }
+        }
+
+        self.input().update(ctx, |input, ctx| {
+            input.editor().update(ctx, |editor, ctx| {
+                editor.set_interaction_state(InteractionState::Editable, ctx);
+            });
+        });
+        self.update_pane_configuration(ctx);
+        ctx.notify();
+    }
+
     fn enable_cloud_followup_input_after_conversation_end(
         &mut self,
         task_id: AmbientAgentTaskId,
@@ -1556,11 +1583,19 @@ impl TerminalView {
         source: SharedSessionActionSource,
         ctx: &mut ViewContext<Self>,
     ) {
-        let manager = Manager::as_ref(ctx);
-        let Some(session_id) = manager
-            .session_id(&ctx.view_id())
-            .or_else(|| manager.ended_session_id(&ctx.view_id()))
-        else {
+        let view_id = ctx.view_id();
+        let session_id_opt = {
+            let manager = Manager::as_ref(ctx);
+            manager
+                .session_id(&view_id)
+                .or_else(|| manager.ended_session_id(&view_id))
+        };
+        let Some(session_id) = session_id_opt else {
+            let window_id = ctx.window_id();
+            crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                let toast = DismissibleToast::error("Sharing link not yet available".to_string());
+                toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+            });
             return;
         };
 
@@ -1905,6 +1940,7 @@ impl TerminalView {
         &self,
         model: &TerminalModel,
         is_share_session_disabled: bool,
+        has_session_link: bool,
     ) -> Vec<MenuItem<TerminalAction>> {
         let mut items = Vec::new();
 
@@ -1933,6 +1969,7 @@ impl TerminalView {
                     .with_on_select_action(TerminalAction::CopySharedSessionLink {
                         source: SharedSessionActionSource::RightClickMenu,
                     })
+                    .with_disabled(!has_session_link)
                     .into_item(),
             );
         }

@@ -515,8 +515,7 @@ jobs:
     name: Build Release (macOS TUI ${{ matrix.arch }})
     runs-on: macos-26-xlarge
     needs: prepare_release
-    # The Warp TUI is available on the dev, preview, and stable channels.
-    if: ${{ inputs.build_macos != false && (inputs.channel == 'dev' || inputs.channel == 'preview' || inputs.channel == 'stable') }}
+    if: ${{ inputs.build_macos != false }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -631,7 +630,7 @@ jobs:
     name: Build Release (Linux TUI ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     needs: prepare_release
-    if: ${{ inputs.build_linux != false && (inputs.channel == 'dev' || inputs.channel == 'preview' || inputs.channel == 'stable') }}
+    if: ${{ inputs.build_linux != false }}
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -1628,7 +1627,7 @@ jobs:
     name: Build Release (Windows TUI ${{ matrix.arch }})
     runs-on: windows-latest-large
     needs: prepare_release
-    if: ${{ inputs.build_windows != false && (inputs.channel == 'dev' || inputs.channel == 'stable') }}
+    if: ${{ inputs.build_windows != false }}
     timeout-minutes: 150
     strategy:
       fail-fast: false
@@ -1935,12 +1934,10 @@ jobs:
           if [[ ${{ needs.release_macos_cli.result }} != 'success' ]]; then
             FAILED+=('MacOS CLI')
           fi
-          # The TUI jobs only run on supported release channels, so only treat
-          # them as failures where they are expected to produce artifacts.
-          if [[ ${{ needs.release_macos_tui.result }} != 'success' && ( ${{ inputs.channel }} == 'dev' || ${{ inputs.channel }} == 'preview' || ${{ inputs.channel }} == 'stable' ) ]]; then
+          if [[ ${{ needs.release_macos_tui.result }} != 'success' ]]; then
             FAILED+=('MacOS TUI')
           fi
-          if [[ ${{ needs.release_linux_tui.result }} != 'success' && ( ${{ inputs.channel }} == 'dev' || ${{ inputs.channel }} == 'preview' || ${{ inputs.channel }} == 'stable' ) ]]; then
+          if [[ ${{ needs.release_linux_tui.result }} != 'success' ]]; then
             FAILED+=('Linux TUI')
           fi
           if [[ ${{ needs.release_linux_x86.result }} != 'success' ]]; then
@@ -1958,7 +1955,7 @@ jobs:
           if [[ ${{ needs.release_windows.result }} != 'success' ]]; then
               FAILED+=("Windows")
           fi
-          if [[ ${{ needs.release_windows_tui.result }} != 'success' && ( ${{ inputs.channel }} == 'dev' || ${{ inputs.channel }} == 'stable' ) ]]; then
+          if [[ ${{ needs.release_windows_tui.result }} != 'success' ]]; then
               FAILED+=("Windows TUI")
           fi
 
@@ -1991,19 +1988,17 @@ jobs:
         shell: bash
         env:
           SHOULD_PUBLISH: ${{ needs.prepare_release.outputs.should_publish }}
-          CHANNEL: ${{ inputs.channel }}
           MACOS_TUI_RESULT: ${{ needs.release_macos_tui.result }}
           LINUX_TUI_RESULT: ${{ needs.release_linux_tui.result }}
           WINDOWS_TUI_RESULT: ${{ needs.release_windows_tui.result }}
         run: |
-          if [[ "$SHOULD_PUBLISH" != "true" || ( "$CHANNEL" != "dev" && "$CHANNEL" != "preview" && "$CHANNEL" != "stable" ) ]]; then
+          if [[ "$SHOULD_PUBLISH" != "true" ]]; then
             exit 0
           fi
           if [[ "$MACOS_TUI_RESULT" != "success" ||
                 "$LINUX_TUI_RESULT" != "success" ||
-                ( ( "$CHANNEL" == "dev" || "$CHANNEL" == "stable" ) && "$WINDOWS_TUI_RESULT" != "success" ) ]]; then
+                "$WINDOWS_TUI_RESULT" != "success" ]]; then
             echo "::error::TUI release artifacts were not published successfully (macOS: $MACOS_TUI_RESULT, Linux: $LINUX_TUI_RESULT, Windows: $WINDOWS_TUI_RESULT)"
-            echo "::error::TUI release artifacts were not published successfully (macOS: $MACOS_TUI_RESULT, Linux: $LINUX_TUI_RESULT)"
             exit 1
           fi
 

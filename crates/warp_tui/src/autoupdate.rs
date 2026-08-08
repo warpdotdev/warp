@@ -305,7 +305,7 @@ impl UpdateOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TuiAutoupdateStatus {
     /// Nothing to show: updates are disabled for this process, or no check
-    /// has produced a stable result yet (e.g. the first check failed).
+    /// has produced a stable result yet.
     Idle,
     /// Fetching the latest version for this channel.
     Checking,
@@ -313,6 +313,8 @@ pub(crate) enum TuiAutoupdateStatus {
     Updating,
     /// The running build is the channel's latest version.
     UpToDate,
+    /// The most recent check or update attempt failed.
+    Failed,
     /// A newer version is staged and takes effect on the next launch.
     PendingRestart,
 }
@@ -433,8 +435,9 @@ impl TuiAutoupdater {
     /// show progress: a lightweight version check, then — only when a newer
     /// version needs staging — the download/install phase.
     fn check_now(&mut self, layout: InstallLayout, ctx: &mut ModelContext<Self>) {
-        // Where the status settles when this pass fails or is skipped: the
-        // previous pass's stable status, never the transient `Checking`.
+        // Where the status settles when this pass is skipped because another
+        // process is installing, and the status to preserve once an update is
+        // pending restart.
         let fallback_status = self.status;
         self.set_status(TuiAutoupdateStatus::Checking, ctx);
         let check_layout = layout.clone();
@@ -470,29 +473,12 @@ impl TuiAutoupdater {
     ) {
         match &result {
             Ok(outcome) => log::info!("TUI autoupdate check finished: {outcome:?}"),
-            // Fail quietly and let the next poll retry; transient
-            // network errors (e.g. waking from sleep) are common here.
+            // Let the next poll retry; transient network errors (e.g. waking
+            // from sleep) are common here.
             Err(error) => log::warn!("TUI autoupdate check failed: {error:#}"),
         }
         self.report_outcome(&result, ctx);
-        let status = match &result {
-            Ok(UpdateOutcome::UpToDate { .. }) => TuiAutoupdateStatus::UpToDate,
-            Ok(UpdateOutcome::PendingRestart { .. } | UpdateOutcome::Installed { .. }) => {
-                TuiAutoupdateStatus::PendingRestart
-            }
-            #[cfg(unix)]
-            Ok(UpdateOutcome::Locked) => fallback_status,
-            // Failed checks aren't surfaced; settle back on the previous
-            // stable status and let the next poll retry.
-            Err(_) => fallback_status,
-        };
-        // Once an update is staged, only a restart clears it: never downgrade
-        // from `PendingRestart` (e.g. on a server-side version rollback).
-        let status = if fallback_status == TuiAutoupdateStatus::PendingRestart {
-            TuiAutoupdateStatus::PendingRestart
-        } else {
-            status
-        };
+        let status = settled_status(&result, fallback_status);
         self.set_status(status, ctx);
         ctx.spawn(
             async { Timer::after(CHECK_INTERVAL).await },
@@ -523,6 +509,27 @@ impl TuiAutoupdater {
             },
         };
         send_telemetry_from_ctx!(event, ctx);
+    }
+}
+
+fn settled_status(
+    result: &Result<UpdateOutcome>,
+    fallback_status: TuiAutoupdateStatus,
+) -> TuiAutoupdateStatus {
+    // Once an update is staged, only a restart clears it: never downgrade
+    // from `PendingRestart` (e.g. on a failed check or server-side rollback).
+    if fallback_status == TuiAutoupdateStatus::PendingRestart {
+        return TuiAutoupdateStatus::PendingRestart;
+    }
+
+    match result {
+        Ok(UpdateOutcome::UpToDate { .. }) => TuiAutoupdateStatus::UpToDate,
+        Ok(UpdateOutcome::PendingRestart { .. } | UpdateOutcome::Installed { .. }) => {
+            TuiAutoupdateStatus::PendingRestart
+        }
+        #[cfg(unix)]
+        Ok(UpdateOutcome::Locked) => fallback_status,
+        Err(_) => TuiAutoupdateStatus::Failed,
     }
 }
 
@@ -672,12 +679,27 @@ async fn install_update(layout: InstallLayout, latest_version: String) -> Result
     .await
 }
 
+/// Builds the Inno Setup `/DIR` argument naming the install root.
+///
+/// [`InstallLayout::detect`] canonicalizes the running executable, which on
+/// Windows yields a Win32 extended-length path (`\\?\C:\...`). Inno Setup
+/// validates `/DIR` as a plain folder name and rejects the `?` and second `:`
+/// that prefix introduces, reporting "Folder names cannot include any of the
+/// following characters" and exiting with code 3 before installing anything.
+/// `/SUPPRESSMSGBOXES` hides that dialog, so the failure would otherwise
+/// surface only as a bare exit code.
+#[cfg(windows)]
+fn installer_dir_argument(root: &Path) -> OsString {
+    let mut argument = OsString::from("/DIR=");
+    argument.push(dunce::simplified(root));
+    argument
+}
+
 #[cfg(windows)]
 async fn install_update(layout: InstallLayout, latest_version: String) -> Result<UpdateOutcome> {
     let client = http_client::Client::new();
     let installer = download_windows_installer(&layout, &client, &latest_version).await?;
-    let mut install_dir = OsString::from("/DIR=");
-    install_dir.push(&layout.root);
+    let install_dir = installer_dir_argument(&layout.root);
 
     let output = command::r#async::Command::new(&installer.path)
         .args([

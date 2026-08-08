@@ -474,6 +474,8 @@ fn is_gl_to_metal_adapter_on_windows_in_parallels(adapter_info: &wgpu::AdapterIn
 /// - `Intel(R) HD Graphics 620` (KBL GT2) — flickering (PLAT-744)
 /// - `Intel(R) UHD Graphics (ICL GT1)` — stuck at "Starting zsh..." on Mesa 21.2.6 (GH #14325)
 /// - `Intel(R) UHD Graphics (TGL GT1)` — window flashing/flicker on older Mesa (PLAT-599, GH #4533)
+/// - `Intel(R) Xe Graphics (TGL GT2)` — frozen window; every `get_current_texture` call returns a
+///   validation error on Mesa 21.2.6 (GH #14577)
 ///
 /// See the Mesa 21.3.6 changelog for the upstream fix:
 /// <https://docs.mesa3d.org/relnotes/21.3.6.html#:~:text=Flickering%20Intel%20Uhd%20620%20Graphics>
@@ -488,6 +490,7 @@ fn is_older_vulkan_intel_uhd_adapter(adapter_info: &wgpu::AdapterInfo) -> bool {
         "Intel(R) HD Graphics 620",
         "Intel(R) UHD Graphics (ICL GT1)",
         "Intel(R) UHD Graphics (TGL GT1)",
+        "Intel(R) Xe Graphics (TGL GT2)",
     ];
 
     if !affected_names

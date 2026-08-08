@@ -37,25 +37,21 @@ fn renders_read_only_code_with_language_and_wrapping() {
                 .to_lines()
                 .into_iter()
                 .map(|line| line.trim_end().to_owned())
-                .take_while(|line| !line.is_empty() || line.starts_with('▏'))
+                .take_while(|line| !line.is_empty())
                 .collect::<Vec<_>>();
             assert_eq!(
                 lines,
                 vec![
-                    "▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁",
-                    "▏ rust           ▕",
-                    "▏ fn main() {    ▕",
-                    "▏     println!   ▕",
-                    "▏ (\"hello        ▕",
-                    "▏ world\");       ▕",
-                    "▏ }              ▕",
-                    "▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔",
+                    "rust",
+                    "fn main() {",
+                    "    println!",
+                    "(\"hello world\");",
+                    "}",
                 ]
             );
         });
     });
 }
-
 fn add_code_view(
     app: &mut App,
     build: impl FnOnce(&mut warpui_core::ViewContext<TuiCodeBlockView>) -> TuiCodeBlockView + 'static,

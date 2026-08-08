@@ -986,9 +986,10 @@ impl AIAssistantPanelView {
             .finish(),
         );
 
-        let is_custom_llm_enabled: bool = UserWorkspaces::as_ref(app)
-            .team_for_view_handle(&self.view_handle, app)
-            .is_some_and(|team| team.is_custom_llm_enabled());
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        let is_custom_llm_enabled = user_workspaces.is_custom_llm_enabled_for_team(
+            user_workspaces.team_for_view_handle(&self.view_handle, app),
+        );
 
         if !is_custom_llm_enabled {
             column.add_child(

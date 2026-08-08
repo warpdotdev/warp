@@ -130,7 +130,6 @@ pub(crate) enum TuiSessionsEvent {
 pub(crate) struct TuiSessions {
     /// TUI-specific process driver. Its handle restores terminal mode on
     /// drop, so the app-lifetime session singleton must retain it.
-    #[cfg_attr(not(feature = "voice_input"), allow(dead_code))]
     driver: Option<TuiDriverHandle>,
     keyboard_enhancement_supported: bool,
     exit_summary: TuiExitSummaryHandle,
@@ -600,6 +599,12 @@ impl TuiSessions {
             focused_session_id: None,
             resume_token: None,
             default_autoexecute_mode: AIConversationAutoexecuteMode::RespectUserSettings,
+        }
+    }
+
+    pub(crate) fn set_freeze_repaints_when_unfocused(&mut self, freeze: bool) {
+        if let Some(driver) = self.driver.as_mut() {
+            driver.set_freeze_repaints_when_unfocused(freeze);
         }
     }
 

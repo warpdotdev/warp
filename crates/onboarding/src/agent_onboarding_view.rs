@@ -11,8 +11,8 @@ use warpui_core::windowing::state::{ApplicationStage, StateEvent};
 
 use crate::components::feature_optout_dialog::{FeatureOptOutDialog, render_feature_optout_dialog};
 use crate::model::{
-    CreditPackOption, OnboardingAuthState, OnboardingStateEvent, OnboardingStateModel,
-    OnboardingStep, SelectedSettings,
+    ChooseHowToStartExperimentArm, CreditPackOption, OnboardingAuthState, OnboardingStateEvent,
+    OnboardingStateModel, OnboardingStep, SelectedSettings,
 };
 use crate::slides::{
     AgentSlide, AiAccessSlide, AiAccessSlideEvent, AiSetupSlide, CustomizeUISlide, IntentionSlide,
@@ -356,6 +356,17 @@ impl AgentOnboardingView {
         ctx.notify();
     }
 
+    pub fn set_pricing_promotion_message(
+        &mut self,
+        message: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.onboarding_state.update(ctx, |state, ctx| {
+            state.set_pricing_promotion_message(message, ctx);
+        });
+        ctx.notify();
+    }
+
     pub fn set_workspace_enforces_autonomy(&mut self, value: bool, ctx: &mut ViewContext<Self>) {
         self.onboarding_state.update(ctx, |state, ctx| {
             state.set_workspace_enforces_autonomy(value, ctx);
@@ -408,6 +419,17 @@ impl AgentOnboardingView {
         ctx.notify();
     }
 
+    /// A web checkout reported success through the desktop hand-off. Returns
+    /// whether an AI-sell onboarding screen consumed it, so the caller can tell
+    /// a post-checkout return apart from an unrelated deeplink.
+    pub fn on_checkout_succeeded(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        let advanced = self
+            .onboarding_state
+            .update(ctx, |state, ctx| state.on_checkout_succeeded(ctx));
+        ctx.notify();
+        advanced
+    }
+
     /// The purchased credits are on the account. Safe to call speculatively
     /// (e.g. from a workspace refresh): it is a no-op unless a purchase started
     /// from the offer slide is still awaiting its credits.
@@ -433,6 +455,29 @@ impl AgentOnboardingView {
             .as_ref(ctx)
             .credit_purchase_state()
             .is_in_flight()
+    }
+
+    /// Snapshots the server-assigned "Choose how to start" experiment arm onto
+    /// onboarding state. Called just before the offer is shown so the arm is
+    /// frozen for that exposure (REV-1939).
+    pub fn set_choose_how_to_start_experiment_arm(
+        &mut self,
+        arm: ChooseHowToStartExperimentArm,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.onboarding_state.update(ctx, |state, ctx| {
+            state.set_choose_how_to_start_experiment_arm(arm, ctx);
+        });
+        ctx.notify();
+    }
+
+    /// The `experiment_arm` to report on this offer's telemetry, or `None` when
+    /// the current offer isn't the arm-experiment surface.
+    pub fn offer_experiment_arm(&self, ctx: &AppContext) -> Option<String> {
+        self.onboarding_state
+            .as_ref(ctx)
+            .offer_experiment_arm()
+            .map(str::to_string)
     }
 
     pub fn show_post_auth_offer(&mut self, variant: OfferVariant, ctx: &mut ViewContext<Self>) {
@@ -478,6 +523,7 @@ impl AgentOnboardingView {
                     "intro"
                 }
                 .to_string(),
+                experiment_arm: None,
             },
             ctx
         );

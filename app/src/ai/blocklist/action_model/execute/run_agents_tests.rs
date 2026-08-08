@@ -626,6 +626,136 @@ fn should_not_autoexecute_without_approved_plan_or_always_allow_profile() {
 }
 
 #[test]
+fn should_autoexecute_for_child_conversation_without_plan_or_profile() {
+    // A child conversation lives in a hidden pane where a confirmation card
+    // would be invisible, so its run_agents must auto-execute even without an
+    // approved plan config or an always-allow profile.
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let child_conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.start_new_child_conversation(
+                    EntityId::new(),
+                    "mid-tree".to_string(),
+                    state.conversation_id,
+                    None,
+                    ctx,
+                )
+            });
+        let action = remote_run_agents_action("oz");
+
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: child_conversation_id,
+                },
+                ctx,
+            )
+        });
+
+        assert!(should_autoexecute);
+    });
+}
+
+#[test]
+fn child_run_agents_executes_when_multi_level_orchestration_enabled() {
+    let _flag = FeatureFlag::MultiLevelOrchestration.override_enabled(true);
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let child_conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.start_new_child_conversation(
+                    EntityId::new(),
+                    "mid-tree".to_string(),
+                    state.conversation_id,
+                    None,
+                    ctx,
+                )
+            });
+        let action = remote_run_agents_action("oz");
+
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: child_conversation_id,
+                },
+                ctx,
+            )
+        });
+        assert!(should_autoexecute);
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: child_conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+        assert!(matches!(execution, AnyActionExecution::Async { .. }));
+    });
+}
+
+#[test]
+fn execute_denies_child_run_agents_when_multi_level_orchestration_disabled() {
+    let _flag = FeatureFlag::MultiLevelOrchestration.override_enabled(false);
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let child_conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                history.start_new_child_conversation(
+                    EntityId::new(),
+                    "mid-tree".to_string(),
+                    state.conversation_id,
+                    None,
+                    ctx,
+                )
+            });
+        let action = remote_run_agents_action("oz");
+
+        // Auto-execution still bypasses the confirmation card (invisible in a
+        // hidden pane) so the denial below renders instead of hanging the run.
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: child_conversation_id,
+                },
+                ctx,
+            )
+        });
+        assert!(should_autoexecute);
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: child_conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+        let AnyActionExecution::Sync(AIAgentActionResultType::RunAgents(RunAgentsResult::Denied {
+            reason,
+        })) = execution
+        else {
+            panic!("expected synchronous run_agents denial");
+        };
+        assert_eq!(
+            reason,
+            "Multi-level orchestration is not enabled on this client."
+        );
+    });
+}
+
+#[test]
 fn execute_denies_remote_non_warp_harness_without_default_auth_secret() {
     App::test((), |mut app| async move {
         let state = initialize_run_agents_test(&mut app, ExecutionMode::App);

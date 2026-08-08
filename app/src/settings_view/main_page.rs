@@ -33,7 +33,9 @@ use super::settings_page::{
     SettingsPageViewHandle, SettingsWidget, ToggleState, render_body_item,
     render_customer_type_badge,
 };
-use super::{SettingsAction, SettingsSection, ToggleSettingActionPair, flags};
+use super::{
+    SettingsAction, SettingsSection, ToggleSettingActionPair, flags, plan_header_presentation,
+};
 use crate::appearance::Appearance;
 use crate::auth::auth_manager::{AuthManager, LoginGatedFeature};
 use crate::auth::auth_state::AuthState;
@@ -370,7 +372,10 @@ impl AccountWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::End);
         let current_user_id = auth_state.user_id().unwrap_or_default();
 
-        plan_info.add_child(render_customer_type_badge(appearance, "Free".into()));
+        let presentation = plan_header_presentation(None, false, true);
+        if let Some(badge_label) = presentation.badge_label {
+            plan_info.add_child(render_customer_type_badge(appearance, badge_label));
+        }
         plan_info.add_child(
             Container::new(
                 appearance
@@ -505,15 +510,12 @@ impl AccountWidget {
         let workspaces = UserWorkspaces::as_ref(app);
         let workspace = workspaces.current_workspace();
         let billing_metadata = workspace.map(|workspace| &workspace.billing_metadata);
-        if let Some(billing_metadata) = billing_metadata
-            && billing_metadata.customer_type != CustomerType::Unknown
-        {
-            plan_info.add_child(render_customer_type_badge(
-                appearance,
-                billing_metadata.customer_type.to_display_string(),
-            ));
+        let team = workspaces.team_for_view_handle(&view.self_handle, app);
+        let presentation = plan_header_presentation(billing_metadata, team.is_some(), false);
+        if let Some(badge_label) = presentation.badge_label {
+            plan_info.add_child(render_customer_type_badge(appearance, badge_label));
         }
-        if let Some(team) = workspaces.team_for_view_handle(&view.self_handle, app) {
+        if let Some(team) = team {
             let current_user_email = auth_state.user_email().unwrap_or_default();
             let has_admin_permissions = team.has_admin_permissions(&current_user_email);
             if has_admin_permissions {
@@ -591,10 +593,7 @@ impl AccountWidget {
                     }
                 }
             }
-        } else {
-            let plan_badge_child = render_customer_type_badge(appearance, "Free".into());
-            plan_info.add_child(plan_badge_child);
-
+        } else if presentation.show_personal_upgrade {
             plan_info.add_child(
                 appearance
                     .ui_builder()
