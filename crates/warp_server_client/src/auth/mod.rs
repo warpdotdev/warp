@@ -1,11 +1,12 @@
 mod session;
 
+use std::borrow::Cow;
 use std::result::Result as StdResult;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
-use cynic::{MutationBuilder, QueryBuilder};
+use cynic::{GraphQlResponse, MutationBuilder, QueryBuilder};
 use firebase::FirebaseError;
 use instant::Duration;
 #[cfg(any(test, feature = "test-util"))]
@@ -41,7 +42,7 @@ use warp_server_auth::credentials::{AuthToken, Credentials, FirebaseToken, Login
 pub use warp_server_auth::user_uid;
 
 use crate::base_client::BaseClient;
-use crate::graphql_helpers::send_graphql_request;
+use crate::graphql_helpers::{missing_response_data_error, send_graphql_request};
 use crate::ids::ApiKeyUid;
 
 /// Header key used to associate unauthenticated requests with an experiment identity.
@@ -197,6 +198,26 @@ impl AuthClientImpl {
         Self::on_settings_updated(result, unknown_error_message)
     }
 
+    /// Extracts the user output from a `GetUser` response.
+    ///
+    /// A response without `data` means the server could not resolve the user;
+    /// the reason is only described by the response's `errors`, so those are
+    /// surfaced in the returned error rather than dropped.
+    fn user_output_from_response(
+        operation_name: Option<&str>,
+        response: GraphQlResponse<GetUser>,
+    ) -> Result<GqlUserOutput> {
+        let GraphQlResponse { data, errors } = response;
+        let data =
+            data.ok_or_else(|| missing_response_data_error(operation_name, errors.as_deref()))?;
+        match data.user {
+            warp_graphql::queries::get_user::UserResult::UserOutput(user_output) => Ok(user_output),
+            warp_graphql::queries::get_user::UserResult::Unknown => {
+                Err(anyhow!("Unable to fetch user"))
+            }
+        }
+    }
+
     fn on_settings_updated(
         result: UpdateUserSettingsResult,
         unknown_error_message: &'static str,
@@ -302,6 +323,7 @@ impl AuthClient for AuthClientImpl {
         let operation = GetUser::build(GetUserVariables {
             request_context: warp_graphql::client::get_request_context(),
         });
+        let operation_name = operation.operation_name().map(Cow::into_owned);
         let mut options = self
             .base_client
             .graphql_request_options_with_token(auth_token.map(ToOwned::to_owned));
@@ -311,15 +333,8 @@ impl AuthClient for AuthClientImpl {
         );
         let response = operation
             .send_request(self.base_client.owned_http_client(), options)
-            .await?
-            .data
-            .ok_or_else(|| anyhow!("Expected valid response.data"))?;
-        match response.user {
-            warp_graphql::queries::get_user::UserResult::UserOutput(user_output) => Ok(user_output),
-            warp_graphql::queries::get_user::UserResult::Unknown => {
-                Err(anyhow!("Unable to fetch user"))
-            }
-        }
+            .await?;
+        Self::user_output_from_response(operation_name.as_deref(), response)
     }
 
     async fn get_user_settings(&self) -> Result<Option<SyncedUserSettings>> {
