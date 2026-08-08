@@ -84,13 +84,10 @@ pub async fn dump_heap_profile_to_disk() -> anyhow::Result<std::path::PathBuf> {
 
 /// Dumps a jemalloc heap profile and sends it to Sentry.
 ///
-/// On Linux the profile is produced in-process via the `jemalloc_pprof` crate
-/// as a raw (unsymbolized) pprof -- sample addresses + mappings + GNU build-id
-/// -- and is symbolized offline against the debug-info file uploaded to Sentry
-/// by the release process (matched by build-id).  On other platforms it spawns
-/// the bundled `pprof` binary to fetch and symbolicate the heap profile from
-/// the local HTTP server.  Either way, the resulting profile is attached to a
-/// Sentry event.
+/// The profile is produced in-process from the `jemalloc_pprof` profiler as a raw (unsymbolized)
+/// pprof -- sample addresses plus mappings carrying each loaded image's path and build-id -- and is
+/// symbolized offline against the debug-info file uploaded to Sentry by the release process
+/// (matched by build-id).  The resulting profile is attached to a Sentry event.
 #[cfg(feature = "heap_usage_tracking")]
 pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
     use sentry::protocol::{Attachment, AttachmentType};
@@ -139,56 +136,31 @@ pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
 #[cfg(feature = "heap_usage_tracking")]
 async fn dump_jemalloc_heap_profile_inner() -> anyhow::Result<Vec<u8>> {
     cfg_if::cfg_if! {
-        if #[cfg(target_os = "linux")] {
-            // `jemalloc_pprof` only supports Linux. We build it WITHOUT the
-            // `symbolize` feature, so `dump_pprof()` returns a raw, gzipped
-            // pprof (sample addresses + mappings + GNU build-id) that is
-            // symbolized offline against the debug-info file by build-id.  Dump
-            // it directly in-process -- no external `pprof`/Go binary, HTTP
-            // round-trip, or port dependency required (the latter matter for
-            // the headless remote server daemon, which has no bundled helpers
-            // next to it).
+        if #[cfg(any(target_os = "linux", target_os = "macos"))] {
+            // We build `jemalloc_pprof` WITHOUT the `symbolize` feature, so we produce a raw,
+            // gzipped pprof (sample addresses + mappings + build-id) that is symbolized offline
+            // against the debug-info file by build-id.  Dump it directly in-process -- no external
+            // `pprof`/Go binary, HTTP round-trip, or port dependency required (the latter matter
+            // for the headless remote server daemon, which has no bundled helpers next to it).
             dump_jemalloc_pprof_bytes().await
         } else {
-            use anyhow::Context as _;
-
-            // Create a temporary file for the profile output.
-            let temp_dir = tempfile::tempdir().context("Failed to create temporary directory")?;
-            let profile_path = temp_dir.path().join("heap-profile.pb");
-
-            // Run pprof to fetch and symbolicate the heap profile.
-            let pprof_path = pprof_binary_path()?;
-            let output = command::r#async::Command::new(pprof_path)
-                .args(["--proto", "--symbolize=local", "-output"])
-                .arg(&profile_path)
-                .arg("http://127.0.0.1:9277/debug/pprof/heap")
-                .output()
-                .await
-                .context("Failed to execute pprof")?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                anyhow::bail!("pprof failed: {stderr}");
-            }
-
-            // Read the profile data from the temporary file.
-            let profile_data =
-                std::fs::read(&profile_path).context("Failed to read heap profile from disk")?;
-
-            Ok(profile_data)
+            // `heap_usage_tracking` is only ever enabled for the Linux and macOS bundles, both of
+            // which take the branch above.
+            anyhow::bail!("heap profiling is not supported on this platform");
         }
     }
 }
 
-/// Produces a raw (unsymbolized), gzipped pprof heap profile directly from the
-/// in-process jemalloc profiler. The profile carries sample addresses,
-/// mappings, and the GNU build-id, and is symbolized offline against the
-/// matching debug-info file (by build-id).
+/// Produces a raw (unsymbolized), gzipped pprof heap profile directly from the in-process jemalloc
+/// profiler.  The profile carries sample addresses, mappings, and each loaded image's build-id, and
+/// is symbolized offline against the matching debug-info file (by build-id).
 ///
-/// This is the same dump that [`handle_get_heap`] serves over HTTP, but
-/// invoked directly so callers don't need to reach the local HTTP server.
-/// Requires the `jemalloc_pprof` feature, which is Linux-only.
-#[cfg(all(feature = "jemalloc_pprof", target_os = "linux"))]
+/// This is the same dump that [`handle_get_heap`] serves over HTTP, but invoked directly so callers
+/// don't need to reach the local HTTP server.
+#[cfg(all(
+    feature = "jemalloc_pprof",
+    any(target_os = "linux", target_os = "macos")
+))]
 async fn dump_jemalloc_pprof_bytes() -> anyhow::Result<Vec<u8>> {
     let Some(prof_ctl) = jemalloc_pprof::PROF_CTL.as_ref() else {
         anyhow::bail!("heap profiler not initialized");
@@ -197,20 +169,241 @@ async fn dump_jemalloc_pprof_bytes() -> anyhow::Result<Vec<u8>> {
     if !prof_ctl.activated() {
         anyhow::bail!("heap profiling not activated");
     }
-    prof_ctl.dump_pprof()
-}
 
-#[cfg(all(feature = "heap_usage_tracking", not(target_os = "linux")))]
-fn pprof_binary_path() -> anyhow::Result<std::path::PathBuf> {
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            use anyhow::Context as _;
+            // `ProfCtl::dump_pprof` builds the pprof mapping table from `mappings::MAPPINGS`, which
+            // is hard-coded to `None` on every non-Linux target because it walks
+            // `dl_iterate_phdr`/ELF program headers.  A pprof with no mappings carries no image
+            // paths, no build-ids, and raw run-time addresses, so nothing can symbolize it and the
+            // attachment is useless for triage.  Supply the mapping table ourselves from dyld and
+            // then run the same conversion `dump_pprof` would.
+            use std::io::BufReader;
 
-            let app_bundle_dir = std::path::PathBuf::from(warp_core::macos::get_bundle_path().context("Failed to get app bundle path")?);
-            Ok(app_bundle_dir.join("Contents/Helpers/pprof"))
+            let dump = prof_ctl.dump()?;
+            let mappings = macos_mappings::collect();
+            let profile = pprof_util::parse_jeheap(BufReader::new(dump), Some(&mappings))?;
+            Ok(profile.to_pprof(("inuse_space", "bytes"), ("space", "bytes"), None))
+        } else {
+            prof_ctl.dump_pprof()
         }
-        else {
-            Err(anyhow::anyhow!("pprof binary path not supported on this platform"))
+    }
+}
+
+/// Collects the pprof mapping table for the current process on macOS.
+///
+/// This is the Mach-O equivalent of what the `mappings` crate does for ELF on Linux: it walks every
+/// image loaded into the process via dyld and records, for each executable segment, where that
+/// segment lives at run time, where it lives in the file, and the image's build-id.  Sentry uses
+/// the build-id -- the Mach-O `LC_UUID`, which is exactly the debug-id the release process uploads
+/// dSYMs under -- to symbolize the profile offline.
+#[cfg(all(feature = "jemalloc_pprof", target_os = "macos"))]
+mod macos_mappings {
+    use std::ffi::{CStr, OsStr, c_char};
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::path::{Path, PathBuf};
+
+    use pprof_util::{BuildId, Mapping};
+
+    /// `MH_MAGIC_64` from `<mach-o/loader.h>`.
+    const MH_MAGIC_64: u32 = 0xfeed_facf;
+    /// `LC_SEGMENT_64` from `<mach-o/loader.h>`.
+    const LC_SEGMENT_64: u32 = 0x19;
+    /// `LC_UUID` from `<mach-o/loader.h>`.
+    const LC_UUID: u32 = 0x1b;
+    /// `VM_PROT_EXECUTE` from `<mach/vm_prot.h>`.
+    const VM_PROT_EXECUTE: i32 = 0x4;
+
+    // dyld's image introspection API, from `<mach-o/dyld.h>`.  Declared here rather than taken from
+    // `libc`, whose bindings for these are deprecated in favour of a `mach2` dependency we would
+    // not otherwise need.
+    unsafe extern "C" {
+        fn _dyld_image_count() -> u32;
+        fn _dyld_get_image_header(image_index: u32) -> *const MachHeader64;
+        fn _dyld_get_image_name(image_index: u32) -> *const c_char;
+        fn _dyld_get_image_vmaddr_slide(image_index: u32) -> isize;
+    }
+
+    /// `struct mach_header_64` from `<mach-o/loader.h>`.
+    ///
+    /// The unread fields are kept so the declaration mirrors the C layout.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    #[allow(dead_code)]
+    struct MachHeader64 {
+        magic: u32,
+        cputype: i32,
+        cpusubtype: i32,
+        filetype: u32,
+        ncmds: u32,
+        sizeofcmds: u32,
+        flags: u32,
+        reserved: u32,
+    }
+
+    /// `struct load_command` from `<mach-o/loader.h>`.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct LoadCommand {
+        cmd: u32,
+        cmdsize: u32,
+    }
+
+    /// `struct segment_command_64` from `<mach-o/loader.h>`.
+    ///
+    /// The unread fields are kept so the declaration mirrors the C layout.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    #[allow(dead_code)]
+    struct SegmentCommand64 {
+        cmd: u32,
+        cmdsize: u32,
+        segname: [u8; 16],
+        vmaddr: u64,
+        vmsize: u64,
+        fileoff: u64,
+        filesize: u64,
+        maxprot: i32,
+        initprot: i32,
+        nsects: u32,
+        flags: u32,
+    }
+
+    /// `struct uuid_command` from `<mach-o/loader.h>`.
+    ///
+    /// The unread fields are kept so the declaration mirrors the C layout.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    #[allow(dead_code)]
+    struct UuidCommand {
+        cmd: u32,
+        cmdsize: u32,
+        uuid: [u8; 16],
+    }
+
+    /// Returns a mapping for every executable segment of every image currently loaded into this
+    /// process.
+    ///
+    /// Only executable segments are reported: stack addresses in a heap profile only ever land in
+    /// those, and emitting every segment of every image would bloat the attachment and slow down
+    /// the linear mapping lookup `pprof_util` performs per address.
+    pub fn collect() -> Vec<Mapping> {
+        let mut mappings = Vec::new();
+
+        // SAFETY: `_dyld_image_count` only reads dyld's image list.  That list can grow if another
+        // thread loads an image while we iterate, in which case the accessors below simply return
+        // null for an index we no longer consider valid, and we skip it.
+        let count = unsafe { _dyld_image_count() };
+
+        for index in 0..count {
+            // SAFETY: `index` is less than the count reported by dyld, and both accessors return
+            // null rather than misbehaving for an out-of-range index.
+            let (header, name) =
+                unsafe { (_dyld_get_image_header(index), _dyld_get_image_name(index)) };
+            if header.is_null() || name.is_null() {
+                continue;
+            }
+
+            // SAFETY: dyld documents the image name as a null-terminated string that stays valid
+            // for as long as the image is loaded.
+            let name = unsafe { CStr::from_ptr(name) };
+            let pathname = PathBuf::from(OsStr::from_bytes(name.to_bytes()));
+
+            // SAFETY: `index` is in range, as above.
+            let slide = unsafe { _dyld_get_image_vmaddr_slide(index) };
+
+            // SAFETY: `header` points at the Mach-O header of a loaded image, which stays mapped
+            // for as long as that image is loaded.
+            unsafe { collect_image(header, slide, &pathname, &mut mappings) };
+        }
+
+        mappings
+    }
+
+    /// Appends the executable-segment mappings of a single loaded image.
+    ///
+    /// # Safety
+    ///
+    /// `header` must point at the Mach-O header of an image that is currently loaded into this
+    /// process, and `slide` must be that image's vmaddr slide.
+    unsafe fn collect_image(
+        header: *const MachHeader64,
+        slide: isize,
+        pathname: &Path,
+        mappings: &mut Vec<Mapping>,
+    ) {
+        // SAFETY: the caller guarantees `header` points at a mapped Mach-O header.  Every read here
+        // is unaligned because dyld makes no alignment promises about the pointers it hands out.
+        let MachHeader64 { magic, ncmds, .. } = unsafe { std::ptr::read_unaligned(header) };
+        if magic != MH_MAGIC_64 {
+            // Every image in the 64-bit-only builds we ship is Mach-O 64.
+            return;
+        }
+
+        // The load commands directly follow the header.
+        //
+        // SAFETY: a Mach-O image is a header followed by `ncmds` load commands, all of which live
+        // within the image's own mapping.
+        let mut cursor = unsafe { header.add(1) }.cast::<u8>();
+
+        let mut build_id = None;
+        let mut segments = Vec::new();
+
+        for _ in 0..ncmds {
+            // SAFETY: `cursor` walks forward by each command's self-reported size, so it stays
+            // inside the load command region.
+            let command: LoadCommand = unsafe { std::ptr::read_unaligned(cursor.cast()) };
+
+            let Ok(size) = usize::try_from(command.cmdsize) else {
+                break;
+            };
+            if size < std::mem::size_of::<LoadCommand>() {
+                // A bogus size would leave us walking in place forever.
+                break;
+            }
+
+            match command.cmd {
+                LC_SEGMENT_64 => {
+                    // SAFETY: `cmd` identifies this command as a `segment_command_64`.
+                    let segment: SegmentCommand64 =
+                        unsafe { std::ptr::read_unaligned(cursor.cast()) };
+                    if segment.initprot & VM_PROT_EXECUTE != 0 && segment.vmsize > 0 {
+                        segments.push(segment);
+                    }
+                }
+                LC_UUID => {
+                    // SAFETY: `cmd` identifies this command as a `uuid_command`.
+                    let uuid: UuidCommand = unsafe { std::ptr::read_unaligned(cursor.cast()) };
+                    build_id = Some(BuildId(uuid.uuid.to_vec()));
+                }
+                _ => {}
+            }
+
+            // SAFETY: still inside the load command region, as above.
+            cursor = unsafe { cursor.add(size) };
+        }
+
+        for segment in segments {
+            let (Ok(vmaddr), Ok(vmsize)) = (
+                usize::try_from(segment.vmaddr),
+                usize::try_from(segment.vmsize),
+            ) else {
+                continue;
+            };
+
+            // pprof recovers the address a symbolizer needs as `addr - memory_start +
+            // memory_offset`, so pairing the run-time start with the static `vmaddr` turns each
+            // sampled address back into the image-relative address recorded in the dSYM.
+            let memory_start = vmaddr.wrapping_add_signed(slide);
+
+            mappings.push(Mapping {
+                memory_start,
+                memory_end: memory_start.saturating_add(vmsize),
+                memory_offset: vmaddr,
+                file_offset: segment.fileoff,
+                pathname: pathname.to_path_buf(),
+                build_id: build_id.clone(),
+            });
         }
     }
 }

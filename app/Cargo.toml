@@ -130,6 +130,13 @@ jaq-all.workspace = true
 # process (matched by build-id). This keeps the shipped binary fully
 # strippable.
 jemalloc_pprof = { version = "0.8.1", optional = true }
+# The lower-level building blocks that `jemalloc_pprof` itself uses to turn a
+# raw jemalloc heap dump into a pprof.  We need them directly on macOS, where
+# `jemalloc_pprof::ProfCtl::dump_pprof` cannot produce a usable profile because
+# the `mappings` crate it relies on only supports Linux (see
+# `profiling::macos_mappings`).  Kept feature-less so it unifies with the copy
+# `jemalloc_pprof` depends on.
+pprof_util = { version = "0.8", optional = true }
 lsp-types = "0.97.0"
 indexmap = { version = "2.0.2", features = ["serde"] }
 input_classifier.workspace = true
@@ -777,7 +784,7 @@ in_band_generators_ssh = []
 jemalloc = ["dep:tikv-jemallocator", "ai/jemalloc"]
 jemalloc_with_profiling = ["jemalloc", "tikv-jemallocator/profiling"]
 jemalloc_auto_heap_profiling = ["jemalloc_with_profiling"]
-jemalloc_pprof = ["jemalloc_with_profiling", "dep:jemalloc_pprof"]
+jemalloc_pprof = ["jemalloc_with_profiling", "dep:jemalloc_pprof", "dep:pprof_util"]
 run_generators_with_cmd_exe = []
 inline_ssh_banner = []
 kitty_images = []

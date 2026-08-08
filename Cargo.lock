@@ -15281,6 +15281,7 @@ dependencies = [
  "pin-project",
  "plist",
  "pprof",
+ "pprof_util",
  "prost",
  "prost-build",
  "prost-types",

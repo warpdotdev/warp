@@ -129,12 +129,6 @@ NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" "$WARP_APP_PATH/Co
 
 "${REPO_ROOT}/script/compile_icon" "$WARP_CHANNEL" "$WARP_APP_PATH"
 
-if [[ ",$FEATURES," =~ ",heap_usage_tracking," ]]; then
-  echo "Bundling pprof..."
-  HELPERS_DIR="$WARP_APP_PATH/Contents/Helpers"
-  "${REPO_ROOT}/script/prepare_bundled_pprof" "$HELPERS_DIR"
-fi
-
 if [[ ",$FEATURES," =~ ",warp_control_cli," ]]; then
   WARPCTRL_SCRIPT_PATH="$WARP_APP_PATH/Contents/Resources/bin/warpctrl-$WARP_CHANNEL"
   echo "Creating warpctrl wrapper script at $WARPCTRL_SCRIPT_PATH..."

@@ -666,12 +666,6 @@ if [[ "$ARTIFACT" == "app" ]]; then
 
   "$WORKSPACE_ROOT_DIR/script/compile_icon" "$RELEASE_CHANNEL" "$BUNDLE_DIR/$WARP_APP_NAME.app"
 
-  HELPERS_DIR="$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Helpers"
-  if [[ ",$FEATURES," =~ ",heap_usage_tracking," ]]; then
-    echo "Bundling pprof..."
-    "$WORKSPACE_ROOT_DIR/script/prepare_bundled_pprof" "$HELPERS_DIR"
-  fi
-
   # Determine CLI wrapper script path based on release channel.  Each channel's
   # value here must match `Channel::cli_command_name` in the Rust source.
   if [[ $RELEASE_CHANNEL = "stable" ]]; then
