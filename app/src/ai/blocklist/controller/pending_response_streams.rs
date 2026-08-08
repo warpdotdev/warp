@@ -29,9 +29,29 @@ impl PendingResponseStreams {
         let Some(conversation) = history_model.conversation(&conversation_id) else {
             return false;
         };
-        self.streams
-            .keys()
-            .any(|stream_id| conversation.is_processing_response_stream(stream_id))
+        self.streams.iter().any(|(stream_id, stream)| {
+            conversation.is_processing_response_stream(stream_id) && stream.as_ref(app).is_active()
+        })
+    }
+
+    /// Removes completed streams that are still registered for the conversation.
+    ///
+    /// Completion is delivered asynchronously, so a finished stream can remain in
+    /// the registry after it has stopped owning a request. Removing only the registry
+    /// entry leaves the conversation's stream-to-exchange mapping intact until the
+    /// queued completion event handles it.
+    pub fn cleanup_inactive_streams_for_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        app: &AppContext,
+    ) {
+        let history_model = BlocklistAIHistoryModel::as_ref(app);
+        let Some(conversation) = history_model.conversation(&conversation_id) else {
+            return;
+        };
+        self.streams.retain(|stream_id, stream| {
+            !conversation.is_processing_response_stream(stream_id) || stream.as_ref(app).is_active()
+        });
     }
 
     /// Returns the IDs of all in-flight streams owned by the given conversation.
@@ -65,6 +85,18 @@ impl PendingResponseStreams {
 
     pub fn cleanup_stream(&mut self, stream_id: &ResponseStreamId) {
         self.streams.remove(stream_id);
+    }
+
+    #[cfg(test)]
+    pub fn mark_stream_inactive_for_test(
+        &self,
+        stream_id: &ResponseStreamId,
+        ctx: &mut ModelContext<BlocklistAIController>,
+    ) {
+        self.streams
+            .get(stream_id)
+            .expect("test stream should be registered")
+            .update(ctx, |stream, _| stream.mark_inactive_for_test());
     }
 
     pub fn try_cancel_stream(

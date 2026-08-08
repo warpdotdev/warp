@@ -213,6 +213,22 @@ impl ResponseStream {
         &self.id
     }
 
+    /// Whether this stream still owns a live request attempt.
+    ///
+    /// The controller normally removes a stream from its registry when it handles
+    /// `AfterStreamFinished`, but that event is delivered asynchronously. The
+    /// registry can therefore briefly (or, if teardown is interrupted, indefinitely)
+    /// retain a stream whose request has already completed.
+    pub(super) fn is_active(&self) -> bool {
+        self.current_request_id.is_some() && self.cancellation_tx.is_some()
+    }
+
+    #[cfg(test)]
+    pub(super) fn mark_inactive_for_test(&mut self) {
+        self.current_request_id = None;
+        self.cancellation_tx = None;
+    }
+
     /// Returns true if we should attempt to resume the conversation after the stream finishes.
     pub fn should_resume_conversation_after_stream_finished(&self) -> bool {
         self.should_resume_conversation_after_stream_finished

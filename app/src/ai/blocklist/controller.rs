@@ -2414,6 +2414,8 @@ impl BlocklistAIController {
             .all_inputs()
             .any(|input| input.is_passive_request());
         let can_attempt_resume_on_error = can_attempt_resume_on_error && !is_passive_request;
+        self.in_flight_response_streams
+            .cleanup_inactive_streams_for_conversation(conversation_id, ctx);
 
         // Make sure there's no existing response stream for the conversation. If
         // there is, something has gone wrong.
@@ -2647,6 +2649,16 @@ impl BlocklistAIController {
             CancellationReason::ManuallyCancelled,
             ctx,
         );
+    }
+
+    #[cfg(test)]
+    pub fn mark_stream_inactive_for_test(
+        &self,
+        stream_id: &ResponseStreamId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.in_flight_response_streams
+            .mark_stream_inactive_for_test(stream_id, ctx);
     }
 
     /// Cancels 'progress' for the active conversation if there is one:
