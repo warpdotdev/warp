@@ -16,6 +16,7 @@ use rand::Rng;
 use rand::distributions::Alphanumeric;
 use string_offset::CharOffset;
 use vec1::Vec1;
+use warp_completer::completer::PathSeparators;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
@@ -85,7 +86,6 @@ use crate::code::local_code_editor::{
     LocalCodeEditorEvent, LocalCodeEditorView, render_unsaved_circle_with_tooltip,
 };
 use crate::code::view::PendingSaveIntent;
-use crate::code_review::DiffSetScope;
 use crate::code_review::comments::{
     AttachedReviewCommentTarget, CommentId, ReviewCommentBatch, ReviewCommentBatchEvent,
 };
@@ -110,6 +110,7 @@ use crate::code_review::telemetry_event::{
     AddToContextOrigin, CodeReviewContextDestination, CodeReviewTelemetryEvent, GitButtonKind,
     PaneStateChange,
 };
+use crate::code_review::{DiffSetScope, format_path_for_display};
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::editor::InteractionState;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
@@ -2854,6 +2855,22 @@ impl CodeReviewView {
         self.action_target_provider.as_ref()?.focused_terminal(app)
     }
 
+    /// The path separators the focused session prefers when displaying paths, so a
+    /// native Windows (PowerShell) session shows `\` while WSL/MSYS2 and Unix
+    /// sessions keep `/`. Falls back to the host OS when no session is available.
+    pub(crate) fn path_separators(&self, app: &AppContext) -> PathSeparators {
+        self.focused_terminal(app)
+            .and_then(|terminal| {
+                terminal.read(app, |terminal, ctx| {
+                    terminal
+                        .active_block_session_id()
+                        .and_then(|id| terminal.sessions_model().as_ref(ctx).get(id))
+                        .map(|session| session.path_separators())
+                })
+            })
+            .unwrap_or_else(PathSeparators::for_os)
+    }
+
     fn diff_state(&self, app: &AppContext) -> DiffState {
         self.diff_state_model.read(app, |model, ctx| model.get(ctx))
     }
@@ -4489,8 +4506,9 @@ impl CodeReviewView {
 
         // When the flag is off, sidebar goes on the left (legacy).
         if !sidebar_on_right && self.file_sidebar_expanded && !state.file_states.is_empty() {
-            sidebar_and_diffs_row
-                .add_child(Container::new(self.render_file_sidebar(state, appearance)).finish());
+            sidebar_and_diffs_row.add_child(
+                Container::new(self.render_file_sidebar(state, appearance, app)).finish(),
+            );
 
             let vertical_separator = ConstrainedBox::new(
                 Rect::new()
@@ -4546,8 +4564,9 @@ impl CodeReviewView {
             .finish();
 
             sidebar_and_diffs_row.add_child(vertical_separator);
-            sidebar_and_diffs_row
-                .add_child(Container::new(self.render_file_sidebar(state, appearance)).finish());
+            sidebar_and_diffs_row.add_child(
+                Container::new(self.render_file_sidebar(state, appearance, app)).finish(),
+            );
         }
 
         Shrinkable::new(1., sidebar_and_diffs_row.finish()).finish()
@@ -4557,13 +4576,15 @@ impl CodeReviewView {
         &self,
         state: &LoadedState,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let mut column = Flex::column()
             .with_main_axis_alignment(MainAxisAlignment::Start)
             .with_cross_axis_alignment(CrossAxisAlignment::Start);
+        let path_separators = self.path_separators(app);
 
         for (file_index, file_state) in state.file_states.values().enumerate() {
-            let file_row = self.render_file_sidebar_row(file_state, appearance);
+            let file_row = self.render_file_sidebar_row(file_state, appearance, &path_separators);
             column.add_child(
                 Hoverable::new(file_state.sidebar_mouse_state.clone(), |mouse_state| {
                     let mut container = Container::new(Shrinkable::new(1., file_row).finish())
@@ -4633,6 +4654,7 @@ impl CodeReviewView {
         &self,
         file_state: &FileState,
         appearance: &Appearance,
+        path_separators: &PathSeparators,
     ) -> Box<dyn Element> {
         let repo_relative_path = Path::new(&file_state.file_diff.file_path);
         let file_name = repo_relative_path
@@ -4643,6 +4665,7 @@ impl CodeReviewView {
             .parent()
             .and_then(|parent| parent.to_str())
             .unwrap_or_default();
+        let dir_path = format_path_for_display(dir_path, path_separators);
         let additions = file_state.file_diff.additions();
         let deletions = file_state.file_diff.deletions();
 
@@ -4686,7 +4709,7 @@ impl CodeReviewView {
                 Shrinkable::new(
                     1.,
                     Text::new(
-                        dir_path.to_string(),
+                        dir_path,
                         appearance.ui_font_family(),
                         appearance.ui_font_size() * SMALLER_TEXT_RATIO, // Slightly smaller
                     )
@@ -4879,8 +4902,9 @@ impl CodeReviewView {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
+        let path_separators = self.path_separators(app);
 
-        let file_name = file.file_diff.file_path.clone();
+        let file_name = format_path_for_display(&file.file_diff.file_path, &path_separators);
 
         let mut left_section = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -4895,7 +4919,7 @@ impl CodeReviewView {
                 Shrinkable::new(
                     1.,
                     Text::new(
-                        old_path.clone(),
+                        format_path_for_display(old_path, &path_separators),
                         appearance.ui_font_family(),
                         appearance.ui_font_size() + 2.,
                     )

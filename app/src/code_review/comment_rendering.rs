@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use chrono::{Duration, Local};
 use pathfinder_color::ColorU;
+use warp_completer::completer::PathSeparators;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors::{neutral_1, neutral_2, text_sub};
 use warp_editor::content::buffer::InitialBufferState;
@@ -29,6 +30,7 @@ use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
 use crate::code_review::comments::{
     AttachedReviewComment, AttachedReviewCommentTarget, LineDiffContent,
 };
+use crate::code_review::format_path_for_display;
 use crate::editor::InteractionState;
 use crate::notebooks::editor::view::RichTextEditorView;
 use crate::util::time_format::human_readable_approx_duration;
@@ -386,11 +388,13 @@ impl CommentViewCard {
         header_trailing_element: Option<Box<dyn Element>>,
         metadata_trailing_element: Option<Box<dyn Element>>,
         on_header_click: Option<&HeaderClickHandler>,
+        path_separators: &PathSeparators,
         app: &AppContext,
     ) -> Box<dyn Element> {
+        let title = format_path_for_display(&self.title, path_separators);
         if self.is_collapsed {
             return render_collapsed_comment_card(
-                &self.title,
+                &title,
                 self.source.outdated,
                 header_trailing_element,
                 on_header_click,
@@ -404,7 +408,7 @@ impl CommentViewCard {
         let mut card = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
         card.add_child(render_comment_file_path_header(
-            &self.title,
+            &title,
             self.source.outdated,
             header_trailing_element,
             CornerRadius::with_top(Radius::Pixels(8.)),
