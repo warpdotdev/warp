@@ -285,8 +285,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CodeLaunchModal,
         #[cfg(feature = "api_key_management")]
         FeatureFlag::APIKeyManagement,
-        #[cfg(feature = "mcp_oauth")]
-        FeatureFlag::McpOauth,
         #[cfg(feature = "file_based_mcp")]
         FeatureFlag::FileBasedMcp,
         #[cfg(feature = "diff_set_as_context")]
