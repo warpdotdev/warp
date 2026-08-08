@@ -1458,6 +1458,70 @@ fn test_out_of_credits_refined_by_local_bedrock_credentials() {
 }
 
 #[test]
+fn test_out_of_credits_refined_by_connected_grok_subscription() {
+    App::test((), |mut app| async move {
+        // BYOK is allowed by policy (the gate a Grok subscription's OAuth token
+        // rides on), but the server can't see the locally stored subscription.
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace.billing_metadata.tier.byo_api_key_policy =
+            Some(ByoApiKeyPolicy { enabled: true });
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        // Out of credits with no connected subscription yet: AI is gated.
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.apply_server_availability(
+                Ok(AICreditAvailability::unavailable(
+                    AICreditDenialReason::OutOfCredits,
+                )),
+                ctx,
+            );
+            assert!(
+                !model.has_any_ai_remaining(ctx),
+                "out of credits without a connected Grok subscription should gate AI",
+            );
+        });
+
+        // A blank access token is not a usable credential, so it must not lift
+        // the out-of-credits gate.
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_grok_tokens(
+                Some(GrokTokens {
+                    access_token: "   ".to_string(),
+                    ..Default::default()
+                }),
+                ctx,
+            );
+        });
+        request_usage_model.read(&app, |model, ctx| {
+            assert!(
+                !model.has_any_ai_remaining(ctx),
+                "a blank Grok access token is unusable and must not permit AI",
+            );
+        });
+
+        // A usable Grok OAuth token is the fact the server can't see; it lets
+        // grok requests route through the subscription and permits AI.
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_grok_tokens(
+                Some(GrokTokens {
+                    access_token: "grok-usable-token".to_string(),
+                    ..Default::default()
+                }),
+                ctx,
+            );
+        });
+        request_usage_model.read(&app, |model, ctx| {
+            assert!(
+                model.has_any_ai_remaining(ctx),
+                "a connected Grok subscription should permit AI when out of Warp credits",
+            );
+        });
+    });
+}
+
+#[test]
 fn test_server_managed_availability_trusted_without_local_keys() {
     App::test((), |mut app| async move {
         // `available` with no credit source now means a server-managed BYO
