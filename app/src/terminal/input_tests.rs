@@ -8208,6 +8208,126 @@ fn test_ai_context_menu_closes_when_space_immediately_after_at_symbol() {
     });
 }
 
+/// Regression test for https://github.com/warpdotdev/warp/issues/14786: typing "@" must open the
+/// AI context menu regardless of whether the prompt contains multi-byte characters.
+#[test]
+fn test_ai_context_menu_opens_after_multibyte_text() {
+    let _ai_context_menu_enabled = FeatureFlag::AIContextMenuEnabled.override_enabled(true);
+    let _at_menu_outside_of_ai_mode = FeatureFlag::AtMenuOutsideOfAIMode.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        // The prompt with multi-byte characters is exercised first so that no menu state from a
+        // previous ASCII prompt can mask the bug. The cursor is a byte offset, so the "@" sits at
+        // byte 7 here even though it is only the fourth character.
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("你好 ", ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(
+                *input.suggestions_mode_model().as_ref(ctx).mode(),
+                InputSuggestionsMode::Closed
+            );
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("@", ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "你好 @");
+            assert_eq!(
+                *input.suggestions_mode_model().as_ref(ctx).mode(),
+                InputSuggestionsMode::AIContextMenu {
+                    filter_text: String::new(),
+                    at_symbol_position: "你好 ".len(),
+                }
+            );
+        });
+
+        // The filter text typed after the "@" is extracted by byte offset as well.
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("f", ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "你好 @f");
+            assert_eq!(
+                *input.suggestions_mode_model().as_ref(ctx).mode(),
+                InputSuggestionsMode::AIContextMenu {
+                    filter_text: "f".to_owned(),
+                    at_symbol_position: "你好 ".len(),
+                }
+            );
+        });
+
+        // An ASCII prompt behaves the same way.
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("hello ", ctx);
+            input.user_insert("@", ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "hello @");
+            assert_eq!(
+                *input.suggestions_mode_model().as_ref(ctx).mode(),
+                InputSuggestionsMode::AIContextMenu {
+                    filter_text: String::new(),
+                    at_symbol_position: "hello ".len(),
+                }
+            );
+        });
+    });
+}
+
+/// Regression test for https://github.com/warpdotdev/warp/issues/14786: the "@" button must not
+/// insert a duplicate "@" when the multi-byte prompt already ends with one.
+#[test]
+fn test_ai_context_menu_button_reuses_existing_at_symbol_after_multibyte_text() {
+    let _ai_context_menu_enabled = FeatureFlag::AIContextMenuEnabled.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("你好 @", ctx);
+            input.handle_universal_developer_input_button_bar_event(
+                &UniversalDeveloperInputButtonBarEvent::SetAIContextMenuOpen(true),
+                ctx,
+            );
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "你好 @");
+            assert_eq!(
+                *input.suggestions_mode_model().as_ref(ctx).mode(),
+                InputSuggestionsMode::AIContextMenu {
+                    filter_text: String::new(),
+                    at_symbol_position: "你好 ".len(),
+                }
+            );
+        });
+    });
+}
+
 #[test]
 fn test_ai_context_menu_preserves_lock_state() {
     App::test((), |mut app| async move {

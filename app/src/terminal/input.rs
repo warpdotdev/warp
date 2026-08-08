@@ -247,6 +247,7 @@ use crate::resource_center::{
     Tip, TipAction, TipHint, TipsCompleted, mark_feature_used_and_write_to_user_defaults,
 };
 use crate::search::QueryFilter;
+use crate::search::ai_context_menu::floor_char_boundary;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::ai_context_menu::search::is_valid_search_query;
 use crate::search::ai_context_menu::view::AIContextMenuAction;
@@ -1519,6 +1520,15 @@ fn should_show_completions_in_ai_input(buffer_text: &str) -> bool {
     } else {
         false
     }
+}
+
+/// Returns the slice of `buffer_text` preceding the given byte offset.
+///
+/// Editor cursor positions are byte offsets, so inspecting the text around the cursor has to slice
+/// by byte. Treating a cursor position as a `char` index desyncs as soon as the buffer holds
+/// multi-byte characters, e.g. `你好 @` puts the cursor at byte 8 but only has 4 chars.
+fn text_before_byte_offset(buffer_text: &str, byte_offset: usize) -> &str {
+    &buffer_text[..floor_char_boundary(buffer_text, byte_offset)]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4802,15 +4812,11 @@ impl Input {
             .editor
             .read(ctx, |editor, _ctx| editor.buffer_text(ctx));
 
-        let first_char_pos = at_symbol_position + 1;
-        let num_chars = cursor_position.saturating_sub(first_char_pos);
-
-        // Extract text between @ and cursor
+        // Extract text between @ and cursor. Both positions are byte offsets into the buffer.
         let filter_text = buffer_text
-            .chars()
-            .skip(first_char_pos)
-            .take(num_chars)
-            .collect::<String>();
+            .get(at_symbol_position + 1..cursor_position)
+            .unwrap_or_default()
+            .to_owned();
 
         if !is_valid_search_query(is_navigation, &prev_query, &filter_text) {
             self.close_ai_context_menu(ctx);
@@ -4931,23 +4937,32 @@ impl Input {
 
     fn set_ai_context_menu_open(&mut self, open: bool, ctx: &mut ViewContext<Self>) {
         if FeatureFlag::AIContextMenuEnabled.is_enabled() && open {
-            let cursor_position = self.editor.read(ctx, |editor, ctx| {
-                editor.start_byte_index_of_last_selection(ctx)
-            });
+            let cursor_position = self
+                .editor
+                .read(ctx, |editor, ctx| {
+                    editor.start_byte_index_of_last_selection(ctx)
+                })
+                .as_usize();
 
             let buffer_text = self
                 .editor
                 .read(ctx, |editor, _ctx| editor.buffer_text(ctx));
 
-            if buffer_text
-                .chars()
-                .nth(cursor_position.as_usize().saturating_sub(1))
-                != Some('@')
-            {
+            let has_at_symbol_before_cursor =
+                text_before_byte_offset(&buffer_text, cursor_position).ends_with('@');
+            if !has_at_symbol_before_cursor {
                 self.editor.update(ctx, |editor, ctx| {
                     editor.insert_char('@', ctx);
                 });
             }
+
+            // Byte offset of the "@" this menu is anchored to: either the one already before the
+            // cursor, or the one just inserted at the cursor.
+            let at_symbol_position = if has_at_symbol_before_cursor {
+                cursor_position - 1
+            } else {
+                cursor_position
+            };
 
             // Update AI context menu input mode based on current state
             // Show AI categories if we're in AI mode OR if autodetection is enabled (not locked)
@@ -4967,7 +4982,7 @@ impl Input {
                 m.set_mode(
                     InputSuggestionsMode::AIContextMenu {
                         filter_text: "".to_owned(),
-                        at_symbol_position: cursor_position.as_usize(),
+                        at_symbol_position,
                     },
                     ctx,
                 );
@@ -10108,8 +10123,9 @@ impl Input {
         if cursor_pos < at_symbol_position {
             return true;
         }
-        let chars_before_cursor: Vec<char> = buffer.as_str().chars().take(cursor_pos).collect();
-        let iter = chars_before_cursor.into_iter().rev();
+        let iter = text_before_byte_offset(buffer.as_str(), cursor_pos)
+            .chars()
+            .rev();
         let mut prev_char_was_space = false;
         for c in iter {
             if c.is_whitespace() && c != ' ' {
@@ -12116,19 +12132,20 @@ impl Input {
             return false;
         }
 
-        if buffer_text.chars().nth(cursor_position.saturating_sub(1)) != Some('@') {
+        // The cursor is a byte offset, so the characters around it are found by slicing rather
+        // than by `char` index.
+        let mut chars_before_cursor = text_before_byte_offset(buffer_text, cursor_position)
+            .chars()
+            .rev();
+
+        if chars_before_cursor.next() != Some('@') {
             return false;
         }
 
         // Check if '@' is at beginning of line or after non-alphanumeric
-        let is_valid_context = if cursor_position == 1 {
-            true // '@' is the first character
-        } else {
-            buffer_text
-                .chars()
-                .nth(cursor_position.saturating_sub(2))
-                .is_some_and(|c| !c.is_alphanumeric())
-        };
+        let is_valid_context = chars_before_cursor
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric());
 
         if !is_valid_context {
             return false;
