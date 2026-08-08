@@ -46,12 +46,13 @@ pub fn encrypt_anthropic_api_key_secret(
     actor_uid: &str,
     secret_name: &str,
     api_key: &str,
+    base_url: Option<String>,
 ) -> Result<String, JsValue> {
     do_encrypt(
         public_key_base64,
         actor_uid,
         secret_name,
-        &ManagedSecretValue::anthropic_api_key(api_key),
+        &ManagedSecretValue::anthropic_api_key(api_key, base_url),
     )
 }
 
