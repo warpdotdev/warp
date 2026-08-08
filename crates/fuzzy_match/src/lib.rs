@@ -219,14 +219,25 @@ pub fn match_wildcard_pattern(text: &str, pattern: &str) -> Option<FuzzyMatchRes
         return Some(FuzzyMatchResult::no_match());
     }
 
+    let text_is_ascii = text.is_ascii();
+    let pattern_is_ascii = pattern.is_ascii();
+
     // Fast path for simple suffix patterns like "*.rs" or partial suffixes like "*.r"
     if pattern.starts_with('*') && !pattern[1..].contains('*') && !pattern[1..].contains('?') {
         let suffix = &pattern[1..];
 
         // First try exact suffix match
         if text.ends_with(suffix) {
-            let text_char_count = text.chars().count();
-            let suffix_char_count = suffix.chars().count();
+            let text_char_count = if text_is_ascii {
+                text.len()
+            } else {
+                text.chars().count()
+            };
+            let suffix_char_count = if pattern_is_ascii {
+                suffix.len()
+            } else {
+                suffix.chars().count()
+            };
             let start_char_idx = text_char_count - suffix_char_count;
             let matched_indices: Vec<usize> = (start_char_idx..text_char_count).collect();
             return Some(FuzzyMatchResult {
@@ -236,7 +247,7 @@ pub fn match_wildcard_pattern(text: &str, pattern: &str) -> Option<FuzzyMatchRes
         }
 
         // If no exact match, try partial suffix match (for progressive typing)
-        if let Some(match_info) = find_partial_suffix_match(text, suffix) {
+        if let Some(match_info) = find_partial_suffix_match(text, suffix, text_is_ascii) {
             return Some(FuzzyMatchResult {
                 score: 800, // Lower score than exact match but still good
                 matched_indices: match_info,
@@ -253,7 +264,11 @@ pub fn match_wildcard_pattern(text: &str, pattern: &str) -> Option<FuzzyMatchRes
     {
         let prefix = &pattern[..pattern.len() - 1];
         if text.starts_with(prefix) {
-            let prefix_char_count = prefix.chars().count();
+            let prefix_char_count = if pattern_is_ascii {
+                prefix.len()
+            } else {
+                prefix.chars().count()
+            };
             let matched_indices: Vec<usize> = (0..prefix_char_count).collect();
             return Some(FuzzyMatchResult {
                 score: 1000,
@@ -265,7 +280,7 @@ pub fn match_wildcard_pattern(text: &str, pattern: &str) -> Option<FuzzyMatchRes
 
     // For file paths, we want to match patterns anywhere in the path, not just at the beginning
     // Try to find the pattern as a substring match first
-    if let Some(match_info) = find_substring_glob_match(text, pattern) {
+    if let Some(match_info) = find_substring_glob_match(text, pattern, text_is_ascii) {
         return Some(FuzzyMatchResult {
             score: 1000,
             matched_indices: match_info,
@@ -276,7 +291,11 @@ pub fn match_wildcard_pattern(text: &str, pattern: &str) -> Option<FuzzyMatchRes
     if is_glob_match(text, pattern) {
         // For complex patterns, we'll mark the entire text as matched
         // This is a simplification but much faster than tracking exact indices
-        let matched_indices: Vec<usize> = (0..text.chars().count()).collect();
+        let matched_indices: Vec<usize> = if text_is_ascii {
+            (0..text.len()).collect()
+        } else {
+            (0..text.chars().count()).collect()
+        };
 
         let score = if pattern.contains('*') || pattern.contains('?') {
             1000 // Good score for wildcard matches
@@ -314,9 +333,19 @@ pub fn match_wildcard_pattern(text: &str, pattern: &str) -> Option<FuzzyMatchRes
 /// // This would be called internally when matching "*.r" against "button.rs"
 /// // find_partial_suffix_match("button.rs", ".r") -> Some([6, 7])
 /// ```
-fn find_partial_suffix_match(text: &str, partial_suffix: &str) -> Option<Vec<usize>> {
+fn find_partial_suffix_match(
+    text: &str,
+    partial_suffix: &str,
+    text_is_ascii: bool,
+) -> Option<Vec<usize>> {
     if partial_suffix.is_empty() {
         return None;
+    }
+
+    if text_is_ascii && partial_suffix.is_ascii() {
+        return text
+            .rfind(partial_suffix)
+            .map(|start_pos| (start_pos..start_pos + partial_suffix.len()).collect());
     }
 
     // Look for any suffix in the text that starts with our partial suffix
@@ -398,7 +427,7 @@ fn is_glob_match(text: &str, pattern: &str) -> bool {
 /// // Would return indices for "ui/" and ".rs" portions
 /// // Some([5, 6, 7, 14, 15, 16])
 /// ```
-fn find_substring_glob_match(text: &str, pattern: &str) -> Option<Vec<usize>> {
+fn find_substring_glob_match(text: &str, pattern: &str, text_is_ascii: bool) -> Option<Vec<usize>> {
     // Handle patterns like "ui/*.r" - need to find the prefix and match the suffix pattern
     if let Some(star_pos) = pattern.find('*') {
         let prefix = &pattern[..star_pos];
@@ -418,27 +447,39 @@ fn find_substring_glob_match(text: &str, pattern: &str) -> Option<Vec<usize>> {
                 // Handle simple suffix patterns directly
                 let suffix_part = &suffix_pattern[1..];
                 if remaining_text.ends_with(suffix_part) {
-                    let remaining_char_count = remaining_text.chars().count();
-                    let suffix_char_count = suffix_part.chars().count();
+                    let remaining_char_count = if text_is_ascii {
+                        remaining_text.len()
+                    } else {
+                        remaining_text.chars().count()
+                    };
+                    let suffix_char_count = if text_is_ascii {
+                        suffix_part.len()
+                    } else {
+                        suffix_part.chars().count()
+                    };
                     let start_idx = remaining_char_count - suffix_char_count;
                     Some(FuzzyMatchResult {
                         score: 1000,
                         matched_indices: (start_idx..remaining_char_count).collect(),
                     })
                 } else {
-                    find_partial_suffix_match(remaining_text, suffix_part).map(|partial_match| {
-                        FuzzyMatchResult {
+                    find_partial_suffix_match(remaining_text, suffix_part, text_is_ascii).map(
+                        |partial_match| FuzzyMatchResult {
                             score: 800,
                             matched_indices: partial_match,
-                        }
-                    })
+                        },
+                    )
                 }
             } else {
                 // For complex patterns, use the full matching but prevent recursion
                 if is_glob_match(remaining_text, suffix_pattern) {
                     Some(FuzzyMatchResult {
                         score: 1000,
-                        matched_indices: (0..remaining_text.chars().count()).collect(),
+                        matched_indices: if text_is_ascii {
+                            (0..remaining_text.len()).collect()
+                        } else {
+                            (0..remaining_text.chars().count()).collect()
+                        },
                     })
                 } else {
                     None
@@ -447,9 +488,21 @@ fn find_substring_glob_match(text: &str, pattern: &str) -> Option<Vec<usize>> {
 
             if let Some(suffix_result) = suffix_result {
                 // Combine the matched indices
-                let prefix_start_char = text[..prefix_start].chars().count();
-                let prefix_char_count = prefix.chars().count();
-                let remaining_start_char = text[..prefix_end].chars().count();
+                let prefix_start_char = if text_is_ascii {
+                    prefix_start
+                } else {
+                    text[..prefix_start].chars().count()
+                };
+                let prefix_char_count = if text_is_ascii {
+                    prefix.len()
+                } else {
+                    prefix.chars().count()
+                };
+                let remaining_start_char = if text_is_ascii {
+                    prefix_end
+                } else {
+                    text[..prefix_end].chars().count()
+                };
 
                 let mut combined_indices: Vec<usize> =
                     (prefix_start_char..prefix_start_char + prefix_char_count).collect();
@@ -472,8 +525,16 @@ fn find_substring_glob_match(text: &str, pattern: &str) -> Option<Vec<usize>> {
         let prefix = &pattern[..pattern.len() - 1];
         if let Some(start_pos) = text.find(prefix) {
             // Found the prefix as a substring, create indices for the matched part
-            let start_char_idx = text[..start_pos].chars().count();
-            let prefix_char_count = prefix.chars().count();
+            let start_char_idx = if text_is_ascii {
+                start_pos
+            } else {
+                text[..start_pos].chars().count()
+            };
+            let prefix_char_count = if text_is_ascii {
+                prefix.len()
+            } else {
+                prefix.chars().count()
+            };
             let matched_indices: Vec<usize> =
                 (start_char_idx..start_char_idx + prefix_char_count).collect();
             return Some(matched_indices);
@@ -652,9 +713,12 @@ pub fn match_wildcard_pattern_case_insensitive(
         return Some(FuzzyMatchResult::no_match());
     }
 
-    // Convert both text and pattern to lowercase for case insensitive matching
-    let text_lower = text.to_lowercase();
-    let pattern_lower = pattern.to_lowercase();
+    // Use ASCII lowering on the dominant path to avoid Unicode case-folding work.
+    let (text_lower, pattern_lower) = if text.is_ascii() && pattern.is_ascii() {
+        (text.to_ascii_lowercase(), pattern.to_ascii_lowercase())
+    } else {
+        (text.to_lowercase(), pattern.to_lowercase())
+    };
 
     match_wildcard_pattern(&text_lower, &pattern_lower).map(|mut result| {
         // Map the matched indices back to the original text

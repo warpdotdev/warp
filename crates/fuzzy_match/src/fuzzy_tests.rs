@@ -63,6 +63,12 @@ fn test_wildcard_pattern_case_insensitive() {
 }
 
 #[test]
+fn test_wildcard_pattern_case_insensitive_unicode_fallback() {
+    let result = match_wildcard_pattern_case_insensitive("Straße.TXT", "*.txt");
+    assert!(result.is_some());
+}
+
+#[test]
 fn test_wildcard_pattern_complex() {
     let result = match_wildcard_pattern("/src/ui/button.rs", "*/ui/*.rs");
     assert!(result.is_some());
@@ -139,6 +145,11 @@ fn test_partial_suffix_patterns() {
     // Should not match if there's no matching suffix
     let result4 = match_wildcard_pattern("button.rs", "*.py");
     assert!(result4.is_none());
+}
+
+#[test]
+fn test_partial_suffix_patterns_with_unicode_text() {
+    assert!(match_wildcard_pattern("naïve.rs", "*.r").is_some());
 }
 
 #[test]

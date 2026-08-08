@@ -1,6 +1,6 @@
 //! Structures for storing the grid contents in a flat buffer.
 
-use std::collections::BTreeMap;
+use std::collections::{btree_map, BTreeMap};
 use std::ops::{Index, Range};
 
 use get_size::GetSize;
@@ -109,6 +109,11 @@ impl Content {
         }
     }
 
+    /// Returns a cursor positioned at the given content offset.
+    pub fn cursor_at(&self, start_offset: ByteOffset) -> Cursor<'_> {
+        Cursor::new(self, start_offset)
+    }
+
     /// Returns the offset of the end of the content (exclusive).
     ///
     /// If a new grapheme is pushed into the buffer, this is the offset at
@@ -162,6 +167,64 @@ impl Index<Range<ByteOffset>> for Content {
 impl GetSize for Content {
     fn get_heap_size(&self) -> usize {
         self.active_chunk.get_heap_size() * (1 + self.filled_chunks.len())
+    }
+}
+
+/// A cursor for sequentially reading content slices.
+pub struct Cursor<'a> {
+    current_chunk: &'a Chunk,
+    active_chunk: &'a Chunk,
+    inner: btree_map::Range<'a, ByteOffset, Chunk>,
+    current_offset: ByteOffset,
+}
+
+impl<'a> Cursor<'a> {
+    fn new(content: &'a Content, start_offset: ByteOffset) -> Self {
+        let current_chunk = content
+            .filled_chunks
+            .range(start_offset..)
+            .next()
+            .map(|(_, chunk)| chunk)
+            .unwrap_or(&content.active_chunk);
+
+        let inner = content
+            .filled_chunks
+            .range(current_chunk.content_range().end..);
+
+        Self {
+            current_chunk,
+            active_chunk: &content.active_chunk,
+            inner,
+            current_offset: start_offset,
+        }
+    }
+
+    fn advance_chunk(&mut self) {
+        self.current_chunk = self
+            .inner
+            .next()
+            .map(|(_, chunk)| chunk)
+            .unwrap_or(self.active_chunk);
+    }
+
+    /// Returns the next `len` bytes from the cursor.
+    pub fn next_slice(&mut self, len: usize) -> &'a str {
+        debug_assert!(len > 0);
+        let chunk = self.current_chunk;
+        debug_assert!(
+            self.current_offset >= chunk.start_offset,
+            "cursor offset {:#?} must be within the current chunk starting at {:#?}",
+            self.current_offset,
+            chunk.start_offset
+        );
+        let start = (self.current_offset - chunk.start_offset).as_usize();
+        let end = start + len;
+        let content = &chunk[start..end];
+        self.current_offset += len;
+        if self.current_offset >= chunk.content_range().end {
+            self.advance_chunk();
+        }
+        content
     }
 }
 

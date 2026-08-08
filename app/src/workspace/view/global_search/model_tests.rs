@@ -119,3 +119,16 @@ fn remote_match_column_counts_characters_not_bytes() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].column_num, Some(2));
 }
+
+#[test]
+fn remote_match_column_fast_path_matches_ascii_byte_offset() {
+    let success = RipgrepSearchSuccess {
+        matches: vec![proto_match("/repo/a.rs", 1, "abcdef", vec![(3, 6)])],
+        capped: false,
+    };
+
+    let results = GlobalSearch::remote_matches_to_global(&host(), success);
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].column_num, Some(4));
+}

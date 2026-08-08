@@ -130,7 +130,12 @@ fn searchable_session_string_and_ranges(
     session: &SessionNavigationData,
 ) -> (String, SearchableSessionStringRanges) {
     let mut searchable_string = session.prompt().to_string();
-    let prompt_end = session.prompt().chars().count();
+    let prompt = session.prompt();
+    let prompt_end = if prompt.is_ascii() {
+        prompt.len()
+    } else {
+        prompt.chars().count()
+    };
 
     let command_range = match session.command_context() {
         CommandContext::LastRunCommand {
@@ -142,7 +147,12 @@ fn searchable_session_string_and_ranges(
             searchable_string.push_str(last_run_command.as_str());
 
             let start = prompt_end + 1;
-            let end = start + last_run_command.chars().count();
+            let end = start
+                + if last_run_command.is_ascii() {
+                    last_run_command.len()
+                } else {
+                    last_run_command.chars().count()
+                };
             Some(start..end)
         }
         CommandContext::RunningCommand { running_command } => {
@@ -151,7 +161,12 @@ fn searchable_session_string_and_ranges(
             searchable_string.push_str(running_command.as_str());
 
             let start = prompt_end + 1;
-            let end = start + running_command.chars().count();
+            let end = start
+                + if running_command.is_ascii() {
+                    running_command.len()
+                } else {
+                    running_command.chars().count()
+                };
             Some(start..end)
         }
         CommandContext::LastRunAIBlock { prompt } | CommandContext::RunningAIBlock { prompt } => {
@@ -160,7 +175,12 @@ fn searchable_session_string_and_ranges(
             searchable_string.push_str(prompt.as_str());
 
             let start = prompt_end + 1;
-            let end = start + prompt.chars().count();
+            let end = start
+                + if prompt.is_ascii() {
+                    prompt.len()
+                } else {
+                    prompt.chars().count()
+                };
             Some(start..end)
         }
         CommandContext::None => None,
@@ -172,12 +192,22 @@ fn searchable_session_string_and_ranges(
     let hint_text_range = match &command_range {
         Some(command_range) => {
             let start = command_range.end + 1;
-            let end = start + command_info.hint_text.chars().count();
+            let end = start
+                + if command_info.hint_text.is_ascii() {
+                    command_info.hint_text.len()
+                } else {
+                    command_info.hint_text.chars().count()
+                };
             start..end
         }
         None => {
             let start = prompt_end + 1;
-            let end = start + command_info.hint_text.chars().count();
+            let end = start
+                + if command_info.hint_text.is_ascii() {
+                    command_info.hint_text.len()
+                } else {
+                    command_info.hint_text.chars().count()
+                };
             start..end
         }
     };
@@ -363,6 +393,13 @@ mod full_text_searcher {
     /// char-based indices that align with the char-based ranges used by
     /// [`SessionHighlightIndices`].
     pub(super) fn byte_indices_to_char_indices(text: &str, byte_indices: Vec<usize>) -> Vec<usize> {
+        if text.is_ascii() {
+            return byte_indices
+                .into_iter()
+                .filter(|&byte_idx| byte_idx < text.len())
+                .collect();
+        }
+
         let byte_to_char: HashMap<usize, usize> = text
             .char_indices()
             .enumerate()

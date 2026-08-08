@@ -282,21 +282,17 @@ impl InitialCursorState {
     }
 
     fn into_content_offset(self, grid: &GridHandler) -> CursorContentOffset {
-        match self {
-            Self::AtPoint(point) => {
-                let content_offset = grid
-                    .flat_storage
-                    .content_offset_at_point(point)
-                    .expect("should have a content offset for point");
-                CursorContentOffset::AtPoint(content_offset)
-            }
-            Self::AtCellAfterPoint(point) => {
-                let content_offset = grid
-                    .flat_storage
-                    .content_offset_at_point(point)
-                    .expect("should have a content offset for point");
-                CursorContentOffset::AtCellAfterPoint(content_offset)
-            }
+        let (point, cell_after_point) = match self {
+            Self::AtPoint(point) => (point, false),
+            Self::AtCellAfterPoint(point) => (point, true),
+        };
+
+        let content_offset = grid.flat_storage.content_offset_at_point_or_before(point);
+
+        if cell_after_point {
+            CursorContentOffset::AtCellAfterPoint(content_offset)
+        } else {
+            CursorContentOffset::AtPoint(content_offset)
         }
     }
 }

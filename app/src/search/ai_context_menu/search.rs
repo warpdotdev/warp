@@ -10,8 +10,12 @@ pub fn is_valid_search_query(is_navigation: bool, prev_query: &str, query: &str)
         // We need a simple heuristic to handle when somebody jumps to the end
         // of the line. Since spaces are valid characters, we only count
         // how many spaces the users likely jumped over between queries
-        let new_chars = query.chars().skip(prev_query.len());
+        let new_chars = query.chars().skip(prev_query.chars().count());
         return new_chars.filter(|c| *c == ' ').count() < MAX_NEW_SPACES;
     }
     true
 }
+
+#[cfg(test)]
+#[path = "search_tests.rs"]
+mod tests;
