@@ -25,4 +25,40 @@ if [ "${1:-}" = "--force" ]; then
     FORCE_FLAG="--force"
 fi
 
-cargo install ${FORCE_FLAG} --git "${REPO}" --rev "${REVISION}" --bin "${BIN_NAME}"
+# `cargo install` records what it installed in `<install root>/.crates.toml`, and the
+# install root defaults to CARGO_HOME. Container images commonly ship a shared CARGO_HOME
+# whose contents are owned by root, which fails the install with "Permission denied" even
+# when the directory itself is writable.
+install_root_is_writable() {
+    local root="$1"
+    if [ -e "${root}/.crates.toml" ]; then
+        [ -w "${root}/.crates.toml" ]
+    elif [ -d "${root}" ]; then
+        [ -w "${root}" ]
+    else
+        # cargo creates a missing root itself; let it try and report its own error.
+        return 0
+    fi
+}
+
+INSTALL_ROOT="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-${HOME}/.cargo}}"
+ROOT_ARGS=()
+if ! install_root_is_writable "${INSTALL_ROOT}"; then
+    # `${HOME}/.local` rather than a Warp-specific directory because `${HOME}/.local/bin`
+    # is already on PATH in most environments, and PATH is how the binary is found.
+    FALLBACK_ROOT="${HOME}/.local"
+    echo "Cargo install root '${INSTALL_ROOT}' is not writable; installing into '${FALLBACK_ROOT}' instead."
+    INSTALL_ROOT="${FALLBACK_ROOT}"
+    ROOT_ARGS=(--root "${FALLBACK_ROOT}")
+fi
+
+cargo install "${ROOT_ARGS[@]}" ${FORCE_FLAG} --git "${REPO}" --rev "${REVISION}" --bin "${BIN_NAME}" || exit
+
+echo "Installed ${BIN_NAME} to ${INSTALL_ROOT}/bin/${BIN_NAME}"
+case ":${PATH}:" in
+    *":${INSTALL_ROOT}/bin:"*) ;;
+    *)
+        echo "warning: ${INSTALL_ROOT}/bin is not on PATH, so builds fall back to the OSS channel."
+        echo "         Add it with: export PATH=\"${INSTALL_ROOT}/bin:\$PATH\""
+        ;;
+esac
