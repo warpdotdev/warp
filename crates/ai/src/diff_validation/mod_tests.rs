@@ -304,6 +304,364 @@ fn test_find_similar_sections_out_of_bounds() {
     assert!(matches.is_empty());
 }
 
+/// Regression test for QUALITY-1253 (b338d92f evidence):
+/// A single-line search with a leading N| line-number prefix should match the
+/// same content without the prefix, even when the line number in the prefix
+/// does not match the actual line position in the file.
+#[test]
+fn test_single_line_n_pipe_prefixed_search_matches_clean_content() {
+    // Verbatim failing search from request b338d92f (prefix "100|", content on line 1 of test file).
+    let search = "100|Includes CRUD for suites/versions, tasks, configs, runs, trials; a `CreateSuiteVersion` that writes the suite row + its task/config child rows in one transaction; and `Mark\u{2026}ForDeletionByTeamIDs`.";
+    // File contains the SAME text WITHOUT the N| prefix.
+    let file_line = "Includes CRUD for suites/versions, tasks, configs, runs, trials; a `CreateSuiteVersion` that writes the suite row + its task/config child rows in one transaction; and `Mark\u{2026}ForDeletionByTeamIDs`.";
+    let new_content = "UPDATED_CRUD_CONTENT";
+
+    let input_diffs = vec![SearchAndReplace {
+        search: search.to_string(),
+        replace: new_content.to_string(),
+    }];
+    let diff = fuzzy_match_diffs("spec.md", &input_diffs, file_line);
+
+    // The prefix should be stripped and the content should match line 1.
+    assert!(
+        !deltas(&diff).is_empty(),
+        "Expected a delta but got none; failures: {:?}",
+        diff.failures
+    );
+    assert_eq!(deltas(&diff)[0].insertion, new_content);
+    assert!(
+        diff.failures.is_none(),
+        "Expected no failures, got: {:?}",
+        diff.failures
+    );
+}
+
+/// Stale-line-number edge case: the line number in the N| prefix (100) is larger
+/// than the file size (5 lines). The local window search cannot run, so the
+/// global fallback must find the content. This is the realistic condition when
+/// a large spec file is rewritten (line count shrinks) and the model's saved
+/// line numbers are stale.
+#[test]
+fn test_single_line_n_pipe_stale_line_number_uses_global_fallback() {
+    // File has only 5 lines; search prefix says line 100.
+    let file_content =
+        "line one\nline two\nline three\nline four\nIncludes CRUD for suites/versions.";
+    let search = "100|Includes CRUD for suites/versions.";
+    let input_diffs = vec![SearchAndReplace {
+        search: search.to_string(),
+        replace: "UPDATED CRUD".to_string(),
+    }];
+    let diff = fuzzy_match_diffs("spec.md", &input_diffs, file_content);
+    // The global fallback must find "Includes CRUD..." at line 5.
+    assert!(
+        !deltas(&diff).is_empty(),
+        "Expected a delta from the global fallback, failures: {:?}",
+        diff.failures
+    );
+    assert_eq!(deltas(&diff)[0].replacement_line_range, 5..6);
+    assert_eq!(deltas(&diff)[0].insertion, "UPDATED CRUD");
+    assert!(diff.failures.is_none());
+}
+
+/// Reproduces the exact minimal failing scenario from QUALITY-1253 request b338d92f msg 623:
+/// - 200-line file (a spec)
+/// - Target line is at position 47 (1-indexed) in the actual file
+/// - Search carries prefix "102|" pointing to line 102 (which exists but has DIFFERENT content)
+/// - After stripping the prefix the content matches exactly once in the file
+/// - The local search window around line 102 should miss, and the global fallback must succeed
+#[test]
+fn test_single_line_n_pipe_line_number_drifted_in_large_file() {
+    // Build a 200-line file where the target content is at line 47,
+    // but the search prefix points to line 102.
+    let target_line = "Includes CRUD for suites/versions, tasks, configs, runs, trials.";
+    let lines_vec: Vec<String> = (1..=200)
+        .map(|n| {
+            if n == 47 {
+                target_line.to_string()
+            } else {
+                format!("Line {} of the spec document with some text.", n)
+            }
+        })
+        .collect();
+    let file_content = lines_vec.join("\n");
+
+    // The search prefix says line 102 — which exists but has different content.
+    let search = format!("102|{}", target_line);
+    let input_diffs = vec![SearchAndReplace {
+        search: search.clone(),
+        replace: "UPDATED_CRUD".to_string(),
+    }];
+    let diff = fuzzy_match_diffs("M1-data-model.md", &input_diffs, &file_content);
+
+    // Must find the target at line 47 via global fallback.
+    assert!(
+        !deltas(&diff).is_empty(),
+        "N|-prefixed search with drifted line number must still match via global fallback; \
+         failures: {:?}",
+        diff.failures
+    );
+    assert_eq!(
+        deltas(&diff)[0].replacement_line_range,
+        47..48,
+        "Delta should replace line 47 (the actual location of the target)"
+    );
+    assert_eq!(deltas(&diff)[0].insertion, "UPDATED_CRUD");
+    assert!(diff.failures.is_none());
+}
+
+/// Regression test for QUALITY-1253 (root cause, msg 623).
+///
+/// The model produced a search string that is a unique **sub-line fragment** of a
+/// long prose/Markdown line.  It is NOT a whole line, so every line-based matcher
+/// (ExactMatch, IndentationAgnosticMatch, PrefixTail, JaroWinkler) rejects it.
+/// Python's `str.replace()` succeeded with the same fragment because Python does
+/// raw substring matching.
+///
+/// Before the fix this must FAIL (`fuzzy_match_failures = 1`).
+/// After the fix a substring-match tier should apply the replacement.
+#[test]
+fn test_sub_line_fragment_search_matches_unique_substring() {
+    // File line 102 — a long Markdown prose line that contains the search fragment
+    // starting at column 152.  Reproduced verbatim from the real file bytes.
+    let full_line = concat!(
+        "- `model/benchmark.go` \u{2014} `BenchmarkStore` implementation. ",
+        "**Every SELECT/UPDATE includes `AND marked_for_deletion_ts IS NULL`** ",
+        "(data-deletion Step 2). ",
+        "Includes CRUD for suites/versions, tasks, configs, runs, trials; ",
+        "a `CreateSuiteVersion` that writes the suite row + its task/config child rows ",
+        "in one transaction; and `Mark\u{2026}ForDeletionByTeamIDs`.",
+    );
+
+    // The fragment starts mid-line (column 152) and is cut off before `\u{2026}`.
+    // The server prepends `102|` before sending it to the client.
+    let search_with_prefix = concat!(
+        "102|Includes CRUD for suites/versions, tasks, configs, runs, trials; ",
+        "a `CreateSuiteVersion` that writes the suite row + its task/config child rows ",
+        "in one transaction; and `Mark",
+    );
+
+    // The fragment occurs exactly ONCE in the file (unique substring) — which is
+    // exactly why Python's `.replace()` with a `count(old) == 1` guard succeeded.
+    let fragment = search_with_prefix.strip_prefix("102|").unwrap();
+    assert_eq!(
+        full_line.matches(fragment).count(),
+        1,
+        "Sanity: fragment must appear exactly once in the line"
+    );
+
+    let replace_text = "UPDATED CRUD CONTENT";
+    let input_diffs = vec![SearchAndReplace {
+        search: search_with_prefix.to_string(),
+        replace: replace_text.to_string(),
+    }];
+    let diff = fuzzy_match_diffs("M1-data-model.md", &input_diffs, full_line);
+
+    // Before the fix this fails with fuzzy_match_failures=1; after the fix it applies.
+    assert!(
+        !deltas(&diff).is_empty(),
+        "Sub-line fragment must match via substring tier after the fix; \
+         failures: {:?}",
+        diff.failures
+    );
+    // The delta replaces line 102 with the fragment substituted.
+    assert_eq!(deltas(&diff)[0].replacement_line_range, 1..2);
+    assert!(
+        deltas(&diff)[0].insertion.contains(replace_text),
+        "The inserted line must contain the replacement"
+    );
+    // Prefix (before fragment) and suffix (after fragment) of the original line are preserved.
+    // The search fragment ends at "`Mark" which is consumed, so the suffix starts at U+2026.
+    let insertion = &deltas(&diff)[0].insertion;
+    assert!(
+        insertion.starts_with("- `model/benchmark.go`"),
+        "Line prefix must be preserved; got: {insertion}"
+    );
+    assert!(
+        insertion.ends_with("\u{2026}ForDeletionByTeamIDs`."),
+        "Line suffix (after the fragment) must be preserved; got: {insertion}"
+    );
+    assert!(diff.failures.is_none());
+}
+
+/// Regression test: the `1|Z` case proved in the code review.
+/// `Z` (after stripping `1|`) has only 1 character < MIN_SUBSTRING_SEARCH_LEN (10),
+/// so the degenerate-search guard rejects it before any location check runs.
+/// (Even without the proximity guard, the length guard is sufficient here.)
+#[test]
+fn test_substring_tier_rejects_short_search() {
+    // Three-line file: Z only exists on line 3, not near the hint of line 1.
+    let file_content = "alpha beta\ngamma delta\nepsilon Z zeta";
+    let search = "1|Z"; // hint says line 1; Z is on line 3
+    let input_diffs = vec![SearchAndReplace {
+        search: search.to_string(),
+        replace: "REPLACED".to_string(),
+    }];
+    let diff = fuzzy_match_diffs("file.md", &input_diffs, file_content);
+
+    // Must NOT produce a delta — the min-length guard (1 char < 10) rejects it.
+    assert!(
+        deltas(&diff).is_empty(),
+        "Short search must not produce a delta; got: {:?}",
+        deltas(&diff)
+    );
+    assert!(
+        diff.failures.is_some_and(|f| f.fuzzy_match_failures > 0),
+        "Expected fuzzy_match_failures, got: {:?}",
+        diff.failures
+    );
+}
+
+/// When the line-range hint is in-bounds but drifted (the file was rewritten and
+/// the content shifted from the hinted line), the tier must still apply the
+/// substitution via the file-wide fallback.  Uniqueness is the primary guard.
+#[test]
+fn test_substring_tier_accepts_drifted_in_bounds_hint() {
+    // 10-line file; the search fragment is uniquely on line 7,
+    // but the hint (after stripping the N| prefix) points to line 2.
+    let fragment = "the_unique_needle_in_haystack"; // > 10 chars
+    let lines: Vec<String> = (1..=10)
+        .map(|n| {
+            if n == 7 {
+                format!("prefix line {n}: {fragment} suffix")
+            } else {
+                format!("unrelated content for line {n}")
+            }
+        })
+        .collect();
+    let file_content = lines.join("\n");
+
+    // Search hinted at line 2 (in-bounds for this 10-line file), but the only
+    // occurrence of the fragment is on line 7 — more than 1 line away.
+    let search = format!("2|{fragment}");
+    let input_diffs = vec![SearchAndReplace {
+        search: search.clone(),
+        replace: "UPDATED_NEEDLE".to_string(),
+    }];
+    let diff = fuzzy_match_diffs("spec.md", &input_diffs, &file_content);
+
+    // Must produce a delta at line 7 (the unique file-wide location).
+    assert!(
+        !deltas(&diff).is_empty(),
+        "Drifted hint must still apply via file-wide fallback; \
+         failures: {:?}",
+        diff.failures
+    );
+    assert_eq!(
+        deltas(&diff)[0].replacement_line_range,
+        7..8,
+        "Delta must be at the actual location of the fragment (line 7)"
+    );
+    assert!(diff.failures.is_none());
+}
+
+/// The min-length guard counts Unicode characters, not bytes, so that multi-byte
+/// code-points (CJK, emoji, …) each count as one character and very short CJK
+/// searches are still rejected even though they may occupy many bytes.
+///
+/// The search is a sub-line fragment (not the whole line) so that line-based
+/// matchers cannot find it and the substring tier is exercised.
+#[test]
+fn test_substring_tier_rejects_short_multibyte_search() {
+    // Nine CJK characters = 27 bytes but only 9 Unicode chars < MIN_SUBSTRING_SEARCH_LEN (10).
+    // Embed the fragment in a longer line so line-based matchers reject it first.
+    let cjk_fragment = "\u{6211}\u{4EEC}\u{5728}\u{5B66}\u{4E60}\u{4E2D}\u{6587}\u{5BF9}\u{5417}"; // 9 chars
+    assert_eq!(cjk_fragment.chars().count(), 9, "sanity: 9 CJK chars");
+    let file_content = format!("English prefix: {cjk_fragment} suffix text here");
+    // The search carries the 9-char CJK fragment hinted at line 5 (out of bounds → None).
+    let search = format!("5|{cjk_fragment}");
+    let input_diffs = vec![SearchAndReplace {
+        search: search.clone(),
+        replace: "REPLACED".to_string(),
+    }];
+    let diff = fuzzy_match_diffs("file.md", &input_diffs, &file_content);
+    // Must be rejected: 9 chars < MIN_SUBSTRING_SEARCH_LEN (10).
+    assert!(
+        deltas(&diff).is_empty(),
+        "9-character CJK search (27 bytes) must be rejected by the char-count guard; \
+         got: {:?}",
+        deltas(&diff)
+    );
+}
+
+/// Regression test: a degenerate whitespace-only search must be rejected.
+#[test]
+fn test_substring_tier_rejects_whitespace_only_search() {
+    let file_content = "line one\nline two";
+    // Whitespace-only search (even though it has enough bytes) must be rejected.
+    let input_diffs = vec![SearchAndReplace {
+        search: "1|          ".to_string(), // 10 spaces — passes length but not trim check
+        replace: "REPLACED".to_string(),
+    }];
+    let diff = fuzzy_match_diffs("file.md", &input_diffs, file_content);
+    assert!(
+        deltas(&diff).is_empty(),
+        "Whitespace-only search must not produce a delta"
+    );
+}
+
+/// Ambiguity guard: when the fragment appears as a sub-line substring in more
+/// than one location, `ambiguous_substring_matches` must be set and no delta
+/// produced. The fragment must be a *substring* (not a whole line) so that
+/// line-based matchers cannot find it, forcing the substring tier to run.
+#[test]
+fn test_substring_tier_ambiguity_guard() {
+    // Both lines contain the needle as a sub-string. They are NOT equal to the
+    // needle, so exact and fuzzy matchers reject them; only the substring tier
+    // runs and must detect the ambiguity.
+    let needle = "the_shared_needle_here"; // 22 chars > MIN_SUBSTRING_SEARCH_LEN
+    let file_content = format!(
+        "prefix_A {needle} suffix_A\nunrelated middle line content\nprefix_B {needle} suffix_B"
+    );
+    // Line-range hint points to line 5, which is beyond the 3-line file,
+    // so the filter produces None — the substring tier runs with no proximity
+    // constraint and must still catch the ambiguity.
+    let search = format!("5|{needle}");
+    let input_diffs = vec![SearchAndReplace {
+        search: search.clone(),
+        replace: "REPLACED".to_string(),
+    }];
+    let diff = fuzzy_match_diffs("file.md", &input_diffs, &file_content);
+    assert!(
+        deltas(&diff).is_empty(),
+        "Ambiguous fragment must not produce a delta; got: {:?}",
+        deltas(&diff)
+    );
+    assert!(
+        diff.failures
+            .is_some_and(|f| f.ambiguous_substring_matches > 0),
+        "Expected ambiguous_substring_matches; got: {:?}",
+        diff.failures
+    );
+}
+
+/// Verbatim indented-prefix case from the same evidence:
+/// `117|  - \`Apply\`` where the N| prefix precedes the leading whitespace.
+#[test]
+fn test_single_line_n_pipe_with_indented_content_matches() {
+    // The prefix sits BEFORE the indentation ("117|  - ...").
+    let search = "117|  - `Apply` (mutations via the `syncauth.Applier`): upsert a **new suite version** (max(version)+1 for the uid) with its task/config rows, in the caller's tx.";
+    let file_line = "  - `Apply` (mutations via the `syncauth.Applier`): upsert a **new suite version** (max(version)+1 for the uid) with its task/config rows, in the caller's tx.";
+    let new_content = "  - `Apply` (mutations via UPDATED path): upsert a **new suite version**.";
+
+    let input_diffs = vec![SearchAndReplace {
+        search: search.to_string(),
+        replace: new_content.to_string(),
+    }];
+    let diff = fuzzy_match_diffs("spec.md", &input_diffs, file_line);
+
+    assert!(
+        !deltas(&diff).is_empty(),
+        "Expected a delta for indented N|-prefixed search but got none; failures: {:?}",
+        diff.failures
+    );
+    assert_eq!(deltas(&diff)[0].insertion, new_content);
+    assert!(
+        diff.failures.is_none(),
+        "Expected no failures, got: {:?}",
+        diff.failures
+    );
+}
+
 #[test]
 fn test_v4a_exact_match() {
     let hunks = vec![V4AHunk {

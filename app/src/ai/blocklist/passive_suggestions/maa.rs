@@ -18,8 +18,8 @@ use crate::ai::agent::{
 use crate::ai::block_context::BlockContext;
 use crate::ai::blocklist::diff_types::FileDiff;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, FileReadResult, RequestFileEditsFormatKind, SessionContext,
-    apply_edits,
+    ApplyEditsOutcome, BlocklistAIHistoryModel, FileReadResult, RequestFileEditsFormatKind,
+    SessionContext, apply_edits,
 };
 use crate::ai::paths::host_native_absolute_path;
 use crate::auth::auth_state::AuthStateProvider;
@@ -281,11 +281,11 @@ impl PassiveSuggestionsModel {
                                 )
                                 .await
                             },
-                            move |me: &mut Self, applied_diffs: Result<Vec<ai::diff_validation::AIRequestedCodeDiff>, _>, ctx: &mut ModelContext<Self>| {
-                                let Ok(applied_diffs) = applied_diffs else {
-                                    log::warn!("[passive-code-diff] apply_edits failed");
-                                    return;
-                                };
+                            move |me: &mut Self, outcome: ApplyEditsOutcome, ctx: &mut ModelContext<Self>| {
+                                if !outcome.errors.is_empty() {
+                                    log::warn!("[passive-code-diff] apply_edits had {} error(s)", outcome.errors.len());
+                                }
+                                let applied_diffs = outcome.applied_diffs;
                                 if applied_diffs.is_empty() {
                                     log::warn!("[passive-code-diff] no diffs generated");
                                     return;

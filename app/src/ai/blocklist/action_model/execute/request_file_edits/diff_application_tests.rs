@@ -1,7 +1,7 @@
 use std::io::Write as _;
 use std::sync::Arc;
 
-use ai::diff_validation::{DiffDelta, ParsedDiff, V4AHunk};
+use ai::diff_validation::{AIRequestedCodeDiff, DiffDelta, DiffMatchFailures, ParsedDiff, V4AHunk};
 use async_io::block_on;
 use tempfile::NamedTempFile;
 use vec1::vec1;
@@ -19,6 +19,26 @@ fn update_deltas(diff: &AIRequestedCodeDiff) -> &[DiffDelta] {
     }
 }
 
+/// Asserts the outcome has no errors and returns the applied diffs.
+fn assert_success(outcome: ApplyEditsOutcome) -> Vec<AIRequestedCodeDiff> {
+    assert!(
+        outcome.errors.is_empty(),
+        "Expected no errors but got: {:?}",
+        outcome.errors
+    );
+    outcome.applied_diffs
+}
+
+/// Asserts the outcome has no applied diffs and returns the errors.
+fn assert_failure(outcome: ApplyEditsOutcome) -> Vec<DiffApplicationError> {
+    assert!(
+        outcome.applied_diffs.is_empty(),
+        "Expected no applied diffs but got {} diffs",
+        outcome.applied_diffs.len()
+    );
+    outcome.errors
+}
+
 #[test]
 fn test_apply_diffs_error_when_no_diffs_applied() {
     App::test((), |app| async move {
@@ -33,22 +53,18 @@ fn test_apply_diffs_error_when_no_diffs_applied() {
             replace: Some("Replacement content".to_string()),
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(invalid_diff)],
-            &session_context,
-            ai_identifiers,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
             app.background_executor(),
-            auth_state,
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        let errors = result.expect_err("Expected an error due to unmatched diff");
+        let errors = assert_failure(outcome);
         match &errors[..] {
             [DiffApplicationError::UnmatchedDiffs { file, .. }] => {
                 assert_eq!(*file, file_path);
@@ -72,26 +88,18 @@ fn test_apply_diffs_succeeds_with_valid_diff() {
             replace: Some("Modified first line".to_string()),
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let background_executor = app.background_executor();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(valid_diff)],
-            &session_context,
-            ai_identifiers,
-            background_executor,
-            auth_state,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        // Should succeed with a valid diff
-        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
-
-        let diffs = result.unwrap();
+        let diffs = assert_success(outcome);
         assert_eq!(diffs.len(), 1);
         assert_eq!(diffs[0].file_name, file_path);
 
@@ -103,42 +111,36 @@ fn test_apply_diffs_succeeds_with_valid_diff() {
 
 #[test]
 fn test_apply_diffs_with_partial_failures() {
+    // When a matching and a non-matching hunk target the SAME file, the whole
+    // file is treated as a failure — it appears in errors, not applied_diffs.
     App::test((), |app| async move {
         let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
         let file_path = temp_file.path().to_string_lossy().to_string();
         writeln!(&mut temp_file, "First line\nSecond line\n").unwrap();
 
-        // Create one valid diff and one invalid diff.
         let valid_diff = ParsedDiff::StrReplaceEdit {
             file: Some(file_path.clone()),
             search: Some("1|First line".to_string()),
             replace: Some("Modified first line".to_string()),
         };
-
         let invalid_diff = ParsedDiff::StrReplaceEdit {
             file: Some(file_path.clone()),
             search: Some("1|This content doesn't exist".to_string()),
             replace: Some("Replacement content".to_string()),
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let background_executor = app.background_executor();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(valid_diff), FileEdit::Edit(invalid_diff)],
-            &session_context,
-            ai_identifiers,
-            background_executor,
-            auth_state,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        // With mixed valid and invalid diffs, we should get an error
-        let errors = result.expect_err("Expected an error due to mixed valid/invalid diffs");
+        let errors = assert_failure(outcome);
         match &errors[..] {
             [DiffApplicationError::UnmatchedDiffs { file, .. }] => {
                 assert_eq!(*file, file_path);
@@ -152,7 +154,6 @@ fn test_apply_diffs_with_partial_failures() {
 fn test_apply_diffs_with_new_file() {
     // TODO(ben): Drop support for this behavior once the file-creation tool is live.
     App::test((), |app| async move {
-        // Create a diff for a non-existent file with empty search (file creation)
         let non_existent_file = "non_existent_file.txt".to_string();
         let create_file_diff = ParsedDiff::StrReplaceEdit {
             file: Some(non_existent_file.clone()),
@@ -160,26 +161,18 @@ fn test_apply_diffs_with_new_file() {
             replace: Some("New file content".to_string()),
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let background_executor = app.background_executor();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(create_file_diff)],
-            &session_context,
-            ai_identifiers,
-            background_executor.clone(),
-            auth_state.clone(),
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        // Should succeed with a file creation diff
-        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
-
-        let diffs = result.unwrap();
+        let diffs = assert_success(outcome);
         assert_eq!(diffs.len(), 1);
         assert_eq!(diffs[0].file_name, non_existent_file);
         assert_eq!(diffs[0].failures, None);
@@ -205,23 +198,17 @@ fn test_apply_diffs_with_missing_file() {
             replace: Some("New content".to_string()),
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let background_executor = app.background_executor();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = block_on(apply_edits(
+        let outcome = block_on(apply_edits(
             vec![FileEdit::Edit(invalid_non_existent_diff)],
-            &session_context,
-            ai_identifiers,
-            background_executor,
-            auth_state,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         ));
 
-        // Should fail due to the invalid diff.
-        let errors = result.expect_err("Expected an error due to missing file");
+        let errors = assert_failure(outcome);
         match &errors[..] {
             [DiffApplicationError::MissingFile { file }] => {
                 assert_eq!(*file, non_existent_file);
@@ -231,8 +218,107 @@ fn test_apply_diffs_with_missing_file() {
     });
 }
 
+/// Regression test for QUALITY-1253 (request b338d92f evidence):
+/// A StrReplaceEdit whose `search` field carries a single N| line-number prefix
+/// (e.g. "100|content") should match the same content in the file even though
+/// the file has no N| prefix. This is the exact failure mode observed in staging:
+/// apply-diffs rejected the diff while a Python `text.replace(old, new)` using
+/// the cleaned string succeeded in the same session.
 #[test]
-fn test_parse_diffs_with_mixed_empty_and_valid_diffs() {
+fn test_single_line_n_pipe_prefixed_search_via_apply_edits() {
+    App::test((), |app| async move {
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+        let file_path = temp_file.path().to_string_lossy().to_string();
+        // File content has NO N| prefix — exactly what's in the real spec files.
+        writeln!(
+            &mut temp_file,
+            "Includes CRUD for suites/versions, tasks, configs, runs, trials; a `CreateSuiteVersion` that writes the suite row + its task/config child rows in one transaction; and `Mark\u{2026}ForDeletionByTeamIDs`."
+        ).unwrap();
+
+        // The apply-diffs search carries the N| prefix that parse_line_numbers should strip.
+        let diff = ParsedDiff::StrReplaceEdit {
+            file: Some(file_path.clone()),
+            search: Some("100|Includes CRUD for suites/versions, tasks, configs, runs, trials; a `CreateSuiteVersion` that writes the suite row + its task/config child rows in one transaction; and `Mark\u{2026}ForDeletionByTeamIDs`.".to_string()),
+            replace: Some("UPDATED CRUD line".to_string()),
+        };
+
+        let outcome = apply_edits(
+            vec![FileEdit::Edit(diff)],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
+            false,
+            |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
+        )
+        .await;
+
+        let diffs = assert_success(outcome);
+        assert_eq!(
+            diffs.len(),
+            1,
+            "Expected the N|-prefixed search to produce one applied diff"
+        );
+        let deltas = update_deltas(&diffs[0]);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].insertion, "UPDATED CRUD line");
+    });
+}
+
+/// Verbatim indented case from the same evidence: N| prefix before indentation.
+#[test]
+fn test_indented_n_pipe_prefixed_search_via_apply_edits() {
+    App::test((), |app| async move {
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+        let file_path = temp_file.path().to_string_lossy().to_string();
+        writeln!(
+            &mut temp_file,
+            "  - `Apply` (mutations via the `syncauth.Applier`): upsert a **new suite version** (max(version)+1 for the uid) with its task/config rows, in the caller's tx."
+        ).unwrap();
+
+        // The N| prefix "117|" precedes the leading indentation "  - `Apply`".
+        let diff = ParsedDiff::StrReplaceEdit {
+            file: Some(file_path.clone()),
+            search: Some("117|  - `Apply` (mutations via the `syncauth.Applier`): upsert a **new suite version** (max(version)+1 for the uid) with its task/config rows, in the caller's tx.".to_string()),
+            replace: Some("  - `Apply` (mutations via UPDATED path): upsert a **new suite version**.".to_string()),
+        };
+
+        let outcome = apply_edits(
+            vec![FileEdit::Edit(diff)],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
+            false,
+            |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
+        )
+        .await;
+
+        let diffs = assert_success(outcome);
+        assert_eq!(
+            diffs.len(),
+            1,
+            "Expected the indented N|-prefixed search to produce one applied diff"
+        );
+        let deltas = update_deltas(&diffs[0]);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(
+            deltas[0].insertion,
+            "  - `Apply` (mutations via UPDATED path): upsert a **new suite version**."
+        );
+    });
+}
+
+/// Regression test for QUALITY-1253: a multi-file batch where some files match
+/// and others do not should apply the matching files and report only the failures,
+/// rather than discarding the whole batch.
+///
+/// Reproduces the staging failure in conversation 09d2ec39: the model emitted a
+/// mixed batch of PRODUCT.md hunks (all matched) and TECH.md hunks (none matched).
+/// Previously the entire batch was discarded and only a thin TECH.md error was
+/// returned; the PRODUCT.md edits were silently dropped.
+#[test]
+fn test_multi_file_batch_applies_successful_files_when_some_fail() {
     App::test((), |app| async move {
         let mut file1 = NamedTempFile::new().expect("Failed to create first temporary file");
         let file1_path = file1.path().to_string_lossy().to_string();
@@ -247,39 +333,41 @@ fn test_parse_diffs_with_mixed_empty_and_valid_diffs() {
             search: Some("1|File 1 content".to_string()),
             replace: Some("Modified file 1 content".to_string()),
         };
-
         let invalid_diff = ParsedDiff::StrReplaceEdit {
             file: Some(file2_path.clone()),
             search: Some("1|This doesn't match anything".to_string()),
             replace: Some("New content".to_string()),
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-
-        let background_executor = app.background_executor();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        // Even though we could apply a diff to file1, no diffs could be applied to file2. Overall,
-        // this is an error because there's at least one file with an empty diff.
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(valid_diff), FileEdit::Edit(invalid_diff)],
-            &session_context,
-            ai_identifiers,
-            background_executor,
-            auth_state,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        // Should fail because one of the diffs didn't match.
-        let errors = result.expect_err("Expected an error due to unmatched diff on second file");
-        match &errors[..] {
+        // file1 matched: should be in applied_diffs.
+        assert_eq!(
+            outcome.applied_diffs.len(),
+            1,
+            "Expected file1 diff to be in applied_diffs"
+        );
+        assert_eq!(outcome.applied_diffs[0].file_name, file1_path);
+        let deltas = update_deltas(&outcome.applied_diffs[0]);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].insertion, "Modified file 1 content");
+
+        // file2 failed: should be in errors only, not in applied_diffs.
+        assert_eq!(outcome.errors.len(), 1, "Expected file2 to have one error");
+        match &outcome.errors[..] {
             [DiffApplicationError::UnmatchedDiffs { file, .. }] => {
                 assert_eq!(*file, file2_path);
             }
-            other => panic!("Expected a single UnmatchedDiffs error, got {other:?}"),
+            other => panic!("Expected a single UnmatchedDiffs for file2, got {other:?}"),
         }
     });
 }
@@ -306,7 +394,7 @@ fn test_apply_diffs_noop_with_successful_change() {
             },
         ];
 
-        let result = apply_edits(
+        let outcome = apply_edits(
             diffs.into_iter().map(FileEdit::Edit).collect(),
             &SessionContext::new_for_test(),
             &AIIdentifiers::default(),
@@ -317,8 +405,7 @@ fn test_apply_diffs_noop_with_successful_change() {
         )
         .await;
 
-        assert!(result.is_ok());
-        let diffs = result.unwrap();
+        let diffs = assert_success(outcome);
         assert_eq!(diffs.len(), 1);
         assert_eq!(diffs[0].file_name, file_path);
         assert_eq!(diffs[0].failures, None);
@@ -343,29 +430,24 @@ fn test_apply_diffs_fails_with_only_noop() {
         let content = "First line\nSecond line\n";
         writeln!(temp_file, "{content}").unwrap();
 
-        // Create a diff that exactly matches the existing content (making it a noop)
         let noop_diff = ParsedDiff::StrReplaceEdit {
             file: Some(file_path.clone()),
             search: Some("1|First line".to_string()),
             replace: Some("First line".to_string()),
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(noop_diff)],
-            &session_context,
-            ai_identifiers,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
             app.background_executor(),
-            auth_state,
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        let errors = result.expect_err("Expected an error due to noop diff");
+        let errors = assert_failure(outcome);
         match &errors[..] {
             [
                 DiffApplicationError::UnmatchedDiffs {
@@ -388,33 +470,27 @@ fn test_multiple_file_create_edits_for_same_path() {
         let file_path = "new_file.txt".to_string();
 
         // Create two FileEdit::Create edits for the same file path
-        let create_edit1 = FileEdit::Create {
-            file: Some(file_path.clone()),
-            content: Some("First content".to_string()),
-        };
-        let create_edit2 = FileEdit::Create {
-            file: Some(file_path.clone()),
-            content: Some("Second content".to_string()),
-        };
-
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let background_executor = app.background_executor();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
-            vec![create_edit1, create_edit2],
-            &session_context,
-            ai_identifiers,
-            background_executor,
-            auth_state,
+        let outcome = apply_edits(
+            vec![
+                FileEdit::Create {
+                    file: Some(file_path.clone()),
+                    content: Some("First content".to_string()),
+                },
+                FileEdit::Create {
+                    file: Some(file_path.clone()),
+                    content: Some("Second content".to_string()),
+                },
+            ],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        // Should fail due to multiple creation attempts for the same file
-        let errors = result.expect_err("Expected an error due to multiple file creation attempts");
+        let errors = assert_failure(outcome);
         match &errors[..] {
             [DiffApplicationError::MultipleFileCreation { file }] => {
                 assert_eq!(*file, file_path);
@@ -429,36 +505,28 @@ fn test_mixed_create_and_edit_for_same_path() {
     App::test((), |app| async move {
         let file_path = "mixed_file.txt".to_string();
 
-        // Create a FileEdit::Create and FileEdit::Edit for the same file path
-        let create_edit = FileEdit::Create {
-            file: Some(file_path.clone()),
-            content: Some("New file content".to_string()),
-        };
-        let edit_diff = ParsedDiff::StrReplaceEdit {
-            file: Some(file_path.clone()),
-            search: Some("1|Some existing content".to_string()),
-            replace: Some("Modified content".to_string()),
-        };
-
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let background_executor = app.background_executor();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
-            vec![create_edit, FileEdit::Edit(edit_diff)],
-            &session_context,
-            ai_identifiers,
-            background_executor,
-            auth_state,
+        let outcome = apply_edits(
+            vec![
+                FileEdit::Create {
+                    file: Some(file_path.clone()),
+                    content: Some("New file content".to_string()),
+                },
+                FileEdit::Edit(ParsedDiff::StrReplaceEdit {
+                    file: Some(file_path.clone()),
+                    search: Some("1|Some existing content".to_string()),
+                    replace: Some("Modified content".to_string()),
+                }),
+            ],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        // Should fail due to mixed create and edit for the same file
-        let errors =
-            result.expect_err("Expected an error due to mixed create and edit for same file");
+        let errors = assert_failure(outcome);
         match &errors[..] {
             [DiffApplicationError::MultipleFileCreation { file }] => {
                 assert_eq!(*file, file_path);
@@ -475,16 +543,17 @@ fn test_delete_and_create_same_path_replaces_existing_file() {
         let file_path = temp_file.path().to_string_lossy().to_string();
         writeln!(&mut temp_file, "Old line one\nOld line two").unwrap();
 
-        let delete_edit = FileEdit::Delete {
-            file: Some(file_path.clone()),
-        };
-        let create_edit = FileEdit::Create {
-            file: Some(file_path.clone()),
-            content: Some("New file content".to_string()),
-        };
-
-        let result = apply_edits(
-            vec![delete_edit, create_edit],
+        // Combining a delete and create for the same path is treated as a full-file replacement.
+        let outcome = apply_edits(
+            vec![
+                FileEdit::Delete {
+                    file: Some(file_path.clone()),
+                },
+                FileEdit::Create {
+                    file: Some(file_path.clone()),
+                    content: Some("New file content".to_string()),
+                },
+            ],
             &SessionContext::new_for_test(),
             &AIIdentifiers::default(),
             app.background_executor(),
@@ -494,8 +563,7 @@ fn test_delete_and_create_same_path_replaces_existing_file() {
         )
         .await;
 
-        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
-        let diffs = result.unwrap();
+        let diffs = assert_success(outcome);
         assert_eq!(diffs.len(), 1);
         assert_eq!(diffs[0].file_name, file_path);
         assert_eq!(diffs[0].original_content, "Old line one\nOld line two\n");
@@ -514,16 +582,16 @@ fn test_create_then_delete_same_path_replaces_existing_file() {
         let file_path = temp_file.path().to_string_lossy().to_string();
         writeln!(&mut temp_file, "Old line one\nOld line two").unwrap();
 
-        let create_edit = FileEdit::Create {
-            file: Some(file_path.clone()),
-            content: Some("New file content".to_string()),
-        };
-        let delete_edit = FileEdit::Delete {
-            file: Some(file_path.clone()),
-        };
-
-        let result = apply_edits(
-            vec![create_edit, delete_edit],
+        let outcome = apply_edits(
+            vec![
+                FileEdit::Create {
+                    file: Some(file_path.clone()),
+                    content: Some("New file content".to_string()),
+                },
+                FileEdit::Delete {
+                    file: Some(file_path.clone()),
+                },
+            ],
             &SessionContext::new_for_test(),
             &AIIdentifiers::default(),
             app.background_executor(),
@@ -533,8 +601,7 @@ fn test_create_then_delete_same_path_replaces_existing_file() {
         )
         .await;
 
-        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
-        let diffs = result.unwrap();
+        let diffs = assert_success(outcome);
         assert_eq!(diffs.len(), 1);
         assert_eq!(diffs[0].file_name, file_path);
 
@@ -552,21 +619,21 @@ fn test_delete_create_and_edit_same_path_still_fails() {
         let file_path = temp_file.path().to_string_lossy().to_string();
         writeln!(&mut temp_file, "Existing content").unwrap();
 
-        let delete_edit = FileEdit::Delete {
-            file: Some(file_path.clone()),
-        };
-        let create_edit = FileEdit::Create {
-            file: Some(file_path.clone()),
-            content: Some("New file content".to_string()),
-        };
-        let edit_diff = ParsedDiff::StrReplaceEdit {
-            file: Some(file_path.clone()),
-            search: Some("1|Existing content".to_string()),
-            replace: Some("Modified content".to_string()),
-        };
-
-        let result = apply_edits(
-            vec![delete_edit, create_edit, FileEdit::Edit(edit_diff)],
+        let outcome = apply_edits(
+            vec![
+                FileEdit::Delete {
+                    file: Some(file_path.clone()),
+                },
+                FileEdit::Create {
+                    file: Some(file_path.clone()),
+                    content: Some("New file content".to_string()),
+                },
+                FileEdit::Edit(ParsedDiff::StrReplaceEdit {
+                    file: Some(file_path.clone()),
+                    search: Some("1|Existing content".to_string()),
+                    replace: Some("Modified content".to_string()),
+                }),
+            ],
             &SessionContext::new_for_test(),
             &AIIdentifiers::default(),
             app.background_executor(),
@@ -576,7 +643,7 @@ fn test_delete_create_and_edit_same_path_still_fails() {
         )
         .await;
 
-        let errors = result.expect_err("Expected an error due to create/edit/delete same path");
+        let errors = assert_failure(outcome);
         match &errors[..] {
             [DiffApplicationError::MultipleFileCreation { file }] => {
                 assert_eq!(*file, file_path);
@@ -595,29 +662,21 @@ fn test_create_edit_for_existing_file() {
         writeln!(&mut temp_file, "Existing content").unwrap();
 
         // Try to create a file that already exists
-        let create_edit = FileEdit::Create {
-            file: Some(file_path.clone()),
-            content: Some("New content".to_string()),
-        };
-
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let background_executor = app.background_executor();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
-            vec![create_edit],
-            &session_context,
-            ai_identifiers,
-            background_executor,
-            auth_state,
+        let outcome = apply_edits(
+            vec![FileEdit::Create {
+                file: Some(file_path.clone()),
+                content: Some("New content".to_string()),
+            }],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        // Should fail because the file already exists
-        let errors = result.expect_err("Expected an error because file already exists");
+        let errors = assert_failure(outcome);
         match &errors[..] {
             [DiffApplicationError::AlreadyExists { file }] => {
                 assert_eq!(*file, file_path);
@@ -629,46 +688,89 @@ fn test_create_edit_for_existing_file() {
 
 #[test]
 fn test_format_match_error() {
+    // fuzzy_match_failures: search did not match any line
     let err = DiffApplicationError::UnmatchedDiffs {
         file: "file.txt".to_string(),
         match_failures: DiffMatchFailures {
             fuzzy_match_failures: 1,
             noop_deltas: 0,
             missing_line_numbers: 0,
+            ambiguous_substring_matches: 0,
         },
     };
-
-    assert_eq!(
-        err.to_conversation_message(),
-        "Could not apply all diffs to file.txt."
+    let msg = err.to_conversation_message();
+    assert!(
+        msg.contains("1 search block"),
+        "Should mention count: {msg}"
     );
+    assert!(msg.contains("file.txt"), "Should name the file: {msg}");
 
+    // noop_deltas: changes already applied
     let err = DiffApplicationError::UnmatchedDiffs {
         file: "file.txt".to_string(),
         match_failures: DiffMatchFailures {
             fuzzy_match_failures: 0,
             noop_deltas: 1,
             missing_line_numbers: 0,
+            ambiguous_substring_matches: 0,
         },
     };
-
     assert_eq!(
         err.to_conversation_message(),
-        "The changes to file.txt were already made."
+        "1 change to file.txt has already been applied."
     );
 
+    // ambiguous_substring_matches: fragment found in multiple locations
+    let err = DiffApplicationError::UnmatchedDiffs {
+        file: "file.txt".to_string(),
+        match_failures: DiffMatchFailures {
+            fuzzy_match_failures: 0,
+            noop_deltas: 0,
+            missing_line_numbers: 0,
+            ambiguous_substring_matches: 2,
+        },
+    };
+    let msg = err.to_conversation_message();
+    assert!(
+        msg.contains("2 search block"),
+        "Should mention count: {msg}"
+    );
+    assert!(
+        msg.contains("multiple locations"),
+        "Should say ambiguous: {msg}"
+    );
+
+    // both fuzzy failures and noops
     let err = DiffApplicationError::UnmatchedDiffs {
         file: "file.txt".to_string(),
         match_failures: DiffMatchFailures {
             fuzzy_match_failures: 2,
             noop_deltas: 2,
             missing_line_numbers: 0,
+            ambiguous_substring_matches: 0,
         },
+    };
+    let msg = err.to_conversation_message();
+    assert!(
+        msg.contains("2 search block"),
+        "Should mention unmatched count: {msg}"
+    );
+    assert!(
+        msg.contains("2 change"),
+        "Should mention already-applied count: {msg}"
+    );
+}
+
+#[test]
+fn test_format_already_exists_message_includes_recovery_hint() {
+    let err = DiffApplicationError::AlreadyExists {
+        file: "spec.md".to_string(),
     };
 
     assert_eq!(
         err.to_conversation_message(),
-        "Could not apply all diffs to file.txt. The changes to file.txt were already made."
+        "Could not create spec.md because it already exists. \
+         Use search-and-replace or an update operation to modify the existing file."
     );
 }
 
@@ -684,14 +786,21 @@ fn test_format_multiple_errors() {
                 fuzzy_match_failures: 1,
                 noop_deltas: 0,
                 missing_line_numbers: 0,
+                ambiguous_substring_matches: 0,
             },
         },
     ];
 
-    assert_eq!(
-        DiffApplicationError::error_for_conversation(&errs),
-        "* missing.rs does not exist. Is the path correct?\n* Could not apply all diffs to unmatched.rs."
+    let msg = errors_to_conversation_message(&errs);
+    assert!(
+        msg.contains("* missing.rs does not exist"),
+        "Should list missing file error: {msg}"
     );
+    assert!(
+        msg.contains("* 1 search block"),
+        "Should list unmatched count: {msg}"
+    );
+    assert!(msg.contains("unmatched.rs"), "Should name the file: {msg}");
 }
 
 #[test]
@@ -702,7 +811,7 @@ fn test_format_single_errors() {
     },];
 
     assert_eq!(
-        DiffApplicationError::error_for_conversation(&errs),
+        errors_to_conversation_message(&errs),
         "Could not read no_permissions.scala"
     );
 }
@@ -733,23 +842,18 @@ fn test_apply_v4a_edits_simple_match() {
             }],
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(v4a_edit)],
-            &session_context,
-            ai_identifiers,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
             app.background_executor(),
-            auth_state,
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
-        let diffs = result.unwrap();
+        let diffs = assert_success(outcome);
         assert_eq!(diffs.len(), 1);
         assert_eq!(diffs[0].file_name, file_path);
 
@@ -784,23 +888,18 @@ fn test_apply_v4a_edits_with_jump_context() {
             }],
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(v4a_edit)],
-            &session_context,
-            ai_identifiers,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
             app.background_executor(),
-            auth_state,
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
-        let diffs = result.unwrap();
+        let diffs = assert_success(outcome);
         assert_eq!(diffs.len(), 1);
 
         let deltas = update_deltas(&diffs[0]);
@@ -829,22 +928,18 @@ fn test_apply_v4a_edits_no_match() {
             }],
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(v4a_edit)],
-            &session_context,
-            ai_identifiers,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
             app.background_executor(),
-            auth_state,
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        let errors = result.expect_err("Expected an error due to unmatched V4A edit");
+        let errors = assert_failure(outcome);
         match &errors[..] {
             [DiffApplicationError::UnmatchedDiffs { file, .. }] => {
                 assert_eq!(*file, file_path);
@@ -874,22 +969,18 @@ fn test_apply_v4a_edits_noop() {
             }],
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(v4a_edit)],
-            &session_context,
-            ai_identifiers,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
             app.background_executor(),
-            auth_state,
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        let errors = result.expect_err("Expected an error due to noop V4A edit");
+        let errors = assert_failure(outcome);
         match &errors[..] {
             [
                 DiffApplicationError::UnmatchedDiffs {
@@ -929,23 +1020,18 @@ fn test_apply_v4a_edits_multiline_change() {
             }],
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(v4a_edit)],
-            &session_context,
-            ai_identifiers,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
             app.background_executor(),
-            auth_state,
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
-        let diffs = result.unwrap();
+        let diffs = assert_success(outcome);
         assert_eq!(diffs.len(), 1);
 
         let deltas = update_deltas(&diffs[0]);
@@ -979,23 +1065,18 @@ fn test_apply_v4a_edits_nested_jump_context() {
             }],
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(v4a_edit)],
-            &session_context,
-            ai_identifiers,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
             app.background_executor(),
-            auth_state,
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
-        let diffs = result.unwrap();
+        let diffs = assert_success(outcome);
         assert_eq!(diffs.len(), 1);
 
         let deltas = update_deltas(&diffs[0]);
@@ -1021,22 +1102,18 @@ fn test_apply_v4a_edits_missing_file() {
             }],
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(v4a_edit)],
-            &session_context,
-            ai_identifiers,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
             app.background_executor(),
-            auth_state,
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        let errors = result.expect_err("Expected an error due to missing file");
+        let errors = assert_failure(outcome);
         match &errors[..] {
             [DiffApplicationError::MissingFile { file }] => {
                 assert_eq!(*file, non_existent_file);
@@ -1066,23 +1143,18 @@ fn test_apply_v4a_edits_empty_context() {
             }],
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(v4a_edit)],
-            &session_context,
-            ai_identifiers,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
             app.background_executor(),
-            auth_state,
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
-        let diffs = result.unwrap();
+        let diffs = assert_success(outcome);
         assert_eq!(diffs.len(), 1);
 
         let deltas = update_deltas(&diffs[0]);
@@ -1116,23 +1188,18 @@ fn test_apply_v4a_rename_to_nonexistent_file() {
             }],
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(v4a_edit)],
-            &session_context,
-            ai_identifiers,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
             app.background_executor(),
-            auth_state,
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
-        let diffs = result.unwrap();
+        let diffs = assert_success(outcome);
 
         // Should produce a single Update diff with rename
         assert_eq!(diffs.len(), 1);
@@ -1179,23 +1246,18 @@ fn test_apply_v4a_rename_to_existing_file() {
             }],
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(v4a_edit)],
-            &session_context,
-            ai_identifiers,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
             app.background_executor(),
-            auth_state,
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
-        let diffs = result.unwrap();
+        let diffs = assert_success(outcome);
 
         // Should produce TWO diffs: deletion for source, update for target
         assert_eq!(diffs.len(), 2);
@@ -1215,23 +1277,11 @@ fn test_apply_v4a_rename_to_existing_file() {
                 // Two deltas: one replaces target with source content, one applies the modification
                 assert_eq!(deltas.len(), 2);
                 // First delta: replaces target content with source content
-                assert!(
-                    deltas[0].insertion.contains("source line one"),
-                    "Should contain source content"
-                );
-                assert!(
-                    deltas[0].insertion.contains("source line two"),
-                    "First delta should contain original source"
-                );
-                assert!(
-                    deltas[0].insertion.contains("source line three"),
-                    "Should contain source content"
-                );
+                assert!(deltas[0].insertion.contains("source line one"));
+                assert!(deltas[0].insertion.contains("source line two"));
+                assert!(deltas[0].insertion.contains("source line three"));
                 // Second delta: applies the modification
-                assert!(
-                    deltas[1].insertion.contains("MODIFIED LINE TWO"),
-                    "Should contain modified line"
-                );
+                assert!(deltas[1].insertion.contains("MODIFIED LINE TWO"));
             }
             other => panic!("Expected Update diff_type for target, got {other:?}"),
         }
@@ -1259,23 +1309,18 @@ fn test_apply_v4a_rename_to_existing_file_no_deltas() {
             hunks: vec![],
         };
 
-        let ai_identifiers = &AIIdentifiers::default();
-        let session_context = SessionContext::new_for_test();
-        let auth_state = Arc::new(AuthState::new_for_test());
-
-        let result = apply_edits(
+        let outcome = apply_edits(
             vec![FileEdit::Edit(v4a_edit)],
-            &session_context,
-            ai_identifiers,
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
             app.background_executor(),
-            auth_state,
+            Arc::new(AuthState::new_for_test()),
             false,
             |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
         )
         .await;
 
-        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
-        let diffs = result.unwrap();
+        let diffs = assert_success(outcome);
 
         // Should produce TWO diffs: deletion for source, update for target
         assert_eq!(diffs.len(), 2);

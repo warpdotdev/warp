@@ -797,6 +797,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                         // Line counts are not available in legacy persisted data
                         lines_added: 0,
                         lines_removed: 0,
+                        partial_errors: None,
                     }
                 }
                 Some(api::apply_file_diffs_result::Result::Error(error)) => {

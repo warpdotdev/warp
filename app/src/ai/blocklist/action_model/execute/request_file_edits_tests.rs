@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use ai::diff_validation::{AIRequestedCodeDiff, DiffType};
+use ai::diff_validation::{AIRequestedCodeDiff, DiffMatchFailures, DiffType};
 use async_channel::unbounded;
 use futures::FutureExt;
 use warpui::{App, AppContext, EntityId};
@@ -10,6 +10,13 @@ use super::*;
 use crate::ai::agent::task::TaskId;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::ModelEventDispatcher;
+
+fn outcome_from_diffs(diffs: Vec<AIRequestedCodeDiff>) -> ApplyEditsOutcome {
+    ApplyEditsOutcome {
+        applied_diffs: diffs,
+        errors: Vec::new(),
+    }
+}
 
 /// Shared observable state for a [`TestStorage`].
 struct TestStorageState {
@@ -47,6 +54,7 @@ impl RegisteredDiffStorage for TestStorage {
             deleted_files: Vec::new(),
             lines_added: 0,
             lines_removed: 0,
+            partial_errors: None,
         })
         .boxed()
     }
@@ -121,7 +129,7 @@ fn on_diffs_applied_seeds_registered_storage() {
         let (tx, _rx) = oneshot::channel();
         executor.update(&mut app, |executor, ctx| {
             executor.on_diffs_applied(
-                Ok(vec![AIRequestedCodeDiff {
+                outcome_from_diffs(vec![AIRequestedCodeDiff {
                     file_name: "/tmp/x.rs".to_owned(),
                     diff_type: DiffType::creation("fn main() {}\n".to_owned()),
                     failures: None,
@@ -217,5 +225,101 @@ fn discard_pending_drops_state_in_any_state() {
             executor.discard_pending(&failed_id);
             assert!(!executor.diff_application_failures.contains_key(&failed_id));
         });
+
+        // Partial-error entry (some diffs applied, some failed).
+        let partial_id = AIAgentActionId::from("edit-partial".to_owned());
+        executor.update(&mut app, |executor, _| {
+            executor
+                .diff_application_partial_errors
+                .insert(partial_id.clone(), "some files failed".to_owned());
+            executor.discard_pending(&partial_id);
+            assert!(
+                !executor
+                    .diff_application_partial_errors
+                    .contains_key(&partial_id)
+            );
+        });
+    });
+}
+
+/// A partial-success outcome (some diffs applied, some errored) should:
+/// 1. Seed storage with only the successful diffs.
+/// 2. Record the partial error message in `diff_application_partial_errors`.
+/// 3. NOT trigger auto-execution (`should_autoexecute` must still consult
+///    `can_write_files`) since the successful diffs need the normal
+///    permission / user-acceptance gate.
+#[test]
+fn partial_success_seeds_storage_and_does_not_bypass_permission_gate() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let executor = add_executor(&mut app);
+        let action_id = AIAgentActionId::from("edit-partial".to_owned());
+        let storage = register_storage(&mut app, &executor, &action_id);
+
+        // Feed an outcome with one applied diff and one error.
+        let (tx, _rx) = oneshot::channel();
+        executor.update(&mut app, |executor, ctx| {
+            executor.on_diffs_applied(
+                ApplyEditsOutcome {
+                    applied_diffs: vec![AIRequestedCodeDiff {
+                        file_name: "/tmp/success.rs".to_owned(),
+                        diff_type: DiffType::creation("fn ok() {}\n".to_owned()),
+                        failures: None,
+                        original_content: String::new(),
+                    }],
+                    errors: vec![DiffApplicationError::UnmatchedDiffs {
+                        file: "/tmp/fail.rs".to_owned(),
+                        match_failures: DiffMatchFailures {
+                            fuzzy_match_failures: 1,
+                            noop_deltas: 0,
+                            missing_line_numbers: 0,
+                            ambiguous_substring_matches: 0,
+                        },
+                    }],
+                },
+                action_id.clone(),
+                tx,
+                ctx,
+            );
+        });
+
+        // Storage is seeded with the successful diff only.
+        let seeded = storage.diffs.borrow_mut().take();
+        let (diffs, _) = seeded.expect("storage should be seeded with the successful diff");
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].file_path(), "/tmp/success.rs");
+
+        // The partial error is recorded, not a total failure.
+        executor.update(&mut app, |executor, _| {
+            assert!(
+                executor
+                    .diff_application_partial_errors
+                    .contains_key(&action_id),
+                "partial error should be recorded"
+            );
+            assert!(
+                !executor.diff_application_failures.contains_key(&action_id),
+                "should not be a total failure"
+            );
+        });
+
+        // should_autoexecute must NOT return true for a partial-success action,
+        // because the successful diffs still need the user-acceptance gate.
+        // (The executor's `can_write_files` path returns false in the test harness.)
+        let action = edit_action(&action_id);
+        let conversation_id = AIConversationId::new();
+        let would_auto = executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id,
+                },
+                ctx,
+            )
+        });
+        assert!(
+            !would_auto,
+            "partial-success should NOT bypass the permission gate"
+        );
     });
 }

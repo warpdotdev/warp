@@ -44,6 +44,11 @@ pub(crate) use action_model::recording_controller::RecordingController;
 pub(crate) use action_model::recording_finalize::{
     FinalizeReason, finalize_recording_for_conversation,
 };
+#[cfg_attr(target_family = "wasm", allow(unused_imports))]
+pub(crate) use action_model::{
+    ApplyEditsOutcome, FileReadResult, ReadFileContextResult, RequestFileEditsFormatKind,
+    apply_edits, read_local_file_context,
+};
 // Consumed by `tui_export` for the `warp_tui` frontend.
 #[cfg(feature = "tui")]
 pub use action_model::{
@@ -51,11 +56,6 @@ pub use action_model::{
 };
 pub use action_model::{
     BlocklistAIActionEvent, BlocklistAIActionModel, ShellCommandExecutor, ShellCommandExecutorEvent,
-};
-#[cfg_attr(target_family = "wasm", allow(unused_imports))]
-pub(crate) use action_model::{
-    FileReadResult, ReadFileContextResult, RequestFileEditsFormatKind, apply_edits,
-    read_local_file_context,
 };
 // Consumed by `tui_export` for the `warp_tui` frontend.
 #[cfg(feature = "tui")]
