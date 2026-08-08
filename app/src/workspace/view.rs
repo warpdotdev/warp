@@ -23370,6 +23370,11 @@ impl Workspace {
         if *ai_settings.file_based_mcp_enabled.value() {
             context.set.insert(flags::FILE_BASED_MCP_FLAG);
         }
+        // The raw preference, not the effective getter: the command palette must offer the
+        // action that matches the switch the user sees, even when AI is globally off.
+        if *ai_settings.plugin_discovery_enabled.value() {
+            context.set.insert(flags::PLUGIN_DISCOVERY_ENABLED);
+        }
         if *ai_settings.can_use_warp_credits_for_fallback.value() {
             context.set.insert(flags::WARP_CREDIT_FALLBACK_FLAG);
         }

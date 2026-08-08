@@ -1975,6 +1975,22 @@ define_settings_group!(AISettings, settings: [
         description: "Whether third-party file-based MCP servers are automatically detected.",
     }
 
+    // Whether Warp discovers Agent Plugin packages from the user and repository plugin roots.
+    //
+    // This is a global kill switch for plugin packages, not an inventory or a per-plugin control.
+    // The GUI and TUI read the same key from their own settings profiles; the TUI has no toggle
+    // surface in v1. Factory runtimes ignore this personal preference entirely.
+    plugin_discovery_enabled: AgentPluginDiscoveryEnabled {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
+        private: false,
+        toml_path: "agents.plugins.discovery_enabled",
+        description: "Whether Warp discovers Agent Plugin packages.",
+    }
+
     // Controls how agent thinking/reasoning traces are displayed.
     thinking_display_mode: ThinkingDisplayMode,
 
@@ -2339,6 +2355,17 @@ impl AISettings {
         // solution (e.g. per-environment allowlisting, signed configs) should be
         // explored in the future.
         *self.file_based_mcp_enabled
+    }
+
+    /// Whether the interactive client may discover Agent Plugin packages.
+    ///
+    /// A Factory runtime must not consult this: Factory plugin discovery is part of the applied
+    /// Factory definition, so it uses `PluginDiscoveryPolicy::RequiredByFactory` instead of a
+    /// requester's or service account's personal preference.
+    pub fn is_plugin_discovery_enabled(&self, app: &warpui::AppContext) -> bool {
+        FeatureFlag::AgentPlugins.is_enabled()
+            && self.is_any_ai_enabled(app)
+            && *self.plugin_discovery_enabled
     }
 
     pub fn is_orchestration_enabled(&self, app: &warpui::AppContext) -> bool {

@@ -144,6 +144,8 @@ use ::ai::index::full_source_code_embedding::SyncTask;
 use ::ai::index::full_source_code_embedding::manager::{
     CodebaseIndexManager, CodebaseIndexManagerConfig,
 };
+#[cfg(not(target_family = "wasm"))]
+use ::ai::plugins::REPOSITORY_PLUGIN_PATHS;
 use ::ai::project_context::model::ProjectContextModel;
 pub use ai::agent::todos::AIAgentTodoList;
 pub use ai::agent::{AIAgentActionResultType, FileEdit, TodoOperation};
@@ -1964,16 +1966,17 @@ pub(crate) fn initialize_app(
     #[cfg(not(target_family = "wasm"))]
     {
         ctx.add_singleton_model(DirectoryWatcher::new);
-        // Register the skill provider directories as force-included paths so
-        // the gitignore-pruning watch descend filter still watches gitignored
-        // skill directories (e.g. `.agents/skills`) for `Repository`
+        // Register the skill and plugin provider directories as force-included paths so the
+        // gitignore-pruning watch descend filter still watches gitignored
+        // directories (e.g. `.agents/skills` and `.agents/plugins`) for `Repository`
         // subscribers (LSP, MCP). Registered before any repository begins
         // watching so it gates descent on the very first registration.
         DirectoryWatcher::handle(ctx).update(ctx, |watcher, _| {
             watcher.register_force_included_paths(
                 ::ai::skills::SKILL_PROVIDER_DEFINITIONS
                     .iter()
-                    .map(|provider| provider.skills_path.clone()),
+                    .map(|provider| provider.skills_path.clone())
+                    .chain(REPOSITORY_PLUGIN_PATHS.map(PathBuf::from)),
             );
         });
         ctx.add_singleton_model(|_| DetectedRepositories::default());
@@ -2322,6 +2325,10 @@ pub(crate) fn initialize_app(
 
     // SkillManager is used to cache SKILL.md files for all active terminal views and their working directories
     ctx.add_singleton_model(SkillManager::new);
+
+    // Owns discovered Agent Plugin packages. Registered after SkillManager and
+    // FileBasedMCPManager because plugin components are surfaced through them.
+    ctx.add_singleton_model(ai::plugins::PluginManager::new);
 
     // CloudViewModel subscribes to UpdateManager so that it can be notified when objects are
     // created on the server.

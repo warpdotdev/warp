@@ -14,6 +14,7 @@ pub mod document;
 pub mod gfm_table;
 pub mod index;
 pub mod paths;
+pub mod plugins;
 pub mod project_context;
 pub mod skills;
 mod telemetry;

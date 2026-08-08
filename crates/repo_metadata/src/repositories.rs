@@ -45,6 +45,17 @@ pub struct DetectedRepositories {
 }
 
 impl DetectedRepositories {
+    /// Returns the local repositories already known to the application.
+    ///
+    /// Consumers that subscribe after repository detection use this snapshot before relying on
+    /// future [`DetectedRepositoriesEvent`]s.
+    pub fn local_repository_roots(&self) -> Vec<PathBuf> {
+        self.repository_roots
+            .iter()
+            .filter_map(|root| root.to_local_path().map(Path::to_path_buf))
+            .collect()
+    }
+
     /// Detects the git repository root for the given working directory.
     ///
     /// For **local sessions**, pass `None` for `remote_detect` — this delegates

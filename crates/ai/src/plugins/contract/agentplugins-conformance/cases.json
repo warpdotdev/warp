@@ -1,0 +1,261 @@
+[
+  {
+    "name": "author-email-not-string",
+    "kind": "manifest",
+    "path": "manifest/author-email-not-string.json",
+    "expect": "invalid",
+    "reason": "5.4: author.email is a string."
+  },
+  {
+    "name": "author-not-object",
+    "kind": "manifest",
+    "path": "manifest/author-not-object.json",
+    "expect": "invalid",
+    "reason": "5.4: author is an object."
+  },
+  {
+    "name": "author-unknown-field",
+    "kind": "manifest",
+    "path": "manifest/author-unknown-field.json",
+    "expect": "invalid",
+    "reason": "5.4: author permits only name, email, and url."
+  },
+  {
+    "name": "extensions-not-object",
+    "kind": "manifest",
+    "path": "manifest/extensions-not-object.json",
+    "expect": "warn",
+    "reason": "5.2: a non-object extensions field is reported and ignored."
+  },
+  {
+    "name": "foreign-schema",
+    "kind": "manifest",
+    "path": "manifest/foreign-schema.json",
+    "expect": "invalid",
+    "reason": "5.2: an unrecognized $schema rejects the plugin."
+  },
+  {
+    "name": "full-metadata",
+    "kind": "manifest",
+    "path": "manifest/full-metadata.json",
+    "expect": "valid",
+    "reason": "Every permitted field with a correct type."
+  },
+  {
+    "name": "keywords-not-strings",
+    "kind": "manifest",
+    "path": "manifest/keywords-not-strings.json",
+    "expect": "invalid",
+    "reason": "5.4: keywords is an array of strings."
+  },
+  {
+    "name": "minimal",
+    "kind": "manifest",
+    "path": "manifest/minimal.json",
+    "expect": "valid",
+    "reason": "Only the two required fields."
+  },
+  {
+    "name": "missing-name",
+    "kind": "manifest",
+    "path": "manifest/missing-name.json",
+    "expect": "invalid",
+    "reason": "5.3: name is required."
+  },
+  {
+    "name": "missing-schema",
+    "kind": "manifest",
+    "path": "manifest/missing-schema.json",
+    "expect": "invalid",
+    "reason": "5.2: $schema is required."
+  },
+  {
+    "name": "name-double-hyphen",
+    "kind": "manifest",
+    "path": "manifest/name-double-hyphen.json",
+    "expect": "invalid",
+    "reason": "5.5: no repeated hyphen."
+  },
+  {
+    "name": "name-leading-dot",
+    "kind": "manifest",
+    "path": "manifest/name-leading-dot.json",
+    "expect": "invalid",
+    "reason": "5.5: first character must be alphanumeric."
+  },
+  {
+    "name": "name-uppercase",
+    "kind": "manifest",
+    "path": "manifest/name-uppercase.json",
+    "expect": "invalid",
+    "reason": "5.5: names are lowercase."
+  },
+  {
+    "name": "unknown-top-level-field",
+    "kind": "manifest",
+    "path": "manifest/unknown-top-level-field.json",
+    "expect": "warn",
+    "reason": "5.2: an unknown top-level field is reported and ignored."
+  },
+  {
+    "name": "version-not-string",
+    "kind": "manifest",
+    "path": "manifest/version-not-string.json",
+    "expect": "invalid",
+    "reason": "5.4: version is typed as a string."
+  },
+  {
+    "name": "command-escapes-root",
+    "kind": "mcp",
+    "path": "mcp/command-escapes-root.json",
+    "expect": "invalid",
+    "reason": "4.1/7.2.1: a relative command must stay inside the plugin root."
+  },
+  {
+    "name": "command-relative-without-prefix",
+    "kind": "mcp",
+    "path": "mcp/command-relative-without-prefix.json",
+    "expect": "invalid",
+    "reason": "7.2.1: a plugin-relative command must begin with ./"
+  },
+  {
+    "name": "command-shell-string",
+    "kind": "mcp",
+    "path": "mcp/command-shell-string.json",
+    "expect": "invalid",
+    "reason": "7.2.1: command is a single executable token, not a shell string."
+  },
+  {
+    "name": "cwd-absolute",
+    "kind": "mcp",
+    "path": "mcp/cwd-absolute.json",
+    "expect": "invalid",
+    "reason": "7.2.1: cwd must be ./-relative or placeholder-rooted."
+  },
+  {
+    "name": "cwd-escapes-plugin-data",
+    "kind": "mcp",
+    "path": "mcp/cwd-escapes-plugin-data.json",
+    "expect": "invalid",
+    "reason": "7.2.1: a PLUGIN_DATA-rooted cwd must stay inside the data directory."
+  },
+  {
+    "name": "empty-servers",
+    "kind": "mcp",
+    "path": "mcp/empty-servers.json",
+    "expect": "valid",
+    "reason": "7.2.1: an empty mcpServers object is valid."
+  },
+  {
+    "name": "factory-schema-in-plugin-root",
+    "kind": "mcp",
+    "path": "mcp/factory-schema-in-plugin-root.json",
+    "expect": "invalid",
+    "reason": "Warp: the Factory MCP schema is invalid inside a plugin root."
+  },
+  {
+    "name": "foreign-schema",
+    "kind": "mcp",
+    "path": "mcp/foreign-schema.json",
+    "expect": "invalid",
+    "reason": "7.2.1: an unrecognized $schema rejects the MCP configuration."
+  },
+  {
+    "name": "header-duplicate-casing",
+    "kind": "mcp",
+    "path": "mcp/header-duplicate-casing.json",
+    "expect": "invalid",
+    "reason": "7.2.1: header names are case-insensitive and must be unique."
+  },
+  {
+    "name": "header-value-control-character",
+    "kind": "mcp",
+    "path": "mcp/header-value-control-character.json",
+    "expect": "invalid",
+    "reason": "7.2.1: header values must be valid HTTP field values."
+  },
+  {
+    "name": "http-loopback",
+    "kind": "mcp",
+    "path": "mcp/http-loopback.json",
+    "expect": "valid",
+    "reason": "7.2.1: plaintext HTTP is permitted on a loopback host."
+  },
+  {
+    "name": "legacy-sse",
+    "kind": "mcp",
+    "path": "mcp/legacy-sse.json",
+    "expect": "warn",
+    "reason": "7.2.1: sse is an optional transport; Warp diagnoses and skips the entry."
+  },
+  {
+    "name": "managed-entry",
+    "kind": "mcp",
+    "path": "mcp/managed-entry.json",
+    "expect": "invalid",
+    "reason": "Warp: a managed server reference must never appear inside a plugin root."
+  },
+  {
+    "name": "reserved-env-plugin-data",
+    "kind": "mcp",
+    "path": "mcp/reserved-env-plugin-data.json",
+    "expect": "invalid",
+    "reason": "9.2: env must not declare PLUGIN_DATA."
+  },
+  {
+    "name": "reserved-env-plugin-root",
+    "kind": "mcp",
+    "path": "mcp/reserved-env-plugin-root.json",
+    "expect": "invalid",
+    "reason": "9.2: env must not declare PLUGIN_ROOT."
+  },
+  {
+    "name": "stdio-placeholders",
+    "kind": "mcp",
+    "path": "mcp/stdio-placeholders.json",
+    "expect": "valid",
+    "reason": "7.2.1/9.2: placeholders in args, env values, and cwd."
+  },
+  {
+    "name": "stdio-unknown-field",
+    "kind": "mcp",
+    "path": "mcp/stdio-unknown-field.json",
+    "expect": "invalid",
+    "reason": "7.2.1: each variant is closed; a field from another variant is invalid."
+  },
+  {
+    "name": "streamable-http",
+    "kind": "mcp",
+    "path": "mcp/streamable-http.json",
+    "expect": "valid",
+    "reason": "7.2.1: HTTPS endpoint with a fixed header."
+  },
+  {
+    "name": "unknown-transport",
+    "kind": "mcp",
+    "path": "mcp/unknown-transport.json",
+    "expect": "invalid",
+    "reason": "7.2.1: an unknown type makes the entry invalid."
+  },
+  {
+    "name": "url-fragment",
+    "kind": "mcp",
+    "path": "mcp/url-fragment.json",
+    "expect": "invalid",
+    "reason": "7.2.1: the URL must not contain a fragment."
+  },
+  {
+    "name": "url-plaintext-non-loopback",
+    "kind": "mcp",
+    "path": "mcp/url-plaintext-non-loopback.json",
+    "expect": "invalid",
+    "reason": "7.2.1: non-loopback endpoints must use HTTPS."
+  },
+  {
+    "name": "url-userinfo",
+    "kind": "mcp",
+    "path": "mcp/url-userinfo.json",
+    "expect": "invalid",
+    "reason": "7.2.1: the URL must not contain user information."
+  }
+]

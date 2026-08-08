@@ -45,6 +45,12 @@ pub(crate) mod metadata_project_rules;
 pub mod onboarding;
 pub(crate) mod orchestration;
 pub(crate) mod persisted_workspace;
+// The plugin manager's read surface — the active skills, the diagnostics, the qualified-name
+// resolver, and the data locator — has no caller yet. Registering plugin components with
+// `SkillManager` and `FileBasedMCPManager` is the next step of APP-5237; remove this allow with
+// that change, at which point every one of these is consumed.
+#[allow(dead_code)]
+pub(crate) mod plugins;
 pub(crate) mod predict;
 pub(crate) mod pricing_promotion;
 #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
