@@ -830,14 +830,12 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Input") & id!(flags::IS_ANY_AI_ENABLED)),
     ]);
 
-    if FeatureFlag::CommandCorrectionKey.is_enabled() {
-        app.register_editable_bindings([EditableBinding::new(
-            "input:insert_command_correction",
-            "Insert Command Correction",
-            TerminalAction::InsertMostRecentCommandCorrection,
-        )
-        .with_context_predicate(id!("Terminal"))]);
-    }
+    app.register_editable_bindings([EditableBinding::new(
+        "input:insert_command_correction",
+        "Insert Command Correction",
+        TerminalAction::InsertMostRecentCommandCorrection,
+    )
+    .with_context_predicate(id!("Terminal"))]);
 
     app.register_editable_bindings([
         // UniversalInput callout debug bindings
