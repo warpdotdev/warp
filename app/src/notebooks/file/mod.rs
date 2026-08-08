@@ -428,12 +428,10 @@ impl FileNotebookView {
 
         #[cfg(feature = "local_fs")]
         {
-            if let Some(prev_id) = self.file_id.take() {
-                FileModel::handle(ctx).update(ctx, |m, ctx| {
-                    m.cancel(prev_id);
-                    m.unsubscribe(prev_id, ctx)
-                });
-            }
+            // Reopening (e.g. "Try again") must not leave the previous read, its watcher, or its
+            // event subscription behind: `subscribe_to_model` appends, so re-subscribing without
+            // this would stack one stale closure per attempt.
+            self.release_file_model(ctx);
 
             let file_model = FileModel::handle(ctx);
             let file_id = file_model.update(ctx, |m, ctx| m.open(&local_path, true, ctx));
@@ -509,6 +507,28 @@ impl FileNotebookView {
         }
     }
 
+    /// The [`FileId`] this view currently holds open, if any.
+    #[cfg(all(test, feature = "local_fs"))]
+    pub(crate) fn file_id_for_test(&self) -> Option<FileId> {
+        self.file_id
+    }
+
+    /// Releases everything this view holds in the shared [`FileModel`]: the in-flight read, the
+    /// file's watcher registration, and this view's subscription to the model's events.
+    ///
+    /// Safe to call when no file is open, and idempotent, so every teardown path can run it.
+    #[cfg(feature = "local_fs")]
+    pub(crate) fn release_file_model(&mut self, ctx: &mut ViewContext<Self>) {
+        let file_model = FileModel::handle(ctx);
+        if let Some(file_id) = self.file_id.take() {
+            file_model.update(ctx, |model, ctx| {
+                model.cancel(file_id);
+                model.unsubscribe(file_id, ctx);
+            });
+        }
+        ctx.unsubscribe_to_model(&file_model);
+    }
+
     /// Open static Markdown as a file pane.
     pub fn open_static(
         &mut self,
@@ -517,11 +537,7 @@ impl FileNotebookView {
         ctx: &mut ViewContext<Self>,
     ) {
         #[cfg(feature = "local_fs")]
-        {
-            if let Some(prev_id) = self.file_id.take() {
-                FileModel::handle(ctx).update(ctx, |m, ctx| m.unsubscribe(prev_id, ctx));
-            }
-        }
+        self.release_file_model(ctx);
         self.set_content(content, ctx);
         let title = title.into();
         self.pane_configuration.update(ctx, |pane_config, ctx| {
@@ -1009,7 +1025,8 @@ impl TypedActionView for FileNotebookView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             FileNotebookAction::Focus => ctx.focus_self(),
-            FileNotebookAction::Close => ctx.emit(FileNotebookEvent::Pane(PaneEvent::Close)),
+            // Route through `BackingView::close` so this takes the header close button's path.
+            FileNotebookAction::Close => BackingView::close(self, ctx),
             FileNotebookAction::FocusTerminalInput => {
                 ctx.emit(FileNotebookEvent::Pane(PaneEvent::FocusActiveSession))
             }
@@ -1145,14 +1162,11 @@ impl BackingView for FileNotebookView {
         actions
     }
 
+    /// Requests that the pane close. The file itself is released by
+    /// `FilePane::detach(DetachType::Closed)`, once the pane is permanently discarded: with
+    /// undo-close the pane is only hidden, and the same view is reattached without reopening its
+    /// file, so releasing here would leave a restored pane showing content that never updates.
     fn close(&mut self, ctx: &mut ViewContext<Self>) {
-        #[cfg(feature = "local_fs")]
-        {
-            // Unsubscribe from the file watcher before closing.
-            if let Some(prev_id) = self.file_id.take() {
-                FileModel::handle(ctx).update(ctx, |m, ctx| m.unsubscribe(prev_id, ctx));
-            }
-        }
         ctx.emit(FileNotebookEvent::Pane(PaneEvent::Close));
     }
 
