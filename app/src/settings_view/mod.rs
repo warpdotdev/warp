@@ -489,6 +489,7 @@ pub mod flags {
     pub const LINUX_SELECTION_CLIPBOARD_FLAG: &str = "Linux_Selection_Clipboard";
     pub const RESTORE_SESSION_CONTEXT_FLAG: &str = "Restore_Sessions";
     pub const HONOR_PS1_CONTEXT_FLAG: &str = "Honor_PS1";
+    pub const PROJECT_LAYOUT_CONTEXT_FLAG: &str = "Project_Layout";
     pub const GIT_PROMPT_CONTEXT_FLAG: &str = "Git_Prompt";
     pub const AUTOCOMPLETE_SYMBOLS_CONTEXT_FLAG: &str = "Autocomplete_Symbols";
     pub const QUAKE_MODE_ENABLED_CONTEXT_FLAG: &str = "Quake_Mode_Editor";

@@ -6,11 +6,11 @@ use warpui::EntityId;
 use warpui::elements::PositionedElementOffsetBounds;
 
 use super::{
-    AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons, TerminalAgentText,
-    TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
-    VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
-    VerticalTabsSummaryPrimaryLabel, branch_label_display, coalesce_summary_branch_entries,
-    code_detail_kind_label, compact_branch_subtitle_display, detail_sidecar_width_and_bounds,
+    SummaryPaneKind, SummaryPaneKindIcons, TerminalAgentText, TerminalPrimaryLineData,
+    TerminalPrimaryLineFont, VerticalTabsDetailTarget, VerticalTabsDetailTargetKind,
+    VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData, VerticalTabsSummaryPrimaryLabel,
+    branch_label_display, coalesce_summary_branch_entries, code_detail_kind_label,
+    compact_branch_subtitle_display, detail_sidecar_width_and_bounds,
     detail_target_for_hovered_row, non_terminal_search_text_fragments,
     pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
     push_normalized_unique_summary_label, search_fragments_contain_query,
@@ -29,6 +29,7 @@ use crate::pane_group::{PaneId, TerminalPaneId};
 use crate::safe_triangle::SafeTriangle;
 use crate::terminal::CLIAgent;
 use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
+use crate::workspace::tab_title::AgentTabTextPreference;
 
 fn label(text: &str) -> VerticalTabsSummaryPrimaryLabel {
     VerticalTabsSummaryPrimaryLabel {

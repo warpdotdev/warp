@@ -9454,6 +9454,21 @@ impl TerminalView {
         })
     }
 
+    /// Puts `text` in the input without arming it to run.
+    ///
+    /// [`Self::set_pending_command`] sounds like this but is not: a *pending*
+    /// command means "the user submitted it and it has not reached the shell
+    /// yet", so `execute_pending_command` fires it on the next
+    /// `BootstrapPrecmdDone` or `BlockCompleted`. For a command the user has
+    /// not asked for yet — resuming an agent session, where they want to read
+    /// the restored conversation first — that is the wrong contract: the shell
+    /// finishes bootstrapping and the command runs on its own.
+    pub fn prefill_command(&self, text: &str, ctx: &mut ViewContext<Self>) {
+        self.input.update(ctx, |input, ctx| {
+            input.system_insert(text, ctx);
+        });
+    }
+
     pub fn set_pending_command_queue(
         &mut self,
         commands: Vec<String>,
