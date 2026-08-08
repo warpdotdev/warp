@@ -33,6 +33,15 @@ use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 pub mod text_file_reader;
 pub use text_file_reader::{TextFileReadResult, TextFileSegment};
 
+/// Maximum file size that the code editor will load into memory.
+///
+/// Files larger than this threshold cause excessive memory usage: the buffer
+/// materializes all content as `StyledBufferBlock`s (proportional to file size),
+/// the edit delta is cloned in the editor model, and tree-sitter parses the
+/// entire content — together these can consume many GBs for large files.
+/// See Sentry issue 7259255054 for a real-world example (7.6 GB for one file).
+pub const MAX_EDITOR_FILE_SIZE_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
+
 #[derive(Debug)]
 pub enum FileModelEvent {
     FileLoaded {
@@ -418,9 +427,7 @@ impl FileModel {
         let use_individual_watcher = watcher_type == WatcherType::Individual;
         let future = ctx.spawn(
             async move {
-                let contents = async_fs::read_to_string(&file_path_buf)
-                    .await
-                    .map_err(FileLoadError::from);
+                let contents = Self::read_file_with_size_limit(&file_path_buf).await;
                 (file_id, contents)
             },
             move |me, (file_id, load_result), ctx| match load_result {
@@ -468,6 +475,37 @@ impl FileModel {
 
         self.abort_handles.insert(file_id, future);
         file_id
+    }
+
+    /// Read file content, enforcing the [`MAX_EDITOR_FILE_SIZE_BYTES`] limit.
+    ///
+    /// Returns [`FileLoadError::FileTooLarge`] if the file on disk exceeds the
+    /// limit. This prevents the code editor from loading enormous files into
+    /// the in-memory buffer, where content is materialized as styled blocks and
+    /// cloned, potentially consuming many GBs of RAM.
+    async fn read_file_with_size_limit(file_path: &Path) -> Result<String, FileLoadError> {
+        if !Self::file_exists(file_path).await {
+            return Err(FileLoadError::DoesNotExist);
+        }
+        let metadata = async_fs::metadata(file_path)
+            .await
+            .map_err(FileLoadError::from)?;
+        let size_bytes = metadata.len();
+        if size_bytes > MAX_EDITOR_FILE_SIZE_BYTES {
+            log::warn!(
+                "Refusing to load {}: file size {} bytes exceeds {} byte limit",
+                file_path.display(),
+                size_bytes,
+                MAX_EDITOR_FILE_SIZE_BYTES
+            );
+            return Err(FileLoadError::FileTooLarge {
+                size_bytes,
+                limit_bytes: MAX_EDITOR_FILE_SIZE_BYTES,
+            });
+        }
+        async_fs::read_to_string(file_path)
+            .await
+            .map_err(FileLoadError::from)
     }
 
     pub async fn read_content_for_file(file_path: &Path) -> Result<String, FileLoadError> {
