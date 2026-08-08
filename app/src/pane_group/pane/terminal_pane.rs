@@ -907,20 +907,11 @@ fn handle_terminal_view_event(
                 ctx.emit(pane_group::Event::ExecuteCommand(event.clone()));
             }
             Event::Exited => {
-                // If the shell process exited before it successfully bootstrapped,
-                // keep the pane open.  There might be useful information visible
-                // in the output, and if this was the first shell spawned when the
-                // user started the app, it will prevent it from suddenly quitting.
-                if group
-                    .terminal_view_from_pane_id(terminal_pane_id, ctx)
-                    .is_some_and(|terminal_view| {
-                        !terminal_view.as_ref(ctx).is_login_shell_bootstrapped()
-                    })
-                {
-                    return;
-                }
-
-                group.close_pane(pane_id, ctx);
+                // Keep the pane open so users can inspect the shell-terminated
+                // banner and any output that explains why the process exited.
+                // Explicit close requests still go through CloseRequested.
+                ctx.emit(pane_group::Event::TerminalViewStateChanged);
+                ctx.emit(pane_group::Event::AppStateChanged);
             }
             Event::CloseRequested => {
                 group.close_pane_with_confirmation(pane_id, ctx);
