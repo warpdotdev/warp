@@ -27659,6 +27659,7 @@ impl View for Workspace {
                             .cover()
                             .with_opacity(opacity_ratio)
                             .with_corner_radius(window_corner_radius)
+                            .enable_animation_with_start_time(std::time::Instant::now())
                             .finish(),
                     )
                     .finish(),
