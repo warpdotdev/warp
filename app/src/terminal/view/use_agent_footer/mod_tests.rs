@@ -369,6 +369,8 @@ fn cli_agent_footer_renders_for_viewer_of_shared_cloud_agent_session() {
                         draft_text: None,
                         custom_command_prefix: None,
                         received_rich_notification: false,
+                        blocked_since: None,
+                        success_seen: false,
                         should_auto_toggle_input: false,
                     },
                     ctx,
@@ -408,6 +410,8 @@ fn cli_agent_footer_does_not_render_for_warp_tui_session() {
                     CLIAgentSession {
                         agent: CLIAgent::WarpTui,
                         status: CLIAgentSessionStatus::InProgress,
+                        blocked_since: None,
+                        success_seen: false,
                         session_context: CLIAgentSessionContext::default(),
                         input_state: CLIAgentInputState::Closed,
                         listener: None,
@@ -477,6 +481,8 @@ fn insert_cli_agent_voice_text_hermes_multiline_uses_bracketed_paste_without_sub
                     CLIAgentSession {
                         agent: CLIAgent::Hermes,
                         status: CLIAgentSessionStatus::InProgress,
+                        blocked_since: None,
+                        success_seen: false,
                         session_context: CLIAgentSessionContext::default(),
                         input_state: CLIAgentInputState::Closed,
                         should_auto_toggle_input: false,

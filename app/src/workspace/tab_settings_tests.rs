@@ -127,3 +127,59 @@ fn header_toolbar_chip_selection_custom_empty_reports_all_absent() {
         assert!(!config.contains_item(&item));
     }
 }
+
+#[test]
+fn rail_hide_shells_without_agents_defaults_to_false() {
+    // Off by default: a rail that silently omits tabs the first time a user
+    // sees it would look like Warp had lost them.
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(!*settings.rail_hide_shells_without_agents);
+        });
+    });
+}
+
+#[test]
+fn rail_hide_shells_without_agents_round_trips() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        TabSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .rail_hide_shells_without_agents
+                .set_value(true, ctx)
+                .expect("setting the rail shell filter should succeed");
+        });
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(*settings.rail_hide_shells_without_agents);
+        });
+
+        TabSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .rail_hide_shells_without_agents
+                .set_value(false, ctx)
+                .expect("clearing the rail shell filter should succeed");
+        });
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(!*settings.rail_hide_shells_without_agents);
+        });
+    });
+}
+
+#[test]
+fn rail_hide_shells_without_agents_uses_the_tabs_path() {
+    assert_eq!(
+        RailHideShellsWithoutAgents::toml_path(),
+        Some("appearance.tabs.rail_hide_shells_without_agents")
+    );
+    assert_eq!(
+        RailHideShellsWithoutAgents::hierarchy(),
+        Some("appearance.tabs")
+    );
+    assert_eq!(
+        RailHideShellsWithoutAgents::toml_key(),
+        "rail_hide_shells_without_agents"
+    );
+}

@@ -3436,3 +3436,48 @@ fn decide_remote_child_hydration_empty_token_falls_back() {
         );
     }
 }
+
+/// A restored tab's terminal pane retains its startup directory even when
+/// the tab has never been focused (as happens for most of a many-tab
+/// restore under `FeatureFlag::LazyShellStartup`), so
+/// `restored_terminal_startup_directory` must find it without going through
+/// focus state.
+#[test]
+fn restored_terminal_startup_directory_resolves_for_never_focused_tab() {
+    let _lazy_shell = FeatureFlag::LazyShellStartup.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: false,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: Uuid::new_v4().as_bytes().to_vec(),
+                cwd: Some("/tmp".to_owned()),
+                shell_launch_data: None,
+                is_active: false,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: Vec::new(),
+                active_conversation_id: None,
+            }),
+        })));
+
+        let pane_group = mock_pane_group(
+            &mut app,
+            MockOptions {
+                layout,
+                ..Default::default()
+            },
+        );
+
+        pane_group.read(&app, |panes, _ctx| {
+            assert_eq!(
+                panes.restored_terminal_startup_directory(),
+                Some(PathBuf::from("/tmp")),
+            );
+        });
+    });
+}

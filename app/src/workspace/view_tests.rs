@@ -17,7 +17,8 @@ use terminal::view::ActiveSessionState;
 use warp_editor::editor::NavigationKey;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
-use warpui::platform::WindowStyle;
+use warpui::keymap::Keystroke;
+use warpui::platform::{OperatingSystem, WindowStyle};
 use warpui::{AddSingletonModel, App, ViewHandle};
 use watcher::HomeDirectoryWatcher;
 
@@ -1380,6 +1381,55 @@ fn reopen_closed_session_menu_item(
         Some(MenuItem::Item(fields)) if fields.label() == "Reopen closed session" => fields,
         _ => panic!("expected Reopen closed session to be the last new-session menu item"),
     }
+}
+
+#[test]
+fn test_new_project_and_new_task_in_project_bindings_are_editable() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        app.update(|ctx| {
+            // Both bindings are registered under their own names, so Settings
+            // → Keyboard shortcuts and the command palette can surface and
+            // search for them independently of `workspace:new_tab`.
+            assert!(
+                ctx.editable_bindings()
+                    .any(|binding| binding.name == NEW_PROJECT_BINDING_NAME),
+                "{NEW_PROJECT_BINDING_NAME} should be registered as an editable binding"
+            );
+            assert!(
+                ctx.editable_bindings()
+                    .any(|binding| binding.name == "workspace:new_task_in_project"),
+                "workspace:new_task_in_project should be registered as an editable binding"
+            );
+
+            // `cmd-shift-N`/`alt-shift-N` are already `project_buttons:create_new_project`'s
+            // default, so `workspace:new_project` must default to a different chord.
+            let new_project = trigger_to_keystroke(
+                ctx.editable_bindings()
+                    .find(|binding| binding.name == NEW_PROJECT_BINDING_NAME)
+                    .expect("workspace:new_project should be registered")
+                    .trigger,
+            );
+            let expected = if OperatingSystem::get().is_mac() {
+                Keystroke::parse("cmd-ctrl-n").ok()
+            } else {
+                Keystroke::parse("ctrl-alt-n").ok()
+            };
+            assert_eq!(new_project, expected);
+
+            // `workspace:new_task_in_project` deliberately ships with no default
+            // chord (see the registration comment in `workspace::init`): `cmd-t`
+            // already does the same thing via `workspace:new_tab`.
+            let new_task_in_project = trigger_to_keystroke(
+                ctx.editable_bindings()
+                    .find(|binding| binding.name == "workspace:new_task_in_project")
+                    .expect("workspace:new_task_in_project should be registered")
+                    .trigger,
+            );
+            assert_eq!(new_task_in_project, None);
+        });
+    });
 }
 
 #[test]

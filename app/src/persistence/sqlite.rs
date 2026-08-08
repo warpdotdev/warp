@@ -65,8 +65,8 @@ use super::model::{
     TabGroup, WORKFLOW_PANE_KIND, Window, WorkspaceMetadata as WorkspaceMetadataModel,
 };
 use super::{
-    BlockCompleted, FinishedCommandMetadata, ModelEvent, PersistedData, PersistedDataScope,
-    PersistenceScope, StartedCommandMetadata, WriterHandles, schema,
+    AgentSessionHandleOp, BlockCompleted, FinishedCommandMetadata, ModelEvent, PersistedData,
+    PersistedDataScope, PersistenceScope, StartedCommandMetadata, WriterHandles, schema,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -142,6 +142,7 @@ pub fn initialize(
     match init_db(&scope) {
         Ok(mut conn) => {
             let mut persisted_data = read_persisted_data(&mut conn, ctx, data_scope);
+            log_agent_session_handles(&mut conn);
 
             let writer_handles = match start_writer(conn, database_path.clone()) {
                 Ok(writer_handles) => Some(writer_handles),
@@ -182,6 +183,37 @@ pub fn initialize(
             report_db_error("initialization", err, &database_path);
             (None, None)
         }
+    }
+}
+
+/// Startup read surface for the durable agent-session-handle store: dumps the
+/// stored handles to the log so the write path is verifiable before any UI
+/// reads the table. Titles are user content and stay out of the log; the
+/// short session id + cwd are enough to cross-check against the agent's own
+/// transcript directory.
+fn log_agent_session_handles(conn: &mut SqliteConnection) {
+    if !FeatureFlag::ResumeProjectTasks.is_enabled() {
+        return;
+    }
+    match super::agent_session_handles::load_all(conn) {
+        Ok(handles) => {
+            log::info!("agent_session_handles: {} stored", handles.len());
+            for handle in handles.iter().take(20) {
+                let short_id = handle
+                    .session_id
+                    .as_deref()
+                    .map(|id| id.chars().take(8).collect::<String>())
+                    .unwrap_or_else(|| "in-flight".to_owned());
+                log::debug!(
+                    "  handle: agent={} session={short_id} cwd={} titled={} last_seen={}",
+                    handle.agent,
+                    handle.cwd,
+                    handle.title.is_some(),
+                    handle.last_seen_at,
+                );
+            }
+        }
+        Err(err) => log::warn!("Failed to read agent_session_handles: {err}"),
     }
 }
 
@@ -777,6 +809,43 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
                 .map_err(anyhow::Error::from)
                 .context("error deleting multi-agent conversation")
         }
+        ModelEvent::AgentSessionHandle(op) => match op {
+            AgentSessionHandleOp::StartInflight {
+                agent,
+                pane_uuid,
+                cwd,
+            } => {
+                super::agent_session_handles::insert_inflight(connection, &agent, &pane_uuid, &cwd)
+                    .context("error recording in-flight agent session handle")
+            }
+            AgentSessionHandleOp::Identify {
+                agent,
+                pane_uuid,
+                cwd,
+                session_id,
+            } => super::agent_session_handles::identify(
+                connection,
+                &agent,
+                &pane_uuid,
+                &cwd,
+                &session_id,
+            )
+            .context("error identifying agent session handle"),
+            AgentSessionHandleOp::Touch { agent, session_id } => {
+                super::agent_session_handles::touch(connection, &agent, &session_id)
+                    .context("error touching agent session handle")
+            }
+            AgentSessionHandleOp::SetTitle {
+                agent,
+                session_id,
+                title,
+            } => super::agent_session_handles::set_title(connection, &agent, &session_id, &title)
+                .context("error caching agent session handle title"),
+            AgentSessionHandleOp::Forget { agent, session_id } => {
+                super::agent_session_handles::forget(connection, &agent, &session_id)
+                    .context("error forgetting agent session handle")
+            }
+        },
         ModelEvent::UpsertCurrentUserInformation { user_information } => {
             upsert_current_user_information(connection, user_information)
                 .context("error upserting user information")
@@ -2500,6 +2569,7 @@ fn read_sqlite_data(
             codebase_indices: get_all_codebase_index_metadata(conn)?,
             workspace_language_servers: Default::default(),
             multi_agent_conversations: Default::default(),
+            agent_session_handles: Default::default(),
             projects: Default::default(),
             project_rules: Default::default(),
             ignored_suggestions: Default::default(),
@@ -2893,6 +2963,11 @@ fn read_sqlite_data(
     // per-conversation via `read_agent_conversation_by_id`.
     let (multi_agent_conversations, conversation_summary_backfills) =
         read_agent_conversation_metadata(conn)?;
+    let agent_session_handles = if FeatureFlag::ResumeProjectTasks.is_enabled() {
+        super::agent_session_handles::load_all(conn)?
+    } else {
+        Vec::new()
+    };
     let projects = get_all_projects(conn)?;
     let project_rules = get_all_project_rules(conn)?;
     let ignored_suggestions = get_all_ignored_suggestions(conn)?;
@@ -2914,6 +2989,7 @@ fn read_sqlite_data(
         codebase_indices,
         workspace_language_servers,
         multi_agent_conversations,
+        agent_session_handles,
         projects,
         project_rules,
         ignored_suggestions,

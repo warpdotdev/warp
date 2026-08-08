@@ -1207,6 +1207,8 @@ fn submit_cli_agent_rich_input_restores_unlocked_input_config() {
                         draft_text: None,
                         custom_command_prefix: None,
                         received_rich_notification: false,
+                        blocked_since: None,
+                        success_seen: false,
                     },
                     ctx,
                 );
@@ -1274,6 +1276,8 @@ fn unregister_cli_agent_session_restores_unlocked_input_config() {
                         draft_text: None,
                         custom_command_prefix: None,
                         received_rich_notification: false,
+                        blocked_since: None,
+                        success_seen: false,
                     },
                     ctx,
                 );
@@ -6648,6 +6652,8 @@ fn submit_rich_input_and_collect_pty_writes(
                     draft_text: None,
                     custom_command_prefix: None,
                     received_rich_notification: false,
+                    blocked_since: None,
+                    success_seen: false,
                 },
                 ctx,
             );
@@ -6687,6 +6693,8 @@ fn open_cli_agent_rich_input_for_agent_with_window_id(
                     draft_text: None,
                     custom_command_prefix: None,
                     received_rich_notification: false,
+                    blocked_since: None,
+                    success_seen: false,
                 },
                 ctx,
             );
@@ -7083,6 +7091,8 @@ fn drag_drop_image_in_cli_agent_long_running_command_pastes_via_clipboard() {
                         draft_text: None,
                         custom_command_prefix: None,
                         received_rich_notification: false,
+                        blocked_since: None,
+                        success_seen: false,
                     },
                     ctx,
                 );
@@ -7161,6 +7171,8 @@ fn paste_raw_image_clipboard_in_cli_agent_sends_correct_bytes() {
                             draft_text: None,
                             custom_command_prefix: None,
                             received_rich_notification: false,
+                            blocked_since: None,
+                            success_seen: false,
                         },
                         ctx,
                     );
@@ -7239,6 +7251,8 @@ fn submit_without_auto_dismiss_keeps_rich_input_open() {
                         draft_text: None,
                         custom_command_prefix: None,
                         received_rich_notification: false,
+                        blocked_since: None,
+                        success_seen: false,
                     },
                     ctx,
                 );
@@ -7302,6 +7316,8 @@ fn submit_with_plugin_and_auto_toggle_keeps_rich_input_open() {
                         draft_text: None,
                         custom_command_prefix: None,
                         received_rich_notification: true,
+                        blocked_since: None,
+                        success_seen: false,
                     },
                     ctx,
                 );
@@ -7357,6 +7373,8 @@ fn submit_with_plugin_but_auto_toggle_off_respects_auto_dismiss() {
                         draft_text: None,
                         custom_command_prefix: None,
                         received_rich_notification: false,
+                        blocked_since: None,
+                        success_seen: false,
                     },
                     ctx,
                 );
@@ -7412,6 +7430,8 @@ fn status_blocked_auto_closes_rich_input() {
                         draft_text: None,
                         custom_command_prefix: None,
                         received_rich_notification: false,
+                        blocked_since: None,
+                        success_seen: false,
                     },
                     ctx,
                 );
@@ -7489,6 +7509,8 @@ fn status_in_progress_auto_opens_rich_input_after_blocked() {
                         draft_text: None,
                         custom_command_prefix: None,
                         received_rich_notification: false,
+                        blocked_since: None,
+                        success_seen: false,
                     },
                     ctx,
                 );
@@ -7588,6 +7610,8 @@ fn codex_status_change_does_not_auto_open_rich_input() {
                         draft_text: None,
                         custom_command_prefix: None,
                         received_rich_notification: false,
+                        blocked_since: None,
+                        success_seen: false,
                     },
                     ctx,
                 );
@@ -7670,6 +7694,8 @@ fn cli_session_status_updates_active_child_conversation() {
                         draft_text: None,
                         custom_command_prefix: None,
                         received_rich_notification: false,
+                        blocked_since: None,
+                        success_seen: false,
                     },
                     ctx,
                 );
@@ -7815,6 +7841,8 @@ fn cli_session_status_updates_single_child_conversation_without_agent_view() {
                         draft_text: None,
                         custom_command_prefix: None,
                         received_rich_notification: false,
+                        blocked_since: None,
+                        success_seen: false,
                     },
                     ctx,
                 );
@@ -7894,6 +7922,8 @@ fn manual_dismiss_disables_auto_toggle_for_session() {
                         draft_text: None,
                         custom_command_prefix: None,
                         received_rich_notification: false,
+                        blocked_since: None,
+                        success_seen: false,
                     },
                     ctx,
                 );
@@ -8910,6 +8940,8 @@ fn set_warp_tui_session(view: &mut TerminalView, ctx: &mut ViewContext<TerminalV
             CLIAgentSession {
                 agent: CLIAgent::WarpTui,
                 status: CLIAgentSessionStatus::InProgress,
+                blocked_since: None,
+                success_seen: false,
                 session_context: CLIAgentSessionContext::default(),
                 input_state: CLIAgentInputState::Closed,
                 should_auto_toggle_input: false,

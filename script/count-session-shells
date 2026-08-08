@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+#
+# Count the login shells belonging to ONE Warp app bundle.
+#
+# Usage:  ./script/count-session-shells [/Applications/WarpOssDev.app]
+#
+# This is the measurement for FeatureFlag::LazyShellStartup (see
+# specs/samithaj/lazy-shell-startup/plan.md §8). Restoring a window with ~50
+# tabs used to spawn ~50 shells at once; with the flag on, only the tab you
+# actually open should have one.
+#
+# Why not `pgrep -fc zsh`: three reasons.
+#   1. macOS pgrep has no -c.
+#   2. This machine runs ~110 zsh processes belonging to other apps, so a
+#      global count says nothing about Warp.
+#   3. Two Warp builds are usually running at once (stable + dev), and the
+#      whole point is to compare them.
+# So walk the process tree down from the bundle's own terminal-server instead.
+#
+# Reading it:
+#   ~49  deferral did not take
+#     1  correct -- the active tab started, nothing else did
+#     0  either the active tab never started (a bug), OR restoration never ran
+#        at all. Distinguish with:
+#          grep -c "Creating terminal model with" ~/Library/Logs/warp-oss.log
+#        That line is emitted BEFORE the deferral branch, so ~48 of them means
+#        restoration ran and deferral is working; zero means the app never got
+#        that far -- most likely blocked on a macOS security prompt, see §8a.
+#
+# Take the reading at a stable point (30s+ after the window paints). During
+# startup the tree is still being built and the walk can undercount.
+
+set -uo pipefail
+
+BUNDLE="${1:-/Applications/WarpOssDev.app}"
+
+APP_PID=$(pgrep -f "^${BUNDLE}/Contents/MacOS/warp-oss$" | head -1)
+if [[ -z "${APP_PID}" ]]; then
+  echo "not running: ${BUNDLE}" >&2
+  exit 1
+fi
+
+SERVER_PID=$(pgrep -f "terminal-server --parent-pid=${APP_PID}" | head -1)
+if [[ -z "${SERVER_PID}" ]]; then
+  echo "app=${APP_PID} terminal-server=none shells=0"
+  exit 0
+fi
+
+# Breadth-first walk of the terminal-server's descendants.
+frontier="${SERVER_PID}"
+all=""
+while [[ -n "${frontier}" ]]; do
+  next=""
+  for pid in ${frontier}; do
+    all="${all} ${pid}"
+    next="${next} $(pgrep -P "${pid}" 2>/dev/null | tr '\n' ' ')"
+  done
+  frontier=$(echo "${next}" | xargs 2>/dev/null)
+done
+
+shells=0
+for pid in ${all}; do
+  case "$(ps -o comm= -p "${pid}" 2>/dev/null)" in
+    *zsh|*bash|*fish|*sh) shells=$((shells + 1)) ;;
+  esac
+done
+
+echo "app=${APP_PID} terminal-server=${SERVER_PID} shells=${shells}"
