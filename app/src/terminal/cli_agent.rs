@@ -423,15 +423,35 @@ impl CLIAgent {
             })
             .unwrap_or(Cow::Borrowed(trimmed));
 
+        // Check multi-word special patterns first (e.g. `aifx agent run claude`).
+        if Self::is_aifx_agent_run_claude(&resolved_command, ctx) {
+            return Some(CLIAgent::Claude);
+        }
+
         // Check if resolved command matches any known CLI agent.
-        // Also matches `aifx agent run claude` as Claude for Uber employees.
-        enum_iterator::all::<CLIAgent>()
+        let direct_match = enum_iterator::all::<CLIAgent>()
             .filter(|agent| !matches!(agent, CLIAgent::Unknown))
-            .find(|agent| {
-                agent.matches_command(&resolved_command, escape_char)
-                    || (matches!(agent, CLIAgent::Claude)
-                        && Self::is_aifx_agent_run_claude(&resolved_command, ctx))
-            })
+            .find(|agent| agent.matches_command(&resolved_command, escape_char));
+
+        if direct_match.is_some() {
+            return direct_match;
+        }
+
+        // Scan the first few words for a known CLI agent. This handles wrapper
+        // commands like `headroom warp opencode` or `npx opencode` where the
+        // actual agent binary appears after launcher/subcommand words.
+        // Limited to 6 words to avoid false positives on unrelated commands.
+        for word in resolved_command.split_whitespace().take(6).skip(1) {
+            let basename = word.rsplit(['/', '\\']).next().unwrap_or(word);
+            let matched = enum_iterator::all::<CLIAgent>()
+                .filter(|agent| !matches!(agent, CLIAgent::Unknown))
+                .find(|agent| agent.command_prefixes().contains(&basename));
+            if matched.is_some() {
+                return matched;
+            }
+        }
+
+        None
     }
 
     /// Returns true if the resolved command is `aifx agent run claude` (Uber's
