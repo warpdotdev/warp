@@ -22,6 +22,8 @@ use warpui::elements::{
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
+#[cfg(feature = "local_fs")]
+use warpui::platform::SaveFilePickerConfiguration;
 use warpui::presenter::ChildView;
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
@@ -74,7 +76,9 @@ use crate::view_components::{
 };
 use crate::word_block_editor::{ChipEditorState, WordBlockEditorView, WordBlockEditorViewEvent};
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::team::{DiscoverableTeam, MembershipRole, Team, TeamDeleteDisabledReason};
+use crate::workspaces::team::{
+    DiscoverableTeam, MembershipRole, Team, TeamDeleteDisabledReason, TeamMember,
+};
 use crate::workspaces::update_manager::{TeamUpdateManager, TeamUpdateManagerEvent};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::{
@@ -131,6 +135,32 @@ lazy_static! {
     static ref PAST_DUE_BADGE_COLOR: ColorU = ColorU::new(254, 253, 194, 255);
     static ref UNPAID_BADGE_COLOR: ColorU = ColorU::new(255, 130, 114, 255);
     static ref DELINQUENCY_BADGE_TEXT_COLOR: ColorU = ColorU::new(0, 0, 0, 190);
+}
+
+/// Escapes a CSV field value per RFC 4180: if the value contains a comma,
+/// double-quote, or newline, wrap it in double-quotes and escape any
+/// embedded double-quotes by doubling them.
+fn csv_escape(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+/// Serialise a team's confirmed member list to CSV with header row.
+/// Columns: `email`, `name` (empty — not stored in client model), `role`.
+fn members_to_csv(members: &[TeamMember]) -> String {
+    let mut csv = String::from("email,name,role\n");
+    for member in members {
+        let role = match member.role {
+            MembershipRole::Owner => "owner",
+            MembershipRole::Admin => "admin",
+            MembershipRole::User => "user",
+        };
+        csv.push_str(&format!("{},\"\",{}\n", csv_escape(&member.email), role));
+    }
+    csv
 }
 
 fn owner_state_chip_text_color(theme: &themes::theme::WarpTheme) -> ColorU {
@@ -209,6 +239,14 @@ pub enum TeamsPageAction {
         user_uid: UserUid,
         role: MembershipRole,
     },
+    /// Download the current team's member list as a CSV file.
+    DownloadMembersCSV {
+        team_uid: ServerId,
+    },
+    /// Open the section-level overflow menu on the Team members header.
+    OpenTeamMembersSectionMenu,
+    /// Close the section-level overflow menu on the Team members header.
+    CloseTeamMembersSectionMenu,
 }
 
 impl TeamsPageAction {
@@ -233,6 +271,7 @@ impl TeamsPageAction {
                 | ToggleTeamDiscoverabilityBeforeCreation
                 | ToggleTeamDiscoverability { .. }
                 | JoinTeamWithTeamDiscovery { .. }
+                | DownloadMembersCSV { .. }
         )
     }
 }
@@ -311,6 +350,7 @@ struct TeamsWidgetMouseHandles {
     grow_team_warning_cta_button: MouseStateHandle,
     team_members_count_tooltip: MouseStateHandle,
     outgrow_upgrade_link: MouseStateHandle,
+    section_actions_menu_button: MouseStateHandle,
 }
 
 /// TeamsInviteOption is whether the user is looking at invite-by-link or invite-by-email.
@@ -481,6 +521,9 @@ pub struct TeamsPageView {
     checkbox_value: bool,
     member_actions_menu: ViewHandle<Menu<TeamsPageAction>>,
     open_member_actions_menu_index: Option<usize>,
+    /// Section-level overflow menu for the Team members header (e.g. "Download CSV").
+    section_actions_menu: ViewHandle<Menu<TeamsPageAction>>,
+    section_actions_menu_open: bool,
 }
 
 impl Entity for TeamsPageView {
@@ -632,6 +675,16 @@ impl TypedActionView for TeamsPageView {
                 role,
             } => {
                 self.set_team_member_role(*user_uid, *team_uid, *role, ctx);
+            }
+            TeamsPageAction::DownloadMembersCSV { team_uid } => {
+                self.download_members_csv(*team_uid, ctx);
+            }
+            TeamsPageAction::OpenTeamMembersSectionMenu => {
+                self.open_team_members_section_menu(ctx);
+            }
+            TeamsPageAction::CloseTeamMembersSectionMenu => {
+                self.section_actions_menu_open = false;
+                ctx.notify();
             }
         };
 
@@ -832,6 +885,14 @@ impl TeamsPageView {
             }
         });
 
+        let section_actions_menu = ctx.add_typed_action_view(|_| Menu::new().with_drop_shadow());
+        ctx.subscribe_to_view(&section_actions_menu, |me, _, event, ctx| {
+            if let menu::Event::Close { .. } = event {
+                me.section_actions_menu_open = false;
+                ctx.notify();
+            }
+        });
+
         let page = PageType::new_monolith(TeamsWidget::default(), None, true);
         TeamsPageView {
             self_handle: ctx.handle(),
@@ -867,7 +928,27 @@ impl TeamsPageView {
             checkbox_value: true,
             member_actions_menu,
             open_member_actions_menu_index: None,
+            section_actions_menu,
+            section_actions_menu_open: false,
         }
+    }
+
+    /// Populate and open the section-level overflow menu on the Team members header.
+    fn open_team_members_section_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(team) = self.user_workspaces.as_ref(ctx).current_team() else {
+            return;
+        };
+        let team_uid = team.uid;
+        let menu_items: Vec<MenuItem<TeamsPageAction>> = vec![MenuItem::Item(
+            MenuItemFields::new("Download members as CSV".to_string())
+                .with_on_select_action(TeamsPageAction::DownloadMembersCSV { team_uid })
+                .with_icon(Icon::Download),
+        )];
+        self.section_actions_menu.update(ctx, |menu, ctx| {
+            menu.set_items(menu_items, ctx);
+        });
+        self.section_actions_menu_open = true;
+        ctx.notify();
     }
 
     fn open_member_actions_menu_for_item(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
@@ -1652,6 +1733,41 @@ impl TeamsPageView {
             });
     }
 
+    /// Opens a native save-file dialog and writes the current team's member
+    /// list as a CSV file. Only executes when the `local_fs` feature is
+    /// available (desktop builds); silently skips on platforms without it.
+    fn download_members_csv(&mut self, _team_uid: ServerId, ctx: &mut ViewContext<Self>) {
+        let Some(team) = self.user_workspaces.as_ref(ctx).current_team() else {
+            return;
+        };
+        let csv_content = members_to_csv(&team.members);
+
+        #[cfg(feature = "local_fs")]
+        {
+            let config = SaveFilePickerConfiguration::new()
+                .with_default_filename("team-members.csv".to_string());
+            ctx.open_save_file_picker(
+                move |path_opt, me, ctx| {
+                    let Some(path) = path_opt else {
+                        return;
+                    };
+                    match std::fs::write(&path, csv_content.as_bytes()) {
+                        Ok(()) => me.show_success("Team members CSV downloaded", ctx),
+                        Err(err) => {
+                            let err = anyhow::Error::from(err);
+                            me.show_error("Failed to save CSV", Some(&err), ctx);
+                        }
+                    }
+                },
+                config,
+            );
+        }
+        #[cfg(not(feature = "local_fs"))]
+        {
+            let _ = csv_content;
+        }
+    }
+
     fn generate_upgrade_link(&mut self, team_uid: ServerId, ctx: &mut ViewContext<Self>) {
         self.user_workspaces
             .update(ctx, move |user_workspaces, ctx| {
@@ -2312,6 +2428,7 @@ impl TeamsWidget {
         main_content.add_child(self.render_team_members_section(
             team_metadata,
             &current_user_email,
+            has_admin_permissions,
             view,
             appearance,
         ));
@@ -2931,22 +3048,40 @@ impl TeamsWidget {
         &self,
         team: &Team,
         user_email: &str,
+        has_admin_permissions: bool,
         view: &TeamsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let mut section = Flex::column().with_main_axis_size(MainAxisSize::Min);
 
-        // 1) "Team members" header row
-        let header_row = Flex::row()
+        // 1) "Team members" header row with optional overflow (⋯) menu
+        let mut header_row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center);
+        header_row.add_child(self.render_subsection_header("Team members".to_owned(), appearance));
+
+        // Right side: overflow menu button (admins/owners only) + count
+        let mut right_side = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(self.render_subsection_header("Team members".to_owned(), appearance))
-            .with_child(self.render_team_members_count(team, appearance))
-            .finish();
+            .with_main_axis_size(MainAxisSize::Min);
+        if has_admin_permissions {
+            right_side.add_child(
+                Container::new(
+                    self.render_team_members_section_overflow_menu(team.uid, view, appearance),
+                )
+                .with_margin_right(12.)
+                .finish(),
+            );
+        }
+        right_side.add_child(self.render_team_members_count(team, appearance));
+        header_row.add_child(right_side.finish());
+
         section.add_child(
             SavePosition::new(
-                Container::new(header_row).with_padding_bottom(16.).finish(),
+                Container::new(header_row.finish())
+                    .with_padding_bottom(16.)
+                    .finish(),
                 TEAM_MEMBERS_HEADER_POSITION_ID,
             )
             .finish(),
@@ -2961,6 +3096,63 @@ impl TeamsWidget {
         ));
 
         section.finish()
+    }
+
+    /// Renders the DotsHorizontal (⋯) overflow menu button for the Team members header.
+    /// When clicked it opens a drop-down menu whose initial item is "Download members as CSV".
+    fn render_team_members_section_overflow_menu(
+        &self,
+        _team_uid: ServerId,
+        view: &TeamsPageView,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let menu_is_open = view.section_actions_menu_open;
+        let mut stack = Stack::new();
+
+        let dots_button = Hoverable::new(
+            self.mouse_state_handles.section_actions_menu_button.clone(),
+            |_mouse_state| {
+                Container::new(
+                    ConstrainedBox::new(
+                        Icon::DotsHorizontal
+                            .to_warpui_icon(
+                                appearance.theme().active_ui_text_color().with_opacity(70),
+                            )
+                            .finish(),
+                    )
+                    .with_max_height(CLOSE_BUTTON_ICON_SIZE)
+                    .with_max_width(CLOSE_BUTTON_ICON_SIZE)
+                    .finish(),
+                )
+                .with_uniform_padding(2.)
+                .finish()
+            },
+        )
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| {
+            if menu_is_open {
+                ctx.dispatch_typed_action(TeamsPageAction::CloseTeamMembersSectionMenu);
+            } else {
+                ctx.dispatch_typed_action(TeamsPageAction::OpenTeamMembersSectionMenu);
+            }
+        })
+        .finish();
+
+        stack.add_child(dots_button);
+
+        if view.section_actions_menu_open {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&view.section_actions_menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., 0.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::BottomRight,
+                    ChildAnchor::TopRight,
+                ),
+            );
+        }
+
+        stack.finish()
     }
 
     /// Right-aligned "{N} team members" label next to the section header.
@@ -4465,6 +4657,78 @@ pub fn test_valid_domains() {
     assert!(TeamsPageView::is_valid_domain("warp0.dev0"));
     assert!(TeamsPageView::is_valid_domain("warp.dev"));
     assert!(TeamsPageView::is_valid_domain("miniclip.com"));
+}
+
+#[cfg(test)]
+#[test]
+pub fn test_csv_escape() {
+    // Plain values are returned unchanged
+    assert_eq!(csv_escape("alice@example.com"), "alice@example.com");
+    assert_eq!(csv_escape("owner"), "owner");
+    assert_eq!(csv_escape(""), "");
+
+    // Values with commas are double-quoted
+    assert_eq!(csv_escape("last, first"), "\"last, first\"");
+
+    // Values with embedded double-quotes escape them
+    assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"");
+
+    // Values with newlines are double-quoted
+    assert_eq!(csv_escape("line1\nline2"), "\"line1\nline2\"");
+}
+
+#[cfg(test)]
+#[test]
+pub fn test_members_to_csv() {
+    let members = vec![
+        TeamMember {
+            uid: UserUid::new("uid1"),
+            email: "owner@example.com".to_string(),
+            role: MembershipRole::Owner,
+        },
+        TeamMember {
+            uid: UserUid::new("uid2"),
+            email: "admin@example.com".to_string(),
+            role: MembershipRole::Admin,
+        },
+        TeamMember {
+            uid: UserUid::new("uid3"),
+            email: "user@example.com".to_string(),
+            role: MembershipRole::User,
+        },
+    ];
+
+    let csv = members_to_csv(&members);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines[0], "email,name,role");
+    assert_eq!(lines[1], "owner@example.com,\"\",owner");
+    assert_eq!(lines[2], "admin@example.com,\"\",admin");
+    assert_eq!(lines[3], "user@example.com,\"\",user");
+    assert_eq!(lines.len(), 4);
+}
+
+#[cfg(test)]
+#[test]
+pub fn test_members_to_csv_empty() {
+    let csv = members_to_csv(&[]);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines, vec!["email,name,role"]);
+}
+
+#[cfg(test)]
+#[test]
+pub fn test_members_to_csv_email_with_comma() {
+    // RFC 4180: email fields containing commas must be quoted (extremely rare
+    // but the escaping logic should handle it)
+    let members = vec![TeamMember {
+        uid: UserUid::new("uid1"),
+        email: "comma,user@example.com".to_string(),
+        role: MembershipRole::User,
+    }];
+    let csv = members_to_csv(&members);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines[0], "email,name,role");
+    assert_eq!(lines[1], "\"comma,user@example.com\",\"\",user");
 }
 
 #[cfg(test)]
