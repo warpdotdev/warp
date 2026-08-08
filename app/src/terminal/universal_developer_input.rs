@@ -44,6 +44,8 @@ use crate::network::NetworkStatus;
 #[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::view::AIContextMenu;
 #[cfg(not(target_family = "wasm"))]
+use crate::search::ai_context_menu::{AtContextMenuCoreState, AtContextMenuGates};
+#[cfg(not(target_family = "wasm"))]
 use crate::settings::InputSettings;
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::settings_view::SettingsSection;
@@ -170,15 +172,12 @@ impl AtContextMenuDisabledReason {
 
         // This condition kicks in if we're locked in shell mode and not in a git repository, so we have
         // no categories available.
-        if AIContextMenu::get_categories_for_mode(
-            input_config.input_type.is_ai() || !input_config.is_locked,
-            false,
-            false, /* is_in_ambient_agent */
-            false, /* is_cli_agent_input */
-            ctx,
-        )
-        .is_empty()
-        {
+        let mut menu_state = AtContextMenuCoreState::new(AtContextMenuGates {
+            is_ai_or_autodetect_mode: input_config.input_type.is_ai() || !input_config.is_locked,
+            ..Default::default()
+        });
+        menu_state.set_working_directory(AIContextMenu::active_working_directory(ctx));
+        if menu_state.available_categories(ctx).is_empty() {
             return Some(AtContextMenuDisabledReason::NoObjectsAvailable);
         }
 
