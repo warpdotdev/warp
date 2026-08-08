@@ -135,7 +135,15 @@ const MISTRAL_ORANGE: ColorU = ColorU {
     a: 255,
 };
 
-/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe)
+/// Kimi brand color (white, monochrome logo)
+const KIMI_COLOR: ColorU = ColorU {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 255,
+};
+
+/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe, Kimi Code)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
 pub enum CLIAgent {
     Claude,
@@ -153,6 +161,7 @@ pub enum CLIAgent {
     Hermes,
     Vibe,
     Antigravity,
+    Kimi,
     /// Warp's own headless TUI.
     WarpTui,
     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
@@ -178,6 +187,7 @@ impl CLIAgent {
             CLIAgent::Hermes => &["hermes"],
             CLIAgent::Vibe => &["vibe", "vibe-acp"],
             CLIAgent::Antigravity => &["agy"],
+            CLIAgent::Kimi => &["kimi"],
             CLIAgent::WarpTui => &[
                 "warp",
                 "warp-preview",
@@ -241,6 +251,7 @@ impl CLIAgent {
             CLIAgent::Hermes => "Hermes",
             CLIAgent::Vibe => "Mistral Vibe",
             CLIAgent::Antigravity => "Antigravity",
+            CLIAgent::Kimi => "Kimi Code",
             CLIAgent::WarpTui => "Warp TUI",
             CLIAgent::Unknown => "CLI Agent",
         }
@@ -267,6 +278,7 @@ impl CLIAgent {
             // up in a follow-up once an officially licensed SVG is available.
             CLIAgent::Vibe => None,
             CLIAgent::Antigravity => Some(Icon::AntigravityLogo),
+            CLIAgent::Kimi => Some(Icon::KimiLogo),
             CLIAgent::WarpTui => Some(Icon::Warp),
             CLIAgent::Unknown => None,
         }
@@ -300,6 +312,7 @@ impl CLIAgent {
             CLIAgent::Hermes => &[SkillProvider::Agents],
             CLIAgent::Vibe => &[SkillProvider::Agents],
             CLIAgent::Antigravity => &[],
+            CLIAgent::Kimi => &[SkillProvider::Agents],
             CLIAgent::WarpTui => &[],
             CLIAgent::Unknown => &[],
         }
@@ -350,6 +363,7 @@ impl CLIAgent {
             CLIAgent::Hermes => Some(HERMES_PURPLE),
             CLIAgent::Vibe => Some(MISTRAL_ORANGE),
             CLIAgent::Antigravity => Some(ANTIGRAVITY_COLOR),
+            CLIAgent::Kimi => Some(KIMI_COLOR),
             CLIAgent::WarpTui => Some(ColorU::black()),
             CLIAgent::Unknown => None,
         }
@@ -363,7 +377,8 @@ impl CLIAgent {
             | CLIAgent::OhMyPi
             | CLIAgent::Auggie
             | CLIAgent::Droid
-            | CLIAgent::Antigravity => ColorU::new(0, 0, 0, 255),
+            | CLIAgent::Antigravity
+            | CLIAgent::Kimi => ColorU::new(0, 0, 0, 255),
             _ => ColorU::white(),
         }
     }
@@ -626,6 +641,7 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::Hermes => CLIAgentType::Hermes,
             CLIAgent::Vibe => CLIAgentType::Vibe,
             CLIAgent::Antigravity => CLIAgentType::Antigravity,
+            CLIAgent::Kimi => CLIAgentType::Kimi,
             CLIAgent::WarpTui => CLIAgentType::WarpTui,
             CLIAgent::Unknown => CLIAgentType::Unknown,
         }
