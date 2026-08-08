@@ -350,33 +350,18 @@ impl AmbientAgentRunner {
                 return;
             }
 
-            let attachments = if FeatureFlag::AmbientAgentsImageUpload.is_enabled() {
-                if !args.attachment_paths.is_empty() {
-                    match args
-                        .attachment_paths
-                        .iter()
-                        .enumerate()
-                        .map(|(i, path)| process_attachment(path, i))
-                        .collect::<Result<Vec<_>, _>>()
-                    {
-                        Ok(processed) => processed,
-                        Err(err) => {
-                            super::report_fatal_error(err, ctx);
-                            return;
-                        }
-                    }
-                } else {
-                    vec![]
-                }
-            } else {
-                if !args.attachment_paths.is_empty() {
-                    super::report_fatal_error(
-                        anyhow::anyhow!("Attachment upload is not enabled"),
-                        ctx,
-                    );
+            let attachments = match args
+                .attachment_paths
+                .iter()
+                .enumerate()
+                .map(|(i, path)| process_attachment(path, i))
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(processed) => processed,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
                     return;
                 }
-                vec![]
             };
 
             let mut environment_args = args.environment;

@@ -275,8 +275,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AllowIgnoringInputSuggestions,
         #[cfg(feature = "ambient_agents_command_line")]
         FeatureFlag::AmbientAgentsCommandLine,
-        #[cfg(feature = "ambient_agents_image_upload")]
-        FeatureFlag::AmbientAgentsImageUpload,
         #[cfg(feature = "scheduled_ambient_agents")]
         FeatureFlag::ScheduledAmbientAgents,
         #[cfg(feature = "conversation_api")]
