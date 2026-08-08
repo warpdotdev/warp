@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ai::agent::action::InsertReviewComment;
+use ai::agent::action::{
+    CommentSide, InsertReviewComment, InsertedCommentLine, InsertedCommentLocation,
+};
 use chrono::Local;
 use lsp::LspManagerModel;
 use repo_metadata::repositories::DetectedRepositories;
@@ -399,6 +401,73 @@ fn test_relocate_comments_empty_input() {
                 "Empty input should return empty output"
             );
             assert_eq!(fallbacks, 0, "Empty input should have no fallbacks");
+        });
+    });
+}
+
+#[test]
+fn test_imported_context_line_comment_not_marked_outdated() {
+    App::test((), |mut app| async move {
+        let _flag_override = FeatureFlag::PRCommentsSlashCommand.override_enabled(true);
+
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
+        let pending_comment = PendingImportedReviewComment::try_from(InsertReviewComment {
+            comment_id: "context-line-comment".to_string(),
+            author: "reviewer".to_string(),
+            last_modified_timestamp: "2024-01-01T00:00:00Z".to_string(),
+            comment_body: "Comment on unchanged context".to_string(),
+            parent_comment_id: None,
+            comment_location: Some(InsertedCommentLocation {
+                relative_file_path: "test.txt".to_string(),
+                line: Some(InsertedCommentLine {
+                    comment_line_range: 2..2,
+                    diff_hunk_line_range: 1..3,
+                    diff_hunk_text: "@@ -1,3 +1,3 @@\n line 1\n line 2\n line 3".to_string(),
+                    side: Some(CommentSide::Right),
+                }),
+            }),
+            html_url: None,
+        })
+        .expect("valid pending imported context comment");
+
+        let mut attached =
+            attach_pending_imported_comments(vec![pending_comment], &ctx.repo_location);
+        assert_eq!(attached.len(), 1);
+
+        let original_id = attached[0].id;
+        match &attached[0].target {
+            AttachedReviewCommentTarget::Line { content, .. } => {
+                assert_eq!(content.content, "line 2");
+                assert_eq!(content.original_text(), "line 2");
+            }
+            _ => panic!("expected line comment target"),
+        }
+
+        ctx.code_review_view.update(&mut app, |_view, view_ctx| {
+            let RelocateCommentsResult {
+                comments: relocated,
+                fallback_count: fallbacks,
+            } = CodeReviewView::relocate_comments(
+                std::mem::take(&mut attached),
+                &ctx.state,
+                &ctx.repo_location,
+                view_ctx,
+            );
+
+            assert_eq!(relocated.len(), 1);
+            assert_eq!(relocated[0].id, original_id);
+            assert!(
+                !relocated[0].outdated,
+                "Imported context-line comments should match the editor text without the diff context marker"
+            );
+            assert_eq!(fallbacks, 0);
+
+            match &relocated[0].target {
+                AttachedReviewCommentTarget::Line { line, .. } => {
+                    assert_eq!(line.line_number(), Some(LineCount::from(1)));
+                }
+                _ => panic!("expected line comment target"),
+            }
         });
     });
 }
