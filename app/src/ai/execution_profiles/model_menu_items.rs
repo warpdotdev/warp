@@ -7,11 +7,11 @@ use warpui::elements::{
     Text,
 };
 use warpui::fonts::{Properties, Style};
-use warpui::{Action, AppContext, Element};
+use warpui::{Action, AppContext, Element, SingletonEntity as _};
 
 use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::llms::{
-    DisableReason, LLMId, LLMInfo, ModelIconFlags, model_leading_icon,
+    DisableReason, LLMId, LLMInfo, LLMPreferences, ModelIconFlags, model_leading_icon,
     should_show_bedrock_icon_for_model,
     should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
 };
@@ -90,6 +90,9 @@ fn make_item_fields<A: Action + Clone>(
         should_show_gemini_enterprise_agent_platform_icon_for_model(llm, app);
     let is_using_api_key = should_show_key_icon_for_model(llm, app);
     let is_custom_router = is_custom_router_id(llm.id.as_str());
+    let is_custom_endpoint = LLMPreferences::as_ref(app)
+        .custom_llm_info_for_id(&llm.id)
+        .is_some();
     let leading_icon = model_leading_icon(
         llm,
         ModelIconFlags {
@@ -97,6 +100,7 @@ fn make_item_fields<A: Action + Clone>(
             is_auto: is_auto_model,
             is_using_bedrock,
             is_using_gemini_enterprise: is_using_gemini_enterprise_agent_platform,
+            is_custom_endpoint,
         },
     );
     let is_using_cloud_host = is_using_bedrock || is_using_gemini_enterprise_agent_platform;

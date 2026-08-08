@@ -171,12 +171,31 @@ pub struct ModelIconFlags {
     pub is_auto: bool,
     pub is_using_bedrock: bool,
     pub is_using_gemini_enterprise: bool,
+    pub is_custom_endpoint: bool,
+}
+
+/// Returns whether a model id belongs to Moonshot AI's Kimi family (e.g.
+/// `kimi-k3-fireworks`).
+///
+/// Kimi has no [`LLMProvider`] variant of its own — the server reports these
+/// models as [`LLMProvider::Unknown`] — so the id is the only signal available
+/// for picking the brand logo.
+fn is_kimi_model(id: &str) -> bool {
+    let id = id.trim();
+    id.eq_ignore_ascii_case("kimi")
+        || id
+            .get(..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("kimi-"))
 }
 
 /// The leading icon shown next to a model in the model picker and model menus.
 ///
 /// Auto models deliberately get the generic agent glyph rather than a host or
 /// provider logo.
+///
+/// The Kimi branch matches on the model id, so it is restricted to
+/// server-catalogue models: a custom endpoint's id is its user-chosen
+/// `config_key`, which carries no provider provenance and must not be branded.
 pub fn model_leading_icon(llm: &LLMInfo, flags: ModelIconFlags) -> Icon {
     if flags.is_custom_router {
         Icon::Dataflow
@@ -186,6 +205,8 @@ pub fn model_leading_icon(llm: &LLMInfo, flags: ModelIconFlags) -> Icon {
         Icon::Aws
     } else if flags.is_using_gemini_enterprise {
         Icon::GeminiEnterpriseAgentPlatform
+    } else if !flags.is_custom_endpoint && is_kimi_model(llm.id.as_str()) {
+        Icon::KimiLogo
     } else {
         llm.provider.icon().unwrap_or(Icon::Agent)
     }
