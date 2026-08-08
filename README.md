@@ -110,3 +110,5 @@ We'd like to call out a few of the [open source dependencies](https://docs.warp.
 - [FontKit](https://github.com/servo/font-kit)
 - [Core-foundation](https://github.com/servo/core-foundation-rs)
 - [Smol](https://github.com/smol-rs/smol)
+
+<!-- factory-pipeline-test: APP-5028 — intentional end-to-end plumbing test, safe to close or merge -->
