@@ -17,15 +17,18 @@ use warp::settings::{
 };
 use warp::terminal::model::ansi::{Handler, InputBufferValue, Mode};
 use warp::tui_export::{
-    AIAgentActionId, AIAgentExchangeId, AIAgentTodo, AIAgentTodoList,
-    AIConversationAutoexecuteMode, AIConversationId, AgentViewEntryOrigin, BlockPadding,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatus, ConversationUsageTotals,
-    Harness, InputTypeAutoDetectionSource, LLMPreferences, LinkedWorkflowData,
-    LongRunningCommandControlState, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, Session,
-    SizeInfo, SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope,
-    TuiMcpAction, TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers,
+    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId, AIAgentInput,
+    AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentTodo, AIAgentTodoList,
+    AIBlockModel, AIBlockOutputStatus, AIConversationAutoexecuteMode, AIConversationId,
+    AIRequestType, AgentViewEntryOrigin, AskUserQuestionItem, AskUserQuestionOption,
+    AskUserQuestionType, BlockPadding, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    ConversationStatus, ConversationUsageTotals, Harness, InputTypeAutoDetectionSource, LLMId,
+    LLMPreferences, LinkedWorkflowData, LongRunningCommandControlState, MessageId,
+    OutputStatusUpdateCallback, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, ServerOutputId,
+    Session, Shared, SizeInfo, SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId,
+    TranscriptScope, TuiMcpAction, TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers,
     TuiUpArrowHistoryItemKind, UserTakeOverReason, WarpConfig, WarpConfigUpdateEvent,
-    export_conversation_markdown, forkable_tui_conversation_for_test,
+    export_conversation_markdown, forkable_tui_conversation_for_test, queue_tui_permission_action,
     register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test, slash_commands,
 };
 use warp_core::channel::{Channel, ChannelState};
@@ -50,7 +53,7 @@ use warpui_core::keymap::{Context, DescriptionContext, Keystroke, Trigger};
 use warpui_core::platform::keyboard::KeyCode;
 use warpui_core::presenter::tui::{TuiFrame, TuiPresenter};
 use warpui_core::telemetry::{EventPayload, flush_events};
-use warpui_core::{App, AppContext, TuiView, TypedActionView, WindowInvalidation};
+use warpui_core::{App, AppContext, TuiView, TypedActionView, ViewContext, WindowInvalidation};
 
 use super::statusline::{
     ContextWindowUsage, FooterSegment, FooterSegments, format_context_window_usage,
@@ -79,7 +82,7 @@ use super::{
     SESSION_COMPOSER_SHORTCUTS_ACTIVE_FLAG, VOICE_INPUT_BINDING_NAME, VOICE_USAGE_HINT,
     voice_argument_is_empty, voice_command_argument,
 };
-use crate::agent_block::upgrade_url;
+use crate::agent_block::{TuiAIBlock, upgrade_url};
 use crate::autoupdate::TuiAutoupdater;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
 use crate::input_mode_policy::{AI_LOCKED_CONFIG, AI_UNLOCKED_CONFIG};
@@ -5650,6 +5653,164 @@ fn background_focus_reconciliation_does_not_steal_foreground_focus() {
     });
 }
 
+struct LateMaterializationBlockModel {
+    conversation_id: AIConversationId,
+    status: AIBlockOutputStatus,
+}
+
+impl AIBlockModel for LateMaterializationBlockModel {
+    type View = TuiAIBlock;
+
+    fn status(&self, _app: &AppContext) -> AIBlockOutputStatus {
+        self.status.clone()
+    }
+
+    fn server_output_id(&self, _app: &AppContext) -> Option<ServerOutputId> {
+        None
+    }
+
+    fn model_id(&self, _app: &AppContext) -> Option<LLMId> {
+        None
+    }
+
+    fn base_model<'a>(&'a self, _app: &'a AppContext) -> Option<&'a LLMId> {
+        None
+    }
+
+    fn inputs_to_render<'a>(&'a self, _app: &'a AppContext) -> &'a [AIAgentInput] {
+        &[]
+    }
+
+    fn conversation_id(&self, _app: &AppContext) -> Option<AIConversationId> {
+        Some(self.conversation_id)
+    }
+
+    fn on_updated_output(
+        &self,
+        _callback: OutputStatusUpdateCallback<Self::View>,
+        _ctx: &mut ViewContext<Self::View>,
+    ) {
+    }
+
+    fn request_type(&self, _app: &AppContext) -> AIRequestType {
+        AIRequestType::Active
+    }
+}
+
+fn materialize_already_blocked_action(
+    app: &mut App,
+    session: &ViewHandle<TuiTerminalSessionView>,
+    action: AIAgentAction,
+) -> ViewHandle<TuiAIBlock> {
+    let (conversation_id, action_model, transcript) = session.update(app, |session, ctx| {
+        let conversation_id = session
+            .conversation_selection
+            .update(ctx, |selection, ctx| {
+                selection
+                    .try_start_new_conversation(AgentViewEntryOrigin::Tui, ctx)
+                    .expect("test conversation should start")
+            });
+        ctx.focus(&session.input_view);
+        (
+            conversation_id,
+            session.ai_action_model.clone(),
+            session.transcript.clone(),
+        )
+    });
+    action_model.update(app, |model, ctx| {
+        queue_tui_permission_action(model, action.clone(), conversation_id, ctx);
+    });
+    let status = AIBlockOutputStatus::Complete {
+        output: Shared::new(AIAgentOutput {
+            messages: vec![AIAgentOutputMessage {
+                id: MessageId::new("late-action-message".to_owned()),
+                message: AIAgentOutputMessageType::Action(action),
+                citations: Vec::new(),
+            }],
+            ..Default::default()
+        }),
+    };
+    transcript.update(app, |transcript, ctx| {
+        transcript.append_agent_block_for_test(
+            conversation_id,
+            AIAgentExchangeId::new(),
+            Rc::new(LateMaterializationBlockModel {
+                conversation_id,
+                status,
+            }),
+            ctx,
+        )
+    })
+}
+
+#[test]
+fn foreground_session_focuses_an_already_blocked_question_when_materialized() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (session, _) = add_focus_test_session(&mut app, &fixture, true);
+        let action = AIAgentAction {
+            id: AIAgentActionId::from("late-question".to_owned()),
+            task_id: TaskId::new("task".to_owned()),
+            action: AIAgentActionType::AskUserQuestion {
+                questions: vec![AskUserQuestionItem {
+                    question_id: "question".to_owned(),
+                    question: "Which option?".to_owned(),
+                    question_type: AskUserQuestionType::MultipleChoice {
+                        is_multiselect: false,
+                        options: vec![AskUserQuestionOption {
+                            label: "Alpha".to_owned(),
+                            recommended: false,
+                        }],
+                        supports_other: false,
+                    },
+                }],
+            },
+            requires_result: true,
+        };
+
+        let block = materialize_already_blocked_action(&mut app, &session, action);
+        let question = block.read(&app, |block, ctx| {
+            let Some(BlockingInputSource::AskQuestion(view)) =
+                block.active_blocking_input_source(ctx)
+            else {
+                panic!("materialized question should be the active blocker");
+            };
+            view.clone()
+        });
+
+        app.read(|ctx| {
+            assert!(ctx.check_view_or_child_focused(fixture.window_id, &question.id()));
+        });
+    });
+}
+
+#[test]
+fn foreground_session_focuses_an_already_blocked_permission_when_materialized() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (session, _) = add_focus_test_session(&mut app, &fixture, true);
+        let action = AIAgentAction {
+            id: AIAgentActionId::from("late-permission".to_owned()),
+            task_id: TaskId::new("task".to_owned()),
+            action: AIAgentActionType::InitProject,
+            requires_result: true,
+        };
+
+        let block = materialize_already_blocked_action(&mut app, &session, action);
+        let permission = block.read(&app, |block, ctx| {
+            let Some(BlockingInputSource::Permission(view)) =
+                block.active_blocking_input_source(ctx)
+            else {
+                panic!("materialized permission prompt should be the active blocker");
+            };
+            view.clone()
+        });
+
+        app.read(|ctx| {
+            assert!(ctx.check_view_or_child_focused(fixture.window_id, &permission.id()));
+        });
+    });
+}
 fn tab_focused_context() -> Context {
     let mut context = Context::default();
     context.set.insert(super::TuiTerminalSessionView::ui_name());
