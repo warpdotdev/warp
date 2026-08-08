@@ -16,6 +16,89 @@ fn local_datetime_to_timestamp(timestamp: DateTime<Local>) -> prost_types::Times
     }
 }
 
+/// A tier that has never reported activity is sent as `0` seconds rather than
+/// omitted, because the accompanying tier-level fields already say whether the
+/// tier had anything to report.
+fn duration_to_secs_f32(duration: Option<Duration>) -> f32 {
+    duration.unwrap_or_default().as_secs_f32()
+}
+
+impl From<LrcActivity> for api::LongRunningCommandActivity {
+    fn from(activity: LrcActivity) -> Self {
+        Self {
+            seconds_since_last_activity: duration_to_secs_f32(activity.since_last_activity),
+            output_changed_since_last_read: activity.output_changed_since_last_read,
+            seconds_since_output_change: duration_to_secs_f32(activity.since_output_change),
+            process: activity.process.map(Into::into),
+            files: activity.files.into_iter().map(Into::into).collect(),
+            signals_unavailable: activity.signals_unavailable,
+        }
+    }
+}
+
+impl From<LrcProcessActivity> for api::long_running_command_activity::ProcessActivity {
+    fn from(process: LrcProcessActivity) -> Self {
+        Self {
+            cpu_time_delta_ms: process.cpu_time_delta.as_millis() as u64,
+            state: process.state.as_wire_str().to_owned(),
+            live_process_count: process.live_process_count,
+            io_write_bytes_delta: process.io_write_bytes_delta,
+        }
+    }
+}
+
+impl From<LrcFileActivity> for api::long_running_command_activity::FileActivity {
+    fn from(file: LrcFileActivity) -> Self {
+        Self {
+            path: file.path,
+            size_bytes: file.size_bytes,
+            size_delta_bytes: file.size_delta_bytes,
+            tail: file.tail,
+        }
+    }
+}
+
+/// Restores activity from the wire, for rebuilding a conversation that was
+/// previously sent to the server.
+impl From<&api::LongRunningCommandActivity> for LrcActivity {
+    fn from(activity: &api::LongRunningCommandActivity) -> Self {
+        Self {
+            since_last_activity: secs_f32_to_duration(activity.seconds_since_last_activity),
+            output_changed_since_last_read: activity.output_changed_since_last_read,
+            since_output_change: secs_f32_to_duration(activity.seconds_since_output_change),
+            process: activity.process.as_ref().map(Into::into),
+            files: activity.files.iter().map(Into::into).collect(),
+            signals_unavailable: activity.signals_unavailable,
+        }
+    }
+}
+
+fn secs_f32_to_duration(seconds: f32) -> Option<Duration> {
+    Duration::try_from_secs_f32(seconds).ok()
+}
+
+impl From<&api::long_running_command_activity::ProcessActivity> for LrcProcessActivity {
+    fn from(process: &api::long_running_command_activity::ProcessActivity) -> Self {
+        Self {
+            cpu_time_delta: Duration::from_millis(process.cpu_time_delta_ms),
+            state: LrcProcessState::from_wire_str(&process.state),
+            live_process_count: process.live_process_count,
+            io_write_bytes_delta: process.io_write_bytes_delta,
+        }
+    }
+}
+
+impl From<&api::long_running_command_activity::FileActivity> for LrcFileActivity {
+    fn from(file: &api::long_running_command_activity::FileActivity) -> Self {
+        Self {
+            path: file.path.clone(),
+            size_bytes: file.size_bytes,
+            size_delta_bytes: file.size_delta_bytes,
+            tail: file.tail.clone(),
+        }
+    }
+}
+
 impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_result::Result {
     type Error = ConvertToAPITypeError;
 
@@ -53,6 +136,7 @@ impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_resu
                 grid_contents,
                 cursor,
                 is_alt_screen_active,
+                activity,
             } => Ok(
                 api::request::input::tool_call_result::Result::RunShellCommand(
                     #[allow(deprecated)]
@@ -68,6 +152,7 @@ impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_resu
                                     cursor: cursor.to_owned(),
                                     is_alt_screen_active,
                                     is_preempted: false,
+                                    activity: activity.map(Into::into),
                                 },
                             ),
                         ),
@@ -108,7 +193,7 @@ impl TryFrom<WriteToLongRunningShellCommandResult>
 
     fn try_from(result: WriteToLongRunningShellCommandResult) -> Result<Self, Self::Error> {
         match result {
-            WriteToLongRunningShellCommandResult::Snapshot { block_id, grid_contents, cursor, is_alt_screen_active, is_preempted } => Ok(
+            WriteToLongRunningShellCommandResult::Snapshot { block_id, grid_contents, cursor, is_alt_screen_active, is_preempted, activity } => Ok(
                 api::request::input::tool_call_result::Result::WriteToLongRunningShellCommand(
                     api::WriteToLongRunningShellCommandResult {
                         result: Some(api::write_to_long_running_shell_command_result::Result::LongRunningCommandSnapshot(
@@ -118,6 +203,7 @@ impl TryFrom<WriteToLongRunningShellCommandResult>
                                 cursor: cursor.to_owned(),
                                 is_alt_screen_active,
                                 is_preempted,
+                                activity: activity.map(Into::into),
                             }
                         ))
                     },
@@ -699,6 +785,7 @@ impl TryFrom<ReadShellCommandOutputResult> for api::request::input::tool_call_re
                 cursor,
                 is_alt_screen_active,
                 is_preempted,
+                activity,
             } => Ok(
                 api::request::input::tool_call_result::Result::ReadShellCommandOutput(
                     api::ReadShellCommandOutputResult {
@@ -711,6 +798,7 @@ impl TryFrom<ReadShellCommandOutputResult> for api::request::input::tool_call_re
                                     cursor: cursor.to_owned(),
                                     is_alt_screen_active,
                                     is_preempted,
+                                    activity: activity.map(Into::into),
                                 },
                             ),
                         ),
@@ -750,6 +838,7 @@ impl TryFrom<TransferShellCommandControlToUserResult>
                 cursor,
                 is_alt_screen_active,
                 is_preempted,
+                activity,
             } => Ok(
                 api::request::input::tool_call_result::Result::TransferShellCommandControlToUser(
                     api::TransferShellCommandControlToUserResult {
@@ -761,6 +850,7 @@ impl TryFrom<TransferShellCommandControlToUserResult>
                                     cursor,
                                     is_alt_screen_active,
                                     is_preempted,
+                                    activity: activity.map(Into::into),
                                 },
                             ),
                         ),
