@@ -240,13 +240,17 @@ impl DataSource {
         should_include_command_workflows: bool,
         app: &AppContext,
     ) -> anyhow::Result<Vec<WorkflowSearchItem>> {
-        self.searcher.search_workflow(
-            &query.text.to_lowercase(),
-            &self.scope,
-            app,
-            should_include_agent_mode_prompts,
-            should_include_command_workflows,
-        )
+        Ok(self
+            .searcher
+            .search_workflow(
+                &query.text.to_lowercase(),
+                app,
+                should_include_agent_mode_prompts,
+                should_include_command_workflows,
+            )?
+            .into_iter()
+            .filter(|item| self.scope.contains(&item.cloud_workflow, app))
+            .collect())
     }
 }
 
@@ -265,12 +269,13 @@ impl crate::search::mixer::SyncDataSource for DataSource {
         if query.filters.contains(&QueryFilter::Notebooks) || should_include_all_drive_objects {
             filtered_cloud_objects.extend(
                 self.searcher
-                    .search_notebook(&query.text.to_lowercase(), &self.scope, app)
+                    .search_notebook(&query.text.to_lowercase(), app)
                     .map_err(|err| {
                         Box::new(DataSourceSearchError::new(err.to_string()))
                             as DataSourceRunErrorWrapper
                     })?
                     .into_iter()
+                    .filter(|item| self.scope.contains(&item.cloud_notebook, app))
                     .map(QueryResult::from),
             );
         }
@@ -278,12 +283,13 @@ impl crate::search::mixer::SyncDataSource for DataSource {
         if query.filters.contains(&QueryFilter::Plans) || should_include_all_drive_objects {
             filtered_cloud_objects.extend(
                 self.searcher
-                    .search_plans(&query.text.to_lowercase(), &self.scope, app)
+                    .search_plans(&query.text.to_lowercase(), app)
                     .map_err(|err| {
                         Box::new(DataSourceSearchError::new(err.to_string()))
                             as DataSourceRunErrorWrapper
                     })?
                     .into_iter()
+                    .filter(|item| self.scope.contains(&item.cloud_notebook, app))
                     .map(QueryResult::from),
             );
         }
@@ -317,12 +323,13 @@ impl crate::search::mixer::SyncDataSource for DataSource {
         {
             filtered_cloud_objects.extend(
                 self.searcher
-                    .search_env_var(&query.text.to_lowercase(), &self.scope, app)
+                    .search_env_var(&query.text.to_lowercase(), app)
                     .map_err(|err| {
                         Box::new(DataSourceSearchError::new(err.to_string()))
                             as DataSourceRunErrorWrapper
                     })?
                     .into_iter()
+                    .filter(|item| self.scope.contains(&item.cloud_env_var_collection, app))
                     .map(QueryResult::from),
             );
         }
@@ -381,8 +388,6 @@ impl Entity for DataSource {
     type Event = ();
 }
 
-/// Every method is scoped to a single window: the index only ever holds objects the window can
-/// see, and the searchers that read [`CloudModel`] directly filter to the same set.
 trait WarpDriveSearcher {
     fn insert_searchable_object(
         &mut self,
@@ -406,14 +411,12 @@ trait WarpDriveSearcher {
     fn search_notebook(
         &self,
         query: &str,
-        scope: &WindowScope,
         app: &AppContext,
     ) -> anyhow::Result<Vec<NotebookSearchItem>>;
 
     fn search_workflow(
         &self,
         query: &str,
-        scope: &WindowScope,
         app: &AppContext,
         should_include_am_prompts: bool,
         should_include_command_workflow: bool,
@@ -422,14 +425,12 @@ trait WarpDriveSearcher {
     fn search_env_var(
         &self,
         query: &str,
-        scope: &WindowScope,
         app: &AppContext,
     ) -> anyhow::Result<Vec<EnvVarCollectionSearchItem>>;
 
     fn search_plans(
         &self,
         query: &str,
-        scope: &WindowScope,
         app: &AppContext,
     ) -> anyhow::Result<Vec<NotebookSearchItem>>;
 }
@@ -566,12 +567,9 @@ impl WarpDriveSearcher for FuzzyWarpDriveSearcher {
     fn search_notebook(
         &self,
         query: &str,
-        scope: &WindowScope,
         app: &AppContext,
     ) -> anyhow::Result<Vec<NotebookSearchItem>> {
-        let cloud_notebooks = CloudModel::as_ref(app)
-            .get_all_active_notebooks()
-            .filter(|notebook| scope.contains(*notebook, app));
+        let cloud_notebooks = CloudModel::as_ref(app).get_all_active_notebooks();
         Ok(cloud_notebooks
             .filter_map(|cloud_notebook| {
                 FuzzyMatchNotebookResult::try_match(query, cloud_notebook, app).map(
@@ -587,15 +585,11 @@ impl WarpDriveSearcher for FuzzyWarpDriveSearcher {
     fn search_plans(
         &self,
         query: &str,
-        scope: &WindowScope,
         app: &AppContext,
     ) -> anyhow::Result<Vec<NotebookSearchItem>> {
-        let cloud_notebooks =
-            CloudModel::as_ref(app)
-                .get_all_active_notebooks()
-                .filter(|notebook| {
-                    notebook.model().ai_document_id.is_some() && scope.contains(*notebook, app)
-                });
+        let cloud_notebooks = CloudModel::as_ref(app)
+            .get_all_active_notebooks()
+            .filter(|notebook| notebook.model().ai_document_id.is_some());
         Ok(cloud_notebooks
             .filter_map(|cloud_notebook| {
                 FuzzyMatchNotebookResult::try_match(query, cloud_notebook, app).map(
@@ -611,14 +605,11 @@ impl WarpDriveSearcher for FuzzyWarpDriveSearcher {
     fn search_workflow(
         &self,
         query: &str,
-        scope: &WindowScope,
         app: &AppContext,
         should_include_am_prompts: bool,
         should_include_command_workflow: bool,
     ) -> anyhow::Result<Vec<WorkflowSearchItem>> {
-        let cloud_workflows = CloudModel::as_ref(app)
-            .get_all_active_workflows()
-            .filter(|workflow| scope.contains(*workflow, app));
+        let cloud_workflows = CloudModel::as_ref(app).get_all_active_workflows();
 
         Ok(cloud_workflows
             .filter_map(move |cloud_workflow| {
@@ -645,12 +636,10 @@ impl WarpDriveSearcher for FuzzyWarpDriveSearcher {
     fn search_env_var(
         &self,
         query: &str,
-        scope: &WindowScope,
         app: &AppContext,
     ) -> anyhow::Result<Vec<EnvVarCollectionSearchItem>> {
-        let cloud_env_var_collections = CloudModel::as_ref(app)
-            .get_all_active_env_var_collections()
-            .filter(|collection| scope.contains(*collection, app));
+        let cloud_env_var_collections =
+            CloudModel::as_ref(app).get_all_active_env_var_collections();
 
         Ok(cloud_env_var_collections
             .filter_map(|cloud_env_var_collection| {
@@ -1090,7 +1079,6 @@ mod full_text_searcher {
         fn search_notebook(
             &self,
             query: &str,
-            _scope: &WindowScope,
             app: &AppContext,
         ) -> anyhow::Result<Vec<NotebookSearchItem>> {
             self.search_notebooks_with_filter(query, false, app)
@@ -1099,7 +1087,6 @@ mod full_text_searcher {
         fn search_plans(
             &self,
             query: &str,
-            _scope: &WindowScope,
             app: &AppContext,
         ) -> anyhow::Result<Vec<NotebookSearchItem>> {
             self.search_notebooks_with_filter(query, true, app)
@@ -1108,7 +1095,6 @@ mod full_text_searcher {
         fn search_workflow(
             &self,
             query: &str,
-            _scope: &WindowScope,
             app: &AppContext,
             should_include_am_prompts: bool,
             should_include_command_workflow: bool,
@@ -1190,7 +1176,6 @@ mod full_text_searcher {
         fn search_env_var(
             &self,
             query: &str,
-            _scope: &WindowScope,
             app: &AppContext,
         ) -> anyhow::Result<Vec<EnvVarCollectionSearchItem>> {
             if query.is_empty() {
