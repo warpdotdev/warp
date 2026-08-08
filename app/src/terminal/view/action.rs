@@ -406,6 +406,11 @@ pub enum TerminalAction {
     ToggleConversationDetailsPanel,
     /// Cancel the ambient agent task while it's loading
     CancelAmbientAgentTask,
+    /// Retry a failed cloud environment setup by re-running the full spawn
+    /// (environment setup first, then the prompt once the session is ready),
+    /// rather than the generic `ResumeConversation`, which re-drives the
+    /// conversation without re-establishing the cloud environment.
+    RetryCloudEnvironmentSetup,
     OpenInlineHistoryMenu,
     OpenModelSelector,
     ResolvePromptSuggestion(PromptSuggestionResolution),
@@ -733,6 +738,7 @@ impl fmt::Debug for TerminalAction {
             }
             ToggleConversationDetailsPanel => write!(f, "ToggleConversationDetailsPanel"),
             CancelAmbientAgentTask => write!(f, "CancelAmbientAgentTask"),
+            RetryCloudEnvironmentSetup => write!(f, "RetryCloudEnvironmentSetup"),
             OpenInlineHistoryMenu => write!(f, "OpenInlineHistoryMenu"),
             OpenModelSelector => write!(f, "OpenModelSelector"),
             ResolvePromptSuggestion(..) => write!(f, "ResolvePromptSuggestion"),
