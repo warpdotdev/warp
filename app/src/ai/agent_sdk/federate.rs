@@ -5,7 +5,6 @@ use serde_json::json;
 use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::federate::{FederateCommand, IssueGcpTokenArgs, IssueTokenArgs};
-use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::platform::TerminationMode;
@@ -19,9 +18,6 @@ pub fn run(
     global_options: GlobalOptions,
     command: FederateCommand,
 ) -> Result<()> {
-    if !FeatureFlag::OzIdentityFederation.is_enabled() {
-        return Err(anyhow::anyhow!("This feature is not enabled"));
-    }
     match command {
         FederateCommand::IssueToken(args) => issue_token(ctx, args, global_options.output_format),
         FederateCommand::IssueGcpToken(args) => issue_gcp_token(ctx, args),
