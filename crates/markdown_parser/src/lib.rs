@@ -545,6 +545,7 @@ fn formatted_inline_to_gfm_table_cell_markdown(inline: &FormattedTextInline) -> 
     markdown
 }
 
+// This mirrors `BufferMarkdownParser::append_formatting`; keep both implementations in sync.
 fn append_inline_formatting<'a>(
     previous: &FormattedTextStyles,
     next: &FormattedTextStyles,
