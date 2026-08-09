@@ -1,0 +1,45 @@
+[
+  (contract_declaration)
+  (interface_declaration)
+  (library_declaration)
+  (constructor_definition)
+  (fallback_receive_definition)
+  (function_definition)
+  (modifier_definition)
+  (event_definition)
+  (error_declaration)
+  (struct_declaration)
+  (enum_declaration)
+  (block_statement)
+  (contract_body)
+  (function_body)
+  (struct_body)
+  (enum_body)
+  (parenthesized_expression)
+  (inline_array_expression)
+  (struct_expression)
+  (call_expression)
+  (call_argument)
+  (parameter)
+  (if_statement)
+  (for_statement)
+  (while_statement)
+  (do_while_statement)
+  (try_statement)
+  (catch_clause)
+  (import_directive)
+  (member_expression)
+  (binary_expression)
+  (assignment_expression)
+  (augmented_assignment_expression)
+  (return_statement)
+  (revert_statement)
+  (variable_declaration_statement)
+  (variable_declaration_tuple)
+] @indent
+
+[
+  "}"
+  "]"
+  ")"
+] @outdent

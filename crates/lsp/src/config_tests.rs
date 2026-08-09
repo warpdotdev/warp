@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use lsp_types::Uri;
 
-use crate::config::{lsp_uri_to_path, path_to_lsp_uri};
+use crate::config::{LanguageId, lsp_uri_to_path, path_to_lsp_uri};
 
 // Unix-specific tests use Unix paths
 #[cfg(not(windows))]
@@ -127,6 +127,13 @@ mod unix_tests {
         let uri = path_to_lsp_uri(&original_path).unwrap();
         let roundtrip_path = lsp_uri_to_path(&uri).unwrap();
         assert_eq!(original_path, roundtrip_path);
+    }
+
+    #[test]
+    fn test_solidity_file_resolves_to_solidity_language_id() {
+        let path = PathBuf::from("/Users/test/project/contract.sol");
+        assert_eq!(LanguageId::from_path(&path), Some(LanguageId::Solidity));
+        assert_eq!(LanguageId::Solidity.lsp_language_identifier(), "solidity");
     }
 }
 

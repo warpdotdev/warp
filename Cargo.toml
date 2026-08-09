@@ -299,7 +299,7 @@ tracing-subscriber = { version = "0.3.22", default-features = false, features = 
   "registry",
   "std",
 ] }
-arborium = { version = "2", default-features = false, features = [
+arborium = { version = "2.18.1", default-features = false, features = [
   "lang-rust",
   "lang-go",
   "lang-yaml",
@@ -334,6 +334,7 @@ arborium = { version = "2", default-features = false, features = [
   "lang-vue",
   "lang-dockerfile",
   "lang-markdown",
+  "lang-solidity",
 ] }
 unicode-general-category = "1.1.0"
 unicode-linebreak = "0.1.5"

@@ -95,3 +95,20 @@ fn markdown_extensions_resolve_to_markdown() {
         );
     }
 }
+
+/// `.sol` files should resolve to the Solidity language so the editor applies
+/// syntax highlighting and LSP support to Solidity smart contracts.
+#[test]
+fn solidity_extensions_resolve_to_solidity() {
+    for filename in ["Contract.sol", "Token.sol"] {
+        let path = StandardizedPath::try_new(&format!("/tmp/{filename}"))
+            .expect("test path should be absolute");
+        let language = language_by_filename(&path)
+            .unwrap_or_else(|| panic!("expected {filename} to resolve to a language"));
+        assert_eq!(
+            language.display_name(),
+            "Solidity",
+            "{filename} should resolve to Solidity",
+        );
+    }
+}
