@@ -72,6 +72,7 @@ use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::history::History;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_tty::spawner::PtySpawner;
+use crate::terminal::model_events::ModelEvent as TerminalModelEvent;
 use crate::terminal::shared_session::{
     SharedSessionScrollbackType, SharedSessionSource, SharedSessionStatus,
 };
@@ -267,6 +268,97 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
         )
     });
     workspace
+}
+
+#[test]
+fn bell_badge_tracks_split_terminal_visibility() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let (window_id, pane_group) = workspace.update(&mut app, |workspace, ctx| {
+            (ctx.window_id(), workspace.active_tab_pane_group().clone())
+        });
+
+        app.update(|ctx| {
+            WindowManager::handle(ctx).update(ctx, |state, ctx| {
+                state.overwrite_for_test(ApplicationStage::Active, Some(window_id));
+                ctx.notify();
+            });
+        });
+
+        let visible_unfocused_terminal = pane_group.update(&mut app, |panes, ctx| {
+            let original_pane = panes.pane_id_by_index(0).unwrap();
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+            let terminal = panes
+                .terminal_view_from_pane_id(original_pane, ctx)
+                .unwrap();
+            assert_ne!(panes.focused_pane_id(ctx), original_pane);
+            assert!(panes.visible_terminal_views(ctx).contains(&terminal));
+            terminal
+        });
+        let bell_events = visible_unfocused_terminal.read(&app, |terminal, _| {
+            terminal.model_event_dispatcher().clone()
+        });
+
+        bell_events.update(&mut app, |_, ctx| {
+            ctx.emit(TerminalModelEvent::Bell);
+        });
+        assert_eq!(app.dock_badge_count(), 0);
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.handle_action(&PaneGroupAction::ToggleMaximizePane, ctx);
+            assert!(panes.is_focused_pane_maximized(ctx));
+        });
+        bell_events.update(&mut app, |_, ctx| {
+            ctx.emit(TerminalModelEvent::Bell);
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.handle_action(&PaneGroupAction::ToggleMaximizePane, ctx);
+            assert!(!panes.is_focused_pane_maximized(ctx));
+        });
+        assert_eq!(app.dock_badge_count(), 0);
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let notebook = ctx.add_typed_action_view(NotebookView::new);
+            panes.add_pane_with_direction(
+                Direction::Left,
+                NotebookPane::new(notebook, ctx),
+                true,
+                ctx,
+            );
+            assert!(panes.focused_session_view(ctx).is_none());
+        });
+        app.update(|ctx| {
+            WindowManager::handle(ctx).update(ctx, |state, ctx| {
+                let previous = state.state().clone();
+                state.overwrite_for_test(ApplicationStage::Inactive, None);
+                ctx.emit(StateEvent::ValueChanged {
+                    current: state.state().clone(),
+                    previous,
+                });
+                ctx.notify();
+            });
+        });
+        bell_events.update(&mut app, |_, ctx| {
+            ctx.emit(TerminalModelEvent::Bell);
+        });
+        assert_eq!(app.dock_badge_count(), 1);
+
+        app.update(|ctx| {
+            WindowManager::handle(ctx).update(ctx, |state, ctx| {
+                let previous = state.state().clone();
+                state.overwrite_for_test(ApplicationStage::Active, Some(window_id));
+                ctx.emit(StateEvent::ValueChanged {
+                    current: state.state().clone(),
+                    previous,
+                });
+                ctx.notify();
+            });
+        });
+        assert_eq!(app.dock_badge_count(), 0);
+    });
 }
 
 #[test]

@@ -906,7 +906,24 @@ fn handle_pane_stack_event(
             let state = ctx.windows().state();
             (state.stage, state.active_window)
         };
-        if (removed_view_was_focused || active_terminal.is_self_or_child_focused(ctx))
+        let workspace = WorkspaceRegistry::as_ref(ctx).get(ctx.window_id(), ctx);
+        let is_visible = if let Some(workspace) = workspace {
+            workspace.as_ref(ctx).is_pane_group_visible(ctx.view_id())
+                && !(group.right_panel_open && group.is_right_panel_maximized)
+                && if group.is_focused_pane_maximized(ctx) {
+                    group
+                        .focused_session_view(ctx)
+                        .is_some_and(|view| view.id() == active_terminal.id())
+                } else {
+                    group
+                        .visible_terminal_views(ctx)
+                        .iter()
+                        .any(|view| view.id() == active_terminal.id())
+                }
+        } else {
+            removed_view_was_focused || active_terminal.is_self_or_child_focused(ctx)
+        };
+        if is_visible
             && application_stage == ApplicationStage::Active
             && active_window == Some(ctx.window_id())
         {

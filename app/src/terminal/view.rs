@@ -542,6 +542,7 @@ use crate::workspace::view::cloud_agent_capacity_modal::CloudAgentCapacityModalV
 use crate::workspace::{
     CommandSearchOptions, ForkAIConversationParams, ForkFromExchange,
     ForkedConversationDestination, OneTimeModalModel, ToastStack, WorkspaceAction,
+    WorkspaceRegistry,
 };
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::CustomerType;
@@ -11794,11 +11795,27 @@ impl TerminalView {
                 ctx.request_user_attention();
 
                 // Count this terminal in the Dock badge when it bells while not
-                // viewed (focused in the active window); cleared when it's viewed,
-                // its shell exits, or its pane closes (GH-11095).
-                let is_viewed = ctx.is_self_or_child_focused()
-                    && ctx.windows().state().stage == ApplicationStage::Active
-                    && ctx.windows().state().active_window == Some(ctx.window_id());
+                // visible in the active window; cleared when it's viewed, its shell
+                // exits, or its pane closes (GH-11095).
+                let (application_stage, active_window) = {
+                    let state = ctx.windows().state();
+                    (state.stage, state.active_window)
+                };
+                let is_visible = WorkspaceRegistry::as_ref(ctx)
+                    .get(ctx.window_id(), ctx)
+                    .map_or_else(
+                        || ctx.is_self_or_child_focused(),
+                        |workspace| {
+                            workspace
+                                .as_ref(ctx)
+                                .visible_terminal_views(ctx)
+                                .iter()
+                                .any(|view| view.id() == self.view_id)
+                        },
+                    );
+                let is_viewed = is_visible
+                    && application_stage == ApplicationStage::Active
+                    && active_window == Some(ctx.window_id());
                 if !is_viewed {
                     AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
                         model.record_terminal_bell(self.view_id, ctx);

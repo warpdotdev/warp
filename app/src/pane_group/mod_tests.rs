@@ -2249,11 +2249,15 @@ fn closing_terminal_pane_clears_its_dock_badge() {
 #[test]
 fn popping_terminal_stack_clears_exposed_terminal_dock_badge() {
     App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        let pane_group = mock_pane_group(&mut app, Default::default());
+        crate::workspace::view::tests::initialize_app(&mut app);
+        let workspace = crate::workspace::view::tests::mock_workspace(&mut app);
+        let pane_group = workspace.read(&app, |workspace, _| {
+            workspace.active_tab_pane_group().clone()
+        });
 
         let pane_stack = pane_group.update(&mut app, |panes, ctx| {
             let terminal_pane = panes.terminal_session_by_pane_index(0).unwrap();
+            let terminal_pane_id = terminal_pane.terminal_pane_id();
             let underlying_view = terminal_pane.terminal_view(ctx);
             let pane_stack = terminal_pane.pane_view().as_ref(ctx).pane_stack().clone();
             let (top_pane, top_view) = panes.create_terminal_pane_data(
@@ -2267,6 +2271,9 @@ fn popping_terminal_stack_clears_exposed_terminal_dock_badge() {
             pane_stack.update(ctx, |stack, ctx| {
                 stack.push(top_pane.terminal_manager(ctx), top_view.clone(), ctx);
             });
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+            assert_ne!(panes.focused_pane_id(ctx), terminal_pane_id.into());
+            assert!(panes.visible_terminal_views(ctx).contains(&top_view));
             AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
                 model.record_terminal_bell(underlying_view.id(), ctx);
             });
@@ -2275,7 +2282,6 @@ fn popping_terminal_stack_clears_exposed_terminal_dock_badge() {
                 state.overwrite_for_test(ApplicationStage::Active, Some(window_id));
                 ctx.notify();
             });
-            ctx.focus(&top_view);
             pane_stack
         });
         assert_eq!(app.dock_badge_count(), 1);
