@@ -107,31 +107,25 @@ impl CodexSessionHandler {
     /// Parse a plain-text OSC 9 notification body into a `CLIAgentEvent`.
     /// Returns `None` only for empty bodies.
     fn parse_osc9_text(body: &str) -> Option<CLIAgentEvent> {
-        parse_codex_osc9_fallback_event(body)
-    }
-}
+        let body = body.trim();
+        if body.is_empty() {
+            return None;
+        }
 
-/// Parse a plain-text Codex OSC 9 notification into the fallback event used by
-/// legacy Codex sessions. Returns `None` only for empty bodies.
-pub(crate) fn parse_codex_osc9_fallback_event(body: &str) -> Option<CLIAgentEvent> {
-    let body = body.trim();
-    if body.is_empty() {
-        return None;
+        Some(CLIAgentEvent {
+            v: 1,
+            agent: CLIAgent::Codex,
+            event: CLIAgentEventType::Stop,
+            session_id: None,
+            cwd: None,
+            project: None,
+            payload: CLIAgentEventPayload {
+                query: Some(body.to_owned()),
+                ..Default::default()
+            },
+            source: CLIAgentEventSource::CodexOsc9Fallback,
+        })
     }
-
-    Some(CLIAgentEvent {
-        v: 1,
-        agent: CLIAgent::Codex,
-        event: CLIAgentEventType::Stop,
-        session_id: None,
-        cwd: None,
-        project: None,
-        payload: CLIAgentEventPayload {
-            query: Some(body.to_owned()),
-            ..Default::default()
-        },
-        source: CLIAgentEventSource::CodexOsc9Fallback,
-    })
 }
 
 impl CLIAgentSessionHandler for CodexSessionHandler {

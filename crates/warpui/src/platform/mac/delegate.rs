@@ -8,7 +8,6 @@ use objc2::{MainThreadMarker, msg_send};
 use objc2_app_kit::{NSApplication, NSCursor, NSRequestUserAttentionType};
 use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
 use objc2_foundation::{NSString, NSUInteger};
-use parking_lot::Mutex;
 use warpui_core::accessibility::AccessibilityContent;
 use warpui_core::clipboard::InMemoryClipboard;
 use warpui_core::keymap::Keystroke;
@@ -59,7 +58,6 @@ pub struct AppDelegate {
 pub struct IntegrationTestDelegate {
     app_delegate: AppDelegate,
     clipboard: InMemoryClipboard,
-    dock_badge_count: Mutex<usize>,
 }
 
 impl IntegrationTestDelegate {
@@ -67,7 +65,6 @@ impl IntegrationTestDelegate {
         Ok(IntegrationTestDelegate {
             app_delegate: AppDelegate::new()?,
             clipboard: InMemoryClipboard::default(),
-            dock_badge_count: Mutex::new(0),
         })
     }
 }
@@ -80,15 +77,6 @@ impl platform::Delegate for IntegrationTestDelegate {
 
     fn set_cursor_shape(&self, cursor: Cursor) {
         self.app_delegate.set_cursor_shape(cursor)
-    }
-
-    fn set_dock_badge_count(&self, count: usize) {
-        *self.dock_badge_count.lock() = count;
-    }
-
-    #[cfg(feature = "test-util")]
-    fn dock_badge_count(&self) -> usize {
-        *self.dock_badge_count.lock()
     }
 
     fn open_url(&self, _: &str) -> bool {

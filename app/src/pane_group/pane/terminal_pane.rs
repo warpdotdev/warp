@@ -10,6 +10,7 @@ use url::Url;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_errors::report_error;
+use warpui::windowing::state::ApplicationStage;
 use warpui::{
     AppContext, EntityId, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId,
 };
@@ -403,7 +404,7 @@ impl PaneContent for TerminalPane {
         // restored, so this is safe to run unconditionally.
         let terminal_view_id = self.terminal_view(ctx).id();
         ActiveAgentViewsModel::handle(ctx).update(ctx, |model, ctx| {
-            for terminal_view_id in terminal_view_ids {
+            for &terminal_view_id in &terminal_view_ids {
                 model.unregister_agent_view_controller(terminal_view_id, ctx);
                 model.unregister_ambient_session(terminal_view_id, ctx);
             }
@@ -415,9 +416,10 @@ impl PaneContent for TerminalPane {
             CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
                 sessions.remove_session(terminal_view_id, ctx);
             });
-            // Drop any unviewed-bell Dock badge entry for the closing terminal.
             AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
-                model.clear_terminal_bell(terminal_view_id, ctx);
+                for terminal_view_id in terminal_view_ids {
+                    model.clear_terminal_bell(terminal_view_id, ctx);
+                }
             });
         }
 
@@ -881,19 +883,37 @@ fn handle_pane_stack_event(
     terminal_pane_id: TerminalPaneId,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
-    match event {
+    let removed_view_was_focused = match event {
         PaneStackEvent::ViewAdded(terminal_view) => {
             attach_terminal_view(terminal_view, terminal_pane_id, ctx);
+            false
         }
         PaneStackEvent::ViewRemoved(terminal_view) => {
+            let was_focused = terminal_view.is_self_or_child_focused(ctx);
             ctx.unsubscribe_to_view(terminal_view);
+            AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
+                model.clear_terminal_bell(terminal_view.id(), ctx);
+            });
+            was_focused
         }
-    }
+    };
 
     // Ensure we use the new top-level view's title and active session status.
     // TODO(ben): This shouldn't be necessary once titles are set declaratively.
     if let Some(active_terminal) = group.terminal_view_from_pane_id(terminal_pane_id, ctx) {
         active_terminal.update(ctx, |view, ctx| view.on_pane_state_change(ctx));
+        let (application_stage, active_window) = {
+            let state = ctx.windows().state();
+            (state.stage, state.active_window)
+        };
+        if (removed_view_was_focused || active_terminal.is_self_or_child_focused(ctx))
+            && application_stage == ApplicationStage::Active
+            && active_window == Some(ctx.window_id())
+        {
+            AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
+                model.clear_terminal_bell(active_terminal.id(), ctx);
+            });
+        }
     }
 }
 
