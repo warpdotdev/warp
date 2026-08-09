@@ -62,7 +62,7 @@ Running tmux in Warp shows tmux's raw text TUI; Warp's native tabs/splits, comma
 11. Scrolling up shows history beyond the live buffer, fetched on demand, with no duplicated or missing line at the seed/live boundary; reaching `history-limit` stops cleanly.
 12. tmux panes are plain scrolling terminals by default. Blocks are opt-in: they form only when the user has Warp's shell integration sourced inside their tmux shell; their absence is normal, not an error.
 13. Hand-typed `tmux -CC` shows the convert banner and does not render raw `%output` text; the pane only becomes native on **Convert**.
-14. On `%exit` (server exit / session kill), the native tabs/panes tear down with a clear message; Warp does not hang.
+14. On `%exit` (server exit / session kill), or on a malformed/oversized control stream (e.g. a hostile or corrupt remote `tmux -CC`), the native tabs/panes tear down cleanly with a clear message; Warp does not hang or allocate without bound.
 15. On tmux < 3.2, the integration still renders and accepts input (basic mode), with flow-control-dependent behavior degraded and surfaced, not broken.
 16. The whole feature is behind a setting; disabling it returns to today's behavior.
 17. A full-screen app that queries the terminal (cursor-position / device-attributes report) behaves correctly: the emulator's response reaches that pane's process, so the app does not hang.
@@ -76,5 +76,6 @@ Each invariant is backed by a fixture/transcript test (CI-safe, no live tmux) or
 ## Open questions
 
 - Preferred home for the button (tab-bar `+` menu vs. a dedicated affordance) and the setting name/namespace.
-- Whether to reuse or stay clear of the existing `tmux_control_mode` module currently scoped to SSH warpification (see tech spec).
 - Appetite for a later session **dashboard** (list/kill/attach across sessions) vs. the v1 menu.
+
+(Resolved: the existing `tmux_control_mode` module scoped to SSH warpification is left untouched; the control-mode protocol core is a single fresh parser. See the tech spec.)

@@ -51,6 +51,18 @@ Send an initial `refresh-client -C` (size tmux before enumerating), then `list-w
 ### 7. Trigger + UI
 On the control-mode DCS (`ESC P 1000 p`), divert the raw stream at the fd/transport level to the gateway — **not** through the buffering DCS hook. A tab-bar `+` menu and command-palette entry offer New / Attach (from `tmux ls`); hand-typed `tmux -CC` surfaces an inline convert banner (pattern: `terminal/view/inline_banner`), no auto-flip.
 
+### 8. Resource bounds and malformed-stream teardown (local and SSH)
+A control stream can originate from a remote `ssh host tmux -CC`, so it is untrusted input that drives UI/model allocation through panes, windows, layouts, titles, and output. The gateway enforces hard caps and treats any breach as a protocol error rather than a growable buffer:
+- **Frame/line size:** each `%`-notification line is bounded (`MAX_CONTROL_LINE`); an over-long line is a protocol error, not an unbounded read.
+- **Layout depth:** the layout parser is bounded by a recursion-depth cap (`MAX_LAYOUT_DEPTH = 128`) and returns `Malformed` instead of overflowing the stack on a pathological nested string.
+- **Pane/window counts:** adopted panes and windows are capped (`MAX_PANES` / `MAX_WINDOWS`); a stream that exceeds them is rejected rather than allocating unbounded `TerminalModel`s and tabs.
+- **Title length:** window/pane titles are truncated to a fixed maximum before reaching the tab/pane UI.
+- **Per-pane output:** buffered `%output` for a not-yet-registered pane and flow-control backlog are each bounded (256KiB/pane); past the cap the oldest bytes drop rather than grow.
+- **Malformed-stream teardown:** on any parse error, an oversized frame, a `%begin` without a matching `%end`, or a decode failure, the control session is torn down cleanly (panes closed with a surfaced message) on the same path as `%exit`, instead of continuing to allocate.
+
+### 9. `scrollback.rs` - on-demand history backfill
+Initial adoption seeds only the visible screen (section 6). Scrolling above the seed fetches older lines from tmux history on demand: Warp maps the requested scroll range to tmux line offsets and issues `capture-pane -p -e -J -t %N -S <start> -E <end>` (a negative `-S` counts back from the top of the visible region). Fetched lines are prepended into that pane's `TerminalModel` scrollback above the seeded region, with the seed/fetch boundary de-duplicated so no line is doubled or dropped (invariant #11). Fetches are chunked and bounded; requesting past tmux's `history-limit` returns nothing and renders as a clean top-of-history (no error, no infinite request loop). Alt-screen/TUI panes have no meaningful scrollback and are excluded.
+
 ### Concurrency / lock order
 One global order: never acquire a `TerminalModel` lock while holding a `PaneGroup`/UI lock; apply layout/tab mutations via the UI thread's message queue, not inline from the reader thread.
 
@@ -69,7 +81,8 @@ One global order: never acquire a `TerminalModel` lock while holding a `PaneGrou
 
 - **Reattach corrupts TUI/alt-screen panes if text-seeded.** `capture-pane` returns text+SGR only, not modes/cursor. Mitigation: TUI panes repaint live; only text panes restore contents (scopes success criterion #9).
 - **DCS lifetime.** The existing DCS hook buffers to `unhook()`; a control-mode DCS stays open for the session lifetime → OOM / renders nothing. Mitigation: divert at the fd/transport level; the origin pane's `TerminalModel` becomes a dead host.
-- **Collision with the existing `tmux_control_mode`/`TmuxCommandExecutor`.** Audit and coordinate reuse-vs-fresh before implementation; likely extract a shared parser rather than ship a second one. **(Open question for maintainers.)**
+- **Collision with the existing `tmux_control_mode`/`TmuxCommandExecutor`.** Resolved: the existing module is scoped to SSH warpification (OSC52 clipboard passthrough via `escape_sequences.rs:144 tmux_passthrough()`) and never parses the control-mode `%`-protocol or drives panes. It is therefore left untouched by this feature. The control-mode protocol core is a single fresh, self-contained parser under `crates/warp_terminal/src/tmux/` (canonical, unit-tested in isolation) with no dependency on the legacy module; the legacy code is audited and either narrowed or removed in a follow-up rather than extended, so exactly one control-mode parser and one set of protocol tests are canonical.
+- **Hostile or corrupt control stream (especially over SSH).** An untrusted remote `tmux -CC` could try to exhaust memory or the stack via oversized frames, deeply nested layouts, or huge pane/window counts, or drive the UI with over-long titles. Mitigation: the hard caps and malformed-stream teardown in section 8 (frame/line size, layout depth 128, pane/window counts, title length, bounded per-pane buffers); a breach tears the session down instead of allocating.
 - **Head-of-line blocking** (single control channel): flow control from the first render PR; never block the UI thread on a `%begin/%end` round trip.
 - **Self-echo double-apply / oscillation:** idempotent diff-apply + command-number tagging.
 - **Ordering:** single wire-ordered apply; a resize acts as a barrier for that pane's later output.
@@ -81,8 +94,11 @@ One global order: never acquire a `TerminalModel` lock while holding a `PaneGrou
 ## Testing and validation
 
 - **Unit:** gateway framing/escaping incl. a lone `0x80`–`0xFF` byte in `%output`; a proof that no input sequence yields a bare newline on the control fd; layout parse+emit incl. `e123,204x53,0,0{102x53,0,0,1,101x53,103,0[101x26,103,0,2,101x26,103,27,3]}`; query-response routing; unknown-pane buffering; self-echo idempotency.
+- **Resource bounds (section 8):** a deeply nested layout string returns `Malformed` instead of overflowing the stack; an over-long `%`-line, an over-long title, and pane/window counts past the caps are each rejected/truncated; a parse error or `%begin` without `%end` triggers the teardown path rather than unbounded allocation.
+- **Scrollback backfill (section 9):** a transcript that seeds a screen then serves `capture-pane -S/-E` history ranges asserts fetched lines prepend correctly, the seed/fetch boundary has no duplicate or missing line, and a fetch past `history-limit` stops cleanly.
 - **Fixture/transcript tests (CI-safe, no live tmux):** replay recorded `%`-streams through gateway+controller and assert the tab/split tree, pane contents, and the seed↔live-`%output` boundary (no duplicate/missing line). Mirrors `app/src/terminal/ref_tests/data/tmux_htop`. CI has no `tmux` binary, so these are the primary protocol tests.
 - **Integration (`crates/integration/`, gated on tmux ≥3.2):** drive real `tmux -CC`; assert attach, `%layout-change` splits, write-back round-trips, reattach with a running TUI (repaint, no garble), flood-without-freeze, `%exit` teardown. Skips cleanly where tmux is absent.
+- **SSH control mode (`ssh host tmux -CC`):** a fixture/transcript test replays an SSH-originated control stream (transport diverted at the fd, not a local PTY) and asserts the same tab/split/output invariants; an integration scenario gated on tmux ≥3.2 plus an SSH target asserts attach, command serialization over the SSH channel, and write-back round-trips, since transport diversion and serialization differ from a locally spawned tmux. Skips cleanly where no SSH target is configured.
 - **CI (implementation PRs):** `./script/presubmit` (fmt + clippy `-D warnings` + nextest) green; a `CHANGELOG-NEW-FEATURE` line on the PRs that ship user-facing code; screen-recording proof. This spec-only PR carries `CHANGELOG-NONE`.
 
 ## Follow-ups
