@@ -30,13 +30,12 @@ pub mod terminal_model;
 pub mod test_utils;
 
 pub use lifecycle::{LifecycleRecoveryRecord, StartCommandOutcome};
-pub use warp_terminal::model::blockgrid;
 pub use warp_terminal::model::grid::cell;
 pub use warp_terminal::model::secrets::{
     ObfuscateSecrets, RespectObfuscatedSecrets, Secret, SecretHandle,
     set_user_and_enterprise_secret_regexes,
 };
 pub use warp_terminal::model::{
-    BlockId, ansi, char_or_str, completions, escape_sequences, find, grid, image_map, iterm_image,
-    kitty, mouse, selection,
+    BlockId, ansi, blockgrid, char_or_str, completions, escape_sequences, find, grid, image_map,
+    iterm_image, kitty, mouse, selection,
 };

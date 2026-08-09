@@ -1,6 +1,7 @@
+use std::collections::HashMap;
+
 use itertools::Itertools;
 use pathfinder_geometry::vector::Vector2F;
-use std::collections::HashMap;
 use unicode_width::UnicodeWidthChar;
 
 use crate::SizeInfo;
