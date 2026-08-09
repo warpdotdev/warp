@@ -39,7 +39,7 @@ Running tmux in Warp shows tmux's raw text TUI; Warp's native tabs/splits, comma
 
 1. A **tmux button** on the tab-bar `+` control (and a command-palette entry) opens a menu: **New tmux session**, and **Attach to…** listing running local sessions with their window counts.
 2. Choosing one renders that session natively: its windows are tabs, its panes are splits, content is live.
-3. Typing `tmux -CC` (or `ssh box 'tmux -CC'`) by hand shows a small inline banner: "tmux control mode detected — open natively?" with a **Convert** button. Ignoring it leaves the pane as-is; it never flips without a click.
+3. Typing `tmux -CC` (or `ssh box 'tmux -CC'`) by hand shows a small inline banner: "tmux control mode detected - open natively?" with a **Convert** button. While the banner is pending, Warp suppresses the raw control-mode stream, so the pane shows the banner and never raw `%output` gibberish (criterion #13). **Convert** renders it natively; dismissing the banner detaches the `-CC` client so the pane returns to a normal shell, with the tmux session left running. It never flips without a click.
 4. Splitting/closing/resizing panes and adding/closing tabs with Warp's own UI is reflected in tmux, and changes made from another tmux client are reflected in Warp.
 5. Closing Warp leaves the session running; reopening and reattaching restores it.
 
@@ -61,7 +61,7 @@ Running tmux in Warp shows tmux's raw text TUI; Warp's native tabs/splits, comma
 10. A pane emitting a large burst is paused/backpressured (`%pause` honored) without freezing other panes or dropping the connection; output resumes after drain (`%continue`).
 11. Scrolling up shows history beyond the live buffer, fetched on demand, with no duplicated or missing line at the seed/live boundary; reaching `history-limit` stops cleanly.
 12. tmux panes are plain scrolling terminals by default. Blocks are opt-in: they form only when the user has Warp's shell integration sourced inside their tmux shell; their absence is normal, not an error.
-13. Hand-typed `tmux -CC` shows the convert banner and does not render raw `%output` text; the pane only becomes native on **Convert**.
+13. Hand-typed `tmux -CC` shows the convert banner and does not render raw `%output` text (the control stream is suppressed while pending); the pane only becomes native on **Convert**, and dismissing the banner detaches the client back to a normal shell.
 14. On `%exit` (server exit / session kill), or on a malformed/oversized control stream (e.g. a hostile or corrupt remote `tmux -CC`), the native tabs/panes tear down cleanly with a clear message; Warp does not hang or allocate without bound.
 15. On tmux < 3.2, the integration still renders and accepts input (basic mode), with flow-control-dependent behavior degraded and surfaced, not broken.
 16. The whole feature is behind the **`terminal.tmux_control_mode`** setting (surfaced under Settings → Features, default **off** during rollout, backed by `FeatureFlag::TmuxControlMode`); disabling it returns to today's behavior.
