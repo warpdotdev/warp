@@ -388,16 +388,6 @@ fn write_tool_call_args(out: &mut String, tool: &Tool) {
                 }
             }
         }
-        Tool::StartAgent(sa) => {
-            out.push_str(&format!("name: \"{}\"\n", escape_yaml_string(&sa.name)));
-            out.push_str("prompt: |\n");
-            write_block_scalar(out, &sa.prompt);
-        }
-        Tool::StartAgentV2(sa) => {
-            out.push_str(&format!("name: \"{}\"\n", escape_yaml_string(&sa.name)));
-            out.push_str("prompt: |\n");
-            write_block_scalar(out, &sa.prompt);
-        }
         #[allow(deprecated)]
         Tool::FileGlob(fg) => {
             out.push_str("patterns:\n");
@@ -589,15 +579,6 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
                     "error: \"{}\"\n",
                     escape_yaml_string(&failure.error)
                 ));
-            }
-            None => {}
-        },
-        ToolCallResultType::StartAgentV2(r) => match &r.result {
-            Some(api::start_agent_v2_result::Result::Success(s)) => {
-                out.push_str(&format!("agent_id: {}\n", s.agent_id));
-            }
-            Some(api::start_agent_v2_result::Result::Error(e)) => {
-                out.push_str(&format!("error: {}\n", e.error));
             }
             None => {}
         },
@@ -988,19 +969,6 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
                     }
                     Result::Error(e) => {
                         out.push_str(&format!("error: {}\n", e.message));
-                    }
-                }
-            }
-        }
-        ToolCallResultType::StartAgent(r) => {
-            if let Some(res) = &r.result {
-                use api::start_agent_result::Result;
-                match res {
-                    Result::Success(s) => {
-                        out.push_str(&format!("agent_id: {}\n", s.agent_id));
-                    }
-                    Result::Error(e) => {
-                        out.push_str(&format!("error: {}\n", e.error));
                     }
                 }
             }

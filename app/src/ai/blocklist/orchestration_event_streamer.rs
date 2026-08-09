@@ -296,6 +296,7 @@ pub struct OrchestrationEventStreamer {
     killed_run_id_order: VecDeque<String>,
 }
 
+#[allow(private_interfaces)]
 pub enum OrchestrationEventStreamerEvent {
     DormantClaudeWakeReady {
         conversation_id: AIConversationId,
@@ -310,6 +311,13 @@ pub enum OrchestrationEventStreamerEvent {
     /// Lifecycle transition for a known child under `parent_task_id`.
     ChildStatusChanged {
         parent_task_id: AmbientAgentTaskId,
+        run_id: String,
+        status: ConversationStatus,
+    },
+    /// Lifecycle transition observed on an owner-side stream for a watched run.
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+    WatchedRunStatusChanged {
+        owner_conversation_id: AIConversationId,
         run_id: String,
         status: ConversationStatus,
     },
@@ -545,43 +553,40 @@ impl OrchestrationEventStreamer {
         }
     }
 
+    /// Pure eligibility check for [`Self::register_parent_on_wait`]: the
+    /// gating flag must be on; passive views of runs hosted elsewhere
+    /// (shared-session viewers, remote-child placeholders) never register
+    /// because the owning process owns the inbox (mirrors the `is_eligible`
+    /// exclusion); and an established parent needs no re-fetch because the
+    /// live ancestor stream already discovers new children via the server
+    /// `parent_run_id` JOIN. Child conversations ARE eligible: with
+    /// multi-level orchestration a mid-tree node is simultaneously a child
+    /// and a parent candidate, so a child blocked on `wait_for_events` must
+    /// still confirm whether it has children of its own.
+    fn should_register_parent_on_wait(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &warpui::AppContext,
+    ) -> bool {
+        FeatureFlag::WaitForEventsParentRegistration.is_enabled()
+            && !self.is_remote_run_view(conversation_id, ctx)
+            && !self.is_parent_agent_conversation(conversation_id, ctx)
+    }
+
     /// Confirms parent status against the server when an orchestrator blocks
     /// on `wait_for_events`, registering it for the owner-side ancestor
     /// stream. This is the trigger that lets a parent learn about children
     /// created out-of-band (Oz CLI / web API), which never flowed through
     /// [`Self::register_watched_run_id`]. Once the parent role is established
     /// it is permanent for the conversation's life, so subsequent waits
-    /// short-circuit on the already-parent check below.
+    /// short-circuit in [`Self::should_register_parent_on_wait`]. The fetch
+    /// below exists only to make the initial not-parent -> parent transition.
     pub fn register_parent_on_wait(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !FeatureFlag::WaitForEventsParentRegistration.is_enabled() {
-            return;
-        }
-        // One-level-tree invariant: a child can never also be a parent, so
-        // skip the server fetch. The child still receives its own inbox via
-        // the existing `is_eligible` -> `RunIds(self)` stream, so there is no
-        // regression.
-        let is_child = BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&conversation_id)
-            .is_some_and(|c| c.is_child_agent_conversation());
-        if is_child {
-            return;
-        }
-        // Passive views of a run hosted elsewhere (shared-session viewers,
-        // remote-child placeholders) must not register: the owning process
-        // owns the inbox. Mirrors the `is_eligible` exclusion and avoids a
-        // wasted `get_ambient_agent_task` fetch.
-        if self.is_remote_run_view(conversation_id, ctx) {
-            return;
-        }
-        // Already a known parent: the live ancestor stream already discovers
-        // new children via the server `parent_run_id` JOIN, so no re-fetch is
-        // needed. The fetch below exists only to make the initial
-        // not-parent -> parent transition.
-        if self.is_parent_agent_conversation(conversation_id, ctx) {
+        if !self.should_register_parent_on_wait(conversation_id, ctx) {
             return;
         }
         // No run_id yet (rare): nothing to query the server with; the next
@@ -2101,6 +2106,25 @@ impl OrchestrationEventStreamer {
                 .or_default()
                 .pending_message_ids
                 .extend(message_ids);
+        }
+
+        // The owner-side event service delivers lifecycle notifications to the
+        // orchestrator conversation, but passive remote-child views do not run
+        // their own SSE stream. Broadcast the same canonical status mapping so
+        // frontends retaining those views can project the child's lifecycle.
+        for event in &events {
+            if event.run_id == self_run_id {
+                continue;
+            }
+            let Some(lifecycle_type) = lifecycle_event_type_from_wire(event.event_type.as_str())
+            else {
+                continue;
+            };
+            ctx.emit(OrchestrationEventStreamerEvent::WatchedRunStatusChanged {
+                owner_conversation_id: conversation_id,
+                run_id: event.run_id.clone(),
+                status: conversation_status_from_lifecycle_event_type(lifecycle_type),
+            });
         }
 
         let lifecycle_events = convert_lifecycle_events(&events, self_run_id);

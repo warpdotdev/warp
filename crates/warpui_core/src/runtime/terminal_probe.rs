@@ -146,7 +146,6 @@ fn run_probe() -> io::Result<ProbedTerminalColors> {
     }
     Ok(parse_replies(&replies))
 }
-
 /// Non-unix hosts skip the probe: conhost does not answer OSC 10/11, and a
 /// non-blocking console read needs a different mechanism (see Codex's
 /// `GetConsoleScreenBufferInfoEx` fallback for a possible follow-up). Callers

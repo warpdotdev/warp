@@ -213,7 +213,7 @@ impl Input {
                 )
                 .with_dragbar_side(DragBarSide::Right)
                 .with_dragbar_offset(7.0)
-                .with_bounds_callback(Box::new(|window_size| (200.0, window_size.x())))
+                .with_bounds_callback(Box::new(|window_size| (200.0, window_size.x().max(200.0))))
                 .on_resize(move |ctx, _| {
                     ctx.notify();
                 })
@@ -246,7 +246,7 @@ impl Input {
                     horizontal_resizable,
                 )
                 .with_dragbar_side(dragbar_side)
-                .with_bounds_callback(Box::new(|window_size| (100.0, window_size.y())))
+                .with_bounds_callback(Box::new(|window_size| (100.0, window_size.y().max(100.0))))
                 .on_resize(move |ctx, _| {
                     ctx.notify();
                 })

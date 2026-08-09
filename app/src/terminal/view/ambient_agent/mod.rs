@@ -29,12 +29,7 @@ pub use host_selector::{
     Host, HostSelector, HostSelectorAction, HostSelectorEvent, NakedHeaderButtonTheme,
 };
 pub use loading_screen::{render_cloud_mode_error_screen, render_cloud_mode_loading_screen};
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-pub(crate) use model::PendingHandoff;
-pub(crate) use model::should_disable_snapshot;
 pub use model::{AgentProgress, AmbientAgentViewModel, AmbientAgentViewModelEvent, Status};
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-pub(crate) use model::{HandoffSubmissionState, SnapshotUploadStatus};
 pub use model_selector::{
     HarnessSelection, ModelSelection, ModelSelector, ModelSelectorAction, ModelSelectorEvent,
 };
@@ -130,7 +125,14 @@ pub fn wire_ambient_agent_session_events(
                     }
                 }
                 AmbientAgentViewModelEvent::ExecutionSessionReady { session_id } => {
-                    manager.attach_execution_session(*session_id, ctx);
+                    // Returns false when the viewer is mid-connect, in which case the pane stays
+                    // on its current session. Recoverable, but silent otherwise: the attach is
+                    // driven by an event, so the caller that requested it has already returned.
+                    if !manager.attach_execution_session(*session_id, ctx) {
+                        log::warn!(
+                            "Ambient viewer could not re-attach to execution session {session_id}"
+                        );
+                    }
                 }
                 AmbientAgentViewModelEvent::EnteredSetupState
                 | AmbientAgentViewModelEvent::EnteredComposingState

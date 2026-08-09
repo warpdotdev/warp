@@ -296,8 +296,6 @@ pub mod text {
                     }
                     FetchConversationResult::Cancelled => writeln!(w, "{CANCELLED_MESSAGE}"),
                 },
-                // StartAgent is a client-side orchestration action, not used in SDK
-                AIAgentActionResultType::StartAgent(_) => Ok(()),
                 // SendMessageToAgent is a client-side orchestration action, not used in SDK
                 AIAgentActionResultType::SendMessageToAgent(_) => Ok(()),
                 AIAgentActionResultType::AskUserQuestion(_) => Ok(()),
@@ -413,17 +411,21 @@ pub mod text {
                     AIAgentActionType::StartRecording { .. } => {
                         writeln!(w, "Starting recording")?;
                     }
-                    AIAgentActionType::StopRecording { recording_id } => {
-                        writeln!(w, "Stopping recording {recording_id}")?;
+                    AIAgentActionType::StopRecording {
+                        recording_id,
+                        should_persist,
+                    } => {
+                        if *should_persist {
+                            writeln!(w, "Stopping recording {recording_id}")?;
+                        } else {
+                            writeln!(w, "Stopping recording {recording_id} and discarding result")?;
+                        }
                     }
                     AIAgentActionType::ReadSkill(request) => {
                         writeln!(w, "Reading skill: {}", request.skill)?;
                     }
                     AIAgentActionType::FetchConversation { conversation_id } => {
                         writeln!(w, "Fetching conversation {conversation_id}")?;
-                    }
-                    AIAgentActionType::StartAgent { name, .. } => {
-                        writeln!(w, "Starting agent: {name}")?;
                     }
                     AIAgentActionType::SendMessageToAgent {
                         addresses, subject, ..
@@ -1140,7 +1142,6 @@ pub mod json {
                     | AIAgentActionType::ReadShellCommandOutput { .. }
                     | AIAgentActionType::ReadSkill(_)
                     | AIAgentActionType::FetchConversation { .. }
-                    | AIAgentActionType::StartAgent { .. }
                     | AIAgentActionType::SendMessageToAgent { .. }
                     | AIAgentActionType::TransferShellCommandControlToUser { .. } => None,
                     AIAgentActionType::AskUserQuestion { .. } => None,

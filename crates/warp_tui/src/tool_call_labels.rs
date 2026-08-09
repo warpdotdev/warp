@@ -1,16 +1,18 @@
-//! Per-tool, per-state one-line labels for tool-call rows in the TUI
-//! transcript, modeled on the GUI's inline action text.
+//! Per-tool, per-state labels for tool-call rows in the TUI transcript,
+//! modeled on the GUI's inline action text.
 
 use std::path::Path;
 
+use ai::agent::action_result::RunAgentsAgentOutcome;
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionResultType, AIAgentActionType,
     AskUserQuestionResult, FileGlobV2Result, GrepResult, RequestCommandOutputResult,
     RunAgentsAgentOutcomeKind, RunAgentsResult, SearchCodebaseFailureReason, SearchCodebaseResult,
-    StartAgentExecutionMode, SuggestNewConversationResult,
+    StopRecordingResult, SuggestNewConversationResult, mcp_server_name_for_id,
 };
 use warp_core::command::ExitCode;
-use warpui_core::elements::tui::TuiStyle;
+use warpui_core::AppContext;
+use warpui_core::elements::tui::{Modifier, TuiStyle};
 
 use self::ToolCallDisplayState as State;
 use crate::tui_builder::TuiUiBuilder;
@@ -40,8 +42,9 @@ pub(crate) struct ResolvedCommandBlock {
     pub(crate) state: CommandBlockState,
 }
 
-/// Longest rendered length for interpolated values (commands, queries, paths)
-/// so tool-call rows stay scannable one-liners.
+/// Longest rendered length for compact interpolated values such as queries and
+/// paths. Shell commands are preserved in full and wrap in their collapsible
+/// header instead.
 const MAX_INLINE_LEN: usize = 80;
 
 /// Coarse presentation state for a tool call.
@@ -94,6 +97,22 @@ impl ToolCallDisplayState {
     }
 }
 
+/// Styles the first word of a tool-call label as the action and the rest as details.
+pub(crate) fn styled_tool_call_label_spans(
+    label: &str,
+    builder: &TuiUiBuilder,
+) -> Vec<(String, TuiStyle)> {
+    let action_style = builder.primary_text_style().add_modifier(Modifier::BOLD);
+    let details_style = builder.neutral_7_text_style();
+    match label.find(char::is_whitespace) {
+        Some(first_word_end) => vec![
+            (label[..first_word_end].to_owned(), action_style),
+            (label[first_word_end..].to_owned(), details_style),
+        ],
+        None => vec![(label.to_owned(), action_style)],
+    }
+}
+
 /// Collapses an optional action status into the coarse display state.
 /// `output_streaming` is whether the exchange output is still streaming;
 /// a status-less action in a streaming output is still being constructed
@@ -137,18 +156,35 @@ pub(crate) fn tool_call_display_state(
     }
 }
 
-/// Returns the one-line transcript label for a tool call in its current state.
+/// Returns the transcript label for a tool call in its current state.
+///
+/// Equivalent to [`tool_call_label_with_server`] with no MCP server name; use
+/// that variant when rendering an MCP tool call whose originating server is
+/// known so the label surfaces both the tool name and the server.
 pub(crate) fn tool_call_label(
     action: &AIAgentAction,
     status: Option<&AIActionStatus>,
     output_streaming: bool,
     block: Option<&ResolvedCommandBlock>,
 ) -> String {
+    tool_call_label_with_server(action, status, output_streaming, block, None)
+}
+
+/// Like [`tool_call_label`], but interpolates the MCP tool's originating server
+/// name (when known) into the per-state label so MCP tool calls surface both
+/// their tool name and server identity across the transcript lifecycle.
+pub(crate) fn tool_call_label_with_server(
+    action: &AIAgentAction,
+    status: Option<&AIActionStatus>,
+    output_streaming: bool,
+    block: Option<&ResolvedCommandBlock>,
+    server_name: Option<&str>,
+) -> String {
     let state = tool_call_display_state(status, output_streaming, block.map(|block| block.state));
     let result = status
         .and_then(AIActionStatus::finished_result)
         .map(|result| &result.result);
-    let label = label_for_action(&action.action, state, result, block);
+    let label = label_for_action(&action.action, state, result, block, server_name);
     match state {
         State::Blocked => format!("{label} (awaiting approval)"),
         State::Constructing
@@ -157,6 +193,21 @@ pub(crate) fn tool_call_label(
         | State::Succeeded
         | State::Failed
         | State::Cancelled => label,
+    }
+}
+
+/// Resolves the user-facing name of the originating MCP server for an MCP
+/// tool-call action, for use in transcript labels. Returns `None` for non-
+/// MCP-tool actions, legacy/flat calls with no server id, or unknown servers.
+pub(crate) fn mcp_server_name_for_action(
+    action: &AIAgentActionType,
+    app: &AppContext,
+) -> Option<String> {
+    match action {
+        AIAgentActionType::CallMCPTool { server_id, .. } => server_id
+            .as_ref()
+            .and_then(|id| mcp_server_name_for_id(id, app)),
+        _ => None,
     }
 }
 
@@ -172,6 +223,7 @@ fn label_for_action(
     state: State,
     result: Option<&AIAgentActionResultType>,
     block: Option<&ResolvedCommandBlock>,
+    server_name: Option<&str>,
 ) -> String {
     let block_state = block.map(|block| block.state);
     match action {
@@ -182,7 +234,9 @@ fn label_for_action(
             let executed = result
                 .and_then(AIAgentActionResultType::command_str)
                 .or_else(|| block.and_then(|block| block.command.as_deref()));
-            let cmd = single_line(executed.unwrap_or(command));
+            // Shell-command headers wrap in `TuiShellCommandView`, so retain
+            // the complete command instead of capping it at MAX_INLINE_LEN.
+            let cmd = executed.unwrap_or(command).trim_end();
             match state {
                 State::Constructing => "Generating command…".to_owned(),
                 State::Pending | State::Blocked => format!("Run `{cmd}`"),
@@ -350,16 +404,23 @@ fn label_for_action(
         }
         AIAgentActionType::CallMCPTool { name, .. } => {
             let name = single_line(name);
+            // Append the originating server when known so MCP tool calls
+            // surface both identities, with a deterministic no-server fallback.
+            let suffix = server_name
+                .map(|server| format!(" on {server}"))
+                .unwrap_or_default();
             match state {
                 // Like the GUI's "Calling \"{name}\" MCP tool..." loading
                 // text; the tool name is available before its args finish.
-                State::Constructing if name.is_empty() => "Calling MCP tool…".to_owned(),
-                State::Constructing => format!("Calling \"{name}\" MCP tool…"),
-                State::Pending | State::Blocked => format!("Call MCP tool {name}"),
-                State::Running => format!("Calling MCP tool {name}"),
-                State::Succeeded => format!("Called MCP tool {name}"),
-                State::Failed => format!("MCP tool {name} failed"),
-                State::Cancelled => format!("MCP tool {name} cancelled"),
+                State::Constructing if name.is_empty() => {
+                    format!("Calling MCP tool{suffix}…")
+                }
+                State::Constructing => format!("Calling \"{name}\" MCP tool{suffix}…"),
+                State::Pending | State::Blocked => format!("Call MCP tool {name}{suffix}"),
+                State::Running => format!("Calling MCP tool {name}{suffix}"),
+                State::Succeeded => format!("Called MCP tool {name}{suffix}"),
+                State::Failed => format!("MCP tool {name}{suffix} failed"),
+                State::Cancelled => format!("MCP tool {name}{suffix} cancelled"),
             }
         }
         AIAgentActionType::SuggestNewConversation { .. } => match state {
@@ -445,7 +506,12 @@ fn label_for_action(
         AIAgentActionType::StopRecording { .. } => match state {
             State::Pending | State::Blocked => "Stop recording".to_owned(),
             State::Constructing | State::Running => "Stopping recording…".to_owned(),
-            State::Succeeded => "Saved screen recording".to_owned(),
+            State::Succeeded => match result {
+                Some(AIAgentActionResultType::StopRecording(StopRecordingResult::Discarded)) => {
+                    "Discarded screen recording".to_owned()
+                }
+                _ => "Saved screen recording".to_owned(),
+            },
             State::Failed => "Failed to save recording".to_owned(),
             State::Cancelled => "Stop recording cancelled".to_owned(),
         },
@@ -468,25 +534,6 @@ fn label_for_action(
             State::Failed => "Fetch conversation failed".to_owned(),
             State::Cancelled => "Fetch conversation cancelled".to_owned(),
         },
-        AIAgentActionType::StartAgent {
-            name,
-            execution_mode,
-            ..
-        } => {
-            let agent = if matches!(execution_mode, StartAgentExecutionMode::Remote { .. }) {
-                format!("remote agent {name}")
-            } else {
-                format!("agent {name}")
-            };
-            match state {
-                State::Constructing => "Configuring agent…".to_owned(),
-                State::Pending | State::Blocked => format!("Start {agent}"),
-                State::Running => format!("Starting {agent}…"),
-                State::Succeeded => format!("Started agent {name}"),
-                State::Failed => format!("Failed to start agent {name}"),
-                State::Cancelled => format!("Start agent {name} cancelled"),
-            }
-        }
         AIAgentActionType::SendMessageToAgent {
             addresses, subject, ..
         } => {
@@ -555,25 +602,14 @@ fn label_for_action(
                     Some(AIAgentActionResultType::RunAgents(RunAgentsResult::Launched {
                         agents,
                         ..
-                    })) => {
-                        let launched = agents
-                            .iter()
-                            .filter(|agent| {
-                                matches!(agent.kind, RunAgentsAgentOutcomeKind::Launched { .. })
-                            })
-                            .count();
-                        let total = agents.len();
-                        if launched == total {
-                            format!("Spawned {}", count_label(total, "agent", "agents"))
-                        } else if launched == 0 {
-                            format!("Failed to spawn {}", count_label(total, "agent", "agents"))
-                        } else {
-                            format!("Spawned {launched} of {total} agents")
-                        }
-                    }
+                    })) => launched_agents_label(agents),
                     _ => format!("Spawned {}", count_label(total, "agent", "agents")),
                 },
                 State::Failed => match result {
+                    Some(AIAgentActionResultType::RunAgents(RunAgentsResult::Launched {
+                        agents,
+                        ..
+                    })) => launched_agents_label(agents),
                     Some(AIAgentActionResultType::RunAgents(RunAgentsResult::Denied {
                         ..
                     })) => "Orchestration disabled — agents not launched".to_owned(),
@@ -598,6 +634,20 @@ fn label_for_action(
     }
 }
 
+fn launched_agents_label(agents: &[RunAgentsAgentOutcome]) -> String {
+    let launched = agents
+        .iter()
+        .filter(|agent| matches!(agent.kind, RunAgentsAgentOutcomeKind::Launched { .. }))
+        .count();
+    let total = agents.len();
+    if launched == total {
+        format!("Spawned {}", count_label(total, "agent", "agents"))
+    } else if launched == 0 {
+        format!("Failed to spawn {}", count_label(total, "agent", "agents"))
+    } else {
+        format!("Spawned {launched} of {total} agents")
+    }
+}
 /// Shared label body for both file-glob action versions; only V2 results
 /// carry a match count.
 fn file_glob_label(

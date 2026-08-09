@@ -292,12 +292,14 @@ pub(crate) fn plugin_manager_for_with_shell(
         | CLIAgent::Droid
         | CLIAgent::Copilot
         | CLIAgent::Pi
+        | CLIAgent::OhMyPi
         | CLIAgent::Auggie
         | CLIAgent::CursorCli
         | CLIAgent::Hermes
         | CLIAgent::Goose
         | CLIAgent::Vibe
         | CLIAgent::Antigravity
+        | CLIAgent::WarpTui
         | CLIAgent::Unknown => None,
     }
 }

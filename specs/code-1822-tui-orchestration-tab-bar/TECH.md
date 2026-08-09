@@ -89,7 +89,7 @@ Restructure the normal render tree into:
 
 The alt-screen early return remains unchanged and therefore owns the complete pane. Blocking cards remain inside the normal session column, so the tab bar stays available above them.
 
-When the bar is unfocused, render the normal footer with the conditional `Shift + ↑ sub-agents` hint. When focused, keep the input visible but blurred and replace the normal footer with the PRODUCT (18) navigation footer.
+When the bar is unfocused, place the conditional `Shift + ↑ for other agents` shortcut after the empty agent input's `Ask the agent anything` lead-in and before its remaining shortcuts, and retain the normal status footer. When focused, keep the input visible but blurred and replace the normal footer with the PRODUCT (18) navigation footer.
 
 Tab and overflow interactions emit semantic child-view events subscribed by `TuiTerminalSessionView`:
 - Tab clicks select immediately. The owner preserves tab focus only if it was already active; otherwise it focuses the target session's normal interaction target.
@@ -110,7 +110,7 @@ Extend `orchestration_model_tests.rs`, `session_registry_tests.rs`, `terminal_se
 - Exact reuse of GUI pin/status/error/active/done-recency/spawn ordering after filtering non-navigable sessions — PRODUCT (4, 9-12).
 - The same root and tabs from orchestrator and child sessions; newly materialized and removed sessions — PRODUCT (1-5, 47-49).
 - Shared active-tree page state, explicit-page persistence, active reveal, and semantic keyboard navigation while the active tab is off-page — PRODUCT (26-27, 39-42).
-- Wrapped-row and selection-aware `Shift+Up` behavior; `Shift+Down` restoration — PRODUCT (13-18).
+- Conditional input ghost text, wrapped-row and selection-aware `Shift+Up` behavior, and `Shift+Down` restoration — PRODUCT (13-18).
 - Wrapped adjacent navigation, child-only first/last jumps, and tab focus preserved across full-session projection — PRODUCT (19-25).
 - Focused and unfocused mouse switches, no-op active clicks, overflow clicks that neither select nor move focus, and blocker precedence — PRODUCT (28-32, 38, 45-46).
 - Tab bar above normal blockers and omitted by alt-screen replacement — PRODUCT (50).

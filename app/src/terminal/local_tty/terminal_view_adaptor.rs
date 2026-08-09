@@ -22,7 +22,7 @@ use session_sharing_protocol::sharer::{
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
-use warpui::{AppContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
+use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId};
 
 use super::terminal_manager::{TerminalManager, TerminalSurfaceInit, TerminalSurfaceResult};
 use crate::NetworkStatus;
@@ -64,7 +64,7 @@ use crate::terminal::shared_session::sharer::network::{
 };
 use crate::terminal::shared_session::{
     SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
-    SharedSessionStatus,
+    SharedSessionStatus, max_session_size,
 };
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as TerminalViewEvent};
 use crate::terminal::writeable_pty::terminal_manager_util::wire_up_remote_server_controller_with_view;
@@ -744,15 +744,9 @@ impl TerminalManager<TerminalView> {
         });
 
         let (events_tx, events_rx) = async_channel::unbounded();
-        let input_replica_id = terminal_view
-            .as_ref(ctx)
-            .input()
-            .as_ref(ctx)
-            .editor()
-            .as_ref(ctx)
-            .replica_id(ctx);
 
         let scrollback_first_block_index = scrollback_type.first_block_index(&model.lock());
+        let max_session_size = max_session_size(window_id, ctx);
 
         // TODO: rather than picking which constructor we use here,
         // we might want to use a dedicated terminal manager for tests.
@@ -762,14 +756,20 @@ impl TerminalManager<TerminalView> {
                 let network = ctx.add_model(|ctx| Network::new_for_test(
                     model.clone(),
                     events_rx,
-                    scrollback_type,
                     active_prompt,
                     selection,
-                    input_replica_id,
+                    max_session_size,
                     ctx,
                 ));
             } else {
                 let input_config = terminal_view.as_ref(ctx).input_config(ctx);
+                let input_replica_id = terminal_view
+                    .as_ref(ctx)
+                    .input()
+                    .as_ref(ctx)
+                    .editor()
+                    .as_ref(ctx)
+                    .replica_id(ctx);
                 // Compute current auto-approve state from the AI context model
                 let auto_approve_agent_actions = terminal_view
                     .as_ref(ctx)
@@ -852,6 +852,7 @@ impl TerminalManager<TerminalView> {
                         universal_developer_input_context,
                         lifetime,
                         source.clone(),
+                        max_session_size,
                         ctx,
                     )
                 });
@@ -1180,6 +1181,7 @@ impl TerminalManager<TerminalView> {
                     view.input().update(ctx, |input, ctx| {
                         input.process_remote_edits(block_id, operations.clone(), ctx);
                     });
+                    emit_shared_session_viewer_input(view, ctx);
                 });
             }
             NetworkEvent::CommandExecutionRequested {
@@ -1239,6 +1241,7 @@ impl TerminalManager<TerminalView> {
                             ctx,
                         );
                     });
+                    emit_shared_session_viewer_input(view, ctx);
                 });
             }
             NetworkEvent::WriteToPtyRequested { id, bytes } => {
@@ -1284,6 +1287,7 @@ impl TerminalManager<TerminalView> {
 
                 terminal_view.update(ctx, |view, ctx| {
                     view.write_viewer_bytes_to_pty(bytes.clone(), ctx);
+                    emit_shared_session_viewer_input(view, ctx);
                 });
             }
             NetworkEvent::AgentPromptRequested {
@@ -2005,6 +2009,19 @@ impl TerminalManagerTrait for TerminalManager<TerminalView> {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+}
+
+/// Reports viewer input on a cloud agent's shared session so the agent driver can treat someone
+/// debugging in the session as activity.
+///
+/// Scoped to those sessions because a cloud agent's sharer is a process that can hold the session
+/// open on the strength of this signal. Ordinary shared sessions have no consumer for it, and
+/// these fire at keystroke frequency.
+fn emit_shared_session_viewer_input(view: &TerminalView, ctx: &mut ViewContext<TerminalView>) {
+    if !view.model.lock().is_shared_ambient_agent_session() {
+        return;
+    }
+    ctx.emit(TerminalViewEvent::SharedSessionViewerInput);
 }
 
 /// Send a Shutdown event to each PTY's event loop and waits for the

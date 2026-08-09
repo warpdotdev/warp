@@ -14,14 +14,16 @@ fn mcp_integration_wire_id(integration: McpIntegration) -> &'static str {
 ///
 /// `RequiresFile` activations are evaluated here — the daemon owns the
 /// files — so the client only ever receives `Always` or `RequiresMcp`
-/// conditions. The result is sorted by skill path so pushes are
-/// deterministic across daemon restarts.
+/// conditions. TUI-only local skills are omitted because a remote daemon
+/// cannot expose client-local migration behavior. The result is sorted by
+/// skill path so pushes are deterministic across daemon restarts.
 pub(crate) fn bundled_skill_snapshot_protos(catalog: &BundledSkill) -> Vec<RemoteSkillProto> {
     let mut protos: Vec<RemoteSkillProto> = catalog
         .iter_definitions()
         .filter_map(|(id, skill, activation)| {
             let requires_mcp = match activation {
                 BundledSkillActivation::Always => None,
+                BundledSkillActivation::TuiOnly => return None,
                 BundledSkillActivation::RequiresMcp(integration) => {
                     Some(mcp_integration_wire_id(*integration).to_owned())
                 }

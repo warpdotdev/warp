@@ -266,6 +266,8 @@ integration_tests! {
     test_latest_buffer_operations,
 
     test_pass_control_sequences_to_long_running_block,
+    test_execution_profiles_load_from_settings_file,
+    test_execution_profile_model_persists_and_hot_reloads_settings_file,
     test_settings_file_migration_from_native_store,
     test_settings_file_hot_reload_applies_new_values,
 
@@ -334,6 +336,7 @@ integration_tests! {
 
     // Copy current path command-palette action
     test_copy_current_path_copies_terminal_pwd,
+    test_copy_current_path_copies_code_editor_file_path,
 
     // Go to Line tests
     test_goto_line_dialog_open_close,

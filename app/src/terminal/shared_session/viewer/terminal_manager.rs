@@ -111,6 +111,7 @@ pub struct TerminalManager {
     /// transitive `ancestor_run_id` filter.
     enable_orchestration_polling: bool,
 }
+
 pub struct TerminalManagerInit {
     pub(crate) manager: TerminalManager,
     pub(crate) view: ViewHandle<TerminalView>,

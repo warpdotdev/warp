@@ -201,8 +201,8 @@ impl platform::Delegate for AppDelegate {
         *self.dock_badge_count.lock()
     }
 
-    fn open_url(&self, _: &str) {
-        // no-op for tests
+    fn open_url(&self, _: &str) -> bool {
+        true
     }
 
     fn close_ime_async(&self, _window_id: WindowId) {
@@ -325,8 +325,8 @@ impl platform::Delegate for IntegrationTestDelegate {
         *self.dock_badge_count.lock()
     }
 
-    fn open_url(&self, _: &str) {
-        // no-op for tests
+    fn open_url(&self, _: &str) -> bool {
+        true
     }
 
     fn close_ime_async(&self, _window_id: WindowId) {

@@ -11,6 +11,7 @@ use warpui::r#async::executor::Background;
 use warpui::text::{SelectionType, str_to_byte_vec};
 
 use super::*;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::terminal::color;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ObfuscateSecrets;
@@ -54,6 +55,58 @@ fn create_default_serialized_block() -> SerializedBlock {
     }
 }
 
+fn report_shell_typeahead(model: &mut TerminalModel, text: &str) {
+    model.input_buffer(InputBufferValue {
+        buffer: text.to_owned(),
+        session_id: None,
+    });
+}
+
+#[test]
+fn take_typeahead_for_input_advances_incremental_typeahead() {
+    let mut model = TerminalModel::mock(None, None);
+    model.simulate_long_running_block("sleep 5", "");
+    model.finish_block();
+
+    report_shell_typeahead(&mut model, "ec");
+    assert_eq!(
+        model.take_typeahead_for_input(),
+        Some(("ec".to_owned(), CharOffset::from(0)))
+    );
+
+    report_shell_typeahead(&mut model, "echo hi");
+    assert_eq!(
+        model.take_typeahead_for_input(),
+        Some(("echo hi".to_owned(), CharOffset::from(2)))
+    );
+}
+
+#[test]
+fn take_typeahead_for_input_ignores_agent_requested_commands() {
+    let mut model = TerminalModel::mock(None, None);
+    model.simulate_long_running_block("sleep 5", "");
+    let action_id: crate::ai::agent::AIAgentActionId = "action".to_owned().into();
+    model
+        .block_list_mut()
+        .active_block_mut()
+        .set_agent_interaction_mode(AgentInteractionMetadata::new_hidden(
+            action_id,
+            AIConversationId::new(),
+        ));
+    model.finish_block();
+    report_shell_typeahead(&mut model, "echo hi");
+
+    assert_eq!(model.take_typeahead_for_input(), None);
+}
+
+#[test]
+fn take_typeahead_for_input_is_none_when_typeahead_is_empty() {
+    let mut model = TerminalModel::mock(None, None);
+    model.simulate_long_running_block("sleep 5", "");
+    model.finish_block();
+
+    assert_eq!(model.take_typeahead_for_input(), None);
+}
 #[test]
 fn cloud_mode_deferred_terminal_model_starts_view_pending() {
     let mut model = TerminalModel::new_for_cloud_mode_shared_session_viewer(

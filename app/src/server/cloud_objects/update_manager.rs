@@ -406,8 +406,8 @@ impl UpdateManager {
                                     }
                                 });
                         } else if cloud_model.get_ai_execution_profile(&server_id).is_some() {
-                            AIExecutionProfilesModel::handle(ctx).update(ctx, |model, _| {
-                                model.replace_client_id_with_server_id(server_id, client_id);
+                            AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
+                                model.replace_client_id_with_server_id(server_id, client_id, ctx);
                             });
                         }
                     }
@@ -1231,6 +1231,11 @@ impl UpdateManager {
     pub fn initial_load_complete(&self) -> impl Future<Output = ()> + use<> {
         // We're not using `async fn` here so that the returned Future doesn't borrow self.
         self.has_initial_load.wait()
+    }
+
+    /// Returns whether the current account's initial cloud-object load has completed.
+    pub(crate) fn has_completed_initial_load(&self) -> bool {
+        self.has_initial_load.is_set()
     }
 
     /// Reset the initial-load condition so that subsequent callers of

@@ -61,6 +61,14 @@ impl AppBuilder {
         }
     }
 
+    /// Allows a headless frontend with microphone functionality to query the
+    /// platform's existing microphone authorization state.
+    pub fn enable_headless_microphone_access_query(&mut self) {
+        if let AppBackend::Headless(inner) = &mut self.inner {
+            inner.enable_microphone_access_query();
+        }
+    }
+
     /// Constructs a new application using the headless backend.
     pub fn new_headless(
         callbacks: AppCallbacks,

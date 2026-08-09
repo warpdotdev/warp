@@ -50,6 +50,7 @@ use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStream
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQueryModel};
+use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -132,6 +133,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| SystemStats::new());
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(CloudEnvironmentCatalog::new);
     app.add_singleton_model(UserWorkspaces::default_mock);
     app.add_singleton_model(TeamTesterStatus::mock);
     app.add_singleton_model(TeamUpdateManager::mock);
@@ -213,6 +215,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(UndoCloseStack::new);
     app.add_singleton_model(|_| IgnoredSuggestionsModel::new(vec![]));
     app.add_singleton_model(|_| PricingInfoModel::new());
+    app.add_singleton_model(crate::ai::pricing_promotion::PricingPromotionState::new);
     app.add_singleton_model(AIDocumentModel::new);
     app.add_singleton_model(|_| History::new(vec![]));
     app.add_singleton_model(|_| GitHubAuthNotifier::new());
@@ -297,6 +300,7 @@ fn ambient_agent_task_for_current_user(task_id: AmbientAgentTaskId) -> AmbientAg
         run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: Some(AgentSource::CloudMode),
+        execution_location: None,
         session_id: None,
         session_link: None,
         executor: None,
@@ -350,6 +354,7 @@ fn test_server_conversation_metadata(
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
+            total_provider_cost_in_cents: None,
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
@@ -762,6 +767,7 @@ fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
 
             assert_eq!(panes.pane_count(), initial_tree_pane_count);
             assert_eq!(panes.pane_ids().count(), initial_content_pane_count + 1);
+            assert_eq!(panes.terminal_pane_ids().count(), 2);
             assert_eq!(panes.visible_pane_count(), initial_visible_count);
             assert!(panes.has_pane_id(child_pane_id.into()));
             assert!(!panes.panes.is_pane_in_tree(child_pane_id.into()));
@@ -769,6 +775,15 @@ fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
             // The new child pane should remain off-tree and not affect visible ordering.
             assert_eq!(panes.pane_id_by_index(0), Some(parent_pane_id));
             assert_eq!(panes.pane_id_by_index(1), None);
+            let visible_terminal_views = panes.visible_terminal_views(ctx);
+            assert_eq!(visible_terminal_views.len(), 1);
+            assert_eq!(
+                visible_terminal_views[0].id(),
+                panes
+                    .terminal_view_from_pane_id(parent_pane_id, ctx)
+                    .unwrap()
+                    .id()
+            );
 
             // Creating a hidden child pane should not steal focus or active session.
             assert_eq!(panes.focused_pane_id(ctx), parent_pane_id);
@@ -1389,6 +1404,91 @@ fn test_ambient_transcript_restore_uses_generic_viewer_when_handoff_disabled() {
             assert_eq!(
                 model.conversation_transcript_viewer_status(),
                 Some(&ConversationTranscriptViewerStatus::ViewingAmbientConversation(task_id))
+            );
+        });
+    });
+}
+
+/// REMOTE-2208: attaching a live execution session to a read-only conversation transcript
+/// viewer is impossible (it is backed by a mock manager with no network), so the attach must
+/// report failure. Reporting success left the caller focused on a transcript with no input box
+/// — the "session opens but the terminal is not interactive" symptom — instead of falling back
+/// to opening a fresh, writable shared-session tab.
+#[test]
+fn attach_execution_session_refuses_read_only_transcript_viewer_pane() {
+    let _handoff = FeatureFlag::HandoffCloudCloud.override_enabled(false);
+    let _setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        let task_id = new_ambient_agent_task_id();
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.load_data_into_conversation_transcript_viewer(
+                cloud_conversation_with_ambient_task(task_id),
+                Some(task_id),
+                ctx,
+            );
+        });
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let terminal_view = panes
+                .active_session_view(ctx)
+                .expect("transcript viewer should have an active terminal view");
+            let pane_id = panes
+                .find_pane_id_for_terminal_view(terminal_view.id(), ctx)
+                .expect("transcript viewer pane should be found");
+            assert!(
+                terminal_view.as_ref(ctx).model.lock().is_read_only(),
+                "precondition: the transcript viewer pane is read-only",
+            );
+
+            assert!(
+                !panes.attach_execution_session_to_ambient_pane(pane_id, SessionId::new(), ctx),
+                "a read-only transcript viewer must not report a successful live-session attach",
+            );
+        });
+    });
+}
+
+/// REMOTE-2208: the read-only state is cleared as part of reattaching, so it must only be
+/// cleared when a join actually starts. A caller that gets `false` opens a fresh pane instead,
+/// and clearing eagerly would leave this pane looking writable while attached to nothing.
+#[test]
+fn attach_execution_session_keeps_read_only_state_when_the_attach_fails() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let terminal_view = panes
+                .active_session_view(ctx)
+                .expect("mock pane group should have an active terminal view");
+            let pane_id = panes
+                .find_pane_id_for_terminal_view(terminal_view.id(), ctx)
+                .expect("active terminal view should have a pane");
+
+            // A plain terminal pane's manager is not a shared-session viewer, so the attach below
+            // fails at the downcast — the same shape as a manager that is already connecting.
+            terminal_view.update(ctx, |view, _| {
+                view.model
+                    .lock()
+                    .set_shared_session_status(SharedSessionStatus::FinishedViewer);
+            });
+            assert!(
+                terminal_view.as_ref(ctx).model.lock().is_read_only(),
+                "precondition: the pane is in a finished, read-only state",
+            );
+
+            assert!(
+                !panes.attach_execution_session_to_ambient_pane(pane_id, SessionId::new(), ctx),
+                "precondition: this attach cannot succeed",
+            );
+            assert!(
+                terminal_view.as_ref(ctx).model.lock().is_read_only(),
+                "a failed attach must leave the pane read-only so the caller's fresh-tab fallback \
+                 is not shadowed by a pane that looks writable but joined nothing",
             );
         });
     });

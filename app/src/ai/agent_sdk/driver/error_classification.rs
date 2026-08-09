@@ -173,6 +173,16 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
+        // The shell died while an environment setup command was running
+        // (e.g. the command ran `exit`). This is a user-side environment
+        // configuration problem, so classify as FAILED.
+        AgentDriverError::SetupCommandExitedShell { .. } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                error.to_string(),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
         AgentDriverError::InvalidWorkingDirectory { path, .. } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -247,6 +257,13 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             AgentTaskState::Error,
             TaskStatusUpdate::with_error_code(
                 format!("Failed to fetch task secrets: {err}"),
+                PlatformErrorCode::InternalError,
+            ),
+        ),
+        AgentDriverError::TaskMetadataFetchFailed(err) => (
+            AgentTaskState::Error,
+            TaskStatusUpdate::with_error_code(
+                format!("Failed to fetch task metadata: {err}"),
                 PlatformErrorCode::InternalError,
             ),
         ),

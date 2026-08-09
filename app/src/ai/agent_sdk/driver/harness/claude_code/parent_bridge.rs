@@ -687,8 +687,11 @@ async fn run_parent_bridge_forever(
     // The shared driver keeps `since_sequence` in memory across its own retry
     // loop and we also persist it inside the session state dir so dormant runs
     // can resume without replaying already handled events.
-    let config =
-        AgentEventDriverConfig::retry_forever_run_ids(vec![run_id.clone()], since_sequence);
+    //
+    // Use the bounded config: once this task ends, its credentials are
+    // permanently rejected (HTTP 401), so the driver should stop rather than
+    // reconnect forever and keep the worker pod alive indefinitely.
+    let config = AgentEventDriverConfig::bounded_run_ids(vec![run_id.clone()], since_sequence);
     let source = ServerApiAgentEventSource::new(server_api.clone());
     let mut consumer = MessageBridgeEventConsumer {
         run_id,

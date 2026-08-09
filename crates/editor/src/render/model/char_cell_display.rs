@@ -13,10 +13,11 @@
 //!   leading/trailing hidden runs produce no rows).
 //!
 //! Rows are style- and text-free: they carry char *ranges* (into the buffer
-//! text or a ghost's content), never strings or colors. Both consumers — the
-//! TUI editor element's painting and interaction geometry (cursor placement,
-//! mouse hit-testing) — are projections of this one computation, so what is
-//! painted on row N and what a click on row N resolves to can never disagree.
+//! text or a ghost's content), never strings or colors. [`DisplayLattice`]
+//! projects those ranges to paint-ready text using the same retained widths
+//! that drive interaction geometry (cursor placement and mouse hit-testing),
+//! so what is painted on row N and what a click on row N resolves to cannot
+//! disagree.
 //!
 //! Display-row space vs buffer visual-row space: the softwrap functions
 //! ([`char_cell_offset_to_softwrap_point`](super::char_cell_offset_to_softwrap_point)
@@ -111,6 +112,32 @@ impl<'a> DisplayLattice<'a> {
     /// The ghost blocks that `Ghost` rows' `ghost_index` values index into.
     pub fn ghosts(&self) -> &[CharCellTemporaryBlock] {
         &self.ghosts
+    }
+
+    /// Paint-ready text for a buffer or ghost `row`.
+    ///
+    /// Tabs expand to the exact width retained by the layout index for their
+    /// source character. Paint therefore consumes layout's tab geometry
+    /// directly instead of independently recalculating tab stops. Gap rows
+    /// have no source text and return `None`.
+    pub fn row_text(&self, row: &DisplayRow, buffer_chars: &[char]) -> Option<String> {
+        match &row.kind {
+            DisplayRowKind::Buffer { .. } => Some(display_text_for_range(
+                buffer_chars,
+                &self.text_index.char_widths,
+                &row.char_range,
+            )),
+            DisplayRowKind::Ghost { ghost_index } => {
+                let ghost = self.ghosts.get(*ghost_index)?;
+                let ghost_chars: Vec<char> = ghost.content.chars().collect();
+                Some(display_text_for_range(
+                    &ghost_chars,
+                    &ghost.char_widths,
+                    &row.char_range,
+                ))
+            }
+            DisplayRowKind::Gap { .. } => None,
+        }
     }
 
     /// The display columns occupied by the clamped buffer character `range`.
@@ -220,6 +247,31 @@ impl<'a> DisplayLattice<'a> {
             DisplayRowKind::Ghost { .. } | DisplayRowKind::Gap { .. } => None,
         }
     }
+}
+
+fn display_text_for_range(chars: &[char], char_widths: &[u8], range: &Range<CharOffset>) -> String {
+    let start = range
+        .start
+        .as_usize()
+        .min(chars.len())
+        .min(char_widths.len());
+    let end = range
+        .end
+        .as_usize()
+        .min(chars.len())
+        .min(char_widths.len())
+        .max(start);
+    let mut text = String::with_capacity(end - start);
+    for (&ch, &width) in chars[start..end].iter().zip(&char_widths[start..end]) {
+        if ch == '\t' {
+            for _ in 0..width {
+                text.push(' ');
+            }
+        } else {
+            text.push(ch);
+        }
+    }
+    text
 }
 
 fn normalize_hidden_line_ranges(ranges: &[Range<usize>]) -> Vec<Range<usize>> {

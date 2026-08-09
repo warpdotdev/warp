@@ -9,7 +9,7 @@ use instant::Instant;
 use warp_errors::{AnyhowErrorExt as _, report_error};
 use warpui::r#async::Timer;
 
-use crate::server::retry_strategies::is_transient_http_error;
+use crate::server::retry_strategies::{is_auth_error, is_transient_http_error};
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::AgentRunEvent;
 use crate::server::server_api::presigned_upload::HttpStatusError;
@@ -18,6 +18,22 @@ pub(crate) const DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS: &[u64] = &[1, 2, 5
 pub(crate) const DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS: &[u64] = &[30];
 pub(crate) const DEFAULT_AGENT_EVENT_PROACTIVE_RECONNECT: Duration = Duration::from_secs(14 * 60);
 pub(crate) const DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG: usize = 5;
+
+/// Consecutive authentication failures (HTTP 401/403) after which a bounded
+/// listener gives up instead of reconnecting. A small threshold (rather than 1)
+/// tolerates a one-off token blip while still bailing quickly once credentials
+/// are permanently invalid.
+// Only consumed by the (native-only) cloud-agent message bridge via
+// `bounded_run_ids`, so it is dead code on the wasm target.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub(crate) const DEFAULT_AUTH_ERROR_GIVE_UP_FAILURES: usize = 3;
+
+/// Total wall-clock time a bounded listener keeps retrying, measured from the
+/// first failure since the last successful open/event, before it gives up. Set
+/// larger than the proactive reconnect window so healthy streams are never
+/// affected; it only bounds sustained failure.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub(crate) const DEFAULT_AGENT_EVENT_MAX_RETRY_DURATION: Duration = Duration::from_secs(30 * 60);
 
 /// Selects which server-side filter shape an [`AgentEventSource`] should use
 /// when opening a stream.
@@ -82,6 +98,16 @@ pub(crate) struct AgentEventDriverConfig {
     /// Failure count at which actionable reconnect failures are reported at Error level.
     /// This only affects log severity; retry behavior stays the same.
     pub failures_before_error_log: usize,
+    /// Consecutive authentication failures (HTTP 401/403) after which the driver
+    /// stops and returns an error instead of reconnecting. `None` keeps retrying
+    /// through auth errors forever (the default for local, interactive
+    /// listeners whose credentials refresh in the background).
+    pub auth_error_give_up_failures: Option<usize>,
+    /// Total wall-clock time the driver keeps retrying after failures begin
+    /// (measured from the first failure since the last successful open/event)
+    /// before it stops and returns an error. `None` retries without a time
+    /// limit.
+    pub max_retry_duration: Option<Duration>,
 }
 
 impl AgentEventDriverConfig {
@@ -95,6 +121,8 @@ impl AgentEventDriverConfig {
             permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
             proactive_reconnect_after: Some(DEFAULT_AGENT_EVENT_PROACTIVE_RECONNECT),
             failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+            auth_error_give_up_failures: None,
+            max_retry_duration: None,
         }
     }
 
@@ -102,6 +130,22 @@ impl AgentEventDriverConfig {
     /// run IDs. Lets existing call sites keep their current ergonomics.
     pub(crate) fn retry_forever_run_ids(run_ids: Vec<String>, since_sequence: i64) -> Self {
         Self::retry_forever(AgentEventFilter::RunIds(run_ids), since_sequence)
+    }
+
+    /// Build a reconnecting config for a cloud-agent listener that must NOT run
+    /// forever. Unlike [`retry_forever`], this stops after sustained
+    /// authentication failures or a bounded total retry window, so a listener
+    /// whose task has ended (and whose credentials are now permanently
+    /// rejected) shuts down instead of reconnecting indefinitely.
+    // Only called by the (native-only) cloud-agent message bridge, so it is dead
+    // code on the wasm target.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn bounded_run_ids(run_ids: Vec<String>, since_sequence: i64) -> Self {
+        Self {
+            auth_error_give_up_failures: Some(DEFAULT_AUTH_ERROR_GIVE_UP_FAILURES),
+            max_retry_duration: Some(DEFAULT_AGENT_EVENT_MAX_RETRY_DURATION),
+            ..Self::retry_forever(AgentEventFilter::RunIds(run_ids), since_sequence)
+        }
     }
 }
 
@@ -299,7 +343,16 @@ where
 {
     let mut since_sequence = config.since_sequence;
     let mut failures = 0usize;
+    // Consecutive authentication failures (HTTP 401/403), tracked separately from
+    // `failures` so the auth give-up threshold only counts an uninterrupted run
+    // of auth failures. Any non-auth failure or success resets it, so a mix like
+    // 500, 500, 401 does not trip a "3 consecutive auth failures" policy.
+    let mut consecutive_auth_failures = 0usize;
     let mut has_connected_once = false;
+    // Start of the current run of consecutive failures. Reset to `None` after any
+    // successful open/event so the `max_retry_duration` window only measures
+    // sustained failure, not total stream lifetime.
+    let mut retry_window_started_at: Option<Instant> = None;
 
     loop {
         // `open_stream` is lazy for the SSE-backed source: the TCP
@@ -311,29 +364,16 @@ where
             Ok(stream) => stream,
             Err(err) => {
                 failures += 1;
-                let backoff_steps = if is_transient_http_error(&err) {
-                    config.reconnect_backoff_steps
-                } else {
-                    config.permanent_error_backoff_steps
-                };
-                let backoff = agent_event_backoff(failures, backoff_steps);
-                log_stream_failure(
-                    &config.filter,
-                    failures,
-                    backoff,
-                    &err,
-                    config.failures_before_error_log,
-                );
-                notify_driver_state(
+                handle_http_error(
+                    &config,
                     consumer,
-                    AgentEventDriverState::RetryScheduled {
-                        consecutive_failures: failures,
-                        backoff,
-                        is_initial_connect: !has_connected_once,
-                    },
+                    err,
+                    failures,
+                    &mut consecutive_auth_failures,
+                    &mut retry_window_started_at,
+                    !has_connected_once,
                 )
-                .await;
-                Timer::after(backoff).await;
+                .await?;
                 continue;
             }
         };
@@ -368,6 +408,8 @@ where
                 }
                 NextDriverItem::StreamItem(Some(Ok(AgentEventSourceItem::Open))) => {
                     failures = 0;
+                    consecutive_auth_failures = 0;
+                    retry_window_started_at = None;
                     has_connected_once = true;
                     notify_driver_state(consumer, AgentEventDriverState::Connected).await;
                     log::info!(
@@ -377,6 +419,8 @@ where
                 }
                 NextDriverItem::StreamItem(Some(Ok(AgentEventSourceItem::Event(event)))) => {
                     failures = 0;
+                    consecutive_auth_failures = 0;
+                    retry_window_started_at = None;
                     if event.sequence <= since_sequence {
                         continue;
                     }
@@ -397,29 +441,16 @@ where
                 }
                 NextDriverItem::StreamItem(Some(Err(err))) => {
                     failures += 1;
-                    let backoff_steps = if is_transient_http_error(&err) {
-                        config.reconnect_backoff_steps
-                    } else {
-                        config.permanent_error_backoff_steps
-                    };
-                    let backoff = agent_event_backoff(failures, backoff_steps);
-                    log_stream_failure(
-                        &config.filter,
-                        failures,
-                        backoff,
-                        &err,
-                        config.failures_before_error_log,
-                    );
-                    notify_driver_state(
+                    handle_http_error(
+                        &config,
                         consumer,
-                        AgentEventDriverState::RetryScheduled {
-                            consecutive_failures: failures,
-                            backoff,
-                            is_initial_connect: false,
-                        },
+                        err,
+                        failures,
+                        &mut consecutive_auth_failures,
+                        &mut retry_window_started_at,
+                        false,
                     )
-                    .await;
-                    Timer::after(backoff).await;
+                    .await?;
                     break;
                 }
                 // Clean stream closure (server-side close, not an HTTP
@@ -427,6 +458,20 @@ where
                 // there is no HTTP status to classify.
                 NextDriverItem::StreamItem(None) => {
                     failures += 1;
+                    // A clean server-side close carries no HTTP status, so it is
+                    // never treated as an auth failure; reset the auth streak and
+                    // let only the time-based backstop trigger a give-up here.
+                    consecutive_auth_failures = 0;
+                    if let Some(reason) = agent_event_give_up_reason(
+                        &config,
+                        consecutive_auth_failures,
+                        &mut retry_window_started_at,
+                    ) {
+                        return Err(anyhow!(
+                            "Agent event driver {reason} for {} after stream closed",
+                            config.filter.log_label()
+                        ));
+                    }
                     let backoff = agent_event_backoff(failures, config.reconnect_backoff_steps);
                     log::warn!(
                         "Agent event stream closed for {}, reconnecting in {backoff:?}",
@@ -452,6 +497,111 @@ where
 enum NextDriverItem {
     StreamItem(Option<Result<AgentEventSourceItem>>),
     ProactiveReconnect,
+}
+
+/// Update the consecutive auth-failure streak for `err` and return a give-up
+/// reason if the driver should stop retrying. Bumps `consecutive_auth_failures`
+/// on an HTTP 401/403 error and resets it otherwise, then defers to
+/// [`agent_event_give_up_reason`].
+fn classify_failure_and_give_up_reason(
+    config: &AgentEventDriverConfig,
+    err: &anyhow::Error,
+    consecutive_auth_failures: &mut usize,
+    retry_window_started_at: &mut Option<Instant>,
+) -> Option<String> {
+    if is_auth_error(err) {
+        *consecutive_auth_failures += 1;
+    } else {
+        *consecutive_auth_failures = 0;
+    }
+    agent_event_give_up_reason(config, *consecutive_auth_failures, retry_window_started_at)
+}
+
+/// Handles an HTTP error from either `open_stream` or a stream item: checks the
+/// give-up policy, selects a backoff schedule, logs, notifies the consumer of the
+/// pending retry, and waits out the backoff delay. Returns `Err` if the driver
+/// should stop — the error is ready to propagate directly — or `Ok(())` once the
+/// retry delay has elapsed.
+async fn handle_http_error<C: AgentEventConsumer>(
+    config: &AgentEventDriverConfig,
+    consumer: &mut C,
+    err: anyhow::Error,
+    failures: usize,
+    consecutive_auth_failures: &mut usize,
+    retry_window_started_at: &mut Option<Instant>,
+    is_initial_connect: bool,
+) -> Result<()> {
+    if let Some(reason) = classify_failure_and_give_up_reason(
+        config,
+        &err,
+        consecutive_auth_failures,
+        retry_window_started_at,
+    ) {
+        return Err(err.context(format!(
+            "Agent event driver {reason} for {}",
+            config.filter.log_label()
+        )));
+    }
+    let backoff_steps = if is_transient_http_error(&err) {
+        config.reconnect_backoff_steps
+    } else {
+        config.permanent_error_backoff_steps
+    };
+    let backoff = agent_event_backoff(failures, backoff_steps);
+    log_stream_failure(
+        &config.filter,
+        failures,
+        backoff,
+        &err,
+        config.failures_before_error_log,
+    );
+    notify_driver_state(
+        consumer,
+        AgentEventDriverState::RetryScheduled {
+            consecutive_failures: failures,
+            backoff,
+            is_initial_connect,
+        },
+    )
+    .await;
+    Timer::after(backoff).await;
+    Ok(())
+}
+
+/// Decide whether a bounded driver should stop retrying after a failure.
+///
+/// Returns `Some(reason)` (a short human-readable explanation for logs) when the
+/// driver should give up, or `None` to keep retrying. `consecutive_auth_failures`
+/// is the length of the current uninterrupted run of HTTP 401/403 failures (the
+/// caller resets it on any non-auth failure or success), and
+/// `retry_window_started_at` is seeded on the first call of a failure run so the
+/// `max_retry_duration` window measures sustained failure.
+fn agent_event_give_up_reason(
+    config: &AgentEventDriverConfig,
+    consecutive_auth_failures: usize,
+    retry_window_started_at: &mut Option<Instant>,
+) -> Option<String> {
+    let now = Instant::now();
+    let window_start = *retry_window_started_at.get_or_insert(now);
+
+    if let Some(threshold) = config.auth_error_give_up_failures
+        && consecutive_auth_failures >= threshold
+    {
+        return Some(format!(
+            "stopping after {consecutive_auth_failures} consecutive authentication failures"
+        ));
+    }
+
+    if let Some(max) = config.max_retry_duration {
+        let elapsed = now.saturating_duration_since(window_start);
+        if elapsed >= max {
+            return Some(format!(
+                "stopping after retrying for {elapsed:?} (max_retry_duration={max:?})"
+            ));
+        }
+    }
+
+    None
 }
 
 async fn notify_driver_state<C: AgentEventConsumer>(

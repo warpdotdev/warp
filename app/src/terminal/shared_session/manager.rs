@@ -61,6 +61,13 @@ impl Manager {
         self.ended_session_ids.get(terminal_view_id).copied()
     }
 
+    /// Returns true iff the Manager has a session id (active or ended) for the given terminal
+    /// view. When false, copy-link actions should be disabled rather than silently no-op.
+    pub fn has_session_link(&self, terminal_view_id: &EntityId) -> bool {
+        self.session_id(terminal_view_id).is_some()
+            || self.ended_session_id(terminal_view_id).is_some()
+    }
+
     /// Returns the view handle to the shared terminal view, identified by `terminal_view_id`, if it's being shared.
     pub fn shared_view_by_id(
         &self,

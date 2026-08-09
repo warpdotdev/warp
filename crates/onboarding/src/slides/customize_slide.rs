@@ -485,7 +485,7 @@ impl CustomizeUISlide {
     ];
 
     /// Returns the image path for the current visual state.
-    /// When `OpenWarpNewSettingsModes` is enabled, assets depend on the tab layout setting.
+    /// In modern onboarding flows, assets depend on the tab layout setting.
     fn visual_image_path(
         selected_setting: Option<SettingCard>,
         hovered_chip: Option<ToolsPanelSubSetting>,
@@ -631,7 +631,9 @@ impl CustomizeUISlide {
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+        if FeatureFlag::AccountFirstOnboarding.is_enabled()
+            || FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+        {
             let path =
                 Self::visual_image_path(self.selected_setting, self.hovered_chip, intention, ui);
             let fg_layout = match self.selected_setting {
