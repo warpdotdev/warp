@@ -152,16 +152,25 @@ pub(super) fn merge_repos_deduped(
 /// Factory agent whose Factory definition lives in a Warp-managed repository.
 const FACTORY_REPO_CLONE_URL_ENV_VAR: &str = "WARP_FACTORY_REPO_CLONE_URL";
 
+/// Environment variable carrying the directory, relative to the working
+/// directory, that the Factory definition repository is cloned into.
+const FACTORY_REPO_DIR_ENV_VAR: &str = "WARP_FACTORY_REPO_DIR";
+
 /// Prepends the setup command that clones a Factory's definition repository
-/// when the dispatch attached the clone URL to this run, so the checkout
+/// when the dispatch attached the clone variables to this run, so the checkout
 /// exists before user-declared setup commands run.
 pub(super) fn prepend_factory_definition_clone(setup_commands: &mut Vec<String>) {
     let clone_url = std::env::var(FACTORY_REPO_CLONE_URL_ENV_VAR).unwrap_or_default();
-    prepend_factory_definition_clone_for_values(&clone_url, setup_commands);
+    let clone_dir = std::env::var(FACTORY_REPO_DIR_ENV_VAR).unwrap_or_default();
+    prepend_factory_definition_clone_for_values(&clone_url, &clone_dir, setup_commands);
 }
 
-fn prepend_factory_definition_clone_for_values(clone_url: &str, setup_commands: &mut Vec<String>) {
-    if clone_url.trim().is_empty() {
+fn prepend_factory_definition_clone_for_values(
+    clone_url: &str,
+    clone_dir: &str,
+    setup_commands: &mut Vec<String>,
+) {
+    if clone_url.trim().is_empty() || clone_dir.trim().is_empty() {
         return;
     }
     // Environments provisioned before run-scoped cloning still persist their
@@ -173,13 +182,14 @@ fn prepend_factory_definition_clone_for_values(clone_url: &str, setup_commands: 
     {
         return;
     }
-    // The command expands the variable in the session shell instead of
-    // inlining its value so the credential-bearing URL never appears in
-    // command text. This clones into git's default directory name (the
-    // repository's basename) rather than a pinned target directory.
+    // The command expands the variables in the session shell instead of
+    // inlining their values so the credential-bearing URL never appears in
+    // command text. There is deliberately no existence guard: a bare clone
+    // into an already-present target directory fails, which is treated as a
+    // fatal setup-command error upstream.
     setup_commands.insert(
         0,
-        format!("git clone \"${FACTORY_REPO_CLONE_URL_ENV_VAR}\""),
+        format!("git clone \"${FACTORY_REPO_CLONE_URL_ENV_VAR}\" \"${FACTORY_REPO_DIR_ENV_VAR}\""),
     );
 }
 
