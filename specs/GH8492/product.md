@@ -64,7 +64,7 @@ Running tmux in Warp shows tmux's raw text TUI; Warp's native tabs/splits, comma
 13. Hand-typed `tmux -CC` shows the convert banner and does not render raw `%output` text; the pane only becomes native on **Convert**.
 14. On `%exit` (server exit / session kill), or on a malformed/oversized control stream (e.g. a hostile or corrupt remote `tmux -CC`), the native tabs/panes tear down cleanly with a clear message; Warp does not hang or allocate without bound.
 15. On tmux < 3.2, the integration still renders and accepts input (basic mode), with flow-control-dependent behavior degraded and surfaced, not broken.
-16. The whole feature is behind a setting; disabling it returns to today's behavior.
+16. The whole feature is behind the **`terminal.tmux_control_mode`** setting (surfaced under Settings → Features, default **off** during rollout, backed by `FeatureFlag::TmuxControlMode`); disabling it returns to today's behavior.
 17. A full-screen app that queries the terminal (cursor-position / device-attributes report) behaves correctly: the emulator's response reaches that pane's process, so the app does not hang.
 18. On attach, each pane shows its correct current screen with no garbling, even when live output arrives while the pane is still being seeded.
 19. Typing or pasting reaches the focused pane intact and can never accidentally detach or corrupt the session (input is sent literally; a bare newline is never written to the control channel).
@@ -75,7 +75,7 @@ Each invariant is backed by a fixture/transcript test (CI-safe, no live tmux) or
 
 ## Open questions
 
-- Preferred home for the button (tab-bar `+` menu vs. a dedicated affordance) and the setting name/namespace.
+- Preferred home for the button (tab-bar `+` menu vs. a dedicated affordance). The setting itself is resolved: `terminal.tmux_control_mode` under Settings → Features (see success criterion #16).
 - Appetite for a later session **dashboard** (list/kill/attach across sessions) vs. the v1 menu.
 
 (Resolved: the existing `tmux_control_mode` module scoped to SSH warpification is left untouched; the control-mode protocol core is a single fresh parser. See the tech spec.)
