@@ -305,7 +305,7 @@ fn ending_ambient_session_refreshes_shared_session_link_surfaces() {
             });
 
         let (wakeups_tx, _wakeups_rx) = async_channel::unbounded();
-        let (events_tx, _events_rx) = async_channel::unbounded();
+        let (events_tx, _events_rx) = async_channel::unbounded::<crate::terminal::event::Event>();
         let (pty_reads_tx, pty_reads_rx) = broadcast(8);
         let _inactive_pty_reads_rx = pty_reads_rx.deactivate();
         let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);

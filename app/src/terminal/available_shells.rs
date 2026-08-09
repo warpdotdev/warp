@@ -25,6 +25,13 @@ struct LocalConfig {
     shell_type: ShellType,
 }
 
+#[cfg(feature = "local_tty")]
+impl crate::terminal::local_tty::shell::AvailableShell for AvailableShell {
+    fn get_valid_shell_path_and_type(&self) -> Option<ShellLaunchData> {
+        AvailableShell::get_valid_shell_path_and_type(self)
+    }
+}
+
 impl TryFrom<StartupShell> for LocalConfig {
     type Error = ();
 
