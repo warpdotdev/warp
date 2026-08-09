@@ -1,16 +1,15 @@
 //! Tests for the Grid.
 
-use crate::model::grid::cell;
 use grid_handler::GridHandler;
+use warp_core::features::FeatureFlag;
 
 use super::*;
 use crate::SizeInfo;
 use crate::model::ansi::Handler;
 use crate::model::cell::{Cell, Flags};
-use crate::model::grid::Dimensions;
+use crate::model::grid::{Dimensions, cell};
 use crate::model::index::{Point, VisiblePoint, VisibleRow};
 use crate::model::secrets::ObfuscateSecrets;
-use warp_core::features::FeatureFlag;
 
 // Scroll up moves lines upward.
 #[test]

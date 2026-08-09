@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+
 pub use warp_terminal::util::extensions::TrimStringExt;
 
 pub trait SliceExt<T: 'static> {

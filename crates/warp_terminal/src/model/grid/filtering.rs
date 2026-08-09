@@ -99,7 +99,7 @@ impl FilterState {
     /// Returns a FilterState with a dummy DFA and the provided matches.
     #[cfg(test)]
     fn new_with_matches_for_test(matches: Vec<RangeInclusive<Point>>) -> FilterState {
-        use crate::block_filter::DEFAULT_CONTEXT_LINES_VALUE;
+        use crate::model::block_filter::DEFAULT_CONTEXT_LINES_VALUE;
 
         Self {
             dfas: Arc::new(RegexDFAs::new("").unwrap()),
@@ -822,6 +822,7 @@ impl GridHandler {
     ///         match
     ///         context
     ///         ```
+    ///
     /// TODO(daniel): This approach only works when the only `DisplaySource`
     /// variants are `FilterMatch`, `FilterContext`, and `CursorLine`. If more
     /// variants are added, a more robust algorithm is needed.

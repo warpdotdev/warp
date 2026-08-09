@@ -1,17 +1,55 @@
 use itertools::Itertools;
+use pathfinder_geometry::vector::Vector2F;
+use std::collections::HashMap;
 use unicode_width::UnicodeWidthChar;
 
-use crate::terminal::SizeInfo;
-use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::model::ansi::{self, Handler};
-use crate::terminal::model::blockgrid::BlockGrid;
-use crate::terminal::model::cell::Flags;
-use crate::terminal::model::grid::Dimensions as _;
-use crate::terminal::model::grid::grid_handler::PerformResetGridChecks;
-use crate::terminal::model::index::{VisiblePoint, VisibleRow};
+use crate::SizeInfo;
+use crate::event_listener::ChannelEventListener;
+use crate::model::ObfuscateSecrets;
+use crate::model::ansi::{self, Handler};
+use crate::model::blockgrid::BlockGrid;
+use crate::model::cell::Flags;
+use crate::model::grid::Dimensions as _;
+use crate::model::grid::grid_handler::PerformResetGridChecks;
+use crate::model::image_map::StoredImageMetadata;
+use crate::model::index::{VisiblePoint, VisibleRow};
+use crate::model::kitty::{
+    KittyAction, KittyImage, KittyImageMetadata, KittyPixelDataFormat, KittyPlacementData,
+    KittyTransmissionMedium, StoreAndDisplay,
+};
 
 const MAX_SCROLL_LIMIT: usize = 1000;
+
+fn test_kitty_image_metadata() -> KittyImageMetadata {
+    KittyImageMetadata {
+        pixel_data_format: KittyPixelDataFormat::Rgba32Bit,
+        transmission_medium: KittyTransmissionMedium::Direct,
+        image_size: Vector2F::new(10.0, 10.0),
+    }
+}
+
+pub fn test_kitty_image_metadata_map(image_id: u32) -> HashMap<u32, StoredImageMetadata> {
+    HashMap::from([(
+        image_id,
+        StoredImageMetadata::Kitty(test_kitty_image_metadata()),
+    )])
+}
+
+pub fn test_kitty_store_and_display_action(image_id: u32, placement_id: u32) -> KittyAction {
+    KittyAction::StoreAndDisplay(StoreAndDisplay {
+        image: KittyImage {
+            metadata: test_kitty_image_metadata(),
+            data: vec![0],
+        },
+        placement_data: KittyPlacementData {
+            cols: Some(1),
+            rows: Some(1),
+            ..Default::default()
+        },
+        image_id,
+        placement_id,
+    })
+}
 
 /// Constructs a blockgrid from its contents as a string.
 ///

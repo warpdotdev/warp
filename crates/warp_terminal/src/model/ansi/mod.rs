@@ -18,7 +18,6 @@ use std::fmt::Write;
 use std::time::Duration;
 use std::{io, str};
 
-use crate::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use ansi_c_decoder::*;
 use byte_unit::{Byte, Unit as ByteUnit};
 pub use control_sequence_parameters::*;
@@ -30,6 +29,8 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::debug;
 use vte::{Params, Parser as VteParser, Perform as VtePerform};
+use warp_core::features::FeatureFlag;
+use warp_core::{safe_debug, safe_error, safe_warn};
 use warp_errors::report_error;
 use warpui::color::ColorU;
 
@@ -40,8 +41,7 @@ use crate::model::completions::{
 use crate::model::escape_sequences::C0;
 use crate::model::index::VisibleRow;
 use crate::model::iterm_image::parse_iterm_image_metadata;
-use warp_core::features::FeatureFlag;
-use warp_core::{safe_debug, safe_error, safe_warn};
+use crate::model::{KeyboardModes, KeyboardModesApplyBehavior};
 
 /// Marks an OSC as one that is sent by Warp logic registered in the shell.
 ///

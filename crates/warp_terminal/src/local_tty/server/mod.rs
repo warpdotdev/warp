@@ -42,11 +42,9 @@ use super::spawner::PtyHandle;
 /// receive requests from the host application.
 ///
 /// ### Future work
-/// * We could pass the file descriptor index to the child process as a command
-/// line argument - this might enable the use of `posix_spawn` as the underlying
-/// process creation behavior (vs. fork/exec).  (`posix_spawn` is typically a
-/// bit more performant, though not sure how much that matters given this is a
-/// one-time cost.)
+/// We could pass the file descriptor index to the child process as a command-line argument. This
+/// might enable `posix_spawn` instead of fork/exec. `posix_spawn` is typically more performant,
+/// though the difference might not matter for this one-time cost.
 const RECV_SOCKET_FILENO: RawFd = libc::STDERR_FILENO + 1;
 /// The file descriptor of the Unix domain socket where the terminal server will
 /// send requests to the host application.

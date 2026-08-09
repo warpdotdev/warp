@@ -8,17 +8,17 @@ mod resize;
 use std::cmp::min;
 use std::ops::{Index, IndexMut, Range};
 
-pub use crate::model::grid::Dimensions;
 use serde::{Deserialize, Serialize};
+use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 
 use crate::model::ansi::{CharsetIndex, StandardCharset};
 use crate::model::cell::{Cell, Flags};
+pub use crate::model::grid::Dimensions;
 use crate::model::grid::row::Row;
 use crate::model::grid::storage::Storage;
 use crate::model::index::{IndexRange, Point, VisiblePoint, VisibleRow};
 use crate::model::secrets::ObfuscateSecrets;
-use warp_core::features::FeatureFlag;
 
 impl ::std::cmp::PartialEq for GridStorage {
     fn eq(&self, other: &Self) -> bool {

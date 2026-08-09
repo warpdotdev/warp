@@ -1,8 +1,8 @@
+pub use warp_terminal::model::secrets::*;
 use warpui::EntityId;
 use warpui::elements::SecretRange;
 
 use crate::ai::blocklist::block::TextLocation;
-pub use warp_terminal::model::secrets::*;
 #[derive(Clone, Debug)]
 pub struct RichContentSecretTooltipInfo {
     pub secret: String,

@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::ops::RangeInclusive;
 
-use crate::model::grid::CellType;
 use regex::escape;
 use regex_automata::hybrid::BuildError;
 use regex_automata::hybrid::dfa::{Cache, DFA};
@@ -12,6 +11,7 @@ use regex_automata::{Anchored, Input};
 
 use super::grid::grapheme_cursor;
 use super::grid::grid_handler::GridHandler;
+use crate::model::grid::CellType;
 use crate::model::index::{Direction, Point};
 
 pub type Match = RangeInclusive<Point>;

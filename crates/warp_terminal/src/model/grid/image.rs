@@ -1,6 +1,5 @@
-use crate::model::Point;
-
 use super::{AbsolutePoint, AbsoluteRectangle, GridHandler};
+use crate::model::Point;
 use crate::model::image_map::ImagePlacementData;
 
 impl GridHandler {

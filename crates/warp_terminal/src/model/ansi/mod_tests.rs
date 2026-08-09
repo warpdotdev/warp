@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use hex;
 use warp_core::command::ExitCode;
+use warp_core::features::FeatureFlag;
 use warpui::color::ColorU;
 
 use super::*;
@@ -11,7 +12,6 @@ use crate::model::ansi::InputBufferValue;
 use crate::model::index::VisibleRow;
 use crate::model::selection::ScrollDelta;
 use crate::model::session::SessionId;
-use warp_core::features::FeatureFlag;
 
 const HEX_ENCODED_JSON_DCS_START: &[u8] = &[0x1b, 0x50, 0x24, 0x64];
 const UNENCODED_JSON_DCS_START: &[u8] = &[0x1b, 0x50, 0x24, 0x66];

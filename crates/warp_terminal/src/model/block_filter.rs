@@ -34,7 +34,7 @@ impl BlockFilterQuery {
         !self.query.is_empty() && self.is_active
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn new_for_test(query: String) -> Self {
         Self {
             query,

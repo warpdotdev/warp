@@ -1,9 +1,9 @@
 use async_channel::Sender;
+pub use warp_terminal::shell::{shell_escape_single_quotes, shell_quote_arg};
 
 use crate::terminal::model::session::command_executor::{
     InBandCommand, InBandCommandCancelledEvent,
 };
-pub use warp_terminal::shell::{shell_escape_single_quotes, shell_quote_arg};
 
 /// Set of events sent by command executors.
 pub enum ExecutorCommandEvent {

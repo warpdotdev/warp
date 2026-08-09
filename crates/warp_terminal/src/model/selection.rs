@@ -10,7 +10,6 @@ use std::mem;
 use std::ops::RangeInclusive;
 pub use std::ops::{Range, RangeBounds};
 
-use crate::model::grid::cell;
 use pathfinder_geometry::vector::Vector2F;
 use vec1::Vec1;
 use warp_core::semantic_selection::SemanticSelection;
@@ -21,8 +20,8 @@ use super::index::{Direction, VisibleRow};
 use crate::model::GridStorage;
 use crate::model::ansi::CursorShape;
 use crate::model::cell::Flags;
-use crate::model::grid::Dimensions;
 use crate::model::grid::grid_handler::GridHandler;
+use crate::model::grid::{Dimensions, cell};
 use crate::model::index::{Point, Side};
 
 /// A Point and side within that point.

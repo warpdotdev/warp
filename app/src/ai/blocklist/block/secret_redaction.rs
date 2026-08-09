@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use similar::DiffableStr;
+use warp_terminal::model::secrets::find_secrets_in_text_with_levels_using_regex;
 use warpui::elements::{MouseStateHandle, PartialClickableElement, SecretRange};
 use warpui::platform::Cursor;
 
 use super::{AIBlockAction, TextLocation};
 use crate::ai::agent::{AIAgentOutput, AIAgentTextSection, AgentOutputText};
 use crate::terminal::model::secrets::{SECRETS_REGEX, SecretLevel, SecretsRegex};
-use warp_terminal::model::secrets::find_secrets_in_text_with_levels_using_regex;
 
 pub const SECRET_REDACTION_REPLACEMENT_CHARACTER: &str = "*";
 

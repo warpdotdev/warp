@@ -105,7 +105,6 @@ enclose = "1.1.8"
 enum-iterator.workspace = true
 event-listener.workspace = true
 field_mask.workspace = true
-flate2 = "1.0.17"
 float-cmp.workspace = true
 futures-lite.workspace = true
 futures-util.workspace = true
@@ -343,7 +342,6 @@ syntect = "5.0"
 sysinfo.workspace = true
 warp-command-signatures = { workspace = true, features = ["embed-signatures"] }
 is_executable = "1.0.1"
-gethostname = "1.1.0"
 watcher.workspace = true
 warp_files.workspace = true
 
@@ -372,9 +370,7 @@ web-sys.workspace = true
 warp_web_event_bus.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-cvt = "0.1.1"
 signal-hook = "0.3.17"
-signal-hook-mio = { version = "0.2.4", features = ["support-v1_0"] }
 nix = { workspace = true, features = [
     "fs",
     "hostname",

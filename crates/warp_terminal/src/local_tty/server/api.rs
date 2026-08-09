@@ -21,12 +21,10 @@ impl<T> From<anyhow::Result<T>> for Result<T> {
 /// organized into request/response pairs for the API "methods".
 ///
 /// ### Future work
-/// * We may want to structure this slightly differently to group
-/// messages sent by the client or sent by the server, simplifying logic that
-/// exists on each side for message parsing.  (We currently have error-checking
-/// logic to ensure that, for example, the server doesn't receive a message that
-/// should only be sent server->client; it would be preferable if we didn't need
-/// to ever perform that check.)
+/// We may want to structure this differently to group messages sent by the client or server,
+/// simplifying each side's parsing logic. We currently check, for example, that the server does
+/// not receive a message that should only be sent from the server to the client. It would be
+/// preferable if that check were unnecessary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) enum Message {
     /// A message sent from client -> server requesting that the server spawns

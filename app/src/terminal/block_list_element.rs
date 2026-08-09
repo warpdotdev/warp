@@ -38,7 +38,7 @@ use warpui::{
 };
 
 use super::block_list_viewport::{ClampingMode, InputMode, ScrollPosition, ViewportState};
-use super::blockgrid_renderer::GridRenderParams;
+use super::blockgrid_renderer::{BlockGridRenderer, GridRenderParams};
 use super::find::{BlockFindRenderData, TerminalFindModel};
 use super::grid_renderer::CellGlyphCache;
 use super::meta_shortcuts::handle_keystroke_despite_composing;

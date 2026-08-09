@@ -1,11 +1,10 @@
 use std::borrow::Cow;
 
+use super::grid_handler::GridHandler;
+use super::{CursorDirection, CursorState, Dimensions as _};
 use crate::model::grid::CellType;
 use crate::model::grid::cell::{self, Cell};
 use crate::model::grid::row::Row;
-
-use super::grid_handler::GridHandler;
-use super::{CursorDirection, CursorState, Dimensions as _};
 use crate::model::index::Point;
 
 /// The set of possible grapheme cursor wrapping behaviors.

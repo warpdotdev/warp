@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 use std::io;
 
-use crate::model::ansi::control_sequence_parameters::*;
-use crate::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::color::ColorU;
 
 use super::ProcessorInput;
 use super::dcs_hooks::*;
+use crate::model::ansi::control_sequence_parameters::*;
 use crate::model::completions::{
     ShellCompletion, ShellCompletionUpdate, ShellData as CompletionsShellData,
 };
@@ -16,6 +15,7 @@ use crate::model::iterm_image::{ITermImage, ITermImageMetadata};
 use crate::model::kitty::{KittyAction, KittyChunk, KittyResponse};
 use crate::model::selection::ScrollDelta;
 use crate::model::session::SessionId;
+use crate::model::{KeyboardModes, KeyboardModesApplyBehavior};
 
 /// Trait to be implemented by model objects that handle pty output. The
 /// ansi::Performer (our pty output parser) delegates handling of specific

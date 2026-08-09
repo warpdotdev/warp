@@ -5,6 +5,7 @@ mod block_index;
 pub mod block {
     pub use super::BlockId;
 }
+pub mod blockgrid;
 pub mod cell {
     pub use super::grid::cell::*;
 }
@@ -25,7 +26,6 @@ pub mod mouse;
 pub mod secrets;
 pub mod selection;
 pub mod session;
-pub mod terminal_model;
 
 pub use block_id::BlockId;
 pub use block_index::BlockIndex;

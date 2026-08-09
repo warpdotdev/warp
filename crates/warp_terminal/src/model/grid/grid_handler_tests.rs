@@ -3,12 +3,12 @@
 
 use std::ops::BitOrAssign;
 
-use crate::model::char_or_str::CharOrStr;
 use warp_util::path::LineAndColumnArg;
 use warpui::text::words::is_default_word_boundary;
 
 use super::*;
 use crate::model::blockgrid::BlockGrid;
+use crate::model::char_or_str::CharOrStr;
 use crate::model::secrets::{IsObfuscated, ObfuscateSecrets, SecretLevel};
 use crate::test_util::mock_blockgrid;
 

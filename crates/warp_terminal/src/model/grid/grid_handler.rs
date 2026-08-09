@@ -19,9 +19,6 @@ use std::mem;
 use std::num::NonZeroUsize;
 use std::ops::{Range, RangeInclusive};
 
-pub use crate::model::TermMode;
-use crate::model::grid::{CellType, FlatStorage, HyperlinkId, HyperlinkRegistry};
-use crate::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use bounded_vec_deque::BoundedVecDeque;
 use filtering::FilterState;
 use itertools::Itertools;
@@ -43,16 +40,19 @@ use super::row::Row;
 use super::{ConvertToAbsolute as _, Cursor, SelectionCursor};
 use crate::SizeInfo;
 use crate::event_listener::ChannelEventListener;
+pub use crate::model::TermMode;
 use crate::model::ansi::{self, Color, CursorStyle, Handler, NamedColor};
 use crate::model::cell::{Cell, DEFAULT_CHAR, Flags, LineLength};
 use crate::model::char_or_str::{CharOrStr, PushCharOrStr};
 use crate::model::find::{Match, RegexDFAs};
-use crate::model::grid::{Dimensions, GridStorage, RespectDisplayedOutput};
+use crate::model::grid::{
+    CellType, Dimensions, FlatStorage, GridStorage, HyperlinkId, HyperlinkRegistry,
+    RespectDisplayedOutput,
+};
 use crate::model::image_map::ImageMap;
 use crate::model::index::{Direction, IndexRange, Point, VisibleRow};
 use crate::model::secrets::{ObfuscateSecrets, RespectObfuscatedSecrets, SecretMap};
-use crate::model::terminal_model::RangeInModel;
-use crate::model::{Secret, SecretHandle};
+use crate::model::{KeyboardModes, KeyboardModesApplyBehavior, RangeInModel, Secret, SecretHandle};
 use crate::util::extensions::TrimStringExt;
 
 /// Used to match equal brackets, when performing a bracket-pair selection.

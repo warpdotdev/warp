@@ -14,9 +14,9 @@ use warp_core::safe_warn;
 use warp_errors::report_error;
 use warpui::elements::SecretRange;
 
+use super::RangeInModel;
 use super::grid::grid_handler::GridHandler;
 use super::grid::{Dimensions as _, RespectDisplayedOutput};
-use super::terminal_model::RangeInModel;
 use crate::model::find::RegexDFAs;
 use crate::model::index::Point;
 
@@ -510,7 +510,7 @@ pub fn find_secrets_in_text_with_levels_using_regex(
 }
 
 /// Merges overlapping ranges while preserving the highest priority SecretLevel
-fn merge_sorted_ranges_with_levels(
+pub fn merge_sorted_ranges_with_levels(
     ranges: Vec<(SecretRange, SecretLevel)>,
 ) -> Vec<(SecretRange, SecretLevel)> {
     if ranges.is_empty() {

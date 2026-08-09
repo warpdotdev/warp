@@ -2,12 +2,15 @@
 
 use std::cmp::Ordering;
 use std::fmt;
-use std::ops::{Add, AddAssign, Range, Sub, SubAssign};
+use std::ops::{Add, AddAssign, Range, RangeInclusive, Sub, SubAssign};
 
 use serde::{Deserialize, Serialize};
 use warpui_core::units::Lines;
 
 use super::grid::Dimensions;
+pub trait RangeInModel {
+    fn range(&self) -> RangeInclusive<Point>;
+}
 
 /// Behavior for handling grid boundaries.
 pub enum Boundary {

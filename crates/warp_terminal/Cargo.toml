@@ -29,11 +29,11 @@ get-size.workspace = true
 hex.workspace = true
 image.workspace = true
 instant.workspace = true
-is_executable = "1.0.1"
 itertools.workspace = true
 lazy_static.workspace = true
 libc.workspace = true
 log.workspace = true
+memo-map.workspace = true
 ordered-float.workspace = true
 parking_lot.workspace = true
 pathfinder_color.workspace = true
@@ -115,6 +115,7 @@ winreg.workspace = true
 serial_test = "0.8.0"
 tempfile.workspace = true
 unicode-segmentation = "1.11.0"
+warp_core = { workspace = true, features = ["test-util"] }
 
 [features]
 crash_reporting = ["warp_errors/crash_reporting"]

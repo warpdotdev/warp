@@ -1,11 +1,10 @@
 use std::ops::{Index, IndexMut, Range, RangeFrom, RangeFull, RangeTo};
 
-use crate::model::grid::cell::Cell;
-use crate::model::grid::row::Row;
-
 use super::GridStorage;
 use super::grid_handler::GridHandler;
 use crate::model::grid::Dimensions as _;
+use crate::model::grid::cell::Cell;
+use crate::model::grid::row::Row;
 use crate::model::index::{Point, VisiblePoint, VisibleRow};
 
 pub trait ConvertToAbsolute {

@@ -23,14 +23,15 @@ use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
 
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use shell::ShellStarter;
+
 #[cfg(unix)]
 pub use self::unix::*;
 #[cfg(windows)]
 pub use self::windows::*;
 use crate::SizeInfo;
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
-use shell::ShellStarter;
 
 /// This trait defines the behaviour needed to read and/or write to a stream.
 /// It defines an abstraction over mio's interface in order to allow either one

@@ -69,7 +69,7 @@ pub fn main() -> Result<()> {
                 // GUI application), do so.  This must occur before init_logging, as the
                 // terminal server sets up its own logger, and attempting to set a second
                 // logger leads to a panic.
-                warp::terminal::local_tty::server::run_terminal_server(args);
+                warp::terminal::local_tty::run_terminal_server(args);
                 return Ok(());
             }
             // This is a catch-all to handle the plugin host, which the integration test crate doesn't have a feature flag for.

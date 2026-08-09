@@ -44,6 +44,7 @@ use crate::model::index::VisibleRow;
 ///
 /// Imagine we want to print Shakespeare plays in alphabetical order. Let's assume sequential storage.
 ///
+/// ```text
 /// 1) The first write takes place at index 0.
 ///    ┌────────────────────────────────┐
 /// 0: │All's Well That Ends Well       │
@@ -84,6 +85,7 @@ use crate::model::index::VisibleRow;
 /// 8: │Henry IV, Part II (1597)        │
 /// 9: │Henry V (1598)                  │
 ///    └────────────────────────────────┘
+/// ```
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(super) struct Storage {
     inner: Vec<Row>,

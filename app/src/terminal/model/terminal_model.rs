@@ -1,14 +1,12 @@
 use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet};
-use std::num::ParseIntError;
 use std::ops::{Range, RangeInclusive};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_channel::Sender;
 use base64::Engine;
-use hex::FromHexError;
-use itertools::{Either, Itertools};
+use itertools::Either;
 use serde::Serialize;
 use session_sharing_protocol::common::{
     AICommandMetadata, OrderedTerminalEventType, ParticipantId,
@@ -19,7 +17,9 @@ use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_errors::report_error;
-pub use warp_terminal::model::BlockIndex;
+pub use warp_terminal::event::ExitReason;
+use warp_terminal::event::validate_and_decode_in_band_command_output_to_bytes;
+pub use warp_terminal::model::{BlockIndex, RangeInModel};
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::AppContext;
 use warpui::assets::asset_cache::Asset;
@@ -86,7 +86,6 @@ use crate::terminal::{
     BlockPadding, ShellHost, ShellLaunchData, ShellLaunchState, SizeUpdate, SizeUpdateReason,
     color, ssh,
 };
-pub use warp_terminal::model::terminal_model::{ExitReason, RangeInModel};
 
 /// Max size of the window title stack.
 const TITLE_STACK_MAX_DEPTH: usize = 4096;
@@ -3675,55 +3674,6 @@ impl ModeProvider for TerminalModel {
     fn is_term_mode_set(&self, mode: TermMode) -> bool {
         self.is_term_mode_set(mode)
     }
-}
-
-/// Validates and decodes in-band command output sent via `warp_send_generator_output_osc_message`.
-/// Upon success, returns the string content of the generator output. The OSC payload is expected
-/// to conform to the following format:
-///
-///   <content_length>;<content>
-///
-/// where `content_length` is the length (number of bytes) in `content`.  If the
-/// payload does not conform to this format or if expected content length does not
-/// match the actual content length, returns an error.
-fn validate_and_decode_in_band_command_output_to_bytes(
-    raw_payload: &str,
-) -> Result<Vec<u8>, InBandCommandOutputDecodingError> {
-    let components = raw_payload.splitn(2, ';').collect_vec();
-    if components.len() != 2 {
-        return Err(InBandCommandOutputDecodingError::NoContentLengthHeader);
-    }
-
-    let expected_content_length = components[0]
-        .parse::<usize>()
-        .map_err(InBandCommandOutputDecodingError::ContentLengthHeaderCorrupted)?;
-    let payload: &str = components[1].trim();
-    let actual_content_length = payload.len();
-    if actual_content_length != expected_content_length {
-        return Err(InBandCommandOutputDecodingError::ContentLengthMismatch {
-            actual_length: actual_content_length,
-            expected_length: expected_content_length,
-        });
-    }
-
-    hex::decode(payload).map_err(InBandCommandOutputDecodingError::HexDecodingFailure)
-}
-
-#[derive(thiserror::Error, Debug)]
-enum InBandCommandOutputDecodingError {
-    #[error("Missing content length header.")]
-    NoContentLengthHeader,
-    #[error("DCS content length header is corrupted: {0:?}")]
-    ContentLengthHeaderCorrupted(ParseIntError),
-    #[error(
-        "Content length header does not match length of received content. Actual: {actual_length}, expected: {expected_length}"
-    )]
-    ContentLengthMismatch {
-        actual_length: usize,
-        expected_length: usize,
-    },
-    #[error("Failed to hex-decode the DCS payload: {0:?}")]
-    HexDecodingFailure(FromHexError),
 }
 
 #[cfg(test)]

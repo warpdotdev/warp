@@ -14,10 +14,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use warp_core::SessionId;
+use warp_util::path::resolve_executable;
 
 use super::shell::DirectShellStarter;
 use crate::shell::ShellType;
-use crate::util::path::resolve_executable;
 
 /// Default home directory for the sandbox user inside the shell template.
 /// Lives inside the container image and is shared across all sandboxes, so it

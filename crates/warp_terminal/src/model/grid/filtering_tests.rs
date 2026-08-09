@@ -1,9 +1,8 @@
-use crate::model::grid::cell::Flags;
-
 use super::*;
 use crate::model::ansi::Handler as _;
 use crate::model::blockgrid::BlockGrid;
 use crate::model::grid::Dimensions as _;
+use crate::model::grid::cell::Flags;
 use crate::model::index::{VisiblePoint, VisibleRow};
 use crate::test_util::mock_blockgrid;
 

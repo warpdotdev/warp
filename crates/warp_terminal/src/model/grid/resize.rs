@@ -1,15 +1,14 @@
 // The code in this file is adapted from the alacritty_terminal crate under the
 // Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
 
-use crate::model::grid::Dimensions as _;
-use crate::model::grid::cell::{self, LineLength as _};
-use crate::model::{Point, VisiblePoint, VisibleRow};
 use string_offset::ByteOffset;
 use warp_errors::report_error;
 
 use super::{FullGridClearBehavior, GridHandler};
 use crate::SizeInfo;
-use crate::model::grid::Cursor;
+use crate::model::grid::cell::{self, LineLength as _};
+use crate::model::grid::{Cursor, Dimensions as _};
+use crate::model::{Point, VisiblePoint, VisibleRow};
 
 impl GridHandler {
     /// Resize terminal to new dimensions.

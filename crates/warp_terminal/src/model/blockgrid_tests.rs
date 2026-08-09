@@ -1,16 +1,17 @@
 use warp_core::features::FeatureFlag;
 
-use crate::terminal::SizeInfo;
-use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::model::ansi::{self, Handler};
-use crate::terminal::model::blockgrid::{BlockGrid, CursorDisplayPoint};
-use crate::terminal::model::grid::Dimensions;
-use crate::terminal::model::grid::grid_handler::PerformResetGridChecks;
-use crate::terminal::model::index::{Point, VisibleRow};
-use crate::terminal::model::kitty::{CursorMovementPolicy, KittyAction};
-use crate::terminal::model::secrets::ObfuscateSecrets;
-use crate::terminal::model::test_utils;
-use crate::test_util::mock_blockgrid;
+use crate::SizeInfo;
+use crate::event_listener::ChannelEventListener;
+use crate::model::ansi::{self, Handler};
+use crate::model::blockgrid::{BlockGrid, CursorDisplayPoint};
+use crate::model::grid::Dimensions;
+use crate::model::grid::grid_handler::PerformResetGridChecks;
+use crate::model::index::{Point, VisibleRow};
+use crate::model::kitty::{CursorMovementPolicy, KittyAction};
+use crate::model::secrets::ObfuscateSecrets;
+use crate::test_util::{
+    mock_blockgrid, test_kitty_image_metadata_map, test_kitty_store_and_display_action,
+};
 
 #[test]
 pub fn test_finish_truncates_grid_basic() {
@@ -191,8 +192,8 @@ pub fn test_non_moving_kitty_image_keeps_finished_grid_visible() {
         ObfuscateSecrets::No,
         PerformResetGridChecks::default(),
     );
-    let mut metadata = test_utils::test_kitty_image_metadata_map(1);
-    let mut action = test_utils::test_kitty_store_and_display_action(1, 1);
+    let mut metadata = test_kitty_image_metadata_map(1);
+    let mut action = test_kitty_store_and_display_action(1, 1);
     let KittyAction::StoreAndDisplay(store_and_display) = &mut action else {
         panic!("expected StoreAndDisplay action");
     };

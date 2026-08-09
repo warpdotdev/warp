@@ -949,6 +949,7 @@ fn build_docker_sandbox_command(
 ///   - `sbx rm --force warp-sandbox-<id>` to drop the container,
 ///   - `fs::remove_dir_all` on `starter.init_dir()` and
 ///     `starter.workspace_dir()` to reclaim host disk.
+///
 /// Tracking as a follow-up.
 fn prepare_docker_sandbox(starter: &DockerSandboxShellStarter) -> Result<()> {
     // Build each per-sandbox subdirectory with mode 0700 so other local users

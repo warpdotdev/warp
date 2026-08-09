@@ -15,7 +15,6 @@ macro_rules! assert_lines_approx_eq {
 
 pub mod alt_screen;
 pub mod block;
-pub mod blockgrid;
 pub mod blocks;
 pub mod bootstrap;
 pub mod header_grid;
@@ -31,12 +30,13 @@ pub mod terminal_model;
 pub mod test_utils;
 
 pub use lifecycle::{LifecycleRecoveryRecord, StartCommandOutcome};
+pub use warp_terminal::model::blockgrid;
 pub use warp_terminal::model::grid::cell;
 pub use warp_terminal::model::secrets::{
     ObfuscateSecrets, RespectObfuscatedSecrets, Secret, SecretHandle,
     set_user_and_enterprise_secret_regexes,
 };
-pub use warp_terminal::model::{BlockId, char_or_str, escape_sequences, mouse};
 pub use warp_terminal::model::{
-    ansi, completions, find, grid, image_map, iterm_image, kitty, selection,
+    BlockId, ansi, char_or_str, completions, escape_sequences, find, grid, image_map, iterm_image,
+    kitty, mouse, selection,
 };

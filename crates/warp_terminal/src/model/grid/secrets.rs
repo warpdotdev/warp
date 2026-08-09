@@ -5,13 +5,13 @@ use std::sync::Arc;
 use itertools::Itertools as _;
 
 use super::GridHandler;
+use crate::model::RangeInModel;
 use crate::model::grid::{Dimensions as _, RespectDisplayedOutput, grapheme_cursor};
 use crate::model::index::{Direction, Point};
 use crate::model::secrets::{
     IsObfuscated, ObfuscateSecrets, SECRETS_REGEX, Secret, SecretAndHandle, SecretHandle,
     SecretLevel, SecretsRegex, find_secrets_in_text_with_levels_using_regex,
 };
-use crate::model::terminal_model::RangeInModel;
 
 impl GridHandler {
     pub fn num_secrets_obfuscated(&self) -> usize {

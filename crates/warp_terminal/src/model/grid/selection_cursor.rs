@@ -1,7 +1,6 @@
-use crate::model::grid::CellType;
-
 use super::grid_handler::GridHandler;
 use super::{CursorDirection, CursorState, Dimensions as _};
+use crate::model::grid::CellType;
 use crate::model::index::Point;
 
 /// A structure to help with movement of the cursor for keyboard-driven

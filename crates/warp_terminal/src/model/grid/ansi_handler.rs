@@ -12,9 +12,6 @@ use std::io;
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::model::ansi::CharsetIndex;
-use crate::model::grid::cell;
-use crate::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use base64::Engine as _;
 use bounded_vec_deque::BoundedVecDeque;
 use pathfinder_geometry::vector::Vector2F;
@@ -27,17 +24,16 @@ use warp_errors::report_error;
 use warpui::image_cache::{FitType, resize_dimensions};
 
 use super::{AbsolutePoint, FullGridClearBehavior, GridHandler, PerformResetGridChecks, TermMode};
-use crate::ImageProtocol;
 use crate::event::Event;
 use crate::event_listener::ChannelEventListener;
-use crate::model::ObfuscateSecrets;
 use crate::model::ansi::{
-    self, Attr, Color, CursorStyle, Handler as _, NamedColor, PrecmdValue, PreexecValue,
+    self, Attr, CharsetIndex, Color, CursorStyle, Handler as _, NamedColor, PrecmdValue,
+    PreexecValue,
 };
 use crate::model::cell::{Cell, Flags};
 use crate::model::char_or_str::CharOrStr;
 use crate::model::grid::indexing::IndexRegion as _;
-use crate::model::grid::{Dimensions as _, grapheme_cursor};
+use crate::model::grid::{Dimensions as _, cell, grapheme_cursor};
 use crate::model::image_map::{ImagePlacementData, ImageType, StoredImageMetadata};
 use crate::model::index::{Point, VisibleRow};
 use crate::model::iterm_image::{ITermImage, ITermImageDimensionUnit};
@@ -45,7 +41,8 @@ use crate::model::kitty::{
     CursorMovementPolicy, KittyAction, KittyError, KittyResponse, StorageError,
 };
 use crate::model::selection::ScrollDelta;
-use crate::{ClipboardType, SizeInfo};
+use crate::model::{KeyboardModes, KeyboardModesApplyBehavior, ObfuscateSecrets};
+use crate::{ClipboardType, ImageProtocol, SizeInfo};
 
 const MAX_IMAGE_CELL_HEIGHT: u32 = 255;
 

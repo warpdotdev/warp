@@ -56,7 +56,7 @@ impl ChannelEventListener {
         }
     }
 
-    #[cfg(any(test, feature = "integration_tests"))]
+    #[cfg(any(test, feature = "integration_tests", feature = "test-util"))]
     pub fn are_any_events_pending(&self) -> bool {
         !self.wakeups_tx.is_empty()
             || !(self.is_terminal_event_queue_empty)()

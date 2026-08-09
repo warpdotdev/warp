@@ -7,6 +7,8 @@ pub mod model;
 mod runtime;
 mod shared_session;
 pub mod shell;
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_util;
 pub mod util;
 pub mod writeable_pty;
 

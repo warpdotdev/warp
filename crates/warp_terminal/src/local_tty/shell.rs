@@ -9,13 +9,13 @@ use typed_path::UnixPathBuf;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::session_id::SessionId;
 use warp_errors::report_error;
-use warp_util::path::{canonicalize_git_bash_path, is_msys2_path, warp_shell_path};
+use warp_util::path::{
+    canonicalize_git_bash_path, is_msys2_path, resolve_executable, warp_shell_path,
+};
 
 use crate::bootstrap::{generate_session_id, init_shell_script_for_shell};
 use crate::local_tty::docker_sandbox::DockerSandboxShellStarter;
-use crate::shell::ShellLaunchData;
-use crate::shell::{ShellName, ShellType};
-use crate::util::path::resolve_executable;
+use crate::shell::{ShellLaunchData, ShellName, ShellType};
 #[cfg(windows)]
 use crate::util::windows::{powershell_5_path, powershell_7_path, wsl_path};
 
@@ -374,7 +374,7 @@ pub enum ShellStarterSource {
 }
 
 impl ShellStarterSource {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn shell_type(&self) -> ShellType {
         match self {
             Self::Override(starter) => starter.shell_type(),
@@ -453,7 +453,7 @@ impl From<ShellStarterSource> for ShellStarterSourceOrWslName {
 }
 
 impl DirectShellStarter {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-util"))]
     pub fn new_for_test(shell_type: ShellType, shell_path: PathBuf, args: Vec<OsString>) -> Self {
         Self {
             shell_type,
@@ -830,6 +830,7 @@ fn decode_wsl_path_result(result: io::Result<process::Output>) -> Option<UnixPat
 /// 1. UTF-8 encoded output from the WSL distro.
 /// 2. A UTF-16 encoded CRLF.
 /// 3. A UTF-16 error message.
+///
 /// See this ticket for an example and why this is necessary:
 /// https://linear.app/warpdotdev/issue/CORE-3539
 fn take_until_utf16_crlf(bytes: Vec<u8>) -> Vec<u8> {
