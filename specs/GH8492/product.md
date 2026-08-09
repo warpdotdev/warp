@@ -78,4 +78,4 @@ Each invariant is backed by a fixture/transcript test (CI-safe, no live tmux) or
 - Preferred home for the button (tab-bar `+` menu vs. a dedicated affordance). The setting itself is resolved: `terminal.tmux_control_mode` under Settings → Features (see success criterion #16).
 - Appetite for a later session **dashboard** (list/kill/attach across sessions) vs. the v1 menu.
 
-(Resolved: the existing `tmux_control_mode` module scoped to SSH warpification is left untouched; the control-mode protocol core is a single fresh parser. See the tech spec.)
+(Resolved: the only pre-existing tmux code is the deprecated SSH-wrapper tombstones and OSC52 clipboard passthrough; neither parses control mode, so the control-mode protocol core is a single fresh parser with nothing to reconcile. See the tech spec.)
