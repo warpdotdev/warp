@@ -4,13 +4,18 @@ use std::sync::Arc;
 #[cfg(feature = "local_fs")]
 use anyhow::Context;
 use async_trait::async_trait;
-#[cfg(feature = "local_fs")]
-use command::r#async::Command;
 
 use crate::CommandBuilder;
 use crate::language_server_candidate::{LanguageServerCandidate, LanguageServerMetadata};
 #[cfg(feature = "local_fs")]
 use crate::supported_servers::CustomBinaryConfig;
+
+#[cfg(feature = "local_fs")]
+const SOLIDITY_SERVER_BINARY_NAME: &str = "nomicfoundation-solidity-language-server";
+
+/// Minimum Node.js version required by `@nomicfoundation/solidity-language-server`.
+#[cfg(feature = "local_fs")]
+const SOLIDITY_MIN_NODE_VERSION: (u64, u64, u64) = (20, 9, 0);
 
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub struct SolidityLanguageServerCandidate {
@@ -48,36 +53,12 @@ impl SolidityLanguageServerCandidate {
             return None;
         }
 
-        let node_binary = node_runtime::find_working_node_binary(path_env_var).await?;
+        let node_binary = find_node_binary_for_solidity(path_env_var).await?;
 
-        let mut cmd = Command::new(&node_binary);
-        if let Some(path) = path_env_var {
-            cmd.env("PATH", path);
-        }
-        cmd.arg(&server_js).arg("--version");
-        match cmd.output().await {
-            Ok(output) if output.status.success() => {
-                let version = String::from_utf8_lossy(&output.stdout);
-                log::info!(
-                    "Verified Solidity language server installation: {}",
-                    version.trim()
-                );
-            }
-            Ok(output) => {
-                log::warn!(
-                    "Solidity language server version check failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-                return None;
-            }
-            Err(e) => {
-                log::warn!(
-                    "Failed to run Solidity language server version check: {}",
-                    e
-                );
-                return None;
-            }
-        }
+        log::info!(
+            "Found Solidity language server JS file at {}",
+            server_js.display()
+        );
 
         Some(CustomBinaryConfig {
             binary_path: node_binary,
@@ -106,13 +87,7 @@ impl LanguageServerCandidate for SolidityLanguageServerCandidate {
     }
 
     async fn is_installed_on_path(&self, executor: &CommandBuilder) -> bool {
-        executor
-            .command("nomicfoundation-solidity-language-server")
-            .arg("--version")
-            .output()
-            .await
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        binary_exists_on_path(executor.path_env_var(), SOLIDITY_SERVER_BINARY_NAME)
     }
 
     async fn install(
@@ -131,10 +106,7 @@ impl LanguageServerCandidate for SolidityLanguageServerCandidate {
             .await
             .context("Failed to create Solidity language server installation directory")?;
 
-        let use_system_node = match executor.path_env_var() {
-            Some(path) => node_runtime::detect_system_node(path).await.is_ok(),
-            None => false,
-        };
+        let use_system_node = system_node_meets_solidity_requirement(executor.path_env_var()).await;
 
         let custom_node_paths = if use_system_node {
             log::info!("Using system Node.js for Solidity language server installation");
@@ -199,6 +171,135 @@ impl LanguageServerCandidate for SolidityLanguageServerCandidate {
             digest: None,
         })
     }
+}
+
+/// Finds a Node.js binary that can run the Solidity language server.
+///
+/// Prefers Warp's pinned custom Node install, then falls back to system Node only when it
+/// satisfies the package's `engines` requirement (`>=20.9.0`).
+#[cfg(feature = "local_fs")]
+async fn find_node_binary_for_solidity(path_env_var: Option<&str>) -> Option<std::path::PathBuf> {
+    if let Ok(custom_node) = node_runtime::node_binary_path()
+        && custom_node.is_file()
+    {
+        log::info!(
+            "Using custom node installation for Solidity language server at {}",
+            custom_node.display()
+        );
+        return Some(custom_node);
+    }
+
+    if system_node_meets_solidity_requirement(path_env_var).await {
+        log::info!("Using system node for Solidity language server");
+        return Some(std::path::PathBuf::from("node"));
+    }
+
+    None
+}
+
+/// Returns true when system Node.js is available and meets the Solidity server's engine requirement.
+#[cfg(feature = "local_fs")]
+async fn system_node_meets_solidity_requirement(path_env_var: Option<&str>) -> bool {
+    let Some(path) = path_env_var else {
+        return false;
+    };
+
+    // Still require Warp's generic minimum first so we share the same PATH resolution path.
+    if node_runtime::detect_system_node(path).await.is_err() {
+        return false;
+    }
+
+    let mut cmd = command::r#async::Command::new("node");
+    cmd.env("PATH", path).arg("--version");
+    match cmd.output().await {
+        Ok(output) if output.status.success() => {
+            let version_str = String::from_utf8_lossy(&output.stdout);
+            let version_str = version_str.trim().trim_start_matches('v');
+            match parse_semver_tuple(version_str) {
+                Some(version) if version >= SOLIDITY_MIN_NODE_VERSION => {
+                    log::info!(
+                        "System Node.js {} meets Solidity language server requirement (>= {}.{}.{})",
+                        version_str,
+                        SOLIDITY_MIN_NODE_VERSION.0,
+                        SOLIDITY_MIN_NODE_VERSION.1,
+                        SOLIDITY_MIN_NODE_VERSION.2
+                    );
+                    true
+                }
+                Some(_) => {
+                    log::info!(
+                        "System Node.js {} is below Solidity language server requirement (>= {}.{}.{})",
+                        version_str,
+                        SOLIDITY_MIN_NODE_VERSION.0,
+                        SOLIDITY_MIN_NODE_VERSION.1,
+                        SOLIDITY_MIN_NODE_VERSION.2
+                    );
+                    false
+                }
+                None => {
+                    log::warn!("Failed to parse system Node.js version: {version_str}");
+                    false
+                }
+            }
+        }
+        Ok(output) => {
+            log::warn!(
+                "node --version failed while checking Solidity requirement: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            false
+        }
+        Err(e) => {
+            log::warn!("Failed to run node --version for Solidity requirement check: {e}");
+            false
+        }
+    }
+}
+
+/// Returns true if `binary_name` exists somewhere on PATH.
+///
+/// The Solidity language server only accepts LSP transport flags such as `--stdio`,
+/// so we cannot probe it with `--version` the way we do for other Node-based servers.
+#[cfg(feature = "local_fs")]
+fn binary_exists_on_path(path_env_var: Option<&str>, binary_name: &str) -> bool {
+    let Some(path_env_var) = path_env_var else {
+        return false;
+    };
+
+    for dir in std::env::split_paths(path_env_var) {
+        let candidate = dir.join(binary_name);
+        if candidate.is_file() {
+            return true;
+        }
+
+        #[cfg(windows)]
+        {
+            for extension in ["cmd", "bat", "exe"] {
+                let windows_candidate = dir.join(format!("{binary_name}.{extension}"));
+                if windows_candidate.is_file() {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+#[cfg(feature = "local_fs")]
+fn parse_semver_tuple(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts
+        .next()
+        .unwrap_or("0")
+        .split(|c: char| !c.is_ascii_digit())
+        .next()
+        .unwrap_or("0")
+        .parse()
+        .ok()?;
+    Some((major, minor, patch))
 }
 
 #[async_trait]
