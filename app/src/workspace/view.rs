@@ -290,6 +290,8 @@ use crate::menu::{
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
 use crate::notebooks::CloudNotebook;
+#[cfg(feature = "local_fs")]
+use crate::notebooks::file::SourceScrollTarget;
 use crate::notebooks::manager::{NotebookManager, NotebookSource};
 use crate::notification::NotificationContext;
 use crate::palette::PaletteMode;
@@ -6406,6 +6408,42 @@ impl Workspace {
         code_source: CodeSource,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.open_file_with_target_and_match(
+            path,
+            target,
+            OpenFileLocation::from_line_col(line_col),
+            code_source,
+            ctx,
+        );
+    }
+
+    #[cfg(not(feature = "local_fs"))]
+    pub fn open_file_with_target_and_match(
+        &mut self,
+        _path: PathBuf,
+        _target: FileTarget,
+        _location: OpenFileLocation,
+        _code_source: CodeSource,
+        _ctx: &mut ViewContext<Self>,
+    ) {
+    }
+
+    /// As [`Self::open_file_with_target`], but carrying the text of the search
+    /// match this open came from. The Markdown viewer renders its content, so
+    /// it locates the match by text rather than by source line and column.
+    #[cfg(feature = "local_fs")]
+    pub fn open_file_with_target_and_match(
+        &mut self,
+        path: PathBuf,
+        target: FileTarget,
+        location: OpenFileLocation,
+        code_source: CodeSource,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let OpenFileLocation {
+            line_col,
+            match_text,
+        } = location;
         // Handle directories for CodeEditor(NewTab) target by opening a new terminal tab
         if path.is_dir() && matches!(target, FileTarget::CodeEditor(EditorLayout::NewTab)) {
             self.add_tab_with_pane_layout(
@@ -6430,6 +6468,7 @@ impl Workspace {
                     session,
                     layout,
                     Some(code_source),
+                    source_scroll_target(line_col, match_text),
                     ctx,
                 );
             }
@@ -6522,16 +6561,20 @@ impl Workspace {
                 location,
                 target,
                 line_col,
+                match_text,
             } => {
                 let code_source = CodeSource::FileTree {
                     location: location.clone(),
                 };
                 match location {
                     LocalOrRemotePath::Local(path) => {
-                        self.open_file_with_target(
+                        self.open_file_with_target_and_match(
                             path.clone(),
                             target.clone(),
-                            *line_col,
+                            OpenFileLocation {
+                                line_col: *line_col,
+                                match_text: match_text.clone(),
+                            },
                             code_source,
                             ctx,
                         );
@@ -6548,6 +6591,7 @@ impl Workspace {
                                     None,
                                     *layout,
                                     Some(code_source),
+                                    source_scroll_target(*line_col, match_text.clone()),
                                     ctx,
                                 );
                             } else {
@@ -8649,6 +8693,7 @@ impl Workspace {
         session: Option<Arc<Session>>,
         layout: EditorLayout,
         code_source: Option<CodeSource>,
+        source_target: Option<SourceScrollTarget>,
         ctx: &mut ViewContext<Self>,
     ) {
         let existing_file_pane = {
@@ -8667,6 +8712,18 @@ impl Workspace {
             self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
                 pane_group.focus_pane_by_id(pane_id, ctx);
             });
+            if let Some(target) = source_target {
+                // Resolved after the update: holding a view handle across it deadlocks.
+                let file_view = self
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .file_notebook_view_from_pane_id(pane_id, ctx);
+                if let Some(file_view) = file_view {
+                    file_view.update(ctx, |view, ctx| {
+                        view.scroll_to_source_target(target, ctx);
+                    });
+                }
+            }
             return;
         }
         // The notebook viewer renders markdown rather than raw lines, but it
@@ -8677,6 +8734,7 @@ impl Workspace {
             session,
             #[cfg(feature = "local_fs")]
             code_source,
+            source_target,
             ctx,
         );
 
@@ -16187,7 +16245,14 @@ impl Workspace {
                 #[cfg(feature = "local_fs")]
                 {
                     let layout = *EditorSettings::as_ref(ctx).open_file_layout.value();
-                    self.open_file_notebook(path.clone(), Some(session.clone()), layout, None, ctx);
+                    self.open_file_notebook(
+                        path.clone(),
+                        Some(session.clone()),
+                        layout,
+                        None,
+                        None,
+                        ctx,
+                    );
                 }
             }
             pane_group::Event::MoveToSpace {
@@ -29439,6 +29504,40 @@ pub(crate) fn tab_bar_rects_for_window(window_id: WindowId, app: &AppContext) ->
     app.element_position_by_id_at_last_frame(window_id, active_tab_bar_position_id(app))
         .into_iter()
         .collect()
+}
+
+/// Where in a file an open request wants to land.
+///
+/// `match_text` is set when the open came from a search result. Views that render their content,
+/// such as the Markdown viewer, locate the match by that text because source line and column do
+/// not map onto rendered output.
+#[derive(Debug, Clone, Default)]
+pub struct OpenFileLocation {
+    pub line_col: Option<LineAndColumnArg>,
+    pub match_text: Option<String>,
+}
+
+impl OpenFileLocation {
+    pub fn from_line_col(line_col: Option<LineAndColumnArg>) -> Self {
+        Self {
+            line_col,
+            match_text: None,
+        }
+    }
+}
+
+/// Builds the Markdown viewer's scroll target, or `None` when there is no line to scroll to.
+#[cfg(feature = "local_fs")]
+fn source_scroll_target(
+    line_col: Option<LineAndColumnArg>,
+    match_text: Option<String>,
+) -> Option<SourceScrollTarget> {
+    let line_col = line_col?;
+    Some(SourceScrollTarget {
+        source_line: line_col.line_num,
+        column_num: line_col.column_num,
+        match_text,
+    })
 }
 
 // Checks that the tab/group rect is not clipped by overflow area

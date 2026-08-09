@@ -49,7 +49,7 @@ use super::notebook_command::NotebookCommand;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::editor::InteractionState;
 use crate::notebooks::editor::interaction_state_model::InteractionStateModelEvent;
-use crate::notebooks::file::MarkdownDisplayMode;
+use crate::notebooks::file::{MarkdownDisplayMode, SourceScrollTarget};
 use crate::notebooks::telemetry::BlockInfo;
 use crate::terminal::ShellLaunchData;
 
@@ -108,6 +108,20 @@ pub struct NotebooksEditorModel {
     /// Context used to generate clickable file path links for notebooks.
     file_link_resolution_context: Option<FileLinkResolutionContext>,
     default_mermaid_display_mode: MarkdownDisplayMode,
+    /// A scroll target that has not visibly taken effect yet. A freshly opened pane has no
+    /// viewport to resolve against, and Markdown lays out progressively, so an early scroll can
+    /// clamp to the top or land short. Re-asserted on each layout until the target is on screen.
+    pending_scroll: Option<PendingScroll>,
+}
+
+/// Bounds re-assertion of a pending scroll, so content that never settles cannot scroll forever.
+const MAX_PENDING_SCROLL_ATTEMPTS: u8 = 8;
+
+/// A scroll request waiting for layout to catch up.
+#[derive(Debug, Clone, Copy)]
+struct PendingScroll {
+    offset: CharOffset,
+    attempts: u8,
 }
 
 #[derive(Clone)]
@@ -228,6 +242,7 @@ impl NotebooksEditorModel {
             resize_tx,
             file_link_resolution_context: None,
             default_mermaid_display_mode: MarkdownDisplayMode::Raw,
+            pending_scroll: None,
         }
     }
 
@@ -351,9 +366,46 @@ impl NotebooksEditorModel {
                 if self.sync_mermaid_render_offsets(ctx) {
                     self.rebuild_layout(ctx);
                 }
+                self.apply_pending_scroll(ctx);
+            }
+            RenderEvent::ViewportUpdated(_) => {
+                self.apply_pending_scroll(ctx);
             }
             _ => (),
         }
+    }
+
+    /// Re-asserts a scroll target that has not visibly taken effect yet, until the target is on
+    /// screen or the budget runs out, then clears so it never competes with the user's scrolling.
+    fn apply_pending_scroll(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(pending) = self.pending_scroll else {
+            return;
+        };
+        if !self.has_sized_viewport(ctx) {
+            return;
+        }
+
+        // Stop once visible, so later layout passes cannot yank the view back while the user
+        // is reading or scrolling.
+        let on_screen = self
+            .render_state
+            .as_ref(ctx)
+            .viewport_charoffset_range()
+            .contains(&pending.offset);
+        if on_screen {
+            self.pending_scroll = None;
+            return;
+        }
+
+        if pending.attempts >= MAX_PENDING_SCROLL_ATTEMPTS {
+            self.pending_scroll = None;
+        } else {
+            self.pending_scroll = Some(PendingScroll {
+                attempts: pending.attempts + 1,
+                ..pending
+            });
+        }
+        self.request_scroll_to_offset(pending.offset, ctx);
     }
 
     fn handle_interaction_state_model_event(
@@ -1348,6 +1400,99 @@ impl NotebooksEditorModel {
         true
     }
 
+    /// Scrolls, best effort, to the rendered position of a location in the raw markdown source
+    /// this document was loaded from. Returns false when the target cannot be located, leaving
+    /// the scroll position unchanged.
+    pub fn scroll_to_source_target(
+        &mut self,
+        source: &str,
+        target: &SourceScrollTarget,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        self.pending_scroll = None;
+        let Some(range) = self.find_source_target_range(source, target, ctx) else {
+            return false;
+        };
+
+        self.scroll_to_offset(range.start, ctx);
+        true
+    }
+
+    /// Scrolls the given offset into view, deferring until the viewport has a size. An autoscroll
+    /// resolved against a zero-height viewport clamps to the top.
+    fn scroll_to_offset(&mut self, offset: CharOffset, ctx: &mut ModelContext<Self>) {
+        // Held until confirmed on screen: the pane may not be measured yet, and blocks above the
+        // target can still be laying out, either of which lands this request in the wrong place.
+        self.pending_scroll = Some(PendingScroll {
+            offset,
+            attempts: 0,
+        });
+
+        if self.has_sized_viewport(ctx) {
+            self.request_scroll_to_offset(offset, ctx);
+        }
+    }
+
+    /// Test-only: whether a scroll request is still waiting for layout.
+    #[cfg(test)]
+    pub(crate) fn has_pending_scroll_for_test(&self) -> bool {
+        self.pending_scroll.is_some()
+    }
+
+    /// Whether the viewport has been measured. A freshly opened pane reports zero height.
+    fn has_sized_viewport(&self, ctx: &AppContext) -> bool {
+        self.render_state.as_ref(ctx).viewport().height().as_f32() > 0.0
+    }
+
+    fn request_scroll_to_offset(&self, offset: CharOffset, ctx: &mut ModelContext<Self>) {
+        self.render_state.update(ctx, |render_state, _| {
+            render_state
+                .request_autoscroll_to(AutoScrollMode::PositionOffsetInViewportCenter(offset));
+        });
+    }
+
+    /// Locates a source target in the rendered document.
+    ///
+    /// Rendered markdown drops syntax like heading markers, emphasis and link URLs, so source
+    /// offsets do not carry over. A search target anchors on the matched text, which does survive
+    /// rendering, with the source line and column picking which occurrence to use. Without match
+    /// text, the line's rendered text is reconstructed instead.
+    pub(super) fn find_source_target_range(
+        &self,
+        source: &str,
+        target: &SourceScrollTarget,
+        ctx: &AppContext,
+    ) -> Option<Range<CharOffset>> {
+        let text = self.content.as_ref(ctx).text().into_string();
+
+        if let Some(match_text) = target
+            .match_text
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+        {
+            let occurrence = source_occurrence_index(source, target, match_text);
+            if let Some(start) = nth_char_index(&text, match_text, occurrence) {
+                return Some(
+                    CharOffset::from(start)..CharOffset::from(start + match_text.chars().count()),
+                );
+            }
+        }
+
+        let line = source.lines().nth(target.source_line.checked_sub(1)?)?;
+        let needle = source_line_search_needle(line)?;
+
+        // When several source lines reduce to the same text, target the
+        // occurrence matching the requested line rather than the first one.
+        let occurrence = source
+            .lines()
+            .take(target.source_line - 1)
+            .filter(|prior| source_line_search_needle(prior).as_deref() == Some(needle.as_str()))
+            .count();
+
+        let start = nth_char_index(&text, &needle, occurrence)?;
+        Some(CharOffset::from(start)..CharOffset::from(start + needle.chars().count()))
+    }
+
     fn find_matching_header(&self, fragment: &str, ctx: &AppContext) -> Option<Range<CharOffset>> {
         let target = fragment.strip_prefix('#')?;
         if target.is_empty() {
@@ -2281,6 +2426,158 @@ impl ChildModels {
             self.models.insert(start_offset, Box::new(new_model));
         }
     }
+}
+
+/// How many occurrences of `match_text` precede this target in the raw source, so the same
+/// occurrence can be picked out of the rendered document.
+///
+/// Counting and lookup both compare case-sensitively against the exact matched text, so a
+/// case-insensitive search still lands on the occurrence that was clicked.
+fn source_occurrence_index(source: &str, target: &SourceScrollTarget, match_text: &str) -> usize {
+    let preceding_lines = source
+        .lines()
+        .take(target.source_line.saturating_sub(1))
+        .map(|line| line.matches(match_text).count())
+        .sum::<usize>();
+
+    let within_line = target
+        .column_num
+        .zip(source.lines().nth(target.source_line.saturating_sub(1)))
+        .map(|(column, line)| {
+            // `column` is a 1-based character column; count only matches that
+            // start before it.
+            let byte_limit = line
+                .char_indices()
+                .nth(column.saturating_sub(1))
+                .map_or(line.len(), |(byte_index, _)| byte_index);
+            line.match_indices(match_text)
+                .take_while(|(byte_index, _)| *byte_index < byte_limit)
+                .count()
+        })
+        .unwrap_or(0);
+
+    preceding_lines + within_line
+}
+
+/// Char index (not byte index) of the `n`-th (0-based) occurrence of `needle` in `haystack`.
+///
+/// Returns `None` when there is no such occurrence, so a target that cannot be placed confidently
+/// leaves the scroll position alone rather than jumping somewhere arbitrary.
+fn nth_char_index(haystack: &str, needle: &str, n: usize) -> Option<usize> {
+    haystack
+        .match_indices(needle)
+        .nth(n)
+        .map(|(byte_index, _)| haystack[..byte_index].chars().count())
+}
+
+/// Reduce a raw markdown source line to the text most likely to appear
+/// verbatim in the rendered document: leading block markers (heading `#`s,
+/// blockquote `>`s, list bullets, ordered-list numbers, task boxes) and
+/// inline emphasis / code markers are stripped, and link/image URLs are
+/// dropped in favor of their visible text. Returns None for lines with no
+/// searchable rendered text (blank lines, code fences, thematic breaks,
+/// table separator rows).
+fn source_line_search_needle(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    // Fence delimiters have no rendered text (their info string, e.g. the
+    // language tag, isn't rendered either).
+    if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+        return None;
+    }
+
+    let unmarked = strip_leading_block_markers(trimmed);
+    // Underscores are kept: intra-word underscores are literal in markdown
+    // and stripping them would break matching of code-like prose.
+    let without_inline: String = unmarked
+        .chars()
+        .filter(|c| !matches!(c, '*' | '`' | '~'))
+        .collect();
+    let needle = strip_link_urls(&without_inline);
+    let needle = needle.trim();
+
+    // Lines of pure punctuation (thematic breaks, table separator rows) have
+    // no rendered text to search for.
+    if !needle.chars().any(char::is_alphanumeric) {
+        return None;
+    }
+    Some(needle.to_string())
+}
+
+/// Strip leading markdown block markers (blockquotes, ATX headings, list
+/// bullets, ordered-list numbers, task boxes) from a trimmed source line.
+fn strip_leading_block_markers(mut rest: &str) -> &str {
+    loop {
+        let before = rest;
+        rest = rest.trim_start();
+
+        if let Some(after) = rest.strip_prefix('>') {
+            rest = after;
+            continue;
+        }
+
+        let hashes = rest.len() - rest.trim_start_matches('#').len();
+        if hashes > 0 {
+            let after = &rest[hashes..];
+            if after.is_empty() || after.starts_with(' ') {
+                rest = after;
+                continue;
+            }
+        }
+
+        for marker in ["- ", "* ", "+ "] {
+            if let Some(after) = rest.strip_prefix(marker) {
+                rest = after;
+            }
+        }
+
+        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0 {
+            let after = &rest[digits..];
+            if let Some(after) = after
+                .strip_prefix(". ")
+                .or_else(|| after.strip_prefix(") "))
+            {
+                rest = after;
+                continue;
+            }
+        }
+
+        for marker in ["[ ] ", "[x] ", "[X] "] {
+            if let Some(after) = rest.strip_prefix(marker) {
+                rest = after;
+            }
+        }
+
+        if rest == before {
+            break;
+        }
+    }
+    rest
+}
+
+/// Replace markdown link/image syntax `[text](url)` / `![alt](url)` with just
+/// the visible text, since URLs aren't part of the rendered document text.
+fn strip_link_urls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '!' if chars.peek() == Some(&'[') => {}
+            '[' | ']' => {
+                if c == ']' && chars.peek() == Some(&'(') {
+                    // Skip the parenthesized URL.
+                    chars.next();
+                    for inner in chars.by_ref() {
+                        if inner == ')' {
+                            break;
+                        }
+                    }
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Check if a content string is fully a valid URL.

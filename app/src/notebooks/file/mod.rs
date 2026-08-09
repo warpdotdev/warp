@@ -99,6 +99,25 @@ pub struct FileNotebookView {
     code_source: Option<CodeSource>,
     /// Persistent hover state for the header title tooltip.
     header_title_mouse_state: MouseStateHandle,
+    /// Latest raw file content, retained because serialized Markdown does not preserve source
+    /// locations.
+    source_content: Option<String>,
+    /// Location in the raw source to scroll to, best effort, once the file content loads.
+    pending_source_target: Option<SourceScrollTarget>,
+}
+
+/// A location in a Markdown file's raw source to scroll to once it renders.
+///
+/// The viewer renders Markdown rather than showing its source, so a source line number does not
+/// identify anything on screen. `match_text` does survive rendering, and is what is located.
+#[derive(Debug, Clone)]
+pub struct SourceScrollTarget {
+    /// 1-based line in the raw source file.
+    pub source_line: usize,
+    /// 1-based character column, distinguishing between several matches on one line.
+    pub column_num: Option<usize>,
+    /// The matched text, when this target came from a search hit.
+    pub match_text: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -294,7 +313,53 @@ impl FileNotebookView {
             #[cfg(feature = "local_fs")]
             code_source: None,
             header_title_mouse_state: Default::default(),
+            source_content: None,
+            pending_source_target: None,
         }
+    }
+
+    /// Sets a scroll target to apply, best effort, once the file content loads.
+    pub fn set_pending_source_target(&mut self, target: Option<SourceScrollTarget>) {
+        self.pending_source_target = target;
+    }
+
+    /// Test-only accessor for the pending scroll target.
+    #[cfg(test)]
+    pub fn pending_source_target_for_test(&self) -> Option<usize> {
+        self.pending_source_target
+            .as_ref()
+            .map(|target| target.source_line)
+    }
+
+    /// Scrolls, best effort, to a location in the raw source file.
+    ///
+    /// Content that is still loading defers the scroll until its raw source arrives.
+    pub fn scroll_to_source_target(
+        &mut self,
+        target: SourceScrollTarget,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.supports_source_scrolling() {
+            return;
+        }
+        if matches!(self.file_state, FileState::Loaded(_))
+            && let Some(source) = self.source_content.as_deref()
+        {
+            self.editor.update(ctx, |editor, ctx| {
+                editor.model().update(ctx, |model, ctx| {
+                    model.scroll_to_source_target(source, &target, ctx);
+                });
+            });
+        } else {
+            self.pending_source_target = Some(target);
+        }
+    }
+
+    /// Whether a raw-source location can be mapped onto what this view shows. Jupyter notebooks
+    /// also render here, but their file is JSON, so a source line refers to a line of that JSON
+    /// rather than to anything on screen.
+    fn supports_source_scrolling(&self) -> bool {
+        !self.is_jupyter_notebook_file()
     }
 
     #[cfg(feature = "local_fs")]
@@ -328,6 +393,7 @@ impl FileNotebookView {
     ///
     /// Jupyter notebook rendering stays behind a feature flag until it launches.
     pub fn set_content(&mut self, content: &str, ctx: &mut ViewContext<Self>) {
+        self.source_content = Some(content.to_string());
         let doc_path = self.file_state.local_path().map(|p| p.to_path_buf());
         let render_as_ipynb =
             FeatureFlag::JupyterNotebookRendering.is_enabled() && self.is_jupyter_notebook_file();
@@ -342,6 +408,18 @@ impl FileNotebookView {
                 model.set_document_path(doc_path, ctx);
             });
         });
+
+        // Taken rather than read, so that content refreshes from file watching keep the user's
+        // scroll position instead of yanking it back to the target.
+        if let Some(target) = self.pending_source_target.take()
+            && self.supports_source_scrolling()
+        {
+            self.editor.update(ctx, |editor, ctx| {
+                editor.model().update(ctx, |model, ctx| {
+                    model.scroll_to_source_target(content, &target, ctx);
+                });
+            });
+        }
     }
 
     #[cfg(feature = "local_fs")]

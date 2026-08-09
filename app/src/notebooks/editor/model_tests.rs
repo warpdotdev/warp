@@ -40,7 +40,7 @@ use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::editor::model::DEBOUNCED_RESIZE_PERIOD;
 use crate::notebooks::editor::notebook_command::NotebookCommand;
 use crate::notebooks::editor::view::{RichTextEditorConfig, RichTextEditorView};
-use crate::notebooks::file::MarkdownDisplayMode;
+use crate::notebooks::file::{MarkdownDisplayMode, SourceScrollTarget};
 use crate::notebooks::link::{NotebookLinks, SessionSource};
 use crate::search::files::model::FileSearchModel;
 use crate::server::ids::{ServerId, SyncId};
@@ -3106,5 +3106,309 @@ fn test_multiselect_delete() {
             assert_eq!(&clipboard.plain_text, "Second\nFirst");
             assert_eq!(clipboard.html.as_deref(), Some("<p>Second</p><p>First</p>"));
         });
+    });
+}
+
+/// Resolves a 1-based source line against the rendered document, returning the located range.
+fn source_line_range(
+    model: &ModelHandle<NotebooksEditorModel>,
+    source: &str,
+    source_line: usize,
+    app: &mut App,
+) -> Option<Range<CharOffset>> {
+    source_target_range(model, source, source_line, None, app)
+}
+
+/// As [`source_line_range`], but for a target that carries the matched text of
+/// a search hit.
+fn source_target_range(
+    model: &ModelHandle<NotebooksEditorModel>,
+    source: &str,
+    source_line: usize,
+    match_text: Option<&str>,
+    app: &mut App,
+) -> Option<Range<CharOffset>> {
+    source_target_range_at_column(model, source, source_line, None, match_text, app)
+}
+
+/// As [`source_target_range`], but pinning the 1-based column of the match.
+fn source_target_range_at_column(
+    model: &ModelHandle<NotebooksEditorModel>,
+    source: &str,
+    source_line: usize,
+    column_num: Option<usize>,
+    match_text: Option<&str>,
+    app: &mut App,
+) -> Option<Range<CharOffset>> {
+    let target = SourceScrollTarget {
+        source_line,
+        column_num,
+        match_text: match_text.map(str::to_string),
+    };
+    app.read(|ctx| {
+        model
+            .as_ref(ctx)
+            .find_source_target_range(source, &target, ctx)
+    })
+}
+
+/// The plain text of the rendered document.
+fn document_text(model: &ModelHandle<NotebooksEditorModel>, app: &mut App) -> String {
+    app.read(|ctx| model.as_ref(ctx).content().as_ref(ctx).text().into_string())
+}
+
+/// Range of the `occurrence`-th (0-based) occurrence of `needle` in the document, in char offsets.
+fn expected_range(document: &str, needle: &str, occurrence: usize) -> Range<CharOffset> {
+    let byte_index = document
+        .match_indices(needle)
+        .nth(occurrence)
+        .unwrap_or_else(|| panic!("document should contain {needle:?}: {document:?}"))
+        .0;
+    let start = document[..byte_index].chars().count();
+    CharOffset::from(start)..CharOffset::from(start + needle.chars().count())
+}
+
+#[test]
+fn test_scroll_to_source_line_plain_paragraph() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "First paragraph\n\nSecond paragraph\n\nThird paragraph";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+        let document = document_text(&model, &mut app);
+
+        let range = source_line_range(&model, source, 3, &mut app)
+            .expect("should locate the second paragraph");
+        assert_eq!(range, expected_range(&document, "Second paragraph", 0));
+
+        // Blank source lines have no rendered text to scroll to.
+        assert_eq!(source_line_range(&model, source, 2, &mut app), None);
+
+        // Out-of-bounds lines resolve to nothing.
+        assert_eq!(source_line_range(&model, source, 42, &mut app), None);
+        assert_eq!(source_line_range(&model, source, 0, &mut app), None);
+    });
+}
+
+/// A scroll requested before the pane has been measured is held rather than resolved against a
+/// zero-height viewport, which would clamp it to the top.
+///
+/// Only the holding half is asserted: the headless test app has neither fonts nor a presenter, so
+/// a viewport never becomes measured. Confirming the view actually moves requires a real display.
+#[test]
+fn test_scroll_to_source_target_is_held_until_measured() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "# Heading\n\nBody paragraph\n\nThe needle we want";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+
+        let target = SourceScrollTarget {
+            source_line: 5,
+            column_num: Some(5),
+            match_text: Some("needle".to_string()),
+        };
+        let located = model.update(&mut app, |model, ctx| {
+            model.scroll_to_source_target(source, &target, ctx)
+        });
+
+        assert!(located, "target should resolve to an offset");
+        assert!(
+            app.read(|ctx| model.as_ref(ctx).has_pending_scroll_for_test()),
+            "scroll should be held while the pane is unmeasured"
+        );
+    });
+}
+
+#[test]
+fn test_failed_source_target_cancels_pending_scroll() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "First paragraph\n\nSecond paragraph";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+        let target = |source_line| SourceScrollTarget {
+            source_line,
+            column_num: None,
+            match_text: None,
+        };
+
+        let located = model.update(&mut app, |model, ctx| {
+            model.scroll_to_source_target(source, &target(3), ctx)
+        });
+        assert!(located);
+        assert!(app.read(|ctx| model.as_ref(ctx).has_pending_scroll_for_test()));
+
+        let located = model.update(&mut app, |model, ctx| {
+            model.scroll_to_source_target(source, &target(42), ctx)
+        });
+        assert!(!located);
+        assert!(!app.read(|ctx| model.as_ref(ctx).has_pending_scroll_for_test()));
+    });
+}
+
+#[test]
+fn test_scroll_to_source_line_strips_markdown_markers() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "# Title\n\nIntro with **bold** text\n\n- item one\n- [ ] task `two`";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+        let document = document_text(&model, &mut app);
+
+        let title = source_line_range(&model, source, 1, &mut app).expect("should locate heading");
+        assert_eq!(title, expected_range(&document, "Title", 0));
+
+        let intro =
+            source_line_range(&model, source, 3, &mut app).expect("should locate bold paragraph");
+        assert_eq!(intro, expected_range(&document, "Intro with bold text", 0));
+
+        let task = source_line_range(&model, source, 6, &mut app).expect("should locate task item");
+        assert_eq!(task, expected_range(&document, "task two", 0));
+    });
+}
+
+#[test]
+fn test_scroll_to_source_line_inside_code_fence() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "Hello\n```\necho test\n```\nworld";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+
+        // Document text: "Hello\necho test\nworld"
+        let code = source_line_range(&model, source, 3, &mut app).expect("should locate code line");
+        assert_eq!(code, CharOffset::from(6)..CharOffset::from(15));
+
+        // Fence delimiter lines have no rendered text.
+        assert_eq!(source_line_range(&model, source, 2, &mut app), None);
+    });
+}
+
+#[test]
+fn test_scroll_to_source_line_repeated_lines() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "repeated line\n\nunique middle\n\nrepeated line";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+        let document = document_text(&model, &mut app);
+
+        let first = source_line_range(&model, source, 1, &mut app).expect("first occurrence");
+        assert_eq!(first, expected_range(&document, "repeated line", 0));
+
+        let second = source_line_range(&model, source, 5, &mut app).expect("second occurrence");
+        assert_eq!(second, expected_range(&document, "repeated line", 1));
+    });
+}
+
+#[test]
+fn test_scroll_to_source_line_requests_autoscroll() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "First paragraph\n\nSecond paragraph";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+
+        let target = |line| SourceScrollTarget {
+            source_line: line,
+            column_num: None,
+            match_text: None,
+        };
+
+        let scrolled = model.update(&mut app, |model, ctx| {
+            model.scroll_to_source_target(source, &target(3), ctx)
+        });
+        assert!(scrolled, "should scroll to a locatable source line");
+
+        let not_scrolled = model.update(&mut app, |model, ctx| {
+            model.scroll_to_source_target(source, &target(2), ctx)
+        });
+        assert!(!not_scrolled, "blank source lines should not scroll");
+    });
+}
+
+/// The matched text survives Markdown rendering even when the surrounding syntax does not.
+#[test]
+fn test_scroll_to_source_target_uses_match_text() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "# Heading with needle\n\nBody paragraph\n\n- list *needle* here";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+        let document = document_text(&model, &mut app);
+
+        // The second occurrence of "needle" is on source line 5, inside
+        // emphasis markers that rendering removes.
+        let range = source_target_range(&model, source, 5, Some("needle"), &mut app)
+            .expect("should locate the match");
+        assert_eq!(range, expected_range(&document, "needle", 1));
+
+        // The first occurrence is in a heading, whose `#` marker is also gone.
+        let first = source_target_range(&model, source, 1, Some("needle"), &mut app)
+            .expect("should locate the first match");
+        assert_eq!(first, expected_range(&document, "needle", 0));
+    });
+}
+
+/// Several matches on one line are told apart by column.
+#[test]
+fn test_scroll_to_source_target_distinguishes_matches_on_one_line() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "alpha needle beta needle gamma\n\ntrailing needle";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+        let document = document_text(&model, &mut app);
+
+        // "needle" starts at 1-based columns 7 and 19 on the first line.
+        let first =
+            source_target_range_at_column(&model, source, 1, Some(7), Some("needle"), &mut app)
+                .expect("should locate the first match on the line");
+        assert_eq!(first, expected_range(&document, "needle", 0));
+
+        let second =
+            source_target_range_at_column(&model, source, 1, Some(19), Some("needle"), &mut app)
+                .expect("should locate the second match on the line");
+        assert_eq!(second, expected_range(&document, "needle", 1));
+
+        // A match on a later line still counts the two before it.
+        let third =
+            source_target_range_at_column(&model, source, 3, Some(10), Some("needle"), &mut app)
+                .expect("should locate the match on the later line");
+        assert_eq!(third, expected_range(&document, "needle", 2));
+    });
+}
+
+/// A case-insensitive search yields the text as it appears in the file, so counting and lookup
+/// stay in step and land on the clicked occurrence.
+#[test]
+fn test_scroll_to_source_target_handles_case_insensitive_matches() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "Needle first\n\nneedle second";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+        let document = document_text(&model, &mut app);
+
+        let upper =
+            source_target_range_at_column(&model, source, 1, Some(1), Some("Needle"), &mut app)
+                .expect("should locate the capitalized match");
+        assert_eq!(upper, expected_range(&document, "Needle", 0));
+
+        let lower =
+            source_target_range_at_column(&model, source, 3, Some(1), Some("needle"), &mut app)
+                .expect("should locate the lowercase match");
+        assert_eq!(lower, expected_range(&document, "needle", 0));
     });
 }

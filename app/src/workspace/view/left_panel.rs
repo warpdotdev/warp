@@ -134,6 +134,10 @@ pub enum LeftPanelEvent {
         location: LocalOrRemotePath,
         target: FileTarget,
         line_col: Option<LineAndColumnArg>,
+        /// Text of the search match this open came from, if any. Rendered
+        /// views (e.g. the Markdown viewer) locate the match by its text,
+        /// since source line/column don't map onto rendered content.
+        match_text: Option<String>,
     },
     NewConversationInNewTab,
     ShowDeleteConfirmationDialog {
@@ -895,6 +899,7 @@ impl LeftPanelView {
                 location,
                 line_number,
                 column_num,
+                match_text,
             } => {
                 let line_col = LineAndColumnArg {
                     line_num: *line_number as usize,
@@ -936,6 +941,7 @@ impl LeftPanelView {
                     location: location.clone(),
                     target,
                     line_col: Some(line_col),
+                    match_text: match_text.clone(),
                 });
             }
         }
@@ -969,6 +975,7 @@ impl LeftPanelView {
                     location: path.clone(),
                     target: target.clone(),
                     line_col: *line_col,
+                    match_text: None,
                 });
             }
             FileTreeEvent::CDToDirectory { path } => {

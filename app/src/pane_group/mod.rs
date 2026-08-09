@@ -1753,6 +1753,7 @@ impl PaneGroup {
                         None,
                         #[cfg(feature = "local_fs")]
                         None,
+                        None,
                         ctx,
                     )),
                 };
@@ -5051,7 +5052,7 @@ impl PaneGroup {
             }
         });
 
-        let file_pane = FilePane::new(Some(path), session, source, ctx);
+        let file_pane = FilePane::new(Some(path), session, source, None, ctx);
         let success = self.replace_pane(code_pane_id, file_pane, false, ctx);
 
         if !success {
@@ -7489,6 +7490,19 @@ impl PaneGroup {
         self.pane_contents
             .get(&pane_id.into())
             .and_then(|contents| contents.as_any().downcast_ref::<CodePane>())
+            .map(|pane| pane.file_view(ctx))
+    }
+
+    /// Given a pane ID, retrieve its backing file notebook view, if the pane is
+    /// a file notebook pane.
+    pub fn file_notebook_view_from_pane_id(
+        &self,
+        pane_id: impl Into<PaneId>,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<FileNotebookView>> {
+        self.pane_contents
+            .get(&pane_id.into())
+            .and_then(|contents| contents.as_any().downcast_ref::<FilePane>())
             .map(|pane| pane.file_view(ctx))
     }
 
