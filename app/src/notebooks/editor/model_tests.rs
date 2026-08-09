@@ -3223,6 +3223,60 @@ fn test_scroll_to_source_target_is_held_until_measured() {
 }
 
 #[test]
+fn test_first_source_target_scroll_survives_initial_layout() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "```text\nline one\nline two\nline three\nline four\nline five\nline six\nline seven\nline eight\nline nine\nline ten\nneedle\n```";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+
+        let target = SourceScrollTarget {
+            source_line: 12,
+            column_num: None,
+            match_text: Some("needle".to_string()),
+        };
+        let located = model.update(&mut app, |model, ctx| {
+            model.scroll_to_source_target(source, &target, ctx)
+        });
+        assert!(located);
+
+        let render_state = app.read(|ctx| model.as_ref(ctx).render_state().clone());
+        render_state.update(&mut app, |render_state, ctx| {
+            render_state.set_viewport_size(
+                SizeInfo {
+                    viewport_size: Vector2F::new(160., 60.),
+                    needs_layout: false,
+                },
+                ctx,
+            );
+        });
+        model.update(&mut app, |model, ctx| model.rebuild_layout(ctx));
+        layout_model(&mut app, &model).await;
+
+        let offset = app.read(|ctx| {
+            model
+                .as_ref(ctx)
+                .find_source_target_range(source, &target, ctx)
+                .expect("target should remain locatable")
+                .start
+        });
+        let (scroll_top, content_height, bounds) = app.read(|ctx| {
+            let render_state = render_state.as_ref(ctx);
+            (
+                render_state.viewport().scroll_top().as_f32(),
+                render_state.height().as_f32(),
+                render_state.character_vertical_bounds(offset),
+            )
+        });
+        assert!(
+            scroll_top > 0.,
+            "the first request should scroll after the pane receives its initial layout; content height: {content_height}, target bounds: {bounds:?}"
+        );
+    });
+}
+
+#[test]
 fn test_failed_source_target_cancels_pending_scroll() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);

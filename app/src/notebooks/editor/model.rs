@@ -114,14 +114,15 @@ pub struct NotebooksEditorModel {
     pending_scroll: Option<PendingScroll>,
 }
 
-/// Bounds re-assertion of a pending scroll, so content that never settles cannot scroll forever.
-const MAX_PENDING_SCROLL_ATTEMPTS: u8 = 8;
+/// Bounds failed viewport confirmations, so content that never settles cannot scroll forever.
+const MAX_PENDING_SCROLL_CONFIRMATIONS: u8 = 8;
 
 /// A scroll request waiting for layout to catch up.
 #[derive(Debug, Clone, Copy)]
 struct PendingScroll {
     offset: CharOffset,
-    attempts: u8,
+    failed_confirmations: u8,
+    request_sent: bool,
 }
 
 #[derive(Clone)]
@@ -366,18 +367,18 @@ impl NotebooksEditorModel {
                 if self.sync_mermaid_render_offsets(ctx) {
                     self.rebuild_layout(ctx);
                 }
-                self.apply_pending_scroll(ctx);
+                self.apply_pending_scroll(false, ctx);
             }
             RenderEvent::ViewportUpdated(_) => {
-                self.apply_pending_scroll(ctx);
+                self.apply_pending_scroll(true, ctx);
             }
             _ => (),
         }
     }
 
     /// Re-asserts a scroll target that has not visibly taken effect yet, until the target is on
-    /// screen or the budget runs out, then clears so it never competes with the user's scrolling.
-    fn apply_pending_scroll(&mut self, ctx: &mut ModelContext<Self>) {
+    /// screen or the confirmation budget runs out.
+    fn apply_pending_scroll(&mut self, confirm_visible: bool, ctx: &mut ModelContext<Self>) {
         let Some(pending) = self.pending_scroll else {
             return;
         };
@@ -385,26 +386,24 @@ impl NotebooksEditorModel {
             return;
         }
 
-        // Stop once visible, so later layout passes cannot yank the view back while the user
-        // is reading or scrolling.
-        let on_screen = self
-            .render_state
-            .as_ref(ctx)
-            .viewport_charoffset_range()
-            .contains(&pending.offset);
-        if on_screen {
-            self.pending_scroll = None;
-            return;
+        let mut failed_confirmations = pending.failed_confirmations;
+        if confirm_visible && pending.request_sent {
+            if self.is_offset_visible(pending.offset, ctx) {
+                self.pending_scroll = None;
+                return;
+            }
+            failed_confirmations += 1;
+            if failed_confirmations >= MAX_PENDING_SCROLL_CONFIRMATIONS {
+                self.pending_scroll = None;
+                return;
+            }
         }
 
-        if pending.attempts >= MAX_PENDING_SCROLL_ATTEMPTS {
-            self.pending_scroll = None;
-        } else {
-            self.pending_scroll = Some(PendingScroll {
-                attempts: pending.attempts + 1,
-                ..pending
-            });
-        }
+        self.pending_scroll = Some(PendingScroll {
+            failed_confirmations,
+            request_sent: true,
+            ..pending
+        });
         self.request_scroll_to_offset(pending.offset, ctx);
     }
 
@@ -1425,11 +1424,12 @@ impl NotebooksEditorModel {
         // target can still be laying out, either of which lands this request in the wrong place.
         self.pending_scroll = Some(PendingScroll {
             offset,
-            attempts: 0,
+            failed_confirmations: 0,
+            request_sent: false,
         });
 
         if self.has_sized_viewport(ctx) {
-            self.request_scroll_to_offset(offset, ctx);
+            self.apply_pending_scroll(false, ctx);
         }
     }
 
@@ -1442,6 +1442,17 @@ impl NotebooksEditorModel {
     /// Whether the viewport has been measured. A freshly opened pane reports zero height.
     fn has_sized_viewport(&self, ctx: &AppContext) -> bool {
         self.render_state.as_ref(ctx).viewport().height().as_f32() > 0.0
+    }
+
+    fn is_offset_visible(&self, offset: CharOffset, ctx: &AppContext) -> bool {
+        let render_state = self.render_state.as_ref(ctx);
+        let Some((offset_top, offset_bottom)) = render_state.character_vertical_bounds(offset)
+        else {
+            return false;
+        };
+        let viewport_top = render_state.viewport().scroll_top();
+        let viewport_bottom = viewport_top + render_state.viewport().height();
+        offset_top < viewport_bottom && offset_bottom > viewport_top
     }
 
     fn request_scroll_to_offset(&self, offset: CharOffset, ctx: &mut ModelContext<Self>) {
