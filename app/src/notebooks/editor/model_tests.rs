@@ -3443,6 +3443,40 @@ fn test_scroll_to_source_target_distinguishes_matches_on_one_line() {
     });
 }
 
+#[test]
+fn test_scroll_to_source_target_ignores_match_in_prior_link_url() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "[Warp](https://example.com/needle)\n\nclicked needle\n\nlater needle";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+        let document = document_text(&model, &mut app);
+
+        let range =
+            source_target_range_at_column(&model, source, 3, Some(9), Some("needle"), &mut app)
+                .expect("should locate the clicked match");
+        assert_eq!(range, expected_range(&document, "needle", 0));
+    });
+}
+
+#[test]
+fn test_scroll_to_source_target_ignores_match_in_same_line_link_url() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+
+        let source = "[Warp](https://example.com/needle) clicked needle\n\nlater needle";
+        let model = model_from_markdown(source, &mut app, true);
+        layout_model(&mut app, &model).await;
+        let document = document_text(&model, &mut app);
+
+        let range =
+            source_target_range_at_column(&model, source, 1, Some(44), Some("needle"), &mut app)
+                .expect("should locate the clicked match");
+        assert_eq!(range, expected_range(&document, "needle", 0));
+    });
+}
+
 /// A case-insensitive search yields the text as it appears in the file, so counting and lookup
 /// stay in step and land on the clicked occurrence.
 #[test]

@@ -1481,8 +1481,14 @@ impl NotebooksEditorModel {
             .as_deref()
             .filter(|text| !text.trim().is_empty())
         {
-            let occurrence = source_occurrence_index(source, target, match_text);
-            if let Some(start) = nth_char_index(&text, match_text, occurrence) {
+            if let Some(start) = source_line_match_index(&text, source, target, match_text) {
+                return Some(
+                    CharOffset::from(start)..CharOffset::from(start + match_text.chars().count()),
+                );
+            }
+            if let Some(occurrence) = source_occurrence_index(source, target, match_text)
+                && let Some(start) = nth_char_index(&text, match_text, occurrence)
+            {
                 return Some(
                     CharOffset::from(start)..CharOffset::from(start + match_text.chars().count()),
                 );
@@ -2439,35 +2445,65 @@ impl ChildModels {
     }
 }
 
-/// How many occurrences of `match_text` precede this target in the raw source, so the same
-/// occurrence can be picked out of the rendered document.
+fn source_line_match_index(
+    rendered_text: &str,
+    source: &str,
+    target: &SourceScrollTarget,
+    match_text: &str,
+) -> Option<usize> {
+    let line_index = target.source_line.checked_sub(1)?;
+    let line = source.lines().nth(line_index)?;
+    let needle = source_line_search_needle(line)?;
+    let line_occurrence = source
+        .lines()
+        .take(line_index)
+        .filter(|prior| source_line_search_needle(prior).as_deref() == Some(needle.as_str()))
+        .count();
+    let line_start = nth_char_index(rendered_text, &needle, line_occurrence)?;
+    let match_occurrence =
+        visible_match_occurrence_before_column(line, target.column_num, match_text);
+    let match_start = nth_char_index(&needle, match_text, match_occurrence)?;
+    Some(line_start + match_start)
+}
+
+/// How many rendered occurrences of `match_text` precede this target, so the same occurrence can
+/// be picked out of the rendered document when the full source line cannot be used as an anchor.
 ///
 /// Counting and lookup both compare case-sensitively against the exact matched text, so a
 /// case-insensitive search still lands on the occurrence that was clicked.
-fn source_occurrence_index(source: &str, target: &SourceScrollTarget, match_text: &str) -> usize {
+fn source_occurrence_index(
+    source: &str,
+    target: &SourceScrollTarget,
+    match_text: &str,
+) -> Option<usize> {
+    let line_index = target.source_line.checked_sub(1)?;
+    let line = source.lines().nth(line_index)?;
     let preceding_lines = source
         .lines()
-        .take(target.source_line.saturating_sub(1))
+        .take(line_index)
+        .filter_map(source_line_search_needle)
         .map(|line| line.matches(match_text).count())
         .sum::<usize>();
+    let within_line = visible_match_occurrence_before_column(line, target.column_num, match_text);
+    let visible_line = source_line_search_needle(line)?;
+    nth_char_index(&visible_line, match_text, within_line)?;
+    Some(preceding_lines + within_line)
+}
 
-    let within_line = target
-        .column_num
-        .zip(source.lines().nth(target.source_line.saturating_sub(1)))
-        .map(|(column, line)| {
-            // `column` is a 1-based character column; count only matches that
-            // start before it.
-            let byte_limit = line
-                .char_indices()
-                .nth(column.saturating_sub(1))
-                .map_or(line.len(), |(byte_index, _)| byte_index);
-            line.match_indices(match_text)
-                .take_while(|(byte_index, _)| *byte_index < byte_limit)
-                .count()
-        })
-        .unwrap_or(0);
-
-    preceding_lines + within_line
+fn visible_match_occurrence_before_column(
+    line: &str,
+    column: Option<usize>,
+    match_text: &str,
+) -> usize {
+    let Some(column) = column else {
+        return 0;
+    };
+    let byte_limit = line
+        .char_indices()
+        .nth(column.saturating_sub(1))
+        .map_or(line.len(), |(byte_index, _)| byte_index);
+    source_line_search_needle(&line[..byte_limit])
+        .map_or(0, |prefix| prefix.matches(match_text).count())
 }
 
 /// Char index (not byte index) of the `n`-th (0-based) occurrence of `needle` in `haystack`.
