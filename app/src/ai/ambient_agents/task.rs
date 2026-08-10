@@ -116,6 +116,23 @@ impl AgentSource {
     }
 }
 
+/// Where the server executed an agent run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum ExecutionLocation {
+    Local,
+    Remote,
+}
+
+impl ExecutionLocation {
+    pub(crate) fn as_query_param(self) -> &'static str {
+        match self {
+            ExecutionLocation::Local => "LOCAL",
+            ExecutionLocation::Remote => "REMOTE",
+        }
+    }
+}
+
 fn deserialize_ambient_agent_source<'de, D>(
     deserializer: D,
 ) -> Result<Option<AgentSource>, D::Error>
@@ -160,6 +177,8 @@ pub struct AmbientAgentTask {
     pub status_message: Option<TaskStatusMessage>,
     #[serde(default, deserialize_with = "deserialize_ambient_agent_source")]
     pub source: Option<AgentSource>,
+    #[serde(default)]
+    pub execution_location: Option<ExecutionLocation>,
     pub session_id: Option<String>,
     pub session_link: Option<String>,
     pub creator: Option<TaskPrincipalInfo>,
@@ -289,7 +308,7 @@ impl AmbientAgentTask {
 
     pub fn active_execution_session_id(&self) -> Option<&str> {
         let execution = self.active_run_execution();
-        if self.state == AmbientAgentTaskState::InProgress && execution.is_active() {
+        if self.supports_live_session() && execution.is_active() {
             execution.session_id
         } else {
             None
@@ -299,11 +318,12 @@ impl AmbientAgentTask {
     /// Returns the canonical live-session state for this task from the client's perspective.
     ///
     /// This separates task liveness from attachability: an in-progress task can have an active
-    /// execution without a usable shared-session id, and callers should not treat that as a
-    /// completed transcript/follow-up state.
+    /// execution without a usable shared-session id. FAILED/ERROR tasks may also remain live while
+    /// their sandbox is retained for debugging. Callers should not treat either case as a completed
+    /// transcript/follow-up state.
     pub fn active_live_session_state(&self) -> AmbientAgentLiveSessionState {
         let execution = self.active_run_execution();
-        if self.state != AmbientAgentTaskState::InProgress || !execution.is_active() {
+        if !self.supports_live_session() || !execution.is_active() {
             return AmbientAgentLiveSessionState::Inactive;
         }
 
@@ -322,7 +342,7 @@ impl AmbientAgentTask {
     }
 
     pub fn has_active_execution(&self) -> bool {
-        self.state == AmbientAgentTaskState::InProgress && self.active_run_execution().is_active()
+        self.supports_live_session() && self.active_run_execution().is_active()
     }
 
     pub fn is_terminal_run_state(&self) -> bool {
@@ -360,6 +380,15 @@ impl AmbientAgentTask {
     /// Returns true if the underlying session for the ambient agent is no longer running.
     pub fn is_no_longer_running(&self) -> bool {
         !self.active_run_execution().is_sandbox_running && !self.state.is_working()
+    }
+
+    fn supports_live_session(&self) -> bool {
+        matches!(
+            self.state,
+            AmbientAgentTaskState::InProgress
+                | AmbientAgentTaskState::Failed
+                | AmbientAgentTaskState::Error
+        )
     }
 }
 

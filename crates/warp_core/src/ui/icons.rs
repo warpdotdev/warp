@@ -274,6 +274,7 @@ pub enum Icon {
     ChatDashed,
     ClaudeLogo,
     GeminiLogo,
+    GrokLogo,
     OpenAILogo,
     XLogo,
     AmpLogo,
@@ -289,6 +290,14 @@ pub enum Icon {
     NLD,
     Oz,
     OzCloud,
+    /// The Warp "W" glyph used as the agent brand mark (sourced from
+    /// `bundled/svg/warp-drive.svg`). The background and tint color are
+    /// the **call site's responsibility** — this variant carries the shape
+    /// only. Most surfaces tint it with the surrounding theme color (light
+    /// theme: dark glyph; dark theme: light glyph). Kept distinct from
+    /// `Warp` so agent surfaces and non-agent Warp UI (e.g.
+    /// `QueryFilter::Drive`) can evolve independently.
+    Agent,
     Conversation,
     Prompt,
     Grid,
@@ -615,6 +624,7 @@ impl From<Icon> for &'static str {
             Icon::ChatDashed => "bundled/svg/chat-dashed.svg",
             Icon::ClaudeLogo => "bundled/svg/claude.svg",
             Icon::GeminiLogo => "bundled/svg/gemini_cli.svg",
+            Icon::GrokLogo => "bundled/svg/grok.svg",
             Icon::OpenAILogo => "bundled/svg/openai.svg",
             Icon::XLogo => "bundled/svg/x-logo.svg",
             Icon::AmpLogo => "bundled/svg/amp.svg",
@@ -630,6 +640,7 @@ impl From<Icon> for &'static str {
             Icon::NLD => "bundled/svg/nld.svg",
             Icon::Oz => "bundled/svg/oz.svg",
             Icon::OzCloud => "bundled/svg/oz-cloud.svg",
+            Icon::Agent => "bundled/svg/warp-drive.svg",
             Icon::Conversation => "bundled/svg/conversation.svg",
             Icon::Prompt => "bundled/svg/prompt.svg",
             Icon::Grid => "bundled/svg/grid.svg",

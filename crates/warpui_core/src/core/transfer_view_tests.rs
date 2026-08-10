@@ -87,6 +87,70 @@ fn test_transfer_view_to_window_updates_window_mapping() {
 }
 
 #[test]
+fn test_transfer_view_stream_continues_in_target_window() {
+    #[derive(Default)]
+    struct TestView {
+        events: Vec<(Option<usize>, WindowId)>,
+    }
+
+    impl Entity for TestView {
+        type Event = ();
+    }
+
+    impl View for TestView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "TestView"
+        }
+    }
+
+    impl TypedActionView for TestView {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let (source_window_id, _) =
+            app.add_window(WindowStyle::NotStealFocus, |_| TestView::default());
+        let (target_window_id, _) =
+            app.add_window(WindowStyle::NotStealFocus, |_| TestView::default());
+        let view = app.add_view(source_window_id, |_| TestView::default());
+        let (tx, rx) = futures::channel::mpsc::unbounded();
+        let stream = view.update(&mut app, |_, ctx| {
+            ctx.spawn_stream_local(
+                rx,
+                |view, item, ctx| view.events.push((Some(item), ctx.window_id())),
+                |view, ctx| view.events.push((None, ctx.window_id())),
+            )
+            .into_future()
+        });
+
+        assert!(app.update(|ctx| ctx.transfer_view_to_window(
+            view.id(),
+            source_window_id,
+            target_window_id
+        )));
+        tx.unbounded_send(1).unwrap();
+        tx.unbounded_send(2).unwrap();
+        drop(tx);
+        stream.await;
+
+        view.read(&app, |view, _| {
+            assert_eq!(
+                view.events,
+                vec![
+                    (Some(1), target_window_id),
+                    (Some(2), target_window_id),
+                    (None, target_window_id),
+                ]
+            );
+        });
+    });
+}
+
+#[test]
 fn test_transfer_view_subscriptions_continue_working() {
     #[derive(Default)]
     struct EmitterView;

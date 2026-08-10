@@ -32,7 +32,7 @@ use warpui::{
 
 use super::privacy::{AddRegexModal, AddRegexModalEvent};
 use super::settings_page::{
-    HEADER_PADDING, LocalOnlyIconState, MatchData, PAGE_PADDING, PageType, SettingsPageMeta,
+    HEADER_PADDING, LocalOnlyIconState, MatchData, PageType, SettingsPageMeta,
     SettingsPageViewHandle, SettingsWidget, TOGGLE_BUTTON_RIGHT_PADDING, ToggleState,
     render_body_item, render_sub_header,
 };
@@ -1366,9 +1366,7 @@ impl SettingsWidget for SecretRedactionWidget {
             column.add_child(self.horizontal_divider(appearance));
         }
 
-        Container::new(column.finish())
-            .with_padding_top(PAGE_PADDING)
-            .finish()
+        Container::new(column.finish()).finish()
     }
 }
 

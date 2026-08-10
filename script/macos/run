@@ -114,8 +114,7 @@ if [[ ",$FEATURES," =~ ",cocoa_sentry," ]]; then
   mkdir -p "$WARP_APP_PATH/Contents/Frameworks"
   cp -a "$SENTRY_FRAMEWORK" "$WARP_APP_PATH/Contents/Frameworks/"
 fi
-echo "Adding rpath to support mac frameworks (e.g. Sentry)"
-install_name_tool -add_rpath "@executable_path/../Frameworks" "$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
+"${REPO_ROOT}/script/macos/add_framework_rpath" "$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
 
 export WARP_SCHEME_NAME
 export WARP_PLIST_PATH="$WARP_APP_PATH/Contents/Info.plist"

@@ -39,7 +39,7 @@ impl SessionType {
     pub(crate) fn icon(&self) -> Icon {
         match self {
             SessionType::Terminal => Icon::Terminal,
-            SessionType::Oz => Icon::Oz,
+            SessionType::Oz => Icon::Agent,
             SessionType::CliAgent(agent) => agent.icon().unwrap_or(Icon::Terminal),
         }
     }

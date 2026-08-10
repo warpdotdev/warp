@@ -2,5 +2,6 @@
 
 /// Ghosted hint row shown in the input's slot while a user-controlled
 /// long-running command owns input (the input box itself stays hidden).
-/// ctrl-c is the reserved interrupt key in both the TUI keymap and the PTY.
-pub(crate) const LONG_RUNNING_COMMAND_HINT: &str = "ctrl-c to interrupt";
+pub(crate) fn long_running_command_hint(attach_key: Option<&str>) -> Option<String> {
+    attach_key.map(|key| format!("{key}  to use agent"))
+}

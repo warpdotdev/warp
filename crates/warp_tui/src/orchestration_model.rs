@@ -17,11 +17,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use warp::tui_export::{
-    AIConversationId, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudAgentStartupIssue,
-    ConversationStatus, Harness, OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
-    PreparedRemoteChildLaunch, RemoteChildLaunchConfig, RenderableAIError, ServerApiProvider,
-    StartAgentExecutionMode, StartAgentRequest, apply_child_agent_model_override,
-    classify_cloud_agent_startup_error, descendant_conversations_in_pill_order,
+    AIConversation, AIConversationId, AgentRunDisplayStatus, AmbientAgentTaskId,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudAgentStartupIssue,
+    CloudConversationData, ConversationStatus, Harness, OrchestrationEventStreamer,
+    OrchestrationEventStreamerEvent, PreparedRemoteChildLaunch, RemoteChildLaunchConfig,
+    RenderableAIError, ServerApiProvider, StartAgentExecutionMode, StartAgentRequest,
+    apply_child_agent_model_override, classify_cloud_agent_startup_error,
+    descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
     inherit_child_agent_settings, orchestration_root_conversation_id, oz_run_url,
     prepare_local_oz_child_launch, prepare_remote_child_launch, register_agent_event_consumer,
     unregister_agent_event_consumer,
@@ -81,7 +83,28 @@ pub(crate) enum TuiOrchestrationEvent {
         request: Box<StartAgentRequest>,
         prepared: Box<PreparedRemoteChildLaunch>,
     },
+    KillLocalChildSession {
+        session_id: TuiSessionId,
+        conversation_id: AIConversationId,
+    },
     RemoveChildSession(TuiSessionId),
+    /// Materialize a restored local Oz child on a fresh background terminal
+    /// session hosted by `root_session_id`, without relaunching it.
+    RestoreLocalChildSession {
+        root_session_id: TuiSessionId,
+        conversation: Box<AIConversation>,
+    },
+    /// Materialize a restored remote/cloud child on a fresh lightweight cloud
+    /// session hosted by `root_session_id`, from its persisted identity.
+    RestoreRemoteChildSession {
+        root_session_id: TuiSessionId,
+        conversation: Box<AIConversation>,
+        task_id: AmbientAgentTaskId,
+        run_id: String,
+    },
+    RestoredRemoteChildStatusUpdated {
+        conversation_id: AIConversationId,
+    },
 }
 
 pub(crate) struct MaterializedLocalOzChildSession {
@@ -217,6 +240,77 @@ impl TuiOrchestrationModel {
         ctx.notify();
     }
 
+    /// Fetches the authoritative lifecycle for a restored remote child once.
+    /// The completion validates the retained session and task identity, so a
+    /// late response cannot update a child whose restored tree was replaced.
+    fn fetch_restored_remote_child_status(
+        &mut self,
+        session_id: TuiSessionId,
+        conversation_id: AIConversationId,
+        task_id: AmbientAgentTaskId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        ctx.spawn(
+            async move { ai_client.get_ambient_agent_task(&task_id).await },
+            move |me, result, ctx| match result {
+                Ok(task) => {
+                    let status =
+                        AgentRunDisplayStatus::from_task(&task, ctx).to_conversation_status();
+                    me.apply_restored_remote_child_status(
+                        session_id,
+                        conversation_id,
+                        task_id,
+                        status,
+                        ctx,
+                    );
+                }
+                Err(error) => {
+                    log::warn!(
+                        "TUI restore: failed to fetch remote child status for \
+                         {conversation_id:?}: {error:#}"
+                    );
+                }
+            },
+        );
+    }
+
+    fn apply_restored_remote_child_status(
+        &mut self,
+        session_id: TuiSessionId,
+        conversation_id: AIConversationId,
+        task_id: AmbientAgentTaskId,
+        status: ConversationStatus,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.child_session_by_conversation.get(&conversation_id) != Some(&session_id)
+            || TuiSessions::as_ref(ctx).session(session_id).is_none()
+        {
+            return;
+        }
+        let should_update = {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            let Some(conversation) = history.conversation(&conversation_id) else {
+                return;
+            };
+            if !conversation.is_remote_child() || conversation.task_id() != Some(task_id) {
+                return;
+            }
+            conversation.status() != &status
+        };
+        if should_update {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.update_conversation_status(
+                    session_id.surface_id(),
+                    conversation_id,
+                    status,
+                    ctx,
+                );
+            });
+            ctx.emit(TuiOrchestrationEvent::RestoredRemoteChildStatusUpdated { conversation_id });
+        }
+    }
+
     /// Focuses the retained session for a conversation and resumes automatic reveal.
     pub(crate) fn focus_conversation_session(
         &mut self,
@@ -298,6 +392,7 @@ impl TuiOrchestrationModel {
                     RemoteChildLaunchConfig {
                         environment_id,
                         skill_references,
+                        working_dir: working_directory.unwrap_or_default(),
                         model_id,
                         computer_use_enabled,
                         worker_host,
@@ -457,7 +552,7 @@ impl TuiOrchestrationModel {
                         child_surface_id,
                         conversation_id,
                         ConversationStatus::Error,
-                        Some(RenderableAIError::other(message, false)),
+                        Some(RenderableAIError::CloudStartupFailed(message)),
                         ctx,
                     );
                 });
@@ -598,9 +693,247 @@ impl TuiOrchestrationModel {
         ctx.notify();
     }
 
-    /// Tears down the background session of a child that failed at the
-    /// launch stage (the executor's `CleanupFailedChildLaunch`).
-    pub(crate) fn cleanup_failed_child(
+    /// Restores retained TUI sessions for every supported, locally-known
+    /// descendant of a just-restored parent conversation, so restored children
+    /// appear in the orchestration tab bar. Descendants are walked in recursive
+    /// spawn order; each conversation keeps its actual parent linkage in
+    /// history, while all new child sessions are hosted by the root session's
+    /// window. Materialization is idempotent: a descendant that already has a
+    /// live or previously-restored session is skipped, and a child failure is
+    /// isolated so the rest of the tree still restores.
+    pub(crate) fn restore_descendant_sessions(
+        &mut self,
+        parent_conversation_id: AIConversationId,
+        root_session_id: TuiSessionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let descendant_ids = descendant_conversation_ids_in_spawn_order(
+            BlocklistAIHistoryModel::as_ref(ctx),
+            parent_conversation_id,
+        );
+        if descendant_ids.is_empty() {
+            return;
+        }
+        // The root parent remains responsible for descendant status watching.
+        self.register_event_consumer(root_session_id, parent_conversation_id, ctx);
+        for descendant_id in descendant_ids {
+            self.restore_descendant_child(
+                parent_conversation_id,
+                descendant_id,
+                root_session_id,
+                ctx,
+            );
+        }
+        ctx.notify();
+    }
+
+    /// Removes the retained child-session projections of a previously restored
+    /// tree when a different parent replaces it. Only the TUI projections and
+    /// their event-consumer registrations are removed; the underlying history
+    /// records are preserved and no local process or cloud task is cancelled or
+    /// deleted.
+    pub(crate) fn discard_restored_descendant_sessions(
+        &mut self,
+        previous_parent_conversation_id: AIConversationId,
+        root_session_id: TuiSessionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let descendant_ids = descendant_conversation_ids_in_spawn_order(
+            BlocklistAIHistoryModel::as_ref(ctx),
+            previous_parent_conversation_id,
+        );
+        for descendant_id in descendant_ids {
+            if let Some(session_id) = self.child_session_by_conversation.remove(&descendant_id) {
+                // `RemoveChildSession` drops only the retained session and its
+                // event consumers (via `handle_session_removed`); it never
+                // deletes the conversation or cancels the child's execution.
+                ctx.emit(TuiOrchestrationEvent::RemoveChildSession(session_id));
+            }
+        }
+        self.unregister_event_consumer(root_session_id, previous_parent_conversation_id, ctx);
+        ctx.notify();
+    }
+
+    fn restore_descendant_child(
+        &mut self,
+        root_parent_conversation_id: AIConversationId,
+        conversation_id: AIConversationId,
+        root_session_id: TuiSessionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.is_child_already_materialized(conversation_id, ctx) {
+            return;
+        }
+        // Prefer the already-hydrated conversation (orchestration children are
+        // eagerly hydrated at startup); fall back to the shared loader for an
+        // indexed-but-not-loaded descendant. Both flow into the same
+        // materializer.
+        match BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .cloned()
+        {
+            Some(conversation) => {
+                self.emit_restore_child_session(conversation, root_session_id, ctx);
+            }
+            None => self.load_and_restore_descendant_child(
+                root_parent_conversation_id,
+                conversation_id,
+                root_session_id,
+                ctx,
+            ),
+        }
+    }
+
+    fn is_child_already_materialized(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &AppContext,
+    ) -> bool {
+        if self
+            .child_session_by_conversation
+            .contains_key(&conversation_id)
+        {
+            return true;
+        }
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        TuiSessions::as_ref(ctx)
+            .session_ids_by_conversation(history)
+            .contains_key(&conversation_id)
+    }
+
+    /// Loads an indexed-but-not-hydrated descendant, then materializes it. The
+    /// completion is guarded so a stale load cannot attach a child to a session
+    /// that is gone, to an already-materialized child, or to a tree that a
+    /// different parent has since replaced.
+    fn load_and_restore_descendant_child(
+        &mut self,
+        root_parent_conversation_id: AIConversationId,
+        conversation_id: AIConversationId,
+        root_session_id: TuiSessionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let future = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.load_conversation_data(conversation_id, ctx)
+        });
+        ctx.spawn(future, move |me, result, ctx| {
+            if TuiSessions::as_ref(ctx).session(root_session_id).is_none()
+                || me.is_child_already_materialized(conversation_id, ctx)
+                || !descendant_conversation_ids_in_spawn_order(
+                    BlocklistAIHistoryModel::as_ref(ctx),
+                    root_parent_conversation_id,
+                )
+                .contains(&conversation_id)
+            {
+                return;
+            }
+            match result {
+                Some(CloudConversationData::Oz(conversation)) => {
+                    me.emit_restore_child_session(*conversation, root_session_id, ctx);
+                }
+                Some(CloudConversationData::CLIAgent(_)) | None => {
+                    log::warn!(
+                        "TUI restore: could not load descendant conversation \
+                         {conversation_id:?} for restoration."
+                    );
+                }
+            }
+        });
+    }
+
+    /// Classifies a resolved child conversation and requests the matching
+    /// restore-session materialization. Unsupported kinds are skipped with
+    /// diagnostics so the rest of the tree still restores: shared-session
+    /// viewers and explicit local non-Oz harnesses have no matching TUI view,
+    /// and a remote child without stable task/run identity cannot be shown.
+    fn emit_restore_child_session(
+        &mut self,
+        conversation: AIConversation,
+        root_session_id: TuiSessionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let conversation_id = conversation.id();
+        if conversation.is_viewing_shared_session() {
+            log::debug!(
+                "TUI restore: skipping shared-session viewer child {conversation_id:?}; \
+                 the TUI has no shared-session view."
+            );
+            return;
+        }
+        if conversation.is_remote_child() {
+            let (Some(task_id), Some(run_id)) = (conversation.task_id(), conversation.run_id())
+            else {
+                log::warn!(
+                    "TUI restore: skipping remote child {conversation_id:?} without stable \
+                     task/run identity."
+                );
+                return;
+            };
+            ctx.emit(TuiOrchestrationEvent::RestoreRemoteChildSession {
+                root_session_id,
+                conversation: Box::new(conversation),
+                task_id,
+                run_id,
+            });
+            return;
+        }
+        // A local child with no explicit harness predates orchestration-harness
+        // stamping and is treated as legacy Oz.
+        match conversation.orchestration_harness() {
+            None | Some(Harness::Oz) => {
+                ctx.emit(TuiOrchestrationEvent::RestoreLocalChildSession {
+                    root_session_id,
+                    conversation: Box::new(conversation),
+                });
+            }
+            Some(
+                harness @ (Harness::Claude
+                | Harness::OpenCode
+                | Harness::Gemini
+                | Harness::Codex
+                | Harness::Unknown),
+            ) => {
+                log::debug!(
+                    "TUI restore: skipping local non-Oz child {conversation_id:?} \
+                     (harness {harness:?}); the TUI has no matching retained view."
+                );
+            }
+        }
+    }
+
+    /// Registers a restored local Oz child after its session was materialized
+    /// and its transcript restored by the session registry.
+    pub(crate) fn register_restored_local_oz_child_session(
+        &mut self,
+        session_id: TuiSessionId,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        // A local child consumes its own event stream, mirroring live children.
+        self.register_event_consumer(session_id, conversation_id, ctx);
+        self.child_session_by_conversation
+            .insert(conversation_id, session_id);
+        ctx.notify();
+    }
+
+    /// Registers a restored remote child after its lightweight cloud session was
+    /// materialized by the session registry.
+    pub(crate) fn register_restored_remote_child_session(
+        &mut self,
+        session_id: TuiSessionId,
+        conversation_id: AIConversationId,
+        task_id: AmbientAgentTaskId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        // Remote placeholders stay passive; the root parent watches descendant
+        // status (registered in `restore_descendant_sessions`).
+        self.child_session_by_conversation
+            .insert(conversation_id, session_id);
+        self.fetch_restored_remote_child_status(session_id, conversation_id, task_id, ctx);
+        ctx.notify();
+    }
+
+    /// Deletes a child conversation and removes its retained TUI session.
+    pub(crate) fn cleanup_child(
         &mut self,
         conversation_id: &AIConversationId,
         ctx: &mut ModelContext<Self>,
@@ -614,6 +947,86 @@ impl TuiOrchestrationModel {
             ctx.emit(TuiOrchestrationEvent::RemoveChildSession(session_id));
         }
         ctx.notify();
+    }
+
+    /// Kills a child agent: tombstones late events, cancels any in-flight
+    /// execution (cloud task or local controller), deletes the conversation
+    /// from history, and removes the retained TUI session. Equivalent to the
+    /// GUI's `KillAgentConversation` path.
+    pub(crate) fn kill_child_agent(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        // 1. Tombstone so late SSE events cannot resurrect the killed child.
+        OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
+            streamer.mark_conversation_killed(conversation_id, ctx);
+        });
+
+        // 2. Cancel in-flight execution BEFORE deletion (AC 6).
+        //    Read what we need up front to avoid borrow-checker issues with the
+        //    subsequent mutable operations.
+        let is_in_progress = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|c| c.status().is_in_progress() || c.status().is_blocked());
+        let is_remote = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|c| c.is_remote_child());
+        let task_id: Option<AmbientAgentTaskId> = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .and_then(|c| c.task_id());
+        let child_session_id = self
+            .child_session_by_conversation
+            .get(&conversation_id)
+            .copied();
+
+        if is_in_progress {
+            if is_remote {
+                // Remote (cloud) child: best-effort cancel the server-side task.
+                // This is async and fire-and-forget; the tombstone above ensures
+                // late events cannot resurrect the child regardless.
+                if let Some(task_id) = task_id {
+                    let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+                    ctx.spawn(
+                        async move { ai_client.cancel_ambient_agent_task(&task_id).await },
+                        |_, result, _| {
+                            if let Err(e) = result {
+                                log::warn!("kill_child_agent: failed to cancel cloud task: {e:#}");
+                            }
+                        },
+                    );
+                }
+            } else if let Some(session_id) = child_session_id {
+                // Cancelling through the session is deferred until the current
+                // view update completes, then cleanup resumes from the event
+                // handler while the conversation is still available.
+                ctx.emit(TuiOrchestrationEvent::KillLocalChildSession {
+                    session_id,
+                    conversation_id,
+                });
+                return;
+            }
+        }
+
+        // 3. Delete conversation and remove session.
+        self.cleanup_child(&conversation_id, ctx);
+    }
+
+    /// Kills every descendant spawned by `conversation_id`, including nested
+    /// descendants. Children are removed deepest-first so each retained
+    /// session can tear down while its ancestry is still available.
+    pub(crate) fn kill_descendant_agents(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let descendant_ids = descendant_conversation_ids_in_spawn_order(
+            BlocklistAIHistoryModel::as_ref(ctx),
+            conversation_id,
+        );
+        for descendant_id in descendant_ids.into_iter().rev() {
+            self.kill_child_agent(descendant_id, ctx);
+        }
     }
 
     /// Resolves a child request as failed without creating a TUI session.
@@ -656,6 +1069,25 @@ impl TuiOrchestrationModel {
             .entry(session_id)
             .or_default()
             .insert(conversation_id);
+    }
+
+    /// Unregisters a single (session, conversation) event-consumer pairing,
+    /// dropping the session's entry once it has no remaining consumers.
+    fn unregister_event_consumer(
+        &mut self,
+        session_id: TuiSessionId,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(conversations) = self.event_consumers_by_session.get_mut(&session_id) else {
+            return;
+        };
+        if conversations.remove(&conversation_id) {
+            unregister_agent_event_consumer(conversation_id, session_id.surface_id(), ctx);
+        }
+        if conversations.is_empty() {
+            self.event_consumers_by_session.remove(&session_id);
+        }
     }
 
     pub(crate) fn handle_session_removed(

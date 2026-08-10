@@ -4,6 +4,7 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
 use itertools::Itertools;
 use warp_core::channel::ChannelState;
+use warp_core::cli_agent_protocol::{WARP_CLI_AGENT_PROTOCOL_VERSION_ENV, WARP_CLIENT_VERSION_ENV};
 use warp_core::features::FeatureFlag;
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::core::{HSTRING, PCWSTR};
@@ -27,8 +28,6 @@ const TERM_PROGRAM_NAME: &str = "TERM_PROGRAM";
 const IS_LOCAL_SESSION_NAME: &str = "WARP_IS_LOCAL_SHELL_SESSION";
 const SSH_SOCKET_DIR: &str = "SSH_SOCKET_DIR";
 const PATH_APPEND_NAME: &str = "WARP_PATH_APPEND";
-const CLIENT_VERSION_NAME: &str = "WARP_CLIENT_VERSION";
-const CLI_AGENT_PROTOCOL_VERSION_NAME: &str = "WARP_CLI_AGENT_PROTOCOL_VERSION";
 const WSLENV: &str = "WSLENV";
 const HISTIGNORE: &str = "HISTIGNORE";
 
@@ -128,18 +127,18 @@ pub(super) fn get_shell_environment_variables(options: &PtyOptions) -> Vec<u16> 
 
     let client_version = ChannelState::app_version().unwrap_or("local");
     env.insert(
-        map_key(CLIENT_VERSION_NAME.into()),
+        map_key(WARP_CLIENT_VERSION_ENV.into()),
         EnvEntry {
-            preferred_key: CLIENT_VERSION_NAME.into(),
+            preferred_key: WARP_CLIENT_VERSION_ENV.into(),
             value: client_version.into(),
         },
     );
 
     if FeatureFlag::HOANotifications.is_enabled() {
         env.insert(
-            map_key(CLI_AGENT_PROTOCOL_VERSION_NAME.into()),
+            map_key(WARP_CLI_AGENT_PROTOCOL_VERSION_ENV.into()),
             EnvEntry {
-                preferred_key: CLI_AGENT_PROTOCOL_VERSION_NAME.into(),
+                preferred_key: WARP_CLI_AGENT_PROTOCOL_VERSION_ENV.into(),
                 value: current_protocol_version().to_string().into(),
             },
         );
@@ -223,14 +222,14 @@ fn wsl_env_allowlist(include_initial_working_dir: bool) -> OsString {
         format!("{TERM_PROGRAM_NAME}/u"),
         format!("{IS_LOCAL_SESSION_NAME}/u"),
         format!("{SSH_SOCKET_DIR}/u"),
-        format!("{CLIENT_VERSION_NAME}/u"),
+        format!("{WARP_CLIENT_VERSION_ENV}/u"),
         format!("{TERMINAL_SESSION_UUID_ENV}/u"),
         format!("{FOCUS_URL_ENV}/u"),
         format!("{PROMPT_NODE_VERSION_ENABLED_NAME}/u"),
     ];
 
     if FeatureFlag::HOANotifications.is_enabled() {
-        entries.push(format!("{CLI_AGENT_PROTOCOL_VERSION_NAME}/u"));
+        entries.push(format!("{WARP_CLI_AGENT_PROTOCOL_VERSION_ENV}/u"));
     }
 
     if include_initial_working_dir {

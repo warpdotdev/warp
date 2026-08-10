@@ -16,7 +16,7 @@ use unindent::Unindent;
 #[cfg(feature = "voice_input")]
 use voice_input::VoiceInputToggledFrom;
 use warp_completer::completer::{
-    EngineFileType, Match, MatchStrategy, MatchedSuggestion, Priority, Suggestion,
+    EngineFileType, Match, MatchStrategy, MatchedSuggestion, PathSeparators, Priority, Suggestion,
     SuggestionResults, SuggestionType,
 };
 use warp_completer::meta::Span;
@@ -331,6 +331,7 @@ pub fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| WorkspaceRegistry::new());
     app.add_singleton_model(|_| ToastStack);
     app.add_singleton_model(|_| PricingInfoModel::new());
+    app.add_singleton_model(crate::ai::pricing_promotion::PricingPromotionState::new);
     app.add_singleton_model(ByoLlmAuthBannerSessionState::new);
     app.add_singleton_model(|_| {
         crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier::new()
@@ -524,11 +525,11 @@ fn argument_suggestion(name: impl Into<SmolStr>) -> MatchedSuggestion {
 
 /// Creates a [`MatchedSuggestion`] for a file completion result.
 /// Specifically, we ensure the replacement is the entire path
-/// while the display text is just the string after the last slash.
+/// while the display text is just the string after the last valid path separator.
 fn file_suggestion(path: impl Into<SmolStr>) -> MatchedSuggestion {
     let replacement = path.into();
     let display = replacement
-        .rsplit(std::path::MAIN_SEPARATOR)
+        .rsplit(PathSeparators::for_os().all)
         .next()
         .map(Into::into)
         .unwrap_or_else(|| replacement.clone());
@@ -1581,6 +1582,59 @@ fn attach_ambient_view_model_skips_composer_selectors_for_actual_shared_session_
             assert!(
                 input.auth_secret_ftux_view().is_none(),
                 "an actual shared-session viewer must not build the auth-secret FTUX view"
+            );
+        });
+    });
+}
+
+#[test]
+fn cloud_mode_host_selector_shown_when_connected_workers_present() {
+    // Regression: connected self-hosted workers must surface the host dropdown even
+    // with no default host set.
+    App::test((), |mut app| async move {
+        let _cloud_mode_input_v2 = FeatureFlag::CloudModeInputV2.override_enabled(true);
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        let terminal_view_id = terminal.read(&app, |view, _| view.id());
+
+        // Fresh cloud-mode composer: a dummy cloud-mode session in `ViewPending`.
+        terminal.update(&mut app, |view, _| {
+            let mut model = view.model.lock();
+            model.set_shared_session_status(SharedSessionStatus::ViewPending);
+            model.set_is_dummy_cloud_mode_session(true);
+        });
+
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
+            input.attach_ambient_agent_view_model(view_model, ctx);
+        });
+
+        // No workspace default host and no connected workers -> the dropdown stays hidden.
+        input.read(&app, |input, ctx| {
+            assert!(
+                input.host_selector().is_some(),
+                "the cloud composer must build the host selector"
+            );
+            assert!(
+                input.visible_host_selector(ctx).is_none(),
+                "host selector must be hidden with no default host and no connected workers"
+            );
+        });
+
+        // A self-hosted worker connects -> the dropdown becomes visible.
+        ConnectedSelfHostedWorkersModel::handle(&app).update(&mut app, |model, ctx| {
+            model.set_workers_for_test(&["oz-k8s-worker"], ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(
+                input.visible_host_selector(ctx).is_some(),
+                "host selector must be shown once a self-hosted worker is connected"
             );
         });
     });
@@ -9444,5 +9498,144 @@ fn ctrl_enter_inserts_newline_in_normal_input_after_rich_input_closes() {
                  (the default); got Emit instead"
             );
         });
+    });
+}
+
+/// Directly exercises `restore_cloud_followup_input_after_upload_failure`:
+/// after the editor is frozen into the loading state, calling the restore
+/// function must put the exact original prompt text back and leave the
+/// editor editable.
+#[test]
+fn restore_cloud_followup_input_after_upload_failure_restores_prompt() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        terminal.update(&mut app, |view, _| {
+            view.model.lock().block_list_mut().set_bootstrapped();
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        // Write a prompt that should survive a failed upload.
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("cloud follow-up prompt", ctx);
+        });
+
+        // Freeze the editor (simulates the upload-in-progress loading state).
+        input.update(&mut app, |input, ctx| {
+            input.freeze_input_in_loading_state(ctx);
+        });
+        let frozen_text = input.read(&app, |i, ctx| i.buffer_text(ctx));
+        assert!(
+            frozen_text.contains("cloud follow-up prompt"),
+            "frozen text must contain the original prompt; got: {frozen_text:?}"
+        );
+        assert!(
+            frozen_text.contains('◌'),
+            "frozen text must contain the loading indicator '◌'; got: {frozen_text:?}"
+        );
+
+        // Simulate an upload failure restoring the input.
+        input.update(&mut app, |input, ctx| {
+            input.restore_cloud_followup_input_after_upload_failure("cloud follow-up prompt", ctx);
+        });
+
+        // The buffer must be restored to the original prompt without the loading marker.
+        assert_eq!(
+            input.read(&app, |i, ctx| i.buffer_text(ctx)),
+            "cloud follow-up prompt",
+            "restore must set the buffer back to the original prompt after upload failure"
+        );
+    });
+}
+
+#[test]
+fn should_upload_cloud_followup_attachments_matches_cloud_mode_image_context_flag() {
+    use base64::Engine as _;
+
+    let attachment = PendingAttachment::Image(ImageContext {
+        data: base64::engine::general_purpose::STANDARD.encode(b"fake image"),
+        mime_type: "image/png".to_string(),
+        file_name: "test.png".to_string(),
+        is_figma: false,
+    });
+
+    assert!(
+        !Input::should_upload_cloud_followup_attachments(&[]),
+        "no pending attachments should submit the text-only follow-up immediately"
+    );
+
+    let flag_guard = FeatureFlag::CloudModeImageContext.override_enabled(false);
+    assert!(
+        !Input::should_upload_cloud_followup_attachments(std::slice::from_ref(&attachment)),
+        "follow-up attachments should not upload while CloudModeImageContext is disabled"
+    );
+    drop(flag_guard);
+    let _flag_guard = FeatureFlag::CloudModeImageContext.override_enabled(true);
+    assert!(
+        Input::should_upload_cloud_followup_attachments(&[attachment]),
+        "follow-up attachments should upload when CloudModeImageContext is enabled"
+    );
+}
+
+/// Exercises the async failure path of `upload_files_then_submit_cloud_followup`:
+/// when the server API rejects the attachment upload (the test HTTP client never
+/// connects to a real server), the callback must restore the prompt text so the
+/// user can retry.
+#[test]
+fn upload_files_then_submit_cloud_followup_restores_input_on_upload_error() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        terminal.update(&mut app, |view, _| {
+            view.model.lock().block_list_mut().set_bootstrapped();
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        let prompt = "attach and follow up".to_string();
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content(&prompt, ctx);
+        });
+
+        // A tiny base64-encoded image used as the test attachment.  The decode
+        // succeeds in the async task, but `prepare_attachments_for_upload` then
+        // fails because the test HTTP client has no real server to contact.
+        use base64::Engine as _;
+        let attachment = PendingAttachment::Image(ImageContext {
+            data: base64::engine::general_purpose::STANDARD.encode(b"fake image"),
+            mime_type: "image/png".to_string(),
+            file_name: "test.png".to_string(),
+            is_figma: false,
+        });
+        let task_id: crate::ai::ambient_agents::AmbientAgentTaskId =
+            "11111111-1111-1111-1111-111111111111".parse().unwrap();
+
+        // Spawn the upload and await the completion of its foreground callback
+        // (which runs after the background tokio task finishes — immediately
+        // with an error in this test environment).
+        let await_future = input.update(&mut app, |input, ctx| {
+            let handle = input.upload_files_then_submit_cloud_followup(
+                task_id,
+                prompt.clone(),
+                vec![attachment],
+                ctx,
+            );
+            ctx.await_spawned_future(handle.future_id())
+        });
+        await_future.await;
+
+        // After the upload error, the callback must have restored the prompt.
+        assert_eq!(
+            input.read(&app, |i, ctx| i.buffer_text(ctx)),
+            prompt,
+            "input must be restored to the original prompt after a failed attachment upload"
+        );
     });
 }

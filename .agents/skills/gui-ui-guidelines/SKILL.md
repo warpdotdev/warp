@@ -15,6 +15,8 @@ This skill is a growing catalog of guidelines for working on Warp's UI code. Eac
 - Each guideline is self-contained. Not every one will apply to every task — use judgment. But if a guideline *does* apply, follow it.
 - When in doubt, prefer reusing an existing abstraction over introducing a new one. The Warp UI has accumulated a well-factored set of shared components and themes; new one-offs almost always drift.
 
+For work on the settings modal (`app/src/settings_view/`) — a settings page, a `SettingsWidget`, or anything that affects settings search — also read the `gui-settings-ui` skill, which covers the page-title, widget-gating, and widget-splitting rules specific to that surface.
+
 New guidelines get added here over time. If you discover a recurring UI mistake that would have been caught by a written rule, add it.
 
 ---

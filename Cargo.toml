@@ -389,7 +389,7 @@ dirs = "6.0.0"
 rayon = "1.10.0"
 sha2 = "0.10"
 shellexpand = "3.1.1"
-warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "29cd61c3a9a96d8bde92e90f926e89d340e74cb6", default-features = false }
+warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "fe3526693fe4ea3dc208ee5ef892b3aad2679af6", default-features = false }
 winit = { git = "https://github.com/warpdotdev/winit.git", rev = "a4e0ecb5f9626ccac9445a73dc28354b52423abc" }
 x11rb = "0.13.0"
 mockito = "1.7.0"
@@ -513,6 +513,12 @@ codegen-units = 1
 [profile.release-cli-debug_assertions]
 inherits = "release-cli"
 debug-assertions = true
+# Short aliases keep Windows build paths below the legacy MAX_PATH limit.
+[profile.rcli]
+inherits = "release-cli"
+
+[profile.rclida]
+inherits = "release-cli-debug_assertions"
 
 # Release profile for the standalone TUI. Strip debug-map entries while
 # retaining function symbols so local backtraces and profiles remain readable.

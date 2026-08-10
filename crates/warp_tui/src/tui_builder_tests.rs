@@ -1,13 +1,63 @@
+#[cfg(feature = "voice_input")]
 use std::time::Duration;
 
 use pathfinder_color::ColorU;
-use warp::tui_export::light_theme;
+use warp::tui_export::{dark_theme, light_theme};
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::Fill as CoreFill;
 use warpui_core::elements::tui::{Color, Modifier};
 
 use super::{TuiUiBuilder, rounded_midpoint_color};
+
+fn rgb(value: u32) -> Color {
+    let color = ColorU::from_u32(value);
+    Color::Rgb(color.r, color.g, color.b)
+}
+
+#[test]
+fn design_palettes_match_figma_in_dark_and_light_themes() {
+    for (theme, brand_primary, brand_accent, agent_colors) in [
+        (
+            dark_theme(),
+            0xD2B5FFFF,
+            0xE2FFD4FF,
+            [
+                0xD0D1FEFF, 0xA5D5FEFF, 0xFF8FFDFF, 0xD2B5FFFF, 0xFF8AA6FF, 0xE2FFD4FF, 0xFBDC79FF,
+            ],
+        ),
+        (
+            light_theme(),
+            0x9C58F0FF,
+            0x33770BFF,
+            [
+                0x20A5BAFF, 0x008EC4FF, 0x523C79FF, 0x9C58F0FF, 0xFF8AA6FF, 0x33770BFF, 0xC79A18FF,
+            ],
+        ),
+    ] {
+        let builder = TuiUiBuilder { warp_theme: theme };
+
+        assert_eq!(builder.brand_primary_style().fg, Some(rgb(brand_primary)));
+        assert_eq!(builder.brand_accent_style().fg, Some(rgb(brand_accent)));
+        assert_eq!(
+            builder.warping_base_color(),
+            ColorU::from_u32(brand_primary)
+        );
+        assert_eq!(
+            builder
+                .agent_identity_palette()
+                .into_iter()
+                .take(agent_colors.len())
+                .map(|identity| identity.style.fg)
+                .collect::<Vec<_>>(),
+            agent_colors
+                .into_iter()
+                .map(|color| Some(rgb(color)))
+                .collect::<Vec<_>>()
+        );
+    }
+}
 
 #[test]
 fn text_styles_follow_light_theme_foreground() {
@@ -29,9 +79,34 @@ fn text_styles_follow_light_theme_foreground() {
             .blend(&theme.foreground().with_opacity(details.sub_text_opacity)),
     )
     .into();
+    let expected_read_only_menu_label: Color = CoreFill::from(
+        theme
+            .background()
+            .blend(&theme.foreground().with_opacity(60)),
+    )
+    .into();
 
     assert_eq!(builder.primary_text_style().fg, Some(expected_primary));
+    let expected_neutral_7: Color =
+        CoreFill::from(ThemeFill::Solid(internal_colors::neutral_7(&theme))).into();
+    assert_eq!(builder.neutral_7_text_style().fg, Some(expected_neutral_7));
+    assert!(
+        !builder
+            .neutral_7_text_style()
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
     assert_eq!(builder.muted_text_style().fg, Some(expected_muted));
+    let read_only_menu_label_style = builder.read_only_menu_label_style();
+    assert_eq!(
+        read_only_menu_label_style.fg,
+        Some(expected_read_only_menu_label)
+    );
+    assert!(
+        !read_only_menu_label_style
+            .add_modifier
+            .contains(Modifier::DIM)
+    );
     assert_ne!(
         builder.primary_text_style().fg,
         Some(CoreFill::from(ThemeFill::from(theme.terminal_colors().normal.white)).into()),
@@ -59,21 +134,29 @@ fn text_styles_follow_light_theme_foreground() {
     )
     .into();
     let shortcut_accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
-    let shortcuts_background: Color =
+    let read_only_menu_background: Color =
         CoreFill::from(theme.background().blend(&shortcut_accent.with_opacity(10))).into();
-    assert_eq!(builder.shortcuts_background(), shortcuts_background);
+    assert_eq!(
+        builder.read_only_menu_background(),
+        read_only_menu_background
+    );
     assert_eq!(builder.shell_command_background(), shell_command_background);
     let shell_command_prefix_style = builder.shell_command_prefix_style();
     assert_eq!(
         shell_command_prefix_style.fg,
         Some(CoreFill::from(shell_command_fill).into())
     );
-    assert_eq!(
-        shell_command_prefix_style.bg,
-        Some(shell_command_background)
-    );
+    assert_eq!(shell_command_prefix_style.bg, None);
     assert!(
         shell_command_prefix_style
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
+    let shell_command_row_style = builder.shell_command_row_style();
+    assert_eq!(shell_command_row_style.fg, shell_command_prefix_style.fg);
+    assert_eq!(shell_command_row_style.bg, Some(shell_command_background));
+    assert!(
+        shell_command_row_style
             .add_modifier
             .contains(Modifier::BOLD)
     );
@@ -110,6 +193,7 @@ fn selected_state_suffix_midpoint_matches_figma_dark_palette() {
 }
 
 #[test]
+#[cfg(feature = "voice_input")]
 fn voice_input_border_pulses_between_cyan_overlay_2_and_lilac_600() {
     let theme = light_theme();
     let builder = TuiUiBuilder {

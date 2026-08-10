@@ -686,12 +686,14 @@ settings::macros::implement_setting_for_enum!(
 #[serde(rename_all = "snake_case")]
 pub enum TuiStatuslineItem {
     AutoApprove,
-    AutoQueue,
+    /// Vim mode indicator (NOR/INS/VIS/V-L/REP); hidden when vim mode is disabled.
+    VimModeIndicator,
     Model,
     WorkingDirectory,
     GitBranch,
     GitBranchStatus,
     GitDiffStatus,
+    GitHubPullRequest,
     CreditUsage,
     ContextWindowUsage,
     Date,
@@ -704,14 +706,15 @@ pub enum TuiStatuslineItem {
 }
 
 impl TuiStatuslineItem {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::AutoApprove,
-        Self::AutoQueue,
+        Self::VimModeIndicator,
         Self::Model,
         Self::WorkingDirectory,
         Self::GitBranch,
         Self::GitBranchStatus,
         Self::GitDiffStatus,
+        Self::GitHubPullRequest,
         Self::CreditUsage,
         Self::ContextWindowUsage,
         Self::Date,
@@ -724,12 +727,13 @@ impl TuiStatuslineItem {
     pub fn label(self) -> &'static str {
         match self {
             Self::AutoApprove => "Auto-approve indicator",
-            Self::AutoQueue => "Auto-queue next prompt indicator",
+            Self::VimModeIndicator => "Vim mode indicator",
             Self::Model => "Model",
             Self::WorkingDirectory => "Working directory",
             Self::GitBranch => "Git branch",
             Self::GitBranchStatus => "Git branch status",
             Self::GitDiffStatus => "Git diff status",
+            Self::GitHubPullRequest => "GitHub pull request",
             Self::CreditUsage => "Credit usage",
             Self::ContextWindowUsage => "Context window usage",
             Self::Date => "Date",
@@ -762,6 +766,8 @@ impl Default for TuiStatuslineConfig {
         Self {
             order: TuiStatuslineItem::ALL.to_vec(),
             enabled: vec![
+                TuiStatuslineItem::AutoApprove,
+                TuiStatuslineItem::VimModeIndicator,
                 TuiStatuslineItem::Model,
                 TuiStatuslineItem::WorkingDirectory,
                 TuiStatuslineItem::GitBranch,
@@ -774,9 +780,10 @@ impl Default for TuiStatuslineConfig {
 impl TuiStatuslineConfig {
     /// Returns a complete, duplicate-free catalog and a valid enabled subset.
     pub fn normalized(&self) -> Self {
+        let is_legacy_config = !self.order.contains(&TuiStatuslineItem::VimModeIndicator);
         let mut order = Vec::with_capacity(TuiStatuslineItem::ALL.len());
         for item in self.order.iter().copied().chain(TuiStatuslineItem::ALL) {
-            if !order.contains(&item) {
+            if TuiStatuslineItem::ALL.contains(&item) && !order.contains(&item) {
                 order.push(item);
             }
         }
@@ -786,6 +793,9 @@ impl TuiStatuslineConfig {
             if order.contains(&item) && !enabled.contains(&item) {
                 enabled.push(item);
             }
+        }
+        if is_legacy_config {
+            enabled.insert(0, TuiStatuslineItem::VimModeIndicator);
         }
 
         Self { order, enabled }
@@ -1735,6 +1745,20 @@ define_settings_group!(AISettings, settings: [
     }
 
     // This is not a user-visible setting - it's merely a one-time flag to track if the
+    // Warp Agent CLI launch modal has been shown to the user.
+    //
+    // We model it as a setting so it's only shown once to a given user regardless of the number of
+    // devices they use.
+    did_check_to_trigger_agent_cli_launch_modal: DidShowAgentCliLaunchModal {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
+        private: true,
+    }
+
+    // This is not a user-visible setting - it's merely a one-time flag to track if the
     // free-AI-removal notice modal has been shown to (or silently marked as seen for) the user.
     //
     // We model it as a setting so it's only shown once to a given user regardless of the number of
@@ -1778,7 +1802,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        surface: settings::SettingSurfaces::GUI,
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         storage_key: "CanUseWarpCreditsWithByok",
         toml_path: "cloud_platform.third_party_api_keys.can_use_warp_credits_with_byok",
@@ -1979,6 +2003,18 @@ define_settings_group!(AISettings, settings: [
         private: false,
         toml_path: "agents.warp_agent.input.include_agent_commands_in_history",
         description: "Whether agent-executed commands are included in command history.",
+    }
+
+    // Whether fast forward / auto-approve can run commands that match the command denylist.
+    auto_approve_bypasses_command_denylist: AutoApproveBypassesCommandDenylist {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
+        private: false,
+        toml_path: "agents.warp_agent.other.auto_approve_bypasses_command_denylist",
+        description: "Whether auto-approve bypasses the command denylist.",
     }
 
     // Controls whether the conversation history view appears in the tools panel.

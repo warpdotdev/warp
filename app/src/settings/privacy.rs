@@ -93,7 +93,7 @@ define_settings_group!(WarpDrivePrivacySettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
-        surface: settings::SettingSurfaces::GUI,
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         storage_key: "TelemetryEnabled",
         toml_path: "privacy.telemetry_enabled",
@@ -104,7 +104,7 @@ define_settings_group!(WarpDrivePrivacySettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
-        surface: settings::SettingSurfaces::GUI,
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         storage_key: "CrashReportingEnabled",
         toml_path: "privacy.crash_reporting_enabled",
@@ -115,7 +115,7 @@ define_settings_group!(WarpDrivePrivacySettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
-        surface: settings::SettingSurfaces::GUI,
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         storage_key: "CloudConversationStorageEnabled",
         toml_path: "agents.cloud_conversation_storage_enabled",
@@ -857,3 +857,7 @@ impl Entity for PrivacySettings {
 }
 
 impl SingletonEntity for PrivacySettings {}
+
+#[cfg(test)]
+#[path = "privacy_tests.rs"]
+mod tests;

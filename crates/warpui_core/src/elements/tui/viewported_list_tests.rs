@@ -6,6 +6,7 @@ use string_offset::ByteOffset;
 use super::{
     TuiViewportContent, TuiViewportPosition, TuiViewportVerticalAlignment, TuiViewportWindow,
     TuiViewportedElement, TuiViewportedList, TuiViewportedListState, TuiVisibleViewportItem,
+    trimmed_selection_row_end,
 };
 use crate::elements::tui::{
     Color, Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiContainer, TuiElement, TuiEvent,
@@ -335,6 +336,47 @@ fn render_in_area(app: &App, element: &mut impl TuiElement, size: TuiSize, area:
             &mut surface,
             &mut paint_ctx,
         );
+    });
+}
+
+#[test]
+fn trimmed_selection_copy_caps_each_row_to_its_content_end() {
+    App::test((), |app| async move {
+        let content = FakeContent::new(vec![FakeItem {
+            lines: vec!["short".to_owned(), "a".to_owned(), "ending".to_owned()],
+            height: 3,
+        }]);
+        let state = TuiViewportedListState::new_at_end();
+        let viewport = viewport_with_state(state, content).with_trimmed_selection_line_ends();
+        let row_ends = app.read(|app_ctx| {
+            let mut rendered_views = EntityIdMap::default();
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            let buffer = viewport
+                .selection_rows(0..3, 8, &mut ctx, app_ctx)
+                .expect("fake content should materialize selection rows");
+            [
+                trimmed_selection_row_end(&buffer, 0, 8),
+                trimmed_selection_row_end(&buffer, 1, 8),
+                trimmed_selection_row_end(&buffer, 2, 8),
+            ]
+        });
+        assert_eq!(row_ends, [Some(5), Some(1), Some(6)]);
+
+        let copies = Rc::new(RefCell::new(Vec::new()));
+        let copies_for_callback = copies.clone();
+        let mut element = TuiSelectable::new(TuiSelectionHandle::default(), viewport)
+            .on_copy(move |text, _, _| copies_for_callback.borrow_mut().push(text));
+        let size = TuiSize::new(8, 3);
+
+        render_viewport(&app, &mut element, size);
+        mouse(&app, &mut element, size, left_down(0, 0, 1, false));
+        mouse(&app, &mut element, size, left_drag(7, 2));
+        render_viewport(&app, &mut element, size);
+        mouse(&app, &mut element, size, left_up(7, 2));
+
+        assert_eq!(copies.borrow().as_slice(), ["short\na\nending"]);
     });
 }
 

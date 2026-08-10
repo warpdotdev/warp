@@ -32,7 +32,7 @@ use warpui::ui_components::slider::SliderStateHandle;
 use warpui::ui_components::switch::{SwitchStateHandle, TooltipConfig};
 use warpui::{
     Action, AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle, id,
+    ViewHandle, WeakViewHandle, id,
 };
 
 use super::custom_inference_modal::{
@@ -91,16 +91,17 @@ use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::settings::{
     AIAutoDetectionEnabled, AICommandDenylist, AISettingsChangedEvent,
     AgentModeCodingPermissionsType, AgentModeCommandExecutionDenylist,
-    AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
-    AwsBedrockCredentialsEnabled, CanUseWarpCreditsForFallback, CodeSettings,
-    CodebaseContextEnabled, FileBasedMcpEnabled, GeminiEnterpriseCredentialsEnabled,
-    GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory, InputSettings,
-    IntelligentAutosuggestionsEnabled, LongRunningCommandSubmissionMode, MemoryEnabled,
-    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode,
-    PromptSubmissionMode, RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled,
-    ShouldRenderCLIAgentToolbar, ShouldRenderUseAgentToolbarForUserCommands,
-    ShouldShowOzUpdatesInZeroState, ShowAgentTips, ShowConversationHistory, ShowHintText,
-    ThinkingDisplayMode, VoiceInputEnabled, WarpDriveContextEnabled,
+    AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled,
+    AutoApproveBypassesCommandDenylist, AwsBedrockAutoLogin, AwsBedrockCredentialsEnabled,
+    CanUseWarpCreditsForFallback, CodeSettings, CodebaseContextEnabled, FileBasedMcpEnabled,
+    GeminiEnterpriseCredentialsEnabled, GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory,
+    InputSettings, IntelligentAutosuggestionsEnabled, LongRunningCommandSubmissionMode,
+    MemoryEnabled, NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled,
+    OrchestrationMessageDisplayMode, PromptSubmissionMode, RuleSuggestionsEnabled,
+    SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
+    ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
+    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
+    WarpDriveContextEnabled,
 };
 use crate::terminal::CLIAgent;
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
@@ -185,7 +186,7 @@ const GIT_OPERATIONS_AUTOGEN_DESCRIPTION: &str =
     "Let AI generate commit messages and pull request titles and descriptions.";
 const WISPR_FLOW_URL: &str = "https://wisprflow.ai/";
 const CUSTOM_INFERENCE_LEARN_MORE_URL: &str =
-    "https://docs.warp.dev/agent-platform/inference/custom-inference-endpoint/";
+    "https://docs.warp.dev/agents/inference/custom-inference-endpoint/";
 const CUSTOM_INFERENCE_TERMS_URL: &str = "https://www.warp.dev/legal/terms-of-service";
 const CUSTOM_INFERENCE_INFO_TOOLTIP_MAX_WIDTH: f32 = 320.;
 const CUSTOM_ENDPOINT_MODAL_MAX_HEIGHT_PERCENTAGE: f32 = 0.8;
@@ -546,6 +547,25 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 )),
                 &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
                 flags::INCLUDE_AGENT_COMMANDS_IN_HISTORY_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi),
+            ToggleSettingActionPair::custom(
+                SettingActionPairDescriptions::new(
+                    "Allow auto-approve to bypass command denylist",
+                    "Require approval for denylisted commands in auto-approve",
+                ),
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleAutoApproveBypassesCommandDenylist,
+                )),
+                SettingActionPairContexts::new(
+                    context.clone()
+                        & id!(flags::IS_ANY_AI_ENABLED)
+                        & !id!(flags::AUTO_APPROVE_BYPASSES_COMMAND_DENYLIST_FLAG),
+                    context.clone()
+                        & id!(flags::IS_ANY_AI_ENABLED)
+                        & id!(flags::AUTO_APPROVE_BYPASSES_COMMAND_DENYLIST_FLAG),
+                ),
+                None,
             )
             .with_group(bindings::BindingGroup::WarpAi),
             ToggleSettingActionPair::new(
@@ -1776,6 +1796,7 @@ impl AISettingsPageView {
         ctx.subscribe_to_model(&ai_request_model, |me, _, event, ctx| {
             match event {
                 AIRequestUsageModelEvent::RequestUsageUpdated => ctx.notify(),
+                AIRequestUsageModelEvent::CreditAvailabilityUpdated => ctx.notify(),
                 AIRequestUsageModelEvent::RequestBonusRefunded { .. } => ctx.notify(),
                 AIRequestUsageModelEvent::AmbientCreditsBannerDismissed => {}
             }
@@ -2172,7 +2193,7 @@ impl AISettingsPageView {
         let (active_id, active_provider) = {
             let prefs = LLMPreferences::as_ref(ctx);
             let active = prefs.get_active_base_model(ctx, None);
-            (active.id.clone(), active.provider.clone())
+            (active.id.clone(), active.provider)
         };
         if LLMPreferences::as_ref(ctx)
             .custom_llm_info_for_id(&active_id)
@@ -2206,7 +2227,8 @@ impl AISettingsPageView {
         let on_paid_plan = UserWorkspaces::as_ref(ctx)
             .current_workspace()
             .is_some_and(|workspace| workspace.billing_metadata.is_user_on_paid_plan());
-        let out_of_monthly_credits = !AIRequestUsageModel::as_ref(ctx).has_requests_remaining();
+        let out_of_monthly_credits =
+            !AIRequestUsageModel::as_ref(ctx).has_base_plan_requests_remaining();
         !on_paid_plan && out_of_monthly_credits && !Self::active_base_model_is_byo_covered(ctx)
     }
 
@@ -2216,32 +2238,14 @@ impl AISettingsPageView {
     /// key editor was committed.
     fn maybe_prompt_for_newly_added_provider_key(&mut self, ctx: &mut ViewContext<Self>) {
         let current = ApiKeyManager::as_ref(ctx).keys().clone();
-        let newly_added = [
-            (
-                LLMProvider::OpenAI,
-                &self.last_seen_provider_keys.openai,
-                &current.openai,
-            ),
-            (
-                LLMProvider::Anthropic,
-                &self.last_seen_provider_keys.anthropic,
-                &current.anthropic,
-            ),
-            (
-                LLMProvider::Google,
-                &self.last_seen_provider_keys.google,
-                &current.google,
-            ),
-        ]
-        .into_iter()
-        .find_map(|(provider, previous_key, current_key)| {
-            let was_present = previous_key
-                .as_deref()
+        let newly_added = LLMProvider::API_KEY_PROVIDERS.into_iter().find(|provider| {
+            let was_present = provider
+                .api_key(&self.last_seen_provider_keys)
                 .is_some_and(|key| !key.trim().is_empty());
-            let now_present = current_key
-                .as_deref()
+            let now_present = provider
+                .api_key(&current)
                 .is_some_and(|key| !key.trim().is_empty());
-            (!was_present && now_present).then_some(provider)
+            !was_present && now_present
         });
         self.last_seen_provider_keys = current;
         if let Some(provider) = newly_added {
@@ -2848,6 +2852,18 @@ impl AISettingsPageView {
             ctx.notify();
         }
     }
+    fn knowledge_widgets() -> Vec<Box<dyn SettingsWidget<View = Self>>> {
+        let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
+            vec![Box::new(RulesWidget::default())];
+        if FeatureFlag::SuggestedRules.is_enabled() {
+            widgets.push(Box::new(SuggestedRulesWidget::default()));
+        }
+        widgets.extend([
+            Box::new(ManageRulesWidget::default()) as Box<dyn SettingsWidget<View = Self>>,
+            Box::new(WarpDriveContextWidget::default()),
+        ]);
+        widgets
+    }
 
     fn build_page(subpage: Option<AISubpage>, ctx: &mut ViewContext<Self>) -> PageType<Self> {
         let ai_settings = AISettings::as_ref(ctx);
@@ -2861,7 +2877,7 @@ impl AISettingsPageView {
                 // Full page: all widgets (legacy behavior)
                 widgets.push(Box::new(GlobalAIWidget::default()));
                 if !FeatureFlag::UsageBasedPricing.is_enabled() {
-                    widgets.push(Box::new(UsageWidget::default()));
+                    widgets.push(Box::new(UsageWidget::new(ctx)));
                 }
                 if ai_settings
                     .intelligent_autosuggestions_enabled_internal
@@ -2882,7 +2898,7 @@ impl AISettingsPageView {
                             .git_operations_autogen_enabled_internal
                             .is_supported_on_current_platform())
                 {
-                    widgets.push(Box::new(ActiveAIWidget::default()));
+                    widgets.push(Box::new(ActiveAIWidget::new(ctx)));
                 }
                 widgets.push(Box::new(AgentsWidget::default()));
                 widgets.push(Box::new(AIInputWidget::default()));
@@ -2890,7 +2906,7 @@ impl AISettingsPageView {
                     widgets.push(Box::new(MCPServersWidget::default()));
                 }
                 if FeatureFlag::AIRules.is_enabled() {
-                    widgets.push(Box::new(AIFactWidget::default()));
+                    widgets.extend(Self::knowledge_widgets());
                 }
                 if cfg!(feature = "voice_input")
                     && ai_settings
@@ -2900,7 +2916,7 @@ impl AISettingsPageView {
                     widgets.push(Box::new(VoiceWidget::default()));
                 }
                 widgets.push(Box::new(CloudHandoffWidget::default()));
-                widgets.push(Box::new(CLIAgentWidget::default()));
+                widgets.extend(cli_agent_widgets());
                 widgets.push(Box::new(ApiKeysWidget::new(ctx)));
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(GeminiEnterpriseWidget::new(ctx)));
@@ -2932,7 +2948,7 @@ impl AISettingsPageView {
                             .git_operations_autogen_enabled_internal
                             .is_supported_on_current_platform())
                 {
-                    widgets.push(Box::new(ActiveAIWidget::default()));
+                    widgets.push(Box::new(ActiveAIWidget::new(ctx)));
                 }
                 widgets.push(Box::new(AIInputWidget::default()));
                 let voice_supported = cfg!(feature = "voice_input")
@@ -2957,23 +2973,29 @@ impl AISettingsPageView {
             }
             Some(AISubpage::Profiles) => {
                 if !FeatureFlag::UsageBasedPricing.is_enabled() {
-                    widgets.push(Box::new(UsageWidget::default()));
+                    widgets.push(Box::new(UsageWidget::new(ctx)));
                 }
                 widgets.push(Box::new(AgentsWidget::default()));
             }
             Some(AISubpage::Knowledge) => {
                 if FeatureFlag::AIRules.is_enabled() {
-                    widgets.push(Box::new(AIFactWidget::default()));
+                    widgets.extend(Self::knowledge_widgets());
                 }
             }
             Some(AISubpage::ThirdPartyCLIAgents) => {
-                widgets.push(Box::new(CLIAgentWidget::default()));
+                widgets.extend(cli_agent_widgets());
             }
         }
 
-        // Subpage widgets render their own subheader-sized titles internally,
-        // so we don't pass a page-level title to PageType.
-        let title: Option<&str> = None;
+        // Multi-section subpages (Warp Agent, Profiles) render their own subheader-sized
+        // section titles inside each widget, so they get no page-level title here.
+        // Single-topic subpages follow the Account-page convention and render their title as
+        // page chrome, so filtering their setting widgets never removes the title.
+        let title = match subpage {
+            Some(AISubpage::Knowledge) => Some("Knowledge"),
+            Some(AISubpage::ThirdPartyCLIAgents) => Some("Third party CLI agents"),
+            None | Some(AISubpage::WarpAgent) | Some(AISubpage::Profiles) => None,
+        };
         PageType::new_uncategorized(widgets, title)
     }
 
@@ -3736,6 +3758,7 @@ pub enum AISettingsPageAction {
     ToggleCloudAgentComputerUse,
     ToggleFileBasedMcp,
     ToggleIncludeAgentCommandsInHistory,
+    ToggleAutoApproveBypassesCommandDenylist,
     ToggleAgentAttribution,
 
     // Custom model routers
@@ -4544,6 +4567,16 @@ impl TypedActionView for AISettingsPageView {
                 });
                 ctx.notify();
             }
+            AISettingsPageAction::ToggleAutoApproveBypassesCommandDenylist => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(
+                        settings
+                            .auto_approve_bypasses_command_denylist
+                            .toggle_and_save_value(ctx)
+                    );
+                });
+                ctx.notify();
+            }
             #[cfg(feature = "local_fs")]
             AISettingsPageAction::SetConversationLayout(layout) => {
                 crate::util::file::external_editor::EditorSettings::handle(ctx).update(
@@ -5005,12 +5038,18 @@ impl SettingsWidget for GlobalAIWidget {
     }
 }
 
-#[derive(Default)]
 struct UsageWidget {
+    view_handle: WeakViewHandle<AISettingsPageView>,
     requests_highlight_index: HighlightedHyperlink,
 }
 
 impl UsageWidget {
+    fn new(ctx: &ViewContext<AISettingsPageView>) -> Self {
+        Self {
+            view_handle: ctx.handle(),
+            requests_highlight_index: Default::default(),
+        }
+    }
     fn render_request_usage_count(
         &self,
         used: usize,
@@ -5171,7 +5210,7 @@ impl SettingsWidget for UsageWidget {
         let next_refresh_time = ai_request_usage_model.next_refresh_time();
         let formatted_next_refresh_time = next_refresh_time.format("%b %d").to_string();
         let workspace_is_delinquent_due_to_payment_issue = UserWorkspaces::as_ref(app)
-            .current_team()
+            .team_for_view_handle(&self.view_handle, app)
             .map(|team| team.billing_metadata.is_delinquent_due_to_payment_issue())
             .unwrap_or_default();
 
@@ -5224,7 +5263,7 @@ impl SettingsWidget for UsageWidget {
 
         let auth_state = AuthStateProvider::as_ref(app).get();
         let upgrade_cta_text_fragments = if let Some(team) =
-            UserWorkspaces::as_ref(app).current_team()
+            UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app)
         {
             let current_user_email = auth_state.user_email().unwrap_or_default();
             let has_admin_permissions = team.has_admin_permissions(&current_user_email);
@@ -5293,8 +5332,8 @@ impl SettingsWidget for UsageWidget {
     }
 }
 
-#[derive(Default)]
 struct ActiveAIWidget {
+    view_handle: WeakViewHandle<AISettingsPageView>,
     active_ai_toggle: SwitchStateHandle,
     intelligent_autosuggestions_toggle: SwitchStateHandle,
     prompt_suggestions_toggle: SwitchStateHandle,
@@ -5305,6 +5344,18 @@ struct ActiveAIWidget {
 }
 
 impl ActiveAIWidget {
+    fn new(ctx: &ViewContext<AISettingsPageView>) -> Self {
+        Self {
+            view_handle: ctx.handle(),
+            active_ai_toggle: Default::default(),
+            intelligent_autosuggestions_toggle: Default::default(),
+            prompt_suggestions_toggle: Default::default(),
+            code_suggestions_toggle: Default::default(),
+            natural_language_autosuggestions_toggle: Default::default(),
+            shared_block_title_generation_toggle: Default::default(),
+            git_operations_autogen_toggle: Default::default(),
+        }
+    }
     fn is_next_command_toggleable(&self, app: &AppContext) -> bool {
         UserWorkspaces::as_ref(app).is_next_command_enabled()
             && AISettings::as_ref(app)
@@ -5341,7 +5392,7 @@ impl ActiveAIWidget {
                 .shared_block_title_generation_enabled_internal
                 .is_supported_on_current_platform()
             && (!UserWorkspaces::as_ref(app)
-                .current_team()
+                .team_for_view_handle(&self.view_handle, app)
                 .is_some_and(|team| {
                     team.billing_metadata.customer_type == CustomerType::Enterprise
                 })
@@ -6337,7 +6388,7 @@ impl AgentsWidget {
             ),
             FormattedTextFragment::hyperlink(
                 "Learn more",
-                "https://docs.warp.dev/agent-platform/capabilities/codebase-context",
+                "https://docs.warp.dev/agents/capabilities/codebase-context",
             ),
         ];
         let description = Container::new(
@@ -6415,7 +6466,7 @@ impl AgentsWidget {
                 FormattedTextFragment::plain_text(" or "),
                 FormattedTextFragment::hyperlink(
                     "learn more about MCPs.",
-                    "https://docs.warp.dev/agent-platform/capabilities/mcp",
+                    "https://docs.warp.dev/agents/capabilities/mcp",
                 ),
             ];
 
@@ -6594,13 +6645,14 @@ struct AIInputWidget {
     show_input_hint_toggle: SwitchStateHandle,
     show_agent_tips_toggle: SwitchStateHandle,
     include_agent_commands_in_history_toggle: SwitchStateHandle,
+    auto_approve_bypasses_command_denylist_toggle: SwitchStateHandle,
 }
 
 impl SettingsWidget for AIInputWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "oz agent ai input natural language detection autodetection prompt terminal command commands history shell executed execution queue interrupt submission submit auto-queue response while responding default long-running long running lrc"
+        "oz agent ai input natural language detection autodetection prompt terminal command commands history shell executed execution queue interrupt submission submit auto-queue response while responding default long-running long running lrc auto-approve fast forward denylist permissions"
     }
 
     fn render(
@@ -6669,6 +6721,28 @@ impl SettingsWidget for AIInputWidget {
             &view.local_only_icon_tooltip_states,
             app,
         ));
+
+        widget_children.push(
+            Flex::column()
+                .with_child(render_ai_setting_toggle::<
+                    AutoApproveBypassesCommandDenylist,
+                >(
+                    "Allow auto-approve to bypass command denylist",
+                    AISettingsPageAction::ToggleAutoApproveBypassesCommandDenylist,
+                    *ai_settings.auto_approve_bypasses_command_denylist,
+                    is_any_ai_enabled,
+                    self.auto_approve_bypasses_command_denylist_toggle
+                        .clone(),
+                    &view.local_only_icon_tooltip_states,
+                    app,
+                ))
+                .with_child(render_ai_setting_description(
+                    "When enabled, fast forward and auto-approve run denylisted commands without asking for confirmation.",
+                    is_any_ai_enabled,
+                    app,
+                ))
+                .finish(),
+        );
 
         if FeatureFlag::QueueSlashCommand.is_enabled() {
             widget_children.push(render_dropdown_item(
@@ -6929,7 +7003,7 @@ impl SettingsWidget for MCPServersWidget {
             ),
             FormattedTextFragment::hyperlink(
                 "Learn more",
-                "https://docs.warp.dev/agent-platform/capabilities/mcp",
+                "https://docs.warp.dev/agents/capabilities/mcp",
             ),
         ];
 
@@ -6975,7 +7049,7 @@ impl SettingsWidget for MCPServersWidget {
                                 ),
                                 FormattedTextFragment::hyperlink(
                                     "See supported providers.",
-                                    "https://docs.warp.dev/agent-platform/capabilities/mcp#file-based-mcp-servers",
+                                    "https://docs.warp.dev/agents/capabilities/mcp#file-based-mcp-servers",
                                 ),
                             ]
                         });
@@ -7028,22 +7102,29 @@ impl SettingsWidget for MCPServersWidget {
 }
 
 #[derive(Default)]
-struct AIFactWidget {
+struct RulesWidget {
     rules_toggle: SwitchStateHandle,
     rules_link_index: HighlightedHyperlink,
-    manage_rules_button: MouseStateHandle,
-    rule_suggestions_toggle: SwitchStateHandle,
-    warp_drive_context_toggle: SwitchStateHandle,
 }
 
-impl AIFactWidget {
-    fn render_rules_toggle(
+impl SettingsWidget for RulesWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "fact memory memories rules conventions"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        FeatureFlag::AIRules.is_enabled()
+    }
+
+    fn render(
         &self,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
+        view: &Self::View,
         appearance: &Appearance,
-        app: &warpui::AppContext,
+        app: &AppContext,
     ) -> Box<dyn Element> {
+        let ai_settings = AISettings::as_ref(app);
         let toggle = render_ai_setting_toggle::<MemoryEnabled>(
             "Rules",
             AISettingsPageAction::ToggleRules,
@@ -7060,7 +7141,7 @@ impl AIFactWidget {
             ),
             FormattedTextFragment::hyperlink(
                 "Learn more",
-                "https://docs.warp.dev/agent-platform/capabilities/rules",
+                "https://docs.warp.dev/agents/capabilities/rules",
             ),
         ];
         let description = Container::new(
@@ -7088,13 +7169,31 @@ impl AIFactWidget {
             .with_child(description)
             .finish()
     }
+}
 
-    fn render_rule_suggestions_toggle(
+#[derive(Default)]
+struct SuggestedRulesWidget {
+    rule_suggestions_toggle: SwitchStateHandle,
+}
+
+impl SettingsWidget for SuggestedRulesWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "suggested rules suggest save"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        FeatureFlag::AIRules.is_enabled() && FeatureFlag::SuggestedRules.is_enabled()
+    }
+
+    fn render(
         &self,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
-        app: &warpui::AppContext,
+        view: &Self::View,
+        _appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
+        let ai_settings = AISettings::as_ref(app);
         let toggle = render_ai_setting_toggle::<RuleSuggestionsEnabled>(
             "Suggested Rules",
             AISettingsPageAction::ToggleRuleSuggestions,
@@ -7116,13 +7215,63 @@ impl AIFactWidget {
             .with_child(description)
             .finish()
     }
+}
 
-    fn render_warp_drive_context_toggle(
+#[derive(Default)]
+struct ManageRulesWidget {
+    manage_rules_button: MouseStateHandle,
+}
+
+impl SettingsWidget for ManageRulesWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "manage rules rule collection"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        FeatureFlag::AIRules.is_enabled()
+    }
+
+    fn render(
         &self,
-        view: &AISettingsPageView,
-        ai_settings: &AISettings,
-        app: &warpui::AppContext,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
+        render_full_pane_width_ai_button(
+            "Manage rules",
+            AISettings::as_ref(app).is_any_ai_enabled(app),
+            self.manage_rules_button.clone(),
+            AISettingsPageAction::OpenAIFactCollection,
+            appearance,
+        )
+    }
+}
+
+#[derive(Default)]
+struct WarpDriveContextWidget {
+    warp_drive_context_toggle: SwitchStateHandle,
+}
+
+impl SettingsWidget for WarpDriveContextWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "warp drive agent context contents personal team developer workflows environments notebooks environment variables"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        FeatureFlag::AIRules.is_enabled()
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        _appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ai_settings = AISettings::as_ref(app);
         let toggle = render_ai_setting_toggle::<WarpDriveContextEnabled>(
             "Warp Drive as agent context",
             AISettingsPageAction::ToggleWarpDriveContext,
@@ -7142,57 +7291,6 @@ impl AIFactWidget {
         Flex::column()
             .with_child(toggle)
             .with_child(description)
-            .finish()
-    }
-}
-
-impl SettingsWidget for AIFactWidget {
-    type View = AISettingsPageView;
-
-    fn search_terms(&self) -> &str {
-        "agent oz ai a.i. knowledge fact memory memories rules warp drive context workflows notebooks environment variables"
-    }
-
-    fn should_render(&self, _app: &AppContext) -> bool {
-        FeatureFlag::AIRules.is_enabled()
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let ai_settings = AISettings::as_ref(app);
-        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
-
-        let header = build_sub_header(
-            appearance,
-            "Knowledge",
-            Some(styles::header_font_color(is_any_ai_enabled, app)),
-        )
-        .with_margin_bottom(HEADER_PADDING)
-        .finish();
-
-        let button = render_full_pane_width_ai_button(
-            "Manage rules",
-            is_any_ai_enabled,
-            self.manage_rules_button.clone(),
-            AISettingsPageAction::OpenAIFactCollection,
-            appearance,
-        );
-
-        let mut column = Flex::column()
-            .with_child(header)
-            .with_child(self.render_rules_toggle(view, ai_settings, appearance, app));
-
-        if FeatureFlag::SuggestedRules.is_enabled() {
-            column.add_child(self.render_rule_suggestions_toggle(view, ai_settings, app));
-        }
-
-        column
-            .with_child(button)
-            .with_child(self.render_warp_drive_context_toggle(view, ai_settings, app))
             .finish()
     }
 }
@@ -7556,22 +7654,28 @@ impl SettingsWidget for OtherAIWidget {
 pub(crate) fn cli_agent_settings_widget_id() -> &'static str {
     CLIAgentWidget::static_widget_id()
 }
+fn cli_agent_widgets() -> Vec<Box<dyn SettingsWidget<View = AISettingsPageView>>> {
+    vec![
+        Box::new(CLIAgentWidget::default()),
+        Box::new(CLIAgentAutoToggleRichInputWidget::default()),
+        Box::new(CLIAgentAutoOpenRichInputWidget::default()),
+        Box::new(CLIAgentAutoDismissRichInputWidget::default()),
+        Box::new(CLIAgentSubmitRichInputWidget::default()),
+        Box::new(CLIAgentCommandsWidget),
+        Box::new(CLIAgentToolbarLayoutWidget),
+    ]
+}
 
 #[derive(Default)]
 struct CLIAgentWidget {
     cli_agent_footer_toggle: SwitchStateHandle,
-    auto_toggle_rich_input_toggle: SwitchStateHandle,
-    auto_toggle_rich_input_info_tooltip: MouseStateHandle,
-    auto_open_rich_input_on_cli_agent_start_toggle: SwitchStateHandle,
-    auto_dismiss_rich_input_toggle: SwitchStateHandle,
-    submit_on_ctrl_enter_toggle: SwitchStateHandle,
 }
 
 impl SettingsWidget for CLIAgentWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "third party cli coding agent claude codex gemini toolbar footer layout chip chips rearrange re-arrange bar command regex auto show rich input dismiss ctrl enter submit newline"
+        "third party cli coding agent claude codex gemini toolbar footer quick actions show"
     }
 
     fn render(
@@ -7616,18 +7720,7 @@ impl SettingsWidget for CLIAgentWidget {
             HighlightedHyperlink::default(),
         );
 
-        let is_footer_enabled = *ai_settings.should_render_cli_agent_footer;
-
-        let mut column = Flex::column()
-            .with_child(
-                build_sub_header(
-                    appearance,
-                    "Third party CLI agents",
-                    Some(styles::header_font_color(true, app)),
-                )
-                .with_padding_bottom(HEADER_PADDING)
-                .finish(),
-            )
+        Flex::column()
             .with_child(cli_agent_footer_toggle)
             .with_child(
                 Container::new(description.finish())
@@ -7635,211 +7728,361 @@ impl SettingsWidget for CLIAgentWidget {
                     .with_margin_bottom(styles::DESCRIPTION_MARGIN_BOTTOM)
                     .with_margin_right(styles::TOGGLE_WIDTH_MARGIN)
                     .finish(),
-            );
+            )
+            .finish()
+    }
+}
 
-        if is_footer_enabled {
-            use super::settings_page::AdditionalInfo;
-            use crate::settings::{
-                AutoDismissRichInputAfterSubmit, AutoOpenRichInputOnCLIAgentStart,
-                AutoToggleRichInput, SubmitRichInputOnCtrlEnter,
-            };
+fn should_render_cli_agent_detail(app: &AppContext) -> bool {
+    *AISettings::as_ref(app).should_render_cli_agent_footer
+}
 
-            if FeatureFlag::CLIAgentRichInput.is_enabled() {
-                // Setting 1: Auto show/hide rich input based on agent status
-                let auto_show_toggle_label = render_body_item_label::<AISettingsPageAction>(
-                    "Auto show/hide Rich Input based on agent status".into(),
-                    Some(styles::header_font_color(true, app)),
-                    Some(AdditionalInfo {
-                        mouse_state: self.auto_toggle_rich_input_info_tooltip.clone(),
-                        on_click_action: None,
-                        secondary_text: None,
-                        tooltip_override_text: Some(
-                            "Requires the Warp plugin for your coding agent".to_owned(),
-                        ),
-                    }),
-                    LocalOnlyIconState::for_setting(
-                        AutoToggleRichInput::storage_key(),
-                        AutoToggleRichInput::sync_to_cloud(),
-                        &mut view.local_only_icon_tooltip_states.borrow_mut(),
-                        app,
-                    ),
-                    ToggleState::Enabled,
-                    appearance,
-                );
-                column.add_child(build_toggle_element(
-                    auto_show_toggle_label,
-                    render_ai_feature_switch(
-                        self.auto_toggle_rich_input_toggle.clone(),
-                        *ai_settings.auto_toggle_rich_input,
-                        true,
-                        AISettingsPageAction::ToggleAutoToggleRichInput,
-                        app,
-                    ),
-                    appearance,
-                    None,
-                ));
+fn should_render_cli_agent_rich_input(app: &AppContext) -> bool {
+    should_render_cli_agent_detail(app) && FeatureFlag::CLIAgentRichInput.is_enabled()
+}
 
-                column.add_child(
-                    render_ai_setting_toggle::<AutoOpenRichInputOnCLIAgentStart>(
-                        "Auto open Rich Input when a coding agent session starts",
-                        AISettingsPageAction::ToggleAutoOpenRichInputOnCLIAgentStart,
-                        *ai_settings.auto_open_rich_input_on_cli_agent_start,
-                        true,
-                        self.auto_open_rich_input_on_cli_agent_start_toggle.clone(),
-                        &view.local_only_icon_tooltip_states,
-                        app,
-                    ),
-                );
+#[derive(Default)]
+struct CLIAgentAutoToggleRichInputWidget {
+    toggle: SwitchStateHandle,
+    info_tooltip: MouseStateHandle,
+}
 
-                // Setting 2: Auto dismiss rich input after prompt submission
-                column.add_child(render_ai_setting_toggle::<AutoDismissRichInputAfterSubmit>(
-                    "Auto dismiss Rich Input after prompt submission",
-                    AISettingsPageAction::ToggleAutoDismissRichInputAfterSubmit,
-                    *ai_settings.auto_dismiss_rich_input_after_submit,
-                    true,
-                    self.auto_dismiss_rich_input_toggle.clone(),
-                    &view.local_only_icon_tooltip_states,
-                    app,
-                ));
+impl SettingsWidget for CLIAgentAutoToggleRichInputWidget {
+    type View = AISettingsPageView;
 
-                // Setting 3: Submit Rich Input with Ctrl+Enter
-                column.add_child(render_ai_setting_toggle::<SubmitRichInputOnCtrlEnter>(
-                    "Submit Rich Input with Ctrl+Enter",
-                    AISettingsPageAction::ToggleSubmitRichInputOnCtrlEnter,
-                    *ai_settings.submit_on_ctrl_enter,
-                    true,
-                    self.submit_on_ctrl_enter_toggle.clone(),
-                    &view.local_only_icon_tooltip_states,
-                    app,
-                ));
-            }
+    fn search_terms(&self) -> &str {
+        "third party cli coding agent rich input auto show hide status plugin"
+    }
 
-            let command_list = {
-                let mut list_column = Flex::column();
+    fn should_render(&self, app: &AppContext) -> bool {
+        should_render_cli_agent_rich_input(app)
+    }
 
-                list_column.add_child(
-                    appearance
-                        .ui_builder()
-                        .span("Commands that enable the toolbar".to_string())
-                        .with_style(UiComponentStyles {
-                            font_size: Some(CONTENT_FONT_SIZE),
-                            ..Default::default()
-                        })
-                        .build()
-                        .finish(),
-                );
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        use super::settings_page::AdditionalInfo;
+        use crate::settings::AutoToggleRichInput;
 
-                list_column
-                    .add_child(ChildView::new(&view.cli_agent_footer_command_editor).finish());
+        if !self.should_render(app) {
+            return Empty::new().finish();
+        }
 
-                let background = appearance.theme().surface_1();
-                let font_color = appearance.theme().foreground();
-                let items: Vec<_> = ai_settings
-                    .cli_agent_footer_enabled_commands
-                    .value()
-                    .keys()
-                    .cloned()
-                    .collect();
-                let len = items.len();
-                for (rev_i, pattern) in items.iter().rev().enumerate() {
-                    let original_i = len - 1 - rev_i;
-                    let remove_action =
-                        AISettingsPageAction::RemoveCLIAgentToolbarEnabledCommand(pattern.clone());
-                    let mouse_state = view
-                        .cli_agent_footer_command_mouse_state_handles
-                        .get(original_i)
-                        .cloned()
-                        .unwrap_or_default();
+        let label = render_body_item_label::<AISettingsPageAction>(
+            "Auto show/hide Rich Input based on agent status".into(),
+            Some(styles::header_font_color(true, app)),
+            Some(AdditionalInfo {
+                mouse_state: self.info_tooltip.clone(),
+                on_click_action: None,
+                secondary_text: None,
+                tooltip_override_text: Some(
+                    "Requires the Warp plugin for your coding agent".to_owned(),
+                ),
+            }),
+            LocalOnlyIconState::for_setting(
+                AutoToggleRichInput::storage_key(),
+                AutoToggleRichInput::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+        );
 
-                    let remove_button = appearance
-                        .ui_builder()
-                        .close_button(16., mouse_state)
-                        .build()
-                        .on_click(move |ctx, _, _| {
-                            ctx.dispatch_typed_action(remove_action.clone());
-                        })
-                        .finish();
+        build_toggle_element(
+            label,
+            render_ai_feature_switch(
+                self.toggle.clone(),
+                *AISettings::as_ref(app).auto_toggle_rich_input,
+                true,
+                AISettingsPageAction::ToggleAutoToggleRichInput,
+                app,
+            ),
+            appearance,
+            None,
+        )
+    }
+}
 
-                    let label = appearance
-                        .ui_builder()
-                        .wrappable_text(pattern.clone(), true)
-                        .with_style(UiComponentStyles {
-                            font_color: Some(font_color.into_solid()),
-                            font_family_id: Some(appearance.monospace_font_family()),
-                            font_size: Some(appearance.ui_font_size()),
-                            ..Default::default()
-                        })
-                        .build()
-                        .finish();
+#[derive(Default)]
+struct CLIAgentAutoOpenRichInputWidget {
+    toggle: SwitchStateHandle,
+}
 
-                    let mut right_side =
-                        Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-                    if let Some(dropdown_handle) = view
-                        .cli_agent_footer_command_agent_dropdowns
-                        .get(original_i)
-                    {
-                        right_side.add_child(
-                            Container::new(ChildView::new(dropdown_handle).finish())
-                                .with_margin_right(8.)
-                                .finish(),
-                        );
-                    }
-                    right_side.add_child(remove_button);
+impl SettingsWidget for CLIAgentAutoOpenRichInputWidget {
+    type View = AISettingsPageView;
 
-                    let row = Container::new(
-                        Flex::row()
-                            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                            .with_main_axis_size(MainAxisSize::Max)
-                            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                            .with_children([
-                                Shrinkable::new(1., label).finish(),
-                                right_side.finish(),
-                            ])
-                            .finish(),
-                    )
-                    .with_background(background)
-                    .with_horizontal_padding(8.)
-                    .with_vertical_padding(4.)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-                    .with_margin_bottom(4.)
-                    .finish();
+    fn search_terms(&self) -> &str {
+        "third party cli coding agent rich input auto open session start"
+    }
 
-                    list_column.add_child(row);
-                }
+    fn should_render(&self, app: &AppContext) -> bool {
+        should_render_cli_agent_rich_input(app)
+    }
 
-                list_column.finish()
-            };
-            let command_list_description = appearance
+    fn render(
+        &self,
+        view: &Self::View,
+        _appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        use crate::settings::AutoOpenRichInputOnCLIAgentStart;
+
+        if !self.should_render(app) {
+            return Empty::new().finish();
+        }
+
+        render_ai_setting_toggle::<AutoOpenRichInputOnCLIAgentStart>(
+            "Auto open Rich Input when a coding agent session starts",
+            AISettingsPageAction::ToggleAutoOpenRichInputOnCLIAgentStart,
+            *AISettings::as_ref(app).auto_open_rich_input_on_cli_agent_start,
+            true,
+            self.toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        )
+    }
+}
+
+#[derive(Default)]
+struct CLIAgentAutoDismissRichInputWidget {
+    toggle: SwitchStateHandle,
+}
+
+impl SettingsWidget for CLIAgentAutoDismissRichInputWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "third party cli coding agent rich input auto dismiss prompt submission"
+    }
+
+    fn should_render(&self, app: &AppContext) -> bool {
+        should_render_cli_agent_rich_input(app)
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        _appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        use crate::settings::AutoDismissRichInputAfterSubmit;
+
+        if !self.should_render(app) {
+            return Empty::new().finish();
+        }
+
+        render_ai_setting_toggle::<AutoDismissRichInputAfterSubmit>(
+            "Auto dismiss Rich Input after prompt submission",
+            AISettingsPageAction::ToggleAutoDismissRichInputAfterSubmit,
+            *AISettings::as_ref(app).auto_dismiss_rich_input_after_submit,
+            true,
+            self.toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        )
+    }
+}
+
+#[derive(Default)]
+struct CLIAgentSubmitRichInputWidget {
+    toggle: SwitchStateHandle,
+}
+
+impl SettingsWidget for CLIAgentSubmitRichInputWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "third party cli coding agent rich input submit ctrl enter newline"
+    }
+
+    fn should_render(&self, app: &AppContext) -> bool {
+        should_render_cli_agent_rich_input(app)
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        _appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        use crate::settings::SubmitRichInputOnCtrlEnter;
+
+        if !self.should_render(app) {
+            return Empty::new().finish();
+        }
+
+        render_ai_setting_toggle::<SubmitRichInputOnCtrlEnter>(
+            "Submit Rich Input with Ctrl+Enter",
+            AISettingsPageAction::ToggleSubmitRichInputOnCtrlEnter,
+            *AISettings::as_ref(app).submit_on_ctrl_enter,
+            true,
+            self.toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        )
+    }
+}
+
+struct CLIAgentCommandsWidget;
+
+impl SettingsWidget for CLIAgentCommandsWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "third party cli coding agent claude codex gemini toolbar commands regex patterns"
+    }
+
+    fn should_render(&self, app: &AppContext) -> bool {
+        should_render_cli_agent_detail(app)
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        if !self.should_render(app) {
+            return Empty::new().finish();
+        }
+
+        let mut list_column = Flex::column();
+        list_column.add_child(
+            appearance
                 .ui_builder()
-                .paragraph(
-                    "Add regex patterns to show the coding agent toolbar for matching commands.",
-                )
+                .span("Commands that enable the toolbar".to_string())
                 .with_style(UiComponentStyles {
+                    font_size: Some(CONTENT_FONT_SIZE),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
+        );
+        list_column.add_child(ChildView::new(&view.cli_agent_footer_command_editor).finish());
+
+        let background = appearance.theme().surface_1();
+        let font_color = appearance.theme().foreground();
+        let items: Vec<_> = AISettings::as_ref(app)
+            .cli_agent_footer_enabled_commands
+            .value()
+            .keys()
+            .cloned()
+            .collect();
+        let len = items.len();
+        for (rev_i, pattern) in items.iter().rev().enumerate() {
+            let original_i = len - 1 - rev_i;
+            let remove_action =
+                AISettingsPageAction::RemoveCLIAgentToolbarEnabledCommand(pattern.clone());
+            let mouse_state = view
+                .cli_agent_footer_command_mouse_state_handles
+                .get(original_i)
+                .cloned()
+                .unwrap_or_default();
+
+            let remove_button = appearance
+                .ui_builder()
+                .close_button(16., mouse_state)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(remove_action.clone());
+                })
+                .finish();
+
+            let label = appearance
+                .ui_builder()
+                .wrappable_text(pattern.clone(), true)
+                .with_style(UiComponentStyles {
+                    font_color: Some(font_color.into_solid()),
+                    font_family_id: Some(appearance.monospace_font_family()),
                     font_size: Some(appearance.ui_font_size()),
-                    font_color: Some(styles::description_font_color(true, app).into()),
-                    margin: Some(
-                        Coords::default()
-                            .top(4.)
-                            .bottom(styles::DESCRIPTION_MARGIN_BOTTOM)
-                            .right(styles::TOGGLE_WIDTH_MARGIN),
-                    ),
                     ..Default::default()
                 })
                 .build()
                 .finish();
 
-            column.add_child(command_list);
-            column.add_child(command_list_description);
-
-            if FeatureFlag::AgentToolbarEditor.is_enabled() {
-                column.add_child(render_toolbar_layout_editor(
-                    &view.cli_agent_toolbar_inline_editor,
-                    appearance,
-                ));
+            let mut right_side = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+            if let Some(dropdown_handle) = view
+                .cli_agent_footer_command_agent_dropdowns
+                .get(original_i)
+            {
+                right_side.add_child(
+                    Container::new(ChildView::new(dropdown_handle).finish())
+                        .with_margin_right(8.)
+                        .finish(),
+                );
             }
+            right_side.add_child(remove_button);
+
+            let row = Container::new(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                    .with_children([Shrinkable::new(1., label).finish(), right_side.finish()])
+                    .finish(),
+            )
+            .with_background(background)
+            .with_horizontal_padding(8.)
+            .with_vertical_padding(4.)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+            .with_margin_bottom(4.)
+            .finish();
+
+            list_column.add_child(row);
         }
 
-        column.finish()
+        let description = appearance
+            .ui_builder()
+            .paragraph("Add regex patterns to show the coding agent toolbar for matching commands.")
+            .with_style(UiComponentStyles {
+                font_size: Some(appearance.ui_font_size()),
+                font_color: Some(styles::description_font_color(true, app).into()),
+                margin: Some(
+                    Coords::default()
+                        .top(4.)
+                        .bottom(styles::DESCRIPTION_MARGIN_BOTTOM)
+                        .right(styles::TOGGLE_WIDTH_MARGIN),
+                ),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        Flex::column()
+            .with_child(list_column.finish())
+            .with_child(description)
+            .finish()
+    }
+}
+
+struct CLIAgentToolbarLayoutWidget;
+
+impl SettingsWidget for CLIAgentToolbarLayoutWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "third party cli coding agent toolbar layout chip chips rearrange re-arrange"
+    }
+
+    fn should_render(&self, app: &AppContext) -> bool {
+        should_render_cli_agent_detail(app) && FeatureFlag::AgentToolbarEditor.is_enabled()
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        if !self.should_render(app) {
+            return Empty::new().finish();
+        }
+
+        render_toolbar_layout_editor(&view.cli_agent_toolbar_inline_editor, appearance)
     }
 }
 
@@ -8242,10 +8485,15 @@ impl SettingsWidget for CloudHandoffWidget {
     }
 }
 
+struct ProviderApiKeyEditor {
+    provider: LLMProvider,
+    editor: ViewHandle<EditorView>,
+    team_key_info_tooltip: MouseStateHandle,
+}
+
 struct ApiKeysWidget {
-    openai_api_key_editor: ViewHandle<EditorView>,
-    anthropic_api_key_editor: ViewHandle<EditorView>,
-    google_api_key_editor: ViewHandle<EditorView>,
+    view_handle: WeakViewHandle<AISettingsPageView>,
+    provider_api_key_editors: Vec<ProviderApiKeyEditor>,
     /// Buttons for the SuperGrok (xAI) subscription row; which one renders
     /// depends on whether OAuth tokens are stored or a connect attempt is in
     /// progress.
@@ -8255,9 +8503,6 @@ struct ApiKeysWidget {
 
     can_use_warp_credits_for_fallback: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
-    openai_team_key_info_tooltip: MouseStateHandle,
-    anthropic_team_key_info_tooltip: MouseStateHandle,
-    google_team_key_info_tooltip: MouseStateHandle,
 
     custom_inference_info_tooltip: MouseStateHandle,
     custom_inference_terms_index: HighlightedHyperlink,
@@ -8272,24 +8517,20 @@ impl ApiKeysWidget {
         let is_byo_enabled = workspace_handle.as_ref(ctx).is_byo_api_key_enabled(ctx);
         let member_byo_keys_allowed = workspace_handle.as_ref(ctx).are_member_byo_keys_allowed();
 
-        let ApiKeys {
-            openai: openai_key,
-            anthropic: anthropic_key,
-            google: google_key,
-            ..
-        } = ApiKeyManager::as_ref(ctx).keys().clone();
-
-        // A helper macro to create and configure an API key editor.  This avoids a lot
-        // of code duplication and ensures consistency between the editors.
-        macro_rules! create_api_key_editor {
-            ($editor:ident, $key:ident, $set_func:ident, $placeholder:literal) => {
-                let $editor = ctx.add_typed_action_view(move |ctx| {
+        let provider_api_key_editors = LLMProvider::API_KEY_PROVIDERS
+            .into_iter()
+            .filter(|provider| provider.supports_pasted_api_key())
+            .map(|provider| {
+                let key = provider
+                    .api_key(ApiKeyManager::as_ref(ctx).keys())
+                    .map(str::to_owned);
+                let placeholder = provider
+                    .api_key_placeholder()
+                    .expect("API-key providers have input placeholders");
+                let editor = ctx.add_typed_action_view(move |ctx| {
                     let appearance = Appearance::handle(ctx).as_ref(ctx);
                     let options = SingleLineEditorOptions {
                         is_password: true,
-                        // Emit Tab/Shift-Tab as navigation events instead of
-                        // inserting whitespace, so focus can move between the
-                        // key fields (see the focus wiring below).
                         propagate_and_no_op_vertical_navigation_keys:
                             PropagateAndNoOpNavigationKeys::Always,
                         text: TextOptions {
@@ -8305,30 +8546,27 @@ impl ApiKeysWidget {
                         ..Default::default()
                     };
                     let mut editor = EditorView::single_line(options, ctx);
-                    editor.set_placeholder_text($placeholder, ctx);
-                    if let Some(key) = &$key {
+                    editor.set_placeholder_text(placeholder, ctx);
+                    if let Some(key) = &key {
                         editor.set_buffer_text(key, ctx);
                     }
                     editor
                 });
                 AISettingsPageView::update_editor_interaction_state(
-                    $editor.clone(),
+                    editor.clone(),
                     is_any_ai_enabled && is_byo_enabled && member_byo_keys_allowed,
                     ctx,
                 );
-                // The default-model prompt is driven off `KeysUpdated` (see the
-                // `ApiKeyManager` subscription), so this only needs to persist
-                // the key on commit.
-                ctx.subscribe_to_view(&$editor, |_, $editor, event, ctx| {
+                ctx.subscribe_to_view(&editor, move |_, editor, event, ctx| {
                     if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
-                        let buffer_text = $editor.as_ref(ctx).buffer_text(ctx);
+                        let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
                         let key = buffer_text.is_empty().not().then_some(buffer_text);
-                        ApiKeyManager::handle(ctx).update(ctx, |model, ctx| {
-                            model.$set_func(key, ctx);
+                        ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                            manager.set_provider_key(provider, key, ctx);
                         });
                     }
                 });
-                let editor_clone = $editor.clone();
+                let editor_clone = editor.clone();
                 ctx.subscribe_to_model(&workspace_handle, move |_, workspace, event, ctx| {
                     if let UserWorkspacesEvent::TeamsChanged = event {
                         let is_any_ai_enabled =
@@ -8338,19 +8576,14 @@ impl ApiKeysWidget {
                             workspace.as_ref(ctx).are_member_byo_keys_allowed();
                         let is_enabled = is_any_ai_enabled && is_byo_enabled;
                         let has_key = !editor_clone.as_ref(ctx).is_empty(ctx);
-                        // Clear stored API keys when BYO is disabled at the billing layer.
-                        // Team member policy is reversible: it only hides and ignores local
-                        // keys. Preserve them so they become usable again if the admin later
-                        // re-enables member BYO.
                         if !is_byo_enabled && has_key {
                             editor_clone.update(ctx, |editor, ctx| {
                                 editor.set_buffer_text("", ctx);
                             });
-                            ApiKeyManager::handle(ctx).update(ctx, |model, ctx| {
-                                model.$set_func(None, ctx);
+                            ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                                manager.set_provider_key(provider, None, ctx);
                             });
                         }
-
                         AISettingsPageView::update_editor_interaction_state(
                             editor_clone.clone(),
                             is_enabled && member_byo_keys_allowed,
@@ -8358,31 +8591,21 @@ impl ApiKeysWidget {
                         );
                         ctx.notify();
                     }
-                })
-            };
-        }
-
-        create_api_key_editor!(openai_api_key_editor, openai_key, set_openai_key, "sk-...");
-        create_api_key_editor!(
-            anthropic_api_key_editor,
-            anthropic_key,
-            set_anthropic_key,
-            "sk-ant-..."
-        );
-        create_api_key_editor!(
-            google_api_key_editor,
-            google_key,
-            set_google_key,
-            "AIzaSy..."
-        );
+                });
+                ProviderApiKeyEditor {
+                    provider,
+                    editor,
+                    team_key_info_tooltip: MouseStateHandle::default(),
+                }
+            })
+            .collect::<Vec<_>>();
 
         // Tab / Shift-Tab move focus between the provider key fields instead of
         // inserting whitespace.
-        let provider_key_editors = [
-            openai_api_key_editor.clone(),
-            anthropic_api_key_editor.clone(),
-            google_api_key_editor.clone(),
-        ];
+        let provider_key_editors = provider_api_key_editors
+            .iter()
+            .map(|provider| provider.editor.clone())
+            .collect::<Vec<_>>();
         for (index, editor) in provider_key_editors.iter().enumerate() {
             let next = provider_key_editors.get(index + 1).cloned();
             let previous = index
@@ -8405,11 +8628,7 @@ impl ApiKeysWidget {
 
         // Editor text colors are snapshotted at construction via
         // `text_colors_override`, so refresh them whenever the theme changes.
-        let api_key_editors = [
-            openai_api_key_editor.clone(),
-            anthropic_api_key_editor.clone(),
-            google_api_key_editor.clone(),
-        ];
+        let api_key_editors = provider_key_editors.clone();
         ctx.subscribe_to_model(&Appearance::handle(ctx), move |_, _, event, ctx| {
             if let AppearanceEvent::ThemeChanged = event {
                 let text_colors = editor_text_colors(Appearance::as_ref(ctx));
@@ -8480,9 +8699,8 @@ impl ApiKeysWidget {
         });
 
         Self {
-            openai_api_key_editor,
-            anthropic_api_key_editor,
-            google_api_key_editor,
+            view_handle: ctx.handle(),
+            provider_api_key_editors,
 
             grok_connect_button,
             grok_connecting_button,
@@ -8490,9 +8708,6 @@ impl ApiKeysWidget {
 
             can_use_warp_credits_for_fallback: Default::default(),
             upgrade_highlight_index: Default::default(),
-            openai_team_key_info_tooltip: Default::default(),
-            anthropic_team_key_info_tooltip: Default::default(),
-            google_team_key_info_tooltip: Default::default(),
 
             custom_inference_info_tooltip: Default::default(),
             custom_inference_terms_index: Default::default(),
@@ -8580,7 +8795,7 @@ impl ApiKeysWidget {
     fn render_api_key_input(
         &self,
         appearance: &Appearance,
-        label: &'static str,
+        label: String,
         provider: LLMProvider,
         team_key_info_tooltip: MouseStateHandle,
         editor: ViewHandle<EditorView>,
@@ -8638,33 +8853,17 @@ impl ApiKeysWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let mut column = Flex::column().with_spacing(16.);
-        column.add_child(self.render_api_key_input(
-            appearance,
-            "OpenAI API key",
-            LLMProvider::OpenAI,
-            self.openai_team_key_info_tooltip.clone(),
-            self.openai_api_key_editor.clone(),
-            is_enabled,
-            app,
-        ));
-        column.add_child(self.render_api_key_input(
-            appearance,
-            "Anthropic API key",
-            LLMProvider::Anthropic,
-            self.anthropic_team_key_info_tooltip.clone(),
-            self.anthropic_api_key_editor.clone(),
-            is_enabled,
-            app,
-        ));
-        column.add_child(self.render_api_key_input(
-            appearance,
-            "Google API key",
-            LLMProvider::Google,
-            self.google_team_key_info_tooltip.clone(),
-            self.google_api_key_editor.clone(),
-            is_enabled,
-            app,
-        ));
+        for provider_editor in &self.provider_api_key_editors {
+            column.add_child(self.render_api_key_input(
+                appearance,
+                format!("{} API key", provider_editor.provider.display_name()),
+                provider_editor.provider,
+                provider_editor.team_key_info_tooltip.clone(),
+                provider_editor.editor.clone(),
+                is_enabled,
+                app,
+            ));
+        }
         column.finish()
     }
 
@@ -9306,7 +9505,7 @@ impl SettingsWidget for ApiKeysWidget {
         if !is_byo_enabled && show_provider_keys {
             let auth_state = AuthStateProvider::as_ref(app).get();
             let upgrade_text_fragments = if let Some(team) =
-                UserWorkspaces::as_ref(app).current_team()
+                UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app)
             {
                 if team.billing_metadata.customer_type == CustomerType::Enterprise {
                     vec![

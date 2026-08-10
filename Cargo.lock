@@ -356,6 +356,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "serde_yaml 0.8.26",
+ "serial_test",
  "sha2 0.10.9",
  "shellexpand",
  "streaming-iterator",
@@ -2450,6 +2451,7 @@ dependencies = [
  "hex",
  "instant",
  "is_executable",
+ "itertools 0.14.0",
  "log",
  "nix 0.26.4",
  "serde",
@@ -2458,6 +2460,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "tracing",
+ "warp_core",
  "warp_errors",
 ]
 
@@ -15406,7 +15409,7 @@ dependencies = [
 [[package]]
 name = "warp-command-signatures"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=29cd61c3a9a96d8bde92e90f926e89d340e74cb6#29cd61c3a9a96d8bde92e90f926e89d340e74cb6"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=fe3526693fe4ea3dc208ee5ef892b3aad2679af6#fe3526693fe4ea3dc208ee5ef892b3aad2679af6"
 dependencies = [
  "cfg-if",
  "itertools 0.10.5",
@@ -15424,7 +15427,7 @@ dependencies = [
 [[package]]
 name = "warp-completion-metadata"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=29cd61c3a9a96d8bde92e90f926e89d340e74cb6#29cd61c3a9a96d8bde92e90f926e89d340e74cb6"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=fe3526693fe4ea3dc208ee5ef892b3aad2679af6#fe3526693fe4ea3dc208ee5ef892b3aad2679af6"
 dependencies = [
  "html-escape",
  "itertools 0.10.5",
@@ -16009,11 +16012,14 @@ dependencies = [
  "chrono",
  "clap",
  "command",
+ "criterion",
  "dirs 6.0.0",
+ "dunce",
  "fs4",
  "futures",
  "futures-lite 1.13.0",
  "http_client",
+ "inquire",
  "instant",
  "itertools 0.14.0",
  "log",
@@ -16036,6 +16042,7 @@ dependencies = [
  "unicode-width 0.1.14",
  "uuid",
  "vec1",
+ "vim",
  "warp",
  "warp_channel_config",
  "warp_completer",
