@@ -19,6 +19,33 @@ Inputs (all optional):
 - `team_uid` — filter factories to a single team.
 - `cursor` — pagination cursor returned by a previous call.
 
+## create_factory
+
+Create a new software factory for a team, seeded with its runner and the full
+roster of named agents (foreman, triage, spec, implement, review, verify).
+Omit `default_environment` to have one auto-created from the name and
+repositories, and omit `default_model` to capture the caller's current
+default model. Returns the same factory shape as `list_factories`, so the new
+`uid` is immediately usable as the `factory_uid` parameter of the other
+factory tools. Set the factory's avatar with the REST endpoint
+`POST /api/v1/factory/avatar`; avatars are not settable over MCP.
+
+Inputs:
+- `team_uid` (required) — UID of the team that will own the factory.
+- `name` (required) — display name for the factory.
+- `code_forge` (required) — source-control provider hosting the repositories:
+  `GITHUB` or `GITLAB`.
+- `repositories` (required) — repositories the factory works in; each entry is
+  `owner/repo` (a GitLab entry may carry a full namespace such as
+  `group/subgroup/repo`).
+- `alias` — optional non-unique display handle for the factory.
+- `description` — optional description of the factory.
+- `default_environment` — optional UID of an existing team environment to use
+  as the factory default; omit to auto-create one from the name and
+  repositories.
+- `default_model` — optional default model ID for the factory's agents; omit
+  to capture the caller's current default model.
+
 ## list_tasks
 
 List a factory's authoritative tasks for discovery. Each task includes the
@@ -59,7 +86,8 @@ exact local git `next_actions`. **The server never touches the caller's disk** �
 you run the returned commands yourself. When the task has no branch in its
 outputs yet, `next_actions` starts a fresh worktree from `origin/HEAD`; in a
 multi-repo factory it warns to point `workspace_dir` at the repo the task
-targets.
+targets. Once work is underway, use `message_foreman` rather than re-calling
+this tool to say something.
 
 Inputs:
 - `factory_task_uid` (required) — authoritative task UID from `list_tasks`.
@@ -117,6 +145,24 @@ New intake vs. hand-back:
   optionally `source_conversation_id` / `artifact_uids` to transfer artifacts to
   the existing task). `factory_uid` is ignored, and `initial_snapshot_token` is
   not supported.
+
+## message_foreman
+
+Send a message to a factory task's foreman — the agent orchestrating the
+task — by its authoritative `factory_task_uid`. This is the coordination
+channel while you work: a status update, a question, a blocker, or what you
+just pushed. The message is delivered to the task's latest foreman run and
+the result reports which run received it; read the reply with
+`get_conversation`. It does not hand the work back or change the task's
+stage — use `send_task` for that. For the one-shot heads-up when you first
+pick a task up, `get_task`'s `start_working = true` + `notify_foreman = true`
+is the better call, since it also tells the foreman which branch you are
+starting from.
+
+Inputs:
+- `factory_task_uid` (required) — authoritative task UID from `list_tasks`.
+- `message` (required) — what to tell the task's foreman: a status update, a
+  question, a blocker, or what you just pushed.
 
 ## complete_task
 

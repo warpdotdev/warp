@@ -36,13 +36,18 @@ tool schema when the two differ.
 
 - `list_factories` — list the factories visible to you (each with its agent
   roster). Start here: a factory's `uid` is the `factory_uid` every other tool needs.
+- `create_factory` — create a new factory for a team, seeded with its runner
+  and full agent roster (foreman, triage, spec, implement, review, verify).
 - `list_tasks` — list a factory's tasks for discovery (each carries a
   `factory_task_uid`, ticket metadata, stage, linked outputs, `run_url`, and a
   `trigger_url` back to its origin).
 - `get_task` — read one task's full status and history; with `start_working=true`
   it also returns the exact local git commands to work on it.
-- `send_task` — the **one write path**: hand the factory new work, or hand an
-  existing task back after working on it locally.
+- `send_task` — the **one write path for handing off work**: hand the factory
+  new work, or hand an existing task back after working on it locally.
+- `message_foreman` — send an ongoing coordination message (status, question,
+  blocker, what you just pushed) to a task's foreman; read replies with
+  `get_conversation`.
 - `complete_task` — mark a task complete (terminal `COMPLETE` stage).
 - `get_conversation` — read the raw foreman transcript for a task.
 
@@ -169,18 +174,24 @@ Use this to make local changes to a factory task and return it to the factory.
 1. Pull the task down exactly as in Workflow 3 (`get_task` with
    `start_working = true` and run the `next_actions`). Optionally set
    `notify_foreman = true` with a short `note` to give the task's foreman a
-   coordination heads-up that you are taking it locally (`notify_foreman`
-   requires `start_working = true`).
+   one-shot pickup heads-up that you are taking it locally — it also tells the
+   foreman which branch you are starting from (`notify_foreman` requires
+   `start_working = true`).
 2. Iterate locally: make your changes, commit them, and **push the branch.** You
    must push before handing the work back — the factory acts on the pushed
    branch, not your local state.
-3. Hand it back with `send_task`, this time passing the **`factory_task_uid`** of
+3. **Coordinate as you go with `message_foreman`.** Once you're underway, use it
+   as the ongoing channel to the task's foreman — a status update, a question, a
+   blocker, or what you just pushed — and read the reply with `get_conversation`.
+   It does not hand the work back or move the task's stage; only `send_task`
+   does that.
+4. Hand it back with `send_task`, this time passing the **`factory_task_uid`** of
    the existing task (not a `factory_uid`). A hand-back resumes the ticket's
    existing foreman conversation as a follow-up, so one unit of work keeps one
    conversation and one factory task record — do not start a new task for the
    same work. Include a `note` describing what changed and what you want next,
    plus `branch` and/or `pr_url`, and a `stage_hint` if relevant.
-4. **Transfer supporting artifacts (optional).** Because a hand-back targets an
+5. **Transfer supporting artifacts (optional).** Because a hand-back targets an
    existing task, you can bring along plan files or screenshots from your current
    conversation: pass `source_conversation_id` (and optionally a subset via
    `artifact_uids`) so they travel with the task. Only *eligible* artifacts are
@@ -199,6 +210,20 @@ send_task(
 ```
 
 The result's `run_url` opens the resumed run in Oz.
+
+## Creating a factory
+
+Use `create_factory` to set up a brand-new factory for a team — this is a
+setup operation, not one of the four collaboration workflows above. One call
+seeds the factory's runner and its full roster of named agents (foreman,
+triage, spec, implement, review, verify). Pass `team_uid`, `name`,
+`code_forge` (`GITHUB` or `GITLAB`), and at least one repository in
+`owner/repo` form. Omit `default_environment` to have one auto-created from
+the name and repositories, and omit `default_model` to capture your current
+default model. The result has the same shape as a `list_factories` entry, so
+the new `uid` is immediately usable as `factory_uid` in the other tools.
+Avatars are not settable over MCP — set one afterward with the REST endpoint
+`POST /api/v1/factory/avatar`.
 
 ## Completing a task
 
@@ -221,9 +246,10 @@ complete raw transcript when the window is not enough.
 
 - **Resolve the factory first.** Every task-level tool needs a `factory_uid` (or
   a `factory_task_uid` that came from `list_tasks`); start with `list_factories`.
-- **`send_task` is the only write path.** New work needs `factory_uid` + `title`;
-  a hand-back needs `factory_task_uid`. Never open a second task for the same
-  unit of work — hand it back to the same `factory_task_uid`.
+- **`send_task` is the only write path for handing off work.** New work needs
+  `factory_uid` + `title`; a hand-back needs `factory_task_uid`. Never open a
+  second task for the same unit of work — hand it back to the same
+  `factory_task_uid`.
 - **Always push before you send.** Neither new intake (aside from the WIP
   snapshot token) nor a hand-back can see unpushed work.
 - **Prefer named links over IDs** (`run_url`, `trigger_url`, `pr_url`) when
