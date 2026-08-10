@@ -28,6 +28,7 @@ use repo_metadata::CanonicalizedPath;
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
 
+use crate::workspace::inline_rename_state::InlineRenameState;
 use crate::ai::block_context::BlockContext;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
 pub(crate) mod docker_sandbox;
@@ -12112,7 +12113,13 @@ impl TerminalView {
                 // case, we want the block to be focused because otherwise,
                 // users get stuck as they'd otherwise need to click into the
                 // box to respond to whether or not they want to update oh my zsh.
-                self.focus_terminal(ctx);
+                //
+                // Skipped while an inline rename editor is waiting for keystrokes: taking
+                // focus would blur it, and blur commits the rename, so a half-typed name
+                // would be saved as the final one (#14241).
+                if !InlineRenameState::editor_has_focus(ctx) {
+                    self.focus_terminal(ctx);
+                }
             }
             ModelEvent::AfterBlockStarted {
                 command,

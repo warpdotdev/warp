@@ -224,6 +224,7 @@ pub(crate) fn initialize_app(app: &mut App) {
 
     #[cfg(feature = "local_tty")]
     terminal::available_shells::register(app);
+    crate::workspace::inline_rename_state::register(app);
     AltScreenReporting::register(app);
 
     #[cfg(enable_crash_recovery)]
@@ -5470,4 +5471,90 @@ mod simplified_wasm_tab_bar {
         });
         });
     }
+}
+
+/// Regression test for #14241.
+///
+/// Creating a tab group opens the inline name editor and also spawns a terminal. About
+/// a second later that terminal's bootstrap block becomes visible and takes focus, which
+/// blurs the editor while the user is still typing. Blur is treated as confirmation, so
+/// whatever fragment had been typed became the group's name — and was persisted.
+///
+/// A rename the user never finished must not be committed.
+#[test]
+fn test_tab_group_rename_blur_does_not_commit_unfinished_name() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(
+                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
+                ctx,
+            );
+            let group_id = workspace.tabs[0]
+                .group_id
+                .expect("active tab should be assigned to the new group");
+            assert_eq!(workspace.tab_groups[&group_id].name, None);
+
+            workspace.rename_tab_group(group_id, ctx);
+
+            // The user gets three characters in before the terminal is ready.
+            workspace.tab_group_rename_editor.update(ctx, |editor, ctx| {
+                editor.clear_buffer_and_reset_undo_stack(ctx);
+                editor.user_insert("Bui", ctx);
+            });
+
+            // The auto-created terminal takes focus; the editor blurs with no user intent
+            // to finish.
+            workspace.handle_tab_group_rename_editor_event(&EditorEvent::Blurred, ctx);
+
+            assert_eq!(
+                workspace.tab_groups[&group_id].name, None,
+                "a rename interrupted by the terminal stealing focus must not be committed"
+            );
+        });
+    });
+}
+
+/// Guards the other half of the #14241 fix: suppressing terminal focus while an inline
+/// rename is open is only safe if every exit from the rename clears that state again.
+/// If cancelling left it set, terminals would silently stop taking focus for the rest of
+/// the session — a worse bug than the one being fixed, and a much harder one to trace.
+#[test]
+fn test_tab_group_rename_exits_release_terminal_focus_suppression() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(
+                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
+                ctx,
+            );
+            let group_id = workspace.tabs[0].group_id.expect("tab should be grouped");
+
+            // Committing with Enter releases it.
+            workspace.rename_tab_group(group_id, ctx);
+            assert!(InlineRenameState::editor_has_focus(ctx));
+            workspace.handle_tab_group_rename_editor_event(&EditorEvent::Enter, ctx);
+            assert!(
+                !InlineRenameState::editor_has_focus(ctx),
+                "finishing a rename must let terminals take focus again"
+            );
+
+            // So does cancelling with Escape.
+            workspace.rename_tab_group(group_id, ctx);
+            assert!(InlineRenameState::editor_has_focus(ctx));
+            workspace.handle_tab_group_rename_editor_event(&EditorEvent::Escape, ctx);
+            assert!(
+                !InlineRenameState::editor_has_focus(ctx),
+                "cancelling a rename must let terminals take focus again"
+            );
+        });
+    });
 }

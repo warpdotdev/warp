@@ -8,6 +8,7 @@ mod close_session_confirmation_dialog;
 pub(crate) mod cross_window_tab_drag;
 pub mod delete_conversation_confirmation_dialog;
 mod global_actions;
+pub(crate) mod inline_rename_state;
 pub mod header_toolbar_editor;
 pub mod header_toolbar_item;
 pub mod hoa_onboarding;
