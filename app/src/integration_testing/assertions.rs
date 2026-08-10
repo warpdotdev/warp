@@ -50,13 +50,14 @@ pub fn join_a_workspace() -> TestStep {
                 let teams: Vec<Team> = vec![Team {
                     uid: "team_uid12345678912345".try_into().expect("ID is valid"),
                     name: "My Team".to_string(),
+                    color: None,
                     invite_code: Default::default(),
                     members: Default::default(),
                     pending_email_invites: Default::default(),
                     invite_link_domain_restrictions: Default::default(),
                     billing_metadata: Default::default(),
                     stripe_customer_id: None,
-                    organization_settings: Default::default(),
+                    settings: Default::default(),
                     is_eligible_for_discovery: false,
                     has_billing_history: false,
                 }];

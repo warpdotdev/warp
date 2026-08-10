@@ -13,12 +13,14 @@ use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
     AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIAgentTodoList,
-    AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, AgentOutputImage,
-    AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable, Appearance,
-    FailedOutputPresentation, LLMId, MessageId, OutputStatusUpdateCallback, ReceivedMessageDisplay,
-    RenderableAIError, RequestCommandOutputResult, ServerOutputId, Shared, SummarizationType,
-    TaskId, TerminalModel, TodoOperation, TodoStatus, UserQueryMode,
-    should_show_failed_output_usage_notice,
+    AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, ActiveSession,
+    AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable,
+    Appearance, AuthStateProvider, BlocklistAIActionModel, FailedOutputPresentation,
+    GetRelevantFilesController, LLMId, MessageId, ModelEventDispatcher, OutputStatusUpdateCallback,
+    ReceivedMessageDisplay, RenderableAIError, RequestCommandOutputResult, ServerOutputId,
+    Sessions, Shared, SummarizationType, TaskId, TerminalModel, TodoOperation, TodoStatus,
+    TuiOnboardingMarker, TuiOnboardingMarkers, UserQueryMode, queue_tui_permission_action,
+    register_tui_session_view_test_singletons, should_show_failed_output_usage_notice,
 };
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
@@ -37,6 +39,7 @@ use warpui_core::{App, AppContext, EntityId, EntityIdMap, TuiView, ViewContext, 
 use super::{
     CollapsibleSectionStates, TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent, TuiAIBlockSection,
     TuiCodeBlockKey, TuiRichTextSection, TuiToolCallView, render_failure_section,
+    render_first_credit_gate, should_consume_first_credit_gate, upgrade_url,
 };
 use crate::agent_block_sections::{
     completed_todos_label, render_fallback_tool_call_section, render_todo_list_section,
@@ -90,6 +93,177 @@ fn agent_block_renders_generic_failure_after_partial_output() {
             ))
             .into();
             assert_eq!(frame.buffer[(0, failure_row as u16)].fg, red);
+        });
+    });
+}
+
+#[test]
+fn restored_out_of_credits_exchange_does_not_consume_first_credit_gate() {
+    let presentation = FailedOutputPresentation::OutOfCredits {
+        message: "out of credits".to_owned(),
+        can_use_own_api_keys: false,
+    };
+    assert!(should_consume_first_credit_gate(false, Some(&presentation)));
+    assert!(!should_consume_first_credit_gate(true, Some(&presentation)));
+    assert!(!should_consume_first_credit_gate(false, None));
+}
+
+#[test]
+fn first_credit_gate_matches_design_and_opens_upgrade() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        let expected_upgrade_url = app.read(upgrade_url);
+        let opened_urls = Rc::new(RefCell::new(Vec::new()));
+        let opened_urls_for_callback = opened_urls.clone();
+        app.update(|ctx| {
+            ctx.set_before_open_url(move |url, _| {
+                opened_urls_for_callback.borrow_mut().push(url.to_owned());
+                url.to_owned()
+            });
+        });
+
+        app.read(|ctx| {
+            let hover_state = MouseStateHandle::default();
+            let mut presenter = TuiPresenter::new();
+            let frame = presenter.present_element(
+                render_first_credit_gate(&hover_state, ctx),
+                TuiRect::new(0, 0, 80, 4),
+                ctx,
+            );
+            assert_eq!(
+                frame
+                    .buffer
+                    .to_lines()
+                    .into_iter()
+                    .map(|line| line.trim_end().to_owned())
+                    .collect::<Vec<_>>(),
+                vec![
+                    "You need AI credits in order to use Warp’s agent.".to_owned(),
+                    "Start using AI (ctrl+o).".to_owned(),
+                    String::new(),
+                    expected_upgrade_url.clone(),
+                ]
+            );
+            let builder = TuiUiBuilder::from_app(ctx);
+            assert_eq!(
+                frame.buffer[(0, 0)].fg,
+                builder
+                    .attention_glyph_style()
+                    .fg
+                    .expect("attention foreground")
+            );
+            assert!(frame.buffer[(0, 1)].modifier.contains(Modifier::UNDERLINED));
+            assert_eq!(
+                frame.buffer[(15, 1)].fg,
+                builder.accent_text_style().fg.expect("accent foreground")
+            );
+            dispatch_click_on_text(
+                render_first_credit_gate(&hover_state, ctx),
+                "Start using AI",
+                80,
+                4,
+                ctx,
+            );
+        });
+
+        assert_eq!(&*opened_urls.borrow(), &[expected_upgrade_url]);
+    });
+}
+
+#[test]
+fn first_credit_gate_consumes_once_and_reacts_to_delayed_marker_readiness() {
+    App::test((), |mut app| async move {
+        register_tui_session_view_test_singletons(&mut app);
+        let markers = TuiOnboardingMarkers::handle(&app);
+        let first = test_agent_block_with_registered_singletons(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: failed_output(
+                    Vec::new(),
+                    RenderableAIError::QuotaLimit {
+                        user_display_message: Some("You’ve reached your credit limit.".to_owned()),
+                    },
+                ),
+            },
+        );
+        app.read(|ctx| {
+            assert!(!first.as_ref(ctx).first_credit_gate);
+        });
+
+        markers.update(&mut app, |markers, ctx| {
+            markers.set_ready_for_test(false, true, ctx);
+        });
+        app.read(|ctx| {
+            let lines = render_block_lines(first.as_ref(ctx), 100, ctx);
+            assert!(first.as_ref(ctx).first_credit_gate);
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line == "You need AI credits in order to use Warp’s agent.")
+            );
+            assert!(
+                lines
+                    .iter()
+                    .all(|line| !line.contains("won't count towards your usage"))
+            );
+        });
+        markers.update(&mut app, |markers, ctx| {
+            assert!(!markers.consume(TuiOnboardingMarker::FirstCreditGate, ctx));
+        });
+
+        let duplicate = test_agent_block_with_registered_singletons(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: failed_output(
+                    Vec::new(),
+                    RenderableAIError::QuotaLimit {
+                        user_display_message: Some("You’ve reached your credit limit.".to_owned()),
+                    },
+                ),
+            },
+        );
+        app.read(|ctx| {
+            assert!(!duplicate.as_ref(ctx).first_credit_gate);
+        });
+    });
+}
+
+#[test]
+fn agent_block_renders_cloud_startup_failure_without_apology_prefix() {
+    // CloudStartupFailed should render the raw error message directly (matching the
+    // GUI error card) without the generic "I'm sorry, I couldn't complete that request."
+    // apology prefix that the Other variant adds.
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: vec![query_input("start cloud agent")],
+                status: failed_output(
+                    Vec::new(),
+                    RenderableAIError::CloudStartupFailed(
+                        "Environment failed to start: disk quota exceeded".to_owned(),
+                    ),
+                ),
+            },
+        );
+
+        app.read(|ctx| {
+            let lines = render_block_lines(block.as_ref(ctx), 80, ctx);
+            // The message should appear without any apology prefix.
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Environment failed to start: disk quota exceeded")),
+                "expected the startup error message in rendered output, got: {lines:?}"
+            );
+            assert!(
+                lines.iter().all(|line| !line.contains("I'm sorry")),
+                "expected no apology prefix for CloudStartupFailed, got: {lines:?}"
+            );
         });
     });
 }
@@ -186,9 +360,11 @@ fn agent_block_renders_context_window_failure() {
 }
 
 #[test]
-fn out_of_credits_failure_uses_shared_copy_warning_style_and_tui_actions() {
+fn out_of_credits_failure_matches_tui_design_and_opens_upgrade() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        let expected_upgrade_url = app.read(upgrade_url);
         let opened_urls = Rc::new(RefCell::new(Vec::new()));
         let opened_urls_for_callback = opened_urls.clone();
         app.update(|ctx| {
@@ -204,17 +380,15 @@ fn out_of_credits_failure_uses_shared_copy_warning_style_and_tui_actions() {
                     .to_owned(),
                 can_use_own_api_keys: true,
             };
-            let compare_plans_hover_state = MouseStateHandle::default();
-            let byok_hover_state = MouseStateHandle::default();
+            let out_of_credits_hover_state = MouseStateHandle::default();
             let mut presenter = TuiPresenter::new();
             let frame = presenter.present_element(
                 render_failure_section(
                     &presentation,
-                    &compare_plans_hover_state,
-                    &byok_hover_state,
+                    &out_of_credits_hover_state,
                     ctx,
                 ),
-                TuiRect::new(0, 0, 100, 4),
+                TuiRect::new(0, 0, 100, 6),
                 ctx,
             );
             assert_eq!(
@@ -225,10 +399,13 @@ fn out_of_credits_failure_uses_shared_copy_warning_style_and_tui_actions() {
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
                 vec![
-                    "⚠ I'm sorry, I couldn't complete that request.",
-                    "  In order to use Warp's AI features, subscribe to a Warp plan, or bring your own inference.",
-                    "",
-                    "  Compare plans  or  Use your own API keys",
+                    "⚠ I’m sorry, I couldn’t complete that request.".to_owned(),
+                    "  In order to use Warp’s AI features, subscribe to a Warp plan or buy packs of credits."
+                        .to_owned(),
+                    String::new(),
+                    "  Get started with AI (ctrl+o)".to_owned(),
+                    String::new(),
+                    format!("  {expected_upgrade_url}"),
                 ]
             );
             let builder = TuiUiBuilder::from_app(ctx);
@@ -244,72 +421,54 @@ fn out_of_credits_failure_uses_shared_copy_warning_style_and_tui_actions() {
             assert_eq!(frame.buffer[(2, 1)].fg, primary_foreground);
             assert_eq!(frame.buffer[(2, 3)].fg, primary_foreground);
             assert_eq!(
-                frame.buffer[(17, 3)].fg,
-                builder.muted_text_style().fg.expect("muted foreground")
+                frame.buffer[(22, 3)].fg,
+                builder
+                    .accent_text_style()
+                    .fg
+                    .expect("accent foreground")
             );
-            assert_eq!(frame.buffer[(21, 3)].fg, primary_foreground);
+            assert_eq!(frame.buffer[(2, 5)].fg, primary_foreground);
             assert!(
                 frame.buffer[(2, 3)]
                     .modifier
                     .contains(Modifier::UNDERLINED)
             );
+            let narrow_frame = presenter.present_element(
+                render_failure_section(
+                    &presentation,
+                    &out_of_credits_hover_state,
+                    ctx,
+                ),
+                TuiRect::new(0, 0, 64, 7),
+                ctx,
+            );
+            let narrow_lines = narrow_frame.buffer.to_lines();
             assert!(
-                frame.buffer[(21, 3)]
-                    .modifier
-                    .contains(Modifier::UNDERLINED)
+                narrow_lines[2].starts_with("  "),
+                "wrapped detail should preserve its two-column indent: {narrow_lines:?}"
             );
 
             dispatch_click_on_text(
                 render_failure_section(
                     &presentation,
-                    &compare_plans_hover_state,
-                    &byok_hover_state,
+                    &out_of_credits_hover_state,
                     ctx,
                 ),
-                "Compare plans",
+                "Get started with AI",
                 100,
-                4,
+                6,
                 ctx,
             );
-            dispatch_click_on_text(
-                render_failure_section(
-                    &presentation,
-                    &compare_plans_hover_state,
-                    &byok_hover_state,
-                    ctx,
-                ),
-                "Use your own API keys",
-                100,
-                4,
-                ctx,
+            assert!(
+                frame
+                    .buffer
+                    .to_lines()
+                    .iter()
+                    .all(|line| !line.contains("API keys"))
             );
-
-            let without_byok = FailedOutputPresentation::OutOfCredits {
-                message: "I'm sorry, I couldn't complete that request.\n\nOut of credits."
-                    .to_owned(),
-                can_use_own_api_keys: false,
-            };
-            let mut presenter = TuiPresenter::new();
-            let frame = presenter.present_element(
-                render_failure_section(
-                    &without_byok,
-                    &compare_plans_hover_state,
-                    &byok_hover_state,
-                    ctx,
-                ),
-                TuiRect::new(0, 0, 100, 4),
-                ctx,
-            );
-            assert_eq!(frame.buffer.to_lines()[3].trim_end(), "  Compare plans");
         });
 
-        assert_eq!(
-            &*opened_urls.borrow(),
-            &[
-                "https://www.warp.dev/pricing".to_owned(),
-                "https://docs.warp.dev/agent-platform/inference/bring-your-own-api-key/".to_owned(),
-            ]
-        );
+        assert_eq!(&*opened_urls.borrow(), &[expected_upgrade_url]);
     });
 }
 
@@ -558,7 +717,8 @@ fn agent_block_renders_tool_calls_in_message_order() {
                     .collect::<Vec<_>>(),
                 vec!["", "before", "", "○ Init project", "", "after"],
             );
-            // A pending tool call renders a dim grey glyph and a dim label.
+            // A pending tool call keeps its dim grey glyph, but renders the
+            // action in bold foreground and its details in regular neutral_7.
             assert_eq!(
                 frame.buffer[(0, 3)].fg,
                 expected_tool_call_text_color(app_ctx)
@@ -566,9 +726,20 @@ fn agent_block_renders_tool_calls_in_message_order() {
             assert!(frame.buffer[(0, 3)].modifier.contains(Modifier::DIM));
             assert_eq!(
                 frame.buffer[(2, 3)].fg,
-                expected_tool_call_text_color(app_ctx)
+                TuiUiBuilder::from_app(app_ctx)
+                    .primary_text_style()
+                    .fg
+                    .unwrap()
             );
-            assert!(frame.buffer[(2, 3)].modifier.contains(Modifier::DIM));
+            assert!(frame.buffer[(2, 3)].modifier.contains(Modifier::BOLD));
+            assert_eq!(
+                frame.buffer[(7, 3)].fg,
+                TuiUiBuilder::from_app(app_ctx)
+                    .neutral_7_text_style()
+                    .fg
+                    .unwrap()
+            );
+            assert!(!frame.buffer[(7, 3)].modifier.contains(Modifier::BOLD));
         });
     });
 }
@@ -1030,6 +1201,112 @@ fn ask_user_question_action_registers_a_stateful_child_view() {
 }
 
 #[test]
+fn materializing_an_already_blocked_question_notifies_the_owner() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action = ask_user_question_action("ask-1", "Which one?");
+        let action_id = action.id.clone();
+        let conversation_id = AIConversationId::new();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: AIBlockOutputStatus::Pending,
+            },
+        );
+        let blocking_state_changes = Rc::new(Cell::new(0));
+        let changes_for_subscription = blocking_state_changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| match event {
+                TuiAIBlockEvent::BlockingStateChanged => {
+                    changes_for_subscription.set(changes_for_subscription.get() + 1);
+                }
+                TuiAIBlockEvent::LayoutInvalidated
+                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+            });
+        });
+        let action_model = block.read(&app, |block, _| block.action_model.clone());
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action.clone(), conversation_id, ctx);
+        });
+        assert_eq!(blocking_state_changes.get(), 0);
+
+        block.update(&mut app, |block, ctx| {
+            block.replace_model(
+                block.conversation_id,
+                Rc::new(FakeAgentBlockModel {
+                    inputs: Vec::new(),
+                    status: complete_output_messages(vec![action_message("message-1", action)]),
+                }),
+            );
+            let action_model = block.action_model.clone();
+            block.sync_action_views(&action_model, ctx);
+        });
+
+        assert_eq!(blocking_state_changes.get(), 1);
+        assert!(block.read(&app, |block, ctx| {
+            let Some(TuiToolCallView::AskQuestion(view)) = block.action_views.get(&action_id)
+            else {
+                return false;
+            };
+            view.as_ref(ctx).is_awaiting_answers(ctx)
+        }));
+    });
+}
+
+#[test]
+fn materializing_an_already_blocked_permission_prompt_notifies_the_owner() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action = test_action("generic-1");
+        let action_id = action.id.clone();
+        let conversation_id = AIConversationId::new();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: AIBlockOutputStatus::Pending,
+            },
+        );
+        let blocking_state_changes = Rc::new(Cell::new(0));
+        let changes_for_subscription = blocking_state_changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| match event {
+                TuiAIBlockEvent::BlockingStateChanged => {
+                    changes_for_subscription.set(changes_for_subscription.get() + 1);
+                }
+                TuiAIBlockEvent::LayoutInvalidated
+                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+            });
+        });
+        let action_model = block.read(&app, |block, _| block.action_model.clone());
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action.clone(), conversation_id, ctx);
+        });
+        assert_eq!(blocking_state_changes.get(), 0);
+
+        block.update(&mut app, |block, ctx| {
+            block.replace_model(
+                block.conversation_id,
+                Rc::new(FakeAgentBlockModel {
+                    inputs: Vec::new(),
+                    status: complete_output_messages(vec![action_message("message-1", action)]),
+                }),
+            );
+            let action_model = block.action_model.clone();
+            block.sync_action_views(&action_model, ctx);
+        });
+
+        assert_eq!(blocking_state_changes.get(), 1);
+        assert!(block.read(&app, |block, ctx| {
+            let Some(TuiToolCallView::Generic(view)) = block.action_views.get(&action_id) else {
+                return false;
+            };
+            view.as_ref(ctx).active_permission_prompt(ctx).is_some()
+        }));
+    });
+}
+#[test]
 fn streamed_ask_user_question_payload_replaces_the_initial_empty_child_view() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -1229,12 +1506,15 @@ fn agent_block_preserves_and_renders_code_sections_in_order() {
                 TuiRect::new(0, 0, 40, 3),
                 app_ctx,
             );
-            assert!(
+            assert_eq!(
                 frame
                     .buffer
                     .to_lines()
-                    .iter()
-                    .any(|line| line.contains("println!"))
+                    .into_iter()
+                    .map(|line| line.trim_end().to_owned())
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>(),
+                vec!["println!(\"hi\");"]
             );
 
             let rendered = render_block_lines(block, 40, app_ctx);
@@ -1842,7 +2122,7 @@ fn task_list_renders_header_and_status_glyph_rows() {
                 vec![
                     "≡ Tasks 4 ▾",
                     "  ✓ Compile list",
-                    "  • Determine duplications",
+                    "  ● Determine duplications",
                     "  ◌ Create suggestions",
                     "  ■ Old task",
                 ],
@@ -1853,7 +2133,7 @@ fn task_list_renders_header_and_status_glyph_rows() {
             // Completed: green check, primary title.
             assert_eq!(frame.buffer[(2, 1)].fg, green);
             assert_eq!(frame.buffer[(4, 1)].fg, primary);
-            // In progress: yellow bullet, primary title.
+            // In progress: yellow filled circle, primary title.
             assert_eq!(frame.buffer[(2, 2)].fg, yellow);
             assert_eq!(frame.buffer[(4, 2)].fg, primary);
             // Pending: primary glyph and title.
@@ -2096,18 +2376,64 @@ fn test_agent_block(app: &mut App, model: FakeAgentBlockModel) -> ViewHandle<Tui
         );
         ctx.add_typed_action_tui_view(window_id, move |ctx| {
             TuiAIBlock::new(
-                AIConversationId::new(),
-                AIAgentExchangeId::new(),
+                (AIConversationId::new(), AIAgentExchangeId::new()),
                 Rc::new(model),
                 action_model,
                 &model_events,
                 terminal_model,
+                false,
                 ctx,
             )
         })
     })
 }
 
+/// Builds an agent block after the full session fixture has registered the app
+/// models needed by out-of-credits presentation.
+fn test_agent_block_with_registered_singletons(
+    app: &mut App,
+    model: FakeAgentBlockModel,
+) -> ViewHandle<TuiAIBlock> {
+    let action_terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+    let sessions = app.add_model(|_| Sessions::new_for_test());
+    let (_tx, model_events_rx) = async_channel::unbounded();
+    let model_events =
+        app.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx));
+    let active_session =
+        app.add_model(|ctx| ActiveSession::new(sessions, model_events.clone(), ctx));
+    let get_relevant_files = app.add_model(|_| GetRelevantFilesController::default());
+    let action_model = app.add_model(|ctx| {
+        BlocklistAIActionModel::new(
+            action_terminal_model,
+            active_session,
+            &model_events,
+            get_relevant_files,
+            EntityId::new(),
+            ctx,
+        )
+    });
+    let block_terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+    app.update(|ctx| {
+        let (window_id, _) = ctx.add_tui_window(
+            AddWindowOptions {
+                window_style: WindowStyle::NotStealFocus,
+                ..Default::default()
+            },
+            |_| TestHostView,
+        );
+        ctx.add_typed_action_tui_view(window_id, move |ctx| {
+            TuiAIBlock::new(
+                (AIConversationId::new(), AIAgentExchangeId::new()),
+                Rc::new(model),
+                action_model,
+                &model_events,
+                block_terminal_model,
+                false,
+                ctx,
+            )
+        })
+    })
+}
 fn ask_user_question_action(id: &str, question: &str) -> AIAgentAction {
     AIAgentAction {
         id: AIAgentActionId::from(id.to_owned()),
@@ -2522,11 +2848,11 @@ fn dispatch_click_on_text(
         app,
     );
 }
-
 fn render_tui_view_lines(
     view: &impl TuiView,
     width: u16,
     height: u16,
+
     app: &AppContext,
 ) -> Vec<String> {
     let mut presenter = TuiPresenter::new();

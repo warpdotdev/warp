@@ -27,6 +27,24 @@ fn assert_navigate_jump_to_line(event: &VimEvent, expected_line: u32) {
         other => panic!("expected Navigate(JumpToLine({expected_line})), got {other:?}"),
     }
 }
+fn assert_replace_text(
+    event: &VimEvent,
+    expected_text: &str,
+    expected_count: u32,
+    expected_already_applied: bool,
+) {
+    match &event.event_type {
+        VimEventType::ReplaceText {
+            text,
+            already_applied,
+        } => {
+            assert_eq!(text, expected_text);
+            assert_eq!(event.count, expected_count);
+            assert_eq!(*already_applied, expected_already_applied);
+        }
+        other => panic!("expected ReplaceText, got {other:?}"),
+    }
+}
 
 fn assert_navigate_jump_to_first_line(event: &VimEvent) {
     match &event.event_type {
@@ -112,6 +130,103 @@ fn assert_visual_operator(
     }
 }
 
+fn assert_replace_char(event: &VimEvent, expected_character: char, expected_advance: bool) {
+    match &event.event_type {
+        VimEventType::ReplaceChar { character, advance } => {
+            assert_eq!(*character, Some(expected_character));
+            assert_eq!(*advance, expected_advance);
+        }
+        other => panic!("expected ReplaceChar, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_normal_mode_r_replaces_once_and_returns_to_normal() {
+    let mut fsa = enter_normal_mode();
+    let mode_event = fsa
+        .typed_character('r')
+        .expect("r should enter Replace mode");
+    assert!(matches!(
+        mode_event.event_type,
+        VimEventType::ChangeMode {
+            new: ModeTransition {
+                mode: VimMode::Replace,
+                ..
+            },
+            old: VimMode::Normal,
+        }
+    ));
+    assert_eq!(fsa.mode, VimMode::Replace);
+
+    let replace_event = fsa
+        .typed_character('x')
+        .expect("the replacement character should emit an event");
+    assert_replace_char(&replace_event, 'x', false);
+    assert_eq!(fsa.mode, VimMode::Normal);
+}
+
+#[test]
+fn test_normal_mode_counted_uppercase_r_repeats_the_session() {
+    let mut fsa = enter_normal_mode();
+    assert!(fsa.typed_character('2').is_none());
+    fsa.typed_character('R')
+        .expect("2R should enter continuous Replace mode");
+    for character in ['x', 'y'] {
+        let replace_event = fsa
+            .typed_character(character)
+            .expect("each replacement character should emit an event");
+        assert_replace_char(&replace_event, character, true);
+        assert_eq!(replace_event.count, 1);
+    }
+
+    let escape_event = fsa
+        .keypress("escape")
+        .expect("Escape should finish the counted Replace session");
+    assert_replace_text(&escape_event, "xy", 2, true);
+
+    let dot_event = fsa
+        .typed_character('.')
+        .expect("dot should preserve the original Replace count");
+    assert_replace_text(&dot_event, "xy", 2, false);
+}
+
+#[test]
+fn test_normal_mode_uppercase_r_replaces_continuously_until_escape() {
+    let mut fsa = enter_normal_mode();
+    let mode_event = fsa
+        .typed_character('R')
+        .expect("R should enter continuous Replace mode");
+    assert!(matches!(
+        mode_event.event_type,
+        VimEventType::ChangeMode {
+            new: ModeTransition {
+                mode: VimMode::Replace,
+                ..
+            },
+            old: VimMode::Normal,
+        }
+    ));
+    assert_eq!(fsa.mode, VimMode::Replace);
+
+    for character in ['x', 'y'] {
+        let replace_event = fsa
+            .typed_character(character)
+            .expect("each replacement character should emit an event");
+        assert_replace_char(&replace_event, character, true);
+        assert_eq!(fsa.mode, VimMode::Replace);
+    }
+
+    let escape_event = fsa
+        .keypress("escape")
+        .expect("Escape should leave continuous Replace mode");
+    assert_replace_text(&escape_event, "xy", 1, true);
+    assert_eq!(fsa.mode, VimMode::Normal);
+
+    let dot_event = fsa
+        .typed_character('.')
+        .expect("dot should replay the full Replace session");
+    assert_replace_text(&dot_event, "xy", 1, false);
+}
 #[test]
 fn test_normal_mode_gg_jumps_to_first_line() {
     let mut fsa = enter_normal_mode();

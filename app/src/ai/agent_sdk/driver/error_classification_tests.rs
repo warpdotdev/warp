@@ -164,6 +164,28 @@ fn environment_setup_failed_is_failed() {
 }
 
 #[test]
+fn setup_command_exited_shell_is_failed_with_env_setup_and_names_command() {
+    let (state, update) = classify_driver_error(&AgentDriverError::SetupCommandExitedShell {
+        command: "./setup.sh".into(),
+    });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+    // The message must name the setup command that exited the shell and
+    // point the user at the environment's setup commands.
+    assert!(update.message.contains("./setup.sh"), "{}", update.message);
+    assert!(
+        update
+            .message
+            .contains("Check the setup commands for this environment"),
+        "{}",
+        update.message
+    );
+}
+
+#[test]
 fn profile_error_is_failed_with_resource_not_found() {
     assert_state_and_code(
         AgentDriverError::ProfileError("my-profile".into()),

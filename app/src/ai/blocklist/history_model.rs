@@ -211,6 +211,11 @@ pub enum UpdateHistoryError {
     #[error("Failed to find conversation with ID {0:?}")]
     ConversationNotFound(AIConversationId),
 }
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ForkConversationError {
+    #[error("cannot fork an empty conversation")]
+    EmptyConversation,
+}
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub(crate) enum BeginConversationRenameError {
@@ -484,6 +489,12 @@ impl BlocklistAIHistoryModel {
             .collect()
     }
 
+    /// Canonical parent resolution for a child's persisted refs: the
+    /// explicit parent conversation id when present, otherwise the parent
+    /// agent id resolved through [`Self::conversation_id_for_agent_id`]
+    /// (run-id index with a legacy server-token fallback). Child indexing,
+    /// the orchestration root walk, breadcrumbs, and UI parent lookups all
+    /// resolve through here so they cannot disagree.
     fn resolved_parent_conversation_id_from_refs(
         &self,
         parent_conversation_id: Option<AIConversationId>,
@@ -1553,6 +1564,16 @@ impl BlocklistAIHistoryModel {
         Ok(new_conversation_id)
     }
 
+    /// Checks whether a conversation can be forked without mutating history.
+    pub fn validate_fork_source(
+        source_conversation: &AIConversation,
+    ) -> Result<(), ForkConversationError> {
+        if source_conversation.is_empty() {
+            return Err(ForkConversationError::EmptyConversation);
+        }
+        Ok(())
+    }
+
     /// Forks an existing conversation by creating a new conversation
     /// and copying the existing conversation's tasks into the new conversation.
     ///
@@ -1572,6 +1593,7 @@ impl BlocklistAIHistoryModel {
         title_override: Option<&str>,
         app: &AppContext,
     ) -> Result<AIConversation, anyhow::Error> {
+        Self::validate_fork_source(source_conversation)?;
         let tasks: Vec<warp_multi_agent_api::Task> = source_conversation
             .all_tasks()
             .filter_map(|t| t.source().cloned())

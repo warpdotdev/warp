@@ -1,5 +1,5 @@
 use warp_completer::completer::{
-    EngineFileType, Match, MatchedSuggestion, Priority, Suggestion, SuggestionType,
+    EngineFileType, MatchType, PreparedSuggestion, Priority, Suggestion, SuggestionType,
 };
 use warpui_core::App;
 
@@ -9,7 +9,7 @@ fn matched_suggestion(
     display: &str,
     replacement: &str,
     file_type: Option<EngineFileType>,
-) -> MatchedSuggestion {
+) -> PreparedSuggestion {
     let mut suggestion = Suggestion::new(
         display,
         replacement,
@@ -18,12 +18,13 @@ fn matched_suggestion(
         Priority::default(),
     );
     suggestion.file_type = file_type;
-    MatchedSuggestion::new(
+    PreparedSuggestion {
         suggestion,
-        Match::Prefix {
+        match_type: MatchType::Prefix {
             is_case_sensitive: true,
         },
-    )
+        matching_indices: Vec::new(),
+    }
 }
 
 #[test]

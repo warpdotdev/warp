@@ -11,8 +11,8 @@ use warpui_core::windowing::state::{ApplicationStage, StateEvent};
 
 use crate::components::feature_optout_dialog::{FeatureOptOutDialog, render_feature_optout_dialog};
 use crate::model::{
-    OnboardingAuthState, OnboardingStateEvent, OnboardingStateModel, OnboardingStep,
-    SelectedSettings,
+    ChooseHowToStartExperimentArm, CreditPackOption, OnboardingAuthState, OnboardingStateEvent,
+    OnboardingStateModel, OnboardingStep, SelectedSettings,
 };
 use crate::slides::{
     AgentSlide, AiAccessSlide, AiAccessSlideEvent, AiSetupSlide, CustomizeUISlide, IntentionSlide,
@@ -67,6 +67,18 @@ pub enum AgentOnboardingEvent {
     UpgradeCopyUrlRequested,
     UpgradePasteTokenFromClipboardRequested,
     OfferSetUpLaterSelected {
+        variant: OfferVariant,
+    },
+    /// The user chose to buy a one-time credit pack on the offer slide. The app
+    /// owns the purchase mutation, so it performs the purchase and reports the
+    /// outcome back through [`AgentOnboardingView::on_credit_purchase_completed`]
+    /// and its siblings.
+    PurchaseCreditsRequested {
+        credits: i32,
+    },
+    /// The purchased credits landed on the account, so onboarding is done for
+    /// this user.
+    OfferCreditsPurchased {
         variant: OfferVariant,
     },
     /// Emitted when the app regains focus (e.g. user returns from the browser).
@@ -174,6 +186,12 @@ impl AgentOnboardingView {
                 }
                 OnboardingStateEvent::AuthStateChanged => {
                     me.handle_auth_state_changed(ctx);
+                }
+                OnboardingStateEvent::CreditPurchaseRequested { credits } => {
+                    ctx.emit(AgentOnboardingEvent::PurchaseCreditsRequested { credits: *credits });
+                }
+                OnboardingStateEvent::CreditPurchaseCompleted => {
+                    me.handle_credit_purchase_completed(ctx);
                 }
                 OnboardingStateEvent::ModelsUpdated
                 | OnboardingStateEvent::SelectedSlideChanged
@@ -338,6 +356,17 @@ impl AgentOnboardingView {
         ctx.notify();
     }
 
+    pub fn set_pricing_promotion_message(
+        &mut self,
+        message: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.onboarding_state.update(ctx, |state, ctx| {
+            state.set_pricing_promotion_message(message, ctx);
+        });
+        ctx.notify();
+    }
+
     pub fn set_workspace_enforces_autonomy(&mut self, value: bool, ctx: &mut ViewContext<Self>) {
         self.onboarding_state.update(ctx, |state, ctx| {
             state.set_workspace_enforces_autonomy(value, ctx);
@@ -350,6 +379,105 @@ impl AgentOnboardingView {
             state.set_auth_state(auth_state, ctx);
         });
         ctx.notify();
+    }
+
+    /// Supplies the ad-hoc credit packs offered on the "Choose how to start"
+    /// slide. Built by the app from server pricing plus the viewer's add-on
+    /// credits policy, so the premium-adjusted prices always match what the
+    /// server charges. An empty list hides the buy-credits option.
+    pub fn set_credit_pack_options(
+        &mut self,
+        options: Vec<CreditPackOption>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.onboarding_state.update(ctx, |state, ctx| {
+            state.set_credit_pack_options(options, ctx);
+        });
+        ctx.notify();
+    }
+
+    /// The credit purchase needs browser checkout. Onboarding stays on the
+    /// offer slide until credits are available.
+    pub fn on_credit_purchase_checkout_opened(&mut self, ctx: &mut ViewContext<Self>) {
+        self.onboarding_state.update(ctx, |state, ctx| {
+            state.on_credit_checkout_opened(ctx);
+        });
+        ctx.notify();
+    }
+
+    /// Reports the server's AI credit availability decision, seen on a refresh.
+    /// Safe to call on every refresh: it only completes a checkout-pending
+    /// purchase, and only when the server says AI is available.
+    pub fn on_ai_credit_availability_observed(
+        &mut self,
+        available: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.onboarding_state.update(ctx, |state, ctx| {
+            state.on_credit_availability_observed(available, ctx);
+        });
+        ctx.notify();
+    }
+
+    /// A web checkout reported success through the desktop hand-off. Returns
+    /// whether an AI-sell onboarding screen consumed it, so the caller can tell
+    /// a post-checkout return apart from an unrelated deeplink.
+    pub fn on_checkout_succeeded(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        let advanced = self
+            .onboarding_state
+            .update(ctx, |state, ctx| state.on_checkout_succeeded(ctx));
+        ctx.notify();
+        advanced
+    }
+
+    /// The purchased credits are on the account. Safe to call speculatively
+    /// (e.g. from a workspace refresh): it is a no-op unless a purchase started
+    /// from the offer slide is still awaiting its credits.
+    pub fn on_credit_purchase_completed(&mut self, ctx: &mut ViewContext<Self>) {
+        self.onboarding_state.update(ctx, |state, ctx| {
+            state.on_credit_purchase_completed(ctx);
+        });
+        ctx.notify();
+    }
+
+    /// The purchase could not be started or was rejected.
+    pub fn on_credit_purchase_failed(&mut self, ctx: &mut ViewContext<Self>) {
+        self.onboarding_state.update(ctx, |state, ctx| {
+            state.on_credit_purchase_failed(ctx);
+        });
+        ctx.notify();
+    }
+
+    /// Whether a credit purchase started on the offer slide is still waiting on
+    /// its credits, so the app knows to watch for them on the next refresh.
+    pub fn is_awaiting_purchased_credits(&self, ctx: &AppContext) -> bool {
+        self.onboarding_state
+            .as_ref(ctx)
+            .credit_purchase_state()
+            .is_in_flight()
+    }
+
+    /// Snapshots the server-assigned "Choose how to start" experiment arm onto
+    /// onboarding state. Called just before the offer is shown so the arm is
+    /// frozen for that exposure (REV-1939).
+    pub fn set_choose_how_to_start_experiment_arm(
+        &mut self,
+        arm: ChooseHowToStartExperimentArm,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.onboarding_state.update(ctx, |state, ctx| {
+            state.set_choose_how_to_start_experiment_arm(arm, ctx);
+        });
+        ctx.notify();
+    }
+
+    /// The `experiment_arm` to report on this offer's telemetry, or `None` when
+    /// the current offer isn't the arm-experiment surface.
+    pub fn offer_experiment_arm(&self, ctx: &AppContext) -> Option<String> {
+        self.onboarding_state
+            .as_ref(ctx)
+            .offer_experiment_arm()
+            .map(str::to_string)
     }
 
     pub fn show_post_auth_offer(&mut self, variant: OfferVariant, ctx: &mut ViewContext<Self>) {
@@ -395,6 +523,7 @@ impl AgentOnboardingView {
                     "intro"
                 }
                 .to_string(),
+                experiment_arm: None,
             },
             ctx
         );
@@ -506,6 +635,13 @@ impl AgentOnboardingView {
     fn handle_onboarding_completed(&mut self, ctx: &mut ViewContext<Self>) {
         let settings = self.onboarding_state.as_ref(ctx).settings();
         ctx.emit(AgentOnboardingEvent::OnboardingCompleted(settings));
+    }
+
+    fn handle_credit_purchase_completed(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(variant) = self.onboarding_state.as_ref(ctx).offer_variant() else {
+            return;
+        };
+        ctx.emit(AgentOnboardingEvent::OfferCreditsPurchased { variant });
     }
 
     /// Reacts to a billing/auth transition. When the user becomes a paying user

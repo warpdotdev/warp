@@ -174,10 +174,13 @@ fn transient_network_error_is_error_with_internal_and_debug_details() {
 #[test]
 fn agent_exited_shell_is_failed_with_invalid_request() {
     assert_update(
-        classify_renderable_error(&RenderableAIError::AgentExitedShell),
+        classify_renderable_error(&RenderableAIError::AgentExitedShell {
+            command: "exit 1".into(),
+        }),
         AgentTaskState::Failed,
         Some(PlatformErrorCode::InvalidRequest),
-        Some("shell exited"),
+        // The message must name the command that exited the shell.
+        Some("exit 1"),
     );
 }
 
@@ -329,7 +332,11 @@ fn map_conversation_status_error_without_exchange_error_is_generic() {
 #[test]
 fn map_conversation_status_error_classifies_agent_exited_shell() {
     let mut conversation = AIConversation::new(false, false);
-    conversation.append_root_exchange_for_test(error_exchange(RenderableAIError::AgentExitedShell));
+    conversation.append_root_exchange_for_test(error_exchange(
+        RenderableAIError::AgentExitedShell {
+            command: "exit 1".into(),
+        },
+    ));
     conversation.set_status_for_test(ConversationStatus::Error);
     assert_update(
         map_conversation_status(&conversation),
@@ -360,7 +367,9 @@ fn map_conversation_status_error_classifies_status_error_via_setter() {
                 .expect("conversation was just restored");
             conv.update_status_with_error(
                 ConversationStatus::Error,
-                Some(RenderableAIError::AgentExitedShell),
+                Some(RenderableAIError::AgentExitedShell {
+                    command: "exit 1".into(),
+                }),
                 terminal_view_id,
                 ctx,
             );
@@ -403,7 +412,9 @@ fn map_conversation_status_error_classifies_status_error_other_as_error() {
 fn map_conversation_status_error_classifies_status_error() {
     let mut conversation = AIConversation::new(false, false);
     conversation.set_status_for_test(ConversationStatus::Error);
-    conversation.set_status_error_for_test(Some(RenderableAIError::AgentExitedShell));
+    conversation.set_status_error_for_test(Some(RenderableAIError::AgentExitedShell {
+        command: "exit 1".into(),
+    }));
     assert_update(
         map_conversation_status(&conversation),
         AgentTaskState::Failed,
@@ -482,7 +493,7 @@ fn install_model_with_call_counter(
     let counter_for_mock = counter.clone();
     let mut mock = MockAIClient::new();
     mock.expect_update_agent_task()
-        .returning(move |_, _, _, _, _| {
+        .returning(move |_, _, _, _, _, _| {
             counter_for_mock.fetch_add(1, Ordering::SeqCst);
             Ok(())
         });
@@ -511,7 +522,7 @@ fn cli_task_mapping_survives_cli_session_end() {
         let succeeded_updates_for_mock = succeeded_updates.clone();
         let mut mock = MockAIClient::new();
         mock.expect_update_agent_task()
-            .returning(move |_, task_state, _, _, _| {
+            .returning(move |_, task_state, _, _, _, _| {
                 if task_state == Some(AgentTaskState::Succeeded) {
                     succeeded_updates_for_mock.fetch_add(1, Ordering::SeqCst);
                 }
@@ -621,7 +632,7 @@ fn shared_session_link_uses_correct_argument_order() {
         let mut mock = MockAIClient::new();
         mock.expect_update_agent_task()
             .withf(
-                move |arg_task_id, task_state, arg_session_id, conv_id, status_msg| {
+                move |arg_task_id, task_state, arg_session_id, conv_id, status_msg, _| {
                     *arg_task_id == task_id
                         && task_state.is_none()
                         && *arg_session_id == Some(session_id)
@@ -630,7 +641,7 @@ fn shared_session_link_uses_correct_argument_order() {
                 },
             )
             .times(1)
-            .returning(|_, _, _, _, _| Ok(()));
+            .returning(|_, _, _, _, _, _| Ok(()));
         let ai_client: Arc<dyn AIClient> = Arc::new(mock);
         let _model = app.add_singleton_model(|ctx| {
             LocalAgentTaskSyncModel::new_with_ai_client_for_test(ai_client, ctx)
@@ -801,7 +812,7 @@ fn conversation_server_token_assigned_fires_update_with_conversation_id() {
         let mut mock = MockAIClient::new();
         mock.expect_update_agent_task()
             .withf(
-                move |arg_task_id, task_state, arg_session_id, conv_id, status_msg| {
+                move |arg_task_id, task_state, arg_session_id, conv_id, status_msg, _| {
                     *arg_task_id == task_id
                         && task_state.is_some()
                         && arg_session_id.is_none()
@@ -810,7 +821,7 @@ fn conversation_server_token_assigned_fires_update_with_conversation_id() {
                 },
             )
             .times(1)
-            .returning(|_, _, _, _, _| Ok(()));
+            .returning(|_, _, _, _, _, _| Ok(()));
         let ai_client: Arc<dyn AIClient> = Arc::new(mock);
         let _model = app.add_singleton_model(|ctx| {
             LocalAgentTaskSyncModel::new_with_ai_client_for_test(ai_client, ctx)

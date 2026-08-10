@@ -61,6 +61,7 @@ use crate::ai::agent::{
     RequestCommandOutputResult,
 };
 use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
+use crate::ai::blocklist::telemetry::send_run_agents_completed_telemetry;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 use crate::terminal::TerminalModel;
@@ -734,12 +735,15 @@ impl BlocklistAIActionModel {
             );
             return;
         };
+        let result =
+            AIAgentActionResultType::RunAgents(ai::agent::action_result::RunAgentsResult::Denied {
+                reason,
+            });
+        send_run_agents_completed_telemetry(conversation_id, &action.action, &result, ctx);
         let result = Arc::new(AIAgentActionResult {
             id: action.id,
             task_id: action.task_id,
-            result: AIAgentActionResultType::RunAgents(
-                ai::agent::action_result::RunAgentsResult::Denied { reason },
-            ),
+            result,
         });
         self.handle_action_result(conversation_id, result, None, ctx);
     }
@@ -1217,10 +1221,17 @@ impl BlocklistAIActionModel {
             );
         }
 
+        let cancelled_result = pending_action.action.cancelled_result();
+        send_run_agents_completed_telemetry(
+            conversation_id,
+            &pending_action.action,
+            &cancelled_result,
+            ctx,
+        );
         let result = Arc::new(AIAgentActionResult {
             id: pending_action.id,
             task_id: pending_action.task_id,
-            result: pending_action.action.cancelled_result(),
+            result: cancelled_result,
         });
         self.handle_action_result(conversation_id, result, reason, ctx);
     }

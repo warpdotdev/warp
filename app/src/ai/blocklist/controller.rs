@@ -2725,17 +2725,20 @@ impl BlocklistAIController {
     ///
     /// Invoked from the terminal view's shell-exit handler before the pane is
     /// torn down. The conversation is moved into a terminal `Error` state with a
-    /// shell-exit message so that the Oz run reports `FAILED` (with an
-    /// explanation) instead of "Cancelled by user", and so the subsequent
-    /// pane-close cancellation — which is guarded by `is_in_progress` — becomes a
-    /// no-op and cannot overwrite the failure.
+    /// shell-exit message (naming the secret-redacted `command` that exited the
+    /// shell) so that the Oz run reports `FAILED` (with an explanation) instead
+    /// of "Cancelled by user", and so the subsequent pane-close cancellation —
+    /// which is guarded by `is_in_progress` — becomes a no-op and cannot
+    /// overwrite the failure.
     pub fn fail_conversation_due_to_shell_exit(
         &mut self,
         conversation_id: AIConversationId,
+        command: String,
         ctx: &mut ModelContext<Self>,
     ) {
         let terminal_surface_id = self.terminal_surface_id;
         let history_model = BlocklistAIHistoryModel::handle(ctx);
+        let shell_exit_error = RenderableAIError::AgentExitedShell { command };
 
         // Only act on conversations that are still running. A finished
         // conversation (e.g. the agent already completed) must not be
@@ -2759,9 +2762,10 @@ impl BlocklistAIController {
             .stream_ids_for_conversation(conversation_id, ctx);
         let had_in_flight_stream = !stream_ids.is_empty();
         for stream_id in &stream_ids {
+            let error = shell_exit_error.clone();
             history_model.update(ctx, |history_model, ctx| {
                 history_model.mark_response_stream_completed_with_error(
-                    RenderableAIError::AgentExitedShell,
+                    error,
                     /* recovery_pending */ false,
                     stream_id,
                     conversation_id,
@@ -2797,7 +2801,7 @@ impl BlocklistAIController {
                     terminal_surface_id,
                     conversation_id,
                     ConversationStatus::Error,
-                    Some(RenderableAIError::AgentExitedShell),
+                    Some(shell_exit_error),
                     ctx,
                 );
             });
@@ -3213,11 +3217,12 @@ impl BlocklistAIController {
 
         // If a user is below their personal limits, then we know that they won't eat into overages,
         // so we don't need to refresh.
-        let has_no_requests_remaining = !AIRequestUsageModel::as_ref(ctx).has_requests_remaining();
+        let has_no_base_plan_requests_remaining =
+            !AIRequestUsageModel::as_ref(ctx).has_base_plan_requests_remaining();
         // If overages aren't enabled, we're not going to reap the benefit of refreshing at all anyway.
         let are_overages_enabled = workspace.are_overages_enabled();
 
-        if are_overages_enabled && has_no_requests_remaining {
+        if are_overages_enabled && has_no_base_plan_requests_remaining {
             // Give a one second delay to ensure that Stripe has been charged and the database is completely updated,
             // before syncing new AI overages data.
             ctx.spawn(

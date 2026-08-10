@@ -157,7 +157,8 @@ impl GuiSlashCommandDataSource {
     pub(crate) fn command_is_active(&self, command: &StaticCommand, ctx: &AppContext) -> bool {
         let availability = self.availability(ctx);
         let gates = self.common_command_gates(ctx);
-        self.command_passes_common_gates(command, availability, &gates)
+        command.supports_gui()
+            && self.command_passes_common_gates(command, availability, &gates)
             && self.command_passes_gui_gates(
                 command,
                 availability,
@@ -173,7 +174,8 @@ impl GuiSlashCommandDataSource {
             COMMAND_REGISTRY
                 .all_commands_by_id()
                 .filter(|(_, command)| {
-                    self.command_passes_common_gates(command, availability, &gates)
+                    command.supports_gui()
+                        && self.command_passes_common_gates(command, availability, &gates)
                         && self.command_passes_gui_gates(
                             command,
                             availability,

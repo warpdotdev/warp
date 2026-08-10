@@ -12,11 +12,12 @@ use sum_tree::SeekBias;
 use warp::tui_export::TotalIndex;
 use warp::tui_export::{BlockHeight, BlockHeightItem, BlockHeightSummary, BlockId, TerminalModel};
 use warpui::{EntityId, ViewHandle};
-use warpui_core::AppContext;
 use warpui_core::elements::tui::{
-    TuiChildView, TuiElement, TuiLayoutContext, TuiRowResize, TuiSelectionSpan, TuiViewportContent,
-    TuiViewportWindow, TuiViewportedElement, TuiVisibleViewportItem,
+    TuiChildView, TuiConstraint, TuiElement, TuiLayoutContext, TuiRowResize, TuiSelectionSpan,
+    TuiSize, TuiStyle, TuiText, TuiViewportContent, TuiViewportWindow, TuiViewportedElement,
+    TuiVisibleViewportItem,
 };
+use warpui_core::{AppContext, TuiView};
 
 use super::agent_block::TuiAIBlock;
 use super::handoff::TuiHandoffBlock;
@@ -27,6 +28,27 @@ pub(super) type AgentBlockRegistry = Rc<RefCell<HashMap<EntityId, ViewHandle<Tui
 pub(super) type CLISubagentBlockRegistry =
     Rc<RefCell<HashMap<EntityId, ViewHandle<TuiCLISubagentView>>>>;
 pub(super) type HandoffBlockRegistry = Rc<RefCell<HashMap<EntityId, ViewHandle<TuiHandoffBlock>>>>;
+pub(super) type TranscriptNoticeRegistry = Rc<RefCell<HashMap<EntityId, TuiTranscriptNotice>>>;
+
+#[derive(Clone)]
+pub(super) struct TuiTranscriptNotice {
+    text: String,
+    style: TuiStyle,
+}
+
+impl TuiTranscriptNotice {
+    pub(super) fn new(text: String, style: TuiStyle) -> Self {
+        Self { text, style }
+    }
+
+    fn element(&self) -> TuiText {
+        TuiText::new(format!("\n{text}", text = self.text)).with_style(self.style)
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.element().desired_height(width)
+    }
+}
 
 /// Extra rows above and below the viewport whose non-dirty agent blocks are
 /// re-measured each frame, so near-off-screen reflow (e.g. a width change) is
@@ -41,6 +63,7 @@ pub(super) enum TuiBlockListViewportItemId {
     Agent(EntityId),
     CLISubagent(EntityId),
     Handoff(EntityId),
+    Notice(EntityId),
 }
 
 struct TuiBlockListVisibleItem {
@@ -55,6 +78,7 @@ enum TuiBlockListVisibleItemKind {
     Agent(ViewHandle<TuiAIBlock>),
     CLISubagent(ViewHandle<TuiCLISubagentView>),
     Handoff(ViewHandle<TuiHandoffBlock>),
+    Notice(TuiTranscriptNotice),
 }
 
 /// Adapts a terminal model's canonical block-list order for TUI viewporting.
@@ -63,6 +87,7 @@ pub(super) struct TuiBlockListViewportSource {
     agent_blocks: AgentBlockRegistry,
     cli_subagent_blocks: CLISubagentBlockRegistry,
     handoff_blocks: HandoffBlockRegistry,
+    notices: TranscriptNoticeRegistry,
     height_changes: RefCell<Vec<TuiRowResize>>,
 }
 
@@ -78,6 +103,7 @@ impl TuiBlockListViewportSource {
             agent_blocks,
             cli_subagent_blocks: Rc::new(RefCell::new(HashMap::new())),
             handoff_blocks: Rc::new(RefCell::new(HashMap::new())),
+            notices: Rc::new(RefCell::new(HashMap::new())),
             height_changes: RefCell::new(Vec::new()),
         }
     }
@@ -86,12 +112,14 @@ impl TuiBlockListViewportSource {
         agent_blocks: AgentBlockRegistry,
         cli_subagent_blocks: CLISubagentBlockRegistry,
         handoff_blocks: HandoffBlockRegistry,
+        notices: TranscriptNoticeRegistry,
     ) -> Self {
         Self {
             model,
             agent_blocks,
             cli_subagent_blocks,
             handoff_blocks,
+            notices,
             height_changes: RefCell::new(Vec::new()),
         }
     }
@@ -103,10 +131,11 @@ impl TuiBlockListViewportSource {
     ///
     /// A non-dirty band block is re-measured only when its cached height cannot
     /// be trusted: its last measurement was at a different width (reflow), it
-    /// has never been measured (no recorded width), or it is still streaming
-    /// (its height can grow without a per-update invalidation — e.g. an
-    /// expanded, still-running shell command). At a stable width with no
-    /// dynamic height, nothing extra is measured and the cached
+    /// has never been measured (no recorded width), or it contains dynamic
+    /// child content such as an expanded, still-running shell command. Agent
+    /// output updates explicitly dirty their block, so animation-only repaints
+    /// do not need to measure the entire streaming response again. At a stable
+    /// width with no dynamic height, nothing extra is measured and the cached
     /// `last_laid_out_height` is reused. Off-band blocks keep their cached
     /// height until they scroll into the band.
     fn agent_heights_to_measure(
@@ -121,6 +150,7 @@ impl TuiBlockListViewportSource {
         let agent_blocks = self.agent_blocks.borrow();
         let cli_subagent_blocks = self.cli_subagent_blocks.borrow();
         let handoff_blocks = self.handoff_blocks.borrow();
+        let notices = self.notices.borrow();
         let block_list = model.block_list();
         let band_top = window.scroll_top.saturating_sub(OVERHANG_ROWS);
         let band_bottom = window
@@ -158,6 +188,8 @@ impl TuiBlockListViewportSource {
                     && view.as_ref(app).needs_height_measurement(available_width)
                 {
                     view_ids.insert(rich_content.view_id);
+                } else if notices.contains_key(&rich_content.view_id) {
+                    view_ids.insert(rich_content.view_id);
                 }
             }
             cursor.next();
@@ -165,6 +197,24 @@ impl TuiBlockListViewportSource {
         view_ids
     }
 
+    fn retained_view_height<V: TuiView>(
+        view: &ViewHandle<V>,
+        width: u16,
+        ctx: &mut TuiLayoutContext,
+        app: &AppContext,
+    ) -> Option<usize> {
+        ctx.rendered_views.contains_key(&view.id()).then(|| {
+            usize::from(
+                TuiChildView::new(view)
+                    .layout(
+                        TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
+                        ctx,
+                        app,
+                    )
+                    .height,
+            )
+        })
+    }
     /// Measures each agent block's wrapped height at `width`, returning heights
     /// in the block list's native line unit.
     fn measured_agent_heights(
@@ -177,24 +227,30 @@ impl TuiBlockListViewportSource {
         let agent_blocks = self.agent_blocks.borrow();
         let cli_subagent_blocks = self.cli_subagent_blocks.borrow();
         let handoff_blocks = self.handoff_blocks.borrow();
+        let notices = self.notices.borrow();
         view_ids
             .into_iter()
             .filter_map(|view_id| {
-                let height = if let Some(view) = agent_blocks.get(&view_id) {
-                    let view = view.as_ref(app);
-                    let height = view.desired_height(width, ctx, app);
+                let height = if let Some(view_handle) = agent_blocks.get(&view_id) {
+                    let view = view_handle.as_ref(app);
+                    let height = Self::retained_view_height(view_handle, width, ctx, app)
+                        .unwrap_or_else(|| view.desired_height(width, ctx, app));
                     view.record_height_measurement(width);
                     height
-                } else if let Some(view) = cli_subagent_blocks.get(&view_id) {
-                    let view = view.as_ref(app);
-                    let height = view.desired_height(width, ctx, app);
+                } else if let Some(view_handle) = cli_subagent_blocks.get(&view_id) {
+                    let view = view_handle.as_ref(app);
+                    let height = Self::retained_view_height(view_handle, width, ctx, app)
+                        .unwrap_or_else(|| view.desired_height(width, ctx, app));
+                    view.record_height_measurement(width);
+                    height
+                } else if let Some(view_handle) = handoff_blocks.get(&view_id) {
+                    let view = view_handle.as_ref(app);
+                    let height = Self::retained_view_height(view_handle, width, ctx, app)
+                        .unwrap_or_else(|| view.desired_height(width, ctx, app));
                     view.record_height_measurement(width);
                     height
                 } else {
-                    let view = handoff_blocks.get(&view_id)?.as_ref(app);
-                    let height = view.desired_height(width, ctx, app);
-                    view.record_height_measurement(width);
-                    height
+                    usize::from(notices.get(&view_id)?.desired_height(width))
                 };
                 Some((view_id, BlockHeight::from(height as f64)))
             })
@@ -249,6 +305,7 @@ impl TuiBlockListViewportSource {
         let agent_blocks = self.agent_blocks.borrow();
         let cli_subagent_blocks = self.cli_subagent_blocks.borrow();
         let handoff_blocks = self.handoff_blocks.borrow();
+        let notices = self.notices.borrow();
         let viewport_bottom = window
             .scroll_top
             .saturating_add(usize::from(window.viewport_height));
@@ -311,14 +368,20 @@ impl TuiBlockListViewportSource {
                                 height,
                                 kind: TuiBlockListVisibleItemKind::CLISubagent(view.clone()),
                             })
+                        } else if let Some(view) = handoff_blocks.get(&item.view_id) {
+                            Some(TuiBlockListVisibleItem {
+                                origin_y: item_top,
+                                height,
+                                kind: TuiBlockListVisibleItemKind::Handoff(view.clone()),
+                            })
                         } else {
-                            handoff_blocks
-                                .get(&item.view_id)
-                                .map(|view| TuiBlockListVisibleItem {
+                            notices.get(&item.view_id).cloned().map(|notice| {
+                                TuiBlockListVisibleItem {
                                     origin_y: item_top,
                                     height,
-                                    kind: TuiBlockListVisibleItemKind::Handoff(view.clone()),
-                                })
+                                    kind: TuiBlockListVisibleItemKind::Notice(notice),
+                                }
+                            })
                         }
                     }
                 }
@@ -370,6 +433,7 @@ impl TuiBlockListViewportSource {
         let agent_blocks = self.agent_blocks.borrow();
         let cli_subagent_blocks = self.cli_subagent_blocks.borrow();
         let handoff_blocks = self.handoff_blocks.borrow();
+        let notices = self.notices.borrow();
         let mut item_ids = Vec::new();
         let mut cursor = block_list
             .block_heights()
@@ -400,6 +464,11 @@ impl TuiBlockListViewportSource {
                     if !item.should_hide && handoff_blocks.contains_key(&item.view_id) =>
                 {
                     item_ids.push(TuiBlockListViewportItemId::Handoff(item.view_id));
+                }
+                BlockHeightItem::RichContent(item)
+                    if !item.should_hide && notices.contains_key(&item.view_id) =>
+                {
+                    item_ids.push(TuiBlockListViewportItemId::Notice(item.view_id));
                 }
                 BlockHeightItem::RichContent(_)
                 | BlockHeightItem::Gap(_)
@@ -527,7 +596,8 @@ impl TuiBlockListVisibleItem {
             }
             TuiBlockListVisibleItemKind::Agent(_)
             | TuiBlockListVisibleItemKind::CLISubagent(_)
-            | TuiBlockListVisibleItemKind::Handoff(_) => self.origin_y,
+            | TuiBlockListVisibleItemKind::Handoff(_)
+            | TuiBlockListVisibleItemKind::Notice(_) => self.origin_y,
         };
         TuiVisibleViewportItem {
             origin_y,
@@ -550,6 +620,7 @@ impl TuiBlockListVisibleItem {
             TuiBlockListVisibleItemKind::Agent(view) => TuiChildView::new(&view).finish(),
             TuiBlockListVisibleItemKind::CLISubagent(view) => TuiChildView::new(&view).finish(),
             TuiBlockListVisibleItemKind::Handoff(view) => TuiChildView::new(&view).finish(),
+            TuiBlockListVisibleItemKind::Notice(notice) => notice.element().finish(),
         }
     }
 }

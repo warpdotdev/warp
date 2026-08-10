@@ -989,6 +989,11 @@ pub struct AIBlock {
     /// requested actions and requested commands are completed or cancelled.
     finish_reason: Option<FinishReason>,
 
+    /// `true` while agent-view Cmd-Up/Cmd-Down transcript navigation targets this block's user
+    /// query. Renders a navigation ring around the query row so the stop stays visibly
+    /// identifiable even when the viewport doesn't move.
+    is_agent_transcript_navigation_target: bool,
+
     directory_context: DirectoryContext,
     view_id: EntityId,
 
@@ -1506,6 +1511,7 @@ impl AIBlock {
             num_attached_context_blocks,
             has_attached_context_selected_text,
             finish_reason: None,
+            is_agent_transcript_navigation_target: false,
             directory_context: DirectoryContext { pwd, home_dir },
             view_id: ctx.view_id(),
             detected_links_state,
@@ -2137,8 +2143,10 @@ impl AIBlock {
                     };
                     self.handle_mcp_tool_stream_update(
                         action_id,
+                        name,
                         &command_text,
                         display_input,
+                        *server_id,
                         ctx,
                     );
                 }
@@ -3622,15 +3630,19 @@ impl AIBlock {
     fn handle_mcp_tool_stream_update(
         &mut self,
         action_id: &AIAgentActionId,
+        tool_name: &str,
         command_text: &str,
         mcp_args: serde_json::Value,
+        server_id: Option<uuid::Uuid>,
         ctx: &mut ViewContext<Self>,
     ) {
         match self.requested_mcp_tools.get_mut(action_id) {
             Some(requested_mcp_tool) => {
                 requested_mcp_tool.view.update(ctx, |view, ctx| {
                     view.apply_streamed_update(command_text, ctx);
+                    view.update_mcp_tool_name(tool_name);
                     view.update_mcp_request(mcp_args);
+                    view.update_mcp_server_id(server_id);
                     ctx.notify();
                 });
             }
@@ -3651,7 +3663,9 @@ impl AIBlock {
                         ctx,
                     );
                     view.apply_streamed_update(command_text, ctx);
+                    view.update_mcp_tool_name(tool_name);
                     view.update_mcp_request(mcp_args);
+                    view.update_mcp_server_id(server_id);
                     view
                 });
                 let action_id_clone = action_id.clone();
@@ -4127,7 +4141,9 @@ impl AIBlock {
                 ctx.emit(AIBlockEvent::RunAwsLoginCommand);
             }
             AwsBedrockCredentialsErrorEvent::ConfigureLoginCommand => {
-                ctx.dispatch_typed_action(&WorkspaceAction::ShowSettingsPageWithSearch {
+                // Defer so Workspace is not opened while AIBlock is still mid-subscription.
+                // Synchronous dispatch here can panic with "Circular view update".
+                ctx.dispatch_typed_action_deferred(WorkspaceAction::ShowSettingsPageWithSearch {
                     search_query: "aws bedrock".to_string(),
                     section: Some(SettingsSection::WarpAgent),
                 });
@@ -4167,7 +4183,9 @@ impl AIBlock {
                 }
             }
             GeminiEnterpriseCredentialsErrorEvent::OpenSettings => {
-                ctx.dispatch_typed_action(&WorkspaceAction::ShowSettingsPageWithSearch {
+                // Defer so Workspace is not opened while AIBlock is still mid-subscription.
+                // Synchronous dispatch here can panic with "Circular view update".
+                ctx.dispatch_typed_action_deferred(WorkspaceAction::ShowSettingsPageWithSearch {
                     search_query: "gemini enterprise".to_string(),
                     section: Some(SettingsSection::WarpAgent),
                 });
@@ -4466,6 +4484,23 @@ impl AIBlock {
             .inputs_to_render(app)
             .iter()
             .any(|input| input.display_query().is_some())
+    }
+
+    /// `true` while agent-view transcript navigation targets this block's user query.
+    pub fn is_agent_transcript_navigation_target(&self) -> bool {
+        self.is_agent_transcript_navigation_target
+    }
+
+    /// Flags or unflags this block as the transcript navigation target.
+    pub fn set_agent_transcript_navigation_target(
+        &mut self,
+        is_target: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.is_agent_transcript_navigation_target != is_target {
+            self.is_agent_transcript_navigation_target = is_target;
+            ctx.notify();
+        }
     }
 
     /// `true` if the AI block is "finished".

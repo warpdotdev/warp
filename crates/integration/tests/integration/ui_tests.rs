@@ -336,6 +336,7 @@ integration_tests! {
 
     // Copy current path command-palette action
     test_copy_current_path_copies_terminal_pwd,
+    test_copy_current_path_copies_code_editor_file_path,
 
     // Go to Line tests
     test_goto_line_dialog_open_close,

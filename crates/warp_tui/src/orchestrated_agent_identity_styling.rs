@@ -4,7 +4,7 @@
 //! policy that keep identities stable across re-renders and edits.
 
 use pathfinder_color::ColorU;
-use warp_core::ui::theme::{Fill as ThemeFill, TerminalColors};
+use warp_core::ui::theme::Fill as ThemeFill;
 use warpui_core::elements::Fill as CoreFill;
 use warpui_core::elements::tui::TuiStyle;
 
@@ -27,19 +27,9 @@ impl Default for AgentIdentity {
     }
 }
 
-/// Builds the identity palette from the seven color roles in the design:
-/// themed cyan, blue, magenta, lilac, pink, green, and yellow. Lilac uses
-/// bright magenta while the remaining roles use their normal ANSI slots.
-pub(crate) fn agent_identity_palette(colors: &TerminalColors) -> Vec<AgentIdentity> {
-    let colors: [ColorU; 7] = [
-        colors.normal.cyan.into(),
-        colors.normal.blue.into(),
-        colors.normal.magenta.into(),
-        colors.bright.magenta.into(),
-        colors.normal.red.into(),
-        colors.normal.green.into(),
-        colors.normal.yellow.into(),
-    ];
+/// Builds the identity palette from the theme's seven design colors: cyan,
+/// blue, magenta, Lilac, pink, green, and yellow.
+pub(crate) fn agent_identity_palette(colors: &[ColorU; 7]) -> Vec<AgentIdentity> {
     // Vary the color fastest so adjacent palette indices differ in color
     // before repeating a glyph.
     AGENT_IDENTITY_GLYPHS

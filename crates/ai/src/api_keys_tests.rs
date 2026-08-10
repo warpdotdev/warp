@@ -1,9 +1,90 @@
 use std::time::{Duration, SystemTime};
 
+#[cfg(not(target_family = "wasm"))]
+use warpui_core::App;
+
 use super::*;
 
 fn make_manager(keys: ApiKeys) -> ApiKeyManager {
     make_manager_with_grok(keys, None)
+}
+
+#[test]
+fn llm_provider_parses_supported_api_key_provider_names() {
+    assert_eq!(
+        LLMProvider::from_api_key_slug("anthropic"),
+        Ok(LLMProvider::Anthropic)
+    );
+    assert_eq!(
+        LLMProvider::from_api_key_slug("open-ai"),
+        Ok(LLMProvider::OpenAI)
+    );
+    assert_eq!(
+        LLMProvider::from_api_key_slug("google"),
+        Ok(LLMProvider::Google)
+    );
+    assert_eq!(LLMProvider::from_api_key_slug("grok"), Ok(LLMProvider::Xai));
+}
+
+#[test]
+fn persisted_provider_api_key_updates_request_state() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+            warp_core::telemetry::testing::MockTelemetryContextProvider::register(ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_provider_key(
+                    LLMProvider::Anthropic,
+                    Some("sk-ant-test".to_owned()),
+                    ctx,
+                )
+            })
+            .expect("no-op secure storage should accept the provider key");
+
+        manager.read(&app, |manager, _| {
+            let request_keys = manager
+                .api_keys_for_request(true, false, None)
+                .expect("persisted provider key should be available to requests");
+            assert_eq!(request_keys.anthropic, "sk-ant-test");
+        });
+    });
+}
+
+#[test]
+fn persisted_provider_api_key_can_be_cleared() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            warpui_extras::secure_storage::register_noop("test", ctx);
+            warp_core::telemetry::testing::MockTelemetryContextProvider::register(ctx);
+        });
+        let manager = app.add_singleton_model(ApiKeyManager::new);
+
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_provider_key(
+                    LLMProvider::Anthropic,
+                    Some("sk-ant-test".to_owned()),
+                    ctx,
+                )?;
+                manager.persist_provider_key(LLMProvider::Anthropic, None, ctx)
+            })
+            .expect("no-op secure storage should clear the provider key");
+
+        manager.read(&app, |manager, _| {
+            assert_eq!(manager.keys().anthropic, None);
+        });
+    });
+}
+#[test]
+fn llm_provider_rejects_unsupported_api_key_provider() {
+    assert_eq!(
+        LLMProvider::from_api_key_slug("openrouter"),
+        Err("provider must be one of: anthropic, openai, google, grok".to_owned())
+    );
 }
 
 #[test]
@@ -38,6 +119,10 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         grok_refresh_allowed: false,
         #[cfg(not(target_family = "wasm"))]
         grok_refresh_waiters: None,
+        #[cfg(not(target_family = "wasm"))]
+        geap_refresh_waiters: None,
+        #[cfg(not(target_family = "wasm"))]
+        geap_last_mint_failure: None,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
         geap_credentials_state: GeapCredentialsState::Missing,
@@ -730,6 +815,96 @@ fn api_keys_for_request_omits_geap_token_when_previous_binding_mismatches() {
     let mut gate = geap_gate();
     gate.user_uid = "someone-else".into();
     assert!(mgr.api_keys_for_request(false, false, Some(gate)).is_none());
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn geap_expired_refresh_eligibility_requires_expired_matching_binding() {
+    let binding = geap_gate();
+    let expired = make_manager_with_geap(geap_loaded("expired", Some(0)));
+    assert!(expired.geap_expired_refresh_eligibility(&binding));
+
+    let valid = make_manager_with_geap(geap_loaded("valid", Some(3600)));
+    assert!(!valid.geap_expired_refresh_eligibility(&binding));
+
+    let refreshing = make_manager_with_geap(GeapCredentialsState::Refreshing {
+        previous: Some((geap_credentials("expired", Some(0)), binding.clone())),
+    });
+    assert!(refreshing.geap_expired_refresh_eligibility(&binding));
+
+    let first_mint = make_manager_with_geap(GeapCredentialsState::Refreshing { previous: None });
+    assert!(!first_mint.geap_expired_refresh_eligibility(&binding));
+
+    let mut mismatched = binding.clone();
+    mismatched.user_uid = "different-user".into();
+    assert!(!expired.geap_expired_refresh_eligibility(&mismatched));
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn begin_expired_geap_refresh_is_single_flight() {
+    App::test((), |mut app| async move {
+        let manager = app.add_model(|_| make_manager_with_geap(geap_loaded("expired", Some(0))));
+        manager.update(&mut app, |manager, ctx| {
+            let binding = geap_gate();
+            let mut kickoff_count = 0;
+            // The kickoff stands in for the app-layer mint: committing to mint
+            // is what installs the waiter and opens the single-flight window.
+            let first = manager.begin_expired_geap_refresh(&binding, ctx, |manager, waiter, _| {
+                kickoff_count += 1;
+                manager.install_geap_refresh_waiter(Some(waiter));
+            });
+            let second = manager.begin_expired_geap_refresh(&binding, ctx, |manager, waiter, _| {
+                kickoff_count += 1;
+                manager.install_geap_refresh_waiter(Some(waiter));
+            });
+
+            assert!(first.is_some());
+            assert!(second.is_some());
+            // The second request attached to the in-flight mint instead of
+            // starting its own.
+            assert_eq!(kickoff_count, 1);
+            assert_eq!(manager.take_geap_refresh_waiters().len(), 2);
+            // Taking the waiters closes the window.
+            assert!(manager.geap_refresh_waiters.is_none());
+        });
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn declined_geap_kickoff_leaves_no_in_flight_window() {
+    App::test((), |mut app| async move {
+        let manager = app.add_model(|_| make_manager_with_geap(geap_loaded("expired", Some(0))));
+        manager.update(&mut app, |manager, ctx| {
+            let binding = geap_gate();
+            // A kickoff that hits one of its own guards returns without
+            // minting, dropping the sender rather than installing it.
+            let receiver = manager.begin_expired_geap_refresh(&binding, ctx, |_, _waiter, _| {});
+            assert!(receiver.is_some());
+            // No window was opened, so a later request starts a fresh kickoff
+            // instead of attaching to a mint that is not running. This is what
+            // makes "waiters present" mean "mint in flight".
+            assert!(manager.geap_refresh_waiters.is_none());
+        });
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn geap_mint_failure_cooldown_suppresses_the_blocking_wait() {
+    let binding = geap_gate();
+    let mut manager = make_manager_with_geap(geap_loaded("expired", Some(0)));
+    assert!(manager.geap_expired_refresh_eligibility(&binding));
+
+    // A failed mint restores the expired credential, so without the cooldown
+    // every following request would block on a mint that is failing.
+    manager.record_geap_mint_failure();
+    assert!(!manager.geap_expired_refresh_eligibility(&binding));
+
+    // A later success reopens the blocking path.
+    manager.clear_geap_mint_failure();
+    assert!(manager.geap_expired_refresh_eligibility(&binding));
 }
 
 // ── grok expiry + blocking-refresh eligibility ──────────────────
