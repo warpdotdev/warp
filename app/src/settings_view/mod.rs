@@ -2,7 +2,12 @@ use std::path::PathBuf;
 
 use about_page::AboutPageView;
 use agent_profiles_page::{AgentProfilesPageAction, AgentProfilesPageEvent, AgentProfilesPageView};
-use appearance_page::{AppearancePageAction, AppearanceSettingsPageView};
+// Re-exported crate-wide so surfaces outside Settings (e.g. the tab bar's
+// context menu) can dispatch an existing appearance toggle through
+// `SettingsAction::AppearancePageToggle` instead of writing the setting
+// themselves.
+pub(crate) use appearance_page::AppearancePageAction;
+use appearance_page::AppearanceSettingsPageView;
 use billing_and_usage_dispatch::BillingAndUsageDispatchView;
 use billing_and_usage_page::BillingAndUsagePageEvent;
 use cli_agents_page::{CLIAgentsPageAction, CLIAgentsPageEvent, CLIAgentsPageView};
