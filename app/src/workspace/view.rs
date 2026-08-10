@@ -3895,6 +3895,11 @@ impl Workspace {
                 ctx.notify();
             }
             TabSettingsChangedEvent::AutoGroupTabs { .. } => {
+                // Enabling the mode is the single moment automation touches
+                // tabs that are already ungrouped. Disabling it does nothing:
+                // every group stays exactly as it is, as an ordinary manual
+                // group.
+                self.sweep_tabs_for_auto_grouping(ctx);
                 ctx.notify();
             }
         }
@@ -12502,6 +12507,14 @@ impl Workspace {
             pane_group.reattach_panes(ctx);
         });
 
+        // A reopened tab is treated as newly created only when the group it
+        // was closed from is gone; a group that survived means its restored
+        // placement stands, and the ordinary manual-override rule applies.
+        let stored_group_vanished = tab_data
+            .group_id
+            .is_some_and(|group_id| !self.tab_groups.contains_key(&group_id));
+        let pane_group_id = tab_data.pane_group.id();
+
         // If the tab belonged to a group, try to re-join it by appending after
         // the group's current last member. If the group no longer exists (it was
         // pruned when the tab was closed), drop the membership and fall back to
@@ -12528,6 +12541,10 @@ impl Workspace {
         }
 
         self.activate_tab(insert_index, ctx);
+
+        if stored_group_vanished {
+            self.place_tab_by_auto_grouping(pane_group_id, ctx);
+        }
 
         ctx.notify();
     }
@@ -12897,6 +12914,7 @@ impl Workspace {
         } else {
             self.new_tab_index_and_group(ctx)
         };
+        let new_pane_group_id = new_pane_group.id();
         self.tabs.insert(insert_idx, TabData::new(new_pane_group));
         self.tab_mru_order
             .push(self.tabs[insert_idx].pane_group.id());
@@ -12942,6 +12960,14 @@ impl Workspace {
                 pg.set_left_panel_open(true, ctx);
             });
         }
+
+        // Automatic grouping places a genuinely new tab. A restoration is
+        // excluded: the window snapshot carries each tab's own group and its
+        // placed-by-automation marker, and overwriting them here would undo a
+        // placement the user made before the restart.
+        if !is_restoration {
+            self.place_tab_by_auto_grouping(new_pane_group_id, ctx);
+        }
     }
 
     pub fn add_tab_from_existing_pane(
@@ -12966,6 +12992,7 @@ impl Workspace {
             me.handle_file_tree_event(pane_group, event, ctx)
         });
 
+        let new_pane_group_id = new_pane_group.id();
         if self.tab_count() == 0 {
             self.tabs.push(TabData::new(new_pane_group));
             self.tab_mru_order
@@ -12985,6 +13012,8 @@ impl Workspace {
             }
             self.expand_tab_group(group_id, ctx);
         }
+
+        self.place_tab_by_auto_grouping(new_pane_group_id, ctx);
     }
 
     pub fn add_tab_for_cloud_notebook(
@@ -16059,6 +16088,12 @@ impl Workspace {
                 {
                     Self::sync_codebase_tab_color(tab, ctx);
                 }
+
+                // The primary automatic-grouping trigger. This event also
+                // fires on pane splits, pane closes, session changes and title
+                // updates, so the handler guards on the anchor pane's
+                // directory actually having changed.
+                self.reconcile_tab_auto_group_after_directory_change(pane_group.id(), ctx);
             }
             pane_group::Event::ActiveSessionChanged => {
                 self.update_active_session(ctx);
@@ -16577,6 +16612,12 @@ impl Workspace {
                 {
                     Self::sync_codebase_tab_color(tab, ctx);
                 }
+
+                // The secondary automatic-grouping trigger: detection answered
+                // for a directory that moved some frames ago. Cannot be the
+                // primary one — it stays silent for every non-git to non-git
+                // move, which is exactly the case R6 covers.
+                self.reconcile_tab_auto_group_after_repo_change(pane_group.id(), ctx);
             }
             #[cfg(feature = "local_fs")]
             pane_group::Event::RemoteRepoNavigated { remote_path } => {
@@ -28041,8 +28082,12 @@ impl Workspace {
         let mut tab_data = TabData::new(pane_group);
         tab_data.selected_color = color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
         tab_data.draggable_state = draggable_state;
+        let pane_group_id = tab_data.pane_group.id();
         self.tabs.insert(index, tab_data);
         self.activate_tab_internal(index, ctx);
+        // A tab arriving from another window carries no group membership, so
+        // it is treated as newly created rather than as deliberately ungrouped.
+        self.place_tab_by_auto_grouping(pane_group_id, ctx);
         ctx.notify();
     }
 

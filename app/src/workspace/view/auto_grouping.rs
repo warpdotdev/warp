@@ -8,13 +8,28 @@
 //! primitives those paths share instead.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use warpui::{EntityId, ViewContext};
+use ::settings::Setting;
+use repo_metadata::repositories::DetectedRepositories;
+use warpui::{EntityId, SingletonEntity, ViewContext, ViewHandle};
 
 use super::{Workspace, group_has_single_member, group_member_indices};
-use crate::workspace::project_key::{self, ProjectKey};
+use crate::pane_group::{PaneGroup, PaneId};
+use crate::workspace::project_key::{self, GitResolution, ProjectKey, ProjectKeyInput};
 use crate::workspace::tab_group::{TabGroup, TabGroupId, auto_tab_grouping_available};
+use crate::workspace::tab_settings::TabSettings;
+
+/// The terminal pane a tab's project key follows, and the directory that pane
+/// reported the last time it was looked at.
+///
+/// The anchor is deliberately *not* the focused pane: focusing a split checked
+/// out from another repository must never move the tab (R9).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TabAnchor {
+    pane_id: PaneId,
+    directory: Option<PathBuf>,
+}
 
 /// The resolver state automatic grouping keeps between reconciles.
 ///
@@ -29,6 +44,20 @@ pub(crate) struct AutoGroupingState {
     /// and a tab the user placed are state-identical — both sit in a group whose
     /// key no longer matches. Only the previously resolved key tells them apart.
     last_resolved_keys: HashMap<EntityId, ProjectKey>,
+    /// Each tab's anchor pane and the directory it last reported, keyed by
+    /// pane-group identity. Re-derived lazily, so a restored tab anchors to the
+    /// first terminal pane of its restored pane group.
+    anchors: HashMap<EntityId, TabAnchor>,
+    /// Test-only stand-in for the anchor pane's working directory. A real
+    /// terminal pane in a unit test has no shell and therefore no pwd, so the
+    /// directory each pane reports is injected here instead. Keyed by pane so
+    /// the anchor selection itself still runs for real.
+    #[cfg(test)]
+    pub(super) test_pane_directories: HashMap<PaneId, PathBuf>,
+    /// Test-only stand-in for what repository detection knows about a
+    /// directory. Absent means "no repository, and detection has answered".
+    #[cfg(test)]
+    pub(super) test_git_resolutions: HashMap<PathBuf, GitResolution>,
 }
 
 impl AutoGroupingState {
@@ -39,6 +68,22 @@ impl AutoGroupingState {
     fn record_resolved_key(&mut self, pane_group_id: EntityId, key: ProjectKey) {
         self.last_resolved_keys.insert(pane_group_id, key);
     }
+}
+
+/// Whether a stored group key came from git identity rather than from a plain
+/// directory.
+///
+/// Nothing records which of the two a key is — the group table stores one
+/// string — so it is derived from the shape git guarantees: `<repo>/.git` for a
+/// normal checkout and `<repo>.git` for a bare one. A repository whose git
+/// directory was relocated somewhere without that suffix reads as a directory
+/// key; the only consequence is that it also becomes a prefix candidate for
+/// non-git tabs, which no requirement depends on.
+fn is_git_project_key(key: &ProjectKey) -> bool {
+    key.path()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".git"))
 }
 
 impl Workspace {
@@ -297,8 +342,290 @@ impl Workspace {
             .iter()
             .position(|tab| tab.pane_group.id() == pane_group_id)
     }
+
+    fn pane_group_for_id(&self, pane_group_id: EntityId) -> Option<ViewHandle<PaneGroup>> {
+        self.tabs
+            .iter()
+            .find(|tab| tab.pane_group.id() == pane_group_id)
+            .map(|tab| tab.pane_group.clone())
+    }
+
+    /// Whether automatic grouping should act on this window right now.
+    ///
+    /// [`Workspace::reconcile_tab_auto_group`] gates itself on the feature
+    /// flags but deliberately not on the setting, so every entry point in this
+    /// file owns that half of the check.
+    pub(super) fn auto_grouping_enabled(&self, ctx: &warpui::AppContext) -> bool {
+        auto_tab_grouping_available() && *TabSettings::as_ref(ctx).auto_group_tabs.value()
+    }
+
+    /// Re-derives the tab's anchor pane and the directory it reports, recording
+    /// both. Returns `true` when either changed since the last refresh.
+    ///
+    /// The anchor is the first terminal pane in the pane group's layout order,
+    /// pinned there for the life of the pane: a later split adds panes without
+    /// disturbing it, and only the anchor closing re-anchors, to the next
+    /// remaining terminal pane. A restored tab has no recorded anchor, so it
+    /// re-derives to the first terminal pane of the restored layout.
+    fn refresh_tab_anchor(&mut self, pane_group_id: EntityId, ctx: &mut ViewContext<Self>) -> bool {
+        let Some(pane_group) = self.pane_group_for_id(pane_group_id) else {
+            return false;
+        };
+        let recorded = self
+            .auto_grouping_state
+            .anchors
+            .get(&pane_group_id)
+            .map(|anchor| anchor.pane_id);
+
+        let anchor_pane_id = {
+            let group = pane_group.as_ref(ctx);
+            let terminal_panes: Vec<PaneId> = group
+                .visible_pane_ids()
+                .into_iter()
+                .filter(|pane_id| group.terminal_view_from_pane_id(*pane_id, ctx).is_some())
+                .collect();
+            match recorded {
+                Some(pane_id) if terminal_panes.contains(&pane_id) => Some(pane_id),
+                _ => terminal_panes.first().copied(),
+            }
+        };
+
+        let Some(anchor_pane_id) = anchor_pane_id else {
+            // No terminal pane at all — a settings, notebook or transcript tab.
+            // It has no directory and therefore no project (R7).
+            return self
+                .auto_grouping_state
+                .anchors
+                .remove(&pane_group_id)
+                .is_some();
+        };
+
+        let directory = self.anchor_directory(&pane_group, anchor_pane_id, ctx);
+        let anchor = TabAnchor {
+            pane_id: anchor_pane_id,
+            directory,
+        };
+        let previous = self
+            .auto_grouping_state
+            .anchors
+            .insert(pane_group_id, anchor.clone());
+        previous.is_none_or(|previous| previous != anchor)
+    }
+
+    /// The anchor pane's canonical working directory, or `None` when it has no
+    /// local session.
+    fn anchor_directory(
+        &self,
+        pane_group: &ViewHandle<PaneGroup>,
+        anchor_pane_id: PaneId,
+        ctx: &warpui::AppContext,
+    ) -> Option<PathBuf> {
+        #[cfg(test)]
+        if let Some(directory) = self
+            .auto_grouping_state
+            .test_pane_directories
+            .get(&anchor_pane_id)
+        {
+            return Some(directory.clone());
+        }
+
+        let terminal_view = pane_group
+            .as_ref(ctx)
+            .terminal_view_from_pane_id(anchor_pane_id, ctx)?;
+        let pwd = terminal_view
+            .as_ref(ctx)
+            .canonical_session_pwd_if_local(ctx)?;
+        Some(pwd.as_path().to_path_buf())
+    }
+
+    /// What repository detection currently knows about `directory`.
+    ///
+    /// The lookup is the two-hop, I/O-free path from an already-canonical
+    /// working directory to the repository's shared git directory — it runs on
+    /// every directory change, so it must never touch the filesystem.
+    ///
+    /// A cache miss is ambiguous on its own, because detection only ever
+    /// records repositories it *found*: there is no negative cache anywhere in
+    /// `repo_metadata`, and no per-pane record of which directory the last
+    /// answer was for. The pane's own last settled answer is the best available
+    /// discriminator:
+    ///
+    /// - it was in a repository, and this directory is not under it (or the
+    ///   lookup would have hit) — so the pane has moved somewhere detection has
+    ///   not answered for yet, and `RepoChanged` is still coming. `Pending`.
+    /// - it was in no repository — the answer for the directory it just left
+    ///   was "not a repository", so treat this one the same. This is the case
+    ///   R6 lives in: a non-git to non-git move emits no `RepoChanged` at all
+    ///   (the detected root did not change), so waiting for one would leave
+    ///   every such tab ungrouped forever.
+    ///
+    /// The second branch is wrong for exactly one shape — the first visit to an
+    /// undetected repository from a non-git directory — and it self-corrects:
+    /// the tab is placed on its directory key, stays tracked against that key,
+    /// and the `RepoChanged` that follows re-keys it onto the shared git
+    /// directory. It is never read as a manual placement, which is the property
+    /// R21 protects.
+    fn git_resolution(
+        &self,
+        pane_group: &ViewHandle<PaneGroup>,
+        anchor_pane_id: PaneId,
+        directory: &Path,
+        ctx: &warpui::AppContext,
+    ) -> GitResolution {
+        #[cfg(test)]
+        if let Some(resolution) = self.auto_grouping_state.test_git_resolutions.get(directory) {
+            return resolution.clone();
+        }
+
+        if let Some(repository) = DetectedRepositories::as_ref(ctx)
+            .get_local_watched_repo_for_canonical_path(directory, ctx)
+        {
+            let common_git_dir = repository.read(ctx, |repository, _| repository.common_git_dir());
+            return GitResolution::Resolved(common_git_dir);
+        }
+
+        let settled_answer_was_a_repository = pane_group
+            .as_ref(ctx)
+            .terminal_view_from_pane_id(anchor_pane_id, ctx)
+            .is_some_and(|terminal_view| terminal_view.as_ref(ctx).current_repo_path().is_some());
+
+        if settled_answer_was_a_repository {
+            GitResolution::Pending
+        } else {
+            GitResolution::NotARepository
+        }
+    }
+
+    /// The project key the tab's anchor pane currently resolves to.
+    ///
+    /// Re-derives the anchor first, so a tab whose anchor pane has closed
+    /// resolves against the pane that replaced it.
+    pub(super) fn resolve_project_key_for_tab(
+        &mut self,
+        pane_group_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<ProjectKey> {
+        self.refresh_tab_anchor(pane_group_id, ctx);
+        self.project_key_for_recorded_anchor(pane_group_id, ctx)
+    }
+
+    fn project_key_for_recorded_anchor(
+        &self,
+        pane_group_id: EntityId,
+        ctx: &warpui::AppContext,
+    ) -> Option<ProjectKey> {
+        let anchor = self.auto_grouping_state.anchors.get(&pane_group_id)?;
+        let directory = anchor.directory.clone()?;
+        let pane_group = self.pane_group_for_id(pane_group_id)?;
+        let git = self.git_resolution(&pane_group, anchor.pane_id, &directory, ctx);
+        let existing_non_git_keys: Vec<ProjectKey> = self
+            .project_keys_in_window()
+            .into_iter()
+            .filter(|key| !is_git_project_key(key))
+            .collect();
+        let home_dir = dirs::home_dir();
+
+        project_key::resolve(&ProjectKeyInput {
+            directory: Some(&directory),
+            git,
+            existing_non_git_keys: &existing_non_git_keys,
+            home_dir: home_dir.as_deref(),
+        })
+    }
+
+    /// The primary trigger: the anchor pane reported a different directory.
+    ///
+    /// `AppStateChanged` also fires on pane splits, pane closes, session
+    /// changes and title updates, so the directory delta is what separates a
+    /// move between projects from the rest. A change of anchor counts as a
+    /// delta too: re-anchoring after the anchor pane closed can change the
+    /// tab's project even when the new anchor's directory happens to match
+    /// nothing that moved.
+    pub(crate) fn reconcile_tab_auto_group_after_directory_change(
+        &mut self,
+        pane_group_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.auto_grouping_enabled(ctx) {
+            return;
+        }
+        if !self.refresh_tab_anchor(pane_group_id, ctx) {
+            return;
+        }
+        let key = self.project_key_for_recorded_anchor(pane_group_id, ctx);
+        self.reconcile_tab_auto_group(pane_group_id, key, ctx);
+    }
+
+    /// The secondary trigger: repository detection answered.
+    ///
+    /// Deliberately not guarded on a directory delta. Detection resolves
+    /// frames after the directory changed, and the whole point of this trigger
+    /// is the reconcile that could not be decided when the directory moved.
+    pub(crate) fn reconcile_tab_auto_group_after_repo_change(
+        &mut self,
+        pane_group_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.auto_grouping_enabled(ctx) {
+            return;
+        }
+        let key = self.resolve_project_key_for_tab(pane_group_id, ctx);
+        self.reconcile_tab_auto_group(pane_group_id, key, ctx);
+    }
+
+    /// Marks a tab as awaiting automatic placement and reconciles it at once.
+    ///
+    /// This is the "treat it as newly created" entry point: a tab that has just
+    /// been created, one arriving from another window (R25), one reopened whose
+    /// stored group no longer exists (R26), and one being unpinned (R23). The
+    /// marker is what carries the intent across the asynchronous window in
+    /// which the tab's key is not resolvable yet — the reconcile below is often
+    /// a no-op, and the first one that can resolve a key does the placing.
+    pub(crate) fn place_tab_by_auto_grouping(
+        &mut self,
+        pane_group_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.auto_grouping_enabled(ctx) {
+            return;
+        }
+        let Some(tab_index) = self.tab_index_for_pane_group(pane_group_id) else {
+            return;
+        };
+        self.tabs[tab_index].placed_by_automation = true;
+
+        let key = self.resolve_project_key_for_tab(pane_group_id, ctx);
+        self.reconcile_tab_auto_group(pane_group_id, key, ctx);
+    }
+
+    /// The enable sweep: the single moment automation touches tabs that are
+    /// already ungrouped.
+    ///
+    /// Tabs sitting in a group were put there by the user (or by an earlier
+    /// run of automation) and are left exactly as they are; pinned tabs are
+    /// never grouped. Turning the mode *off* runs nothing at all — no dissolve,
+    /// no rename, no reorder (R3).
+    pub(crate) fn sweep_tabs_for_auto_grouping(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.auto_grouping_enabled(ctx) {
+            return;
+        }
+        let candidates: Vec<EntityId> = self
+            .tabs
+            .iter()
+            .filter(|tab| tab.group_id.is_none() && !tab.pinned)
+            .map(|tab| tab.pane_group.id())
+            .collect();
+
+        for pane_group_id in candidates {
+            self.place_tab_by_auto_grouping(pane_group_id, ctx);
+        }
+    }
 }
 
 #[cfg(test)]
 #[path = "auto_grouping_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "auto_grouping_wiring_tests.rs"]
+mod wiring_tests;
