@@ -1528,6 +1528,16 @@ extern "C-unwind" fn warp_handle_insert_text(this: &Object, characters: id) {
 }
 
 #[unsafe(no_mangle)]
+extern "C-unwind" fn warp_handle_replace_preceding_text(this: &Object, characters: id) {
+    // SAFETY: `characters` is a valid `NSString` of the inserted text.
+    let string = unsafe { &*characters.cast::<NSString>() }.to_string();
+    let window = unsafe { get_window_state(this) };
+    app::callback_dispatcher()
+        .for_window(&Window(window.clone()))
+        .dispatch_event(Event::ReplacePrecedingCharacters { chars: string });
+}
+
+#[unsafe(no_mangle)]
 extern "C-unwind" fn warp_handle_drag_and_drop(this: &Object, paths: id, point: NSPoint) {
     // SAFETY: `paths` is an `NSArray<NSString>` of dropped file paths.
     let paths = unsafe {

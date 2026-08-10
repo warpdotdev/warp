@@ -38,6 +38,7 @@ impl DispatchedEvent {
             Event::ModifierStateChanged { .. } => Some(&self.event),
             Event::ModifierKeyChanged { .. } => Some(&self.event),
             Event::TypedCharacters { .. } => Some(&self.event),
+            Event::ReplacePrecedingCharacters { .. } => Some(&self.event),
             Event::DragAndDropFiles { .. } => Some(&self.event),
             Event::DragFiles { .. } => Some(&self.event),
             Event::DragFileExit => Some(&self.event),
@@ -191,6 +192,17 @@ pub enum Event {
     TypedCharacters {
         chars: String,
     },
+    /// Gets fired when the text input system commits characters that are meant to
+    /// replace text it has already committed, rather than extend it. The macOS
+    /// press-and-hold accent popup is the only producer today: holding `o` commits a
+    /// literal `o`, and picking `ò` from the popup then commits a replacement for it.
+    ///
+    /// Handlers should drop the grapheme preceding the caret before inserting `chars`.
+    /// The count is fixed at one because the platform layer cannot recover a usable
+    /// length — see the comment in `insertText:replacementRange:` in `host_view.m`.
+    ReplacePrecedingCharacters {
+        chars: String,
+    },
     /// Gets fired when user drags a file or folder into Warp. Note that there could exist
     /// multiple file paths in one event as user could drag and drop multiple targets.
     DragAndDropFiles {
@@ -277,6 +289,7 @@ impl InBoundsExt for Event {
             Event::KeyDown { .. }
             | Event::ModifierKeyChanged { .. }
             | Event::TypedCharacters { .. }
+            | Event::ReplacePrecedingCharacters { .. }
             | Event::DragFileExit
             | Event::SetMarkedText { .. }
             | Event::ClearMarkedText => true,
@@ -410,6 +423,9 @@ impl Scale for Event {
                 Event::ModifierKeyChanged { key_code, state }
             }
             Event::TypedCharacters { chars } => Event::TypedCharacters { chars },
+            Event::ReplacePrecedingCharacters { chars } => {
+                Event::ReplacePrecedingCharacters { chars }
+            }
             Event::SetMarkedText {
                 marked_text,
                 selected_range,
