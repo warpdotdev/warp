@@ -217,8 +217,9 @@ Use `create_factory` to set up a brand-new factory for a team — this is a
 setup operation, not one of the four collaboration workflows above. One call
 seeds the factory's runner and its full roster of named agents (foreman,
 triage, spec, implement, review, verify). Pass `team_uid`, `name`,
-`code_forge` (`GITHUB` or `GITLAB`), and at least one repository in
-`owner/repo` form. Omit `default_environment` to have one auto-created from
+`code_forge` (`GITHUB` or `GITLAB`), and at least one repository as
+`owner/repo` (for GitLab, a full namespace such as `group/subgroup/repo`
+is also allowed). Omit `default_environment` to have one auto-created from
 the name and repositories, and omit `default_model` to capture your current
 default model. The result has the same shape as a `list_factories` entry, so
 the new `uid` is immediately usable as `factory_uid` in the other tools.
