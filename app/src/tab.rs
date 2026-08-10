@@ -38,6 +38,7 @@ use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::menu::{MenuAction, MenuItem, MenuItemFields};
 use crate::pane_group::{PaneGroup, PaneId};
+use crate::settings_view::{AppearancePageAction, SettingsAction};
 use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::shared_session::manager::Manager;
@@ -52,7 +53,7 @@ use crate::util::color::{Opacity, coloru_with_opacity};
 use crate::util::truncation::truncate_from_end;
 use crate::window_settings::WindowSettings;
 use crate::workspace::sync_inputs::SyncedInputState;
-use crate::workspace::tab_group::{TabGroup, TabGroupId};
+use crate::workspace::tab_group::{TabGroup, TabGroupId, auto_tab_grouping_available};
 use crate::workspace::tab_settings::{
     TabCloseButtonPosition, TabSettings, VerticalTabsDisplayGranularity,
 };
@@ -227,6 +228,26 @@ pub(crate) fn reveals_tab_shortcut_hints(ctx: &AppContext) -> bool {
 /// Label for the tab right-click menu's "Move to group" submenu parent.
 pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
 
+/// Labels for the per-tab menu's automatic-tab-grouping toggle.
+///
+/// Everything else in the group section acts on the single tab that was
+/// right-clicked; this entry flips `appearance.tabs.auto_group_tabs`, a
+/// cloud-synced setting that governs every window. Nothing about a menu row's
+/// shape conveys that, so the text has to: the verb says what activating it
+/// will do (which is why the label is state-aware rather than a static noun),
+/// and the trailing scope says how far the effect reaches.
+pub const TURN_ON_AUTO_GROUP_TABS_LABEL: &str = "Turn on automatic tab grouping (all windows)";
+pub const TURN_OFF_AUTO_GROUP_TABS_LABEL: &str = "Turn off automatic tab grouping (all windows)";
+
+/// The automatic-grouping toggle's label for the setting's current value.
+pub fn auto_group_tabs_menu_label(enabled: bool) -> &'static str {
+    if enabled {
+        TURN_OFF_AUTO_GROUP_TABS_LABEL
+    } else {
+        TURN_ON_AUTO_GROUP_TABS_LABEL
+    }
+}
+
 /// Decides which tab-group context-menu entries apply to a tab, based on its
 /// group membership, whether it is the sole member of that group, and whether
 /// any *other* groups exist.
@@ -247,6 +268,60 @@ fn tab_group_menu_entry_flags(
     let has_other_groups = tab_groups.keys().any(|gid| Some(*gid) != group_id);
     let show_new_group = !(in_group && is_only_member_of_group);
     (show_new_group, has_other_groups, in_group)
+}
+
+/// Builds the tab-group section of the per-tab right-click menu — the one menu
+/// both tab bars open, so this is the single place the section is defined.
+///
+/// `auto_group_tabs` is `None` when the automatic-grouping mode is out of reach
+/// (see [`auto_tab_grouping_available`]) and `Some(enabled)` with the setting's
+/// current value otherwise. When it is `Some`, the section ends with a divider
+/// and the window-wide toggle, fenced off because every entry above it acts on
+/// the one right-clicked tab.
+fn tab_group_menu_items_for(
+    index: usize,
+    group_id: Option<TabGroupId>,
+    tab_groups: &HashMap<TabGroupId, TabGroup>,
+    is_only_member_of_group: bool,
+    auto_group_tabs: Option<bool>,
+) -> Vec<MenuItem<WorkspaceAction>> {
+    let (show_new_group, show_move_to_group, show_remove_from_group) =
+        tab_group_menu_entry_flags(group_id, tab_groups, is_only_member_of_group);
+    let mut menu_items = vec![];
+    if show_new_group {
+        menu_items.push(
+            MenuItemFields::new("New group with tab")
+                .with_on_select_action(WorkspaceAction::NewTabGroupFromTab(index))
+                .into_item(),
+        );
+    }
+    if show_move_to_group {
+        menu_items.push(MenuItemFields::new_submenu(MOVE_TO_GROUP_LABEL).into_item());
+    }
+    if show_remove_from_group {
+        menu_items.push(
+            MenuItemFields::new("Remove from group")
+                .with_on_select_action(WorkspaceAction::RemoveTabFromGroup(index))
+                .into_item(),
+        );
+    }
+    if let Some(enabled) = auto_group_tabs {
+        if !menu_items.is_empty() {
+            menu_items.push(MenuItem::Separator);
+        }
+        menu_items.push(
+            MenuItemFields::new(auto_group_tabs_menu_label(enabled))
+                // Routed through the settings page's own toggle instead of
+                // writing `appearance.tabs.auto_group_tabs` here, so the menu,
+                // the Settings switch and the keybinding stay one writer with
+                // one telemetry event between them.
+                .with_on_select_action(WorkspaceAction::DispatchToSettingsTab(
+                    SettingsAction::AppearancePageToggle(AppearancePageAction::ToggleAutoGroupTabs),
+                ))
+                .into_item(),
+        );
+    }
+    menu_items
 }
 
 /// True when the user has opted into vertical tabs and the feature flag is on.
@@ -464,7 +539,7 @@ impl TabData {
 
         for section_items in [
             self.pin_menu_items(index),
-            self.tab_group_menu_items(index, tab_groups, is_only_member_of_group),
+            self.tab_group_menu_items(index, tab_groups, is_only_member_of_group, ctx),
             self.session_sharing_menu_items(index, ctx),
             self.copy_metadata_menu_items(pane_name_target, ctx),
             self.modify_tab_menu_items(index, can_move_left, can_move_right, pane_name_target, ctx),
@@ -851,36 +926,30 @@ impl TabData {
     /// The `Move to group` item is a submenu parent — selecting/hovering it
     /// opens a sidecar populated by the workspace; it has no
     /// `on_select_action` of its own.
+    ///
+    /// When the automatic-grouping mode is available it also appends the
+    /// window-wide toggle for it, behind a divider — see
+    /// [`tab_group_menu_items_for`]. Reading the setting here rather than in the
+    /// builder keeps the section's shape a pure function of its inputs.
     fn tab_group_menu_items(
         &self,
         index: usize,
         tab_groups: &HashMap<TabGroupId, TabGroup>,
         is_only_member_of_group: bool,
+        ctx: &AppContext,
     ) -> Vec<MenuItem<WorkspaceAction>> {
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return vec![];
         }
-        let (show_new_group, show_move_to_group, show_remove_from_group) =
-            tab_group_menu_entry_flags(self.group_id, tab_groups, is_only_member_of_group);
-        let mut menu_items = vec![];
-        if show_new_group {
-            menu_items.push(
-                MenuItemFields::new("New group with tab")
-                    .with_on_select_action(WorkspaceAction::NewTabGroupFromTab(index))
-                    .into_item(),
-            );
-        }
-        if show_move_to_group {
-            menu_items.push(MenuItemFields::new_submenu(MOVE_TO_GROUP_LABEL).into_item());
-        }
-        if show_remove_from_group {
-            menu_items.push(
-                MenuItemFields::new("Remove from group")
-                    .with_on_select_action(WorkspaceAction::RemoveTabFromGroup(index))
-                    .into_item(),
-            );
-        }
-        menu_items
+        let auto_group_tabs = auto_tab_grouping_available()
+            .then(|| *TabSettings::as_ref(ctx).auto_group_tabs.value());
+        tab_group_menu_items_for(
+            index,
+            self.group_id,
+            tab_groups,
+            is_only_member_of_group,
+            auto_group_tabs,
+        )
     }
 
     fn color_option_menu_items(
