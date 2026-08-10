@@ -170,7 +170,7 @@ list `[child, grandchild]`.)
     press kills that child and returns focus to the root session.
 24. `Ctrl+C` with the bar focused and a **group** child selected kills the child **and
     its entire subtree**, deepest-first, so no descendant session is orphaned.
-    **[Open question 2 — recommended]** This deliberately diverges from the GUI, whose
+    **[Approved by the requester, 2026-08-10.]** This deliberately diverges from the GUI, whose
     per-pill Kill removes only the target node and leaves its descendants' hidden panes
     orphaned (deleting a parent drops its `children_by_parent` entry, making the subtree
     unreachable from the bar). In a TUI, unreachable retained sessions are pure leakage;
@@ -292,6 +292,66 @@ list `[child, grandchild]`.)
 50. Rationale: today's fixed prefix is 31 cells (`   Agents:   ` 13 + `orchestrator` tab
     14 + divider 4), leaving 29 cells for children at 60 columns — one child plus an
     arrow. T4 cuts the prefix to 9 cells and fits three.
+
+### Key routing and focus priority
+
+This section records how `←`/`→` are routed today, verified on master, because the
+proposal reuses those keys for level navigation (rule 17). The short version: key
+dispatch is focus-scoped, the proposal adds no new keybindings and no new keymap
+contexts, and the input box always wins the arrows while it is focused.
+
+51. Dispatch mechanism: a keystroke is offered to the **focused view first, then its
+    ancestors**, and a binding fires only where its context predicate matches. The
+    responder chain is the focused view plus its ancestor views only
+    (`crates/warpui_core/src/core/app.rs:2066-2074` `get_responder_chain`,
+    `app.rs:1498-1518` `view_ancestors`); each view in the chain contributes its own
+    keymap context (`app.rs:2008-2033`); matching walks the chain deepest-first and the
+    first match wins (`app.rs:2178-2214` `dispatch_keystroke`, root-first chain iterated
+    with `.rev()`). A view outside the focused chain never sees the key.
+52. When the **input box is focused, it takes the arrows**: `←`/`→` are
+    `tui:input:move_left`/`move_right` (cursor movement, including across wrapped
+    multi-line input; `crates/warp_tui/src/editor_interaction.rs:197-210`) and
+    `Shift+←`/`Shift+→` are `tui:input:select_left`/`select_right`
+    (`editor_interaction.rs:253-266`), all registered against the `TuiInputView` context
+    (`crates/warp_tui/src/keybindings.rs:93-98`). The tab bar's bindings cannot fire
+    then, for two independent reasons:
+    - they require the `TuiOrchestrationTabBarFocused` context flag
+      (`orchestration_tab_bar.rs:59`), and
+    - that flag is inserted into the session view's keymap context only while the bar
+      holds focus **and** the agent composer owns the input target
+      (`terminal_session_view.rs:5022-5031`) — so a blocking card or full-screen
+      terminal surface also suppresses the bar's bindings automatically.
+53. When the **bar is focused** (`Shift+↑` from the input's first visual row with no
+    active selection — CODE-1822 clauses 13-16 — or a prior bar interaction), the
+    session view holds real focus (`set_orchestration_tab_focus` calls
+    `ctx.focus_self()`), the input view is **not in the responder chain at all**, and
+    the active set is exactly: `←`/`→`/`Tab`/`Shift+Tab`/`Shift+←`/`Shift+→`
+    (`orchestration_tab_bar.rs:60-109`), `↓`/`Shift+↓` to leave the bar and `Esc` to
+    return to the root (`terminal_session_view.rs:918-945`), and the fixed `Ctrl+C`
+    (`orchestration_tab_bar.rs:52-57`). So the bar is keyboard-reachable only via
+    `Shift+↑` (mouse clicks on tabs work without bar focus, per CODE-1822 clause 28).
+54. Complete list of the TUI's other `←`/`→` consumers on master, each scoped to its own
+    focused or blocking surface and therefore unable to contend with the bar or the
+    input: the run_agents card's configuration pages (`orchestration_block.rs:77-98`,
+    `TuiOrchestrationBlockConfiguring` context only — the acceptance card binds no
+    arrows), the handoff card's configuration pages (`handoff/block.rs:88-103`), the
+    ask-question card (`tui_ask_question_view.rs:60-83`, active-blocker context), the
+    statusline-config reorder mode (`statusline_config_view.rs:57-72`), and the
+    attachment bar when explicitly focused via `Tab` (`attachment_bar/view.rs:75-98`).
+    The option selector binds only `↑`/`↓` (`option_selector.rs:44-63`). On the
+    cloud-run child surface, `Enter` opens the run URL and `Shift+↑` focuses the bar
+    (`cloud_run_view.rs:68-94`); no arrows. `←` on an **empty, unfocused-bar** agent
+    input additionally opens the conversation switcher (`input/view.rs:949-955`) — an
+    input-focused behavior this proposal does not touch.
+55. Focus is always visually disambiguated, so the owner of the arrows is never
+    ambiguous: while the bar is focused the selected tab uses the focused magenta
+    selection treatment (CODE-1822 clause 7) and the footer switches to the bar's
+    footer variants (rules 22, 27); while the input is focused the input shows its
+    cursor and the standard footer; a blocking card owns the footer and hints while
+    active.
+56. Invariant: rule 17 changes only what the already-bar-scoped `←`/`→` bindings
+    traverse. It introduces no new keybindings, no new keymap contexts, and no change
+    to any other surface's bindings, so no existing `←`/`→` consumer changes behavior.
 
 ## Mockups
 
@@ -442,11 +502,12 @@ Each decision states the chosen option and the rejected alternatives with the re
    levels cheap local navigation. Rejected: all keys tree-wide — skipping a finished
    subtree of N nodes costs N presses. Rejected: all keys level-scoped — strands
    reachability behind repeated drill-ins and breaks today's `Tab` behavior.
-6. **Subtree kill on `Ctrl+C` for group children.** Chosen (pending open question 2): the
-   alternative — GUI-parity single-node kill — orphans grandchild sessions that the TUI
-   can then never display or reclaim. Rejected: an extra confirmation press for group
-   kills — inconsistent with the established single-press bar-focused kill, and the
-   footer already names the blast radius (rule 27).
+6. **Subtree kill on `Ctrl+C` for group children.** Chosen, and **approved by the
+   requester (2026-08-10)**: the alternative — GUI-parity single-node kill — orphans
+   grandchild sessions that the TUI can then never display or reclaim. Rejected: an
+   extra confirmation press for group kills — inconsistent with the established
+   single-press bar-focused kill, and the footer already names the blast radius
+   (rule 27).
 7. **No `?`-overlay expansion or slash command.** The badge plus footers carry
    discoverability (rules 44-46). Rejected: `/agents` command — adds a command for a
    surface that is already one keystroke away and invisible exactly when the command
@@ -481,11 +542,12 @@ Recorded choices made without a requester answer; each is cheap to reverse at re
 ## Open questions
 
 1. **Keyboard scope** (rule 17 / decision 5): `←`/`→` level-scoped with `Tab` tree-wide
-   (recommended), or all navigation keys tree-wide as today?
-2. **Group kill semantics** (rule 24 / decision 6): single `Ctrl+C` kills the selected
-   group child and its whole subtree with the footer naming the blast radius
-   (recommended), or GUI-parity single-node kill, or subtree kill behind a second
-   confirming press?
+   (recommended), or all navigation keys tree-wide as today? Rules 51-56 establish that
+   the level-scoped option conflicts with no existing keybinding and never contends
+   with the input box.
+
+Resolved: group kill semantics (formerly open question 2) — approved as recommended by
+the requester on 2026-08-10; see rule 24 and decision 6.
 
 ## Baseline amendments (CODE-1822 PRODUCT.md)
 
