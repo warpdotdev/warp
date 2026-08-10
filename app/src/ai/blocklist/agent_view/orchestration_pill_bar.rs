@@ -2548,12 +2548,15 @@ fn render_avatar_with_status_overlay(
 /// than a proportional one -- so this is expressed in pixels deliberately, and
 /// a whole one so the baseline's fractional part is unchanged.
 ///
-/// PROVISIONAL. This halves the error rather than removing it: measured on a
-/// 15px disc, `H` went from 0.93px low to 0.47px low. It is also not a clean
-/// translation -- a 1px baseline change moved the centroid 0.46px and took a
-/// row off the bottom of the raster instead of shifting the whole glyph, so
-/// the response is not linear and this value should not be trusted at other
-/// disc sizes until it has been calibrated at two of them.
+/// Measured on a 15px disc, coverage-weighted ink centroid against the disc's
+/// centre, three letters: before the lift +0.82 / +0.89 / +0.89 low; after it
+/// -0.18 / 0.00 / -0.04. So the lift translates the glyph ~1:1 and lands the
+/// ink centred to within a fifth of a pixel, comfortably inside antialiasing
+/// noise.
+///
+/// Only verified at the 15px chip avatar. If it is the rounding effect it
+/// appears to be, it is absolute and should hold at the 16px hover-card and
+/// 1.25x transcript avatars too, but that has not been measured.
 const AVATAR_GLYPH_RASTER_LIFT: f32 = 1.;
 
 /// Baseline placement that centers an avatar letter's *ink* on its disc.
