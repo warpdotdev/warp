@@ -73,6 +73,20 @@ const PILL_HEIGHT: f32 = 22.;
 const PILL_RADIUS: f32 = PILL_HEIGHT / 2.;
 const AVATAR_SIZE: f32 = 16.;
 const PILL_AVATAR_SLOT_SIZE: f32 = 20.;
+// Verifying this geometry means measuring rendered frames, and two things
+// about that were learned expensively while building it:
+//
+//  * Detect elements by temporarily painting them a saturated colour, not by
+//    thresholding their theme colour. Threshold detection failed or actively
+//    misled on three separate occasions here -- it cannot separate a disc from
+//    its own antialiased rim, from the status cutout ring, or from a dark
+//    glyph on a dark card.
+//  * Re-derive reference points (the chip's top row, the disc's rect) from the
+//    frame you are measuring. Carrying them over from an earlier capture, or
+//    comparing two frames measured different ways, manufactures effects that
+//    are not there -- that mistake produced a convincing but entirely
+//    imaginary "the glyph's top edge is clamped" diagnosis.
+
 /// Visible avatar disc diameter, per design.
 const PILL_AVATAR_DISC_SIZE: f32 = 15.;
 /// Gap between the avatar disc and each of the pill's horizontal edges. The
