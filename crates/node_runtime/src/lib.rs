@@ -5,6 +5,9 @@
 //! (x64, arm64).
 
 use anyhow::{Context, Result, bail};
+// Re-export so callers can pass package-specific engine floors without depending on `semver` directly.
+#[cfg(feature = "local_fs")]
+pub use semver::Version;
 use serde::Deserialize;
 
 cfg_if::cfg_if! {
@@ -16,7 +19,6 @@ cfg_if::cfg_if! {
         use std::path::{Path, PathBuf};
         use tar::Archive;
         use command::r#async::Command;
-        use semver::Version;
     }
 }
 
@@ -404,6 +406,18 @@ where
 /// For system node, returns `PathBuf::from("node")` to let PATH resolution handle it.
 #[cfg(feature = "local_fs")]
 pub async fn find_working_node_binary(path_env_var: Option<&str>) -> Option<PathBuf> {
+    find_working_node_binary_with_min(path_env_var, MIN_NODE_VERSION).await
+}
+
+/// Same as [`find_working_node_binary`], but enforces a caller-supplied minimum system Node version.
+///
+/// Custom installs are still preferred and validated with `node --version`. System Node is only
+/// used when it satisfies `min_version`.
+#[cfg(feature = "local_fs")]
+pub async fn find_working_node_binary_with_min(
+    path_env_var: Option<&str>,
+    min_version: Version,
+) -> Option<PathBuf> {
     // First, try our custom node installation
     if let Ok(custom_node) = node_binary_path()
         && custom_node.is_file()
@@ -423,7 +437,9 @@ pub async fn find_working_node_binary(path_env_var: Option<&str>) -> Option<Path
 
     // Fall back to system node if available
     if let Some(path_env_var) = path_env_var
-        && detect_system_node(path_env_var).await.is_ok()
+        && detect_system_node_with_min(path_env_var, min_version)
+            .await
+            .is_ok()
     {
         // System node is available and meets version requirements.
         // Use "node" and let the PATH resolve it.
@@ -435,7 +451,7 @@ pub async fn find_working_node_binary(path_env_var: Option<&str>) -> Option<Path
     None
 }
 
-/// Detects and validates the system-installed Node.js meets the minimum version requirement.
+/// Detects and validates the system-installed Node.js meets Warp's baseline minimum.
 ///
 /// This function runs `node --version` using the provided PATH environment variable
 /// and verifies that the installed version meets the minimum requirement.
@@ -447,6 +463,17 @@ pub async fn find_working_node_binary(path_env_var: Option<&str>) -> Option<Path
 /// Returns an error if Node.js is not found or doesn't meet the minimum version.
 #[cfg(feature = "local_fs")]
 pub async fn detect_system_node(path_env_var: impl AsRef<OsStr>) -> Result<()> {
+    detect_system_node_with_min(path_env_var, MIN_NODE_VERSION).await
+}
+
+/// Same as [`detect_system_node`], but enforces a caller-supplied minimum version.
+///
+/// Used by servers whose npm `engines` field is stricter than Warp's baseline.
+#[cfg(feature = "local_fs")]
+pub async fn detect_system_node_with_min(
+    path_env_var: impl AsRef<OsStr>,
+    min_version: Version,
+) -> Result<()> {
     let path_env_var = path_env_var.as_ref();
 
     // On Windows, we must use `cmd.exe /c node` so that the provided PATH
@@ -482,11 +509,11 @@ pub async fn detect_system_node(path_env_var: impl AsRef<OsStr>) -> Result<()> {
     let version = Version::parse(version_str)
         .with_context(|| format!("Failed to parse Node.js version: {}", version_str))?;
 
-    if version < MIN_NODE_VERSION {
+    if version < min_version {
         bail!(
             "System Node.js version {} is too old. Minimum required: {}",
             version,
-            MIN_NODE_VERSION
+            min_version
         );
     }
 

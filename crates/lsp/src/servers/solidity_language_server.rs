@@ -14,8 +14,12 @@ use crate::supported_servers::CustomBinaryConfig;
 const SOLIDITY_SERVER_BINARY_NAME: &str = "nomicfoundation-solidity-language-server";
 
 /// Minimum Node.js version required by `@nomicfoundation/solidity-language-server`.
+///
+/// Matches the package's published `engines.node` field. Node itself does not enforce
+/// engines, but Warp gates PATH installs and system-Node selection on this floor so a
+/// stale global install cannot block the managed-install fallback.
 #[cfg(feature = "local_fs")]
-const SOLIDITY_MIN_NODE_VERSION: (u64, u64, u64) = (20, 9, 0);
+const SOLIDITY_MIN_NODE_VERSION: node_runtime::Version = node_runtime::Version::new(20, 9, 0);
 
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub struct SolidityLanguageServerCandidate {
@@ -36,6 +40,10 @@ impl SolidityLanguageServerCandidate {
     /// Instead of running the wrapper script (which has a shebang requiring node in PATH),
     /// we run node directly with the packaged JS entrypoint.
     ///
+    /// The published entrypoint only accepts LSP transport flags such as `--stdio`; it does
+    /// not implement `--version`. Custom-install verification therefore checks that the JS
+    /// entrypoint exists and that a usable Node binary is available.
+    ///
     /// # Arguments
     /// * `path_env_var` - The PATH environment variable to use when checking for system node.
     #[cfg(feature = "local_fs")]
@@ -53,7 +61,11 @@ impl SolidityLanguageServerCandidate {
             return None;
         }
 
-        let node_binary = find_node_binary_for_solidity(path_env_var).await?;
+        let node_binary = node_runtime::find_working_node_binary_with_min(
+            path_env_var,
+            SOLIDITY_MIN_NODE_VERSION,
+        )
+        .await?;
 
         log::info!(
             "Found Solidity language server JS file at {}",
@@ -87,7 +99,28 @@ impl LanguageServerCandidate for SolidityLanguageServerCandidate {
     }
 
     async fn is_installed_on_path(&self, executor: &CommandBuilder) -> bool {
-        binary_exists_on_path(executor.path_env_var(), SOLIDITY_SERVER_BINARY_NAME)
+        // The published server only accepts LSP transport flags such as `--stdio`, so we
+        // cannot probe it with `--version` the way we do for pyright/typescript-language-server.
+        // PATH must still only win when the wrapper is actually runnable: the binary has to
+        // exist/be executable, and system Node must satisfy the package engines floor.
+        // Otherwise Warp would skip the managed-install fallback for a broken global install.
+        if !executable_exists_on_path(executor.path_env_var(), SOLIDITY_SERVER_BINARY_NAME) {
+            return false;
+        }
+
+        let Some(path) = executor.path_env_var() else {
+            return false;
+        };
+
+        match node_runtime::detect_system_node_with_min(path, SOLIDITY_MIN_NODE_VERSION).await {
+            Ok(()) => true,
+            Err(err) => {
+                log::info!(
+                    "Ignoring PATH install of {SOLIDITY_SERVER_BINARY_NAME} because system Node does not meet >= {SOLIDITY_MIN_NODE_VERSION}: {err}"
+                );
+                false
+            }
+        }
     }
 
     async fn install(
@@ -106,7 +139,14 @@ impl LanguageServerCandidate for SolidityLanguageServerCandidate {
             .await
             .context("Failed to create Solidity language server installation directory")?;
 
-        let use_system_node = system_node_meets_solidity_requirement(executor.path_env_var()).await;
+        let use_system_node = match executor.path_env_var() {
+            Some(path) => {
+                node_runtime::detect_system_node_with_min(path, SOLIDITY_MIN_NODE_VERSION)
+                    .await
+                    .is_ok()
+            }
+            None => false,
+        };
 
         let custom_node_paths = if use_system_node {
             log::info!("Using system Node.js for Solidity language server installation");
@@ -173,102 +213,19 @@ impl LanguageServerCandidate for SolidityLanguageServerCandidate {
     }
 }
 
-/// Finds a Node.js binary that can run the Solidity language server.
-///
-/// Prefers Warp's pinned custom Node install, then falls back to system Node only when it
-/// satisfies the package's `engines` requirement (`>=20.9.0`).
-#[cfg(feature = "local_fs")]
-async fn find_node_binary_for_solidity(path_env_var: Option<&str>) -> Option<std::path::PathBuf> {
-    if let Ok(custom_node) = node_runtime::node_binary_path()
-        && custom_node.is_file()
-    {
-        log::info!(
-            "Using custom node installation for Solidity language server at {}",
-            custom_node.display()
-        );
-        return Some(custom_node);
-    }
-
-    if system_node_meets_solidity_requirement(path_env_var).await {
-        log::info!("Using system node for Solidity language server");
-        return Some(std::path::PathBuf::from("node"));
-    }
-
-    None
-}
-
-/// Returns true when system Node.js is available and meets the Solidity server's engine requirement.
-#[cfg(feature = "local_fs")]
-async fn system_node_meets_solidity_requirement(path_env_var: Option<&str>) -> bool {
-    let Some(path) = path_env_var else {
-        return false;
-    };
-
-    // Still require Warp's generic minimum first so we share the same PATH resolution path.
-    if node_runtime::detect_system_node(path).await.is_err() {
-        return false;
-    }
-
-    let mut cmd = command::r#async::Command::new("node");
-    cmd.env("PATH", path).arg("--version");
-    match cmd.output().await {
-        Ok(output) if output.status.success() => {
-            let version_str = String::from_utf8_lossy(&output.stdout);
-            let version_str = version_str.trim().trim_start_matches('v');
-            match parse_semver_tuple(version_str) {
-                Some(version) if version >= SOLIDITY_MIN_NODE_VERSION => {
-                    log::info!(
-                        "System Node.js {} meets Solidity language server requirement (>= {}.{}.{})",
-                        version_str,
-                        SOLIDITY_MIN_NODE_VERSION.0,
-                        SOLIDITY_MIN_NODE_VERSION.1,
-                        SOLIDITY_MIN_NODE_VERSION.2
-                    );
-                    true
-                }
-                Some(_) => {
-                    log::info!(
-                        "System Node.js {} is below Solidity language server requirement (>= {}.{}.{})",
-                        version_str,
-                        SOLIDITY_MIN_NODE_VERSION.0,
-                        SOLIDITY_MIN_NODE_VERSION.1,
-                        SOLIDITY_MIN_NODE_VERSION.2
-                    );
-                    false
-                }
-                None => {
-                    log::warn!("Failed to parse system Node.js version: {version_str}");
-                    false
-                }
-            }
-        }
-        Ok(output) => {
-            log::warn!(
-                "node --version failed while checking Solidity requirement: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            false
-        }
-        Err(e) => {
-            log::warn!("Failed to run node --version for Solidity requirement check: {e}");
-            false
-        }
-    }
-}
-
-/// Returns true if `binary_name` exists somewhere on PATH.
+/// Returns true if an executable named `binary_name` exists somewhere on PATH.
 ///
 /// The Solidity language server only accepts LSP transport flags such as `--stdio`,
 /// so we cannot probe it with `--version` the way we do for other Node-based servers.
 #[cfg(feature = "local_fs")]
-fn binary_exists_on_path(path_env_var: Option<&str>, binary_name: &str) -> bool {
+fn executable_exists_on_path(path_env_var: Option<&str>, binary_name: &str) -> bool {
     let Some(path_env_var) = path_env_var else {
         return false;
     };
 
     for dir in std::env::split_paths(path_env_var) {
         let candidate = dir.join(binary_name);
-        if candidate.is_file() {
+        if is_executable_file(&candidate) {
             return true;
         }
 
@@ -276,7 +233,7 @@ fn binary_exists_on_path(path_env_var: Option<&str>, binary_name: &str) -> bool 
         {
             for extension in ["cmd", "bat", "exe"] {
                 let windows_candidate = dir.join(format!("{binary_name}.{extension}"));
-                if windows_candidate.is_file() {
+                if is_executable_file(&windows_candidate) {
                     return true;
                 }
             }
@@ -287,19 +244,19 @@ fn binary_exists_on_path(path_env_var: Option<&str>, binary_name: &str) -> bool 
 }
 
 #[cfg(feature = "local_fs")]
-fn parse_semver_tuple(version: &str) -> Option<(u64, u64, u64)> {
-    let mut parts = version.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next()?.parse().ok()?;
-    let patch = parts
-        .next()
-        .unwrap_or("0")
-        .split(|c: char| !c.is_ascii_digit())
-        .next()
-        .unwrap_or("0")
-        .parse()
-        .ok()?;
-    Some((major, minor, patch))
+fn is_executable_file(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
 }
 
 #[async_trait]
@@ -329,3 +286,7 @@ impl LanguageServerCandidate for SolidityLanguageServerCandidate {
         todo!()
     }
 }
+
+#[cfg(all(test, feature = "local_fs"))]
+#[path = "solidity_language_server_tests.rs"]
+mod tests;
