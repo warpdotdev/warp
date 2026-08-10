@@ -603,9 +603,16 @@ impl Workspace {
 
         // This tab should land right after all pinned items.
         let target = self.pinned_boundary_index(&self.tabs);
+        let pane_group_id = tab.pane_group.id();
 
         self.tabs[tab_index].pinned = false;
         self.move_tab_to_index(tab_index, target, ctx);
+
+        // Automatic grouping skips pinned tabs entirely, so an unpinned tab has
+        // never been placed. It reconciles as if it were newly created; pinning
+        // it again would take it back out of its group without marking it
+        // detached, so the two operations round-trip.
+        self.place_tab_by_auto_grouping(pane_group_id, ctx);
 
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
