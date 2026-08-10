@@ -1,0 +1,143 @@
+{
+  "contract": "factory-plugin-runtime",
+  "version": "1.0.0",
+  "canonical_source": "warpdotdev/warp-server: logic/ai/ambient_agents/workers/common/testdata/factory_plugin_runtime_contract.json",
+  "description": "Environment contract between the warp-server dispatch path and the Warp client for Agent Plugins in a file-managed Factory run. warp-server asserts the producing half against this file; the Warp client vendors a verbatim copy and asserts the consuming half, so a divergence appears as a diff between two committed files.",
+  "environment_variables": [
+    {
+      "name": "WARP_SKILL_DIRS",
+      "produced_by": "server",
+      "encoding": "comma-separated paths",
+      "order": "most specific first: agent, then factory",
+      "relative_to": "environment working directory",
+      "required": false
+    },
+    {
+      "name": "WARP_PLUGIN_DIRS",
+      "produced_by": "server",
+      "encoding": "comma-separated paths",
+      "order": "most specific first: automation, then bound agent, then factory",
+      "relative_to": "environment working directory",
+      "required": false,
+      "notes": "Each entry is a plugin collection directory. The client enumerates immediate child directories as packages; a package whose manifest name repeats in a later directory is shadowed by the earlier one."
+    },
+    {
+      "name": "WARP_FACTORY_MCP_FILES",
+      "produced_by": "server",
+      "encoding": "comma-separated paths",
+      "order": "most specific first: automation, then bound agent, then factory",
+      "relative_to": "environment working directory",
+      "required": false,
+      "notes": "The client loads ordinary entries and ignores managed entries, which Factory sync already projected."
+    },
+    {
+      "name": "WARP_FACTORY_UID",
+      "produced_by": "server",
+      "encoding": "opaque identifier",
+      "required": false,
+      "notes": "Identity and diagnostics only. It is never used to compose a path: the plugin data root already carries it."
+    },
+    {
+      "name": "WARP_PLUGIN_DATA_ROOT",
+      "produced_by": "server",
+      "encoding": "absolute path",
+      "required": false,
+      "notes": "Absence means the backend has no durable storage, and the client must not start a Factory plugin stdio MCP server."
+    }
+  ],
+  "plugin_data_path": {
+    "server_exports": "<durable-base>/plugin-data/<factory-uid>",
+    "client_appends": "<scope-segment>/<plugin-key>",
+    "composed": "${WARP_PLUGIN_DATA_ROOT}/<scope-segment>/<plugin-key>",
+    "segments_below_root": 2,
+    "invariants": [
+      "Exactly two segments below the root. Neither may contain a path separator, and neither may be '.' or '..'.",
+      "Nothing below the root mentions the Factory UID: it appears exactly once in a composed path, in the root the server exported.",
+      "The scope segment is flat, never nested: an agent contributes one segment, not agent/<name>."
+    ],
+    "scope_segment": {
+      "factory": "factory",
+      "agent": "agent-<sanitize(agent-name)>",
+      "automation": "automation-<sanitize(automation-name)>"
+    },
+    "plugin_key": "sanitize(manifest-name)",
+    "notes": [
+      "The Factory UID is baked into the exported root by the server so two Factories running as the same principal cannot share a data directory.",
+      "Agent, automation, and manifest names are author-controlled and become directory segments, so the client sanitizes them before joining. For a conformant package the plugin key is a no-op: Agent Plugins 5.5 already restricts a manifest name to lowercase alphanumerics, hyphens, and periods.",
+      "The client keeps its own local layout (plugins/data/<hash>) for non-Factory plugins; this contract governs Factory plugins only."
+    ]
+  },
+  "sanitize": {
+    "description": "Maps an author-controlled name to a single safe path segment. It is total: every input produces a usable segment.",
+    "steps": [
+      "1. Map each character: keep [a-z0-9._-], lowercase A-Z, replace everything else with '-'.",
+      "2. If the mapped result is byte-identical to the input AND is not '', '.' or '..', return it unchanged.",
+      "3. Otherwise compute SHA-256 over the ORIGINAL input bytes and take the first 4 bytes as 8 lowercase hex characters. For an empty or reserved mapped result return the hex alone; otherwise return '<mapped>-<hex>'."
+    ],
+    "porting_traps": [
+      "The digest is computed over the ORIGINAL input, not over the mapped result. Hashing the mapped form is easy to do by accident and silently resolves the same name to a different directory.",
+      "'..' survives step 1 byte-identical, so the did-it-change test does not catch it. It must be caught by the explicit reserved check. A port that only compares mapped-against-input reintroduces path traversal exactly here."
+    ],
+    "examples_provenance": "Every entry in sanitize_examples was produced by executing an implementation of the rule, not written by hand. Verify a port by reproducing all of them; a port that matches the prose but not these outputs is wrong."
+  },
+  "sanitize_examples": [
+    { "input": "acme-tools", "output": "acme-tools", "why": "conformant manifest name, unchanged" },
+    { "input": "release.tools", "output": "release.tools", "why": "periods are kept" },
+    { "input": "a", "output": "a", "why": "single character, unchanged" },
+    { "input": "lint3r", "output": "lint3r", "why": "digits are kept" },
+    { "input": "with_underscore", "output": "with_underscore", "why": "underscores are kept" },
+    { "input": "a/b", "output": "a-b-c14cddc0", "why": "separator replaced, so the digest is appended" },
+    { "input": "Mixed Case", "output": "mixed-case-0962903a", "why": "uppercase lowercased and space replaced, so the digest is appended" },
+    { "input": "", "output": "e3b0c442", "why": "empty result, so the digest alone" },
+    { "input": ".", "output": "cdb4ee2a", "why": "reserved result, so the digest alone" },
+    { "input": "..", "output": "5ec1f7e7", "why": "reserved result caught by the reserved check rather than the changed check, so the digest alone" },
+    {
+      "input": "../../etc",
+      "output": "..-..-etc-74ccf3c5",
+      "why": "separators replaced while periods are kept, so the digest is appended; the result is one segment with no separator and is not '..', so traversal is neutralized"
+    }
+  ],
+  "examples": [
+    {
+      "durable_base": "/cache/warp",
+      "factory_uid": "factory-uid-1",
+      "server_exports": "/cache/warp/plugin-data/factory-uid-1",
+      "scope": "agent-triage",
+      "plugin_key": "acme-tools",
+      "composed": "/cache/warp/plugin-data/factory-uid-1/agent-triage/acme-tools"
+    },
+    {
+      "durable_base": "/Volumes/warp-plugin-data",
+      "factory_uid": "factory-uid-2",
+      "server_exports": "/Volumes/warp-plugin-data/plugin-data/factory-uid-2",
+      "scope": "factory",
+      "plugin_key": "shared-tools",
+      "composed": "/Volumes/warp-plugin-data/plugin-data/factory-uid-2/factory/shared-tools"
+    },
+    {
+      "durable_base": "/cache/factories",
+      "factory_uid": "fac_01HZY",
+      "server_exports": "/cache/factories/plugin-data/fac_01HZY",
+      "scope": "agent-release",
+      "plugin_key": "acme-tools",
+      "composed": "/cache/factories/plugin-data/fac_01HZY/agent-release/acme-tools"
+    },
+    {
+      "durable_base": "/cache/factories",
+      "factory_uid": "fac_01HZY",
+      "server_exports": "/cache/factories/plugin-data/fac_01HZY",
+      "scope": "automation-nightly",
+      "plugin_key": "release.tools",
+      "composed": "/cache/factories/plugin-data/fac_01HZY/automation-nightly/release.tools"
+    },
+    {
+      "durable_base": "/cache/factories",
+      "factory_uid": "fac_01HZY",
+      "server_exports": "/cache/factories/plugin-data/fac_01HZY",
+      "scope": "agent-..-..-etc-74ccf3c5",
+      "plugin_key": "acme-tools",
+      "composed": "/cache/factories/plugin-data/fac_01HZY/agent-..-..-etc-74ccf3c5/acme-tools",
+      "why": "a hostile agent name still yields exactly two segments below the root"
+    }
+  ]
+}

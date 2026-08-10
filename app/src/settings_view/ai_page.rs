@@ -642,6 +642,25 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                     && FeatureFlag::FileBasedMcp.is_enabled()
                     && ContextFlag::ShowMCPServers.is_enabled()
             }),
+            // Yields the mutually exclusive `Enable Agent Plugin discovery` and
+            // `Disable Agent Plugin discovery` palette entries, backed by the same persisted
+            // preference as the Settings switch.
+            //
+            // Gated on AI being on to match the widget and every neighbouring AI row. Two
+            // surfaces onto one preference must agree about whether it can be changed: gating
+            // only one of them makes the palette silently succeed while the switch looks inert.
+            // Discovery is already inert with AI off, since `is_plugin_discovery_enabled` ands
+            // the two together, so nothing is lost by dimming the control in that state.
+            ToggleSettingActionPair::new(
+                "Agent Plugin discovery",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::TogglePluginDiscovery,
+                )),
+                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+                flags::PLUGIN_DISCOVERY_ENABLED,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| FeatureFlag::AgentPlugins.is_enabled()),
         ],
         app,
     );
@@ -2922,6 +2941,9 @@ impl AISettingsPageView {
                 widgets.push(Box::new(GeminiEnterpriseWidget::new(ctx)));
                 widgets.push(Box::new(AgentAttributionWidget::default()));
                 widgets.push(Box::new(OtherAIWidget::default()));
+                if FeatureFlag::AgentPlugins.is_enabled() {
+                    widgets.push(Box::new(PluginDiscoveryWidget::default()));
+                }
                 if FeatureFlag::AgentModeComputerUse.is_enabled() {
                     widgets.push(Box::new(CloudAgentComputerUseWidget::default()));
                 }
@@ -2967,6 +2989,11 @@ impl AISettingsPageView {
                 }
                 widgets.push(Box::new(AgentAttributionWidget::default()));
                 widgets.push(Box::new(OtherAIWidget::default()));
+                // Static for the process, so the widget is simply never created when Agent
+                // Plugins are off, rather than created and hidden per render.
+                if FeatureFlag::AgentPlugins.is_enabled() {
+                    widgets.push(Box::new(PluginDiscoveryWidget::default()));
+                }
                 if FeatureFlag::AgentModeComputerUse.is_enabled() {
                     widgets.push(Box::new(CloudAgentComputerUseWidget::default()));
                 }
@@ -3757,6 +3784,7 @@ pub enum AISettingsPageAction {
     ToggleGeminiEnterpriseCredentialsEnabled,
     ToggleCloudAgentComputerUse,
     ToggleFileBasedMcp,
+    TogglePluginDiscovery,
     ToggleIncludeAgentCommandsInHistory,
     ToggleAutoApproveBypassesCommandDenylist,
     ToggleAgentAttribution,
@@ -4554,6 +4582,12 @@ impl TypedActionView for AISettingsPageView {
             AISettingsPageAction::ToggleFileBasedMcp => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.file_based_mcp_enabled.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::TogglePluginDiscovery => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.plugin_discovery_enabled.toggle_and_save_value(ctx));
                 });
                 ctx.notify();
             }
@@ -8314,6 +8348,91 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
             .with_child(render_ai_setting_description(
                 "Enable computer use in cloud agent conversations started from the Warp app.",
                 !is_disabled,
+                app,
+            ))
+            .finish()
+    }
+}
+
+/// The single global kill switch for Agent Plugin discovery.
+///
+/// The widget deliberately has no `should_render`: it must stay on screen while discovery is
+/// disabled, otherwise the only way back is to edit `settings.toml` by hand. Whether Agent
+/// Plugins exist at all is a static feature-flag decision made once in `build_page`.
+#[derive(Default)]
+struct PluginDiscoveryWidget {
+    toggle: SwitchStateHandle,
+}
+
+impl SettingsWidget for PluginDiscoveryWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "agent plugin plugins discovery skills mcp disable stop"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ai_settings = AISettings::as_ref(app);
+        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
+        // The raw preference, so the switch keeps showing what the user chose even while AI is
+        // globally off and the effective value is therefore false.
+        let is_checked = *ai_settings.plugin_discovery_enabled.value();
+
+        let ui_builder = appearance.ui_builder();
+        let toggle = if is_any_ai_enabled {
+            ui_builder
+                .switch(self.toggle.clone())
+                .check(is_checked)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::TogglePluginDiscovery);
+                })
+                .finish()
+        } else {
+            ui_builder
+                .switch(self.toggle.clone())
+                .check(is_checked)
+                .with_disabled(true)
+                .build()
+                .finish()
+        };
+
+        let toggle_row = build_toggle_element(
+            render_body_item_label::<AISettingsPageAction>(
+                "Agent Plugin discovery".to_string(),
+                Some(styles::header_font_color(is_any_ai_enabled, app)),
+                None,
+                LocalOnlyIconState::Hidden,
+                ToggleState::Enabled,
+                appearance,
+            ),
+            toggle,
+            appearance,
+            None,
+        );
+
+        Flex::column()
+            .with_child(render_separator(appearance))
+            .with_child(
+                build_sub_header(
+                    appearance,
+                    "Plugins",
+                    Some(styles::header_font_color(is_any_ai_enabled, app)),
+                )
+                .with_padding_bottom(HEADER_PADDING)
+                .finish(),
+            )
+            .with_child(toggle_row)
+            .with_child(render_ai_setting_description(
+                "Discover Agent Plugin packages from .agents/plugins and .warp/plugins. Turning \
+                 this off removes all plugin skills and MCP servers from Warp; your plugin files \
+                 and their data are left alone.",
+                is_any_ai_enabled,
                 app,
             ))
             .finish()

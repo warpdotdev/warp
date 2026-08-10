@@ -949,6 +949,15 @@ pub enum FeatureFlag {
     /// between credits and dollars. When disabled (prod/stable), the footer
     /// falls back to a static, non-interactive credits total.
     TuiCostTransparency,
+
+    /// Enables discovery of [Agent Plugins 1.0.0](https://agent-plugins.org/specification)
+    /// packages from `.agents/plugins` and `.warp/plugins` in the user's home directory and in
+    /// the detected repositories, along with the `Agent Plugin discovery` preference that turns
+    /// that discovery off.
+    ///
+    /// While this is disabled no plugin package is scanned, parsed, or loaded, and the settings
+    /// row and command-palette entries do not exist.
+    AgentPlugins,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1025,6 +1034,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WellKnownMcpIds,
     FeatureFlag::FactoryMcp,
     FeatureFlag::TuiCostTransparency,
+    FeatureFlag::AgentPlugins,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
