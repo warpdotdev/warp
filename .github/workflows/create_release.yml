@@ -1851,12 +1851,20 @@ jobs:
         uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
         if: ${{ steps.failed_releases.outputs.failed != '' }}
         with:
-          channel-id: "#oncall-client"
-          # Follows https://api.slack.com/reference/surfaces/formatting#mentioning-users.
-          # S06N82RS7FA is the user group ID for @oncall-client-eng.
-          slack-message: "Failed to create ${{ steps.failed_releases.outputs.failed }} release artifacts for ${{ inputs.channel }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}. cc: <!subteam^S06N82RS7FA>"
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.ACTION_MONITORING_SLACK }}
+          # v2+ of this action replaced the `channel-id`/`slack-message` inputs
+          # and the SLACK_BOT_TOKEN env var with an explicit API method, a
+          # `token` input, and the API arguments in `payload`. It also no longer
+          # fails the step when the Slack API returns an error unless `errors`
+          # is set, so set it to keep the v1 behavior of surfacing a failed
+          # notification.
+          errors: true
+          method: chat.postMessage
+          token: ${{ secrets.ACTION_MONITORING_SLACK }}
+          payload: |
+            channel: "#oncall-client"
+            # Follows https://api.slack.com/reference/surfaces/formatting#mentioning-users.
+            # S06N82RS7FA is the user group ID for @oncall-client-eng.
+            text: "Failed to create ${{ steps.failed_releases.outputs.failed }} release artifacts for ${{ inputs.channel }}. See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}. cc: <!subteam^S06N82RS7FA>"
 
   generate_changelogs:
     name: Generate Changelogs
@@ -1980,6 +1988,7 @@ jobs:
           CHANGELOG_JSON: ${{ steps.generate_changelog.outputs.changelog }}
           RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
           MARKDOWN_ARTIFACT_URL: ${{ steps.upload_changelog_draft_markdown.outputs.artifact-url }}
+          SLACK_CHANNEL: ${{ steps.get-config.outputs.changelog_slack_channel }}
         run: |
           CHANGELOG_INPUT="${{ runner.temp }}/slack-changelog-input.json"
           SLACK_PAYLOAD="${{ runner.temp }}/slack-changelog-payload.json"
@@ -1995,6 +2004,13 @@ jobs:
           fi
           echo "has_content=true" >> $GITHUB_OUTPUT
 
+          # v2+ of slackapi/slack-github-action takes the destination channel as
+          # a chat.postMessage argument instead of a separate `channel-id`
+          # input, so fold it into the payload here. jq -c keeps the payload on a
+          # single line, which the heredoc below relies on.
+          jq -c --arg channel "$SLACK_CHANNEL" '. + {channel: $channel}' "$SLACK_PAYLOAD" > "$SLACK_PAYLOAD.tmp"
+          mv "$SLACK_PAYLOAD.tmp" "$SLACK_PAYLOAD"
+
           echo "payload<<SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
           cat "$SLACK_PAYLOAD" >> $GITHUB_OUTPUT
           echo "SLACK_PAYLOAD_EOF" >> $GITHUB_OUTPUT
@@ -2008,10 +2024,16 @@ jobs:
         # in Cloud Storage.)
         continue-on-error: true
         with:
-          channel-id: ${{ steps.get-config.outputs.changelog_slack_channel }}
+          # v2+ of this action replaced the `channel-id` input and the
+          # SLACK_BOT_TOKEN env var with an explicit API method, a `token`
+          # input, and the API arguments in `payload`; the channel is merged
+          # into the payload by the step above. `errors` keeps the v1 behavior
+          # of marking the step failed when Slack rejects the message (the job
+          # still proceeds thanks to continue-on-error).
+          errors: true
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_CHANGELOG_BOT }}
           payload: ${{ steps.build_slack_payload.outputs.payload }}
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_CHANGELOG_BOT }}
 
       - name: Generate changelog.json
         id: changelog_json
