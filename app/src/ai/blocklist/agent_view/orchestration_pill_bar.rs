@@ -1935,38 +1935,56 @@ fn render_pinned_divider(app: &AppContext) -> Box<dyn Element> {
     .finish()
 }
 
-/// Pin glyph centered in an avatar-sized hit target so swapping in and out
-/// on hover doesn't jitter sibling pill widths. Solid glyph when pinned,
-/// outline when unpinned.
-fn render_pin_glyph_centered(is_pinned: bool, icon_color: ColorU) -> Box<dyn Element> {
+/// The pin glyph itself. Solid when pinned, outline when not.
+fn render_pin_glyph(is_pinned: bool, icon_color: ColorU) -> Box<dyn Element> {
     let icon_variant = if is_pinned {
         Icon::PinFilled
     } else {
         Icon::Pin
     };
-    let glyph: Box<dyn Element> =
-        ConstrainedBox::new(icon_variant.to_warpui_icon(icon_color.into()).finish())
-            .with_width(PILL_ICON_SIZE)
-            .with_height(PILL_ICON_SIZE)
-            .finish();
-
-    let centered = Flex::column()
-        .with_main_axis_size(MainAxisSize::Max)
-        .with_main_axis_alignment(MainAxisAlignment::Center)
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(
-            Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_main_axis_alignment(MainAxisAlignment::Center)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(glyph)
-                .finish(),
-        )
-        .finish();
-    ConstrainedBox::new(centered)
-        .with_width(PILL_AVATAR_SLOT_SIZE)
-        .with_height(PILL_ICON_BUTTON_SIZE)
+    ConstrainedBox::new(icon_variant.to_warpui_icon(icon_color.into()).finish())
+        .with_width(PILL_ICON_SIZE)
+        .with_height(PILL_ICON_SIZE)
         .finish()
+}
+
+/// The clickable pin button a child pill shows in place of its avatar while
+/// hovered: a circle occupying exactly the avatar disc's rect.
+///
+/// Placement deliberately goes through the same
+/// [`render_avatar_slot`] / [`render_avatar_lockup_box`] pair the disc itself
+/// uses, and the circle is sized off [`PILL_AVATAR_DISC_SIZE`], so the swap
+/// cannot shift by a pixel and the two cannot drift apart if the disc's
+/// geometry is ever retuned.
+///
+/// The glyph is centered by equal padding rather than by a centering
+/// container, which keeps it exact regardless of how the surrounding box
+/// behaves.
+fn render_pin_button(
+    is_pinned: bool,
+    icon_color: ColorU,
+    mouse_state: MouseStateHandle,
+    conversation_id: AIConversationId,
+    theme: &WarpTheme,
+) -> Box<dyn Element> {
+    let hover_background = internal_colors::fg_overlay_1(theme);
+    let button = Hoverable::new(mouse_state, move |hover_state| {
+        let mut circle = Container::new(render_pin_glyph(is_pinned, icon_color))
+            .with_uniform_padding((PILL_AVATAR_DISC_SIZE - PILL_ICON_SIZE) / 2.)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                PILL_AVATAR_DISC_SIZE / 2.,
+            )));
+        if hover_state.is_hovered() || hover_state.is_clicked() {
+            circle = circle.with_background(hover_background);
+        }
+        circle.finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _app, _| {
+        ctx.dispatch_typed_action(OrchestrationPillBarAction::TogglePin(conversation_id));
+    })
+    .finish();
+    render_avatar_slot(render_avatar_lockup_box(button))
 }
 
 fn render_pill(
@@ -2116,30 +2134,17 @@ fn render_pill(
             PillKind::Child => {
                 if show_pin_glyph {
                     // Hovered: the leading slot becomes the clickable pin
-                    // button. We only attach the Hoverable + TogglePin
-                    // click handler here so that when the avatar is the
+                    // button. The Hoverable + TogglePin click handler is
+                    // attached only here so that when the avatar is the
                     // visible content (not hovered), clicks bubble up to
                     // the outer pill body and navigate as expected.
-                    let pin_button_mouse_state = pin_button_mouse_state.clone();
-                    Hoverable::new(pin_button_mouse_state, move |pin_hover_state| {
-                        let pin_button_hovered =
-                            pin_hover_state.is_hovered() || pin_hover_state.is_clicked();
-                        let mut container =
-                            Container::new(render_pin_glyph_centered(is_pinned, text_color))
-                                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
-                        if pin_button_hovered {
-                            container =
-                                container.with_background(internal_colors::fg_overlay_1(theme));
-                        }
-                        container.finish()
-                    })
-                    .with_cursor(Cursor::PointingHand)
-                    .on_click(move |ctx, _app, _| {
-                        ctx.dispatch_typed_action(OrchestrationPillBarAction::TogglePin(
-                            conversation_id,
-                        ));
-                    })
-                    .finish()
+                    render_pin_button(
+                        is_pinned,
+                        text_color,
+                        pin_button_mouse_state.clone(),
+                        conversation_id,
+                        theme,
+                    )
                 } else if let Some(ref status) = status {
                     render_avatar_with_status_overlay(
                         avatar_color,
