@@ -26,11 +26,10 @@ use warpui::elements::{
     PositionedElementOffsetBounds, PositioningAxis, Radius, SavePosition, ScrollbarWidth, Stack,
     Text, XAxisAnchor, YAxisAnchor,
 };
-use warpui::fonts::{FamilyId, Properties, Weight};
+use warpui::fonts::{Properties, Weight};
 use warpui::platform::{Cursor, LineStyle};
 use warpui::text_layout::{
-    ClipConfig, ClipDirection, ClipStyle, ComputeBaselinePositionFn, DEFAULT_TOP_BOTTOM_RATIO,
-    StyleAndFont, TextStyle,
+    ClipConfig, ClipDirection, ClipStyle, DEFAULT_TOP_BOTTOM_RATIO, StyleAndFont, TextStyle,
 };
 use warpui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
@@ -83,11 +82,6 @@ const PILL_AVATAR_VERTICAL_PADDING: f32 = (PILL_HEIGHT - PILL_AVATAR_DISC_SIZE) 
 /// size the avatar disc (that is [`PILL_AVATAR_DISC_SIZE`]) — it only reserves
 /// the square whose bottom-right corner the badge hangs off.
 const AVATAR_WITH_STATUS_TOTAL_SIZE: f32 = PILL_AVATAR_SLOT_SIZE;
-/// Letter/icon size inside an avatar disc, as a fraction of the disc.
-const AVATAR_GLYPH_RATIO: f32 = 0.625;
-/// Cap-height fallback used only when the font reports no bounds for `H`.
-/// Roboto's is 0.711; this is close enough to keep a glyph sane in that case.
-const FALLBACK_CAP_HEIGHT_RATIO: f32 = 0.711;
 const PILL_LABEL_MAX_WIDTH: f32 = 83.;
 const PILL_ROW_GAP: f32 = 8.;
 const PILL_CONTENT_GAP: f32 = 2.;
@@ -1936,48 +1930,6 @@ fn render_pinned_divider(app: &AppContext) -> Box<dyn Element> {
     .finish()
 }
 
-/// Ink height of an avatar letter on a disc of `disc_size` — the UI font's cap
-/// height at the size [`render_avatar_disc`] draws letters at. `H` is the
-/// reference capital because its flat top and bottom make its ink box exactly
-/// the cap height.
-///
-/// The pin glyph is sized off this so hovering swaps one mark for another of
-/// the same visual weight instead of jumping to something much heavier.
-fn avatar_letter_ink_height(disc_size: f32, appearance: &Appearance, app: &AppContext) -> f32 {
-    let glyph_size = disc_size * AVATAR_GLYPH_RATIO;
-    let font_cache = app.font_cache();
-    let font_id = font_cache.select_font(
-        appearance.ui_font_family(),
-        Properties {
-            weight: Weight::Bold,
-            ..Default::default()
-        },
-    );
-    font_cache
-        .glyph_for_char(font_id, 'H', false)
-        .and_then(|(glyph_id, glyph_font_id)| {
-            font_cache
-                .glyph_typographic_bounds(glyph_font_id, glyph_size, glyph_id)
-                .ok()
-        })
-        .map(|ink| ink.max_y() - ink.min_y())
-        .unwrap_or(glyph_size * FALLBACK_CAP_HEIGHT_RATIO)
-}
-
-/// The pin glyph itself, sized so its box matches `ink_height`. Solid when
-/// pinned, outline when not.
-fn render_pin_glyph(is_pinned: bool, icon_color: ColorU, ink_height: f32) -> Box<dyn Element> {
-    let icon_variant = if is_pinned {
-        Icon::PinFilled
-    } else {
-        Icon::Pin
-    };
-    ConstrainedBox::new(icon_variant.to_warpui_icon(icon_color.into()).finish())
-        .with_width(ink_height)
-        .with_height(ink_height)
-        .finish()
-}
-
 /// The clickable pin button a child pill shows in place of its avatar while
 /// hovered: a circle occupying exactly the avatar disc's rect.
 ///
@@ -1990,14 +1942,11 @@ fn render_pin_glyph(is_pinned: bool, icon_color: ColorU, ink_height: f32) -> Box
 /// The glyph is centered by equal padding rather than by a centering
 /// container, which keeps it exact regardless of how the surrounding box
 /// behaves.
-#[allow(clippy::too_many_arguments)]
 fn render_pin_button(
     is_pinned: bool,
     icon_color: ColorU,
     mouse_state: MouseStateHandle,
     conversation_id: AIConversationId,
-    appearance: &Appearance,
-    app: &AppContext,
 ) -> Box<dyn Element> {
     // Tint with the pill's own contrasting colour rather than a fixed
     // foreground overlay. `fg_overlay_1` is the foreground at 5% opacity, and a
@@ -2006,11 +1955,19 @@ fn render_pin_button(
     // selected chip — which, since the bar anchors on the parent of whatever
     // leaf you are viewing, is the common case rather than an edge case.
     let hover_background = coloru_with_opacity(icon_color, PIN_BUTTON_HOVER_OPACITY);
-    let glyph_ink_height =
-        avatar_letter_ink_height(PILL_AVATAR_DISC_SIZE, appearance, app) + PIN_GLYPH_INK_BOOST;
+    let glyph_size = PILL_AVATAR_DISC_SIZE * PIN_GLYPH_RATIO;
+    let icon = if is_pinned {
+        Icon::PinFilled
+    } else {
+        Icon::Pin
+    };
     let button = Hoverable::new(mouse_state, move |hover_state| {
-        let mut circle = Container::new(render_pin_glyph(is_pinned, icon_color, glyph_ink_height))
-            .with_uniform_padding((PILL_AVATAR_DISC_SIZE - glyph_ink_height) / 2.)
+        let glyph = ConstrainedBox::new(icon.to_warpui_icon(icon_color.into()).finish())
+            .with_width(glyph_size)
+            .with_height(glyph_size)
+            .finish();
+        let mut circle = Container::new(glyph)
+            .with_uniform_padding((PILL_AVATAR_DISC_SIZE - glyph_size) / 2.)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
                 PILL_AVATAR_DISC_SIZE / 2.,
             )));
@@ -2183,8 +2140,6 @@ fn render_pill(
                         text_color,
                         pin_button_mouse_state.clone(),
                         conversation_id,
-                        appearance,
-                        app,
                     )
                 } else if let Some(ref status) = status {
                     render_avatar_with_status_overlay(
@@ -2396,11 +2351,12 @@ fn render_overflow_button(
     SavePosition::new(button, &overflow_button_position_id(conversation_id)).finish()
 }
 
-/// How much taller the pin glyph is than the avatar letter's ink. Matching the
-/// two exactly made the pin read *smaller* than the letter it replaces: a
-/// thin, busy outline carries less visual weight than a solid letterform at
-/// the same height. This is the knob to nudge if it still reads wrong.
-const PIN_GLYPH_INK_BOOST: f32 = 4.;
+/// Pin glyph size as a fraction of the avatar disc it sits in. Calibrated
+/// against the letter it replaces: matching the letter's ink height exactly
+/// read too *small*, because a thin outline carries less visual weight than a
+/// solid letterform, so design asked for roughly 4px more. This is the knob to
+/// nudge if it still reads wrong.
+const PIN_GLYPH_RATIO: f32 = 0.71;
 
 /// Opacity of the pin button's hover tint, over the pill's contrasting colour.
 /// A little stronger than the 5% `fg_overlay_1` used to apply, because that
@@ -2535,80 +2491,6 @@ fn render_avatar_with_status_overlay(
     render_avatar_slot(lockup)
 }
 
-/// Whole-pixel lift applied to the avatar letter's baseline.
-///
-/// Centering the ink arithmetically still paints it low, measured at 0.93px on
-/// a 15px disc across H, O and S. Three mechanisms were tested against the
-/// pixels and all three predicted the wrong direction or magnitude:
-/// antialiasing fringe (disproved -- the coverage profile has hard zeros
-/// either side of the ink), rasterisation at the line height rather than the
-/// font size, and centering on the layout rect where the disc paints on a
-/// snapped one. What is left behaves like a rounding step in the glyph
-/// rasteriser's vertical placement, which is an absolute pixel effect rather
-/// than a proportional one -- so this is expressed in pixels deliberately, and
-/// a whole one so the baseline's fractional part is unchanged.
-///
-/// Measured on a 15px disc, coverage-weighted ink centroid against the disc's
-/// centre, three letters: before the lift +0.82 / +0.89 / +0.89 low; after it
-/// -0.18 / 0.00 / -0.04. So the lift translates the glyph ~1:1 and lands the
-/// ink centred to within a fifth of a pixel, comfortably inside antialiasing
-/// noise.
-///
-/// Only verified at the 15px chip avatar. If it is the rounding effect it
-/// appears to be, it is absolute and should hold at the 16px hover-card and
-/// 1.25x transcript avatars too, but that has not been measured.
-const AVATAR_GLYPH_RASTER_LIFT: f32 = 1.;
-
-/// Baseline placement that centers an avatar letter's *ink* on its disc.
-///
-/// Two separate things push the letter off center by default, and this fixes
-/// both at once by choosing the baseline outright:
-/// * A line box spans ascent + descent, but a capital only occupies
-///   baseline-to-cap-height, so centering the box still leaves the ink high.
-/// * The glyph is painted at the *top* of the `disc_size`-square box
-///   [`render_avatar_disc`] wraps it in rather than centered in it. Measured
-///   off real frames: with the default baseline the ink sat 2px above center
-///   on a 15px disc. The returned baseline is therefore measured from the
-///   disc's top edge, not from the middle of the line box.
-///
-/// Everything here is derived from the font's own metrics at the size actually
-/// being drawn, so the 15px chip avatar, the 16px hover-card avatar and the
-/// 1.25x transcript avatar all land correctly without a per-size nudge.
-fn center_glyph_ink_baseline_position_fn(
-    letter: char,
-    family_id: FamilyId,
-    properties: Properties,
-    disc_size: f32,
-) -> ComputeBaselinePositionFn {
-    Box::new(move |args| {
-        let font_id = args.font_cache.select_font(family_id, properties);
-        // Typographic bounds are y-up from the baseline: `max_y` is the ink's
-        // top above it and `min_y` its bottom. A glyph with no bounds — a
-        // blank, or a stub font in tests — just puts the baseline on the
-        // disc's center line.
-        let Some(ink) = args
-            .font_cache
-            .glyph_for_char(font_id, letter, false)
-            .and_then(|(glyph_id, glyph_font_id)| {
-                args.font_cache
-                    .glyph_typographic_bounds(glyph_font_id, args.font_size, glyph_id)
-                    .ok()
-            })
-        else {
-            return disc_size / 2.;
-        };
-        // Centering the ink exactly leaves both of its edges on fractional
-        // device pixels, and the rasterizer's coverage then fringes further
-        // down than up, which reads as the letter sitting low. Snapping the
-        // ink's top edge to a whole pixel gives it a crisp edge to sit on.
-        // The snap is applied after the size-scaled computation, so it holds
-        // at every avatar size rather than being tuned to one.
-        let ink_height = ink.max_y() - ink.min_y();
-        let ink_top = ((disc_size - ink_height) / 2.).round();
-        ink_top + ink.max_y() - AVATAR_GLYPH_RASTER_LIFT
-    })
-}
-
 /// Renders the avatar circle as a colored disc with a centered glyph (letter
 /// or icon) on top. Uses `Stack` so the disc is a clean rounded square that
 /// composites cleanly over the pill's own background without visual seams.
@@ -2628,21 +2510,21 @@ fn render_avatar_disc(
     .with_width(size)
     .with_height(size)
     .finish();
-    let glyph_size = size * AVATAR_GLYPH_RATIO;
+    let glyph_size = size * 0.625;
 
     let glyph_element: Box<dyn Element> = match glyph {
         AvatarGlyph::Letter(letter) => {
-            let family_id = appearance.ui_font_family();
-            let properties = Properties {
-                weight: Weight::Bold,
-                ..Default::default()
-            };
-            Text::new(letter.to_string(), family_id, glyph_size)
+            Text::new(letter.to_string(), appearance.ui_font_family(), glyph_size)
                 .with_color(theme.background().into_solid())
-                .with_style(properties)
-                .with_compute_baseline_position_fn(center_glyph_ink_baseline_position_fn(
-                    letter, family_id, properties, size,
-                ))
+                .with_style(Properties {
+                    weight: Weight::Bold,
+                    ..Default::default()
+                })
+                // The default 1.2 ratio pads the text box with leading, so
+                // centering the box leaves the letter's ink sitting high in
+                // the disc. At 1.0 the box is the glyph, and centering it
+                // centers what you can see.
+                .with_line_height_ratio(1.)
                 .finish()
         }
         AvatarGlyph::Icon(icon) => {
@@ -2653,28 +2535,10 @@ fn render_avatar_disc(
         }
     };
 
-    // Horizontal centering only. The nested `Flex` centers the glyph across
-    // the disc, but does not move it vertically — letters are positioned by
-    // `center_glyph_ink_baseline_position_fn` instead, and the icon variant is
-    // already square and centered.
-    let glyph_centered = ConstrainedBox::new(
-        Flex::column()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::Center)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Flex::row()
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_main_axis_alignment(MainAxisAlignment::Center)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(glyph_element)
-                    .finish(),
-            )
-            .finish(),
-    )
-    .with_width(size)
-    .with_height(size)
-    .finish();
+    let glyph_centered = ConstrainedBox::new(Align::new(glyph_element).finish())
+        .with_width(size)
+        .with_height(size)
+        .finish();
 
     Stack::new()
         .with_child(disc)
