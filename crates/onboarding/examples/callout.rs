@@ -173,6 +173,8 @@ fn build_appearance(
         1.4,
         ai_font_family,
         password_font_family,
+        12.0,
+        None,
     );
 
     appearance.set_ui_font_family(ui_font_family, ctx);

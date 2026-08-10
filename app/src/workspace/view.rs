@@ -150,7 +150,7 @@ use super::rewind_confirmation_dialog::{
 };
 use super::tab_settings::{
     HeaderToolbarChipSelection, NewTabPlacement, TabSettings, TabSettingsChangedEvent,
-    VerticalTabsDisplayGranularity, WorkspaceDecorationVisibility,
+    WorkspaceDecorationVisibility,
 };
 use super::util::{
     PaneViewLocator, TabMovement, TerminalSessionFallbackBehavior, WelcomeTipsViewState,
@@ -1218,13 +1218,7 @@ impl Workspace {
     }
     fn tab_rename_editor_font_size(ctx: &AppContext, appearance: &Appearance) -> f32 {
         if FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs {
-            match *TabSettings::as_ref(ctx)
-                .vertical_tabs_display_granularity
-                .value()
-            {
-                VerticalTabsDisplayGranularity::Panes => 10.,
-                VerticalTabsDisplayGranularity::Tabs => 12.,
-            }
+            appearance.vertical_tabs_font_size().max(12.)
         } else {
             appearance.ui_font_size()
         }
@@ -3855,6 +3849,24 @@ impl Workspace {
                 let font_size = Self::tab_rename_editor_font_size(ctx, appearance);
                 self.tab_rename_editor.update(ctx, |editor, ctx| {
                     editor.set_font_size(font_size, ctx);
+                });
+                ctx.notify();
+            }
+            TabSettingsChangedEvent::VerticalTabsFontSize { .. } => {
+                let appearance = Appearance::as_ref(ctx);
+                let font_size = Self::tab_rename_editor_font_size(ctx, appearance);
+                self.tab_rename_editor.update(ctx, |editor, ctx| {
+                    editor.set_font_size(font_size, ctx);
+                });
+                ctx.notify();
+            }
+            TabSettingsChangedEvent::VerticalTabsFontFamily { .. } => {
+                let appearance = Appearance::as_ref(ctx);
+                let font_family = appearance
+                    .vertical_tabs_font_family()
+                    .unwrap_or_else(|| appearance.ui_font_family());
+                self.tab_rename_editor.update(ctx, |editor, ctx| {
+                    editor.set_font_family(font_family, ctx);
                 });
                 ctx.notify();
             }

@@ -3593,6 +3593,8 @@ impl TerminalView {
                 | AppearanceEvent::UiFontFamilyChanged { .. } => {
                     me.refresh_size(ctx);
                 }
+                AppearanceEvent::VerticalTabsFontSizeChanged { .. }
+                | AppearanceEvent::VerticalTabsFontFamilyChanged { .. } => {}
             },
         );
 

@@ -129,6 +129,27 @@ const VERTICAL_TABS_ICON_SIZE: f32 = 24.;
 /// `STATUS_ELEMENT_PADDING` (2px) for an overall ~14px element next to a 12pt title.
 const VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE: f32 = 10.;
 
+/// Default font size (px) for the vertical tabs sidebar title.
+const VERTICAL_TABS_TITLE_FONT_SIZE: f32 = 12.0;
+
+/// Returns the font size used for the vertical tabs sidebar.
+///
+/// The configured [appearance.vertical_tabs] font_size is applied to the
+/// title face; the meta (10pt) and detail (14pt) faces are derived from it
+/// to keep the relative hierarchy intact.
+fn vtab_font_size(appearance: &Appearance, base: f32) -> f32 {
+    let title_size = appearance.vertical_tabs_font_size();
+    (title_size + base - VERTICAL_TABS_TITLE_FONT_SIZE).max(1.)
+}
+
+/// Returns the font family used for the vertical tabs sidebar, honoring the
+/// [appearance.vertical_tabs] font_family override when set.
+fn vtab_font_family(appearance: &Appearance) -> warpui_core::fonts::FamilyId {
+    appearance
+        .vertical_tabs_font_family()
+        .unwrap_or_else(|| appearance.ui_font_family())
+}
+
 fn vtab_pane_row_position_id(pane_group_id: EntityId, pane_id: PaneId) -> String {
     format!("vertical_tabs:pane_row:{pane_group_id:?}:{pane_id}")
 }
@@ -1659,6 +1680,7 @@ fn render_vertical_tabs_panel(
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
+    let font_scale = appearance.vertical_tabs_font_size() / VERTICAL_TABS_TITLE_FONT_SIZE;
 
     let scrollable_groups = ClippedScrollable::vertical(
         state.scroll_state.clone(),
@@ -1739,9 +1761,10 @@ fn render_vertical_tabs_panel(
         .on_resize(|ctx, _| {
             ctx.notify();
         })
-        .with_bounds_callback(Box::new(|window_size| {
+        .with_bounds_callback(Box::new(move |window_size| {
             let max_width = window_size.x() * MAX_PANEL_WIDTH_RATIO;
-            (MIN_PANEL_WIDTH, max_width.max(MIN_PANEL_WIDTH))
+            let min_width = MIN_PANEL_WIDTH * font_scale;
+            (min_width, max_width.max(min_width))
         }))
         .finish()
 }
@@ -1756,9 +1779,13 @@ fn render_groups(
 
     if workspace.tabs.is_empty() {
         return Container::new(
-            Text::new_inline("No tabs open", appearance.ui_font_family(), 12.)
-                .with_color(theme.sub_text_color(theme.background()).into())
-                .finish(),
+            Text::new_inline(
+                "No tabs open",
+                vtab_font_family(appearance),
+                vtab_font_size(appearance, 12.),
+            )
+            .with_color(theme.sub_text_color(theme.background()).into())
+            .finish(),
         )
         .with_padding(Padding::uniform(12.))
         .finish();
@@ -1893,7 +1920,7 @@ fn render_groups(
             return Container::new(
                 Text::new_inline(
                     "No tabs match your search.",
-                    appearance.ui_font_family(),
+                    vtab_font_family(appearance),
                     12.,
                 )
                 .with_color(theme.sub_text_color(theme.background()).into())
@@ -2751,7 +2778,7 @@ fn render_grouped_tabs_header(
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-    let font_family = appearance.ui_font_family();
+    let font_family = vtab_font_family(appearance);
     let main_text_color = theme.main_text_color(theme.background());
     let sub_text_color = theme.sub_text_color(theme.background());
     let group_id = group.id;
@@ -2793,7 +2820,7 @@ fn render_grouped_tabs_header(
                 .name
                 .clone()
                 .unwrap_or_else(|| "New Group".to_string());
-            Text::new_inline(title_text, font_family, 12.)
+            Text::new_inline(title_text, font_family, vtab_font_size(appearance, 12.))
                 .with_clip(ClipConfig::ellipsis())
                 .with_color(main_text_color.into())
                 .finish()
@@ -2803,7 +2830,7 @@ fn render_grouped_tabs_header(
     } else {
         format!("{member_count} tabs")
     };
-    let subtitle = Text::new_inline(subtitle_text, font_family, 10.)
+    let subtitle = Text::new_inline(subtitle_text, font_family, vtab_font_size(appearance, 10.))
         .with_clip(ClipConfig::ellipsis())
         .with_color(sub_text_color.into())
         .finish();
@@ -3241,7 +3268,7 @@ fn render_group_header(props: GroupHeaderProps<'_>, app: &AppContext) -> Box<dyn
     } else {
         title
     };
-    let font_family = appearance.ui_font_family();
+    let font_family = vtab_font_family(appearance);
     let title_color = theme.sub_text_color(theme.background());
 
     Hoverable::new(header_mouse_state, move |_header_state| {
@@ -3256,7 +3283,7 @@ fn render_group_header(props: GroupHeaderProps<'_>, app: &AppContext) -> Box<dyn
             .build()
             .finish()
         } else {
-            Text::new_inline(title.clone(), font_family, 10.)
+            Text::new_inline(title.clone(), font_family, vtab_font_size(appearance, 10.))
                 .with_clip(ClipConfig::ellipsis())
                 .with_color(title_color.into())
                 .finish()
@@ -3468,7 +3495,7 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
     let effective_subtitle = props.subtitle.clone();
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-    let font_family = appearance.ui_font_family();
+    let font_family = vtab_font_family(appearance);
 
     let icon = render_pane_icon_with_status(
         resolve_icon_with_status_variant(&props.typed, &props.title, appearance, app),
@@ -3504,10 +3531,14 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
                 render_pane_title_slot(
                     &props,
                     || {
-                        Text::new_inline(props.displayed_title().to_string(), font_family, 12.)
-                            .with_clip(ClipConfig::ellipsis())
-                            .with_color(theme.main_text_color(theme.background()).into())
-                            .finish()
+                        Text::new_inline(
+                            props.displayed_title().to_string(),
+                            font_family,
+                            vtab_font_size(appearance, 12.),
+                        )
+                        .with_clip(ClipConfig::ellipsis())
+                        .with_color(theme.main_text_color(theme.background()).into())
+                        .finish()
                     },
                     12.,
                     theme.main_text_color(theme.background()),
@@ -3539,10 +3570,14 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
                 ClipConfig::ellipsis()
             };
             content_col.add_child(
-                Text::new_inline(effective_subtitle, font_family, 12.)
-                    .with_clip(subtitle_clip)
-                    .with_color(theme.sub_text_color(theme.background()).into())
-                    .finish(),
+                Text::new_inline(
+                    effective_subtitle,
+                    font_family,
+                    vtab_font_size(appearance, 12.),
+                )
+                .with_clip(subtitle_clip)
+                .with_color(theme.sub_text_color(theme.background()).into())
+                .finish(),
             );
         }
 
@@ -4545,6 +4580,7 @@ fn render_git_branch_text(
     font_size: f32,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    let font_size = vtab_font_size(appearance, font_size);
     Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(2.)
@@ -4557,7 +4593,7 @@ fn render_git_branch_text(
         .with_child(
             Shrinkable::new(
                 1.,
-                Text::new_inline(branch.to_string(), appearance.ui_font_family(), font_size)
+                Text::new_inline(branch.to_string(), vtab_font_family(appearance), font_size)
                     .with_clip(ClipConfig::ellipsis())
                     .with_color(text_color.into())
                     .finish(),
@@ -4578,10 +4614,14 @@ fn render_text_line(
     clip: ClipConfig,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    Text::new_inline(text.to_string(), appearance.ui_font_family(), 12.)
-        .with_clip(clip)
-        .with_color(text_color.into())
-        .finish()
+    Text::new_inline(
+        text.to_string(),
+        vtab_font_family(appearance),
+        vtab_font_size(appearance, 12.),
+    )
+    .with_clip(clip)
+    .with_color(text_color.into())
+    .finish()
 }
 
 pub(crate) fn render_inline_tab_rename_editor(
@@ -4630,7 +4670,7 @@ fn render_title_override(
         .as_ref()
         .or(props.display_title_override.as_ref())
         .map(|title| {
-            Text::new_inline(title.clone(), appearance.ui_font_family(), font_size)
+            Text::new_inline(title.clone(), vtab_font_family(appearance), font_size)
                 .with_clip(clip)
                 .with_color(text_color.into())
                 .finish()
@@ -4646,6 +4686,7 @@ fn render_pane_title_slot(
     appearance: &Appearance,
     app: &AppContext,
 ) -> Box<dyn Element> {
+    let font_size = vtab_font_size(appearance, font_size);
     let title = render_title_override(props, font_size, text_color, clip, appearance, app)
         .unwrap_or_else(generated_title);
 
@@ -4917,7 +4958,7 @@ fn render_summary_overflow_line(
 ) -> Box<dyn Element> {
     Text::new_inline(
         format!("+ {hidden_count} more"),
-        appearance.ui_font_family(),
+        vtab_font_family(appearance),
         10.,
     )
     .with_clip(ClipConfig::end())
@@ -5217,7 +5258,10 @@ fn render_summary_branch_line(
     }
 
     ConstrainedBox::new(row.finish())
-        .with_height(METADATA_ROW_HEIGHT)
+        .with_height(
+            METADATA_ROW_HEIGHT * appearance.vertical_tabs_font_size()
+                / VERTICAL_TABS_TITLE_FONT_SIZE,
+        )
         .finish()
 }
 
@@ -5287,18 +5331,20 @@ fn render_terminal_primary_line(
             .finish()
     };
     match primary_line {
-        TerminalPrimaryLineData::StatusText { text, .. } => {
-            Text::new_inline(text, appearance.ui_font_family(), 12.)
-                .with_clip(ClipConfig::ellipsis())
-                .with_color(text_color.into())
-                .finish()
-        }
+        TerminalPrimaryLineData::StatusText { text, .. } => Text::new_inline(
+            text,
+            vtab_font_family(appearance),
+            vtab_font_size(appearance, 12.),
+        )
+        .with_clip(ClipConfig::ellipsis())
+        .with_color(text_color.into())
+        .finish(),
         TerminalPrimaryLineData::Text { text, font } => {
             let font_family = match font {
-                TerminalPrimaryLineFont::Ui => appearance.ui_font_family(),
+                TerminalPrimaryLineFont::Ui => vtab_font_family(appearance),
                 TerminalPrimaryLineFont::Monospace => appearance.monospace_font_family(),
             };
-            let title_el = Text::new_inline(text, font_family, 12.)
+            let title_el = Text::new_inline(text, font_family, vtab_font_size(appearance, 12.))
                 .with_clip(ClipConfig::ellipsis())
                 .with_color(text_color.into())
                 .finish();
@@ -5337,10 +5383,14 @@ fn render_terminal_metadata_line(
         }
         MetadataLeftContent::WorkingDirectory(wd) if !wd.trim().is_empty() => Shrinkable::new(
             1.,
-            Text::new_inline(wd, appearance.ui_font_family(), 10.)
-                .with_clip(ClipConfig::start())
-                .with_color(sub_text_color.into())
-                .finish(),
+            Text::new_inline(
+                wd,
+                vtab_font_family(appearance),
+                vtab_font_size(appearance, 10.),
+            )
+            .with_clip(ClipConfig::start())
+            .with_color(sub_text_color.into())
+            .finish(),
         )
         .finish(),
         _ => Empty::new().finish(),
@@ -5365,7 +5415,10 @@ fn render_terminal_metadata_line(
 
     // Constrain to a fixed height so toggling badges on/off doesn't change the row height.
     ConstrainedBox::new(meta.finish())
-        .with_height(METADATA_ROW_HEIGHT)
+        .with_height(
+            METADATA_ROW_HEIGHT * appearance.vertical_tabs_font_size()
+                / VERTICAL_TABS_TITLE_FONT_SIZE,
+        )
         .finish()
 }
 
@@ -5502,17 +5555,21 @@ fn render_compact_non_terminal_title(
     } else {
         ClipConfig::ellipsis()
     };
-    Text::new_inline(title.to_string(), appearance.ui_font_family(), 12.)
-        .with_clip(clip_config)
-        .with_color(theme.main_text_color(theme.background()).into())
-        .finish()
+    Text::new_inline(
+        title.to_string(),
+        vtab_font_family(appearance),
+        vtab_font_size(appearance, 12.),
+    )
+    .with_clip(clip_config)
+    .with_color(theme.main_text_color(theme.background()).into())
+    .finish()
 }
 
 fn render_vtab_diff_stats_content(
     line_changes: &GitLineChanges,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let font_family = appearance.ui_font_family();
+    let font_family = vtab_font_family(appearance);
     let font_size = 10.;
     let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
 
@@ -5562,9 +5619,13 @@ fn render_pull_request_badge_content(label: &str, appearance: &Appearance) -> Bo
                 .finish(),
         )
         .with_child(
-            Text::new_inline(label.to_string(), appearance.ui_font_family(), 10.)
-                .with_color(sub_text_color.into())
-                .finish(),
+            Text::new_inline(
+                label.to_string(),
+                vtab_font_family(appearance),
+                vtab_font_size(appearance, 10.),
+            )
+            .with_color(sub_text_color.into())
+            .finish(),
         )
         .finish()
 }
@@ -5735,10 +5796,10 @@ pub(super) fn render_settings_popup(
     app: &AppContext,
 ) -> Box<dyn Element> {
     const SETTINGS_POPUP_CORNER_RADIUS: f32 = 6.;
-    const SETTINGS_POPUP_MENU_ITEM_FONT_SIZE: f32 = 12.;
 
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
+    let settings_popup_menu_item_font_size = vtab_font_size(appearance, 12.);
     let current_granularity = *TabSettings::as_ref(app)
         .vertical_tabs_display_granularity
         .value();
@@ -5768,8 +5829,8 @@ pub(super) fn render_settings_popup(
     let view_as_header = Container::new(
         Text::new_inline(
             "View as".to_string(),
-            appearance.ui_font_family(),
-            SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
+            vtab_font_family(appearance),
+            settings_popup_menu_item_font_size,
         )
         .with_color(sub_text.into())
         .finish(),
@@ -5827,8 +5888,8 @@ pub(super) fn render_settings_popup(
     let tab_item_header = Container::new(
         Text::new_inline(
             "Tab item".to_string(),
-            appearance.ui_font_family(),
-            SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
+            vtab_font_family(appearance),
+            settings_popup_menu_item_font_size,
         )
         .with_color(sub_text.into())
         .finish(),
@@ -5865,8 +5926,8 @@ pub(super) fn render_settings_popup(
     let density_header = Container::new(
         Text::new_inline(
             "Density".to_string(),
-            appearance.ui_font_family(),
-            SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
+            vtab_font_family(appearance),
+            settings_popup_menu_item_font_size,
         )
         .with_color(sub_text.into())
         .finish(),
@@ -5942,8 +6003,8 @@ pub(super) fn render_settings_popup(
     let pane_title_header = Container::new(
         Text::new_inline(
             "Pane title as".to_string(),
-            appearance.ui_font_family(),
-            SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
+            vtab_font_family(appearance),
+            settings_popup_menu_item_font_size,
         )
         .with_color(sub_text.into())
         .finish(),
@@ -6013,8 +6074,8 @@ pub(super) fn render_settings_popup(
             let subtitle_header = Container::new(
                 Text::new_inline(
                     "Additional metadata".to_string(),
-                    appearance.ui_font_family(),
-                    SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
+                    vtab_font_family(appearance),
+                    settings_popup_menu_item_font_size,
                 )
                 .with_color(sub_text.into())
                 .finish(),
@@ -6047,8 +6108,8 @@ pub(super) fn render_settings_popup(
             let show_header = Container::new(
                 Text::new_inline(
                     "Show".to_string(),
-                    appearance.ui_font_family(),
-                    SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
+                    vtab_font_family(appearance),
+                    settings_popup_menu_item_font_size,
                 )
                 .with_color(sub_text.into())
                 .finish(),
@@ -6128,7 +6189,7 @@ fn render_compact_subtitle_option(
     theme: &WarpTheme,
 ) -> Box<dyn Element> {
     const ICON_SIZE: f32 = 16.;
-    const FONT_SIZE: f32 = 12.;
+    let font_size = vtab_font_size(appearance, 12.);
     const GAP: f32 = 8.;
 
     let label = label.to_string();
@@ -6151,7 +6212,7 @@ fn render_compact_subtitle_option(
             .with_spacing(GAP)
             .with_child(check_icon)
             .with_child(
-                Text::new_inline(label.clone(), appearance.ui_font_family(), FONT_SIZE)
+                Text::new_inline(label.clone(), vtab_font_family(appearance), font_size)
                     .with_color(main_text.into())
                     .finish(),
             )
@@ -6181,7 +6242,7 @@ fn render_tab_item_mode_option(
     theme: &WarpTheme,
 ) -> Box<dyn Element> {
     const ICON_SIZE: f32 = 16.;
-    const FONT_SIZE: f32 = 12.;
+    let font_size = vtab_font_size(appearance, 12.);
     const GAP: f32 = 8.;
 
     let label = label.to_string();
@@ -6204,7 +6265,7 @@ fn render_tab_item_mode_option(
             .with_spacing(GAP)
             .with_child(check_icon)
             .with_child(
-                Text::new_inline(label.clone(), appearance.ui_font_family(), FONT_SIZE)
+                Text::new_inline(label.clone(), vtab_font_family(appearance), font_size)
                     .with_color(main_text.into())
                     .finish(),
             )
@@ -6234,7 +6295,7 @@ fn render_primary_info_option(
     theme: &WarpTheme,
 ) -> Box<dyn Element> {
     const ICON_SIZE: f32 = 16.;
-    const FONT_SIZE: f32 = 12.;
+    let font_size = vtab_font_size(appearance, 12.);
     const GAP: f32 = 8.;
 
     let label = label.to_string();
@@ -6257,7 +6318,7 @@ fn render_primary_info_option(
             .with_spacing(GAP)
             .with_child(check_icon)
             .with_child(
-                Text::new_inline(label.clone(), appearance.ui_font_family(), FONT_SIZE)
+                Text::new_inline(label.clone(), vtab_font_family(appearance), font_size)
                     .with_color(main_text.into())
                     .finish(),
             )
@@ -6293,7 +6354,7 @@ fn render_show_toggle_option(
     theme: &WarpTheme,
 ) -> Box<dyn Element> {
     const ICON_SIZE: f32 = 16.;
-    const FONT_SIZE: f32 = 12.;
+    let font_size = vtab_font_size(appearance, 12.);
     const GAP: f32 = 8.;
     const INFO_ICON_SIZE: f32 = 12.;
     const INFO_GAP: f32 = 4.;
@@ -6322,7 +6383,7 @@ fn render_show_toggle_option(
         let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
         row.add_child(Container::new(check_icon).with_margin_right(GAP).finish());
         row.add_child(
-            Text::new_inline(label.clone(), appearance.ui_font_family(), FONT_SIZE)
+            Text::new_inline(label.clone(), vtab_font_family(appearance), font_size)
                 .with_color(main_text.into())
                 .finish(),
         );
@@ -6437,9 +6498,13 @@ fn render_popup_text_segment(
 
         Container::new(
             Align::new(
-                Text::new_inline(label.clone(), appearance.ui_font_family(), 14.)
-                    .with_color(if is_selected { main_text } else { sub_text }.into())
-                    .finish(),
+                Text::new_inline(
+                    label.clone(),
+                    vtab_font_family(appearance),
+                    vtab_font_size(appearance, 14.),
+                )
+                .with_color(if is_selected { main_text } else { sub_text }.into())
+                .finish(),
             )
             .finish(),
         )
@@ -6636,9 +6701,13 @@ fn render_detail_badge(
         );
     }
     content.add_child(
-        Text::new_inline(label.into(), appearance.ui_font_family(), 10.)
-            .with_color(text_color.into())
-            .finish(),
+        Text::new_inline(
+            label.into(),
+            vtab_font_family(appearance),
+            vtab_font_size(appearance, 10.),
+        )
+        .with_color(text_color.into())
+        .finish(),
     );
 
     let mut badge = Container::new(content.finish())
@@ -6669,9 +6738,13 @@ fn render_detail_status_pill(
                     .finish(),
             )
             .with_child(
-                Text::new_inline(status.to_string(), appearance.ui_font_family(), 10.)
-                    .with_color(WarpThemeFill::Solid(color).into())
-                    .finish(),
+                Text::new_inline(
+                    status.to_string(),
+                    vtab_font_family(appearance),
+                    vtab_font_size(appearance, 10.),
+                )
+                .with_color(WarpThemeFill::Solid(color).into())
+                .finish(),
             )
             .finish(),
     )
@@ -6688,9 +6761,13 @@ fn render_detail_wrapping_text(
     style: Option<Properties>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let mut text = Text::new(text.into(), appearance.ui_font_family(), font_size)
-        .soft_wrap(true)
-        .with_color(color.into());
+    let mut text = Text::new(
+        text.into(),
+        vtab_font_family(appearance),
+        vtab_font_size(appearance, font_size),
+    )
+    .soft_wrap(true)
+    .with_color(color.into());
     if let Some(style) = style {
         text = text.with_style(style);
     }
@@ -6703,17 +6780,21 @@ fn render_terminal_detail_primary_line(
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let font_family = match primary_line {
-        TerminalPrimaryLineData::StatusText { .. } => appearance.ui_font_family(),
+        TerminalPrimaryLineData::StatusText { .. } => vtab_font_family(appearance),
         TerminalPrimaryLineData::Text { font, .. } => match font {
-            TerminalPrimaryLineFont::Ui => appearance.ui_font_family(),
+            TerminalPrimaryLineFont::Ui => vtab_font_family(appearance),
             TerminalPrimaryLineFont::Monospace => appearance.monospace_font_family(),
         },
     };
 
-    Text::new(primary_line.text().to_string(), font_family, 12.)
-        .soft_wrap(true)
-        .with_color(color.into())
-        .finish()
+    Text::new(
+        primary_line.text().to_string(),
+        font_family,
+        vtab_font_size(appearance, 12.),
+    )
+    .soft_wrap(true)
+    .with_color(color.into())
+    .finish()
 }
 
 fn detail_pane_props<'a>(
@@ -7209,7 +7290,7 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
     let theme = appearance.theme();
     let main_text_color = theme.main_text_color(theme.background());
     let sub_text_color = theme.sub_text_color(theme.background());
-    let font_family = appearance.ui_font_family();
+    let font_family = vtab_font_family(appearance);
     let has_indicator = props.typed.badge(app).is_some() || has_unread_activity(&props.typed, app);
 
     let icon = render_pane_icon_with_status(
@@ -7249,20 +7330,26 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
                         main_text_color,
                         app,
                     ),
-                    VerticalTabsPrimaryInfo::WorkingDirectory => {
-                        Text::new_inline(working_directory_text.clone(), font_family, 12.)
-                            .with_clip(ClipConfig::start())
-                            .with_color(main_text_color.into())
-                            .finish()
-                    }
+                    VerticalTabsPrimaryInfo::WorkingDirectory => Text::new_inline(
+                        working_directory_text.clone(),
+                        font_family,
+                        vtab_font_size(appearance, 12.),
+                    )
+                    .with_clip(ClipConfig::start())
+                    .with_color(main_text_color.into())
+                    .finish(),
                     VerticalTabsPrimaryInfo::Branch => match branch_display {
                         (branch_text, true) => {
                             render_git_branch_text(&branch_text, main_text_color, 12., appearance)
                         }
-                        (fallback_text, false) => Text::new_inline(fallback_text, font_family, 12.)
-                            .with_clip(ClipConfig::start())
-                            .with_color(main_text_color.into())
-                            .finish(),
+                        (fallback_text, false) => Text::new_inline(
+                            fallback_text,
+                            font_family,
+                            vtab_font_size(appearance, 12.),
+                        )
+                        .with_clip(ClipConfig::start())
+                        .with_color(main_text_color.into())
+                        .finish(),
                     },
                 },
                 12.,
@@ -7282,14 +7369,14 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
                     if show_branch_icon {
                         render_git_branch_text(&text, sub_text_color, 10., appearance)
                     } else {
-                        Text::new_inline(text, font_family, 10.)
+                        Text::new_inline(text, font_family, vtab_font_size(appearance, 10.))
                             .with_clip(ClipConfig::start())
                             .with_color(sub_text_color.into())
                             .finish()
                     }
                 }),
                 VerticalTabsCompactSubtitle::WorkingDirectory => working_directory.map(|wd| {
-                    Text::new_inline(wd, font_family, 10.)
+                    Text::new_inline(wd, font_family, vtab_font_size(appearance, 10.))
                         .with_clip(ClipConfig::start())
                         .with_color(sub_text_color.into())
                         .finish()
@@ -7308,10 +7395,14 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
                         terminal_view.last_completed_command_text(),
                     );
                     Some(
-                        Text::new_inline(line_data.text().to_string(), font_family, 10.)
-                            .with_clip(ClipConfig::ellipsis())
-                            .with_color(sub_text_color.into())
-                            .finish(),
+                        Text::new_inline(
+                            line_data.text().to_string(),
+                            font_family,
+                            vtab_font_size(appearance, 10.),
+                        )
+                        .with_clip(ClipConfig::ellipsis())
+                        .with_color(sub_text_color.into())
+                        .finish(),
                     )
                 }
             };
@@ -7346,10 +7437,14 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
                     ClipConfig::ellipsis()
                 };
                 Some(
-                    Text::new_inline(effective_subtitle, font_family, 10.)
-                        .with_clip(subtitle_clip)
-                        .with_color(sub_text_color.into())
-                        .finish(),
+                    Text::new_inline(
+                        effective_subtitle,
+                        font_family,
+                        vtab_font_size(appearance, 10.),
+                    )
+                    .with_clip(subtitle_clip)
+                    .with_color(sub_text_color.into())
+                    .finish(),
                 )
             };
             (title, subtitle)
