@@ -74,19 +74,11 @@ const PILL_HEIGHT: f32 = 22.;
 const PILL_RADIUS: f32 = PILL_HEIGHT / 2.;
 const AVATAR_SIZE: f32 = 16.;
 const PILL_AVATAR_SLOT_SIZE: f32 = 20.;
-/// Padding above the avatar disc inside a pill, per design. Deliberately 1px
-/// tighter than [`PILL_AVATAR_BOTTOM_PADDING`]: the status badge overhangs
-/// below the disc, so the lockup only *reads* as centered when the disc itself
-/// sits half a pixel above the pill's geometric center.
-const PILL_AVATAR_TOP_PADDING: f32 = 3.;
-/// Padding below the avatar disc inside a pill, per design. The status badge
-/// hangs down into this band; see [`PILL_AVATAR_TOP_PADDING`].
-const PILL_AVATAR_BOTTOM_PADDING: f32 = 4.;
-/// Avatar disc diameter, derived from the pill height and the designed
-/// asymmetric padding (22 - 3 - 4 = 15) so the relationship holds if
-/// [`PILL_HEIGHT`] ever changes.
-const PILL_AVATAR_DISC_SIZE: f32 =
-    PILL_HEIGHT - PILL_AVATAR_TOP_PADDING - PILL_AVATAR_BOTTOM_PADDING;
+/// Visible avatar disc diameter, per design.
+const PILL_AVATAR_DISC_SIZE: f32 = 15.;
+/// Gap between the avatar disc and each of the pill's horizontal edges. The
+/// disc is dead-centre in the pill, so this is symmetric: (22 - 15) / 2 = 3.5.
+const PILL_AVATAR_VERTICAL_PADDING: f32 = (PILL_HEIGHT - PILL_AVATAR_DISC_SIZE) / 2.;
 /// Square box the status badge is sized and anchored against. It does *not*
 /// size the avatar disc (that is [`PILL_AVATAR_DISC_SIZE`]) — it only reserves
 /// the square whose bottom-right corner the badge hangs off.
@@ -1721,13 +1713,17 @@ fn render_status_badge(
         .finish()
 }
 
-/// Centers a pill's leading avatar content — an
+/// Places a pill's leading avatar content — an
 /// [`AVATAR_WITH_STATUS_TOTAL_SIZE`] box built by [`render_avatar_lockup_box`],
 /// with or without a status badge layered on it — in the fixed-width leading
 /// slot. The slot spans the full pill height so hover swaps (avatar ↔ pin
-/// glyph) never shift the label.
+/// button) never shift the label.
+///
+/// The box is bottom-aligned rather than centered: the status badge hangs off
+/// its bottom-right corner and design wants that badge flush with the pill's
+/// bottom edge, so the box's bottom has to be the pill's bottom.
 fn render_avatar_slot(avatar: Box<dyn Element>) -> Box<dyn Element> {
-    ConstrainedBox::new(Align::new(avatar).finish())
+    ConstrainedBox::new(Align::new(avatar).bottom_left().finish())
         .with_width(PILL_AVATAR_SLOT_SIZE)
         .with_height(PILL_HEIGHT)
         .finish()
@@ -2395,9 +2391,18 @@ fn render_overflow_button(
     SavePosition::new(button, &overflow_button_position_id(conversation_id)).finish()
 }
 
+/// Cutout-ring diameter of the status badge, per design.
+const PILL_BADGE_RING_SIZE: f32 = 11.;
+/// Bounding box of the status icon inside that ring, per design. The 1px it
+/// leaves on each side is the visible cutout.
+const PILL_BADGE_ICON_SIZE: f32 = 9.;
+
+/// `icon_with_status` expresses badge geometry as fractions of the box the
+/// badge is anchored to, so convert the designed absolute sizes once here
+/// rather than restating them as ratios.
 const PILL_BADGE_STYLE: StatusBadgeStyle = StatusBadgeStyle {
-    ring_ratio: 0.57,
-    icon_ratio: 0.36,
+    ring_ratio: PILL_BADGE_RING_SIZE / AVATAR_WITH_STATUS_TOTAL_SIZE,
+    icon_ratio: PILL_BADGE_ICON_SIZE / AVATAR_WITH_STATUS_TOTAL_SIZE,
     inner_shape: BadgeInnerShape::RoundedSquare { radius_px: 2.0 },
 };
 
@@ -2414,11 +2419,12 @@ const PILL_BADGE_STYLE: StatusBadgeStyle = StatusBadgeStyle {
 const PILL_BADGE_OVERHANG_RATIO: f32 = 0.05;
 
 /// Top inset of the avatar disc inside the [`AVATAR_WITH_STATUS_TOTAL_SIZE`]
-/// box. The box is itself centered in the [`PILL_HEIGHT`]-tall slot, so this
-/// inset plus that centering offset has to add up to
-/// [`PILL_AVATAR_TOP_PADDING`]: 1 + 2 = 3.
+/// box. The box is bottom-aligned in the [`PILL_HEIGHT`]-tall slot so the
+/// badge anchored to its bottom-right corner reaches the pill's bottom edge,
+/// so this inset plus that bottom-alignment offset has to add up to
+/// [`PILL_AVATAR_VERTICAL_PADDING`]: 2 + 1.5 = 3.5.
 const PILL_AVATAR_LOCKUP_TOP_INSET: f32 =
-    PILL_AVATAR_TOP_PADDING - (PILL_HEIGHT - AVATAR_WITH_STATUS_TOTAL_SIZE) / 2.;
+    PILL_AVATAR_VERTICAL_PADDING - (PILL_HEIGHT - AVATAR_WITH_STATUS_TOTAL_SIZE);
 
 /// Places the avatar disc inside the square box that the status badge is
 /// anchored against, applying the designed asymmetric padding. Shared by the
@@ -2464,22 +2470,23 @@ fn render_pill_avatar(
 /// Geometry, in pill-content coordinates (the pill is [`PILL_HEIGHT`] = 22
 /// tall with a [`PILL_RADIUS`] = 11 stadium cap, and the leading slot spans
 /// x = 4..24 after [`PILL_HORIZONTAL_PADDING_LEFT`]):
-/// * Lockup box: [`AVATAR_WITH_STATUS_TOTAL_SIZE`] = 20 square, centered in
-///   the 22-tall slot, so it spans y = 1..21.
-/// * Avatar disc: [`PILL_AVATAR_DISC_SIZE`] = 22 - 3 - 4 = 15, inset
-///   [`PILL_AVATAR_LOCKUP_TOP_INSET`] = 2 from the box's top and flush with
-///   its left edge, so it spans y = 3..18 and x = 4..19:
-///   [`PILL_AVATAR_TOP_PADDING`] = 3 above and
-///   [`PILL_AVATAR_BOTTOM_PADDING`] = 4 below. Its center is y = 10.5, half a
-///   pixel above the pill's geometric center on purpose — the badge's mass
-///   below the disc is what makes that read as centered.
-/// * Status badge: cutout ring diameter = 20 * `ring_ratio` (0.57) = 11.4,
-///   anchored BR-to-BR with `corner_overlay_offset(20, 0.05)` = 0, so its BR
-///   lands on the lockup box's BR at (24, 21) and the ring spans y = 9.6..21,
-///   x = 12.6..24. It hangs 3px below the disc into the bottom padding band
-///   while keeping 22 - 21 = 1px of clearance from the pill's bottom edge, and
-///   it starts at x = 12.6 > `PILL_RADIUS`, i.e. clear of the rounded left cap
-///   (only x < 11 is governed by the cap's arc).
+/// * Lockup box: [`AVATAR_WITH_STATUS_TOTAL_SIZE`] = 20 square, bottom-aligned
+///   in the 22-tall slot, so it spans y = 2..22.
+/// * Avatar disc: [`PILL_AVATAR_DISC_SIZE`] = 15, inset
+///   [`PILL_AVATAR_LOCKUP_TOP_INSET`] = 1.5 from the box's top and flush with
+///   its left edge, so it spans y = 3.5..18.5 and x = 4..19 — dead-centre in
+///   the pill, [`PILL_AVATAR_VERTICAL_PADDING`] = 3.5 above and below.
+/// * Status badge: [`PILL_BADGE_RING_SIZE`] = 11 cutout ring, anchored BR-to-BR
+///   with `corner_overlay_offset(20, 0.05)` = 0, so its BR lands on the lockup
+///   box's BR at (24, 22) and the ring spans y = 11..22, x = 13..24. That is
+///   9 horizontally and 7.5 vertically in from the disc's top-left, per design,
+///   and its bottom is flush with the pill's — an emergent property of the
+///   box being bottom-aligned, not a hardcoded 22. The ring starts at
+///   x = 13 > `PILL_RADIUS`, so it sits in the pill's flat-bottom region and
+///   is tangent to that edge rather than clipped by the rounded cap (only
+///   x < 11 is governed by the cap's arc).
+/// * Status icon: [`PILL_BADGE_ICON_SIZE`] = 9 bounding box centred in the
+///   ring, leaving the 1px cutout.
 fn render_avatar_with_status_overlay(
     avatar_color: ColorU,
     glyph: AvatarGlyph,
