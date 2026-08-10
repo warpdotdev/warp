@@ -308,10 +308,7 @@ fn level_tab_bar_config(
                 child.subtree_rollup.as_ref(),
                 rollup_badge_text(child.subtree_rollup.as_ref(), presentation.badge),
             ) {
-                tab = tab.with_trailing_text(
-                    badge,
-                    conversation_status_glyph_style(&rollup.status, builder),
-                );
+                tab = tab.with_trailing_text(badge, rollup_badge_style(&rollup.status, builder));
             }
             tab
         })
@@ -371,6 +368,24 @@ fn rollup_badge_text(rollup: Option<&LoadedSubtreeRollup>, badge: BadgeDisplay) 
         BadgeDisplay::Full => Some(format!("{ROLLUP_BADGE_MARKER}{}", rollup.descendant_count)),
         BadgeDisplay::MarkerOnly => Some(ROLLUP_BADGE_MARKER.to_owned()),
         BadgeDisplay::Hidden => None,
+    }
+}
+
+/// The `▸N` badge color for a subtree's aggregated status, per design
+/// review: **yellow** while any descendant is working or stuck (running,
+/// recovering, waiting for events — alive and resumable per QUALITY-780 — or
+/// blocked), **red** when the settled subtree contains a failure, and
+/// **neutral_7** when everything settled without one (success or cancelled).
+fn rollup_badge_style(status: &ConversationStatus, builder: &TuiUiBuilder) -> TuiStyle {
+    match status {
+        ConversationStatus::InProgress
+        | ConversationStatus::TransientError
+        | ConversationStatus::WaitingForEvents
+        | ConversationStatus::Blocked { .. } => builder.attention_glyph_style(),
+        ConversationStatus::Error => builder.error_text_style(),
+        ConversationStatus::Success | ConversationStatus::Cancelled => {
+            builder.neutral_7_text_style()
+        }
     }
 }
 

@@ -4,7 +4,7 @@ use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, TuiView};
 
-use super::orchestration_tab_bar_config;
+use super::{orchestration_tab_bar_config, rollup_badge_style};
 use crate::orchestration_model::{
     ORCHESTRATOR_TAB_LABEL, TuiOrchestrationBreadcrumb, TuiOrchestrationChild,
     TuiOrchestrationSnapshot,
@@ -225,6 +225,44 @@ fn depth_three_row_renders_two_breadcrumbs_through_the_ladder() {
             // T5 (< 56): same row — the ladder holds with two chips down to
             // the narrowest tier for the spec's reference tree.
             assert_eq!(render_line(&snapshot, 50, ctx), format!("{t4:<50}"));
+        });
+    });
+}
+
+#[test]
+fn rollup_badge_colors_follow_the_design_mapping() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let builder = TuiUiBuilder::from_app(ctx);
+            // Yellow while anything underneath is working or stuck.
+            for status in [
+                ConversationStatus::InProgress,
+                ConversationStatus::TransientError,
+                ConversationStatus::WaitingForEvents,
+                ConversationStatus::Blocked {
+                    blocked_action: "approval".to_owned(),
+                },
+            ] {
+                assert_eq!(
+                    rollup_badge_style(&status, &builder),
+                    builder.attention_glyph_style(),
+                    "{status:?} must read yellow"
+                );
+            }
+            // Red when the settled subtree contains a failure.
+            assert_eq!(
+                rollup_badge_style(&ConversationStatus::Error, &builder),
+                builder.error_text_style()
+            );
+            // neutral_7 when everything settled without one.
+            for status in [ConversationStatus::Success, ConversationStatus::Cancelled] {
+                assert_eq!(
+                    rollup_badge_style(&status, &builder),
+                    builder.neutral_7_text_style(),
+                    "{status:?} must read neutral_7"
+                );
+            }
         });
     });
 }

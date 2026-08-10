@@ -170,11 +170,11 @@ impl TuiOrchestrationBlock {
         );
         column.add_child(self.render_agent_identity_line(builder));
         // Multi-level orchestration: the server may grant launched children
-        // the run_agents tool, so tell the approver up front. Same copy and
-        // gate as the GUI card.
+        // the run_agents tool, so tell the approver up front. Same gate as
+        // the GUI card; copy per design review (trailing period, no glyph).
         if FeatureFlag::MultiLevelOrchestration.is_enabled() {
             column.add_child(
-                TuiText::new("↳ These agents may start their own child agents")
+                TuiText::new("These agents may start their own child agents.")
                     .with_style(builder.muted_text_style())
                     .truncate()
                     .finish(),

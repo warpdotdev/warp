@@ -59,10 +59,12 @@ The change keeps the existing layering: semantic topology and selection stay in
 ### Presentation — `crates/warp_tui/src/orchestration_tab_bar.rs`
 
 - `orchestration_tab_bar_config` builds the base (T0) config from the snapshot — anchor
-  glyph from the aggregated status, `▸N` badges styled by each rollup's status via
-  `conversation_status_glyph_style` (attention while active/blocked, terminal styles when
-  done), breadcrumb chips (`‹` marker, label cap 12) — and, only when the snapshot is
-  multi-level, attaches the degradation ladder T1-T5 as narrow variants (rules 5, 10-14).
+  glyph from the aggregated status, `▸N` badges colored by the explicit design mapping
+  in `rollup_badge_style` (yellow for `InProgress`/`TransientError`/`WaitingForEvents`/
+  `Blocked`, red for `Error`, `neutral_7` for `Success`/`Cancelled` — rule 11 as amended
+  2026-08-10), breadcrumb chips (`‹` marker, label cap 12) — and, only when the snapshot
+  is multi-level, attaches the degradation ladder T1-T5 as narrow variants
+  (rules 5, 10-14).
 - The ladder (rules 47-50): <96 breadcrumb cap 8 / child cap 16; <84 leading collapses to
   two cells; <72 marker-only breadcrumbs, anchor cap 8; <64 glyph-only anchor, child cap
   12, badge `▸`; <56 badge dropped, child cap 8. Boundaries are constants
@@ -95,8 +97,9 @@ The change keeps the existing layering: semantic topology and selection stay in
 ### Card and transcript
 
 - `orchestration_block/render.rs`: the acceptance card adds the muted
-  `↳ These agents may start their own child agents` line under the identity line, same
-  copy and gate as the GUI card (rules 28-30).
+  `These agents may start their own child agents.` line under the identity line, same
+  gate as the GUI card (rules 28-30; copy amended 2026-08-10 per design review — the
+  GUI still omits the trailing period, flagged as a follow-up divergence).
 - `agent_message.rs`: a sender that is neither the current conversation's direct child
   nor its parent/orchestrator gets its parent's name prefixed
   (`researcher › crawler`); an unnamed parent falls back to `orchestrator` only when it

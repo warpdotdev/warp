@@ -444,7 +444,7 @@ fn rendered_block_lines(block: &ViewHandle<TuiOrchestrationBlock>, app: &App) ->
 
 #[test]
 fn acceptance_card_discloses_nested_children_only_with_multi_level_enabled() {
-    let disclosure = "↳ These agents may start their own child agents";
+    let disclosure = "These agents may start their own child agents.";
     {
         let _flag = FeatureFlag::MultiLevelOrchestration.override_enabled(true);
         App::test((), |mut app| async move {

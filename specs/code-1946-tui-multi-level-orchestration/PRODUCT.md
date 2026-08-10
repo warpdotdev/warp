@@ -123,9 +123,16 @@ list `[child, grandchild]`.)
     trailing badge `▸N`, where N is the loaded-descendant count of its subtree
     (`LoadedSubtreeRollup::descendant_count`). The badge never advertises nodes whose
     conversations are not loaded.
-11. The badge's style reflects the subtree's **aggregated status** (attention style while
-    anything underneath is active or blocked, muted/terminal styles when the whole subtree
-    is done). The child's leading glyph keeps today's semantics — own status while live,
+11. The badge's color follows the subtree's **aggregated status** with this explicit,
+    total mapping **[amended 2026-08-10 per design review]**:
+    - **yellow** (`attention_glyph_style`, terminal yellow) while any descendant is
+      working or stuck: `InProgress`, `TransientError` (recovering counts as running),
+      `WaitingForEvents` (alive and resumable per QUALITY-780), or `Blocked`;
+    - **red** (`error_text_style`, terminal red) when the settled subtree contains a
+      failure: aggregated `Error`;
+    - **neutral_7** (`neutral_7_text_style`) when everything settled without one:
+      aggregated `Success` or `Cancelled`.
+    The child's leading glyph keeps today's semantics — own status while live,
     identity glyph once terminal — matching the GUI, where the avatar shows the child's
     own status and the trailing group badge shows the rollup.
 12. A non-group child renders exactly as today: one glyph, one label, no badge.
@@ -205,9 +212,11 @@ list `[child, grandchild]`.)
 
 28. When `FeatureFlag::MultiLevelOrchestration` is enabled, the acceptance card adds one
     muted line directly under the agent identity line:
-    `↳ These agents may start their own child agents` — the same copy and the same gate
-    as the GUI card (`run_agents_card_view.rs:1545-1559`), so both front-ends make the
-    approver the same promise.
+    `These agents may start their own child agents.` — the same gate as the GUI card
+    (`run_agents_card_view.rs:1545-1559`), so both front-ends make the approver the same
+    promise. **[Amended 2026-08-10 per design review: the `↳` glyph is dropped and a
+    trailing period added. The GUI still renders the copy without the period; that
+    divergence is flagged for a follow-up on the GUI side, not changed here.]**
 29. The card does not surface a remaining-depth number (non-goal 6).
 30. There is no nested-approval card treatment because there is no nested approval: a
     child conversation always auto-executes `run_agents`
@@ -479,7 +488,7 @@ Today this width fits one child; the shed chrome fits three:
 ■ Can I start additional agents for this task?
    Agents (3):
    ⊹ researcher  •  ⟡ implementer  •  ✶ reviewer
-   ↳ These agents may start their own child agents
+   These agents may start their own child agents.
 
    Location: Local  •  Harness: Warp  •  Model: Default model
 
