@@ -15,7 +15,7 @@ use warp_errors::ErrorExt as _;
 use super::{
     CacheScope, CacheSetupError, DetectedCacheModes, RepoCacheKey, RepoIdentity,
     RepositoryCacheSource, aggregate_mode_stats, construct_plan, create_retained_scratch_directory,
-    is_valid_env_name, run_command_with_timeout, setup_cache,
+    is_valid_env_name, run_command, run_command_with_timeout, setup_cache,
 };
 #[cfg(unix)]
 use super::{create_cache_dir_all, current_owner};
@@ -588,27 +588,56 @@ fn scratch_directories_are_unique_0700_outside_repo_and_retained() {
     }
 }
 
-#[test]
-fn process_runner_classifies_spawn_nonzero_and_timeout() {
-    let missing = block_on(run_command_with_timeout(
-        Command::new_with_process_group("/definitely/missing/spacectl"),
-        Duration::from_millis(50),
-    ));
-    assert_eq!(missing, Err(CacheSetupError::SpawnFailed));
+// These three legs used to live in a single test that ran each classification through
+// `run_command_with_timeout` with a short, hand-picked budget. That raced each budget against
+// real process-spawn latency: under a loaded CI runner (observed on Windows), spawning `sh` can
+// itself take longer than a short budget, so the timeout future could win the race even for legs
+// that were meant to exercise spawn/exit-code classification rather than the timeout path. See
+// APP-5269.
+//
+// `run_command` (unlike `run_command_with_timeout`) applies no timeout at all, so the
+// spawn-failure and nonzero-exit legs below no longer race a clock against process-spawn
+// latency: they simply wait for the process to finish, however long that takes. Only the
+// dedicated timeout leg still needs a real race, and it's constructed so that race can only ever
+// resolve one way (see below).
 
+#[test]
+fn process_runner_classifies_spawn_failed() {
+    let result = block_on(run_command(Command::new_with_process_group(
+        "/definitely/missing/spacectl",
+    )));
+    assert_eq!(result, Err(CacheSetupError::SpawnFailed));
+}
+
+#[test]
+fn process_runner_classifies_nonzero_exit() {
     let mut nonzero = Command::new_with_process_group("sh");
     nonzero.args(["-c", "exit 17"]);
     assert_eq!(
-        block_on(run_command_with_timeout(nonzero, Duration::from_secs(1))),
+        block_on(run_command(nonzero)),
         Err(CacheSetupError::NonzeroExit {
             exit_code: Some(17)
         })
     );
+}
 
+#[test]
+fn process_runner_classifies_timeout() {
+    // `:` is a POSIX special built-in (a no-op), so this loop never spawns a child process and
+    // never exits on its own. That means there's no finite-duration operation for the timeout to
+    // race against -- unlike a real `sleep`, whose completion time could in principle be confused
+    // with slow process-spawn overhead. This leg can only resolve via the timeout path, so the
+    // assertion is deterministic regardless of machine load. It also avoids spawning a
+    // subprocess-of-a-subprocess: killing the single `sh` process here can't leave an orphaned
+    // descendant behind, unlike a shelled-out `sleep`, which is process-tree killing that isn't
+    // implemented for Windows (see the `TODO(roland)` in `Command::new_with_process_group`).
     let mut timeout = Command::new_with_process_group("sh");
-    timeout.args(["-c", "sleep 1"]);
+    timeout.args(["-c", "while :; do :; done"]);
     assert_eq!(
-        block_on(run_command_with_timeout(timeout, Duration::from_millis(10))),
+        block_on(run_command_with_timeout(
+            timeout,
+            Duration::from_millis(100)
+        )),
         Err(CacheSetupError::Timeout)
     );
 }
