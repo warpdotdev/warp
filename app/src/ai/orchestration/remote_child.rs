@@ -2,11 +2,19 @@
 //!
 //! This module owns frontend-neutral request construction and startup issue semantics;
 //! frontend-specific callers remain responsible for lifecycle state and presentation.
+use std::path::{Path, PathBuf};
+#[cfg(not(target_family = "wasm"))]
+use std::str::FromStr;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use prost::Message as _;
 use warp_cli::agent::Harness;
+#[cfg(not(target_family = "wasm"))]
+use warp_cli::skill::SkillSpec;
 use warp_multi_agent_api as multi_agent_api;
+#[cfg(not(target_family = "wasm"))]
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, SingletonEntity as _};
 
 use crate::ChannelState;
@@ -18,6 +26,8 @@ use crate::ai::ambient_agents::{
     OUT_OF_CREDITS_TASK_FAILURE_MESSAGE, SERVER_OVERLOADED_TASK_FAILURE_MESSAGE, github_auth_url,
 };
 use crate::ai::blocklist::StartAgentRequest;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::skills::resolve_skill_spec;
 use crate::ai::skills::{SkillManager, SkillReference};
 use crate::server::server_api::ai::{AgentConfigSnapshot, SpawnAgentRequest};
 use crate::server::server_api::{AIApiError, ClientError, CloudAgentCapacityError};
@@ -30,6 +40,7 @@ use crate::workspaces::workspace::AdminEnablementSetting;
 pub struct RemoteChildLaunchConfig {
     pub environment_id: String,
     pub skill_references: Vec<SkillReference>,
+    pub working_dir: PathBuf,
     pub model_id: String,
     pub computer_use_enabled: bool,
     pub worker_host: String,
@@ -48,6 +59,39 @@ impl RemoteChildLaunchConfig {
             Harness::parse_orchestration_harness(&self.harness_type).unwrap_or(Harness::Unknown)
         }
     }
+}
+
+/// Fallback for repo-qualified skill specs (`repo:skill`, `org/repo:path`)
+/// that miss the active-skill fast path in `resolve_runtime_skills`. Bundled
+/// ids, remote paths, and active/absolute local paths stay on the fast path:
+/// `resolve_skill_spec` only resolves repo-qualified specs off the local
+/// filesystem and does not honor bundled-skill activation.
+#[cfg(not(target_family = "wasm"))]
+fn resolve_repo_qualified_skill(
+    reference: &SkillReference,
+    working_dir: &Path,
+    ctx: &AppContext,
+) -> Option<Result<ai::skills::ParsedSkill, String>> {
+    let SkillReference::Path(LocalOrRemotePath::Local(path)) = reference else {
+        return None;
+    };
+    let spec = SkillSpec::from_str(&path.display().to_string()).ok()?;
+    // Bail unless the spec is repo-qualified (has a repo component).
+    spec.repo.as_ref()?;
+    Some(
+        resolve_skill_spec(&spec, working_dir, ctx)
+            .map(|resolved| resolved.parsed_skill)
+            .map_err(|error| error.to_string()),
+    )
+}
+
+#[cfg(target_family = "wasm")]
+fn resolve_repo_qualified_skill(
+    _reference: &SkillReference,
+    _working_dir: &Path,
+    _ctx: &AppContext,
+) -> Option<Result<ai::skills::ParsedSkill, String>> {
+    None
 }
 
 /// Frontend-neutral output used to launch one remote child.
@@ -197,6 +241,7 @@ pub fn prepare_remote_child_launch(
     let RemoteChildLaunchConfig {
         environment_id,
         skill_references,
+        working_dir,
         model_id,
         computer_use_enabled,
         worker_host,
@@ -209,7 +254,7 @@ pub fn prepare_remote_child_launch(
     let Some(parent_run_id) = request.parent_run_id.clone() else {
         return Err(PrepareRemoteChildLaunchError::MissingParentRunId);
     };
-    let runtime_skills = resolve_runtime_skills(&skill_references, ctx)?;
+    let runtime_skills = resolve_runtime_skills(&skill_references, &working_dir, ctx)?;
     let agent_name = normalize_orchestrator_agent_name(&request.name);
     let display_name = agent_name.clone().unwrap_or_default();
     let environment_id = Some(environment_id).filter(|id| !id.trim().is_empty());
@@ -343,19 +388,33 @@ pub fn oz_run_url(run_id: &str) -> String {
 
 fn resolve_runtime_skills(
     skill_references: &[SkillReference],
+    working_dir: &Path,
     ctx: &AppContext,
 ) -> Result<Vec<String>, PrepareRemoteChildLaunchError> {
     let skill_manager = SkillManager::as_ref(ctx);
     let mut runtime_skills = Vec::with_capacity(skill_references.len());
     let mut unresolved_references = Vec::new();
     for reference in skill_references {
-        let Some(skill) = skill_manager.active_skill_by_reference(reference, ctx) else {
-            unresolved_references.push(reference.to_string());
+        if let Some(skill) = skill_manager.active_skill_by_reference(reference, ctx) {
+            runtime_skills.push(
+                BASE64_STANDARD.encode(multi_agent_api::Skill::from(skill.clone()).encode_to_vec()),
+            );
             continue;
-        };
-        runtime_skills.push(
-            BASE64_STANDARD.encode(multi_agent_api::Skill::from(skill.clone()).encode_to_vec()),
-        );
+        }
+
+        match resolve_repo_qualified_skill(reference, working_dir, ctx) {
+            Some(Ok(skill)) => {
+                runtime_skills.push(
+                    BASE64_STANDARD.encode(multi_agent_api::Skill::from(skill).encode_to_vec()),
+                );
+            }
+            Some(Err(error)) => {
+                unresolved_references.push(format!("{reference} ({error})"));
+            }
+            None => {
+                unresolved_references.push(reference.to_string());
+            }
+        }
     }
     if unresolved_references.is_empty() {
         Ok(runtime_skills)

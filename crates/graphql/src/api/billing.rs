@@ -37,12 +37,22 @@ pub enum BonusGrantType {
     Any,
 }
 
+#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BonusGrantScope {
+    User,
+    Team,
+    Workspace,
+    #[cynic(fallback)]
+    Other,
+}
+
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct BonusGrant {
     pub created_at: Time,
     pub cost_cents: i32,
     pub expiration: Option<Time>,
     pub grant_type: BonusGrantType,
+    pub scope: BonusGrantScope,
     pub reason: String,
     pub user_facing_message: Option<String>,
     pub request_credits_granted: i32,
@@ -306,6 +316,7 @@ pub struct PricingInfo {
     pub plans: Vec<PlanPricing>,
     pub overages: OveragesPricing,
     pub addon_credits_options: Vec<AddonCreditsOption>,
+    pub promotion_message: Option<String>,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
@@ -378,6 +389,7 @@ pub struct UsageEntry {
     pub usage_source: AiCreditsUsageSource,
     pub credits_used: i32,
     pub cost_cents: i32,
+    pub attributed_team_uid: Option<String>,
 }
 
 #[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]

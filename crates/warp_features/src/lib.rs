@@ -672,6 +672,9 @@ pub enum FeatureFlag {
     /// Enables the orchestration launch modal announcing multi-agent orchestration features.
     OrchestrationLaunchModal,
 
+    /// Enables the launch modal announcing the Warp Agent CLI.
+    AgentCliLaunchModal,
+
     /// Updated tab styling (background colors, border, close button positioning, margins).
     NewTabStyling,
 
@@ -707,6 +710,13 @@ pub enum FeatureFlag {
     /// registers an orchestrator for the owner-side ancestor stream so it
     /// receives events for children created out-of-band (Oz CLI / web API).
     WaitForEventsParentRegistration,
+
+    /// Gates the client-side multi-level orchestration surfaces: child
+    /// conversations auto-executing their own `run_agents` calls and the
+    /// confirmation-card disclosure that launched agents may start
+    /// children of their own. When disabled, a child's `run_agents` call
+    /// fails gracefully instead of presenting a card in a hidden pane.
+    MultiLevelOrchestration,
 
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
@@ -1009,6 +1019,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::JupyterNotebookRendering,
     FeatureFlag::WaitForEventsParentRegistration,
+    FeatureFlag::MultiLevelOrchestration,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::WellKnownMcpIds,

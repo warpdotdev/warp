@@ -207,6 +207,16 @@ impl TuiApiKeysMenuModel {
         self.transition_to_browsing(ctx);
     }
 
+    /// Opens the menu and jumps straight into the Grok connect path, equivalent to selecting the
+    /// "X premium or SuperGrok subscription" row. Reuses `edit_provider` so the already-connected
+    /// and policy-gated cases surface the same messaging as the provider list.
+    pub(crate) fn open_and_connect_grok(&mut self, ctx: &mut ModelContext<Self>) {
+        self.open(ctx);
+        if self.is_open(ctx) {
+            self.edit_provider(LLMProvider::Xai, ctx);
+        }
+    }
+
     pub(crate) fn dismiss(&mut self, ctx: &mut ModelContext<Self>) {
         match self.state {
             TuiApiKeysMenuState::Closed => {}

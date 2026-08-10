@@ -1,6 +1,6 @@
-use warp_graphql::billing::AddonCreditsOption;
+use warp_graphql::billing::{AddonCreditsOption, OveragesPricing, PricingInfo};
 
-use super::onboarding_credit_pack_options;
+use super::{PricingInfoModel, onboarding_credit_pack_options};
 
 /// The production add-on credit packs (`GetAddonCreditsOptions` on the server).
 fn production_packs() -> Vec<AddonCreditsOption> {
@@ -86,4 +86,20 @@ fn packs_worse_than_the_base_rate_show_no_savings() {
         .map(|pack| pack.savings_percent)
         .collect();
     assert_eq!(savings, [0, 0]);
+}
+
+#[test]
+fn promotion_message_is_exposed_verbatim() {
+    let model = PricingInfoModel {
+        pricing_info: Some(PricingInfo {
+            plans: vec![],
+            overages: OveragesPricing {
+                price_per_request_usd_cents: 0,
+            },
+            addon_credits_options: vec![],
+            promotion_message: Some("50% off Fable and Opus 5".to_string()),
+        }),
+    };
+
+    assert_eq!(model.promotion_message(), Some("50% off Fable and Opus 5"));
 }

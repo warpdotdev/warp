@@ -39,6 +39,7 @@ use crate::ai::orchestration::{
     OrchestrationConfigState, can_execute_with_auth_secret,
     populate_default_auth_secret_for_execution,
 };
+use crate::features::FeatureFlag;
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
 /// this window (e.g. binary not found, server error), the slot is failed
@@ -435,6 +436,19 @@ impl RunAgentsExecutor {
         if AppExecutionMode::as_ref(ctx).is_autonomous() {
             return true;
         }
+        // Child conversations live in hidden panes where a confirmation card
+        // would be invisible and hang the run. Always auto-execute — even
+        // with `MultiLevelOrchestration` disabled — so the policy checks in
+        // `prepare_request_for_execution` (including the multi-level gate)
+        // fail the call gracefully with a Denied result instead of a card.
+        // Children inherit the parent surface's execution profile via
+        // `inherit_child_agent_settings`, so run-wide permissions carry over.
+        if BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&input.conversation_id)
+            .is_some_and(|c| c.is_child_agent_conversation())
+        {
+            return true;
+        }
         let mut resolved_request = request.clone();
         resolve_request_from_approved_config(&mut resolved_request, input.conversation_id, ctx);
         populate_default_auth_secret_for_execution(&mut resolved_request, ctx);
@@ -515,6 +529,18 @@ fn prepare_request_for_execution(
 
     if AppExecutionMode::as_ref(ctx).is_autonomous() {
         return None;
+    }
+
+    // A child conversation cannot present a confirmation card (hidden pane),
+    // so when the multi-level surfaces are disabled its `run_agents` call
+    // must be denied outright rather than falling through to the
+    // interactive path.
+    if !FeatureFlag::MultiLevelOrchestration.is_enabled()
+        && BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&parent_conversation_id)
+            .is_some_and(|c| c.is_child_agent_conversation())
+    {
+        return Some("Multi-level orchestration is not enabled on this client.".to_string());
     }
 
     if status.is_some_and(|status| status.is_disapproved()) {

@@ -62,6 +62,7 @@ fn serialize_environment_without_docker_image_omits_field() {
         setup_commands: vec![],
         providers: ProvidersConfig::default(),
         secrets: None,
+        default_runner_uid: None,
     };
 
     let json = serde_json::to_value(&env).unwrap();
@@ -80,6 +81,7 @@ fn roundtrip_serde_without_docker_image() {
         setup_commands: vec!["make build".into()],
         providers: ProvidersConfig::default(),
         secrets: None,
+        default_runner_uid: None,
     };
 
     let serialized = serde_json::to_string(&env).unwrap();

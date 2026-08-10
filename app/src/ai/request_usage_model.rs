@@ -29,7 +29,17 @@ pub const AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD: i32 = 20;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BonusGrantScope {
     User,
+    Team(WorkspaceUid),
     Workspace(WorkspaceUid),
+}
+
+impl BonusGrantScope {
+    pub fn workspace_uid(&self) -> Option<WorkspaceUid> {
+        match self {
+            BonusGrantScope::User => None,
+            BonusGrantScope::Team(uid) | BonusGrantScope::Workspace(uid) => Some(*uid),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -531,8 +541,10 @@ impl AIRequestUsageModel {
         let has_base_plan_ai_requests = self.has_base_plan_requests_remaining();
 
         let user_bonus_credits = self.total_user_interactive_bonus_credits_remaining() > 0;
-        let workspace_bonus_credits = current_workspace
-            .map(|workspace| self.total_workspace_bonus_credits_remaining(workspace.uid) > 0)
+        let workspace_and_team_bonus_credits = current_workspace
+            .map(|workspace| {
+                self.total_workspace_and_team_bonus_credits_remaining(workspace.uid) > 0
+            })
             .unwrap_or_default();
 
         let workspace_has_overages =
@@ -562,7 +574,7 @@ impl AIRequestUsageModel {
             && ApiKeyManager::as_ref(ctx).has_any_key();
 
         has_base_plan_ai_requests
-            || (user_bonus_credits || workspace_bonus_credits)
+            || (user_bonus_credits || workspace_and_team_bonus_credits)
             || workspace_has_overages
             || is_payg_enabled
             || is_enterprise_auto_reload_enabled
@@ -659,20 +671,23 @@ impl AIRequestUsageModel {
         ctx.emit(AIRequestUsageModelEvent::AmbientCreditsBannerDismissed);
     }
 
-    pub fn total_workspace_bonus_credits_remaining(&self, uid: WorkspaceUid) -> i32 {
+    pub fn total_workspace_and_team_bonus_credits_remaining(&self, uid: WorkspaceUid) -> i32 {
         let now = Utc::now();
         self.bonus_grants
             .iter()
-            .filter(|grant| grant.scope == BonusGrantScope::Workspace(uid))
+            .filter(|grant| grant.scope.workspace_uid() == Some(uid))
             .filter(|grant| grant.expiration.is_none_or(|exp| now < exp))
             .map(|grant| grant.request_credits_remaining)
             .sum()
     }
 
-    pub fn total_current_workspace_bonus_credits_remaining(&self, ctx: &AppContext) -> i32 {
+    pub fn total_current_workspace_and_team_bonus_credits_remaining(
+        &self,
+        ctx: &AppContext,
+    ) -> i32 {
         UserWorkspaces::as_ref(ctx)
             .current_workspace()
-            .map(|workspace| self.total_workspace_bonus_credits_remaining(workspace.uid))
+            .map(|workspace| self.total_workspace_and_team_bonus_credits_remaining(workspace.uid))
             .unwrap_or(0)
     }
 
@@ -718,7 +733,7 @@ impl AIRequestUsageModel {
             .filter(|grant| grant.request_credits_remaining > 0)
             .any(|grant| match grant.scope {
                 BonusGrantScope::User => true,
-                BonusGrantScope::Workspace(uid) => {
+                BonusGrantScope::Team(uid) | BonusGrantScope::Workspace(uid) => {
                     current_workspace.is_some_and(|workspace| workspace.uid == uid)
                 }
             });

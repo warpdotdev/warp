@@ -580,6 +580,34 @@ impl SkillManager {
         }
     }
 
+    /// Registers skills loaded from `WARP_SKILL_DIRS` environment variable directories
+    /// as personal (home) tier skills.
+    ///
+    /// Unlike [`handle_skills_added`], this method does not require each skill's path
+    /// to follow a known provider directory structure. Skills are stored directly
+    /// under the local home directory bucket so they are always in scope—the same
+    /// precedence as `~/.agents/skills` and other personal skills.
+    ///
+    /// Call this after reading skills with [`ai::skills::read_skills_for_skills_dirs`].
+    pub fn add_skills_dirs_skills(&mut self, skills: Vec<ParsedSkill>) {
+        let Some(home_dir) = dirs::home_dir() else {
+            log::warn!("WARP_SKILL_DIRS: home directory unavailable; cannot register env skills");
+            return;
+        };
+        let home_dir = LocalOrRemotePath::Local(home_dir);
+        for skill in skills {
+            self.directory_skills
+                .entry(home_dir.clone())
+                .or_default()
+                .insert(skill.path.clone());
+            self.skills_by_name
+                .entry(skill.name.clone())
+                .or_default()
+                .insert(skill.path.clone());
+            self.skills_by_path.insert(skill.path.clone(), skill);
+        }
+    }
+
     fn handle_skills_deleted(&mut self, paths: Vec<LocalOrRemotePath>) {
         for path in paths {
             self.handle_path_deleted(&path);

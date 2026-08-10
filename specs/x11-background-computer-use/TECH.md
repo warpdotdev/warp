@@ -44,8 +44,15 @@ drives the agent seat completely unchanged. Consequences:
 - The user's cursor position, keyboard focus, and modifier state are properties of the user's
   own master pair and are never touched. Agent typing follows the agent keyboard's focus, set
   per action with `XISetFocus`, even while the target window is covered.
-- A second visible cursor exists while a window-targeted batch runs (the seat lives for the
-  `Actor`'s lifetime, i.e. one tool call).
+- A second visible cursor exists while a window-targeted batch runs. Post-ship amendment: the
+  seat originally lived for the `Actor`'s lifetime (one tool call), but the X server holds
+  input state on the seat that must span tool calls — removing a master pair implicitly
+  releases the buttons its XTEST slave holds, which ended split-call drags (press in one
+  `use_computer` call, moves/release in later ones) and broke e.g. drag-to-select. Seats used
+  by in-app sessions are therefore shared per session owner (the client conversation id) and
+  live until `computer_use::end_background_session(owner)` runs at session completion or
+  cancellation, so the second cursor persists for the session, not one call. The owner-less
+  `use_computer` CLI keeps a per-actor seat.
 
 Rejected alternatives: `XSendEvent` synthetic events (silently ignored by major toolkits);
 focus/pointer save-restore juggling on the user's seat (races with concurrent user input, not

@@ -10,7 +10,10 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui_core::r#async::Timer;
 use warpui_core::{App, ModelContext};
 
-use super::{Repository, RepositorySubscriber, TrackedRemoteRef, merge_repository_updates};
+use super::{
+    Repository, RepositorySubscriber, RepositorySubscription, RepositoryWatchMode,
+    TrackedRemoteRef, merge_repository_updates,
+};
 use crate::repositories::stub_git_repository;
 use crate::watcher::DirectoryWatcher;
 use crate::{RepositoryUpdate, TargetFile};
@@ -44,13 +47,19 @@ impl RepositorySubscriber for RecordingSubscriber {
 
 fn add_recording_subscriber(
     repository: &mut Repository,
+    mode: RepositoryWatchMode,
     update_tx: mpsc::UnboundedSender<RepositoryUpdate>,
-) {
+) -> usize {
     let subscriber_id = repository.next_subscriber_id;
     repository.next_subscriber_id += 1;
-    repository
-        .subscribers
-        .insert(subscriber_id, Box::new(RecordingSubscriber { update_tx }));
+    repository.subscribers.insert(
+        subscriber_id,
+        RepositorySubscription {
+            mode,
+            subscriber: Box::new(RecordingSubscriber { update_tx }),
+        },
+    );
+    subscriber_id
 }
 #[test]
 fn tracked_remote_ref_validates_full_ref_names() {
@@ -190,6 +199,198 @@ fn merge_repository_updates_preserves_remote_ref_updates() {
 }
 
 #[test]
+fn filesystem_only_subscription_does_not_activate_git_tracking() {
+    VirtualFS::test(
+        "filesystem_only_subscription_does_not_activate_git_tracking",
+        |dirs, mut vfs| {
+            stub_git_repository(&mut vfs, "repo");
+            let repo_path = dirs.tests().join("repo");
+
+            App::test((), |mut app| async move {
+                let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+                let repo_handle = watcher_handle
+                    .update(&mut app, |watcher, ctx| {
+                        watcher.add_directory(
+                            StandardizedPath::from_local_canonicalized(&repo_path).unwrap(),
+                            ctx,
+                        )
+                    })
+                    .unwrap();
+
+                let (update_tx, _) = mpsc::unbounded::<RepositoryUpdate>();
+                let start = repo_handle.update(&mut app, |repo, ctx| {
+                    repo.start_watching(
+                        RepositoryWatchMode::FilesystemOnly,
+                        Box::new(RecordingSubscriber { update_tx }),
+                        ctx,
+                    )
+                });
+                std::mem::drop(start.registration_future);
+
+                repo_handle.read(&app, |repo, _| {
+                    assert!(!repo.has_git_repository_subscribers());
+                    assert_eq!(repo.tracked_remote_ref_refresh_count, 0);
+                });
+            });
+        },
+    );
+}
+
+#[test]
+fn git_tracking_activates_once_for_concurrent_git_subscriptions() {
+    VirtualFS::test(
+        "git_tracking_activates_once_for_concurrent_git_subscriptions",
+        |dirs, mut vfs| {
+            stub_git_repository(&mut vfs, "repo");
+            let repo_path = dirs.tests().join("repo");
+
+            App::test((), |mut app| async move {
+                let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+                let repo_handle = watcher_handle
+                    .update(&mut app, |watcher, ctx| {
+                        watcher.add_directory(
+                            StandardizedPath::from_local_canonicalized(&repo_path).unwrap(),
+                            ctx,
+                        )
+                    })
+                    .unwrap();
+
+                let mut subscriber_ids = Vec::new();
+                for _ in 0..2 {
+                    let (update_tx, _) = mpsc::unbounded::<RepositoryUpdate>();
+                    let start = repo_handle.update(&mut app, |repo, ctx| {
+                        repo.start_watching(
+                            RepositoryWatchMode::GitRepository,
+                            Box::new(RecordingSubscriber { update_tx }),
+                            ctx,
+                        )
+                    });
+                    subscriber_ids.push(start.subscriber_id);
+                    std::mem::drop(start.registration_future);
+                }
+
+                repo_handle.read(&app, |repo, _| {
+                    assert!(repo.has_git_repository_subscribers());
+                    assert_eq!(repo.tracked_remote_ref_refresh_count, 1);
+                });
+
+                for subscriber_id in subscriber_ids {
+                    repo_handle.update(&mut app, |repo, ctx| {
+                        repo.stop_watching(subscriber_id, ctx);
+                    });
+                }
+
+                repo_handle.read(&app, |repo, _| {
+                    assert!(!repo.has_git_repository_subscribers());
+                    assert!(repo.tracked_remote_ref.is_none());
+                });
+            });
+        },
+    );
+}
+
+#[test]
+fn mixed_watch_modes_filter_git_flags_per_subscriber() {
+    VirtualFS::test(
+        "mixed_watch_modes_filter_git_flags_per_subscriber",
+        |dirs, mut vfs| {
+            stub_git_repository(&mut vfs, "repo");
+            let repo_path = dirs.tests().join("repo");
+
+            App::test((), |mut app| async move {
+                let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+                let repo_handle = watcher_handle
+                    .update(&mut app, |watcher, ctx| {
+                        watcher.add_directory(
+                            StandardizedPath::from_local_canonicalized(&repo_path).unwrap(),
+                            ctx,
+                        )
+                    })
+                    .unwrap();
+
+                let (filesystem_tx, _) = mpsc::unbounded::<RepositoryUpdate>();
+                let (git_tx, _) = mpsc::unbounded::<RepositoryUpdate>();
+                let (filesystem_id, git_id) = repo_handle.update(&mut app, |repo, _| {
+                    (
+                        add_recording_subscriber(
+                            repo,
+                            RepositoryWatchMode::FilesystemOnly,
+                            filesystem_tx,
+                        ),
+                        add_recording_subscriber(repo, RepositoryWatchMode::GitRepository, git_tx),
+                    )
+                });
+                let changed_file = TargetFile::new(repo_path.join("file.txt"), false);
+                let update = RepositoryUpdate {
+                    modified: [changed_file.clone()].into(),
+                    commit_updated: true,
+                    index_lock_detected: true,
+                    remote_ref_updated: true,
+                    ..Default::default()
+                };
+
+                let subscriber_updates =
+                    repo_handle.read(&app, |repo, _| repo.subscriber_updates(&update));
+                let filesystem_update = subscriber_updates
+                    .iter()
+                    .find_map(|(id, update)| (*id == filesystem_id).then_some(update))
+                    .unwrap();
+                let git_update = subscriber_updates
+                    .iter()
+                    .find_map(|(id, update)| (*id == git_id).then_some(update))
+                    .unwrap();
+
+                assert_eq!(filesystem_update.modified, [changed_file.clone()].into());
+                assert!(!filesystem_update.commit_updated);
+                assert!(!filesystem_update.index_lock_detected);
+                assert!(!filesystem_update.remote_ref_updated);
+                assert_eq!(git_update.modified, [changed_file].into());
+                assert!(git_update.commit_updated);
+                assert!(git_update.index_lock_detected);
+                assert!(git_update.remote_ref_updated);
+            });
+        },
+    );
+}
+
+#[test]
+fn filesystem_only_subscription_drops_git_only_updates() {
+    VirtualFS::test(
+        "filesystem_only_subscription_drops_git_only_updates",
+        |dirs, mut vfs| {
+            stub_git_repository(&mut vfs, "repo");
+            let repo_path = dirs.tests().join("repo");
+
+            App::test((), |mut app| async move {
+                let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+                let repo_handle = watcher_handle
+                    .update(&mut app, |watcher, ctx| {
+                        watcher.add_directory(
+                            StandardizedPath::from_local_canonicalized(&repo_path).unwrap(),
+                            ctx,
+                        )
+                    })
+                    .unwrap();
+
+                let (update_tx, _) = mpsc::unbounded::<RepositoryUpdate>();
+                repo_handle.update(&mut app, |repo, _| {
+                    add_recording_subscriber(repo, RepositoryWatchMode::FilesystemOnly, update_tx);
+                });
+                let update = RepositoryUpdate {
+                    commit_updated: true,
+                    ..Default::default()
+                };
+
+                let subscriber_updates =
+                    repo_handle.read(&app, |repo, _| repo.subscriber_updates(&update));
+
+                assert!(subscriber_updates.is_empty());
+            });
+        },
+    );
+}
+
+#[test]
 fn tracked_remote_ref_change_notifies_subscribers() {
     VirtualFS::test("tracked_remote_ref_change_notifies", |dirs, mut vfs| {
         stub_git_repository(&mut vfs, "repo");
@@ -209,7 +410,7 @@ fn tracked_remote_ref_change_notifies_subscribers() {
 
             let (update_tx, mut update_rx) = mpsc::unbounded::<RepositoryUpdate>();
             repo_handle.update(&mut app, |repo, _| {
-                add_recording_subscriber(repo, update_tx);
+                add_recording_subscriber(repo, RepositoryWatchMode::GitRepository, update_tx);
             });
 
             repo_handle.update(&mut app, |repo, ctx| {
@@ -254,7 +455,7 @@ fn unchanged_tracked_remote_ref_does_not_notify_subscribers() {
 
                 let (update_tx, mut update_rx) = mpsc::unbounded::<RepositoryUpdate>();
                 repo_handle.update(&mut app, |repo, _| {
-                    add_recording_subscriber(repo, update_tx);
+                    add_recording_subscriber(repo, RepositoryWatchMode::GitRepository, update_tx);
                 });
 
                 repo_handle.update(&mut app, |repo, _| {

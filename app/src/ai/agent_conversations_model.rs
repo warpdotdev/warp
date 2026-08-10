@@ -39,6 +39,7 @@ use crate::ai::ambient_agents::{
     AmbientAgentTaskState,
 };
 use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::orchestration_topology::orchestration_aware_conversation_status;
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
 };
@@ -416,7 +417,14 @@ impl AgentRunDisplayStatus {
                 let history_model = BlocklistAIHistoryModel::as_ref(app);
                 entry::conversation_id_shadowed_by_task(task, history_model)
                     .and_then(|conversation_id| history_model.conversation(&conversation_id))
-                    .map(|conversation| Self::from_conversation_status(conversation.status()))
+                    .map(|conversation| {
+                        // Roll the whole orchestration subtree (children,
+                        // grandchildren, …) into the root card's status.
+                        Self::from_conversation_status(&orchestration_aware_conversation_status(
+                            history_model,
+                            conversation,
+                        ))
+                    })
                     .unwrap_or_else(|| Self::from_task_state(task))
             }
             AmbientAgentTaskState::Succeeded

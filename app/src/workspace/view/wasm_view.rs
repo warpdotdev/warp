@@ -109,37 +109,15 @@ impl Workspace {
     }
 
     /// Check if we should show the conversation details panel, given the focused terminal view.
-    /// Returns true for:
-    /// - Conversation transcript viewers (always)
-    /// - Restored ambient cloud tasks
-    /// - Shared sessions with an active conversation
+    /// Delegates to `TerminalView::should_show_wasm_conversation_details_panel`, which is the
+    /// authoritative predicate shared by the workspace panel gate and the pane-header button gate.
     pub(super) fn should_show_conversation_details_panel(
         focused_terminal_view: &ViewHandle<TerminalView>,
         ctx: &AppContext,
     ) -> bool {
-        let terminal_view_ref = focused_terminal_view.as_ref(ctx);
-
-        if terminal_view_ref
-            .ambient_agent_task_id_for_details_panel(ctx)
-            .is_some()
-        {
-            return true;
-        }
-        let model = terminal_view_ref.model.lock();
-
-        // Always show for conversation transcript viewers
-        if model.is_conversation_transcript_viewer() {
-            return true;
-        }
-        // For shared sessions, show if there's an active conversation.
-        if model.shared_session_status().is_sharer_or_viewer() {
-            drop(model); // Release lock before accessing BlocklistAIHistoryModel
-            return BlocklistAIHistoryModel::as_ref(ctx)
-                .active_conversation(focused_terminal_view.id())
-                .is_some();
-        }
-
-        false
+        focused_terminal_view
+            .as_ref(ctx)
+            .should_show_wasm_conversation_details_panel(ctx)
     }
 
     /// Renders the transcript details panel for WASM conversation transcript and shared session viewing.

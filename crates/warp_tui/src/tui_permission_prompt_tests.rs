@@ -20,17 +20,24 @@ use crate::editor_view::TuiEditorView;
 use crate::option_selector::{TuiOptionSelectorAction, TuiOptionSelectorEvent};
 use crate::test_fixtures::{TestHostView, add_test_action_model};
 fn add_prompt(app: &mut App, body_editable: bool) -> ViewHandle<TuiPermissionPrompt> {
+    add_prompt_with_host(app, body_editable).1
+}
+
+fn add_prompt_with_host(
+    app: &mut App,
+    body_editable: bool,
+) -> (ViewHandle<TestHostView>, ViewHandle<TuiPermissionPrompt>) {
     app.add_singleton_model(|_| Appearance::mock());
     let action_model = add_test_action_model(app);
     app.update(|ctx| {
-        let (window_id, _) = ctx.add_tui_window(
+        let (window_id, host) = ctx.add_tui_window(
             AddWindowOptions {
                 window_style: WindowStyle::NotStealFocus,
                 ..Default::default()
             },
             |_| TestHostView,
         );
-        ctx.add_typed_action_tui_view(window_id, move |ctx| {
+        let prompt = ctx.add_typed_action_tui_view(window_id, move |ctx| {
             let body_editor =
                 body_editable.then(|| ctx.add_typed_action_tui_view(TuiEditorView::single_line));
             TuiPermissionPrompt::new(
@@ -39,10 +46,14 @@ fn add_prompt(app: &mut App, body_editable: bool) -> ViewHandle<TuiPermissionPro
                 body_editor,
                 ctx,
             )
-        })
+        });
+        (host, prompt)
     })
 }
 
+fn focus_prompt(app: &mut App, prompt: &ViewHandle<TuiPermissionPrompt>) {
+    prompt.update(app, |_, ctx| ctx.focus_self());
+}
 fn dispatch_focused_key(
     app: &mut App,
     prompt: &ViewHandle<TuiPermissionPrompt>,
@@ -147,11 +158,34 @@ fn focusing_an_active_prompt_delegates_to_the_selector() {
         action_model.update(&mut app, |model, ctx| {
             queue_tui_permission_action(model, action, AIConversationId::new(), ctx);
         });
+        focus_prompt(&mut app, &prompt);
         let selector = app.read(|ctx| prompt.as_ref(ctx).selector.clone());
 
         prompt.update(&mut app, |_, ctx| ctx.focus_self());
 
         assert!(app.read(|ctx| selector.is_focused(ctx)));
+    });
+}
+
+#[test]
+fn permission_blocking_transition_does_not_replace_existing_focus() {
+    App::test((), |mut app| async move {
+        let (foreground, prompt) = add_prompt_with_host(&mut app, false);
+        let (action_model, action) = app.read(|ctx| {
+            let prompt = prompt.as_ref(ctx);
+            (prompt.action_model.clone(), pending_action(prompt))
+        });
+        foreground.update(&mut app, |_, ctx| ctx.focus_self());
+
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, AIConversationId::new(), ctx);
+        });
+
+        assert_eq!(
+            app.read(|ctx| ctx.focused_view_id(prompt.window_id(ctx))),
+            Some(foreground.id()),
+            "a blocked permission prompt in a background session must not replace foreground focus"
+        );
     });
 }
 #[test]
@@ -166,6 +200,7 @@ fn leading_editor_participates_in_selector_focus_cycle() {
         action_model.update(&mut app, |model, ctx| {
             queue_tui_permission_action(model, action, AIConversationId::new(), ctx);
         });
+        focus_prompt(&mut app, &prompt);
         render_lines(&mut app, &prompt);
 
         assert!(dispatch_focused_key(&mut app, &prompt, "up"));
@@ -214,6 +249,7 @@ fn e_focuses_the_body_editor_without_interfering_with_other() {
         action_model.update(&mut app, |model, ctx| {
             queue_tui_permission_action(model, action, AIConversationId::new(), ctx);
         });
+        focus_prompt(&mut app, &prompt);
         let selector = app.read(|ctx| prompt.as_ref(ctx).selector.clone());
         assert!(dispatch_focused_key(&mut app, &prompt, "e"));
         assert!(app.read(|ctx| {
@@ -278,6 +314,7 @@ fn footer_shows_exit_editor_hint_while_body_editor_is_focused() {
         action_model.update(&mut app, |model, ctx| {
             queue_tui_permission_action(model, action, AIConversationId::new(), ctx);
         });
+        focus_prompt(&mut app, &prompt);
         // Focus the body editor via EditBody so body_editor_is_focused returns true.
         dispatch_focused_key(&mut app, &prompt, "e");
         // Render and assert the footer reflects the editor-focus state.

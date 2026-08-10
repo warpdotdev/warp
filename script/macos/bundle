@@ -543,8 +543,7 @@ if [[ "$ARTIFACT" == "app" ]]; then
   cargo bundle --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
   popd > /dev/null
 
-  echo "Adding rpath to support mac frameworks (e.g. Sentry)"
-  install_name_tool -add_rpath "@executable_path/../Frameworks" "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/MacOS/$WARP_BIN"
+  "$WORKSPACE_ROOT_DIR/script/macos/add_framework_rpath" "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/MacOS/$WARP_BIN"
 
   export WARP_SCHEME_NAME
   export WARP_PLIST_PATH="$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Info.plist"
@@ -618,8 +617,9 @@ if [[ "$ARTIFACT" == "app" ]]; then
       tmp_bundle_dir=$(mktemp -d -t ci-XXXXXXXXXX)
 
       echo "Adding rpath to both binaries for universal executable"
-      install_name_tool -add_rpath "@executable_path/../Frameworks" "target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN"
-      install_name_tool -add_rpath "@executable_path/../Frameworks"  "target/$ARM_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN"
+      "$WORKSPACE_ROOT_DIR/script/macos/add_framework_rpath" \
+        "target/$INTEL_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN" \
+        "target/$ARM_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN"
 
       echo "Building universal binary using lipo."
       lipo -create -output "$tmp_bundle_dir/$WARP_BIN" \

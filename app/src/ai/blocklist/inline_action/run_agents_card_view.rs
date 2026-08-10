@@ -58,6 +58,7 @@ use crate::ai::harness_availability::{
 };
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
+use crate::features::FeatureFlag;
 use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
 use crate::server::experiments::{ServerExperiments, ServerExperimentsEvent};
 use crate::server::server_api::ServerApiProvider;
@@ -1534,7 +1535,30 @@ fn render_summary(card: &RunAgentsCardFields, appearance: &Appearance) -> Box<dy
     .with_selectable(true)
     .finish();
 
-    Container::new(summary_text)
+    let mut column = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_child(summary_text);
+    // Multi-level orchestration: the server may grant launched children the
+    // run_agents tool, so tell the approver up front. The client cannot
+    // cheaply know the server-side depth budget, so this line is gated on
+    // the client-side multi-level enablement flag.
+    if FeatureFlag::MultiLevelOrchestration.is_enabled() {
+        column = column.with_child(
+            Container::new(
+                Text::new(
+                    "These agents may start their own child agents".to_string(),
+                    appearance.ui_font_family(),
+                    appearance.monospace_font_size() - 1.,
+                )
+                .with_color(blended_colors::text_disabled(theme, theme.background()))
+                .finish(),
+            )
+            .with_margin_top(4.)
+            .finish(),
+        );
+    }
+
+    Container::new(column.finish())
         .with_margin_bottom(12.)
         .finish()
 }
