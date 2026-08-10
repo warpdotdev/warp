@@ -2408,14 +2408,12 @@ const PILL_BADGE_STYLE: StatusBadgeStyle = StatusBadgeStyle {
 
 /// Extra overhang of the status badge past the avatar circle's bottom-right
 /// edge, as a signed fraction of [`AVATAR_WITH_STATUS_TOTAL_SIZE`] added to
-/// `icon_with_status`'s default overhang. `0.05` lands the badge's BR exactly
-/// on the lockup box's BR corner — the Figma-natural overhang — which, with
-/// the lockup box inset 1px from the pill's bottom edge, leaves the badge's
-/// cutout ring 1px clear of that edge.
+/// `icon_with_status`'s default overhang.
 ///
-/// This is the knob to turn if design wants the badge hanging closer to (or
-/// further from) the pill's bottom edge: each 0.05 is 1px of travel along the
-/// box's diagonal.
+/// It is not a free parameter: `0.05` is exactly what cancels that helper's
+/// built-in `0.19` default, putting the badge's bottom-right corner on the
+/// lockup box's own bottom-right corner. Since the box is bottom-aligned in
+/// the slot, that is what makes the ring flush with the pill's bottom edge.
 const PILL_BADGE_OVERHANG_RATIO: f32 = 0.05;
 
 /// Top inset of the avatar disc inside the [`AVATAR_WITH_STATUS_TOTAL_SIZE`]
@@ -2427,7 +2425,7 @@ const PILL_AVATAR_LOCKUP_TOP_INSET: f32 =
     PILL_AVATAR_VERTICAL_PADDING - (PILL_HEIGHT - AVATAR_WITH_STATUS_TOTAL_SIZE);
 
 /// Places the avatar disc inside the square box that the status badge is
-/// anchored against, applying the designed asymmetric padding. Shared by the
+/// anchored against, applying the designed padding. Shared by the
 /// plain and status-badged paths so a pill's avatar lands in exactly the same
 /// spot whether or not it currently has a status.
 ///
