@@ -1,11 +1,11 @@
-//! Periodic workspace-handoff checkpoint coordinator (REMOTE-2111 Phase 3).
+//! Periodic workspace-handoff checkpoint coordinator.
 //!
-//! Drives the five-state machine described in `docs/remote-2111-checkpoint-spec.md`
-//! (warp-server): `Idle -> Due -> InFlight -> Idle` on the periodic path, with
-//! `Finalizing -> Stopped` reachable from `Idle`, `Due`, or `InFlight` via
-//! [`CheckpointCoordinatorHandle::finalize`]. The timer only ever moves `Idle` to
-//! `Due`; all gather/upload/commit work happens through
-//! `super::snapshot::run_checkpoint_from_declarations_file`, reusing the same
+//! Drives a five-state machine: `Idle -> Due -> InFlight -> Idle` on the periodic path,
+//! with `Finalizing -> Stopped` reachable from `Idle`, `Due`, or `InFlight` via
+//! [`CheckpointCoordinatorHandle::finalize`]. `Idle` waits out the jittered interval,
+//! `Due` waits for a safe boundary, and `InFlight` runs exactly one attempt at a time.
+//! The timer only ever moves `Idle` to `Due`; all gather/upload/commit work happens
+//! through `super::snapshot::run_checkpoint_from_declarations_file`, reusing the same
 //! declarations file and gather/upload pipeline as the legacy end-of-run snapshot.
 //!
 //! Safe-boundary gating ("only touch the filesystem/network when the conversation
@@ -59,8 +59,9 @@ enum Boundary {
 type BoundaryCheck = Arc<dyn Fn() -> BoxFuture<'static, Boundary> + Send + Sync>;
 
 /// Default cadence between the end of one checkpoint attempt and the timer firing again,
-/// absent an override on `AgentDriverOptions`. Deliberately not `HARNESS_SAVE_INTERVAL`
-/// (30s) -- see the spec's "5 minutes plus jitter" cadence.
+/// absent an override on `AgentDriverOptions`. Deliberately much coarser than
+/// `HARNESS_SAVE_INTERVAL` (30s): each attempt gathers and uploads the whole workspace,
+/// so it is priced as minutes-scale background work rather than a lightweight save.
 ///
 /// Note this is measured from attempt *completion*, not attempt start: the timer is only
 /// restarted once the `InFlight` state resolves, so back-to-back attempts can never
@@ -333,6 +334,14 @@ fn start_attempt(
 /// longer be found, or when the conversation is quiescent -- there is nothing to interrupt.
 /// [`Boundary::DriverGone`] when the driver itself has been dropped, which stops the loop
 /// rather than being conflated with "safe" and checkpointing forever.
+///
+/// `InProgress`/`TransientError` do not immediately imply `Busy`: for most of a turn the
+/// agent is waiting on the model's response rather than touching the filesystem, and only
+/// actually executing an action (a pending or running entry in the terminal's action model)
+/// risks a concurrent mutation. Treating the whole status as `Busy` would make the safe-
+/// boundary check nearly useless for a continuously active agent, since it would almost
+/// never see anything but `InProgress` before `MAX_BOUNDARY_DEFERRAL` forces a checkpoint
+/// anyway.
 async fn is_safe_boundary(spawner: &ModelSpawner<AgentDriver>) -> Boundary {
     let result = spawner
         .spawn(|driver, ctx| {
@@ -355,9 +364,10 @@ async fn is_safe_boundary(spawner: &ModelSpawner<AgentDriver>) -> Boundary {
             if status.is_waiting_for_events() || status.is_blocked() || status.is_done() {
                 return Boundary::Safe;
             }
-            if status.is_in_progress() || status.is_transient_error() {
-                return Boundary::Busy;
-            }
+            // `InProgress` (running a turn) and `TransientError` (a failed turn about to be
+            // retried) both cover time spent waiting on the model as well as time spent
+            // executing actions, so fall through to the action model rather than treating
+            // either as unconditionally busy.
             let terminal_view = driver
                 .terminal_driver
                 .as_ref(ctx)
@@ -608,7 +618,9 @@ async fn coordinator_loop(
                 // Success, skip, or failure: return to Idle and wait a full interval
                 // before the next attempt either way. The periodic timer itself
                 // (rather than a distinct short backoff) is the retry mechanism for
-                // failures too, matching the spec's "no RPO/RTO SLO" framing.
+                // failures too: checkpoints are best-effort with no recovery-point or
+                // recovery-time guarantee, so retrying sooner isn't worth the extra
+                // whole-workspace gather and upload.
             }
             request = finalize_rx.recv().fuse() => {
                 let Some(request) = request else { return };
