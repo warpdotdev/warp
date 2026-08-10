@@ -54,6 +54,7 @@ fn drilled_snapshot() -> TuiOrchestrationSnapshot {
         anchor_conversation_id: researcher,
         anchor_label: "researcher".to_owned(),
         anchor_status: Some(ConversationStatus::InProgress),
+        anchor_navigable: true,
         breadcrumbs: vec![TuiOrchestrationBreadcrumb {
             conversation_id: root,
             label: ORCHESTRATOR_TAB_LABEL.to_owned(),
@@ -76,6 +77,7 @@ fn flat_snapshot() -> TuiOrchestrationSnapshot {
         anchor_conversation_id: root,
         anchor_label: ORCHESTRATOR_TAB_LABEL.to_owned(),
         anchor_status: None,
+        anchor_navigable: true,
         breadcrumbs: Vec::new(),
         selected_conversation_id: root,
         children,
@@ -178,13 +180,18 @@ fn flat_snapshot_renders_the_historical_root_anchored_row() {
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
             let line = render_line(&flat_snapshot(), 100, ctx);
-            assert!(
-                line.contains("   Agents:    orchestrator  |   ● alpha"),
-                "the flag-off flat projection is unchanged: {line:?}"
+            // Byte-for-byte flag-off equivalence with the historical row:
+            // 13-cell leading, padded `orchestrator` main tab, `pad(1)+|+pad(2)`
+            // divider, child tabs `pad(1)+glyph+space+label+pad(1)` with a
+            // 3-cell gap, and background fill to the full width.
+            let expected = format!(
+                "{:<100}",
+                "   Agents:    orchestrator  |   ● alpha     ● beta"
             );
-            assert!(line.contains("● beta"), "{line:?}");
-            assert!(!line.contains('‹'), "no breadcrumbs while flat: {line:?}");
-            assert!(!line.contains('▸'), "no badges while flat: {line:?}");
+            assert_eq!(
+                line, expected,
+                "the flag-off flat projection must be unchanged"
+            );
         });
     });
 }

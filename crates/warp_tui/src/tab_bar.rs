@@ -35,6 +35,10 @@ pub struct TuiTab {
     /// Per-tab label cap that overrides the config-wide
     /// `maximum_label_columns` when present.
     max_label_columns: Option<u16>,
+    /// Whether the tab can be selected. A non-selectable tab still renders
+    /// (e.g. a sessionless drill-down anchor framing its level) but is
+    /// skipped by keyboard navigation and ignores clicks.
+    selectable: bool,
 }
 
 /// Styled text rendered before or after a tab label.
@@ -53,7 +57,14 @@ impl TuiTab {
             leading: None,
             trailing: None,
             max_label_columns: None,
+            selectable: true,
         }
+    }
+
+    /// Marks whether the tab can be selected via navigation or clicks.
+    pub fn with_selectable(mut self, selectable: bool) -> Self {
+        self.selectable = selectable;
+        self
     }
 
     /// Adds styled text rendered immediately before the tab label.
@@ -342,22 +353,26 @@ impl TuiTabBarView {
     }
 
     /// Resolves the adjacent tab in rendered row order — breadcrumbs, main
-    /// tab, then the secondary tabs — wrapping at either end.
+    /// tab, then the secondary tabs — wrapping at either end and skipping
+    /// non-selectable tabs so navigation can never dead-end on them.
     pub fn navigation_target(&self, direction: TuiTabBarNavigationDirection) -> Option<String> {
-        let order = self
-            .config
-            .row_tabs()
-            .map(|tab| &tab.key)
-            .collect::<Vec<_>>();
+        let order = self.config.row_tabs().collect::<Vec<_>>();
         let selected = self.config.selected_key.as_ref()?;
-        let selected_index = order.iter().position(|key| *key == selected)?;
-        let target_index = match direction {
-            TuiTabBarNavigationDirection::Previous => {
-                selected_index.checked_sub(1).unwrap_or(order.len() - 1)
+        let selected_index = order.iter().position(|tab| &tab.key == selected)?;
+        let mut target_index = selected_index;
+        for _ in 0..order.len() {
+            target_index = match direction {
+                TuiTabBarNavigationDirection::Previous => {
+                    target_index.checked_sub(1).unwrap_or(order.len() - 1)
+                }
+                TuiTabBarNavigationDirection::Next => (target_index + 1) % order.len(),
+            };
+            let target = order[target_index];
+            if target.selectable {
+                return Some(target.key.clone());
             }
-            TuiTabBarNavigationDirection::Next => (selected_index + 1) % order.len(),
-        };
-        order.get(target_index).map(|key| (*key).clone())
+        }
+        None
     }
 
     /// Returns the stable key at one edge of the secondary-tab collection.
@@ -674,9 +689,13 @@ fn render_tab(
     if let Some(background) = tab_style.bg {
         container = container.with_background(background);
     }
-    let key = tab.key.clone();
 
-    TuiHoverable::new(state, container.finish())
+    let hoverable = TuiHoverable::new(state, container.finish());
+    if !tab.selectable {
+        return hoverable.finish();
+    }
+    let key = tab.key.clone();
+    hoverable
         .on_click(move |event_ctx, _| {
             event_ctx.dispatch_typed_action(TuiTabBarAction::SelectTab(key.clone()));
         })

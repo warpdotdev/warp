@@ -77,11 +77,18 @@ The change keeps the existing layering: semantic topology and selection stay in
 
 ### Views — `terminal_session_view.rs`, `cloud_run_view.rs`
 
-- The bar-focused single-press kill and its footer now key off `selected_level_child`
-  (selected ≠ anchor): the anchor's main-tab slot is not a kill target, matching the
-  anchor-selected footer; the unfocused-bar two-press armed kill keeps its
-  selected ≠ root predicate and inherits subtree semantics through
-  `kill_child_agent_subtree` (rules 23-25).
+- The bar-focused single-press kill and its footer key off `bar_focused_kill_target`:
+  a selected level child, or the drilled-in anchor itself when it occupies the main-tab
+  slot (anchor ≠ root, per rule 24's amendment — a selected navigable group child
+  re-anchors, so the anchor slot is how a group child is selected). The root tab is
+  never a kill target, and a bar-focused `Ctrl+C` on a killable tab cannot fall through
+  to the conversation-cancel/app-exit path. The unfocused-bar two-press armed kill
+  keeps its selected ≠ root predicate; both paths share `kill_child_agent_subtree`
+  (rules 23-25).
+- Row navigation cannot dead-end on sessionless targets (rules 17, 21): the snapshot
+  filters breadcrumb chips to session-backed conversations and marks a sessionless
+  anchor non-navigable; the tab bar skips non-selectable tabs in `navigation_target`
+  and ignores clicks on them.
 - `PageChanged` passes the current anchor as the paging level; `Escape` targets
   `tree_root_key`; pill-bar telemetry reports the anchor as `source_conversation_id`.
 
@@ -92,8 +99,9 @@ The change keeps the existing layering: semantic topology and selection stay in
   copy and gate as the GUI card (rules 28-30).
 - `agent_message.rs`: a sender that is neither the current conversation's direct child
   nor its parent/orchestrator gets its parent's name prefixed
-  (`researcher › crawler`); unresolvable lineage falls back to the existing treatment
-  (rules 31-32, 42).
+  (`researcher › crawler`); an unnamed parent falls back to `orchestrator` only when it
+  is the tree root (`Agent` otherwise), and unresolvable lineage falls back to the
+  existing treatment (rules 31-32, 42).
 
 ## Validation
 

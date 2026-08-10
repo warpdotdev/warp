@@ -80,8 +80,13 @@ pub(crate) struct TuiOrchestrationSnapshot {
     /// Aggregated status of the anchor's subtree, shown as the main tab's
     /// leading glyph. `None` while multi-level is disabled.
     pub(crate) anchor_status: Option<ConversationStatus>,
+    /// Whether the anchor maps to a retained, focusable session. A leaf's
+    /// parent can be loaded but sessionless (e.g. a restored non-Oz child);
+    /// its tab still frames the level but cannot be selected.
+    pub(crate) anchor_navigable: bool,
     /// Ancestor chips rendered before the anchor: the tree root, plus the
-    /// anchor's direct parent when the anchor sits 2+ levels below the root.
+    /// anchor's direct parent when the anchor sits 2+ levels below the root
+    /// and maps to a retained session.
     pub(crate) breadcrumbs: Vec<TuiOrchestrationBreadcrumb>,
     pub(crate) selected_conversation_id: AIConversationId,
     pub(crate) children: Vec<TuiOrchestrationChild>,
@@ -278,8 +283,14 @@ impl TuiOrchestrationModel {
         };
         let anchor_status =
             multi_level.then(|| aggregated_orchestrator_status(history, anchor_conversation_id));
+        let anchor_navigable = session_ids_by_conversation.contains_key(&anchor_conversation_id);
         let breadcrumbs = if multi_level {
-            breadcrumbs_for_anchor(history, anchor_conversation_id, root_conversation_id)
+            breadcrumbs_for_anchor(
+                history,
+                &session_ids_by_conversation,
+                anchor_conversation_id,
+                root_conversation_id,
+            )
         } else {
             Vec::new()
         };
@@ -302,6 +313,7 @@ impl TuiOrchestrationModel {
             anchor_conversation_id,
             anchor_label,
             anchor_status,
+            anchor_navigable,
             breadcrumbs,
             selected_conversation_id,
             children,
@@ -1295,8 +1307,11 @@ fn drill_down_anchor_id(
 /// tree root, mirroring the GUI's `breadcrumb_ids` rule: one chip for the
 /// root, plus one for the anchor's direct parent when that parent is a
 /// distinct intermediate level. Never more than two chips at any depth.
+/// Chips must be selectable (they switch sessions), so a loaded but
+/// sessionless parent contributes no chip.
 fn breadcrumbs_for_anchor(
     history: &BlocklistAIHistoryModel,
+    session_ids_by_conversation: &HashMap<AIConversationId, TuiSessionId>,
     anchor_conversation_id: AIConversationId,
     root_conversation_id: AIConversationId,
 ) -> Vec<TuiOrchestrationBreadcrumb> {
@@ -1311,7 +1326,9 @@ fn breadcrumbs_for_anchor(
         .conversation(&anchor_conversation_id)
         .and_then(|anchor| history.resolved_parent_conversation_id_for_conversation(anchor))
         .filter(|parent_id| {
-            *parent_id != root_conversation_id && *parent_id != anchor_conversation_id
+            *parent_id != root_conversation_id
+                && *parent_id != anchor_conversation_id
+                && session_ids_by_conversation.contains_key(parent_id)
         });
     if let Some(parent_id) = parent_id {
         breadcrumbs.push(TuiOrchestrationBreadcrumb {

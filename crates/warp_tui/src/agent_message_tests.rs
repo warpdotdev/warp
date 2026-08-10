@@ -173,6 +173,64 @@ fn grandchild_sender_header_is_prefixed_with_its_parent_name() {
 }
 
 #[test]
+fn unnamed_parent_prefix_uses_orchestrator_only_for_the_tree_root() {
+    let _flag = FeatureFlag::MultiLevelOrchestration.override_enabled(true);
+    App::test((), |mut app| async move {
+        register_models(&mut app);
+        let parent_id = add_parent(&mut app);
+        // An unnamed mid-tree parent (agent_name empty).
+        let unnamed_child_id = add_child(
+            &mut app,
+            parent_id,
+            "",
+            INFRA_RUN_ID,
+            ConversationStatus::InProgress,
+        );
+        let _grandchild_id = add_child(
+            &mut app,
+            unnamed_child_id,
+            "crawler",
+            GRANDCHILD_RUN_ID,
+            ConversationStatus::InProgress,
+        );
+        let sibling_id = add_child(
+            &mut app,
+            parent_id,
+            "ui-implementer",
+            UI_RUN_ID,
+            ConversationStatus::InProgress,
+        );
+
+        app.read(|ctx| {
+            let states = CollapsibleSectionStates::default();
+            let mut presenter = TuiPresenter::new();
+            // A grandchild under the unnamed mid-tree parent: the prefix
+            // falls back to the shared "Agent" label, not "orchestrator".
+            let received = message(GRANDCHILD_RUN_ID, "progress", "Fetched");
+            let frame = presenter.present_element(
+                render_agent_message(&states, &received, parent_id, ctx),
+                TuiRect::new(0, 0, 80, 2),
+                ctx,
+            );
+            let header = frame.buffer.to_lines()[0].clone();
+            assert!(header.contains("Agent › crawler"), "{header}");
+            assert!(!header.contains("orchestrator ›"), "{header}");
+
+            // A sibling's message viewed from another child: its parent IS
+            // the tree root, so the prefix uses the orchestrator label.
+            let sibling_message = message(INFRA_RUN_ID, "progress", "Working");
+            let frame = presenter.present_element(
+                render_agent_message(&states, &sibling_message, sibling_id, ctx),
+                TuiRect::new(0, 0, 80, 2),
+                ctx,
+            );
+            let header = frame.buffer.to_lines()[0].clone();
+            assert!(header.contains("orchestrator ›"), "{header}");
+        });
+    });
+}
+
+#[test]
 fn conversation_statuses_render_expected_glyphs() {
     assert_eq!(
         conversation_status_glyph(&ConversationStatus::InProgress),

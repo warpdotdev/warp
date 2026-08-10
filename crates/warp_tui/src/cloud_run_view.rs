@@ -1,7 +1,7 @@
 use instant::Instant;
 use warp::tui_export::{
     BlocklistAIHistoryModel, CloudAgentStartupAuthFlow, CloudAgentStartupPresentation,
-    ConversationStatus,
+    ConversationStatus, loaded_subtree_rollup,
 };
 use warp_errors::report_error;
 use warpui::SingletonEntity as _;
@@ -295,25 +295,39 @@ impl TuiCloudRunView {
         self.display_state(ctx).link_url
     }
 
-    /// If a child tab of the rendered level is selected (not the anchor's
-    /// main-tab slot), returns its conversation id and its loaded-descendant
-    /// count. Drives the bar-focused single-press kill path and its footer.
-    fn selected_level_child(
+    /// The kill target while the bar is focused, with its loaded-descendant
+    /// count: a selected child tab of the rendered level, or the drilled-in
+    /// anchor itself when it occupies the main-tab slot (anchor ≠ root). The
+    /// root tab is never a kill target. Drives the bar-focused single-press
+    /// kill path and its footer.
+    fn bar_focused_kill_target(
         &self,
         ctx: &AppContext,
     ) -> Option<(warp::tui_export::AIConversationId, usize)> {
         let snapshot = self.compute_orchestration_tab_snapshot(ctx)?;
-        if snapshot.selected_conversation_id == snapshot.anchor_conversation_id {
+        if snapshot.selected_conversation_id != snapshot.anchor_conversation_id {
+            let nested_descendants = snapshot
+                .children
+                .iter()
+                .find(|child| child.conversation_id == snapshot.selected_conversation_id)
+                .and_then(|child| child.subtree_rollup.as_ref())
+                .map(|rollup| rollup.descendant_count)
+                .unwrap_or_default();
+            return Some((snapshot.selected_conversation_id, nested_descendants));
+        }
+        // A drilled-in anchor only exists under multi-level orchestration
+        // (flag off keeps anchor == root), so single-press subtree kill
+        // cannot reach flag-off trees.
+        if snapshot.anchor_conversation_id == snapshot.root_conversation_id {
             return None;
         }
-        let nested_descendants = snapshot
-            .children
-            .iter()
-            .find(|child| child.conversation_id == snapshot.selected_conversation_id)
-            .and_then(|child| child.subtree_rollup.as_ref())
-            .map(|rollup| rollup.descendant_count)
-            .unwrap_or_default();
-        Some((snapshot.selected_conversation_id, nested_descendants))
+        let nested_descendants = loaded_subtree_rollup(
+            BlocklistAIHistoryModel::as_ref(ctx),
+            snapshot.anchor_conversation_id,
+        )
+        .map(|rollup| rollup.descendant_count)
+        .unwrap_or_default();
+        Some((snapshot.anchor_conversation_id, nested_descendants))
     }
 
     /// Kills a child conversation and (with multi-level orchestration
@@ -348,10 +362,11 @@ impl TuiCloudRunView {
     }
 
     fn handle_interrupt(&mut self, ctx: &mut ViewContext<Self>) {
-        // Path 1: tab-bar focused + level child tab selected → single ctrl-c
-        // kills that child (and its loaded subtree, per kill_child_agent).
+        // Path 1: tab-bar focused + killable tab selected (a level child, or
+        // the drilled-in anchor occupying the main-tab slot) → single ctrl-c
+        // kills that agent and its loaded subtree, per kill_child_agent.
         if self.orchestration_tabs_focused
-            && let Some((child_id, _)) = self.selected_level_child(ctx)
+            && let Some((child_id, _)) = self.bar_focused_kill_target(ctx)
         {
             self.kill_child_agent(child_id, ctx);
             return;
@@ -574,7 +589,7 @@ impl TuiView for TuiCloudRunView {
         if self.orchestration_tab_bar.as_ref(ctx).has_tabs() {
             let footer = if self.orchestration_tabs_focused {
                 let nested_descendants = self
-                    .selected_level_child(ctx)
+                    .bar_focused_kill_target(ctx)
                     .map(|(_, nested)| nested)
                     .unwrap_or_default();
                 render_cloud_orchestration_tab_footer(&builder, nested_descendants)

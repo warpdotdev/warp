@@ -183,6 +183,13 @@ list `[child, grandchild]`.)
     orphaned (deleting a parent drops its `children_by_parent` entry, making the subtree
     unreachable from the bar). In a TUI, unreachable retained sessions are pure leakage;
     the divergence is recorded in "Deliberate divergences from the GUI".
+    **[Amended 2026-08-10, implementation review.]** Because selecting a navigable group
+    child re-anchors the bar (rule 3), the selected group child occupies the anchor's
+    main-tab slot; the same single-press subtree kill therefore also applies when the
+    bar is focused and the selection **is** the drilled-in anchor (anchor ≠ root), and
+    the anchor-selected footer names the blast radius (rule 27). The root tab is never a
+    kill target, and a bar-focused `Ctrl+C` on a killable tab never falls through to the
+    conversation-cancel/app-exit path.
 25. The two-press armed-kill flow while *viewing* a child conversation without bar focus
     (first `Ctrl+C` arms, second within the window kills) carries over unchanged, with
     the same subtree semantics when the viewed conversation is a group child.
@@ -415,9 +422,16 @@ after Tab lands on `crawler` (a child of researcher; crawler has children → it
 
 ### Focused footers
 
+[Amended 2026-08-10, implementation review: the first variant is split — the root tab
+is never a kill target, while a drilled-in anchor (a selected group child, per rule 24's
+amendment) gets the group-kill footer.]
+
 ```
-anchor or root tab selected:
+root tab selected:
 Tab or ← → to navigate  Shift + ← → to go to start/end  ↓ to send a message
+
+drilled-in anchor selected (anchor ≠ root):
+Tab or ← → to navigate  Shift + ← → to go to start/end  ↓ to send a message  Ctrl+C to kill sub-agent +2 nested
 
 leaf child selected:
 Tab or ← → to navigate  Shift + ← → to go to start/end  ↓ to send a message  Ctrl+C to kill sub-agent

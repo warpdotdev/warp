@@ -341,7 +341,8 @@ fn level_tab_bar_config(
         None if snapshot.anchor_status.is_some() => String::new(),
         _ => snapshot.anchor_label.clone(),
     };
-    let mut main_tab = TuiTab::new(snapshot.anchor_conversation_id.to_string(), anchor_label);
+    let mut main_tab = TuiTab::new(snapshot.anchor_conversation_id.to_string(), anchor_label)
+        .with_selectable(snapshot.anchor_navigable);
     if let Some(status) = &snapshot.anchor_status {
         main_tab = main_tab.with_leading_text(
             conversation_status_glyph(status),

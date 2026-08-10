@@ -1081,6 +1081,88 @@ fn breadcrumbs_cap_at_root_plus_parent_at_depth_three() {
 }
 
 #[test]
+fn sessionless_parents_are_filtered_from_chips_and_marked_non_navigable() {
+    let _flag = FeatureFlag::MultiLevelOrchestration.override_enabled(true);
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let root_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let root_id = read_active_conversation_id(&app, root_session_id);
+
+        // A loaded but sessionless intermediate (e.g. a restored non-Oz local
+        // child the TUI cannot materialize).
+        let sessionless_parent_id = app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.start_new_child_conversation(
+                    warpui::EntityId::new(),
+                    "claude-mid".to_owned(),
+                    root_id,
+                    Some(Harness::Claude),
+                    ctx,
+                )
+            })
+        });
+        let (_, session_backed_child_id) = add_child_session(
+            &mut app,
+            &fixture,
+            sessionless_parent_id,
+            "session-backed-child",
+        );
+        let (_, leaf_id) = add_child_session(&mut app, &fixture, session_backed_child_id, "leaf");
+
+        app.read(|ctx| {
+            let model = TuiOrchestrationModel::as_ref(ctx);
+            // The leaf anchors its session-backed parent; the sessionless
+            // grandparent contributes no breadcrumb chip — only the root
+            // remains, so ascent stays reachable.
+            let snapshot = model.snapshot(leaf_id, ctx).expect("leaf level snapshot");
+            assert_eq!(snapshot.anchor_conversation_id, session_backed_child_id);
+            assert!(snapshot.anchor_navigable);
+            assert_eq!(
+                snapshot
+                    .breadcrumbs
+                    .iter()
+                    .map(|breadcrumb| breadcrumb.conversation_id)
+                    .collect::<Vec<_>>(),
+                vec![root_id],
+                "a sessionless parent must not become a breadcrumb chip"
+            );
+
+            // A leaf directly under the sessionless parent still frames that
+            // level, but the anchor is marked non-navigable so keyboard
+            // navigation and clicks skip it.
+            let snapshot = model
+                .snapshot(session_backed_child_id, ctx)
+                .expect("mid level snapshot");
+            assert_eq!(snapshot.anchor_conversation_id, session_backed_child_id);
+        });
+
+        // Remove the leaf so session-backed-child becomes a leaf whose parent
+        // is the sessionless conversation: the bar anchors the sessionless
+        // parent and marks it non-navigable.
+        app.update(|ctx| {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.kill_child_agent(leaf_id, ctx);
+            });
+        });
+        app.read(|ctx| {
+            let snapshot = TuiOrchestrationModel::as_ref(ctx)
+                .snapshot(session_backed_child_id, ctx)
+                .expect("sessionless-anchor snapshot");
+            assert_eq!(snapshot.anchor_conversation_id, sessionless_parent_id);
+            assert!(!snapshot.anchor_navigable);
+            assert_eq!(
+                snapshot
+                    .breadcrumbs
+                    .iter()
+                    .map(|breadcrumb| breadcrumb.conversation_id)
+                    .collect::<Vec<_>>(),
+                vec![root_id]
+            );
+        });
+    });
+}
+
+#[test]
 fn adjacent_tree_conversation_walks_the_whole_tree_and_wraps() {
     let _flag = FeatureFlag::MultiLevelOrchestration.override_enabled(true);
     App::test((), |mut app| async move {

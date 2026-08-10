@@ -246,6 +246,31 @@ fn view_navigation_includes_breadcrumbs_in_row_order() {
 }
 
 #[test]
+fn view_navigation_skips_non_selectable_tabs_in_both_directions() {
+    let non_selectable_anchor_config = |selected: String| {
+        let mut config = config(vec![tab(3, "child-a"), tab(4, "child-b")]);
+        config.breadcrumb_tabs = vec![tab(1, "orchestrator")];
+        // A sessionless drilled-down anchor renders but cannot be selected.
+        config.main_tab = Some(tab(2, "anchor").with_selectable(false));
+        config.selected_key = Some(selected);
+        config
+    };
+
+    // Previous from the first child skips the anchor and lands on the
+    // breadcrumb; Next from the breadcrumb skips it in the other direction.
+    let from_child = view(non_selectable_anchor_config(key(3)));
+    assert_eq!(
+        from_child.navigation_target(TuiTabBarNavigationDirection::Previous),
+        Some(key(1))
+    );
+    let from_breadcrumb = view(non_selectable_anchor_config(key(1)));
+    assert_eq!(
+        from_breadcrumb.navigation_target(TuiTabBarNavigationDirection::Next),
+        Some(key(3))
+    );
+}
+
+#[test]
 fn tree_root_key_prefers_the_first_breadcrumb() {
     let mut cfg = config(vec![tab(2, "two"), tab(3, "three")]);
     cfg.main_tab = Some(tab(1, "main"));

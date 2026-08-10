@@ -170,12 +170,23 @@ fn non_direct_sender_parent_label(
     if current_parent_id == Some(sender_conversation_id) {
         return None;
     }
-    let parent_label = history
-        .conversation(&sender_parent_id)?
+    let parent = history.conversation(&sender_parent_id)?;
+    let parent_label = parent
         .agent_name()
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
-        .unwrap_or_else(|| ORCHESTRATOR_TAB_LABEL.to_owned());
+        .unwrap_or_else(|| {
+            // Only the tree root is the orchestrator; an unnamed mid-tree
+            // parent keeps the shared agent fallback.
+            if history
+                .resolved_parent_conversation_id_for_conversation(parent)
+                .is_none()
+            {
+                ORCHESTRATOR_TAB_LABEL.to_owned()
+            } else {
+                "Agent".to_owned()
+            }
+        });
     Some(parent_label)
 }
 
