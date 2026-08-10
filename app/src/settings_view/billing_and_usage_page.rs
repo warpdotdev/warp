@@ -2959,7 +2959,8 @@ impl BillingAndUsagePageView {
             let bonus_credit_balance = workspace.map_or_else(
                 || ai_request_usage_model.total_user_interactive_bonus_credits_remaining(),
                 |workspace| {
-                    ai_request_usage_model.total_workspace_bonus_credits_remaining(workspace.uid)
+                    ai_request_usage_model
+                        .total_workspace_and_team_bonus_credits_remaining(workspace.uid)
                 },
             );
 

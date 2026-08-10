@@ -392,6 +392,7 @@ impl TuiOrchestrationModel {
                     RemoteChildLaunchConfig {
                         environment_id,
                         skill_references,
+                        working_dir: working_directory.unwrap_or_default(),
                         model_id,
                         computer_use_enabled,
                         worker_host,

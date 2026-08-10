@@ -489,6 +489,12 @@ impl BlocklistAIHistoryModel {
             .collect()
     }
 
+    /// Canonical parent resolution for a child's persisted refs: the
+    /// explicit parent conversation id when present, otherwise the parent
+    /// agent id resolved through [`Self::conversation_id_for_agent_id`]
+    /// (run-id index with a legacy server-token fallback). Child indexing,
+    /// the orchestration root walk, breadcrumbs, and UI parent lookups all
+    /// resolve through here so they cannot disagree.
     fn resolved_parent_conversation_id_from_refs(
         &self,
         parent_conversation_id: Option<AIConversationId>,

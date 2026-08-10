@@ -3,8 +3,7 @@ use std::cmp::Ordering;
 use serde::{Deserialize, Serialize};
 
 use super::workspace::{
-    BillingMetadata, EmailInvite, InviteLinkDomainRestriction, WorkspaceInviteCode,
-    WorkspaceSettings,
+    BillingMetadata, EmailInvite, InviteLinkDomainRestriction, TeamSettings, WorkspaceInviteCode,
 };
 use crate::auth::UserUid;
 use crate::server::ids::ServerId;
@@ -88,7 +87,8 @@ pub struct Team {
     pub invite_link_domain_restrictions: Vec<InviteLinkDomainRestriction>,
     pub billing_metadata: BillingMetadata,
     pub stripe_customer_id: Option<String>,
-    pub organization_settings: WorkspaceSettings,
+    /// The team's effective settings, sourced from the server's `Team.settings`.
+    pub settings: TeamSettings,
     /// If the team is eligible for discovery, then show toggle for setting discoverability to the team's admin
     pub is_eligible_for_discovery: bool,
     pub has_billing_history: bool,
@@ -98,7 +98,7 @@ impl Team {
     pub fn from_local_cache(
         uid: ServerId,
         name: String,
-        workspace_settings: Option<WorkspaceSettings>,
+        settings: Option<TeamSettings>,
         billing_metadata: Option<BillingMetadata>,
         members: Option<Vec<TeamMember>>,
     ) -> Self {
@@ -112,7 +112,7 @@ impl Team {
             invite_link_domain_restrictions: Default::default(),
             billing_metadata: billing_metadata.unwrap_or_default(),
             stripe_customer_id: Default::default(),
-            organization_settings: workspace_settings.unwrap_or_default(),
+            settings: settings.unwrap_or_default(),
             is_eligible_for_discovery: false,
             has_billing_history: false,
         }
@@ -144,7 +144,7 @@ impl Team {
     pub fn get_delete_disabled_reason(
         &self,
         current_user_email: &str,
-        remaining_workspace_credits: i32,
+        remaining_workspace_and_team_credits: i32,
     ) -> Option<TeamDeleteDisabledReason> {
         if self.members.len() > 1
             || self
@@ -157,13 +157,13 @@ impl Team {
         if self.billing_metadata.is_user_on_paid_plan() {
             return Some(TeamDeleteDisabledReason::ActivePaidSubscription);
         }
-        if remaining_workspace_credits > 0 {
+        if remaining_workspace_and_team_credits > 0 {
             return Some(TeamDeleteDisabledReason::RemainingBonusCredits);
         }
         None // No reason found, team can be deleted
     }
 
     pub fn is_custom_llm_enabled(&self) -> bool {
-        self.organization_settings.llm_settings.enabled
+        self.settings.llm_settings.enabled
     }
 }

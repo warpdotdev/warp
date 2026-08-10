@@ -1,0 +1,74 @@
+# Builds and publishes the agent-dev base Docker image used by Warp cloud agents.
+#
+# The image is defined by docker/agent-dev/Dockerfile and mirrors the build in
+# script/push-dev-image. It is published to Docker Hub as
+# warpdotdev/warp-internal-dev:latest-dev.
+name: Publish agent-dev image
+
+on:
+  # Rebuild whenever the image definition or any file it copies in changes.
+  push:
+    branches: [master]
+    paths:
+      - docker/agent-dev/Dockerfile
+      - rust-toolchain.toml
+      - script/**
+      - .github/workflows/publish-agent-dev-image.yml
+  # Cron has no native "every 2 weeks", so rebuild on the 1st and 15th of each
+  # month (00:00 UTC) to pick up upstream dependency updates.
+  schedule:
+    - cron: "0 0 1,15 * *"
+  # Allow manual runs.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # Required so GitHub mints the OIDC token that docker/oidc-action exchanges
+  # for a short-lived Docker Hub access token.
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Build and push agent-dev image
+    # Namespace runners build linux/amd64 and linux/arm64 natively, so no QEMU
+    # or Buildx setup step is needed (same runner profile as warp-server's
+    # sidecar workflow).
+    runs-on: namespace-profile-ubuntu-small
+    steps:
+      - name: Check out warp
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Exchange GitHub OIDC token for a Docker Hub token
+        id: docker_oidc
+        uses: docker/oidc-action@96ba694c64860c7209bcd1ede7d698c71564ef78 # v1.2.0
+        with:
+          connection-id: 0a8fc2fc-a9a0-4115-a449-0c7a64bd74c2
+          # The action's 300s default expires mid-build: buildx only requests a
+          # push-scoped token once the ~6.5 minute multi-arch build finishes, and
+          # Docker Hub rejects the expired token as "401 Unauthorized: incorrect
+          # username or password". An hour leaves headroom for the cold-cache
+          # scheduled rebuilds.
+          expires-in: 3600
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          # The exchanged token authenticates as the Docker organization, so the
+          # username is the org name rather than an individual account.
+          username: warpdotdev
+          password: ${{ steps.docker_oidc.outputs.token }}
+
+      - name: Build and push agent-dev image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: docker/agent-dev/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: warpdotdev/warp-internal-dev:latest-dev

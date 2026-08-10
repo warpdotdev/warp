@@ -52,7 +52,7 @@ cfg_if::cfg_if! {
         use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
         use repo_metadata::{
             repository::{RepositorySubscriber, SubscriberId},
-            RepoMetadataError, Repository, RepositoryUpdate,
+            RepoMetadataError, Repository, RepositoryUpdate, RepositoryWatchMode,
         };
         use async_channel::Sender;
         use warpui::ModelHandle;
@@ -976,6 +976,7 @@ impl LocalDiffStateModel {
             async_channel::unbounded();
         let start = new_repository.update(ctx, |new_repository, ctx| {
             new_repository.start_watching(
+                RepositoryWatchMode::GitRepository,
                 Box::new(LocalDiffStateModelRepositorySubscriber {
                     repository_update_tx,
                 }),

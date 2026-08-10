@@ -522,3 +522,88 @@ fn test_from_task_includes_linked_directory_when_server_token_matches() {
         });
     });
 }
+
+#[test]
+fn test_from_task_carries_the_runner_the_run_named() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let mut task = create_test_task("550e8400-e29b-41d4-a716-000000005001");
+        task.agent_config_snapshot = Some(AgentConfigSnapshot {
+            environment_id: Some("env-1".to_string()),
+            runner_id: Some("runner-macos".to_string()),
+            ..Default::default()
+        });
+
+        app.update(|ctx| {
+            let data = ConversationDetailsData::from_task(&task, None, None, ctx);
+            assert!(matches!(
+                data.mode,
+                PanelMode::Task {
+                    runner_id: Some(ref runner_id),
+                    ..
+                } if runner_id == "runner-macos"
+            ));
+        });
+    });
+}
+
+#[test]
+fn test_from_task_leaves_the_runner_absent_when_the_run_names_none() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let mut task = create_test_task("550e8400-e29b-41d4-a716-000000005002");
+        task.agent_config_snapshot = Some(AgentConfigSnapshot {
+            environment_id: Some("env-1".to_string()),
+            ..Default::default()
+        });
+
+        app.update(|ctx| {
+            let data = ConversationDetailsData::from_task(&task, None, None, ctx);
+            assert!(matches!(
+                data.mode,
+                PanelMode::Task {
+                    runner_id: None,
+                    ..
+                }
+            ));
+        });
+    });
+}
+
+// A local conversation has no runner to report, so the panel must not carry
+// one into the platform row.
+#[test]
+fn test_conversation_mode_carries_no_runner() {
+    App::test((), |mut app| async move {
+        let conversation_id = AIConversationId::new();
+        let conversation = create_restored_conversation(
+            conversation_id,
+            "root-task",
+            "/tmp/local-conversation",
+            AgentConversationData {
+                server_conversation_token: None,
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                root_task_is_optimistic: None,
+                run_id: None,
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            },
+        );
+
+        app.update(|ctx| {
+            let data = ConversationDetailsData::from_conversation(&conversation, ctx);
+            assert!(matches!(data.mode, PanelMode::Conversation { .. }));
+        });
+    });
+}

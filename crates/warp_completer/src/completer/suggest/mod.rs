@@ -280,6 +280,33 @@ pub struct FilteredSuggestion<'a> {
     pub matching_indices: Vec<usize>,
 }
 
+#[derive(Clone, Debug)]
+pub struct PreparedSuggestion {
+    pub suggestion: Suggestion,
+    pub match_type: MatchType,
+    /// The indices of the matching characters between suggestion.display and
+    /// the query that this PreparedSuggestion is derived from.
+    pub matching_indices: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub enum ExplicitTabCompletion {
+    NoAction,
+    InsertSingle {
+        suggestion: PreparedSuggestion,
+        replacement_span: Span,
+    },
+    InsertCommonPrefixAndOpen {
+        common_prefix: String,
+        suggestions: Vec<PreparedSuggestion>,
+        replacement_span: Span,
+    },
+    Open {
+        suggestions: Vec<PreparedSuggestion>,
+        replacement_span: Span,
+    },
+}
+
 impl SuggestionResults {
     /// Orders the suggestions in the following order:
     /// 1. A suggestion that matches the query exactly (if any)
@@ -415,6 +442,74 @@ impl SuggestionResults {
             })
     }
 
+    pub fn prepare_for_query(
+        &self,
+        query: &str,
+        path_separators: &[char],
+    ) -> Vec<PreparedSuggestion> {
+        self.filter_by_query(query, path_separators)
+            .map(|suggestion| PreparedSuggestion {
+                suggestion: suggestion.suggestion.clone(),
+                match_type: suggestion.match_type,
+                matching_indices: suggestion.matching_indices,
+            })
+            .collect()
+    }
+
+    pub fn explicit_tab_completion(
+        &self,
+        query: &str,
+        path_separators: &[char],
+    ) -> ExplicitTabCompletion {
+        let suggestions = self.prepare_for_query(query, path_separators);
+        if suggestions.is_empty() {
+            return ExplicitTabCompletion::NoAction;
+        }
+
+        if let Some(single_prefix_suggestion) = self.single_prefix_suggestion()
+            && let Some(suggestion) = suggestions
+                .iter()
+                .find(|suggestion| suggestion.suggestion == single_prefix_suggestion.suggestion)
+        {
+            return ExplicitTabCompletion::InsertSingle {
+                suggestion: suggestion.clone(),
+                replacement_span: self.replacement_span,
+            };
+        }
+
+        let common_prefix = longest_common_prefix(
+            self.suggestions
+                .iter()
+                .filter(|suggestion| {
+                    matches!(
+                        suggestion.match_type,
+                        Match::Prefix {
+                            is_case_sensitive: true
+                        } | Match::Exact {
+                            is_case_sensitive: true
+                        }
+                    )
+                })
+                .map(|suggestion| suggestion.replacement()),
+        )
+        .map(str::to_owned);
+
+        if let Some(common_prefix) = common_prefix
+            && common_prefix.len() > self.replacement_span.distance()
+            && common_prefix.starts_with(query)
+        {
+            return ExplicitTabCompletion::InsertCommonPrefixAndOpen {
+                common_prefix,
+                suggestions,
+                replacement_span: self.replacement_span,
+            };
+        }
+
+        ExplicitTabCompletion::Open {
+            suggestions,
+            replacement_span: self.replacement_span,
+        }
+    }
     /// Returns a `MatchedSuggestion` if there is a _single_ prefix suggestion, otherwise returns
     /// `None`.
     pub fn single_prefix_suggestion(&self) -> Option<&MatchedSuggestion> {
@@ -469,6 +564,22 @@ impl SuggestionResults {
             None
         }
     }
+}
+
+fn longest_common_prefix<'a>(mut strings: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let first = strings.next()?;
+    let common_prefix_len = strings.fold(first.len(), |common_prefix_len, string| {
+        first
+            .char_indices()
+            .zip(string.chars())
+            .take_while(|((index, first_char), string_char)| {
+                *index < common_prefix_len && first_char == string_char
+            })
+            .map(|((index, character), _)| index + character.len_utf8())
+            .last()
+            .unwrap_or_default()
+    });
+    Some(&first[..common_prefix_len])
 }
 
 /// In the cases where we don't have completions to show, we can potentially
@@ -624,6 +735,10 @@ async fn suggestions_internal<'a>(
         match_strategy: options.match_strategy,
     })
 }
+
+#[cfg(test)]
+#[path = "presentation_tests.rs"]
+mod presentation_tests;
 
 #[cfg(test)]
 #[path = "test.rs"]
