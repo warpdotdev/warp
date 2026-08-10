@@ -29,6 +29,8 @@ fn terminate_process_group(process_group_id: u32) {
         }
     }
 }
+#[cfg(not(unix))]
+fn terminate_process_group(_: u32) {}
 
 #[derive(Debug, Default)]
 struct ActiveProcessGroups {
@@ -68,12 +70,9 @@ impl ActiveProcessGroups {
     }
 
     fn cancel(&self, process_group: &Arc<ActiveProcessGroup>) {
-        if !self.remove(process_group) {
-            return;
+        if self.remove(process_group) {
+            terminate_process_group(process_group.id);
         }
-
-        #[cfg(unix)]
-        terminate_process_group(process_group.id);
     }
 
     fn cancel_all(&self) {
