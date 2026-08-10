@@ -287,6 +287,6 @@ impl LanguageServerCandidate for SolidityLanguageServerCandidate {
     }
 }
 
-#[cfg(all(test, feature = "local_fs"))]
+#[cfg(all(test, feature = "local_fs", unix))]
 #[path = "solidity_language_server_tests.rs"]
 mod tests;
