@@ -33,6 +33,19 @@ impl ProjectKey {
     pub fn path(&self) -> &Path {
         &self.0
     }
+
+    /// Rebuilds a key from the form a group persists it in. The stored value is
+    /// the key's path verbatim, so this is the inverse of
+    /// [`Self::to_storage_string`].
+    pub fn from_path(path: PathBuf) -> Self {
+        Self(path)
+    }
+
+    /// The form a group stores its key in. `TabGroup::project_key` is a
+    /// `String` because that is what the group table persists.
+    pub fn to_storage_string(&self) -> String {
+        self.0.to_string_lossy().into_owned()
+    }
 }
 
 /// Everything the resolver needs, and nothing else.
