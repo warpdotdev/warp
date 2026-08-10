@@ -63,7 +63,7 @@ use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::pane_group::pane::view::PaneHeaderAction;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::icon_with_status::{
-    self, BadgeInnerShape, IconWithStatusVariant, StatusBadgeStyle,
+    BadgeInnerShape, IconWithStatusVariant, StatusBadgeStyle,
     render_icon_with_status_with_badge_style,
 };
 use crate::ui_components::icons::Icon;
@@ -73,7 +73,22 @@ const PILL_HEIGHT: f32 = 22.;
 const PILL_RADIUS: f32 = PILL_HEIGHT / 2.;
 const AVATAR_SIZE: f32 = 16.;
 const PILL_AVATAR_SLOT_SIZE: f32 = 20.;
-const PILL_AVATAR_DISC_SIZE: f32 = PILL_AVATAR_SLOT_SIZE * icon_with_status::CIRCLE_RATIO;
+/// Padding above the avatar disc inside a pill, per design. Deliberately 1px
+/// tighter than [`PILL_AVATAR_BOTTOM_PADDING`]: the status badge overhangs
+/// below the disc, so the lockup only *reads* as centered when the disc itself
+/// sits half a pixel above the pill's geometric center.
+const PILL_AVATAR_TOP_PADDING: f32 = 3.;
+/// Padding below the avatar disc inside a pill, per design. The status badge
+/// hangs down into this band; see [`PILL_AVATAR_TOP_PADDING`].
+const PILL_AVATAR_BOTTOM_PADDING: f32 = 4.;
+/// Avatar disc diameter, derived from the pill height and the designed
+/// asymmetric padding (22 - 3 - 4 = 15) so the relationship holds if
+/// [`PILL_HEIGHT`] ever changes.
+const PILL_AVATAR_DISC_SIZE: f32 =
+    PILL_HEIGHT - PILL_AVATAR_TOP_PADDING - PILL_AVATAR_BOTTOM_PADDING;
+/// Square box the status badge is sized and anchored against. It does *not*
+/// size the avatar disc (that is [`PILL_AVATAR_DISC_SIZE`]) — it only reserves
+/// the square whose bottom-right corner the badge hangs off.
 const AVATAR_WITH_STATUS_TOTAL_SIZE: f32 = PILL_AVATAR_SLOT_SIZE;
 const PILL_LABEL_MAX_WIDTH: f32 = 83.;
 const PILL_ROW_GAP: f32 = 8.;
@@ -1700,6 +1715,11 @@ fn render_status_badge(
         .finish()
 }
 
+/// Centers a pill's leading avatar content — an
+/// [`AVATAR_WITH_STATUS_TOTAL_SIZE`] box built by [`render_avatar_lockup_box`],
+/// with or without a status badge layered on it — in the fixed-width leading
+/// slot. The slot spans the full pill height so hover swaps (avatar ↔ pin
+/// glyph) never shift the label.
 fn render_avatar_slot(avatar: Box<dyn Element>) -> Box<dyn Element> {
     ConstrainedBox::new(Align::new(avatar).finish())
         .with_width(PILL_AVATAR_SLOT_SIZE)
@@ -2090,13 +2110,7 @@ fn render_pill(
                     theme,
                     appearance,
                 ),
-                None => render_avatar_slot(render_avatar_disc(
-                    avatar_color,
-                    avatar_glyph,
-                    PILL_AVATAR_DISC_SIZE,
-                    theme,
-                    appearance,
-                )),
+                None => render_pill_avatar(avatar_color, avatar_glyph, theme, appearance),
             },
             PillKind::Child => {
                 if show_pin_glyph {
@@ -2136,13 +2150,7 @@ fn render_pill(
                         appearance,
                     )
                 } else {
-                    render_avatar_slot(render_avatar_disc(
-                        avatar_color,
-                        avatar_glyph,
-                        PILL_AVATAR_DISC_SIZE,
-                        theme,
-                        appearance,
-                    ))
+                    render_pill_avatar(avatar_color, avatar_glyph, theme, appearance)
                 }
             }
         };
@@ -2346,8 +2354,84 @@ const PILL_BADGE_STYLE: StatusBadgeStyle = StatusBadgeStyle {
     icon_ratio: 0.36,
     inner_shape: BadgeInnerShape::RoundedSquare { radius_px: 2.0 },
 };
+
+/// Extra overhang of the status badge past the avatar circle's bottom-right
+/// edge, as a signed fraction of [`AVATAR_WITH_STATUS_TOTAL_SIZE`] added to
+/// `icon_with_status`'s default overhang. `0.05` lands the badge's BR exactly
+/// on the lockup box's BR corner — the Figma-natural overhang — which, with
+/// the lockup box inset 1px from the pill's bottom edge, leaves the badge's
+/// cutout ring 1px clear of that edge.
+///
+/// This is the knob to turn if design wants the badge hanging closer to (or
+/// further from) the pill's bottom edge: each 0.05 is 1px of travel along the
+/// box's diagonal.
 const PILL_BADGE_OVERHANG_RATIO: f32 = 0.05;
 
+/// Top inset of the avatar disc inside the [`AVATAR_WITH_STATUS_TOTAL_SIZE`]
+/// box. The box is itself centered in the [`PILL_HEIGHT`]-tall slot, so this
+/// inset plus that centering offset has to add up to
+/// [`PILL_AVATAR_TOP_PADDING`]: 1 + 2 = 3.
+const PILL_AVATAR_LOCKUP_TOP_INSET: f32 =
+    PILL_AVATAR_TOP_PADDING - (PILL_HEIGHT - AVATAR_WITH_STATUS_TOTAL_SIZE) / 2.;
+
+/// Places the avatar disc inside the square box that the status badge is
+/// anchored against, applying the designed asymmetric padding. Shared by the
+/// plain and status-badged paths so a pill's avatar lands in exactly the same
+/// spot whether or not it currently has a status.
+///
+/// The disc is horizontally centered and [`PILL_AVATAR_LOCKUP_TOP_INSET`] down
+/// from the box's top edge — not centered vertically, because the badge
+/// overhangs the bottom. This has to be explicit: `ConstrainedBox` only
+/// tightens constraints, so an un-wrapped disc would be painted at the box's
+/// top-left corner.
+fn render_avatar_lockup_box(disc: Box<dyn Element>) -> Box<dyn Element> {
+    ConstrainedBox::new(
+        Container::new(Align::new(disc).top_center().finish())
+            .with_padding_top(PILL_AVATAR_LOCKUP_TOP_INSET)
+            .finish(),
+    )
+    .with_width(AVATAR_WITH_STATUS_TOTAL_SIZE)
+    .with_height(AVATAR_WITH_STATUS_TOTAL_SIZE)
+    .finish()
+}
+
+/// Renders the leading avatar for a pill with no status badge.
+fn render_pill_avatar(
+    avatar_color: ColorU,
+    glyph: AvatarGlyph,
+    theme: &WarpTheme,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    render_avatar_slot(render_avatar_lockup_box(render_avatar_disc(
+        avatar_color,
+        glyph,
+        PILL_AVATAR_DISC_SIZE,
+        theme,
+        appearance,
+    )))
+}
+
+/// Renders the leading avatar for a pill that has a status: the avatar disc
+/// plus its status badge, in the same slot [`render_pill_avatar`] uses.
+///
+/// Geometry, in pill-content coordinates (the pill is [`PILL_HEIGHT`] = 22
+/// tall with a [`PILL_RADIUS`] = 11 stadium cap, and the leading slot spans
+/// x = 4..24 after [`PILL_HORIZONTAL_PADDING_LEFT`]):
+/// * Lockup box: [`AVATAR_WITH_STATUS_TOTAL_SIZE`] = 20 square, centered in
+///   the 22-tall slot, so it spans y = 1..21.
+/// * Avatar disc: [`PILL_AVATAR_DISC_SIZE`] = 22 - 3 - 4 = 15, inset
+///   [`PILL_AVATAR_LOCKUP_TOP_INSET`] = 2 from the box's top, so it spans
+///   y = 3..18: [`PILL_AVATAR_TOP_PADDING`] = 3 above and
+///   [`PILL_AVATAR_BOTTOM_PADDING`] = 4 below. Its center is y = 10.5, half a
+///   pixel above the pill's geometric center on purpose — the badge's mass
+///   below the disc is what makes that read as centered.
+/// * Status badge: cutout ring diameter = 20 * `ring_ratio` (0.57) = 11.4,
+///   anchored BR-to-BR with `corner_overlay_offset(20, 0.05)` = 0, so its BR
+///   lands on the lockup box's BR at (24, 21) and the ring spans y = 9.6..21,
+///   x = 12.6..24. It hangs 3px below the disc into the bottom padding band
+///   while keeping 22 - 21 = 1px of clearance from the pill's bottom edge, and
+///   it starts at x = 12.6 > `PILL_RADIUS`, i.e. clear of the rounded left cap
+///   (only x < 11 is governed by the cap's arc).
 fn render_avatar_with_status_overlay(
     avatar_color: ColorU,
     glyph: AvatarGlyph,
@@ -2357,15 +2441,13 @@ fn render_avatar_with_status_overlay(
     theme: &WarpTheme,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    // Top-left anchor inside the helper's `total_size` box so the disc sits
-    // where Figma places it (TL of the slot, leaving the BR for the badge).
-    let avatar = render_avatar_disc(
+    let avatar = render_avatar_lockup_box(render_avatar_disc(
         avatar_color,
         glyph,
-        icon_with_status::circle_size(AVATAR_WITH_STATUS_TOTAL_SIZE),
+        PILL_AVATAR_DISC_SIZE,
         theme,
         appearance,
-    );
+    ));
     let lockup = render_icon_with_status_with_badge_style(
         IconWithStatusVariant::CustomAvatar {
             avatar,
@@ -2379,19 +2461,9 @@ fn render_avatar_with_status_overlay(
         // Cutout ring color for the local badge; ignored by the cloud path.
         pill_background.into(),
     );
-    // Bottom-anchor the lockup in the pill so the badge BR sits flush with
-    // the pill's bottom edge (matches Figma).
-    ConstrainedBox::new(
-        Flex::column()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::End)
-            .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(lockup)
-            .finish(),
-    )
-    .with_width(PILL_AVATAR_SLOT_SIZE)
-    .with_height(PILL_HEIGHT)
-    .finish()
+    // Same slot helper as the no-status path, so both share one placement
+    // rule and the leading slot keeps identical width across the swap.
+    render_avatar_slot(lockup)
 }
 
 /// Renders the avatar circle as a colored disc with a centered glyph (letter

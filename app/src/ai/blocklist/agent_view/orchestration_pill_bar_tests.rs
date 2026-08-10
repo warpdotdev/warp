@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui_components::icon_with_status;
 
 // Traversal and canonical pill-order correctness are exercised in
 // `app/src/ai/blocklist/orchestration_topology_tests.rs`. These tests stay
@@ -744,4 +745,104 @@ fn conversation_server_token_assignment_rerenders_the_pill_bar() {
             );
         });
     });
+}
+
+/// Vertical span of a pill's avatar disc in pill-content coordinates, as
+/// `(top, bottom)`. Mirrors the two placement steps the render path performs:
+/// `render_avatar_slot` centers the lockup box in the pill, and
+/// `render_avatar_lockup_box` insets the disc from that box's top edge.
+/// Identical for the plain and status-badged paths, which is the point.
+fn pill_avatar_disc_span() -> (f32, f32) {
+    let lockup_top = (PILL_HEIGHT - AVATAR_WITH_STATUS_TOTAL_SIZE) / 2.;
+    let disc_top = lockup_top + PILL_AVATAR_LOCKUP_TOP_INSET;
+    (disc_top, disc_top + PILL_AVATAR_DISC_SIZE)
+}
+
+/// Bounding box of the status badge's cutout ring in pill-content
+/// coordinates, as `(left, top, right, bottom)`. The badge is anchored
+/// BR-to-BR against the lockup box and displaced by `corner_overlay_offset`;
+/// the lockup box is centered in the slot that starts at
+/// `PILL_HORIZONTAL_PADDING_LEFT`.
+fn pill_status_badge_ring_bounds() -> (f32, f32, f32, f32) {
+    let lockup_top = (PILL_HEIGHT - AVATAR_WITH_STATUS_TOTAL_SIZE) / 2.;
+    let offset = icon_with_status::corner_overlay_offset(
+        AVATAR_WITH_STATUS_TOTAL_SIZE,
+        PILL_BADGE_OVERHANG_RATIO,
+    );
+    let diameter = icon_with_status::badge_size(AVATAR_WITH_STATUS_TOTAL_SIZE, PILL_BADGE_STYLE);
+    let right = PILL_HORIZONTAL_PADDING_LEFT + AVATAR_WITH_STATUS_TOTAL_SIZE + offset;
+    let bottom = lockup_top + AVATAR_WITH_STATUS_TOTAL_SIZE + offset;
+    (right - diameter, bottom - diameter, right, bottom)
+}
+
+#[test]
+fn pill_avatar_disc_uses_the_designed_asymmetric_padding() {
+    let (disc_top, disc_bottom) = pill_avatar_disc_span();
+    assert_eq!(
+        disc_top, PILL_AVATAR_TOP_PADDING,
+        "avatar disc must start {PILL_AVATAR_TOP_PADDING}px below the pill's top edge",
+    );
+    assert_eq!(
+        PILL_HEIGHT - disc_bottom,
+        PILL_AVATAR_BOTTOM_PADDING,
+        "avatar disc must end {PILL_AVATAR_BOTTOM_PADDING}px above the pill's bottom edge",
+    );
+    assert_eq!(disc_bottom - disc_top, PILL_AVATAR_DISC_SIZE);
+
+    // The half-pixel rise off the geometric center is deliberate: the badge
+    // hangs below the disc, so a truly centered disc reads as sitting low.
+    let disc_center = (disc_top + disc_bottom) / 2.;
+    assert_eq!(PILL_HEIGHT / 2. - disc_center, 0.5);
+}
+
+#[test]
+fn pill_status_badge_hangs_below_the_disc_without_leaving_the_pill() {
+    let (ring_left, ring_top, _, ring_bottom) = pill_status_badge_ring_bounds();
+    let (_, disc_bottom) = pill_avatar_disc_span();
+
+    assert!(
+        ring_bottom > disc_bottom,
+        "the badge is supposed to overhang the disc: ring bottom {ring_bottom} should sit below \
+         disc bottom {disc_bottom}",
+    );
+
+    // The design target is ~1px; the tolerance absorbs the rounding in the
+    // ratio arithmetic behind `corner_overlay_offset` rather than granting real
+    // slack.
+    const MIN_BOTTOM_CLEARANCE: f32 = 0.99;
+    let bottom_clearance = PILL_HEIGHT - ring_bottom;
+    assert!(
+        bottom_clearance >= MIN_BOTTOM_CLEARANCE,
+        "status badge ring bottom {ring_bottom} must keep ~1px of clearance from the pill's \
+         bottom edge {PILL_HEIGHT} (got {bottom_clearance})",
+    );
+    assert!(
+        ring_top >= 0.,
+        "status badge ring top {ring_top} must stay below the pill's top edge",
+    );
+    // Left of `PILL_RADIUS` the pill's outline is the rounded cap's arc rather
+    // than a straight edge, so a ring reaching into that band could poke out of
+    // the corner even while its bounding box looks contained.
+    assert!(
+        ring_left >= PILL_RADIUS,
+        "status badge ring left {ring_left} must stay clear of the pill's rounded left cap \
+         (x < {PILL_RADIUS})",
+    );
+}
+
+#[test]
+fn pill_avatar_lockup_box_fits_the_leading_slot() {
+    assert_eq!(
+        AVATAR_WITH_STATUS_TOTAL_SIZE, PILL_AVATAR_SLOT_SIZE,
+        "the badge's anchor box must fit the leading slot so pills do not change width when a \
+         status appears",
+    );
+    assert!(
+        PILL_AVATAR_DISC_SIZE <= AVATAR_WITH_STATUS_TOTAL_SIZE,
+        "the disc has to fit inside the box it is inset into",
+    );
+    assert!(
+        PILL_AVATAR_LOCKUP_TOP_INSET >= 0.,
+        "a negative inset would push the disc out of the top of the lockup box",
+    );
 }
