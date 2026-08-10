@@ -134,9 +134,10 @@ impl BulkFilesystemWatcherEvent {
 ///
 /// An empty path is not a location, and the platform backends handle it badly enough to be fatal:
 /// on macOS `notify` cannot build a CoreFoundation URL for it and then releases a null `CFError`,
-/// which traps and takes the whole process down (WARP-CLIENT-DEV-XT3). Rejecting it here keeps a
-/// caller's bad path from being a crash.
-fn watchable_path(path: &Path) -> Result<PathBuf> {
+/// which traps and takes the whole process down. Rejecting it here keeps a caller's bad path from
+/// being a crash. See Sentry issue
+/// [WARP-CLIENT-DEV-XT3](https://warpdotdev.sentry.io/issues/WARP-CLIENT-DEV-XT3).
+fn ensure_watchable_path(path: &Path) -> Result<PathBuf> {
     if path.as_os_str().is_empty() {
         anyhow::bail!("the filesystem watcher cannot watch an empty path");
     }
@@ -195,7 +196,7 @@ impl BulkFilesystemWatcher {
     /// Awaiting the future is *not* required for the path to be unregistered.
     pub fn unregister_path(&mut self, path: &Path) -> impl Future<Output = Result<()>> + use<> {
         let (tx, rx) = oneshot::channel();
-        let send_result = watchable_path(path).and_then(|path| {
+        let send_result = ensure_watchable_path(path).and_then(|path| {
             self.tx
                 .send(BackgroundFileWatcherCommand::RemovePath { path, response: tx })
                 .map_err(anyhow::Error::new)
@@ -221,7 +222,7 @@ impl BulkFilesystemWatcher {
         recursive_mode: RecursiveMode,
     ) -> impl Future<Output = Result<()>> + use<> {
         let (tx, rx) = oneshot::channel();
-        let send_result = watchable_path(path).and_then(|path| {
+        let send_result = ensure_watchable_path(path).and_then(|path| {
             self.tx
                 .send(BackgroundFileWatcherCommand::AddPath {
                     path,

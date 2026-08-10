@@ -4,8 +4,8 @@ use super::*;
 /// macOS turns it into a null-`CFError` release that traps and kills the process.
 #[test]
 fn empty_paths_never_reach_the_platform_watcher() {
-    assert!(watchable_path(Path::new("")).is_err());
+    assert!(ensure_watchable_path(Path::new("")).is_err());
 
     let directory = std::env::temp_dir();
-    assert_eq!(watchable_path(&directory).ok(), Some(directory));
+    assert_eq!(ensure_watchable_path(&directory).ok(), Some(directory));
 }
