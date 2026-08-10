@@ -91,6 +91,11 @@ const PILL_AVATAR_DISC_SIZE: f32 =
 /// size the avatar disc (that is [`PILL_AVATAR_DISC_SIZE`]) — it only reserves
 /// the square whose bottom-right corner the badge hangs off.
 const AVATAR_WITH_STATUS_TOTAL_SIZE: f32 = PILL_AVATAR_SLOT_SIZE;
+/// Letter/icon size inside an avatar disc, as a fraction of the disc.
+const AVATAR_GLYPH_RATIO: f32 = 0.625;
+/// Cap-height fallback used only when the font reports no bounds for `H`.
+/// Roboto's is 0.711; this is close enough to keep a glyph sane in that case.
+const FALLBACK_CAP_HEIGHT_RATIO: f32 = 0.711;
 const PILL_LABEL_MAX_WIDTH: f32 = 83.;
 const PILL_ROW_GAP: f32 = 8.;
 const PILL_CONTENT_GAP: f32 = 2.;
@@ -1935,16 +1940,45 @@ fn render_pinned_divider(app: &AppContext) -> Box<dyn Element> {
     .finish()
 }
 
-/// The pin glyph itself. Solid when pinned, outline when not.
-fn render_pin_glyph(is_pinned: bool, icon_color: ColorU) -> Box<dyn Element> {
+/// Ink height of an avatar letter on a disc of `disc_size` — the UI font's cap
+/// height at the size [`render_avatar_disc`] draws letters at. `H` is the
+/// reference capital because its flat top and bottom make its ink box exactly
+/// the cap height.
+///
+/// The pin glyph is sized off this so hovering swaps one mark for another of
+/// the same visual weight instead of jumping to something much heavier.
+fn avatar_letter_ink_height(disc_size: f32, appearance: &Appearance, app: &AppContext) -> f32 {
+    let glyph_size = disc_size * AVATAR_GLYPH_RATIO;
+    let font_cache = app.font_cache();
+    let font_id = font_cache.select_font(
+        appearance.ui_font_family(),
+        Properties {
+            weight: Weight::Bold,
+            ..Default::default()
+        },
+    );
+    font_cache
+        .glyph_for_char(font_id, 'H', false)
+        .and_then(|(glyph_id, glyph_font_id)| {
+            font_cache
+                .glyph_typographic_bounds(glyph_font_id, glyph_size, glyph_id)
+                .ok()
+        })
+        .map(|ink| ink.max_y() - ink.min_y())
+        .unwrap_or(glyph_size * FALLBACK_CAP_HEIGHT_RATIO)
+}
+
+/// The pin glyph itself, sized so its box matches `ink_height`. Solid when
+/// pinned, outline when not.
+fn render_pin_glyph(is_pinned: bool, icon_color: ColorU, ink_height: f32) -> Box<dyn Element> {
     let icon_variant = if is_pinned {
         Icon::PinFilled
     } else {
         Icon::Pin
     };
     ConstrainedBox::new(icon_variant.to_warpui_icon(icon_color.into()).finish())
-        .with_width(PILL_ICON_SIZE)
-        .with_height(PILL_ICON_SIZE)
+        .with_width(ink_height)
+        .with_height(ink_height)
         .finish()
 }
 
@@ -1960,17 +1994,21 @@ fn render_pin_glyph(is_pinned: bool, icon_color: ColorU) -> Box<dyn Element> {
 /// The glyph is centered by equal padding rather than by a centering
 /// container, which keeps it exact regardless of how the surrounding box
 /// behaves.
+#[allow(clippy::too_many_arguments)]
 fn render_pin_button(
     is_pinned: bool,
     icon_color: ColorU,
     mouse_state: MouseStateHandle,
     conversation_id: AIConversationId,
     theme: &WarpTheme,
+    appearance: &Appearance,
+    app: &AppContext,
 ) -> Box<dyn Element> {
     let hover_background = internal_colors::fg_overlay_1(theme);
+    let glyph_ink_height = avatar_letter_ink_height(PILL_AVATAR_DISC_SIZE, appearance, app);
     let button = Hoverable::new(mouse_state, move |hover_state| {
-        let mut circle = Container::new(render_pin_glyph(is_pinned, icon_color))
-            .with_uniform_padding((PILL_AVATAR_DISC_SIZE - PILL_ICON_SIZE) / 2.)
+        let mut circle = Container::new(render_pin_glyph(is_pinned, icon_color, glyph_ink_height))
+            .with_uniform_padding((PILL_AVATAR_DISC_SIZE - glyph_ink_height) / 2.)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
                 PILL_AVATAR_DISC_SIZE / 2.,
             )));
@@ -2144,6 +2182,8 @@ fn render_pill(
                         pin_button_mouse_state.clone(),
                         conversation_id,
                         theme,
+                        appearance,
+                        app,
                     )
                 } else if let Some(ref status) = status {
                     render_avatar_with_status_overlay(
@@ -2497,11 +2537,11 @@ fn center_glyph_ink_baseline_position_fn(
 ) -> ComputeBaselinePositionFn {
     Box::new(move |args| {
         let font_id = args.font_cache.select_font(family_id, properties);
-        // Typographic bounds are y-up from the baseline, so the vertical
-        // midpoint is how far the ink's center sits above it. When a glyph has
-        // no bounds — a blank, or a stub font in tests — this falls back to
-        // zero, which just puts the baseline on the disc's center line.
-        let ink_center_above_baseline = args
+        // Typographic bounds are y-up from the baseline: `max_y` is the ink's
+        // top above it and `min_y` its bottom. A glyph with no bounds — a
+        // blank, or a stub font in tests — just puts the baseline on the
+        // disc's center line.
+        let Some(ink) = args
             .font_cache
             .glyph_for_char(font_id, letter, false)
             .and_then(|(glyph_id, glyph_font_id)| {
@@ -2509,9 +2549,18 @@ fn center_glyph_ink_baseline_position_fn(
                     .glyph_typographic_bounds(glyph_font_id, args.font_size, glyph_id)
                     .ok()
             })
-            .map(|ink| (ink.min_y() + ink.max_y()) / 2.)
-            .unwrap_or_default();
-        disc_size / 2. + ink_center_above_baseline
+        else {
+            return disc_size / 2.;
+        };
+        // Centering the ink exactly leaves both of its edges on fractional
+        // device pixels, and the rasterizer's coverage then fringes further
+        // down than up, which reads as the letter sitting low. Snapping the
+        // ink's top edge to a whole pixel gives it a crisp edge to sit on.
+        // The snap is applied after the size-scaled computation, so it holds
+        // at every avatar size rather than being tuned to one.
+        let ink_height = ink.max_y() - ink.min_y();
+        let ink_top = ((disc_size - ink_height) / 2.).round();
+        ink_top + ink.max_y()
     })
 }
 
@@ -2534,7 +2583,7 @@ fn render_avatar_disc(
     .with_width(size)
     .with_height(size)
     .finish();
-    let glyph_size = size * 0.625;
+    let glyph_size = size * AVATAR_GLYPH_RATIO;
 
     let glyph_element: Box<dyn Element> = match glyph {
         AvatarGlyph::Letter(letter) => {
