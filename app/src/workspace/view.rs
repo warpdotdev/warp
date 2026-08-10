@@ -7320,6 +7320,10 @@ impl Workspace {
         if let Some(tab) = self.tabs.get_mut(new_tab_index) {
             tab.group_id = Some(group_id);
         }
+        // The user asked for this tab to be in this group. Without retiring the
+        // marker the tab's first resolved key would pull it straight back out
+        // and prune the group that was just created.
+        self.note_manual_tab_placement(new_tab_index);
 
         self.move_tab_to_index(new_tab_index, target, ctx);
 
@@ -7425,6 +7429,7 @@ impl Workspace {
             return;
         };
         let previous_group_id = tab.group_id;
+        let pane_group_id = tab.pane_group.id();
 
         let group = TabGroup::new();
         let group_id = group.id;
@@ -7443,6 +7448,7 @@ impl Workspace {
         self.tabs[tab_index].group_id = Some(group_id);
         // Pin state is cleared when a new group with this tab is created.
         self.tabs[tab_index].pinned = false;
+        self.note_manual_tab_placement(tab_index);
 
         self.move_tab_to_index(tab_index, target, ctx);
 
@@ -7456,6 +7462,11 @@ impl Workspace {
         if let Some(prev_group_id) = previous_group_id {
             self.prune_empty_tab_group(prev_group_id, ctx);
         }
+
+        // A group made from one tab is that tab's project's group, so the tab
+        // is back under automation from here on (R14). No-op while the mode is
+        // off or the tab's project is unknown.
+        self.adopt_project_key_for_new_group(group_id, pane_group_id, ctx);
 
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
@@ -7487,8 +7498,11 @@ impl Workspace {
         let target_index = self.index_after_group(group_id).unwrap_or(self.tabs.len());
         self.tabs[tab_index].group_id = Some(group_id);
 
-        // Moving a tab to a group, clear its pinned state.
+        // Moving a tab to a group, clear its pinned state — and its
+        // queued-for-placement marker, so the group the user picked is the one
+        // it keeps. See `Workspace::note_manual_tab_placement`.
         self.tabs[tab_index].pinned = false;
+        self.note_manual_tab_placement(tab_index);
         self.expand_tab_group(group_id, ctx);
         self.move_tab_to_index(tab_index, target_index, ctx);
 
@@ -7523,6 +7537,9 @@ impl Workspace {
             .map(|t| self.clamp_to_unpinned_region(&self.tabs, t));
 
         self.tabs[tab_index].group_id = None;
+        // Leaving a group is a placement: the tab is now ungrouped *and*
+        // detached, and stays that way until the user puts it somewhere.
+        self.note_manual_tab_placement(tab_index);
 
         if let Some(target) = target {
             self.move_tab_to_index(tab_index, target, ctx);
@@ -7548,6 +7565,12 @@ impl Workspace {
         for tab in &mut self.tabs {
             if tab.group_id == Some(group_id) {
                 tab.group_id = None;
+                // R15: a former member is ungrouped *and* detached. Clearing
+                // the marker is what makes that true for a member automation
+                // had not placed yet — without it the next resolve would sweep
+                // the tab straight back into a group. See
+                // `Workspace::note_manual_tab_placement`.
+                tab.placed_by_automation = false;
             }
         }
         self.tab_groups.remove(&group_id);
@@ -7610,6 +7633,11 @@ impl Workspace {
             }
             self.move_tab_to_index(new_idx, target_index, ctx);
         }
+        // The user asked for a tab *in this group*, so this group is where it
+        // stays even if its directory belongs to another project.
+        // `move_tab_to_index` re-seats the active index onto the tab it moved,
+        // so this is the new tab in both branches.
+        self.note_manual_tab_placement(self.active_tab_index);
         self.expand_tab_group(group_id, ctx);
     }
 
@@ -28776,7 +28804,7 @@ impl Workspace {
                 // a pinned tab dragged into a pinned group keeps its pin for the
                 // duration of the drag and only loses it on drop (see the
                 // `DropTab` handler).
-                self.assign_tab_to_group(current_index, expanded_target, ctx);
+                self.commit_dragged_tab_group(current_index, expanded_target, ctx);
 
                 // Hop into the target group's contiguous block so the group
                 // stays one rendered container. Vertical tab rendering only

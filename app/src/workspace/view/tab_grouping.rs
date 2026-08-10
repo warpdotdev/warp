@@ -241,12 +241,17 @@ impl Workspace {
         let anchor_previous_group_id = self.tabs[anchor_index].group_id;
 
         // Assign membership and clear flags for every selected tab. The new
-        // group is unpinned, so any selected tab in set as unpinned.
+        // group is unpinned, so any selected tab in set as unpinned. The
+        // queued-for-placement marker goes too — see
+        // `Workspace::note_manual_tab_placement`. The group itself adopts no
+        // project key: a selection spans no single project, so it is an
+        // ordinary manual group and every member of it is detached.
         for &index in &selected_indices {
             let tab = &mut self.tabs[index];
             tab.group_id = Some(group_id);
             tab.pinned = false;
             tab.in_multi_selection = false;
+            tab.placed_by_automation = false;
         }
 
         // Split tabs into the new group's members and all other tabs.
@@ -346,12 +351,16 @@ impl Workspace {
 
         // Assign membership and clear flags for every selected tab. Entering
         // the group removes any per-tab pinned flag — the destination group's
-        // own `pinned` flag now governs the member's position.
+        // own `pinned` flag now governs the member's position — and retires
+        // the queued-for-placement marker, so automation cannot pull a tab
+        // back out of the group the user chose for it. See
+        // `Workspace::note_manual_tab_placement`.
         for &index in &selected_indices {
             let tab = &mut self.tabs[index];
             tab.group_id = Some(group_id);
             tab.pinned = false;
             tab.in_multi_selection = false;
+            tab.placed_by_automation = false;
         }
 
         // Anchor the group block at its original first-member position, shifted
@@ -411,9 +420,13 @@ impl Workspace {
         let selected_indices = self.selected_tab_indices();
         let selected_set: HashSet<usize> = selected_indices.iter().copied().collect();
 
-        // Clear the group that all selected tabs belonged to.
+        // Clear the group that all selected tabs belonged to. Leaving a group
+        // is a placement too: the tabs are now ungrouped *and* detached, and
+        // stay that way until the user puts them somewhere. See
+        // `Workspace::note_manual_tab_placement`.
         for &index in &selected_indices {
             self.tabs[index].group_id = None;
+            self.tabs[index].placed_by_automation = false;
         }
 
         // Non-selected tabs originally before the group's first member; if the
@@ -544,6 +557,29 @@ impl Workspace {
     /// falls inside that prefix.
     pub(super) fn clamp_to_unpinned_region(&self, tabs: &[TabData], idx: usize) -> usize {
         idx.max(self.pinned_boundary_index(tabs))
+    }
+
+    /// The commit point for a tab-drag placement.
+    ///
+    /// The vertical panel and the horizontal tab bar both dispatch `DragTab`,
+    /// so `Workspace::on_tab_drag` is the one place a drag changes membership,
+    /// and this is the one call inside it that does. Membership is committed
+    /// while the drag is still in flight rather than on mouse-up: that is how
+    /// the dragged tab renders inside its new group, and it is also what keeps
+    /// a reconcile arriving mid-drag from disagreeing with what the user is
+    /// looking at.
+    ///
+    /// `group_id` is `None` when the drag left every group.
+    pub(super) fn commit_dragged_tab_group(
+        &mut self,
+        tab_index: usize,
+        group_id: Option<TabGroupId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Membership only; `assign_tab_to_group` never reorders, so
+        // `tab_index` still addresses the same tab afterwards.
+        self.assign_tab_to_group(tab_index, group_id, ctx);
+        self.note_manual_tab_placement(tab_index);
     }
 
     /// Returns the slot just past the last member of `group_id`, suitable as

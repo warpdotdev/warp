@@ -218,6 +218,73 @@ impl Workspace {
         ctx.notify();
     }
 
+    /// Retires the queued-for-placement marker on a tab the user has just
+    /// placed by hand.
+    ///
+    /// This is the *only* automation state a manual placement writes.
+    /// Tracked-ness itself is derived from where the tab sits (KTD5) and is
+    /// deliberately never stored, so a drop needs to record nothing for R13 to
+    /// hold — with one exception. `placed_by_automation` outranks placement in
+    /// [`Workspace::reconcile_tab_auto_group`]'s derivation, because a tab that
+    /// has never been placed has no placement worth reading. A tab still
+    /// carrying the marker — newly created, arrived from another window,
+    /// reopened without its group, or just unpinned — would therefore be pulled
+    /// back out of the group the user dropped it into by the first reconcile
+    /// that can resolve its key, silently undoing a manual act. Retiring the
+    /// marker is what stops that; everything after it is ordinary derivation.
+    pub(super) fn note_manual_tab_placement(&mut self, tab_index: usize) {
+        if let Some(tab) = self.tabs.get_mut(tab_index) {
+            tab.placed_by_automation = false;
+        }
+    }
+
+    /// Points a group the user just created from a single tab at that tab's
+    /// project, per R14.
+    ///
+    /// Without this the new group carries no key, so it matches nothing the
+    /// tab can ever resolve to and the tab stays detached forever — "give this
+    /// tab its own group" would be a one-way door out of automation. Adopting
+    /// the key instead makes the group the tab's own project's group, which is
+    /// exactly the state R14 re-attaches from.
+    ///
+    /// Only for single-tab creation: a group made from a multi-tab selection
+    /// has no one project to adopt, and stays an ordinary manual group.
+    pub(super) fn adopt_project_key_for_new_group(
+        &mut self,
+        group_id: TabGroupId,
+        pane_group_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.auto_grouping_enabled(ctx) {
+            return;
+        }
+        // No project to adopt: the group stays unkeyed — an ordinary manual
+        // group — and the tab stays detached. Placing it somewhere keyed is
+        // still the way back under automation.
+        let Some(key) = self.resolve_project_key_for_tab(pane_group_id, ctx) else {
+            return;
+        };
+        if !self.tab_groups.contains_key(&group_id) {
+            return;
+        }
+
+        if let Some(group) = self.tab_groups.get_mut(&group_id) {
+            group.project_key = Some(key.to_storage_string());
+        }
+        // Named after the key is stored so the name is qualified against every
+        // key in the window, this one included.
+        let name = self.derived_group_name(&key);
+        if let Some(group) = self.tab_groups.get_mut(&group_id) {
+            group.name = Some(name);
+        }
+
+        // Re-attaches through the ordinary derivation rather than by writing
+        // tracked-ness: the group now carries exactly the key the tab resolves
+        // to, which reconcile already reads as "already correct". It also
+        // records the resolved key, which the next reconcile compares against.
+        self.reconcile_tab_auto_group(pane_group_id, Some(key), ctx);
+    }
+
     /// Appends the tab to the end of `group_id`'s contiguous run.
     ///
     /// Unlike the manual join path this leaves the destination group's collapse
@@ -629,3 +696,7 @@ mod tests;
 #[cfg(test)]
 #[path = "auto_grouping_wiring_tests.rs"]
 mod wiring_tests;
+
+#[cfg(test)]
+#[path = "auto_grouping_manual_override_tests.rs"]
+mod manual_override_tests;
