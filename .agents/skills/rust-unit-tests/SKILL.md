@@ -22,10 +22,6 @@ Default to a unit test when the logic is deterministic and reachable without boo
 
 Prefer unit tests for anything that fits: they are fast, deterministic, and point straight at the failure.
 
-### Regression test adequacy
-
-A regression test only proves something if it exercises the call site where the bug actually lived. Identify that call site — the real code path that crashed or misbehaved — and confirm the test would fail if the exact buggy code reappeared there. A test that only reaches a private helper or an internal function one step removed from that call site can stay green while the regression comes back.
-
 ## When a unit test is the wrong level
 
 Be honest about this codebase. Warp is a terminal emulator with a GPU renderer, PTY and shell integration, and IPC. The common "80% unit tests" heuristic assumes a business-logic-heavy system where units exchange messages and transform data. Large parts of this repo are not that, and forcing them under a unit test usually means mocking away the only thing that could actually break.

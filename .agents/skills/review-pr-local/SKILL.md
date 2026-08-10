@@ -16,24 +16,12 @@ redefine the review output schema, severity labels, safety rules, or
 evidence rules. It only specializes the override categories the core
 skill marks as overridable.
 
-## Mandatory: comment audit (rule-by-rule)
-
-For every comment a PR adds or changes (doc comments and inline comments), check it individually against each rule in the "Comments" guidance under "Development Guidelines" in `AGENTS.md` — a holistic read ("the comments look fine") is not sufficient, and this step is mandatory for every PR that touches a comment. Comments carry a maintenance cost, so a new comment should earn its place. Walk each changed comment against this checklist and name the specific rule it violates when flagging one:
-
-- Restates *what*/*how* the code does instead of a non-obvious *why* ("Minimalist Comments", "Strictly 'Why' Only").
-- Narrates syntax or a function's internal steps line by line instead of documenting its public behavior ("No Line-by-Line Narrations", "Clean Docstrings").
-- Is a "transformation" comment describing the edit rather than the current code — phrases like "this used to...", "without this...", "previously...", "now we..." ("No 'transformation comments'").
-- Enumerates the function's callers in its doc comment instead of documenting its own behavior ("Don't enumerate function call sites in doc comments").
-- Duplicates an explanation a declaration's doc comment already gives, instead of relying on it from the call site or reference ("Single-source of documentation").
-- An existing comment was removed as collateral of an otherwise unrelated change.
-
-Read the full "Comments" section in `AGENTS.md` rather than relying on these examples alone.
-
 ## Repo-specific style and recurring review patterns
 
-- Check every PR against the testing guidelines in `.agents/skills/rust-unit-tests/SKILL.md` and `.agents/skills/gui-integration-test/SKILL.md`: flag tests the PR adds that those skills would call out, and new code that should have a test and doesn't. For any test framed as a regression test, specifically apply `rust-unit-tests`'s "Test behavior through the public API" rule and its "Regression test adequacy" note: trace the original bug to its real call site and name the specific assertion that would fail if the exact buggy code were restored there — exercising that call site through a private helper or internal function one step removed from it, without an assertion the old buggy code would have failed, does not count.
+- Check every PR against the testing guidelines in `.agents/skills/rust-unit-tests/SKILL.md` and `.agents/skills/gui-integration-test/SKILL.md`: flag tests the PR adds that those skills would call out, and new code that should have a test and doesn't. Treat a clear violation of these guidelines as `⚠️ [IMPORTANT]`, not a nit.
 - When a PR is clearly a V0 or initial implementation, frame robustness suggestions such as timeouts, retries, and lifecycle management as optional future work rather than blocking concerns, unless they risk correctness, security, data loss, or a persistent UI hang.
 - For Rust changes, apply the repository conventions from `AGENTS.md`: avoid unnecessary type annotations, prefer imports over long path qualifiers, name context parameters `ctx` and place them last, remove unused parameters instead of prefixing them with `_`, and prefer inline format arguments in macros.
+- Audit the comments a PR adds or changes against the "Comments" guidance under "Development Guidelines" in `AGENTS.md` — comments carry a maintenance cost, so a new comment should earn its place. Common issues to flag: comments that restate what the code already says instead of explaining non-obvious *why*; "transformation" comments that describe the edit rather than the current state (e.g. "this used to ..."); doc comments that narrate a function's internal steps or enumerate its callers; explanations duplicated at a call site or reference that the declaration's doc comment already covers; and existing comments removed as collateral of an otherwise unrelated change. Read the full list in `AGENTS.md` rather than relying on these examples alone. Treat a confirmed violation as `⚠️ [IMPORTANT]`, not a nit.
 - When a PR adds or changes calls to log macros (`log::*` / `safe_*`) or error reporting (`report_error!` / `report_if_error!`), review it against `.agents/skills/logging-and-error-reporting/SKILL.md`. Common issues to flag: using `log::error!` for a failure that should be a Sentry issue (only `report_error!` and panics create issues — `log::*` at Error/Warn/Info are just breadcrumbs); interpolating per-instance data into a `report_error!` grouping message instead of `.context()`/`extra:`; demoting a real typed error into `extra:` or stringifying it with `anyhow!("{e}")` instead of reporting it as the payload; an inappropriate log level for hot paths; and secrets/PII in reports or Info-and-above logs (use the `safe_*` macros for sensitive detail).
 - Avoid wildcard `_` match arms when an enum can reasonably be matched exhaustively; exhaustive matches are preferred so future variants are surfaced during review.
 - For new or changed feature flags, prefer high-level runtime checks with `FeatureFlag::YourFlag.is_enabled()` over `#[cfg(...)]` unless the code cannot compile without a compile-time gate.
