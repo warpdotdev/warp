@@ -4654,6 +4654,137 @@ fn test_close_tab_group_removes_group_and_members() {
     });
 }
 
+/// Puts the tabs at `member_indices` (already a contiguous run, as the
+/// workspace requires) into a fresh group and returns its id. `project_key`
+/// stands in for how the group came to be: `Some` is an automation-keyed
+/// group, `None` a group the user made by hand.
+pub(crate) fn group_tabs_for_test(
+    workspace: &mut Workspace,
+    member_indices: &[usize],
+    project_key: Option<&str>,
+) -> TabGroupId {
+    let mut group = TabGroup::new();
+    let group_id = group.id;
+    group.project_key = project_key.map(str::to_string);
+    workspace.tab_groups.insert(group_id, group);
+    for &index in member_indices {
+        workspace.tabs[index].group_id = Some(group_id);
+    }
+    group_id
+}
+
+#[test]
+fn test_sole_member_of_keyed_group_keeps_its_own_drag_affordance() {
+    // R22. An automation-keyed group is derived, so dragging its only member
+    // away orphans nothing — the emptied group prunes itself and the tab
+    // regroups at its destination. The member therefore keeps the per-tab drag
+    // affordance that cross-window drag rides on.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            let group_id = group_tabs_for_test(workspace, &[0], Some("/work/api/.git"));
+
+            assert!(
+                !workspace.suppresses_member_drag(group_id),
+                "the sole member of a keyed group must keep its own drag"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_sole_member_of_manual_group_defers_drag_to_group_with_auto_grouping_on() {
+    // The gate is on the group, not on the mode: a group the user authored
+    // still swallows its only member's drag so the block moves as one and the
+    // group is never orphaned — even with automatic grouping switched on.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            let group_id = group_tabs_for_test(workspace, &[0], None);
+
+            assert!(
+                workspace.suppresses_member_drag(group_id),
+                "the sole member of a manual group must still defer to the group drag"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_multi_member_groups_keep_their_members_own_drag_affordance() {
+    // Regression guard: suppression has only ever applied to a *sole* member,
+    // and that is unchanged for keyed and manual groups alike.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            for _ in 0..3 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+            assert_eq!(workspace.tab_count(), 4);
+
+            let manual_group_id = group_tabs_for_test(workspace, &[0, 1], None);
+            let keyed_group_id = group_tabs_for_test(workspace, &[2, 3], Some("/work/api/.git"));
+
+            assert!(
+                !workspace.suppresses_member_drag(manual_group_id),
+                "members of a multi-member manual group keep their own drag"
+            );
+            assert!(
+                !workspace.suppresses_member_drag(keyed_group_id),
+                "members of a multi-member keyed group keep their own drag"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_dragging_sole_member_out_empties_and_prunes_its_keyed_group() {
+    // `remove_tab_without_undo` is the source-side step a cross-window tab drag
+    // runs once the tab has been handed to the target window. Driving the real
+    // drag needs two live windows, so this asserts the step that decides
+    // whether anything is orphaned.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            let group_id = group_tabs_for_test(workspace, &[0], Some("/work/api/.git"));
+
+            workspace.remove_tab_without_undo(0, ctx);
+
+            assert_eq!(workspace.tab_count(), 1);
+            assert!(
+                !workspace.tab_groups.contains_key(&group_id),
+                "the emptied keyed group must prune itself"
+            );
+            // A group that no longer exists suppresses nothing, so a stale id
+            // never costs a tab its drag.
+            assert!(!workspace.suppresses_member_drag(group_id));
+        });
+    });
+}
+
 #[test]
 fn test_new_tab_with_after_all_tabs_setting_lands_top_level_at_end() {
     // With `new_tab_placement = AfterAllTabs`, a new tab lands at the very end

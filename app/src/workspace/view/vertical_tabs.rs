@@ -2031,6 +2031,25 @@ fn render_groups(
     }
 }
 
+/// The vertical panel's form of [`Workspace::suppresses_member_drag`]: whether
+/// the row being rendered for `tab` must skip its own `Draggable` so the
+/// enclosing group's drag fires instead.
+///
+/// `in_tab_group` is the panel's own rendering context — a tab rendered as a
+/// top-level row is never drawn inside a group container, so there is no group
+/// drag to defer to even if the tab still carries a `group_id`. Everything past
+/// that is delegated, so this bar and the horizontal one always agree.
+pub(super) fn member_defers_drag_to_group(
+    workspace: &Workspace,
+    tab: &TabData,
+    in_tab_group: bool,
+) -> bool {
+    in_tab_group
+        && tab
+            .group_id
+            .is_some_and(|group_id| workspace.suppresses_member_drag(group_id))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_tab_group(
     state: &VerticalTabsPanelState,
@@ -2536,13 +2555,10 @@ fn render_tab_group_internal(
         .and_then(|gid| workspace.tab_groups.get(&gid))
         .is_some_and(|group| group.draggable_state.is_dragging());
 
-    // Sole group member: skip the per-tab drag so the outer group drag fires instead.
-    let is_sole_group_member = in_tab_group
-        && tab
-            .group_id
-            .is_some_and(|gid| super::group_has_single_member(&workspace.tabs, gid));
+    // The member may have to skip its per-tab drag so the outer group drag fires instead.
+    let defers_drag_to_group = member_defers_drag_to_group(workspace, tab, in_tab_group);
 
-    let draggable: Box<dyn Element> = if is_parent_group_dragging || is_sole_group_member {
+    let draggable: Box<dyn Element> = if is_parent_group_dragging || defers_drag_to_group {
         group_element
     } else {
         let draggable = Draggable::new(tab.draggable_state.clone(), group_element)

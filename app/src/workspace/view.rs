@@ -7860,6 +7860,36 @@ impl Workspace {
         }
     }
 
+    /// Whether a member of `group_id` gives up its own per-tab `Draggable` so
+    /// the parent group's drag fires instead.
+    ///
+    /// Only the sole member of a **manual** group does. That suppression exists
+    /// so dragging the last tab out of a group the user authored moves the
+    /// whole block instead of orphaning the group. An automation-keyed group is
+    /// derived rather than authored, so nothing is orphaned — the emptied group
+    /// prunes itself and the tab regroups at its destination — and the member
+    /// keeps the per-tab drag that carrying a tab into another window relies on
+    /// (group drag does not cross windows; that is issue #14152). With
+    /// automatic grouping on a tab is essentially always grouped, so suppressing
+    /// there would quietly take cross-window drag away (R22).
+    ///
+    /// Gated on the group rather than on the mode on purpose: a manual group
+    /// holding one tab behaves identically whether the mode is on or off, and a
+    /// keyed group left behind after the mode is switched off stays draggable.
+    ///
+    /// This is the single predicate both tab bars ask — the horizontal bar in
+    /// `render_horizontal_tab_group`, the vertical panel through
+    /// `vertical_tabs::member_defers_drag_to_group` — so the two cannot drift
+    /// apart. An unknown `group_id` suppresses nothing, so a stale id never
+    /// costs a tab its drag.
+    pub(super) fn suppresses_member_drag(&self, group_id: TabGroupId) -> bool {
+        group_has_single_member(&self.tabs, group_id)
+            && self
+                .tab_groups
+                .get(&group_id)
+                .is_some_and(|group| group.project_key.is_none())
+    }
+
     /// Moves the tab at `from` to position `to` (`Vec::insert` semantics).
     /// The active-tab tracker follows the moved tab.
     fn move_tab_to_index(&mut self, from: usize, to: usize, ctx: &mut ViewContext<Self>) {
@@ -20056,10 +20086,10 @@ impl Workspace {
             } else {
                 TabCloseButtonPosition::default()
             };
-            // When a group has only one member, suppress that member's per-tab
-            // `Draggable` so the parent group's `Draggable` picks up the drag
-            // instead, dragging the whole group rather than orphaning it.
-            let is_sole_member = group_has_single_member(&self.tabs, group.id);
+            // A member may have to give up its per-tab `Draggable` so the
+            // parent group's `Draggable` picks up the drag instead; see
+            // `Workspace::suppresses_member_drag` for when and why.
+            let defers_drag_to_group = self.suppresses_member_drag(group.id);
             for idx in member_range {
                 // Insertion divider before this member when a pane drop lands
                 // here (into the group at `idx`).
@@ -20080,7 +20110,7 @@ impl Workspace {
                     ctx,
                 )
                 .with_effective_color(effective_color)
-                .for_grouped_member(is_sole_member)
+                .for_grouped_member(defers_drag_to_group)
                 .with_multi_tab_selection(self.is_tab_in_multi_tab_selection(idx))
                 .build()
                 .finish();
@@ -29541,11 +29571,11 @@ fn group_member_index_range(tabs: &[TabData], group_id: TabGroupId) -> Option<(u
     Some((first, last))
 }
 
-/// Returns `true` when `group_id` has exactly one member in `tabs`. Shared
-/// by both horizontal and vertical tab rendering to detect the "sole grouped
-/// member" case, where the per-tab `Draggable` is suppressed so the parent
-/// group's `Draggable` picks up the drag — dragging the only member of a
-/// group drags the entire group rather than orphaning it.
+/// Returns `true` when `group_id` has exactly one member in `tabs`.
+///
+/// This is only the membership half of the "sole grouped member" case; whether
+/// that member actually gives up its own drag is decided by
+/// [`Workspace::suppresses_member_drag`], which both tab bars call.
 pub(super) fn group_has_single_member(tabs: &[TabData], group_id: TabGroupId) -> bool {
     group_member_index_range(tabs, group_id).is_some_and(|(first, last)| first == last)
 }

@@ -1098,8 +1098,9 @@ pub struct TabComponent<'a> {
     for_drag_ghost: bool,
     /// Set when rendered as a member of a horizontal tab group.
     grouped_member: bool,
-    /// Set when this member is the sole tab in its group.
-    sole_grouped_member: bool,
+    /// Set when this member must give up its own drag to the enclosing group's.
+    /// Decided by the caller — see `Workspace::suppresses_member_drag`.
+    defers_drag_to_group: bool,
     /// Locator pointing at this tab's focused pane.
     locator: PaneViewLocator,
     /// True when this tab is part of a multi-tab (count > 1) selection. Drives
@@ -1272,7 +1273,7 @@ impl<'a> TabComponent<'a> {
             background_opacity,
             for_drag_ghost: false,
             grouped_member: false,
-            sole_grouped_member: false,
+            defers_drag_to_group: false,
             locator,
             is_in_multi_tab_selection: false,
             shortcut_hint_label,
@@ -1288,11 +1289,12 @@ impl<'a> TabComponent<'a> {
 
     /// Marks this tab as a member of a horizontal tab group. See the
     /// [`TabComponent`] `grouped_member` field for the rendering differences.
-    /// Pass `is_sole_member = true` when this is the only tab in its group so
-    /// the per-tab `Draggable` is suppressed and the parent group drag fires.
-    pub fn for_grouped_member(mut self, is_sole_member: bool) -> Self {
+    /// Pass `defers_drag_to_group = true` to suppress the per-tab `Draggable`
+    /// so the parent group's drag fires instead; the caller decides, via
+    /// `Workspace::suppresses_member_drag`.
+    pub fn for_grouped_member(mut self, defers_drag_to_group: bool) -> Self {
         self.grouped_member = true;
-        self.sole_grouped_member = is_sole_member;
+        self.defers_drag_to_group = defers_drag_to_group;
         self
     }
 
@@ -2168,7 +2170,7 @@ impl UiComponent for TabComponent<'_> {
         let mouse_close_state = self.tab.close_mouse_state.clone();
         // Capture before `self` is moved into the Hoverable closure below.
         let for_drag_ghost = self.for_drag_ghost;
-        let sole_grouped_member = self.sole_grouped_member;
+        let defers_drag_to_group = self.defers_drag_to_group;
         let locator = self.locator;
         let is_in_multi_tab_selection = self.is_in_multi_tab_selection;
 
@@ -2382,12 +2384,12 @@ impl UiComponent for TabComponent<'_> {
         // position cache, breaking `tab_insertion_index_for_cursor`.
         let full_tab: Box<dyn Element> = if for_drag_ghost {
             constrained_tab
-        } else if sole_grouped_member {
-            // Sole member of a group: skip the per-tab `Draggable` so the
-            // parent group's `Draggable` picks up the drag instead. Dragging
-            // the only member of a group drags the entire group, preventing
-            // accidental orphaning. Keep `SavePosition` so hit-testing /
-            // neighbor-rect math still works.
+        } else if defers_drag_to_group {
+            // The member hands its drag to the group: skip the per-tab
+            // `Draggable` so the parent group's picks up the drag instead and
+            // the whole block moves, rather than orphaning a group the user
+            // authored. Keep `SavePosition` so hit-testing / neighbor-rect math
+            // still works.
             SavePosition::new(constrained_tab, &tab_position_id(tab_index)).finish()
         } else {
             // Grouped members use the same `Draggable` wrapper as regular tabs
