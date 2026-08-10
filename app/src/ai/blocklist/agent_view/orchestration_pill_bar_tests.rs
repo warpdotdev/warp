@@ -964,13 +964,34 @@ fn painted_pill_avatar_uses_the_designed_asymmetric_padding() {
         "the disc's deliberate rise above the pill's geometric center",
     );
 
-    // Horizontally the disc stays centered in the leading slot, which begins
-    // after the pill's left padding.
+    // Horizontally the disc hugs the leading slot's left edge, which begins
+    // right after the pill's left padding. See
+    // `painted_status_badge_does_not_encroach_on_the_avatar_glyph` for why
+    // this must not drift right.
     let slot_left = badged.pill.min_x() + PILL_HORIZONTAL_PADDING_LEFT;
     assert_px(
         badged.disc.min_x() - slot_left,
-        (PILL_AVATAR_SLOT_SIZE - DESIGN_DISC_DIAMETER) / 2.,
+        0.,
         "disc inset from the leading slot's left edge",
+    );
+}
+
+/// The badge is anchored to the lockup box's bottom-right corner, so any
+/// rightward drift of the disc is paid for by the badge's cutout ring eating
+/// further into the avatar. Past roughly the disc's midpoint the ring starts
+/// covering the agent's initial, which is what the glyph is for.
+#[test]
+fn painted_status_badge_does_not_encroach_on_the_avatar_glyph() {
+    let badged =
+        with_pill_avatar_app(|app| paint_pill_avatar(app, Some(ConversationStatus::InProgress)));
+    let ring = badged.badge_ring();
+
+    let horizontal_overlap = badged.disc.max_x() - ring.min_x();
+    assert!(
+        horizontal_overlap < badged.disc.width() / 2.,
+        "the badge's cutout ring overlaps {horizontal_overlap}px of the {}px disc, which reaches \
+         past its center and into the glyph",
+        badged.disc.width(),
     );
 }
 

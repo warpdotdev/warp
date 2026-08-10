@@ -2379,14 +2379,15 @@ const PILL_AVATAR_LOCKUP_TOP_INSET: f32 =
 /// plain and status-badged paths so a pill's avatar lands in exactly the same
 /// spot whether or not it currently has a status.
 ///
-/// The disc is horizontally centered and [`PILL_AVATAR_LOCKUP_TOP_INSET`] down
-/// from the box's top edge — not centered vertically, because the badge
-/// overhangs the bottom. This has to be explicit: `ConstrainedBox` only
-/// tightens constraints, so an un-wrapped disc would be painted at the box's
-/// top-left corner.
+/// The disc hugs the box's leading edge and sits
+/// [`PILL_AVATAR_LOCKUP_TOP_INSET`] down from its top edge. Only the vertical
+/// placement is ours to choose; horizontally the disc has to stay flush left,
+/// because the badge is anchored to the box's bottom-right corner and every
+/// pixel the disc moves right is a pixel more of it the badge's cutout ring
+/// eats — enough to swallow the agent's initial.
 fn render_avatar_lockup_box(disc: Box<dyn Element>) -> Box<dyn Element> {
     ConstrainedBox::new(
-        Container::new(Align::new(disc).top_center().finish())
+        Container::new(Align::new(disc).top_left().finish())
             .with_padding_top(PILL_AVATAR_LOCKUP_TOP_INSET)
             .finish(),
     )
@@ -2420,8 +2421,9 @@ fn render_pill_avatar(
 /// * Lockup box: [`AVATAR_WITH_STATUS_TOTAL_SIZE`] = 20 square, centered in
 ///   the 22-tall slot, so it spans y = 1..21.
 /// * Avatar disc: [`PILL_AVATAR_DISC_SIZE`] = 22 - 3 - 4 = 15, inset
-///   [`PILL_AVATAR_LOCKUP_TOP_INSET`] = 2 from the box's top, so it spans
-///   y = 3..18: [`PILL_AVATAR_TOP_PADDING`] = 3 above and
+///   [`PILL_AVATAR_LOCKUP_TOP_INSET`] = 2 from the box's top and flush with
+///   its left edge, so it spans y = 3..18 and x = 4..19:
+///   [`PILL_AVATAR_TOP_PADDING`] = 3 above and
 ///   [`PILL_AVATAR_BOTTOM_PADDING`] = 4 below. Its center is y = 10.5, half a
 ///   pixel above the pill's geometric center on purpose — the badge's mass
 ///   below the disc is what makes that read as centered.
