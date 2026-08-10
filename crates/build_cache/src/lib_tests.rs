@@ -588,19 +588,6 @@ fn scratch_directories_are_unique_0700_outside_repo_and_retained() {
     }
 }
 
-// These three legs used to live in a single test that ran each classification through
-// `run_command_with_timeout` with a short, hand-picked budget. That raced each budget against
-// real process-spawn latency: under a loaded CI runner (observed on Windows), spawning `sh` can
-// itself take longer than a short budget, so the timeout future could win the race even for legs
-// that were meant to exercise spawn/exit-code classification rather than the timeout path. See
-// APP-5269.
-//
-// `run_command` (unlike `run_command_with_timeout`) applies no timeout at all, so the
-// spawn-failure and nonzero-exit legs below no longer race a clock against process-spawn
-// latency: they simply wait for the process to finish, however long that takes. Only the
-// dedicated timeout leg still needs a real race, and it's constructed so that race can only ever
-// resolve one way (see below).
-
 #[test]
 fn process_runner_classifies_spawn_failed() {
     let result = block_on(run_command(Command::new_with_process_group(
@@ -623,14 +610,9 @@ fn process_runner_classifies_nonzero_exit() {
 
 #[test]
 fn process_runner_classifies_timeout() {
-    // `:` is a POSIX special built-in (a no-op), so this loop never spawns a child process and
-    // never exits on its own. That means there's no finite-duration operation for the timeout to
-    // race against -- unlike a real `sleep`, whose completion time could in principle be confused
-    // with slow process-spawn overhead. This leg can only resolve via the timeout path, so the
-    // assertion is deterministic regardless of machine load. It also avoids spawning a
-    // subprocess-of-a-subprocess: killing the single `sh` process here can't leave an orphaned
-    // descendant behind, unlike a shelled-out `sleep`, which is process-tree killing that isn't
-    // implemented for Windows (see the `TODO(roland)` in `Command::new_with_process_group`).
+    // This must stay a shell builtin loop rather than a shelled-out `sleep`: process-group kill
+    // is Unix-only (see the `TODO(roland)` in `Command::new_with_process_group`), so on Windows a
+    // subprocess spawned by `sh` could survive when only the immediate `sh` process is killed.
     let mut timeout = Command::new_with_process_group("sh");
     timeout.args(["-c", "while :; do :; done"]);
     assert_eq!(
