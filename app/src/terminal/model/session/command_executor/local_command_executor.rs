@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -30,24 +30,83 @@ fn terminate_process_group(process_group_id: u32) {
     }
 }
 
+#[derive(Debug, Default)]
+struct ActiveProcessGroups {
+    process_groups: Mutex<HashMap<u32, Arc<ActiveProcessGroup>>>,
+}
+
+#[derive(Debug)]
+struct ActiveProcessGroup {
+    id: u32,
+}
+
+impl ActiveProcessGroups {
+    fn register(&self, process_group_id: u32) -> Arc<ActiveProcessGroup> {
+        let process_group = Arc::new(ActiveProcessGroup {
+            id: process_group_id,
+        });
+        self.process_groups
+            .lock()
+            .insert(process_group_id, process_group.clone());
+        process_group
+    }
+
+    fn remove(&self, process_group: &Arc<ActiveProcessGroup>) -> bool {
+        let mut process_groups = self.process_groups.lock();
+        if !process_groups
+            .get(&process_group.id)
+            .is_some_and(|active| Arc::ptr_eq(active, process_group))
+        {
+            return false;
+        }
+        process_groups.remove(&process_group.id);
+        true
+    }
+
+    fn complete(&self, process_group: &Arc<ActiveProcessGroup>) {
+        self.remove(process_group);
+    }
+
+    fn cancel(&self, process_group: &Arc<ActiveProcessGroup>) {
+        if !self.remove(process_group) {
+            return;
+        }
+
+        #[cfg(unix)]
+        terminate_process_group(process_group.id);
+    }
+
+    fn cancel_all(&self) {
+        let process_groups = self
+            .process_groups
+            .lock()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for process_group in process_groups {
+            self.cancel(&process_group);
+        }
+    }
+}
+
 struct SpawnedChildCleanup {
-    child_pid: u32,
-    spawned_children_pids: Arc<Mutex<HashSet<u32>>>,
+    process_group: Arc<ActiveProcessGroup>,
+    active_process_groups: Arc<ActiveProcessGroups>,
     armed: bool,
 }
 
 impl SpawnedChildCleanup {
-    fn new(child_pid: u32, spawned_children_pids: Arc<Mutex<HashSet<u32>>>) -> Self {
-        spawned_children_pids.lock().insert(child_pid);
+    fn new(process_group_id: u32, active_process_groups: Arc<ActiveProcessGroups>) -> Self {
+        let process_group = active_process_groups.register(process_group_id);
         Self {
-            child_pid,
-            spawned_children_pids,
+            process_group,
+            active_process_groups,
             armed: true,
         }
     }
 
     fn disarm(mut self) {
-        self.spawned_children_pids.lock().remove(&self.child_pid);
+        self.active_process_groups.complete(&self.process_group);
         self.armed = false;
     }
 }
@@ -57,12 +116,7 @@ impl Drop for SpawnedChildCleanup {
         if !self.armed {
             return;
         }
-
-        let mut spawned_children_pids = self.spawned_children_pids.lock();
-        if spawned_children_pids.remove(&self.child_pid) {
-            #[cfg(unix)]
-            terminate_process_group(self.child_pid);
-        }
+        self.active_process_groups.cancel(&self.process_group);
     }
 }
 
@@ -119,7 +173,7 @@ pub struct LocalCommandExecutor {
     local_shell_path: Option<PathBuf>,
     shell_type: ShellType,
 
-    spawned_children_pids: Arc<Mutex<HashSet<u32>>>,
+    active_process_groups: Arc<ActiveProcessGroups>,
 }
 
 impl LocalCommandExecutor {
@@ -127,7 +181,7 @@ impl LocalCommandExecutor {
         Self {
             local_shell_path,
             shell_type,
-            spawned_children_pids: Arc::new(Mutex::new(HashSet::new())),
+            active_process_groups: Arc::default(),
         }
     }
 
@@ -251,7 +305,7 @@ impl LocalCommandExecutor {
             .spawn()?;
 
         let child_cleanup =
-            SpawnedChildCleanup::new(child.id(), self.spawned_children_pids.clone());
+            SpawnedChildCleanup::new(child.id(), self.active_process_groups.clone());
 
         let output = child
             .output()
@@ -299,14 +353,6 @@ impl CommandExecutor for LocalCommandExecutor {
     }
 
     fn cancel_active_commands(&self) {
-        let mut spawned_children_pids = self.spawned_children_pids.lock();
-        for child_pid in spawned_children_pids.drain() {
-            #[cfg(unix)]
-            terminate_process_group(child_pid);
-
-            // TODO(roland): handle for windows
-            #[cfg(windows)]
-            let _ = child_pid;
-        }
+        self.active_process_groups.cancel_all();
     }
 }

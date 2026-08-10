@@ -147,6 +147,42 @@ mod unix {
     }
 
     #[test]
+    fn cancel_active_commands_kills_descendant_process() {
+        futures_lite::future::block_on(async {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let mut release_fifo = create_release_fifo(temp_dir.path());
+            let ready_file = temp_dir.path().join("ready");
+            let side_effect_file = temp_dir.path().join("side-effect");
+            let executor = executor();
+            let command = executor.execute_local_command(
+                descendant_command(),
+                None,
+                Some(command_environment(temp_dir.path())),
+                ExecuteCommandOptions::default(),
+            );
+
+            let task_executor = async_executor::LocalExecutor::new();
+            task_executor
+                .run(async {
+                    let command_task = task_executor.spawn(command);
+                    let descendant_pid = wait_for_descendant_pid(&ready_file).await;
+
+                    executor.cancel_active_commands();
+                    let _ = command_task.await;
+
+                    writeln!(release_fifo, "continue").expect("release descendant");
+                    wait_for_process_exit(descendant_pid).await;
+                    assert!(
+                        !side_effect_file.exists(),
+                        "canceled descendant unexpectedly created {}",
+                        side_effect_file.display()
+                    );
+                })
+                .await;
+        });
+    }
+
+    #[test]
     fn completed_command_is_not_canceled_later() {
         futures_lite::future::block_on(async {
             let temp_dir = tempfile::tempdir().expect("create temp dir");
