@@ -400,6 +400,7 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
             right_panel: None,
             group_id: None,
             pinned: false,
+            placed_by_automation: false,
         }],
         active_tab_index: 0,
         team_uid: None,
@@ -515,6 +516,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                placed_by_automation: false,
             }],
             active_tab_index: 0,
             team_uid: None,
@@ -594,6 +596,7 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                placed_by_automation: false,
             }],
             active_tab_index: 0,
             team_uid: None,
@@ -681,6 +684,7 @@ fn test_sqlite_round_trips_tab_groups() {
         right_panel: None,
         group_id: Some(group_id),
         pinned: false,
+        placed_by_automation: false,
     };
     let tab_outside_group = TabSnapshot {
         custom_title: None,
@@ -708,6 +712,9 @@ fn test_sqlite_round_trips_tab_groups() {
         left_panel: None,
         right_panel: None,
         group_id: None,
+        // Still waiting for automatic grouping to place it, as opposed to
+        // having been deliberately ungrouped by the user.
+        placed_by_automation: true,
         pinned: false,
     };
 
@@ -734,6 +741,7 @@ fn test_sqlite_round_trips_tab_groups() {
                 color: SelectedTabColor::Color(AnsiColorIdentifier::Blue),
                 collapsed: true,
                 pinned: false,
+                project_key: Some("/work/api/.git".to_string()),
             }],
         }],
         active_window_index: Some(0),
@@ -758,6 +766,12 @@ fn test_sqlite_round_trips_tab_groups() {
         SelectedTabColor::Color(AnsiColorIdentifier::Blue)
     );
     assert!(restored_group.collapsed);
+    // A group created by automatic grouping restores carrying the project key
+    // it is keyed by, so it can be matched to a project without recomputing.
+    assert_eq!(
+        restored_group.project_key.as_deref(),
+        Some("/work/api/.git")
+    );
 
     // The in-memory `TabGroupId` is minted fresh on restore, so we check that
     // the grouped tab points at the restored group, and the ungrouped tab
@@ -765,6 +779,11 @@ fn test_sqlite_round_trips_tab_groups() {
     assert_eq!(restored_window.tabs.len(), 2);
     assert_eq!(restored_window.tabs[0].group_id, Some(restored_group.id));
     assert_eq!(restored_window.tabs[1].group_id, None);
+
+    // The marker round-trips in both states, which is what lets a restart tell
+    // a deliberately ungrouped tab from one automation has not reached yet.
+    assert!(!restored_window.tabs[0].placed_by_automation);
+    assert!(restored_window.tabs[1].placed_by_automation);
 }
 
 /// Verifies that the `pinned` flag on tabs and tab groups round-trips through
@@ -805,6 +824,7 @@ fn test_sqlite_round_trips_pinned_state() {
         right_panel: None,
         group_id: None,
         pinned: true,
+        placed_by_automation: false,
     };
     let unpinned_tab = TabSnapshot {
         custom_title: None,
@@ -833,6 +853,7 @@ fn test_sqlite_round_trips_pinned_state() {
         right_panel: None,
         group_id: Some(unpinned_group_id),
         pinned: false,
+        placed_by_automation: false,
     };
     let tab_in_pinned_group = TabSnapshot {
         custom_title: None,
@@ -861,6 +882,7 @@ fn test_sqlite_round_trips_pinned_state() {
         right_panel: None,
         group_id: Some(pinned_group_id),
         pinned: false,
+        placed_by_automation: false,
     };
 
     let app_state = AppState {
@@ -887,6 +909,7 @@ fn test_sqlite_round_trips_pinned_state() {
                     color: SelectedTabColor::default(),
                     collapsed: false,
                     pinned: true,
+                    project_key: None,
                 },
                 TabGroupSnapshot {
                     id: unpinned_group_id,
@@ -894,6 +917,7 @@ fn test_sqlite_round_trips_pinned_state() {
                     color: SelectedTabColor::default(),
                     collapsed: false,
                     pinned: false,
+                    project_key: None,
                 },
             ],
         }],

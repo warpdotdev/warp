@@ -3952,6 +3952,7 @@ impl Workspace {
                                     // Pinned Tabs feature is enabled.
                                     pinned: FeatureFlag::PinnedTabs.is_enabled()
                                         && group_snapshot.pinned,
+                                    project_key: group_snapshot.project_key.clone(),
                                 },
                             )
                         })
@@ -3982,6 +3983,7 @@ impl Workspace {
                         self.tabs[tab_index].group_id = saved_tab
                             .group_id
                             .filter(|group_id| self.tab_groups.contains_key(group_id));
+                        self.tabs[tab_index].placed_by_automation = saved_tab.placed_by_automation;
 
                         let pane_group = self.tabs[tab_index].pane_group.clone();
 
@@ -11725,6 +11727,10 @@ impl Workspace {
                     // enabled.
                     pinned: FeatureFlag::PinnedTabs.is_enabled()
                         && self.tabs.get(tab_index).is_some_and(|tab| tab.pinned),
+                    placed_by_automation: self
+                        .tabs
+                        .get(tab_index)
+                        .is_some_and(|tab| tab.placed_by_automation),
                 }
             })
             .filter(|tab| {
@@ -11756,6 +11762,7 @@ impl Workspace {
                     color: group.color,
                     collapsed: group.collapsed,
                     pinned: FeatureFlag::PinnedTabs.is_enabled() && group.pinned,
+                    project_key: group.project_key.clone(),
                 })
                 .collect()
         } else {
