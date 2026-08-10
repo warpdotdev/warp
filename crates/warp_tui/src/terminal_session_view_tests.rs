@@ -5900,9 +5900,9 @@ fn orchestration_tab_navigation_bindings_remain_scoped_to_tab_context() {
             let input_context = input_only_context();
             for (name, key) in [
                 ("tui:orchestration_tabs:previous", "left"),
-                ("tui:orchestration_tabs:previous", "shift-tab"),
                 ("tui:orchestration_tabs:next", "right"),
-                ("tui:orchestration_tabs:next", "tab"),
+                ("tui:orchestration_tabs:tree_previous", "shift-tab"),
+                ("tui:orchestration_tabs:tree_next", "tab"),
                 ("tui:orchestration_tabs:first_child", "shift-left"),
                 ("tui:orchestration_tabs:last_child", "shift-right"),
             ] {
@@ -6081,9 +6081,9 @@ fn escape_from_child_tab_switches_to_root_and_clears_tab_focus() {
                     .as_ref(ctx)
                     .orchestration_tab_bar
                     .as_ref(ctx)
-                    .main_tab_key(),
+                    .tree_root_key(),
                 Some(parent_conversation_id.to_string()),
-                "tab bar should expose the parent as the main tab"
+                "tab bar should expose the parent as the tree root"
             );
         });
 
@@ -6142,9 +6142,9 @@ fn escape_with_root_selected_clears_tab_focus_without_switching() {
                     .as_ref(ctx)
                     .orchestration_tab_bar
                     .as_ref(ctx)
-                    .main_tab_key(),
+                    .tree_root_key(),
                 Some(parent_conversation_id.to_string()),
-                "root tab bar should expose the root as the main tab"
+                "root tab bar should expose the root as the tree root"
             );
         });
 
@@ -6480,7 +6480,7 @@ fn orchestration_child_selected_footer_shows_kill_hint() {
             ctx.add_singleton_model(|_| Appearance::mock());
             let builder = TuiUiBuilder::from_app(ctx);
             let buffer = render_element(
-                render_orchestration_child_selected_tab_footer(&builder),
+                render_orchestration_child_selected_tab_footer(&builder, 0),
                 ctx,
                 120,
             );
@@ -6492,6 +6492,20 @@ fn orchestration_child_selected_footer_shows_kill_hint() {
             assert!(
                 footer.contains("kill sub-agent"),
                 "child-selected footer should describe the kill action: {footer}"
+            );
+            assert!(
+                !footer.contains("nested"),
+                "leaf footer must not name a nested blast radius: {footer}"
+            );
+            let group_buffer = render_element(
+                render_orchestration_child_selected_tab_footer(&builder, 2),
+                ctx,
+                120,
+            );
+            let group_footer = group_buffer.to_lines().join("\n");
+            assert!(
+                group_footer.contains("kill sub-agent +2 nested"),
+                "group footer should name the blast radius: {group_footer}"
             );
             assert!(
                 footer.contains('\u{2193}'),
