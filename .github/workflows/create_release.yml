@@ -1968,12 +1968,7 @@ jobs:
         uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
         if: ${{ steps.failed_releases.outputs.failed != '' }}
         with:
-          # v2+ of this action replaced the `channel-id`/`slack-message` inputs
-          # and the SLACK_BOT_TOKEN env var with an explicit API method, a
-          # `token` input, and the API arguments in `payload`. It also no longer
-          # fails the step when the Slack API returns an error unless `errors`
-          # is set, so set it to keep the v1 behavior of surfacing a failed
-          # notification.
+          # Fail the step when Slack rejects the message.
           errors: true
           method: chat.postMessage
           token: ${{ secrets.ACTION_MONITORING_SLACK }}
@@ -2154,10 +2149,8 @@ jobs:
           fi
           echo "has_content=true" >> $GITHUB_OUTPUT
 
-          # v2+ of slackapi/slack-github-action takes the destination channel as
-          # a chat.postMessage argument instead of a separate `channel-id`
-          # input, so fold it into the payload here. jq -c keeps the payload on a
-          # single line, which the heredoc below relies on.
+          # chat.postMessage takes the destination channel as one of its
+          # arguments, so fold it into the payload the Slack step sends.
           jq -c --arg channel "$SLACK_CHANNEL" '. + {channel: $channel}' "$SLACK_PAYLOAD" > "$SLACK_PAYLOAD.tmp"
           mv "$SLACK_PAYLOAD.tmp" "$SLACK_PAYLOAD"
 
@@ -2174,12 +2167,8 @@ jobs:
         # in Cloud Storage.)
         continue-on-error: true
         with:
-          # v2+ of this action replaced the `channel-id` input and the
-          # SLACK_BOT_TOKEN env var with an explicit API method, a `token`
-          # input, and the API arguments in `payload`; the channel is merged
-          # into the payload by the step above. `errors` keeps the v1 behavior
-          # of marking the step failed when Slack rejects the message (the job
-          # still proceeds thanks to continue-on-error).
+          # Fail the step when Slack rejects the message; continue-on-error
+          # above still lets the rest of the job run.
           errors: true
           method: chat.postMessage
           token: ${{ secrets.SLACK_CHANGELOG_BOT }}
