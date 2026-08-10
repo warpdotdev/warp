@@ -446,39 +446,33 @@ pub async fn default_run_command(command: Command) -> Result<Vec<u8>, CacheSetup
     run_command_with_timeout(command, SPACECTL_TIMEOUT).await
 }
 
-/// Run a [`Command`] to completion and classify its result. Unlike
-/// [`run_command_with_timeout`], this applies no timeout of its own: it waits however long the
-/// process takes to spawn, run, and exit. This is split out so that spawn/exit-code
-/// classification can be exercised without racing a wall-clock budget against process-spawn
-/// latency, which is variable under load.
-async fn run_command(mut command: Command) -> Result<Vec<u8>, CacheSetupError> {
+/// Run a [`Command`] with a timeout. If the timeout expires or the future is dropped, then the
+/// process is forcibly killed.
+async fn run_command_with_timeout(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<Vec<u8>, CacheSetupError> {
     command
         .kill_on_drop(true)
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let output = command
-        .output()
-        .await
-        .map_err(|_| CacheSetupError::SpawnFailed)?;
+    let output = async {
+        command
+            .output()
+            .await
+            .map_err(|_| CacheSetupError::SpawnFailed)
+    };
+    let timeout = async {
+        Timer::after(timeout).await;
+        Err(CacheSetupError::Timeout)
+    };
+    let output = future::race(output, timeout).await?;
     if !output.status.success() {
         return Err(CacheSetupError::NonzeroExit {
             exit_code: output.status.code(),
         });
     }
     Ok(output.stdout)
-}
-
-/// Run a [`Command`] with a timeout. If the timeout expires or the future is dropped, then the
-/// process is forcibly killed.
-async fn run_command_with_timeout(
-    command: Command,
-    timeout: Duration,
-) -> Result<Vec<u8>, CacheSetupError> {
-    let timeout = async {
-        Timer::after(timeout).await;
-        Err(CacheSetupError::Timeout)
-    };
-    future::race(run_command(command), timeout).await
 }
 
 /// Set up build caching on the current host. See the crate-level documentation for a description

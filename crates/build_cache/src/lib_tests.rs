@@ -15,7 +15,7 @@ use warp_errors::ErrorExt as _;
 use super::{
     CacheScope, CacheSetupError, DetectedCacheModes, RepoCacheKey, RepoIdentity,
     RepositoryCacheSource, aggregate_mode_stats, construct_plan, create_retained_scratch_directory,
-    is_valid_env_name, run_command, run_command_with_timeout, setup_cache,
+    is_valid_env_name, run_command_with_timeout, setup_cache,
 };
 #[cfg(unix)]
 use super::{create_cache_dir_all, current_owner};
@@ -588,11 +588,18 @@ fn scratch_directories_are_unique_0700_outside_repo_and_retained() {
     }
 }
 
+/// A budget no spawn or immediate exit can plausibly exceed, used by the tests that classify a
+/// finished process. They assert on the classification, not on the clock, so the timeout must
+/// never be the thing that wins the race — process-spawn latency varies by orders of magnitude
+/// under load, and a tight budget made this suite flaky on Windows CI.
+const UNREACHABLE_TIMEOUT: Duration = Duration::from_secs(300);
+
 #[test]
 fn process_runner_classifies_spawn_failed() {
-    let result = block_on(run_command(Command::new_with_process_group(
-        "/definitely/missing/spacectl",
-    )));
+    let result = block_on(run_command_with_timeout(
+        Command::new_with_process_group("/definitely/missing/spacectl"),
+        UNREACHABLE_TIMEOUT,
+    ));
     assert_eq!(result, Err(CacheSetupError::SpawnFailed));
 }
 
@@ -601,7 +608,7 @@ fn process_runner_classifies_nonzero_exit() {
     let mut nonzero = Command::new_with_process_group("sh");
     nonzero.args(["-c", "exit 17"]);
     assert_eq!(
-        block_on(run_command(nonzero)),
+        block_on(run_command_with_timeout(nonzero, UNREACHABLE_TIMEOUT)),
         Err(CacheSetupError::NonzeroExit {
             exit_code: Some(17)
         })
