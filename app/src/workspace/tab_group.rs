@@ -3,7 +3,14 @@
 use uuid::Uuid;
 use warpui::elements::DraggableState;
 
+use crate::features::FeatureFlag;
 use crate::tab::SelectedTabColor;
+
+/// Whether the automatic tab grouping mode is available at all. Layered over `GroupedTabs`
+/// because the mode has nothing to put tabs into where groups themselves are unavailable.
+pub fn auto_tab_grouping_available() -> bool {
+    FeatureFlag::GroupedTabs.is_enabled() && FeatureFlag::AutoTabGrouping.is_enabled()
+}
 
 /// Stable identity for a tab group.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

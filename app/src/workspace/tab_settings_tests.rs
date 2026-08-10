@@ -87,6 +87,48 @@ fn hide_title_bar_search_bar_in_vertical_tabs_uses_vertical_tabs_path() {
 }
 
 #[test]
+fn auto_group_tabs_defaults_to_false() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(!*settings.auto_group_tabs);
+        });
+    });
+}
+
+#[test]
+fn auto_group_tabs_round_trips_through_storage() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        TabSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings.auto_group_tabs.set_value(true, ctx).unwrap();
+        });
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(*settings.auto_group_tabs.value());
+        });
+
+        TabSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings.auto_group_tabs.set_value(false, ctx).unwrap();
+        });
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(!*settings.auto_group_tabs.value());
+        });
+    });
+}
+
+#[test]
+fn auto_group_tabs_uses_tabs_path() {
+    assert_eq!(
+        AutoGroupTabs::toml_path(),
+        Some("appearance.tabs.auto_group_tabs")
+    );
+    assert_eq!(AutoGroupTabs::hierarchy(), Some("appearance.tabs"));
+    assert_eq!(AutoGroupTabs::toml_key(), "auto_group_tabs");
+}
+
+#[test]
 fn header_toolbar_chip_selection_default_contains_code_review() {
     let config = HeaderToolbarChipSelection::Default;
     assert!(config.contains_item(&HeaderToolbarItemKind::CodeReview));
