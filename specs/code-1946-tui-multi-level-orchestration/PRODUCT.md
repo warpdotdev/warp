@@ -1,4 +1,4 @@
-# PRODUCT: Multi-Level Orchestration in the Warp TUI (design proposal)
+# PRODUCT: Multi-Level Orchestration in the Warp TUI
 
 Linear: [CODE-1946 — Design proposal: multi-level orchestration UI in the Warp TUI](https://linear.app/warpdotdev/issue/CODE-1946/design-proposal-multi-level-orchestration-ui-in-the-warp-tui)
 Baseline this amends: [specs/code-1822-tui-orchestration-tab-bar/PRODUCT.md](../code-1822-tui-orchestration-tab-bar/PRODUCT.md)
@@ -6,10 +6,11 @@ GUI reference: `app/src/ai/blocklist/agent_view/orchestration_pill_bar.rs`, `app
 Figma: none provided (the mockups below are exact cell-grid frames; the TUI renders to a
 character grid, so text frames are the design medium).
 
-Status: **proposal — not approved.** Nothing here should be built before sign-off on the
-open questions at the bottom. Once approved, a `TECH.md` (with validation and test
-planning) follows in the implementation PR, and the superseded clauses listed at the end
-are folded back into the CODE-1822 baseline spec.
+Status: **approved.** The requester (Daniel Peng) approved the design, including both
+formerly open questions (keyboard scope and group-kill semantics), in the Slack thread
+on 2026-08-10. A `TECH.md` (with validation and test planning) follows in the
+implementation PR, and the superseded clauses listed at the end are folded back into
+the CODE-1822 baseline spec when implementation lands.
 
 ## Summary
 
@@ -147,11 +148,18 @@ list `[child, grandchild]`.)
 
 17. `←` / `→` navigate **within the rendered row**: breadcrumb chips, anchor, then the
     visible level's children, wrapping across the row's ends. At depth 1 (no breadcrumbs)
-    this is byte-for-byte today's behavior. **[Open question 1 — recommended]**
+    this is byte-for-byte today's behavior. **[Approved by the requester, 2026-08-10.]**
 18. `Tab` / `Shift+Tab` keep today's **tree-wide** walk: the root followed by all
     descendants in pill order (the GUI's keyboard-cycling order,
     `adjacent_orchestration_child_conversation_id`). Landing on a conversation at another
     depth re-anchors the bar per rule 2, so `Tab` alone still reaches every agent.
+    Implementation note — rules 17-18 **deliberately split an existing alias pair**. On
+    master, `←`/`→` and `Tab`/`Shift+Tab` are registered as interchangeable triggers of
+    the same two actions, `tui:orchestration_tabs:previous`/`:next`
+    (`orchestration_tab_bar.rs:60-109`). Under this spec they become two distinct action
+    pairs: a row-scoped previous/next (arrows) and a tree-scoped previous/next
+    (Tab/Shift+Tab). Do not re-unify them; the divergence is the decision, not an
+    oversight (decision 5).
 19. `Shift+←` / `Shift+→` select the first / last **child of the current level**.
     Semantics unchanged, scope narrowed from "all descendants" to the visible level.
 20. `↓` leaves the bar to send a message, `Shift+↓` leaves the bar, `Esc` returns to the
@@ -295,9 +303,9 @@ list `[child, grandchild]`.)
 
 ### Key routing and focus priority
 
-This section records how `←`/`→` are routed today, verified on master, because the
-proposal reuses those keys for level navigation (rule 17). The short version: key
-dispatch is focus-scoped, the proposal adds no new keybindings and no new keymap
+This section records how `←`/`→` are routed today, verified on master, because this
+design reuses those keys for level navigation (rule 17). The short version: key
+dispatch is focus-scoped, this design adds no new keybindings and no new keymap
 contexts, and the input box always wins the arrows while it is focused.
 
 51. Dispatch mechanism: a keystroke is offered to the **focused view first, then its
@@ -342,7 +350,7 @@ contexts, and the input box always wins the arrows while it is focused.
     cloud-run child surface, `Enter` opens the run URL and `Shift+↑` focuses the bar
     (`cloud_run_view.rs:68-94`); no arrows. `←` on an **empty, unfocused-bar** agent
     input additionally opens the conversation switcher (`input/view.rs:949-955`) — an
-    input-focused behavior this proposal does not touch.
+    input-focused behavior this spec does not touch.
 55. Focus is always visually disambiguated, so the owner of the arrows is never
     ambiguous: while the bar is focused the selected tab uses the focused magenta
     selection treatment (CODE-1822 clause 7) and the footer switches to the bar's
@@ -394,7 +402,7 @@ Two breadcrumb chips — root then parent — never more (rule 7):
 ### Tree-wide `Tab` landing on a grandchild
 
 The bar re-anchors so the user sees the grandchild among its siblings, not a flat list.
-This is the moment today's flat row is worst and the proposal earns the most:
+This is the moment today's flat row is worst and the design earns the most:
 
 ```
 before Tab (selection = orchestrator, anchor = root)
@@ -497,11 +505,15 @@ Each decision states the chosen option and the rejected alternatives with the re
    pixel-identical to today. Rejected: aggregated status in the leading glyph — overloads
    one cell with two meanings and makes a group child's glyph inconsistent with its
    sort position (rule 16).
-5. **`Tab` stays tree-wide while `←`/`→` become level-scoped.** Chosen (pending open
-   question 1): preserves total reachability and existing muscle memory while giving
-   levels cheap local navigation. Rejected: all keys tree-wide — skipping a finished
-   subtree of N nodes costs N presses. Rejected: all keys level-scoped — strands
-   reachability behind repeated drill-ins and breaks today's `Tab` behavior.
+5. **`Tab` stays tree-wide while `←`/`→` become level-scoped.** Chosen, and **approved
+   by the requester (2026-08-10)**: preserves total reachability and existing muscle
+   memory while giving levels cheap local navigation, and rules 51-56 establish it
+   conflicts with no existing keybinding and never contends with the input box. This
+   splits today's alias pair — both key sets currently trigger the same
+   `tui:orchestration_tabs:previous`/`:next` actions — into two distinct action pairs
+   (see the implementation note under rule 18). Rejected: all keys tree-wide — skipping
+   a finished subtree of N nodes costs N presses. Rejected: all keys level-scoped —
+   strands reachability behind repeated drill-ins and breaks today's `Tab` behavior.
 6. **Subtree kill on `Ctrl+C` for group children.** Chosen, and **approved by the
    requester (2026-08-10)**: the alternative — GUI-parity single-node kill — orphans
    grandchild sessions that the TUI can then never display or reclaim. Rejected: an
@@ -526,7 +538,8 @@ Each decision states the chosen option and the rejected alternatives with the re
 
 ## Assumptions
 
-Recorded choices made without a requester answer; each is cheap to reverse at review.
+Recorded choices made without an explicit requester answer; all five stood unchallenged
+through spec approval on 2026-08-10.
 
 1. Gating on `FeatureFlag::MultiLevelOrchestration`, identical to the GUI surfaces.
 2. The two depth-1 additive cues (anchor status glyph, `▸N` badge) are acceptable visual
@@ -538,16 +551,6 @@ Recorded choices made without a requester answer; each is cheap to reverse at re
 5. Message-header depth prefixes (rule 31) are in the first cut; they are cheap and are
    the only depth signal for remote subtrees until QUALITY-1544 lands. Drop to a
    follow-up if implementation needs to shed scope.
-
-## Open questions
-
-1. **Keyboard scope** (rule 17 / decision 5): `←`/`→` level-scoped with `Tab` tree-wide
-   (recommended), or all navigation keys tree-wide as today? Rules 51-56 establish that
-   the level-scoped option conflicts with no existing keybinding and never contends
-   with the input box.
-
-Resolved: group kill semantics (formerly open question 2) — approved as recommended by
-the requester on 2026-08-10; see rule 24 and decision 6.
 
 ## Baseline amendments (CODE-1822 PRODUCT.md)
 
