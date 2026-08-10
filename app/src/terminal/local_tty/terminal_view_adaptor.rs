@@ -964,6 +964,7 @@ impl TerminalManager<TerminalView> {
                 });
 
                 terminal_view.update(ctx, |view, ctx| {
+                    view.notify_shared_session_link_changed(ctx);
                     let reason_string = failed_to_initialize_session_user_error(reason);
 
                     if matches!(

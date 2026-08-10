@@ -615,6 +615,7 @@ impl TerminalView {
         self.model
             .lock()
             .set_shared_session_status(SharedSessionStatus::SharePending);
+        self.notify_shared_session_link_changed(ctx);
         log::info!("Emitting request to start sharing current session");
 
         ctx.emit(Event::StartSharingCurrentSession {
@@ -633,6 +634,12 @@ impl TerminalView {
                 ctx
             );
         }
+    }
+
+    pub(crate) fn notify_shared_session_link_changed(&mut self, ctx: &mut ViewContext<Self>) {
+        self.pane_configuration.update(ctx, |pane_config, ctx| {
+            pane_config.notify_shared_session_link_changed(ctx);
+        });
     }
 
     /// Sets the PresenceManager and decorates the view accordingly when a shared session has been started.
@@ -1469,10 +1476,10 @@ impl TerminalView {
     ) {
         #[cfg(target_family = "wasm")]
         {
+            let shared_session_status = self.model.lock().shared_session_status().clone();
             let manager = Manager::as_ref(ctx);
-            let Some(session_id) = manager
-                .session_id(&ctx.view_id())
-                .or_else(|| manager.ended_session_id(&ctx.view_id()))
+            let Some(session_id) =
+                manager.session_id_for_link(&ctx.view_id(), &shared_session_status)
             else {
                 return;
             };
@@ -1584,11 +1591,10 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         let view_id = ctx.view_id();
+        let shared_session_status = self.model.lock().shared_session_status().clone();
         let session_id_opt = {
             let manager = Manager::as_ref(ctx);
-            manager
-                .session_id(&view_id)
-                .or_else(|| manager.ended_session_id(&view_id))
+            manager.session_id_for_link(&view_id, &shared_session_status)
         };
         let Some(session_id) = session_id_opt else {
             let window_id = ctx.window_id();

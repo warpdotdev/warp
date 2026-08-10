@@ -16852,7 +16852,8 @@ impl TerminalView {
                             .block_at(tail_block_index)
                             .is_none_or(|b| b.is_restored());
 
-                    let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+                    let has_session_link = Manager::as_ref(ctx)
+                        .has_session_link(&ctx.view_id(), model.shared_session_status());
                     items.extend(self.session_sharing_context_menu_items(
                         &model,
                         is_share_session_disabled,
@@ -17065,7 +17066,8 @@ impl TerminalView {
                 if FeatureFlag::CreatingSharedSessions.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled()
                 {
-                    let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+                    let has_session_link = Manager::as_ref(ctx)
+                        .has_session_link(&ctx.view_id(), model.shared_session_status());
                     items.extend(self.session_sharing_context_menu_items(
                         &model,
                         false,
@@ -17541,7 +17543,8 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+            let has_session_link = Manager::as_ref(ctx)
+                .has_session_link(&ctx.view_id(), model.shared_session_status());
             items.extend(self.session_sharing_context_menu_items(&model, false, has_session_link));
         }
 
@@ -17780,7 +17783,8 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+            let has_session_link = Manager::as_ref(ctx)
+                .has_session_link(&ctx.view_id(), model.shared_session_status());
             menu_items.extend(self.session_sharing_context_menu_items(
                 &model,
                 false,

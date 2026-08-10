@@ -7,7 +7,7 @@ use warpui::{
     WindowId,
 };
 
-use super::SharedSessionActionSource;
+use super::{SharedSessionActionSource, SharedSessionStatus};
 use crate::terminal::TerminalView;
 
 struct SharedSessionState {
@@ -61,11 +61,35 @@ impl Manager {
         self.ended_session_ids.get(terminal_view_id).copied()
     }
 
-    /// Returns true iff the Manager has a session id (active or ended) for the given terminal
-    /// view. When false, copy-link actions should be disabled rather than silently no-op.
-    pub fn has_session_link(&self, terminal_view_id: &EntityId) -> bool {
-        self.session_id(terminal_view_id).is_some()
-            || self.ended_session_id(terminal_view_id).is_some()
+    /// Returns the session id that may currently be exposed as a link for the given terminal view.
+    /// Active session ids always take precedence. Ended ids are eligible only after the terminal
+    /// has actually left its active or pending sharing state.
+    pub fn session_id_for_link(
+        &self,
+        terminal_view_id: &EntityId,
+        shared_session_status: &SharedSessionStatus,
+    ) -> Option<SessionId> {
+        self.session_id(terminal_view_id)
+            .or_else(|| match shared_session_status {
+                SharedSessionStatus::NotShared | SharedSessionStatus::FinishedViewer => {
+                    self.ended_session_id(terminal_view_id)
+                }
+                SharedSessionStatus::ViewPending
+                | SharedSessionStatus::ActiveViewer { .. }
+                | SharedSessionStatus::SharePendingPreBootstrap { .. }
+                | SharedSessionStatus::SharePending
+                | SharedSessionStatus::ActiveSharer => None,
+            })
+    }
+
+    /// Returns true iff the Manager has a session id that may currently be exposed as a link.
+    pub fn has_session_link(
+        &self,
+        terminal_view_id: &EntityId,
+        shared_session_status: &SharedSessionStatus,
+    ) -> bool {
+        self.session_id_for_link(terminal_view_id, shared_session_status)
+            .is_some()
     }
 
     /// Returns the view handle to the shared terminal view, identified by `terminal_view_id`, if it's being shared.
