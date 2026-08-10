@@ -883,6 +883,12 @@ pub enum FeatureFlag {
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
 
+    /// Gates the automatic tab grouping mode, which keeps every tab in a tab
+    /// group named after the project it is in. Layered over `GroupedTabs`
+    /// rather than folded into it: manual groups already shipped to stable, and
+    /// automation is unproven.
+    AutoTabGrouping,
+
     /// Gates the Pinned Tabs feature, which lets users pin individual tabs
     /// and whole tab groups so they stay at the front of the tab list and
     /// are protected from reordering.
@@ -1050,6 +1056,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PricingTransparency,
     FeatureFlag::PeriodicHandoffCheckpoints,
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
+    FeatureFlag::AutoTabGrouping,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

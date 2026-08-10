@@ -3872,6 +3872,9 @@ impl Workspace {
                 self.sync_panel_positions_from_config(ctx);
                 ctx.notify();
             }
+            TabSettingsChangedEvent::AutoGroupTabs { .. } => {
+                ctx.notify();
+            }
         }
     }
 
@@ -23230,6 +23233,9 @@ impl Workspace {
         }
         if *tab_settings.preserve_active_tab_color.value() {
             context.set.insert(flags::PRESERVE_ACTIVE_TAB_COLOR_FLAG);
+        }
+        if *tab_settings.auto_group_tabs.value() {
+            context.set.insert(flags::AUTO_GROUP_TABS_FLAG);
         }
         if *tab_settings
             .show_vertical_tab_panel_in_restored_windows

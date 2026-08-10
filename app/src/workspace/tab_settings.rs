@@ -497,6 +497,16 @@ define_settings_group!(TabSettings, settings: [
         toml_path: "appearance.tabs.preserve_active_tab_color",
         description: "Whether to preserve the active tab's color when switching tabs.",
     },
+    auto_group_tabs: AutoGroupTabs {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.tabs.auto_group_tabs",
+        description: "Whether to automatically keep every tab in a group named after the project it is in.",
+    },
     use_vertical_tabs: UseVerticalTabs {
         type: bool,
         default: false,
