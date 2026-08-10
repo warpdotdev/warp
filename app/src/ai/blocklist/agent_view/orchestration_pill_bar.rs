@@ -2006,7 +2006,8 @@ fn render_pin_button(
     // selected chip — which, since the bar anchors on the parent of whatever
     // leaf you are viewing, is the common case rather than an edge case.
     let hover_background = coloru_with_opacity(icon_color, PIN_BUTTON_HOVER_OPACITY);
-    let glyph_ink_height = avatar_letter_ink_height(PILL_AVATAR_DISC_SIZE, appearance, app);
+    let glyph_ink_height =
+        avatar_letter_ink_height(PILL_AVATAR_DISC_SIZE, appearance, app) + PIN_GLYPH_INK_BOOST;
     let button = Hoverable::new(mouse_state, move |hover_state| {
         let mut circle = Container::new(render_pin_glyph(is_pinned, icon_color, glyph_ink_height))
             .with_uniform_padding((PILL_AVATAR_DISC_SIZE - glyph_ink_height) / 2.)
@@ -2395,6 +2396,12 @@ fn render_overflow_button(
     SavePosition::new(button, &overflow_button_position_id(conversation_id)).finish()
 }
 
+/// How much taller the pin glyph is than the avatar letter's ink. Matching the
+/// two exactly made the pin read *smaller* than the letter it replaces: a
+/// thin, busy outline carries less visual weight than a solid letterform at
+/// the same height. This is the knob to nudge if it still reads wrong.
+const PIN_GLYPH_INK_BOOST: f32 = 4.;
+
 /// Opacity of the pin button's hover tint, over the pill's contrasting colour.
 /// A little stronger than the 5% `fg_overlay_1` used to apply, because that
 /// colour is nearer the pill's own background than the contrasting one is.
@@ -2528,6 +2535,27 @@ fn render_avatar_with_status_overlay(
     render_avatar_slot(lockup)
 }
 
+/// Whole-pixel lift applied to the avatar letter's baseline.
+///
+/// Centering the ink arithmetically still paints it low, measured at 0.93px on
+/// a 15px disc across H, O and S. Three mechanisms were tested against the
+/// pixels and all three predicted the wrong direction or magnitude:
+/// antialiasing fringe (disproved -- the coverage profile has hard zeros
+/// either side of the ink), rasterisation at the line height rather than the
+/// font size, and centering on the layout rect where the disc paints on a
+/// snapped one. What is left behaves like a rounding step in the glyph
+/// rasteriser's vertical placement, which is an absolute pixel effect rather
+/// than a proportional one -- so this is expressed in pixels deliberately, and
+/// a whole one so the baseline's fractional part is unchanged.
+///
+/// PROVISIONAL. This halves the error rather than removing it: measured on a
+/// 15px disc, `H` went from 0.93px low to 0.47px low. It is also not a clean
+/// translation -- a 1px baseline change moved the centroid 0.46px and took a
+/// row off the bottom of the raster instead of shifting the whole glyph, so
+/// the response is not linear and this value should not be trusted at other
+/// disc sizes until it has been calibrated at two of them.
+const AVATAR_GLYPH_RASTER_LIFT: f32 = 1.;
+
 /// Baseline placement that centers an avatar letter's *ink* on its disc.
 ///
 /// Two separate things push the letter off center by default, and this fixes
@@ -2574,7 +2602,7 @@ fn center_glyph_ink_baseline_position_fn(
         // at every avatar size rather than being tuned to one.
         let ink_height = ink.max_y() - ink.min_y();
         let ink_top = ((disc_size - ink_height) / 2.).round();
-        ink_top + ink.max_y()
+        ink_top + ink.max_y() - AVATAR_GLYPH_RASTER_LIFT
     })
 }
 
