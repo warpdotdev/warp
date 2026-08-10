@@ -19,8 +19,8 @@ use super::config::{QuakeModeWindow, ThemeType};
 use crate::settings::import::config::{Config, ParsedTerminalSetting, SettingType};
 use crate::settings::import::model::{ImportedConfigModel, TerminalTypeAndProfile};
 use crate::settings::{
-    AppEditorSettings, CursorBlink, FontSettings, GlobalHotkeyMode, SelectionSettings,
-    ThemeSettings,
+    AppEditorSettings, CursorBlink, FontSettings, GlobalHotkeyMode, QuakeModeScreen,
+    SelectionSettings, ThemeSettings,
 };
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::keys_settings::KeysSettings;
@@ -850,7 +850,10 @@ impl SettingsImportView {
             .set_global_hotkey_mode_and_write_to_user_defaults(&GlobalHotkeyMode::QuakeMode, ctx);
         keys_settings
             .set_quake_mode_pin_position_and_write_to_user_defaults(window.pin_position, ctx);
-        keys_settings.set_quake_mode_pin_screen_and_write_to_user_defaults(window.screen, ctx);
+        keys_settings.set_quake_mode_pin_screen_and_write_to_user_defaults(
+            window.screen.map(QuakeModeScreen::Display),
+            ctx,
+        );
         keys_settings.set_hide_quake_mode_window_when_unfocused_and_write_to_user_defaults(
             window.autohide,
             ctx,

@@ -168,6 +168,12 @@ impl WindowManager {
         self.platform.bounds_for_display_idx(idx)
     }
 
+    // Get the rect of the screen containing the mouse cursor, if the platform
+    // can determine it.
+    pub fn display_bounds_containing_mouse(&self) -> Option<RectF> {
+        self.platform.display_bounds_containing_mouse()
+    }
+
     pub fn display_count(&self) -> usize {
         self.platform.display_count()
     }

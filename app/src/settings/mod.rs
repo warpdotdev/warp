@@ -331,6 +331,53 @@ impl Mul<Vector2F> for SizePercentages {
     }
 }
 
+/// Which screen the hotkey window opens on.
+///
+/// Serialization is backward compatible with the previous `Option<DisplayIdx>`
+/// representation of `pin_screen`: `Display` is untagged, so existing values
+/// like `"primary"` or `{ external = 0 }` keep deserializing as before, while
+/// the new mouse-follow mode serializes as `"mouse"`.
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[schemars(description = "Which screen the hotkey window opens on.")]
+pub enum QuakeModeScreen {
+    /// The screen containing the mouse cursor at the time the window is shown.
+    #[serde(rename = "mouse")]
+    #[schemars(
+        rename = "mouse",
+        description = "The screen containing the mouse cursor."
+    )]
+    Mouse,
+    /// A fixed display.
+    #[serde(untagged)]
+    #[schemars(description = "A fixed display.")]
+    Display(DisplayIdx),
+}
+
+impl std::fmt::Display for QuakeModeScreen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Mouse => write!(f, "Screen with Mouse"),
+            Self::Display(idx) => write!(f, "{idx}"),
+        }
+    }
+}
+
+impl settings_value::SettingsValue for QuakeModeScreen {
+    fn to_file_value(&self) -> serde_json::Value {
+        match self {
+            Self::Mouse => serde_json::Value::String("mouse".to_string()),
+            Self::Display(idx) => idx.to_file_value(),
+        }
+    }
+
+    fn from_file_value(value: &serde_json::Value) -> Option<Self> {
+        if value.as_str() == Some("mouse") {
+            return Some(Self::Mouse);
+        }
+        DisplayIdx::from_file_value(value).map(Self::Display)
+    }
+}
+
 #[derive(
     Clone,
     Debug,
@@ -350,8 +397,10 @@ pub struct QuakeModeSettings {
     pub active_pin_position: QuakeModePinPosition,
     #[schemars(description = "Window size percentages for each pin position.")]
     pub pin_position_to_size_percentages: HashMap<QuakeModePinPosition, SizePercentages>,
-    #[schemars(description = "Display to pin the hotkey window to.")]
-    pub pin_screen: Option<DisplayIdx>,
+    #[schemars(
+        description = "Screen the hotkey window opens on: \"mouse\" for the screen containing the mouse cursor, or a fixed display. Defaults to the screen with the active window."
+    )]
+    pub pin_screen: Option<QuakeModeScreen>,
     /// Whether we should hide quake mode window when it loses focus, this could happen either when
     /// user focuses on another warp window or another app.
     #[schemars(description = "Whether to hide the hotkey window when it loses focus.")]
@@ -406,10 +455,14 @@ impl QuakeModeSettings {
     /// Resolves the display bounds for quake mode (respecting the pinned screen setting)
     /// and calculates the window bounds.
     pub fn resolve_quake_mode_bounds(&self, ctx: &mut AppContext) -> RectF {
-        let display_bounds = self
-            .pin_screen
-            .and_then(|display_idx| ctx.windows().bounds_for_display_idx(display_idx))
-            .unwrap_or_else(|| ctx.windows().active_display_bounds());
+        let display_bounds = match self.pin_screen {
+            Some(QuakeModeScreen::Mouse) => ctx.windows().display_bounds_containing_mouse(),
+            Some(QuakeModeScreen::Display(display_idx)) => {
+                ctx.windows().bounds_for_display_idx(display_idx)
+            }
+            None => None,
+        }
+        .unwrap_or_else(|| ctx.windows().active_display_bounds());
         self.calculate_quake_mode_bounds_from_settings(display_bounds)
     }
 
@@ -614,4 +667,72 @@ pub fn user_preferences_toml_file_path() -> PathBuf {
         settings::SettingsMode::Tui => warp_core::paths::tui_config_local_dir(),
     };
     config_dir.join("settings.toml")
+}
+
+#[cfg(test)]
+mod quake_mode_screen_tests {
+    use settings_value::SettingsValue as _;
+
+    use super::*;
+
+    /// Values stored before `QuakeModeScreen` existed (serde format of
+    /// `Option<DisplayIdx>`, used by UserDefaults and cloud sync) must keep
+    /// deserializing unchanged.
+    #[test]
+    fn serde_format_is_backward_compatible_with_display_idx() {
+        let primary: QuakeModeScreen =
+            serde_json::from_value(serde_json::json!("Primary")).unwrap();
+        assert_eq!(primary, QuakeModeScreen::Display(DisplayIdx::Primary));
+
+        let external: QuakeModeScreen =
+            serde_json::from_value(serde_json::json!({"External": 1})).unwrap();
+        assert_eq!(external, QuakeModeScreen::Display(DisplayIdx::External(1)));
+
+        // The `Display` variant is untagged, so it serializes exactly like the
+        // wrapped `DisplayIdx` used to.
+        assert_eq!(
+            serde_json::to_value(QuakeModeScreen::Display(DisplayIdx::Primary)).unwrap(),
+            serde_json::to_value(DisplayIdx::Primary).unwrap()
+        );
+    }
+
+    #[test]
+    fn serde_round_trips_mouse() {
+        let value = serde_json::to_value(QuakeModeScreen::Mouse).unwrap();
+        assert_eq!(value, serde_json::json!("mouse"));
+        let parsed: QuakeModeScreen = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed, QuakeModeScreen::Mouse);
+    }
+
+    /// Values written to `settings.toml` before `QuakeModeScreen` existed
+    /// (`SettingsValue` file format of `Option<DisplayIdx>`) must keep
+    /// deserializing unchanged.
+    #[test]
+    fn file_format_is_backward_compatible_with_display_idx() {
+        assert_eq!(
+            QuakeModeScreen::from_file_value(&DisplayIdx::Primary.to_file_value()),
+            Some(QuakeModeScreen::Display(DisplayIdx::Primary))
+        );
+        assert_eq!(
+            QuakeModeScreen::from_file_value(&DisplayIdx::External(0).to_file_value()),
+            Some(QuakeModeScreen::Display(DisplayIdx::External(0)))
+        );
+
+        // The `Display` variant writes exactly what the wrapped `DisplayIdx`
+        // used to.
+        assert_eq!(
+            QuakeModeScreen::Display(DisplayIdx::External(2)).to_file_value(),
+            DisplayIdx::External(2).to_file_value()
+        );
+    }
+
+    #[test]
+    fn file_format_round_trips_mouse() {
+        let value = QuakeModeScreen::Mouse.to_file_value();
+        assert_eq!(value, serde_json::Value::String("mouse".to_string()));
+        assert_eq!(
+            QuakeModeScreen::from_file_value(&value),
+            Some(QuakeModeScreen::Mouse)
+        );
+    }
 }

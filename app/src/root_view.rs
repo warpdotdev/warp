@@ -86,8 +86,8 @@ use crate::settings::cloud_preferences_syncer::{
     CloudPreferencesSyncer, CloudPreferencesSyncerEvent,
 };
 use crate::settings::{
-    AISettings, QuakeModeSettings, ThemeSettings, apply_account_first_onboarding_settings,
-    apply_onboarding_settings,
+    AISettings, QuakeModeScreen, QuakeModeSettings, ThemeSettings,
+    apply_account_first_onboarding_settings, apply_onboarding_settings,
 };
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::settings_view::{OpenTeamsSettingsModalArgs, SettingsSection, flags};
@@ -1417,9 +1417,12 @@ fn fit_quake_mode_window_within_active_screen(
         let active_id = ctx.windows().active_display_id();
 
         // When there is no screen config and active screen id change, we don't need to reposition
-        // the quake mode window as its position should still be valid.
+        // the quake mode window as its position should still be valid. This shortcut doesn't
+        // apply when the window follows the mouse: the mouse can move to another screen without
+        // the active display changing.
         if matches!(trigger, QuakeModeMoveTrigger::ActiveScreenSetting)
             && active_id == state.active_display_id
+            && !matches!(settings.pin_screen, Some(QuakeModeScreen::Mouse))
         {
             return;
         }
@@ -1533,12 +1536,12 @@ fn toggle_quake_mode_window(global_resource_handles: &GlobalResourceHandles, ctx
         Some(state) if matches!(state.window_state, WindowState::Hidden) => {
             send_telemetry_from_app_ctx!(TelemetryEvent::OpenQuakeModeWindow, ctx);
 
-            // If quake mode does not have a set pin screen -- move it to the current active screen.
-            if KeysSettings::as_ref(ctx)
-                .quake_mode_settings
-                .pin_screen
-                .is_none()
-            {
+            // If quake mode does not have a fixed pin screen -- move it to the current active
+            // screen (or the screen with the mouse, when configured to follow the mouse).
+            if !matches!(
+                KeysSettings::as_ref(ctx).quake_mode_settings.pin_screen,
+                Some(QuakeModeScreen::Display(_))
+            ) {
                 fit_quake_mode_window_within_active_screen(
                     &KeysSettings::as_ref(ctx)
                         .quake_mode_settings

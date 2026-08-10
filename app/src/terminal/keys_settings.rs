@@ -2,12 +2,12 @@ use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
 use warp_errors::{report_error, report_if_error};
 use warpui::keymap::Keystroke;
-use warpui::{AppContext, DisplayIdx, ModelContext};
+use warpui::{AppContext, ModelContext};
 
 use crate::root_view::{QuakeModePinPosition, update_quake_window_bounds};
 use crate::settings::{
     CtrlTabBehavior, DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES, ExtraMetaKeys as ExtraMetaKeysEnum,
-    GlobalHotkeyMode, SizePercentages,
+    GlobalHotkeyMode, QuakeModeScreen, SizePercentages,
 };
 
 define_settings_group!(KeysSettings, settings: [
@@ -118,7 +118,7 @@ impl KeysSettings {
 
     pub fn set_quake_mode_pin_screen_and_write_to_user_defaults(
         &mut self,
-        pin_screen: Option<DisplayIdx>,
+        pin_screen: Option<QuakeModeScreen>,
         ctx: &mut ModelContext<Self>,
     ) {
         let mut quake_mode_settings = self.quake_mode_settings.value().clone();

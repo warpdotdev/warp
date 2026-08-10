@@ -15,7 +15,9 @@ use objc::runtime::Object;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyObject, Bool, ProtocolObject};
 use objc2::{MainThreadMarker, msg_send};
-use objc2_app_kit::{NSApplication, NSScreen, NSView, NSWindow, NSWindowButton, NSWindowStyleMask};
+use objc2_app_kit::{
+    NSApplication, NSEvent, NSScreen, NSView, NSWindow, NSWindowButton, NSWindowStyleMask,
+};
 use objc2_foundation::{
     NSArray, NSInteger, NSPoint, NSRange, NSRect, NSSize, NSString, NSUInteger,
 };
@@ -204,6 +206,34 @@ impl platform::WindowManager for WindowManager {
             transform_origin_from_frame_coord_to_rect_coord(point, size),
             size,
         ))
+    }
+
+    fn display_bounds_containing_mouse(&self) -> Option<RectF> {
+        // SAFETY: `WindowManager` methods run on the main thread.
+        let mtm = unsafe { MainThreadMarker::new_unchecked() };
+        let mouse_location = NSEvent::mouseLocation();
+        let screens = NSScreen::screens(mtm);
+
+        // `NSEvent::mouseLocation` and `NSScreen::frame` share AppKit's global
+        // bottom-left-origin coordinate space. Match `NSMouseInRect`'s
+        // convention for points on shared edges: min-inclusive on x,
+        // max-inclusive on y.
+        screens.iter().find_map(|screen| {
+            let rect = screen.frame();
+            let contains = mouse_location.x >= rect.origin.x
+                && mouse_location.x < rect.origin.x + rect.size.width
+                && mouse_location.y > rect.origin.y
+                && mouse_location.y <= rect.origin.y + rect.size.height;
+
+            contains.then(|| {
+                let point = Vector2F::new(rect.origin.x as f32, rect.origin.y as f32);
+                let size = Vector2F::new(rect.size.width as f32, rect.size.height as f32);
+                RectF::new(
+                    transform_origin_from_frame_coord_to_rect_coord(point, size),
+                    size,
+                )
+            })
+        })
     }
 
     fn active_cursor_position_updated(&self) {
