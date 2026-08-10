@@ -26,10 +26,11 @@ use warpui::elements::{
     PositionedElementOffsetBounds, PositioningAxis, Radius, SavePosition, ScrollbarWidth, Stack,
     Text, XAxisAnchor, YAxisAnchor,
 };
-use warpui::fonts::{Properties, Weight};
+use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::platform::{Cursor, LineStyle};
 use warpui::text_layout::{
-    ClipConfig, ClipDirection, ClipStyle, DEFAULT_TOP_BOTTOM_RATIO, StyleAndFont, TextStyle,
+    ClipConfig, ClipDirection, ClipStyle, ComputeBaselinePositionFn, DEFAULT_TOP_BOTTOM_RATIO,
+    StyleAndFont, TextStyle,
 };
 use warpui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
@@ -2468,6 +2469,47 @@ fn render_avatar_with_status_overlay(
     render_avatar_slot(lockup)
 }
 
+/// Baseline placement that centers an avatar letter's *ink* on its disc.
+///
+/// Two separate things push the letter off center by default, and this fixes
+/// both at once by choosing the baseline outright:
+/// * A line box spans ascent + descent, but a capital only occupies
+///   baseline-to-cap-height, so centering the box still leaves the ink high.
+/// * The glyph is painted at the *top* of the `disc_size`-square box
+///   [`render_avatar_disc`] wraps it in rather than centered in it. Measured
+///   off real frames: with the default baseline the ink sat 2px above center
+///   on a 15px disc. The returned baseline is therefore measured from the
+///   disc's top edge, not from the middle of the line box.
+///
+/// Everything here is derived from the font's own metrics at the size actually
+/// being drawn, so the 15px chip avatar, the 16px hover-card avatar and the
+/// 1.25x transcript avatar all land correctly without a per-size nudge.
+fn center_glyph_ink_baseline_position_fn(
+    letter: char,
+    family_id: FamilyId,
+    properties: Properties,
+    disc_size: f32,
+) -> ComputeBaselinePositionFn {
+    Box::new(move |args| {
+        let font_id = args.font_cache.select_font(family_id, properties);
+        // Typographic bounds are y-up from the baseline, so the vertical
+        // midpoint is how far the ink's center sits above it. When a glyph has
+        // no bounds — a blank, or a stub font in tests — this falls back to
+        // zero, which just puts the baseline on the disc's center line.
+        let ink_center_above_baseline = args
+            .font_cache
+            .glyph_for_char(font_id, letter, false)
+            .and_then(|(glyph_id, glyph_font_id)| {
+                args.font_cache
+                    .glyph_typographic_bounds(glyph_font_id, args.font_size, glyph_id)
+                    .ok()
+            })
+            .map(|ink| (ink.min_y() + ink.max_y()) / 2.)
+            .unwrap_or_default();
+        disc_size / 2. + ink_center_above_baseline
+    })
+}
+
 /// Renders the avatar circle as a colored disc with a centered glyph (letter
 /// or icon) on top. Uses `Stack` so the disc is a clean rounded square that
 /// composites cleanly over the pill's own background without visual seams.
@@ -2491,12 +2533,17 @@ fn render_avatar_disc(
 
     let glyph_element: Box<dyn Element> = match glyph {
         AvatarGlyph::Letter(letter) => {
-            Text::new(letter.to_string(), appearance.ui_font_family(), glyph_size)
+            let family_id = appearance.ui_font_family();
+            let properties = Properties {
+                weight: Weight::Bold,
+                ..Default::default()
+            };
+            Text::new(letter.to_string(), family_id, glyph_size)
                 .with_color(theme.background().into_solid())
-                .with_style(Properties {
-                    weight: Weight::Bold,
-                    ..Default::default()
-                })
+                .with_style(properties)
+                .with_compute_baseline_position_fn(center_glyph_ink_baseline_position_fn(
+                    letter, family_id, properties, size,
+                ))
                 .finish()
         }
         AvatarGlyph::Icon(icon) => {
@@ -2507,9 +2554,10 @@ fn render_avatar_disc(
         }
     };
 
-    // Center the glyph on top of the disc both horizontally and vertically by
-    // using `MainAxisAlignment::Center` (along axis) and
-    // `CrossAxisAlignment::Center` (perpendicular) on both Flex containers.
+    // Horizontal centering only. The nested `Flex` centers the glyph across
+    // the disc, but does not move it vertically — letters are positioned by
+    // `center_glyph_ink_baseline_position_fn` instead, and the icon variant is
+    // already square and centered.
     let glyph_centered = ConstrainedBox::new(
         Flex::column()
             .with_main_axis_size(MainAxisSize::Max)
