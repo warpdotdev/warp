@@ -6,6 +6,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use parking_lot::FairMutex;
+#[cfg(test)]
+use warp::tui_export::AIBlockModel;
 use warp::tui_export::{
     AIAgentActionId, AIAgentExchangeId, AIBlockModelImpl, AIConversationId, BlockHeightItem,
     BlockIndex, BlockPadding, BlockSpacing, BlocklistAIActionModel, BlocklistAIHistoryEvent,
@@ -27,7 +29,8 @@ use super::handoff::{TuiHandoffBlock, TuiHandoffBlockEvent};
 use super::terminal_block::{block_content_rows, should_render_terminal_block};
 use super::terminal_session_view::BlockingInputSource;
 use super::tui_block_list_viewport_source::{
-    AgentBlockRegistry, CLISubagentBlockRegistry, HandoffBlockRegistry, TuiBlockListViewportSource,
+    AgentBlockRegistry, CLISubagentBlockRegistry, HandoffBlockRegistry, TranscriptNoticeRegistry,
+    TuiBlockListViewportSource, TuiTranscriptNotice,
 };
 use super::tui_builder::TuiUiBuilder;
 use super::tui_cli_subagent_view::{TuiCLISubagentView, TuiCLISubagentViewEvent};
@@ -85,6 +88,7 @@ pub(super) struct TuiTranscriptView {
     agent_blocks: AgentBlockRegistry,
     cli_subagent_blocks: CLISubagentBlockRegistry,
     handoff_blocks: HandoffBlockRegistry,
+    notices: TranscriptNoticeRegistry,
     viewport: TuiViewportedListState,
     selection: TuiSelectionHandle,
 }
@@ -118,6 +122,20 @@ impl TuiTranscriptView {
         ctx.notify();
     }
 
+    pub(super) fn append_notice(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        let notice_id = EntityId::new();
+        let style = TuiUiBuilder::from_app(ctx).muted_text_style();
+        self.notices
+            .borrow_mut()
+            .insert(notice_id, TuiTranscriptNotice::new(text, style));
+        self.model.lock().block_list_mut().append_rich_content(
+            RichContentItem::new(Some(RichContentType::AIBlock), notice_id, None, false),
+            false,
+        );
+        self.viewport.scroll_to_end();
+        ctx.notify();
+    }
+
     /// Creates a transcript view for one terminal surface.
     pub(super) fn new(
         terminal_surface_id: EntityId,
@@ -139,6 +157,7 @@ impl TuiTranscriptView {
             agent_blocks: Rc::new(RefCell::new(HashMap::new())),
             cli_subagent_blocks: Rc::new(RefCell::new(HashMap::new())),
             handoff_blocks: Rc::new(RefCell::new(HashMap::new())),
+            notices: Rc::new(RefCell::new(HashMap::new())),
             viewport: TuiViewportedListState::new_at_end(),
             selection: TuiSelectionHandle::default(),
         }
@@ -340,6 +359,7 @@ impl TuiTranscriptView {
         if !self.agent_blocks.borrow().is_empty()
             || !self.cli_subagent_blocks.borrow().is_empty()
             || !self.handoff_blocks.borrow().is_empty()
+            || !self.notices.borrow().is_empty()
         {
             return false;
         }
@@ -352,7 +372,7 @@ impl TuiTranscriptView {
         })
     }
 
-    fn agent_blocks_in_canonical_order(&self) -> Vec<ViewHandle<TuiAIBlock>> {
+    pub(super) fn agent_blocks_in_canonical_order(&self) -> Vec<ViewHandle<TuiAIBlock>> {
         let view_ids = {
             let model = self.model.lock();
             model
@@ -448,6 +468,15 @@ impl TuiTranscriptView {
                 ctx,
             )
         });
+        self.attach_agent_block(view, command_block_index, ctx);
+    }
+
+    fn attach_agent_block(
+        &mut self,
+        view: ViewHandle<TuiAIBlock>,
+        command_block_index: Option<BlockIndex>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let view_id = view.id();
         ctx.subscribe_to_view(&view, move |transcript, _, event, ctx| match event {
             TuiAIBlockEvent::LayoutInvalidated => {
@@ -474,6 +503,7 @@ impl TuiTranscriptView {
                 );
             }
         });
+        let has_initial_blocker = view.as_ref(ctx).active_blocking_input_source(ctx).is_some();
         self.agent_blocks.borrow_mut().insert(view_id, view);
         let item = RichContentItem::new(Some(RichContentType::AIBlock), view_id, None, false);
         let mut model = self.model.lock();
@@ -483,7 +513,37 @@ impl TuiTranscriptView {
                 .insert_rich_content_before_block_index(item, command_block_index),
             None => model.block_list_mut().append_rich_content(item, false),
         }
+        drop(model);
+        if has_initial_blocker {
+            ctx.emit(TuiTranscriptViewEvent::BlockingStateChanged);
+        }
         ctx.notify();
+    }
+
+    #[cfg(test)]
+    pub(super) fn append_agent_block_for_test(
+        &mut self,
+        conversation_id: AIConversationId,
+        exchange_id: AIAgentExchangeId,
+        block_model: Rc<dyn AIBlockModel<View = TuiAIBlock>>,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<TuiAIBlock> {
+        let action_model = self.action_model.clone();
+        let model_events = self.model_events.clone();
+        let terminal_model = self.model.clone();
+        let view = ctx.add_typed_action_tui_view(|ctx| {
+            TuiAIBlock::new(
+                (conversation_id, exchange_id),
+                block_model,
+                action_model,
+                &model_events,
+                terminal_model,
+                false,
+                ctx,
+            )
+        });
+        self.attach_agent_block(view.clone(), None, ctx);
+        view
     }
 
     /// Materializes a shared restoration plan as TUI agent-block views.
@@ -686,9 +746,11 @@ impl TuiTranscriptView {
             .collect::<Vec<_>>();
         view_ids.extend(self.cli_subagent_blocks.borrow().keys().copied());
         view_ids.extend(self.handoff_blocks.borrow().keys().copied());
+        view_ids.extend(self.notices.borrow().keys().copied());
         self.agent_blocks.borrow_mut().clear();
         self.cli_subagent_blocks.borrow_mut().clear();
         self.handoff_blocks.borrow_mut().clear();
+        self.notices.borrow_mut().clear();
         self.selection.clear();
         let mut model = self.model.lock();
         for view_id in view_ids {
@@ -725,6 +787,7 @@ impl TuiView for TuiTranscriptView {
             self.agent_blocks.clone(),
             self.cli_subagent_blocks.clone(),
             self.handoff_blocks.clone(),
+            self.notices.clone(),
         );
         let viewport = TuiViewportedList::new(
             self.viewport.clone(),

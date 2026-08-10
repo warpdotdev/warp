@@ -157,9 +157,15 @@ fn new_ffmpeg_capture_command(
         command.args(["-window_id", &format!("0x{window:x}")]);
     }
     command
-        // Composite the X11 cursor. Must come BEFORE -i so ffmpeg
-        // treats it as an x11grab input option, not an output option.
-        .args(["-draw_mouse", "1"])
+        // Do NOT composite the X11 cursor (must come BEFORE -i so ffmpeg
+        // treats it as an x11grab input option, not an output option; it
+        // defaults to 1). XFixes only reports the user's core cursor:
+        // background computer use drives a private MPX agent seat whose
+        // cursor x11grab can never capture, so compositing would show a
+        // frozen, unrelated cursor next to the burned-in click annotations.
+        // The post-stop burn-in synthesizes a cursor from the recorded
+        // pointer events instead, identically for screen and window scopes.
+        .args(["-draw_mouse", "0"])
         // Limit capture wall-clock time as an INPUT option so the duration
         // bound is the real capture wall-clock time. The Linux master is
         // captured at 1x; the smart variable cut runs as a post-stop pass,

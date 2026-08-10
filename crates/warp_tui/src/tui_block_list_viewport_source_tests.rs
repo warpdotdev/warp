@@ -15,8 +15,9 @@ use warp::tui_export::{
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, EntityId, EntityIdMap, ViewHandle};
 use warpui_core::elements::tui::{
-    TuiBufferExt, TuiConstraint, TuiGridPoint, TuiLayoutContext, TuiRect, TuiRowResize,
-    TuiSelectionSpan, TuiSize, TuiViewportContent, TuiViewportWindow, TuiViewportedElement,
+    TuiBufferExt, TuiConstraint, TuiElement, TuiGridPoint, TuiLayoutContext, TuiRect, TuiRowResize,
+    TuiSelectionSpan, TuiSize, TuiText, TuiViewportContent, TuiViewportWindow,
+    TuiViewportedElement,
 };
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, AppContext, TuiView, TypedActionView, ViewContext};
@@ -146,6 +147,37 @@ fn viewport_layout_reports_original_agent_block_resize() {
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].old_rows, 0..99);
         assert_eq!(changes[0].new_height, expected);
+    });
+}
+
+#[test]
+fn viewport_layout_measures_retained_agent_element() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let (source, model, agent_block) = seeded_agent_block_source(&mut app, 0, 99.0);
+
+        let content = app.read(|app| {
+            let mut rendered_views = EntityIdMap::default();
+            rendered_views.insert(
+                agent_block.id(),
+                TuiText::new("one\ntwo\nthree\nfour\nfive").finish(),
+            );
+            let mut ctx = TuiLayoutContext {
+                rendered_views: &mut rendered_views,
+            };
+            source.visible_items(
+                TuiViewportWindow {
+                    scroll_top: 0,
+                    viewport_height: 10,
+                },
+                80,
+                &mut ctx,
+                app,
+            )
+        });
+
+        assert_eq!(content.content_height, 5);
+        assert_eq!(rich_content_height(&model, agent_block.id()), Some(5.0));
     });
 }
 
@@ -363,21 +395,35 @@ fn tui_transcript_scroll_reuses_cached_heights_at_stable_width() {
 }
 
 #[test]
-fn tui_agent_streaming_block_remeasured_at_stable_width() {
+fn tui_agent_streaming_block_reuses_height_until_output_changes() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        // A streaming block's height can grow without a per-update
-        // invalidation, so it must be re-measured at a stable width.
-        let (source, model, agent_block) = streaming_agent_block_source(&mut app);
+        let (source, model, agent_block, block_model) =
+            updating_agent_block_source(&mut app, streaming_markdown_status("Short response"));
 
         request_top_window(&app, &source, 10);
         source.take_selection_row_resizes();
-
-        // Seed a wrong height at the same width without dirtying; the streaming
-        // block is still re-measured, correcting it.
         seed_clean_height(&app, &model, &agent_block, 1234.0, 80);
         request_top_window(&app, &source, 10);
-        assert_ne!(rich_content_height(&model, agent_block.id()), Some(1234.0));
+        assert_eq!(rich_content_height(&model, agent_block.id()), Some(1234.0));
+        assert!(source.take_selection_row_resizes().is_empty());
+
+        block_model.update_status(
+            streaming_markdown_status(
+                "# Expanded response\n\n- first item\n- second item\n- third item\n\n\
+                 ## Details\n\nThis output update must refresh the cached streaming height.",
+            ),
+            &agent_block,
+            &mut app,
+        );
+        let updated = request_top_window(&app, &source, 10);
+
+        assert_ne!(updated.content_height, 1234);
+        assert_eq!(
+            rich_content_height(&model, agent_block.id()),
+            Some(updated.content_height as f64)
+        );
+        assert_eq!(source.take_selection_row_resizes().len(), 1);
     });
 }
 
@@ -422,7 +468,7 @@ fn completed_markdown_output_update_refreshes_cached_scroll_extent() {
 fn tui_transcript_toggle_expands_and_remeasures_block_at_stable_width() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        let (source, _model, agent_block) = reasoning_agent_block_source(&mut app);
+        let (source, _model, agent_block) = streaming_reasoning_agent_block_source(&mut app);
 
         // A finished thinking section renders collapsed (header only).
         assert_eq!(
@@ -441,15 +487,21 @@ fn tui_transcript_toggle_expands_and_remeasures_block_at_stable_width() {
             collapsed
         );
 
-        // Expanding the thinking section must invalidate
-        // the cached height so the next frame re-measures even though the width
-        // is unchanged and the block is not streaming.
+        // Expanding the thinking section must invalidate the cached height so
+        // the next frame re-measures even though the width is unchanged.
         expand_thinking_section(&mut app, &agent_block);
         let expanded = request_top_window(&app, &source, 20).content_height;
         assert!(
             expanded > collapsed,
             "expanding the thinking section must grow the re-measured height ({expanded} vs {collapsed})"
         );
+        assert_eq!(source.take_selection_row_resizes().len(), 1);
+
+        assert_eq!(
+            request_top_window(&app, &source, 20).content_height,
+            expanded
+        );
+        assert!(source.take_selection_row_resizes().is_empty());
 
         // The expanded block renders the reasoning body beneath the header.
         let expanded_lines = render_block_lines(&app, &agent_block, 40);
@@ -627,37 +679,12 @@ fn seeded_agent_block_source(
     Arc<FairMutex<TerminalModel>>,
     ViewHandle<TuiAIBlock>,
 ) {
-    seeded_agent_block_source_impl(app, preceding_rows, stale_height, false)
-}
-
-/// Like [`seeded_agent_block_source`] but the registered agent block is still
-/// streaming, so its height can grow without a per-update invalidation.
-fn streaming_agent_block_source(
-    app: &mut App,
-) -> (
-    TuiBlockListViewportSource,
-    Arc<FairMutex<TerminalModel>>,
-    ViewHandle<TuiAIBlock>,
-) {
-    seeded_agent_block_source_impl(app, 0, 99.0, true)
-}
-
-fn seeded_agent_block_source_impl(
-    app: &mut App,
-    preceding_rows: usize,
-    stale_height: f64,
-    streaming: bool,
-) -> (
-    TuiBlockListViewportSource,
-    Arc<FairMutex<TerminalModel>>,
-    ViewHandle<TuiAIBlock>,
-) {
     let mut model = TerminalModel::mock(None, None);
     if preceding_rows > 0 {
         model.simulate_block("printf", &"x\r\n".repeat(preceding_rows));
     }
     let terminal_model = Arc::new(FairMutex::new(model));
-    let agent_block = add_agent_block(app, "hello world from rust", streaming);
+    let agent_block = add_agent_block(app, "hello world from rust");
     let view_id = agent_block.id();
     {
         let mut model = terminal_model.lock();
@@ -714,8 +741,8 @@ fn request_top_window_at_width(
 }
 
 /// Seeds a rich-content height at `width` without marking it dirty, so a later
-/// stable-width frame re-measures it only if the width-gating logic decides to
-/// (e.g. because the block is streaming).
+/// stable-width frame retains it unless another invalidation requires
+/// remeasurement.
 fn seed_clean_height(
     app: &App,
     model: &Arc<FairMutex<TerminalModel>>,
@@ -735,8 +762,8 @@ fn seed_clean_height(
     app.read(|app| agent_block.as_ref(app).record_height_measurement(width));
 }
 
-/// Builds a source over one finished agent block with a collapsible thought.
-fn reasoning_agent_block_source(
+/// Builds a source over one streaming agent block with a finished, collapsible thought.
+fn streaming_reasoning_agent_block_source(
     app: &mut App,
 ) -> (
     TuiBlockListViewportSource,
@@ -747,7 +774,9 @@ fn reasoning_agent_block_source(
     let agent_block = add_agent_block_with(
         app,
         Vec::new(),
-        finished_reasoning_status("reasoning line one\nreasoning line two\nreasoning line three"),
+        streaming_finished_reasoning_status(
+            "reasoning line one\nreasoning line two\nreasoning line three",
+        ),
         terminal_model.clone(),
     );
     let view_id = agent_block.id();
@@ -840,19 +869,12 @@ fn measured_height(app: &App, agent_block: &ViewHandle<TuiAIBlock>) -> f64 {
     })
 }
 
-/// Adds a `TuiAIBlock` backed by a single-query model in a fresh TUI
-/// window and returns its handle. `streaming` controls whether the block's
-/// model reports itself as still streaming.
-fn add_agent_block(app: &mut App, query: &str, streaming: bool) -> ViewHandle<TuiAIBlock> {
-    let status = if streaming {
-        AIBlockOutputStatus::Pending
-    } else {
-        non_streaming_status()
-    };
+/// Adds a finished `TuiAIBlock` backed by a single-query model in a fresh TUI window.
+fn add_agent_block(app: &mut App, query: &str) -> ViewHandle<TuiAIBlock> {
     add_agent_block_with(
         app,
         vec![query_input(query)],
-        status,
+        non_streaming_status(),
         Arc::new(FairMutex::new(TerminalModel::mock(None, None))),
     )
 }
@@ -973,6 +995,13 @@ fn completed_markdown_status(markdown: &str) -> AIBlockOutputStatus {
         }),
     }
 }
+
+fn streaming_markdown_status(markdown: &str) -> AIBlockOutputStatus {
+    let AIBlockOutputStatus::Complete { output } = completed_markdown_status(markdown) else {
+        unreachable!()
+    };
+    AIBlockOutputStatus::PartiallyReceived { output }
+}
 /// A finished (cancelled) status: the block is not streaming, so the viewport's
 /// width-gating alone decides whether to re-measure it.
 fn non_streaming_status() -> AIBlockOutputStatus {
@@ -1004,6 +1033,13 @@ fn finished_reasoning_status(body: &str) -> AIBlockOutputStatus {
     }
 }
 
+fn streaming_finished_reasoning_status(body: &str) -> AIBlockOutputStatus {
+    let AIBlockOutputStatus::Complete { output } = finished_reasoning_status(body) else {
+        unreachable!()
+    };
+    AIBlockOutputStatus::PartiallyReceived { output }
+}
+
 /// A completed output carrying a single plain-text response section.
 fn plain_text_output_status(text: &str) -> AIBlockOutputStatus {
     AIBlockOutputStatus::Complete {
@@ -1024,9 +1060,6 @@ fn plain_text_output_status(text: &str) -> AIBlockOutputStatus {
 
 struct QueryAgentBlockModel {
     inputs: Vec<AIAgentInput>,
-    /// The output status this fake model reports: `Pending` models a streaming
-    /// block, `Cancelled` a finished (non-streaming) one, and `Complete`
-    /// carries rendered output such as a reasoning section.
     status: AIBlockOutputStatus,
 }
 

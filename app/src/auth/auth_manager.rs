@@ -15,6 +15,7 @@ use warp_errors::{report_error, report_if_error};
 use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUserResult,
 };
+use warp_server_auth::API_KEY_PREFIX;
 use warp_server_auth::user::persistence::PersistedUser;
 use warpui::r#async::Timer;
 use warpui::clipboard::ClipboardContent;
@@ -304,6 +305,28 @@ impl AuthManager {
             Self::on_user_fetched,
         );
     }
+    /// Validates a startup API key without exposing it through shared auth state.
+    ///
+    /// [`Self::on_user_fetched`] promotes the returned user and credentials only
+    /// after the server accepts the key. A failed request leaves the client
+    /// fully logged out.
+    pub fn authenticate_api_key(&self, api_key: String, ctx: &mut ModelContext<Self>) {
+        log::info!("Authenticating via pending API key");
+        let api_key = if api_key.starts_with(API_KEY_PREFIX) {
+            api_key
+        } else {
+            format!("{API_KEY_PREFIX}{api_key}")
+        };
+        let auth_client = self.auth_client.clone();
+        let _ = ctx.spawn(
+            async move {
+                auth_client
+                    .fetch_user(LoginToken::ApiKey(api_key), false)
+                    .await
+            },
+            Self::on_user_fetched,
+        );
+    }
 
     /// Authenticate asynchronously using the OAuth2 device authorization flow.
     ///
@@ -388,7 +411,7 @@ impl AuthManager {
                     llms,
                 } = user_output.into();
 
-                self.set_and_persist(Some(user.clone()), Some(credentials), ctx);
+                self.complete_authentication(user.clone(), credentials, ctx);
 
                 self.set_needs_reauth(false, ctx);
 
@@ -568,6 +591,14 @@ impl AuthManager {
     /// Sets the user and credentials in auth state and persists to secure storage.
     /// Persistence depends on the credential type - currently, we only persist
     /// state if authenticated via a Firebase token.
+    fn complete_authentication(
+        &self,
+        user: User,
+        credentials: Credentials,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.set_and_persist(Some(user), Some(credentials), ctx);
+    }
     fn set_and_persist(
         &self,
         user: Option<User>,

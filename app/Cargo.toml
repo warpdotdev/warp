@@ -467,7 +467,7 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
-tui = ["warpui_core/tui", "voice_input"]
+tui = ["warpui_core/tui"]
 ai_resume_button = []
 autoupdate = []
 figma_detection = []
@@ -511,6 +511,7 @@ cross_repo_context = []
 codebase_index_persistence = ["full_source_code_embedding"]
 default = [
     "agent_mode",
+    "osc_hyperlinks",
     "viewing_shared_sessions",
     "render_continuous_block_selections_with_single_border",
     "shared_with_me",
@@ -600,6 +601,7 @@ default = [
     "mcp_grouped_server_context",
     "fork_from_command",
     "context_window_usage_v2",
+    "context_window_usage_breakdown",
     "ambient_agents_command_line",
     "ambient_agents_image_upload",
     "scheduled_ambient_agents",
@@ -637,6 +639,7 @@ default = [
     "oz_launch_modal",
     "open_warp_launch_modal",
     "orchestration_launch_modal",
+    "agent_cli_launch_modal",
     "new_tab_styling",
     "richtext_multiselect",
     "inline_profile_selector",
@@ -997,6 +1000,7 @@ oz_identity_federation = []
 oz_launch_modal = []
 open_warp_launch_modal = []
 orchestration_launch_modal = []
+agent_cli_launch_modal = []
 new_tab_styling = []
 file_based_mcp = []
 skill_arguments = []

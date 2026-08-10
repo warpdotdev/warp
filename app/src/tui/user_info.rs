@@ -73,7 +73,7 @@ impl TuiUserInfoManager {
             .current_workspace()
             .map(|workspace| workspace.name.clone());
         TuiUserInfoSnapshot {
-            is_logged_in: auth.is_logged_in(),
+            is_logged_in: super::has_validated_identity(auth),
             username: auth.username_for_display(),
             email: auth.user_email(),
             user_id: auth.user_id().map(|uid| uid.as_string()),

@@ -18,12 +18,12 @@ use parking_lot::FairMutex;
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId,
     AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIBlockModel,
-    AIBlockModelHelper, AIBlockOutputStatus, AIConversationId, BlockId, BlocklistAIActionEvent,
-    BlocklistAIActionModel, BlocklistAIHistoryModel, CancellationReason,
+    AIBlockModelHelper, AIBlockOutputStatus, AIConversationId, AuthStateProvider, BlockId,
+    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIHistoryModel, CancellationReason,
     FAILED_OUTPUT_USAGE_NOTICE_TEXT, FailedOutputPresentation, MessageId, ModelEvent,
     ModelEventDispatcher, ReceivedMessageDisplay, RenderableAIError, SummarizationType,
     TelemetryEvent, TerminalModel, TodoOperation, TodoStatus, TuiOnboardingMarker,
-    TuiOnboardingMarkers, TuiOnboardingMarkersEvent, failed_output_presentation,
+    TuiOnboardingMarkers, TuiOnboardingMarkersEvent, UserWorkspaces, failed_output_presentation,
     should_show_failed_output_usage_notice,
 };
 use warpui::SingletonEntity;
@@ -59,7 +59,6 @@ use crate::tui_markdown::{
 };
 use crate::tui_plan_view::{TuiPlanView, TuiPlanViewEvent};
 use crate::tui_review_comments::render_review_comments_tool_call;
-pub(crate) const OUT_OF_CREDITS_URL: &str = "https://www.warp.dev/pricing";
 const OUT_OF_CREDITS_TITLE: &str = "I’m sorry, I couldn’t complete that request.";
 const OUT_OF_CREDITS_DETAIL: &str =
     "In order to use Warp’s AI features, subscribe to a Warp plan or buy packs of credits.";
@@ -69,6 +68,11 @@ const FIRST_CREDIT_GATE_TITLE: &str = "You need AI credits in order to use Warp�
 const FIRST_CREDIT_GATE_ACTION_LABEL: &str = "Start using AI";
 const FIRST_CREDIT_GATE_ACTION_HINT: &str = "(ctrl+o).";
 const FAILURE_WARNING_PREFIX: &str = "⚠ ";
+
+pub(crate) fn upgrade_url(app: &AppContext) -> String {
+    let user_id = AuthStateProvider::as_ref(app).get().user_id();
+    UserWorkspaces::warp_agent_cli_upgrade_link(user_id)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct TuiCodeBlockKey {
@@ -93,13 +97,15 @@ fn render_first_credit_gate(
 ) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
     let primary_style = builder.primary_text_style();
+    let upgrade_url = upgrade_url(app);
+    let click_url = upgrade_url.clone();
     let action = TuiHoverable::new(
         out_of_credits_hover_state.clone(),
         TuiText::new(FIRST_CREDIT_GATE_ACTION_LABEL)
             .with_style(primary_style.add_modifier(Modifier::UNDERLINED))
             .finish(),
     )
-    .on_click(|_, app| app.open_url(OUT_OF_CREDITS_URL))
+    .on_click(move |_, app| app.open_url(&click_url))
     .finish();
     TuiFlex::column()
         .child(
@@ -119,11 +125,7 @@ fn render_first_credit_gate(
                 .finish(),
         )
         .child(TuiText::new(" ").finish())
-        .child(
-            TuiText::new(OUT_OF_CREDITS_URL)
-                .with_style(primary_style)
-                .finish(),
-        )
+        .child(TuiText::new(upgrade_url).with_style(primary_style).finish())
         .finish()
 }
 
@@ -262,13 +264,15 @@ fn render_failure_section(
         FailedOutputPresentation::OutOfCredits { .. } => {
             let primary_style = builder.primary_text_style();
             let link_style = primary_style.add_modifier(Modifier::UNDERLINED);
+            let upgrade_url = upgrade_url(app);
+            let click_url = upgrade_url.clone();
             let action = TuiHoverable::new(
                 out_of_credits_hover_state.clone(),
                 TuiText::new(OUT_OF_CREDITS_ACTION_LABEL)
                     .with_style(link_style)
                     .finish(),
             )
-            .on_click(|_, app| app.open_url(OUT_OF_CREDITS_URL))
+            .on_click(move |_, app| app.open_url(&click_url))
             .finish();
             let actions = TuiFlex::row()
                 .child(TuiText::new("  ").with_style(primary_style).finish())
@@ -301,7 +305,7 @@ fn render_failure_section(
                 .child(actions)
                 .child(TuiText::new(" ").finish())
                 .child(
-                    TuiText::new(format!("  {OUT_OF_CREDITS_URL}"))
+                    TuiText::new(format!("  {upgrade_url}"))
                         .with_style(primary_style)
                         .finish(),
                 )
@@ -321,7 +325,7 @@ fn render_usage_notice(app: &AppContext) -> Box<dyn TuiElement> {
         .finish()
 }
 
-fn failure_text(presentation: &FailedOutputPresentation) -> String {
+fn failure_text(presentation: &FailedOutputPresentation, app: &AppContext) -> String {
     match presentation {
         FailedOutputPresentation::Message(message)
         | FailedOutputPresentation::AwsBedrockCredentialsExpiredOrInvalid {
@@ -331,9 +335,13 @@ fn failure_text(presentation: &FailedOutputPresentation) -> String {
             fallback_message: message,
         }
         | FailedOutputPresentation::ContextWindowExceeded { message } => message.clone(),
-        FailedOutputPresentation::OutOfCredits { .. } => format!(
-            "{OUT_OF_CREDITS_TITLE}\n  {OUT_OF_CREDITS_DETAIL}\n\n  {OUT_OF_CREDITS_ACTION_LABEL} {OUT_OF_CREDITS_ACTION_HINT}\n\n  {OUT_OF_CREDITS_URL}"
-        ),
+        FailedOutputPresentation::OutOfCredits { .. } => {
+            let upgrade_url = upgrade_url(app);
+            format!(
+                "{OUT_OF_CREDITS_TITLE}\n  {OUT_OF_CREDITS_DETAIL}\n\n  \
+                 {OUT_OF_CREDITS_ACTION_LABEL} {OUT_OF_CREDITS_ACTION_HINT}\n\n  {upgrade_url}"
+            )
+        }
         FailedOutputPresentation::InvalidApiKey { title, detail } => {
             format!("{title}\n{detail}")
         }
@@ -500,18 +508,21 @@ impl TuiAIBlock {
             &action_model,
             |me, action_model, event: &BlocklistAIActionEvent, ctx| {
                 if me.renders_action(event.action_id()) {
-                    if matches!(
+                    let materialized_active_blocker = if matches!(
                         event,
                         BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
                     ) {
-                        me.sync_action_views(&action_model, ctx);
-                    }
+                        me.sync_action_views(&action_model, ctx)
+                    } else {
+                        false
+                    };
                     if matches!(
                         event,
                         BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
                             | BlocklistAIActionEvent::ExecutingAction(_)
                             | BlocklistAIActionEvent::FinishedAction { .. }
-                    ) {
+                    ) && !materialized_active_blocker
+                    {
                         ctx.emit(TuiAIBlockEvent::BlockingStateChanged);
                     }
                     me.invalidate_action(event.action_id(), ctx);
@@ -639,7 +650,8 @@ impl TuiAIBlock {
         &mut self,
         action_model: &ModelHandle<BlocklistAIActionModel>,
         ctx: &mut ViewContext<Self>,
-    ) {
+    ) -> bool {
+        let mut materialized_active_blocker = false;
         let status = self.block_model.status(ctx);
         let output_streaming = status.is_streaming();
         let mut ask_question_actions = Vec::new();
@@ -718,6 +730,7 @@ impl TuiAIBlock {
             ctx.subscribe_to_view(&view, |me, _, event, ctx| match event {
                 TuiAskQuestionViewEvent::LayoutChanged => me.invalidate_layout(ctx),
             });
+            materialized_active_blocker |= view.as_ref(ctx).is_awaiting_answers(ctx);
             self.action_views
                 .insert(action_id, TuiToolCallView::AskQuestion(view));
             ctx.notify();
@@ -757,6 +770,7 @@ impl TuiAIBlock {
                     });
                 }
             });
+            materialized_active_blocker |= view.as_ref(ctx).active_permission_prompt(ctx).is_some();
             self.action_views
                 .insert(action_id, TuiToolCallView::Generic(view));
             ctx.notify();
@@ -790,6 +804,7 @@ impl TuiAIBlock {
                     });
                 }
             });
+            materialized_active_blocker |= view.as_ref(ctx).active_permission_prompt(ctx).is_some();
             self.action_views
                 .insert(action_id, TuiToolCallView::FileEdits(view));
             ctx.notify();
@@ -848,6 +863,7 @@ impl TuiAIBlock {
                     });
                 }
             });
+            materialized_active_blocker |= view.as_ref(ctx).active_permission_prompt(ctx).is_some();
             self.action_views
                 .insert(action_id, TuiToolCallView::ShellCommand(view));
             ctx.notify();
@@ -916,10 +932,15 @@ impl TuiAIBlock {
                 }
                 TuiOrchestrationBlockEvent::LayoutInvalidated => me.invalidate_layout(ctx),
             });
+            materialized_active_blocker |= view.as_ref(ctx).is_awaiting_confirmation(ctx);
             self.action_views
                 .insert(action_id, TuiToolCallView::OrchestrationBlock(view));
             ctx.notify();
         }
+        if materialized_active_blocker {
+            ctx.emit(TuiAIBlockEvent::BlockingStateChanged);
+        }
+        materialized_active_blocker
     }
 
     /// Cancels a pending or running action as manually cancelled — the
@@ -1216,7 +1237,6 @@ impl TuiAIBlock {
     /// Whether the cached height is stale at `width`.
     pub(super) fn needs_height_measurement(&self, width: u16, app: &AppContext) -> bool {
         self.last_measured_width.get() != Some(width)
-            || self.block_model.status(app).is_streaming()
             || self.action_views.values().any(|view| match view {
                 TuiToolCallView::AskQuestion(_)
                 | TuiToolCallView::FileEdits(_)
@@ -1368,7 +1388,7 @@ impl TuiAIBlock {
             if !covers_start || !covers_end {
                 return None;
             }
-            collected.push(section_logical_text(section)?);
+            collected.push(section_logical_text(section, app)?);
         }
         overlapped_any.then(|| collected.join("\n"))
     }
@@ -1919,7 +1939,7 @@ fn last_row_content_width(element: &mut Box<dyn TuiElement>, width: u16, height:
 /// The copy-able logical text for a section, or `None` for section kinds with no
 /// clean logical form (tool calls, reasoning, summaries, todo lists, or agent
 /// messages), which fall back to per-row grid text.
-fn section_logical_text(section: &TuiAIBlockSection) -> Option<String> {
+fn section_logical_text(section: &TuiAIBlockSection, app: &AppContext) -> Option<String> {
     match section {
         TuiAIBlockSection::Input(text) => Some(text.clone()),
         TuiAIBlockSection::RichText(TuiRichTextSection::Markdown(formatted)) => {
@@ -1937,11 +1957,14 @@ fn section_logical_text(section: &TuiAIBlockSection) -> Option<String> {
         | TuiAIBlockSection::TodoList { .. }
         | TuiAIBlockSection::CompletedTodos { .. }
         | TuiAIBlockSection::AgentMessage(_) => None,
-        TuiAIBlockSection::Failure(presentation) => Some(failure_text(presentation)),
-        TuiAIBlockSection::FirstCreditGate => Some(format!(
-            "{FIRST_CREDIT_GATE_TITLE}\n{FIRST_CREDIT_GATE_ACTION_LABEL} \
-             {FIRST_CREDIT_GATE_ACTION_HINT}\n\n{OUT_OF_CREDITS_URL}"
-        )),
+        TuiAIBlockSection::Failure(presentation) => Some(failure_text(presentation, app)),
+        TuiAIBlockSection::FirstCreditGate => {
+            let upgrade_url = upgrade_url(app);
+            Some(format!(
+                "{FIRST_CREDIT_GATE_TITLE}\n{FIRST_CREDIT_GATE_ACTION_LABEL} \
+                 {FIRST_CREDIT_GATE_ACTION_HINT}\n\n{upgrade_url}"
+            ))
+        }
         TuiAIBlockSection::UsageNotice => Some(FAILED_OUTPUT_USAGE_NOTICE_TEXT.to_owned()),
     }
 }

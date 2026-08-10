@@ -304,9 +304,16 @@ fn unsupported_modifier_keys_have_no_tui_equivalent() {
 }
 
 #[test]
-fn resize_and_focus_events_are_ignored() {
+fn resize_is_ignored_and_focus_events_are_preserved() {
     assert!(crossterm_event_to_tui_event(CrosstermEvent::Resize(80, 24)).is_none());
-    assert!(crossterm_event_to_tui_event(CrosstermEvent::FocusGained).is_none());
+    assert!(matches!(
+        crossterm_event_to_tui_event(CrosstermEvent::FocusGained),
+        Some(TuiEvent::FocusGained)
+    ));
+    assert!(matches!(
+        crossterm_event_to_tui_event(CrosstermEvent::FocusLost),
+        Some(TuiEvent::FocusLost)
+    ));
 }
 
 #[test]

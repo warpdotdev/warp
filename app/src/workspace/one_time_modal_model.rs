@@ -40,6 +40,8 @@ pub struct OneTimeModalModel {
     /// Whether the OpenWarp launch modal is currently being shown.
     is_openwarp_launch_modal_open: bool,
     is_orchestration_launch_modal_open: bool,
+    /// Whether the Warp Agent CLI launch modal is currently being shown.
+    is_agent_cli_launch_modal_open: bool,
     /// Whether the auto-handoff sleep discoverability modal is currently being shown.
     is_auto_handoff_sleep_modal_open: bool,
     /// Set while the auto-handoff sleep modal is closed and reset while it is
@@ -134,6 +136,12 @@ impl OneTimeModalModel {
                     {
                         log::warn!("Failed to mark orchestration launch modal as dismissed: {e}");
                     }
+                    if let Err(e) = settings
+                        .did_check_to_trigger_agent_cli_launch_modal
+                        .set_value(true, ctx)
+                    {
+                        log::warn!("Failed to mark Warp Agent CLI launch modal as dismissed: {e}");
+                    }
                     // New signups shouldn't see feature-intro popovers on their second
                     // startup, so pre-mark every registered feature intro as seen.
                     for intro in FEATURE_INTROS {
@@ -164,6 +172,7 @@ impl OneTimeModalModel {
             is_oz_launch_modal_open: false,
             is_openwarp_launch_modal_open: false,
             is_orchestration_launch_modal_open: false,
+            is_agent_cli_launch_modal_open: false,
             is_auto_handoff_sleep_modal_open: false,
             auto_handoff_sleep_modal_closed,
             is_free_ai_removal_modal_open: false,
@@ -204,6 +213,14 @@ impl OneTimeModalModel {
 
     pub fn mark_orchestration_launch_modal_dismissed(&mut self, ctx: &mut ModelContext<Self>) {
         self.set_orchestration_launch_modal_open(false, ctx);
+    }
+
+    pub fn is_agent_cli_launch_modal_open(&self) -> bool {
+        self.is_agent_cli_launch_modal_open && self.target_window_id.is_some()
+    }
+
+    pub fn mark_agent_cli_launch_modal_dismissed(&mut self, ctx: &mut ModelContext<Self>) {
+        self.set_agent_cli_launch_modal_open(false, ctx);
     }
 
     /// Returns the feature-intro popover currently being shown, if any.
@@ -345,6 +362,7 @@ impl OneTimeModalModel {
         (self.is_oz_launch_modal_open
             || self.is_openwarp_launch_modal_open
             || self.is_orchestration_launch_modal_open
+            || self.is_agent_cli_launch_modal_open
             || self.is_auto_handoff_sleep_modal_open
             || self.is_build_plan_migration_modal_open
             || self.is_free_ai_removal_modal_open
@@ -365,6 +383,11 @@ impl OneTimeModalModel {
     #[cfg(debug_assertions)]
     pub fn force_open_orchestration_launch_modal(&mut self, ctx: &mut ModelContext<Self>) {
         self.set_orchestration_launch_modal_open(true, ctx);
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn force_open_agent_cli_launch_modal(&mut self, ctx: &mut ModelContext<Self>) {
+        self.set_agent_cli_launch_modal_open(true, ctx);
     }
 
     pub fn update_target_window_id(&mut self, window_id: WindowId, ctx: &mut ModelContext<Self>) {
@@ -423,6 +446,19 @@ impl OneTimeModalModel {
         false
     }
 
+    fn set_agent_cli_launch_modal_open(
+        &mut self,
+        is_open: bool,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        if self.is_agent_cli_launch_modal_open != is_open {
+            self.is_agent_cli_launch_modal_open = is_open;
+            ctx.emit(OneTimeModalEvent::VisibilityChanged { is_open });
+            return true;
+        }
+        false
+    }
+
     fn check_and_trigger_all_modals(&mut self, ctx: &mut ModelContext<Self>) {
         // Never show one-time modals on WASM.
         if cfg!(target_family = "wasm") {
@@ -450,6 +486,10 @@ impl OneTimeModalModel {
         }
 
         if self.check_and_trigger_orchestration_launch_modal(ctx) {
+            return;
+        }
+
+        if self.check_and_trigger_agent_cli_launch_modal(ctx) {
             return;
         }
 
@@ -683,6 +723,30 @@ impl OneTimeModalModel {
 
         let should_show = !matches!(ChannelState::channel(), Channel::Integration);
         self.set_orchestration_launch_modal_open(should_show, ctx);
+        should_show
+    }
+
+    fn check_and_trigger_agent_cli_launch_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        if !FeatureFlag::AgentCliLaunchModal.is_enabled() {
+            return false;
+        }
+
+        let ai_settings = AISettings::as_ref(ctx);
+        if *ai_settings.did_check_to_trigger_agent_cli_launch_modal {
+            return false;
+        }
+
+        AISettings::handle(ctx).update(ctx, |settings, ctx| {
+            if let Err(e) = settings
+                .did_check_to_trigger_agent_cli_launch_modal
+                .set_value(true, ctx)
+            {
+                log::warn!("Failed to mark Warp Agent CLI launch modal as dismissed: {e}");
+            }
+        });
+
+        let should_show = !matches!(ChannelState::channel(), Channel::Integration);
+        self.set_agent_cli_launch_modal_open(should_show, ctx);
         should_show
     }
 

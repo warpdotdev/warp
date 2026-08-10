@@ -83,7 +83,7 @@ pub use crate::ai::blocklist::handoff::{
 };
 pub use crate::ai::blocklist::history_model::{
     AIQueryHistory, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudConversationData,
-    ConversationStatusUpdate,
+    ConversationStatusUpdate, FORK_PREFIX, ForkConversationError,
 };
 pub use crate::ai::blocklist::inline_action::code_diff_view::convert_file_edits_to_file_diffs;
 pub use crate::ai::blocklist::orchestration_event_streamer::{
@@ -137,7 +137,8 @@ pub use crate::ai::harness_availability::{
     HarnessAvailabilityModel, HarnessModelInfo,
 };
 pub use crate::ai::llms::{
-    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, should_show_key_icon_for_model,
+    LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent, should_show_bedrock_icon_for_model,
+    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
 };
 pub use crate::ai::orchestration::{
     AuthSecretSelection, CloudAgentStartupAuthFlow, CloudAgentStartupBlocker,
@@ -159,6 +160,7 @@ pub use crate::ai::skills::{SkillManager, SkillManagerEvent, SkillReference};
 #[cfg(not(target_family = "wasm"))]
 pub use crate::ai::tui_api_keys::notify_tui_api_keys_changed;
 pub use crate::appearance::Appearance;
+pub use crate::auth::AuthStateProvider;
 pub use crate::banner::BannerState;
 pub use crate::changelog_model::{
     ChangelogModel, ChangelogRequestType, ChangelogState, Event as ChangelogModelEvent,
@@ -229,8 +231,8 @@ pub use crate::terminal::model::blocks::{
 pub use crate::terminal::model::escape_sequences::{KeystrokeWithDetails, ToEscapeSequence};
 pub use crate::terminal::model::grid::grid_handler::{GridHandler, TermMode};
 pub use crate::terminal::model::rich_content::RichContentType;
-pub use crate::terminal::model::session::Sessions;
 pub use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
+pub use crate::terminal::model::session::{Session, Sessions, SessionsEvent};
 pub use crate::terminal::model::terminal_model::BlockIndex;
 pub use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 pub use crate::terminal::session_settings::SessionSettings;
@@ -258,8 +260,9 @@ pub use crate::tui_onboarding_markers::{
 #[cfg(any(test, feature = "test-util"))]
 pub use crate::tui_test_support::{
     add_tui_history_test_models, append_tui_history_test_command,
-    blocklist_ai_history_model_with_queries, queue_tui_permission_action,
-    register_tui_input_mode_test_settings, register_tui_session_view_test_singletons,
+    blocklist_ai_history_model_with_queries, forkable_tui_conversation_for_test,
+    queue_tui_permission_action, register_tui_input_mode_test_settings,
+    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test,
 };
 pub use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 pub use crate::util::image::{

@@ -148,12 +148,6 @@ impl TuiPermissionPrompt {
             if matches!(
                 event,
                 BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
-            ) {
-                prompt.focus(ctx);
-            }
-            if matches!(
-                event,
-                BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
                     | BlocklistAIActionEvent::ExecutingAction(_)
                     | BlocklistAIActionEvent::FinishedAction { .. }
             ) {

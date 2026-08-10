@@ -602,6 +602,13 @@ impl TuiSessions {
         }
     }
 
+    pub(crate) fn set_freeze_repaints_when_unfocused(&mut self, freeze: bool) {
+        if let Some(driver) = self.driver.as_mut() {
+            driver.set_freeze_repaints_when_unfocused(freeze);
+        }
+    }
+
+    #[cfg(feature = "voice_input")]
     pub(crate) fn set_modifier_key_lifecycle_enabled(
         &mut self,
         enabled: bool,

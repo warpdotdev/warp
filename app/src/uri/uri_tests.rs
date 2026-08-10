@@ -774,6 +774,44 @@ fn test_settings_section_for_simple_subpage() {
     assert!(settings_section_for_simple_subpage("not_a_subpage").is_none());
 }
 
+// -- post-checkout desktop hand-off ------------------------------------------
+
+/// Regression coverage for REV-1952: the confirmation page reports a completed
+/// purchase by riding `checkoutSuccessful=true` on the ordinary desktop
+/// redirect, so onboarding can advance without opening a settings page.
+#[test]
+fn test_url_reports_checkout_success() {
+    let scheme = ChannelState::url_scheme();
+
+    let with_flag = Url::parse(&format!(
+        "{scheme}://auth/desktop_redirect?refresh_token=abc&checkoutSuccessful=true"
+    ))
+    .unwrap();
+    assert!(url_reports_checkout_success(&with_flag));
+
+    let plain_redirect = Url::parse(&format!(
+        "{scheme}://auth/desktop_redirect?refresh_token=abc"
+    ))
+    .unwrap();
+    assert!(!url_reports_checkout_success(&plain_redirect));
+
+    // Only an explicit `true` counts, so an abandoned checkout that reports
+    // failure never advances onboarding.
+    let failed = Url::parse(&format!(
+        "{scheme}://auth/desktop_redirect?checkoutSuccessful=false"
+    ))
+    .unwrap();
+    assert!(!url_reports_checkout_success(&failed));
+
+    // The flag is not tied to the auth host: an older confirmation page can
+    // still send it on the settings deeplink.
+    let on_settings = Url::parse(&format!(
+        "{scheme}://settings/billing_and_usage?checkoutSuccessful=true"
+    ))
+    .unwrap();
+    assert!(url_reports_checkout_success(&on_settings));
+}
+
 // Regression coverage for issue #9005: shell scripts opened via `file://` should run,
 // not open in the editor. Exercised through the pure routing helper to avoid standing
 // up a full `AppContext`.

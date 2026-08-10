@@ -169,11 +169,14 @@ impl RootTuiView {
         }
 
         match copy(url) {
-            Ok(()) => self.login_copy_hint.show_success(
-                "Login URL copied to clipboard".to_owned(),
-                ctx,
-                |view| &mut view.login_copy_hint,
-            ),
+            Ok(()) => {
+                self.login_copy_hint.show_success(
+                    "Login URL copied to clipboard".to_owned(),
+                    ctx,
+                    |view| &mut view.login_copy_hint,
+                );
+                TuiLoginModel::record_login_url_copied(true, ctx);
+            }
             Err(error) => {
                 log::warn!("Failed to copy TUI login URL: {error}");
                 self.login_copy_hint.show_error(
@@ -181,6 +184,7 @@ impl RootTuiView {
                     ctx,
                     |view| &mut view.login_copy_hint,
                 );
+                TuiLoginModel::record_login_url_copied(false, ctx);
             }
         }
     }
@@ -316,7 +320,12 @@ impl TypedActionView for RootTuiView {
 
     fn handle_action(&mut self, action: &RootTuiAction, ctx: &mut ViewContext<Self>) {
         match action {
-            RootTuiAction::ExitApp => ctx.terminate_app(TerminationMode::ForceTerminate, None),
+            RootTuiAction::ExitApp => {
+                if matches!(self.state, RootTuiState::Auth) {
+                    TuiLoginModel::record_authentication_abandoned(ctx);
+                }
+                ctx.terminate_app(TerminationMode::ForceTerminate, None);
+            }
             RootTuiAction::StartDeviceLogin => {
                 if matches!(
                     TuiLoginModel::as_ref(ctx).phase(),
@@ -333,7 +342,7 @@ impl TypedActionView for RootTuiView {
                 ) {
                     self.reset_login_copy_state();
                     self.copy_login_url_when_available = true;
-                    TuiLoginModel::start_device_login(ctx);
+                    TuiLoginModel::start_device_login_and_copy_url(ctx);
                 }
             }
             RootTuiAction::OpenLoginUrl(url) => {
