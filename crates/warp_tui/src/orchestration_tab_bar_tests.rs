@@ -66,6 +66,43 @@ fn drilled_snapshot() -> TuiOrchestrationSnapshot {
     }
 }
 
+/// The spec's depth-3 reference level: drilled into `crawler`
+/// (root → researcher → crawler), so the bar carries TWO breadcrumb chips —
+/// one back to the root and one to the parent (PRODUCT.md "Drilled into
+/// crawler, depth 2" mockup).
+fn depth_three_snapshot() -> TuiOrchestrationSnapshot {
+    let root = AIConversationId::new();
+    let researcher = AIConversationId::new();
+    let crawler = AIConversationId::new();
+    let fetch_a = AIConversationId::new();
+    let fetch_b = AIConversationId::new();
+    let children = vec![
+        child(fetch_a, "fetch-a", 0, None),
+        child(fetch_b, "fetch-b", 1, None),
+    ];
+    TuiOrchestrationSnapshot {
+        root_conversation_id: root,
+        anchor_conversation_id: crawler,
+        anchor_label: "crawler".to_owned(),
+        anchor_status: Some(ConversationStatus::InProgress),
+        anchor_navigable: true,
+        breadcrumbs: vec![
+            TuiOrchestrationBreadcrumb {
+                conversation_id: root,
+                label: ORCHESTRATOR_TAB_LABEL.to_owned(),
+            },
+            TuiOrchestrationBreadcrumb {
+                conversation_id: researcher,
+                label: "researcher".to_owned(),
+            },
+        ],
+        selected_conversation_id: crawler,
+        children,
+        page_anchor: Some(fetch_a),
+        reveal_selected: true,
+    }
+}
+
 /// A flag-off flat snapshot: root anchored, no breadcrumbs, no rollups.
 fn flat_snapshot() -> TuiOrchestrationSnapshot {
     let root = AIConversationId::new();
@@ -154,6 +191,40 @@ fn t4_row_keeps_marker_only_breadcrumb_glyph_anchor_and_badge_marker() {
                 line.contains("crawler ▸") && !line.contains("▸2"),
                 "T4 shrinks the badge to its marker: {line:?}"
             );
+        });
+    });
+}
+
+#[test]
+fn depth_three_row_renders_two_breadcrumbs_through_the_ladder() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let snapshot = depth_three_snapshot();
+            // T0 (≥ 96): both chips at full labels — the spec's depth-2 mockup
+            // rendered for real (inter-tab gaps come from the bar's actual
+            // accounting).
+            let t0 =
+                "   Agents:    ‹ orchestrator   ‹ researcher   ● crawler  |   ● fetch-a     ● fetch-b";
+            assert_eq!(render_line(&snapshot, 100, ctx), format!("{t0:<100}"));
+            // T1 (< 96): both chips cap at 8 cells and keep distinct labels.
+            let t1 =
+                "   Agents:    ‹ orche...   ‹ resea...   ● crawler  |   ● fetch-a     ● fetch-b";
+            assert_eq!(render_line(&snapshot, 90, ctx), format!("{t1:<90}"));
+            // T2 (< 84): the leading collapses; two capped chips still fit.
+            let t2 = "   ‹ orche...   ‹ resea...   ● crawler  |   ● fetch-a     ● fetch-b";
+            assert_eq!(render_line(&snapshot, 80, ctx), format!("{t2:<80}"));
+            // T3 (< 72): both chips collapse to their markers; the anchor
+            // keeps its label. Two `‹` cells preserve the two ascent targets.
+            let t3 = "   ‹   ‹   ● crawler  |   ● fetch-a     ● fetch-b";
+            assert_eq!(render_line(&snapshot, 70, ctx), format!("{t3:<70}"));
+            // T4 (< 64): glyph-only anchor; the whole two-chip prefix costs 17
+            // cells and both children still fit at 60 columns.
+            let t4 = "   ‹   ‹   ●  |   ● fetch-a     ● fetch-b";
+            assert_eq!(render_line(&snapshot, 60, ctx), format!("{t4:<60}"));
+            // T5 (< 56): same row — the ladder holds with two chips down to
+            // the narrowest tier for the spec's reference tree.
+            assert_eq!(render_line(&snapshot, 50, ctx), format!("{t4:<50}"));
         });
     });
 }
