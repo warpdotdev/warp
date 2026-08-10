@@ -32,6 +32,10 @@ pub struct TabGroup {
     pub draggable_state: DraggableState,
     /// True when this whole group is pinned to the front of the tab list.
     pub pinned: bool,
+    /// The project key this group is keyed by, when automatic grouping created
+    /// it. `None` for a group the user made, which is what tells the two apart
+    /// after a restart.
+    pub project_key: Option<String>,
 }
 
 impl TabGroup {
@@ -44,6 +48,7 @@ impl TabGroup {
             collapsed: false,
             draggable_state: Default::default(),
             pinned: false,
+            project_key: None,
         }
     }
 }

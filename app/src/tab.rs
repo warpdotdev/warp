@@ -370,6 +370,14 @@ pub struct TabData {
     pub in_multi_selection: bool,
     /// True when this tab is pinned to the front of the tab list.
     pub pinned: bool,
+    /// True while this tab is still waiting for automatic grouping to place
+    /// it. Set when the tab is created, reopened, or transferred in from
+    /// another window, and cleared by the first reconcile that places it.
+    ///
+    /// Without it, a tab the user deliberately ungrouped and a tab automation
+    /// never reached — because its project key had not resolved yet — are
+    /// indistinguishable after a restart.
+    pub placed_by_automation: bool,
 }
 
 const TAB_COLOR_ICON_PATH: &str = "bundled/svg/ellipse.svg";
@@ -390,6 +398,7 @@ impl TabData {
             group_id: None,
             in_multi_selection: false,
             pinned: false,
+            placed_by_automation: false,
         }
     }
 
