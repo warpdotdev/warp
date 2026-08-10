@@ -1996,11 +1996,16 @@ fn render_pin_button(
     icon_color: ColorU,
     mouse_state: MouseStateHandle,
     conversation_id: AIConversationId,
-    theme: &WarpTheme,
     appearance: &Appearance,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    let hover_background = internal_colors::fg_overlay_1(theme);
+    // Tint with the pill's own contrasting colour rather than a fixed
+    // foreground overlay. `fg_overlay_1` is the foreground at 5% opacity, and a
+    // selected pill's background *is* the foreground colour, so the old fill
+    // painted a colour onto itself and the hover state was invisible on every
+    // selected chip — which, since the bar anchors on the parent of whatever
+    // leaf you are viewing, is the common case rather than an edge case.
+    let hover_background = coloru_with_opacity(icon_color, PIN_BUTTON_HOVER_OPACITY);
     let glyph_ink_height = avatar_letter_ink_height(PILL_AVATAR_DISC_SIZE, appearance, app);
     let button = Hoverable::new(mouse_state, move |hover_state| {
         let mut circle = Container::new(render_pin_glyph(is_pinned, icon_color, glyph_ink_height))
@@ -2177,7 +2182,6 @@ fn render_pill(
                         text_color,
                         pin_button_mouse_state.clone(),
                         conversation_id,
-                        theme,
                         appearance,
                         app,
                     )
@@ -2390,6 +2394,11 @@ fn render_overflow_button(
     // can anchor relative to it.
     SavePosition::new(button, &overflow_button_position_id(conversation_id)).finish()
 }
+
+/// Opacity of the pin button's hover tint, over the pill's contrasting colour.
+/// A little stronger than the 5% `fg_overlay_1` used to apply, because that
+/// colour is nearer the pill's own background than the contrasting one is.
+const PIN_BUTTON_HOVER_OPACITY: u8 = 8;
 
 /// Cutout-ring diameter of the status badge, per design.
 const PILL_BADGE_RING_SIZE: f32 = 11.;
