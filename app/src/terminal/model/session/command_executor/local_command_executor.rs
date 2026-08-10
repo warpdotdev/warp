@@ -90,33 +90,31 @@ impl ActiveProcessGroups {
 }
 
 struct SpawnedChildCleanup {
-    process_group: Arc<ActiveProcessGroup>,
+    process_group: Option<Arc<ActiveProcessGroup>>,
     active_process_groups: Arc<ActiveProcessGroups>,
-    armed: bool,
 }
 
 impl SpawnedChildCleanup {
     fn new(process_group_id: u32, active_process_groups: Arc<ActiveProcessGroups>) -> Self {
         let process_group = active_process_groups.register(process_group_id);
         Self {
-            process_group,
+            process_group: Some(process_group),
             active_process_groups,
-            armed: true,
         }
     }
 
-    fn disarm(mut self) {
-        self.active_process_groups.complete(&self.process_group);
-        self.armed = false;
+    fn complete(mut self) {
+        if let Some(process_group) = self.process_group.take() {
+            self.active_process_groups.complete(&process_group);
+        }
     }
 }
 
 impl Drop for SpawnedChildCleanup {
     fn drop(&mut self) {
-        if !self.armed {
-            return;
+        if let Some(process_group) = self.process_group.take() {
+            self.active_process_groups.cancel(&process_group);
         }
-        self.active_process_groups.cancel(&self.process_group);
     }
 }
 
@@ -319,7 +317,7 @@ impl LocalCommandExecutor {
                 anyhow!(e)
             });
         if output.is_ok() {
-            child_cleanup.disarm();
+            child_cleanup.complete();
         }
         output
     }
