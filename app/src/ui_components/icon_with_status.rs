@@ -77,7 +77,7 @@ fn circle_padding(total: f32) -> f32 {
 
 /// Returns the diameter of the status badge's cutout ring, i.e. the badge's
 /// full painted footprint.
-pub(crate) fn badge_size(total: f32, style: StatusBadgeStyle) -> f32 {
+fn badge_size(total: f32, style: StatusBadgeStyle) -> f32 {
     total * style.ring_ratio
 }
 
@@ -116,7 +116,7 @@ const DEFAULT_OVERLAY_OVERHANG_PAST_CIRCLE_EDGE: f32 = 0.19;
 ///   `1 - CIRCLE_RATIO - DEFAULT_OVERLAY_OVERHANG_PAST_CIRCLE_EDGE` (= 0.05) lands
 ///   exactly on the box's BR — the Figma-natural overhang.
 /// * Negative — overlay BR pulled inward toward the circle's center.
-pub(crate) fn corner_overlay_offset(total: f32, overlay_extra_overhang_ratio: f32) -> f32 {
+fn corner_overlay_offset(total: f32, overlay_extra_overhang_ratio: f32) -> f32 {
     let total_overhang = DEFAULT_OVERLAY_OVERHANG_PAST_CIRCLE_EDGE + overlay_extra_overhang_ratio;
     -((1.0 - CIRCLE_RATIO) - total_overhang) * total
 }

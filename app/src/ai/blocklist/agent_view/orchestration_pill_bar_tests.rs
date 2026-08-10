@@ -1,5 +1,7 @@
+use pathfinder_geometry::rect::RectF;
+use warpui::App;
+
 use super::*;
-use crate::ui_components::icon_with_status;
 
 // Traversal and canonical pill-order correctness are exercised in
 // `app/src/ai/blocklist/orchestration_topology_tests.rs`. These tests stay
@@ -747,102 +749,329 @@ fn conversation_server_token_assignment_rerenders_the_pill_bar() {
     });
 }
 
-/// Vertical span of a pill's avatar disc in pill-content coordinates, as
-/// `(top, bottom)`. Mirrors the two placement steps the render path performs:
-/// `render_avatar_slot` centers the lockup box in the pill, and
-/// `render_avatar_lockup_box` insets the disc from that box's top edge.
-/// Identical for the plain and status-badged paths, which is the point.
-fn pill_avatar_disc_span() -> (f32, f32) {
-    let lockup_top = (PILL_HEIGHT - AVATAR_WITH_STATUS_TOTAL_SIZE) / 2.;
-    let disc_top = lockup_top + PILL_AVATAR_LOCKUP_TOP_INSET;
-    (disc_top, disc_top + PILL_AVATAR_DISC_SIZE)
+// ---------------------------------------------------------------------------
+// Painted avatar geometry.
+//
+// These assert the design spec (3px above the disc, 4px below it, and ~1px of
+// clearance between the status badge and the pill's bottom edge) against rects
+// read back out of a built `Scene`, not against the layout constants. Anything
+// derived from the constants would just restate them and would not catch the
+// `Container`/`Align`/`Stack` placement behavior the fix depends on.
+// ---------------------------------------------------------------------------
+
+/// Design spec, from the requesting designer, in pill-content coordinates.
+/// Hard-coded on purpose: these are the numbers the pill has to hit, so the
+/// test must not re-derive them from the constants under test.
+const DESIGN_TOP_PADDING: f32 = 3.;
+const DESIGN_BOTTOM_PADDING: f32 = 4.;
+const DESIGN_DISC_DIAMETER: f32 = 15.;
+const DESIGN_BADGE_RING_DIAMETER: f32 = 11.4;
+const DESIGN_BADGE_BOTTOM_CLEARANCE: f32 = 1.;
+
+/// Sentinel fills, so each painted rect can be located unambiguously in the
+/// scene. Real pills use theme colors; none of the geometry depends on which
+/// color is used.
+const PROBE_PILL_BACKGROUND: ColorU = ColorU {
+    r: 1,
+    g: 2,
+    b: 3,
+    a: 255,
+};
+const PROBE_AVATAR_COLOR: ColorU = ColorU {
+    r: 4,
+    g: 5,
+    b: 6,
+    a: 255,
+};
+const PROBE_BADGE_RING_COLOR: ColorU = ColorU {
+    r: 7,
+    g: 8,
+    b: 9,
+    a: 255,
+};
+
+/// Renders one pill's leading avatar inside the same wrapper `render_pill`
+/// puts it in — horizontal padding only, a stadium background, and a hard
+/// [`PILL_HEIGHT`] cap — so the painted background rect can serve as the pill
+/// origin every other measurement is taken from.
+struct PillAvatarProbe {
+    status: Option<ConversationStatus>,
 }
 
-/// Bounding box of the status badge's cutout ring in pill-content
-/// coordinates, as `(left, top, right, bottom)`. The badge is anchored
-/// BR-to-BR against the lockup box and displaced by `corner_overlay_offset`;
-/// the lockup box is centered in the slot that starts at
-/// `PILL_HORIZONTAL_PADDING_LEFT`.
-fn pill_status_badge_ring_bounds() -> (f32, f32, f32, f32) {
-    let lockup_top = (PILL_HEIGHT - AVATAR_WITH_STATUS_TOTAL_SIZE) / 2.;
-    let offset = icon_with_status::corner_overlay_offset(
-        AVATAR_WITH_STATUS_TOTAL_SIZE,
-        PILL_BADGE_OVERHANG_RATIO,
+impl Entity for PillAvatarProbe {
+    type Event = ();
+}
+
+impl View for PillAvatarProbe {
+    fn ui_name() -> &'static str {
+        "PillAvatarProbe"
+    }
+
+    fn render(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let leading = match self.status.clone() {
+            Some(status) => render_avatar_with_status_overlay(
+                PROBE_AVATAR_COLOR,
+                AvatarGlyph::Letter('A'),
+                status,
+                false,
+                PROBE_BADGE_RING_COLOR,
+                theme,
+                appearance,
+            ),
+            None => render_pill_avatar(
+                PROBE_AVATAR_COLOR,
+                AvatarGlyph::Letter('A'),
+                theme,
+                appearance,
+            ),
+        };
+        ConstrainedBox::new(
+            Container::new(leading)
+                .with_padding_left(PILL_HORIZONTAL_PADDING_LEFT)
+                .with_padding_right(PILL_HORIZONTAL_PADDING_RIGHT)
+                .with_background_color(PROBE_PILL_BACKGROUND)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(PILL_RADIUS)))
+                .finish(),
+        )
+        .with_height(PILL_HEIGHT)
+        .finish()
+    }
+}
+
+impl TypedActionView for PillAvatarProbe {
+    type Action = ();
+}
+
+/// Rects a [`PillAvatarProbe`] actually painted, in window coordinates.
+#[derive(Clone, Copy)]
+struct PaintedPillAvatar {
+    pill: RectF,
+    disc: RectF,
+    badge_ring: Option<RectF>,
+}
+
+impl PaintedPillAvatar {
+    fn top_padding(&self) -> f32 {
+        self.disc.min_y() - self.pill.min_y()
+    }
+
+    fn bottom_padding(&self) -> f32 {
+        self.pill.max_y() - self.disc.max_y()
+    }
+
+    /// Disc offset from the pill's top-left, i.e. where the avatar sits
+    /// independent of where the pill itself landed in the window.
+    fn disc_offset(&self) -> (f32, f32) {
+        (
+            self.disc.min_x() - self.pill.min_x(),
+            self.disc.min_y() - self.pill.min_y(),
+        )
+    }
+
+    fn badge_ring(&self) -> RectF {
+        self.badge_ring
+            .expect("this probe should have painted a status badge")
+    }
+}
+
+/// Runs `f` inside a test app with the mock appearance the avatar render path
+/// needs, and hands back whatever it measured.
+fn with_pill_avatar_app<T: 'static>(f: impl FnOnce(&mut App) -> T + 'static) -> T {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        f(&mut app)
+    })
+}
+
+/// Builds a scene for a single pill avatar and reads the painted rects back
+/// out of it.
+fn paint_pill_avatar(app: &mut App, status: Option<ConversationStatus>) -> PaintedPillAvatar {
+    use warpui::platform::WindowStyle;
+    use warpui::{Presenter, Scene, WindowInvalidation};
+
+    fn solid_rect(scene: &Scene, color: ColorU) -> Option<RectF> {
+        scene
+            .layers()
+            .flat_map(|layer| layer.rects.iter())
+            .find(|rect| rect.background == ElementFill::Solid(color))
+            .map(|rect| rect.bounds)
+    }
+
+    let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, move |_| PillAvatarProbe {
+        status,
+    });
+    let root_view_id = app
+        .root_view_id(window_id)
+        .expect("window should have a root view");
+    let mut presenter = Presenter::new(window_id);
+    let invalidation = WindowInvalidation {
+        updated: [root_view_id].into_iter().collect(),
+        ..Default::default()
+    };
+
+    app.update(move |ctx| {
+        presenter.invalidate(invalidation, ctx);
+        let scene = presenter.build_scene(vec2f(200., 60.), 1., None, ctx);
+        PaintedPillAvatar {
+            pill: solid_rect(&scene, PROBE_PILL_BACKGROUND)
+                .expect("the pill background should be painted"),
+            disc: solid_rect(&scene, PROBE_AVATAR_COLOR)
+                .expect("the avatar disc should be painted"),
+            badge_ring: solid_rect(&scene, PROBE_BADGE_RING_COLOR),
+        }
+    })
+}
+
+#[track_caller]
+fn assert_px(actual: f32, expected: f32, what: &str) {
+    // Layout is float arithmetic over ratios, so compare well inside the
+    // sub-pixel band rather than demanding bit equality.
+    const TOLERANCE: f32 = 1e-3;
+    assert!(
+        (actual - expected).abs() <= TOLERANCE,
+        "{what}: expected {expected}px, painted {actual}px",
     );
-    let diameter = icon_with_status::badge_size(AVATAR_WITH_STATUS_TOTAL_SIZE, PILL_BADGE_STYLE);
-    let right = PILL_HORIZONTAL_PADDING_LEFT + AVATAR_WITH_STATUS_TOTAL_SIZE + offset;
-    let bottom = lockup_top + AVATAR_WITH_STATUS_TOTAL_SIZE + offset;
-    (right - diameter, bottom - diameter, right, bottom)
 }
 
 #[test]
-fn pill_avatar_disc_uses_the_designed_asymmetric_padding() {
-    let (disc_top, disc_bottom) = pill_avatar_disc_span();
-    assert_eq!(
-        disc_top, PILL_AVATAR_TOP_PADDING,
-        "avatar disc must start {PILL_AVATAR_TOP_PADDING}px below the pill's top edge",
-    );
-    assert_eq!(
-        PILL_HEIGHT - disc_bottom,
-        PILL_AVATAR_BOTTOM_PADDING,
-        "avatar disc must end {PILL_AVATAR_BOTTOM_PADDING}px above the pill's bottom edge",
-    );
-    assert_eq!(disc_bottom - disc_top, PILL_AVATAR_DISC_SIZE);
+fn painted_pill_avatar_uses_the_designed_asymmetric_padding() {
+    let badged =
+        with_pill_avatar_app(|app| paint_pill_avatar(app, Some(ConversationStatus::InProgress)));
 
-    // The half-pixel rise off the geometric center is deliberate: the badge
-    // hangs below the disc, so a truly centered disc reads as sitting low.
-    let disc_center = (disc_top + disc_bottom) / 2.;
-    assert_eq!(PILL_HEIGHT / 2. - disc_center, 0.5);
+    assert_px(badged.pill.height(), PILL_HEIGHT, "pill height");
+    assert_px(badged.disc.width(), DESIGN_DISC_DIAMETER, "disc width");
+    assert_px(badged.disc.height(), DESIGN_DISC_DIAMETER, "disc height");
+    assert_px(
+        badged.top_padding(),
+        DESIGN_TOP_PADDING,
+        "padding above the avatar disc",
+    );
+    assert_px(
+        badged.bottom_padding(),
+        DESIGN_BOTTOM_PADDING,
+        "padding below the avatar disc",
+    );
+
+    // The disc deliberately sits half a pixel above the pill's geometric
+    // center: the badge's mass below it is what makes that read as centered.
+    let disc_center = badged.disc.min_y() + badged.disc.height() / 2.;
+    let pill_center = badged.pill.min_y() + badged.pill.height() / 2.;
+    assert_px(
+        pill_center - disc_center,
+        0.5,
+        "the disc's deliberate rise above the pill's geometric center",
+    );
+
+    // Horizontally the disc stays centered in the leading slot, which begins
+    // after the pill's left padding.
+    let slot_left = badged.pill.min_x() + PILL_HORIZONTAL_PADDING_LEFT;
+    assert_px(
+        badged.disc.min_x() - slot_left,
+        (PILL_AVATAR_SLOT_SIZE - DESIGN_DISC_DIAMETER) / 2.,
+        "disc inset from the leading slot's left edge",
+    );
 }
 
 #[test]
-fn pill_status_badge_hangs_below_the_disc_without_leaving_the_pill() {
-    let (ring_left, ring_top, _, ring_bottom) = pill_status_badge_ring_bounds();
-    let (_, disc_bottom) = pill_avatar_disc_span();
+fn painted_status_badge_hangs_below_the_disc_without_leaving_the_pill() {
+    let badged =
+        with_pill_avatar_app(|app| paint_pill_avatar(app, Some(ConversationStatus::InProgress)));
+    let ring = badged.badge_ring();
 
-    assert!(
-        ring_bottom > disc_bottom,
-        "the badge is supposed to overhang the disc: ring bottom {ring_bottom} should sit below \
-         disc bottom {disc_bottom}",
+    assert_px(
+        ring.width(),
+        DESIGN_BADGE_RING_DIAMETER,
+        "status badge cutout ring diameter",
     );
-
-    // The design target is ~1px; the tolerance absorbs the rounding in the
-    // ratio arithmetic behind `corner_overlay_offset` rather than granting real
-    // slack.
-    const MIN_BOTTOM_CLEARANCE: f32 = 0.99;
-    let bottom_clearance = PILL_HEIGHT - ring_bottom;
-    assert!(
-        bottom_clearance >= MIN_BOTTOM_CLEARANCE,
-        "status badge ring bottom {ring_bottom} must keep ~1px of clearance from the pill's \
-         bottom edge {PILL_HEIGHT} (got {bottom_clearance})",
+    assert_px(
+        badged.pill.max_y() - ring.max_y(),
+        DESIGN_BADGE_BOTTOM_CLEARANCE,
+        "clearance between the badge and the pill's bottom edge",
     );
     assert!(
-        ring_top >= 0.,
-        "status badge ring top {ring_top} must stay below the pill's top edge",
+        ring.max_y() > badged.disc.max_y(),
+        "the badge is supposed to overhang the disc: ring bottom {} should sit below disc \
+         bottom {}",
+        ring.max_y(),
+        badged.disc.max_y(),
+    );
+    assert!(
+        ring.min_y() >= badged.pill.min_y(),
+        "status badge ring top {} must stay inside the pill's top edge {}",
+        ring.min_y(),
+        badged.pill.min_y(),
     );
     // Left of `PILL_RADIUS` the pill's outline is the rounded cap's arc rather
     // than a straight edge, so a ring reaching into that band could poke out of
     // the corner even while its bounding box looks contained.
     assert!(
-        ring_left >= PILL_RADIUS,
-        "status badge ring left {ring_left} must stay clear of the pill's rounded left cap \
-         (x < {PILL_RADIUS})",
+        ring.min_x() - badged.pill.min_x() >= PILL_RADIUS,
+        "status badge ring left {} must stay clear of the pill's rounded left cap (x < {})",
+        ring.min_x() - badged.pill.min_x(),
+        badged.pill.min_x() + PILL_RADIUS,
     );
 }
 
+/// A status appearing or clearing must not move the avatar or resize the
+/// chip, or every sibling pill in the bar would shift.
 #[test]
-fn pill_avatar_lockup_box_fits_the_leading_slot() {
+fn painted_pill_avatar_is_identical_with_and_without_a_status_badge() {
+    let (plain, badged) = with_pill_avatar_app(|app| {
+        let plain = paint_pill_avatar(app, None);
+        let badged = paint_pill_avatar(app, Some(ConversationStatus::Success));
+        (plain, badged)
+    });
+
+    assert!(
+        plain.badge_ring.is_none(),
+        "a pill with no status should not paint a badge ring",
+    );
     assert_eq!(
-        AVATAR_WITH_STATUS_TOTAL_SIZE, PILL_AVATAR_SLOT_SIZE,
-        "the badge's anchor box must fit the leading slot so pills do not change width when a \
-         status appears",
+        plain.disc_offset(),
+        badged.disc_offset(),
+        "the avatar disc must land in the same spot whether or not the pill has a status",
     );
-    assert!(
-        PILL_AVATAR_DISC_SIZE <= AVATAR_WITH_STATUS_TOTAL_SIZE,
-        "the disc has to fit inside the box it is inset into",
-    );
-    assert!(
-        PILL_AVATAR_LOCKUP_TOP_INSET >= 0.,
-        "a negative inset would push the disc out of the top of the lockup box",
-    );
+    assert_px(plain.pill.width(), badged.pill.width(), "pill width");
+    assert_px(plain.pill.height(), badged.pill.height(), "pill height");
+    assert_px(plain.disc.width(), badged.disc.width(), "disc width");
+}
+
+/// The badge geometry is status-independent: only the glyph inside the ring
+/// changes, never the ring's placement.
+#[test]
+fn painted_status_badge_geometry_is_the_same_for_every_status() {
+    let measurements = with_pill_avatar_app(|app| {
+        [
+            ConversationStatus::InProgress,
+            ConversationStatus::Success,
+            ConversationStatus::Error,
+            ConversationStatus::Cancelled,
+            ConversationStatus::WaitingForEvents,
+            ConversationStatus::Blocked {
+                blocked_action: "rm -rf /".to_string(),
+            },
+        ]
+        .map(|status| paint_pill_avatar(app, Some(status)))
+    });
+
+    for measured in measurements {
+        let ring = measured.badge_ring();
+        assert_px(
+            measured.top_padding(),
+            DESIGN_TOP_PADDING,
+            "padding above the avatar disc",
+        );
+        assert_px(
+            measured.bottom_padding(),
+            DESIGN_BOTTOM_PADDING,
+            "padding below the avatar disc",
+        );
+        assert_px(
+            measured.pill.max_y() - ring.max_y(),
+            DESIGN_BADGE_BOTTOM_CLEARANCE,
+            "clearance between the badge and the pill's bottom edge",
+        );
+    }
 }
