@@ -572,6 +572,18 @@ pub const TAB_BAR_HEIGHT: f32 = 34.;
 pub const PANEL_HEADER_HEIGHT: f32 = TAB_BAR_HEIGHT;
 /// The hover area height for states where the tab bar is revealed on hover.
 const TAB_BAR_HOVER_HEIGHT: f32 = 12.;
+/// How long the pointer has to rest in the hover area before a hidden tab bar is
+/// revealed. Without a delay, merely sweeping the pointer across the top of the
+/// window pops the bar open.
+///
+/// Do not pair this with a hover-out delay. A delayed transition resolves on the
+/// synthetic [`Event::MouseMoved`] the framework replays after each frame, and
+/// [`Hoverable`] drops the redraw for a state change whose previous change was
+/// also synthetic. With both delays every transition is synthetic, so hiding
+/// would flip the state without scheduling the frame that repaints it and the
+/// bar would linger until something unrelated redrew. Hiding therefore stays
+/// undelayed, resolving on the real mouse move that leaves the bar.
+const TAB_BAR_HOVER_IN_DELAY: Duration = Duration::from_millis(250);
 const TAB_BAR_PADDING_LEFT: f32 = 4.;
 const TAB_BAR_PADDING_RIGHT: f32 = 8.;
 const TITLE_BAR_SEARCH_BAR_MAX_WIDTH: f32 = 320.;
@@ -598,6 +610,13 @@ const THEME_CHOOSER_RATIO: f32 = 3.5;
 
 /// Save position for the tab bar.
 pub(crate) const TAB_BAR_POSITION_ID: &str = "workspace_view:tab_bar";
+/// Save position for the strip that reveals a hidden tab bar on hover. Recorded
+/// so the reveal strip and the revealed bar can be checked against each other.
+pub(crate) const TAB_BAR_HOVER_AREA_POSITION_ID: &str = "workspace_view:tab_bar_hover_area";
+/// Save position for the container holding a hover-revealed tab bar. Unlike the
+/// bar itself, this is the element laid out against the whole window, so its
+/// recorded size is what tells us the overlay stayed a strip at the top.
+pub(crate) const TAB_BAR_OVERLAY_POSITION_ID: &str = "workspace_view:tab_bar_overlay";
 const TEAM_SWITCHER_PILL_POSITION_ID: &str = "workspace_view:team_switcher_pill";
 const TEAM_SWITCHER_DOT_ALPHA: u8 = 204;
 
@@ -839,13 +858,22 @@ enum ShowTabBar {
     /// Show the tab bar stacked on top of the pane group area.
     #[default]
     Stacked,
+    /// Float the tab bar over the top of the window without reserving any
+    /// layout space for it. Used whenever the bar is revealed on hover, for two
+    /// reasons: keeping it out of the content column means revealing it never
+    /// reflows the panes, and anchoring it at the very top of the window keeps
+    /// the hover strip that reveals it inside the revealed bar's own hover area.
+    /// A stacked bar starts below [`WORKSPACE_PADDING`], so the topmost pixel
+    /// row of the window would reveal the bar and then sit outside it, making
+    /// the bar oscillate open and closed under a stationary pointer.
+    Overlay,
     /// Hide the tab bar.
     Hidden,
 }
 
 impl ShowTabBar {
     fn has_tab_bar(self) -> bool {
-        matches!(self, ShowTabBar::Stacked)
+        matches!(self, ShowTabBar::Stacked | ShowTabBar::Overlay)
     }
 }
 
@@ -14330,8 +14358,11 @@ impl Workspace {
             .workspace_decoration_visibility
             .value();
 
+        // A bar that comes and goes floats over the content rather than taking a
+        // row in it, so revealing it doesn't shove every pane down by the height
+        // of the bar. See [`ShowTabBar::Overlay`].
         let hovered_visibility = if is_pane_being_dragged || is_hovered || is_tab_menu_open {
-            ShowTabBar::Stacked
+            ShowTabBar::Overlay
         } else {
             ShowTabBar::Hidden
         };
@@ -20728,17 +20759,28 @@ impl Workspace {
 
     /// Renders an invisible rect for detecting hovers over the tab bar.
     fn render_tab_bar_hover_area(&self) -> Box<dyn Element> {
-        self.render_tab_bar_hoverable(
-            ConstrainedBox::new(Empty::new().finish())
-                .with_height(TAB_BAR_HOVER_HEIGHT)
-                .finish(),
+        SavePosition::new(
+            self.render_tab_bar_hoverable(
+                ConstrainedBox::new(Empty::new().finish())
+                    .with_height(TAB_BAR_HOVER_HEIGHT)
+                    .finish(),
+            ),
+            TAB_BAR_HOVER_AREA_POSITION_ID,
         )
+        .finish()
     }
 
     /// Renders the provided content wrapped in the tab bar hover behavior.
+    ///
+    /// The same mouse state backs both the hover strip that reveals a hidden tab
+    /// bar and the revealed bar itself, so this delay governs how long the
+    /// pointer must linger to open the bar. The revealed bar covers the strip,
+    /// so the pointer that opened it stays over it and only a move that leaves
+    /// the bar entirely hides it; see [`TAB_BAR_HOVER_IN_DELAY`] for why that
+    /// direction must stay undelayed.
     fn render_tab_bar_hoverable(&self, content: Box<dyn Element>) -> Box<dyn Element> {
         Hoverable::new(self.tab_bar_hover_state.clone(), |_| content)
-            .with_hover_out_delay(Duration::from_millis(500))
+            .with_hover_in_delay(TAB_BAR_HOVER_IN_DELAY)
             .on_hover(|_is_hovered, ctx, _app, _position| {
                 ctx.dispatch_typed_action(WorkspaceAction::SyncTrafficLights);
             })
@@ -21454,6 +21496,46 @@ impl Workspace {
                 ctx,
             ),
             TAB_BAR_POSITION_ID,
+        )
+        .finish()
+    }
+
+    /// Renders the tab bar for [`ShowTabBar::Overlay`]: the same bar as the
+    /// stacked one, but floated over the content at the very top of the window.
+    ///
+    /// Two things differ from the stacked bar because it no longer sits in the
+    /// content column:
+    /// - It is stretched to the full window width. A positioned stack child is
+    ///   laid out with a zero minimum width, so the bar's flex row would
+    ///   otherwise shrink to its contents instead of spanning the window.
+    /// - It paints its own opaque background. The stacked bar borrows the
+    ///   workspace background painted behind it, which here would let the
+    ///   terminal content underneath show through the tabs. The fill is
+    ///   flattened to a solid color: `background()` may be a gradient, whose
+    ///   stops are normalized to the element it paints, and a full-window ramp
+    ///   squeezed into a tab-bar-tall strip would not match the window behind
+    ///   it.
+    fn render_tab_bar_overlay(
+        &self,
+        appearance: &Appearance,
+        ctx: &AppContext,
+    ) -> Box<dyn Element> {
+        let full_width_bar = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(
+                Expanded::new(
+                    1.,
+                    self.render_tab_bar(self.tab_fixed_width, appearance, ctx),
+                )
+                .finish(),
+            )
+            .finish();
+
+        SavePosition::new(
+            Container::new(full_width_bar)
+                .with_background_color(appearance.theme().background().into())
+                .finish(),
+            TAB_BAR_OVERLAY_POSITION_ID,
         )
         .finish()
     }
@@ -26683,6 +26765,25 @@ impl View for Workspace {
                 .finish(),
         );
 
+        // A hover-revealed tab bar floats above the content instead of taking a
+        // row in it, anchored to the very top of the window rather than inset by
+        // `WORKSPACE_PADDING`. That keeps the hover strip which reveals the bar
+        // (also anchored at the window's top-left) fully inside the revealed
+        // bar, so the pointer that opened it stays over it. It is added here,
+        // ahead of the menus below, so the bar's `SavePosition` entries are in
+        // the position cache before anything anchored to them is laid out.
+        if tab_bar_mode == ShowTabBar::Overlay {
+            stack.add_positioned_child(
+                self.render_tab_bar_overlay(appearance, app),
+                OffsetPositioning::offset_from_parent(
+                    Vector2F::zero(),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
+        }
+
         if !use_simplified_wasm_tab_bar
             && FeatureFlag::VerticalTabs.is_enabled()
             && *TabSettings::as_ref(app).use_vertical_tabs
@@ -26811,6 +26912,7 @@ impl View for Workspace {
 
         match tab_bar_mode {
             ShowTabBar::Stacked => (), // The tab bar was rendered in the content column.
+            ShowTabBar::Overlay => (), // The tab bar was floated above the content column.
             ShowTabBar::Hidden => {
                 // Hide the tab bar, but include a hover area.
                 stack.add_positioned_child(
@@ -26825,10 +26927,10 @@ impl View for Workspace {
             }
         }
 
-        // If the tab bar is being shown in "stacked" mode, we want to render
-        // the traffic lights relative to the full workspace, so they appear
-        // in the top-right corner even if a right-side panel is open.
-        if tab_bar_mode == ShowTabBar::Stacked {
+        // Whenever the tab bar is showing, we want to render the traffic lights
+        // relative to the full workspace, so they appear in the top-right corner
+        // even if a right-side panel is open.
+        if tab_bar_mode.has_tab_bar() {
             self.maybe_render_traffic_lights(&mut stack, app);
         }
 
