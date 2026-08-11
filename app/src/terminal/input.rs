@@ -7932,7 +7932,11 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         if let CanExecuteCommand::No(reason) = self.can_execute_command(ctx) {
-            if reason.is_existing_active_command() {
+            // A resume is Warp's own line rather than a submission the user is waiting on, and a
+            // pane that cannot run it has to look exactly like a pane that was never offered one.
+            let is_internal_invocation =
+                matches!(source, CommandExecutionSource::AgentSessionResume);
+            if reason.is_existing_active_command() && !is_internal_invocation {
                 const MAX_COMMAND_LENGTH: usize = 43;
                 let truncated_command = truncate_from_end(command, MAX_COMMAND_LENGTH);
 

@@ -10086,22 +10086,22 @@ fn emit_block_completed(
 }
 
 fn completed_user_block(command: &str) -> BlockType {
-    BlockType::User(UserBlockCompleted {
-        index: BlockIndex::zero(),
-        serialized_block: Arc::new(SerializedBlock::new_for_test(
+    BlockType::User(UserBlockCompleted::new_for_test(
+        BlockIndex::zero(),
+        Arc::new(SerializedBlock::new_for_test(
             command.as_bytes().to_vec(),
             vec![],
         )),
-        command: command.to_owned(),
-        command_with_obfuscated_secrets: command.to_owned(),
-        output_truncated: String::new(),
-        output_truncated_with_obfuscated_secrets: String::new(),
-        was_part_of_agent_interaction: false,
-        was_warp_authored: false,
-        started_at: None,
-        num_output_lines: 0,
-        num_output_lines_truncated: 0,
-    })
+        command.to_owned(),
+        command.to_owned(),
+        String::new(),
+        String::new(),
+        false,
+        false,
+        None,
+        0,
+        0,
+    ))
 }
 
 /// The agent exits and the user launches it again in the same pane; the pane
@@ -10537,5 +10537,57 @@ fn resume_block_completing_leaves_a_draft_alone() {
             "",
             "a user command completing still clears the buffer"
         );
+    });
+}
+
+/// R24: the agent context a user has staged is reset by their own completed block, on the reading
+/// that they have moved on to something else. A resume is Warp filling the pane in, so whatever
+/// they had selected for their next query is still what they selected.
+#[test]
+fn resume_block_leaves_the_staged_agent_context_alone() {
+    App::test((), |mut app| async move {
+        let _block_context = FeatureFlag::AgentViewBlockContext.override_enabled(false);
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let context_model = terminal.read(&app, |view, _| view.ai_context_model().clone());
+        let stage_context = |app: &mut App| {
+            context_model.update(app, |context, ctx| {
+                context.set_pending_context_selected_text(
+                    Some("staged selection".to_owned()),
+                    true,
+                    ctx,
+                );
+            });
+        };
+
+        stage_context(&mut app);
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_block("claude", "");
+            emit_block_completed(
+                completed_resume_block("claude --resume 'session-1'"),
+                view,
+                ctx,
+            );
+        });
+        context_model.read(&app, |context, _| {
+            assert_eq!(
+                context.pending_context_selected_text().map(String::as_str),
+                Some("staged selection"),
+                "a resume must not discard the context the user staged for their next query"
+            );
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_block("ls", "");
+            emit_block_completed(completed_user_block("ls"), view, ctx);
+        });
+        context_model.read(&app, |context, _| {
+            assert_eq!(
+                context.pending_context_selected_text(),
+                None,
+                "the user's own block still resets the staged context"
+            );
+        });
     });
 }

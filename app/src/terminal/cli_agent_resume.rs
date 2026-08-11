@@ -21,13 +21,16 @@ use serde::{Deserialize, Serialize};
 use warp_errors::report_error;
 
 use crate::terminal::CLIAgent;
+use crate::terminal::shell::ShellType;
 
 /// Trailing comment appended to every built resume invocation so the shell keeps it
 /// out of history: a resume is Warp's line, not something the user typed.
 ///
-/// Matched literally by the bootstrap scripts in `app/assets/bundled/bootstrap/`
-/// (`zsh_body.sh`, `bash_body.sh`, `pwsh.ps1`); changing this string means changing
-/// all three. `#` starts a comment in all three shells, so the marker stays inert.
+/// Matched literally by every bootstrap script in `app/assets/bundled/bootstrap/` that
+/// can be told which command patterns to omit from history, so changing this string
+/// means changing all of them together. `#` starts a comment in each of those shells,
+/// so the marker stays inert. Fish takes no such patterns and is suppressed by
+/// [`history_suppressed_resume_command`] instead.
 pub const RESUME_HISTORY_MARKER: &str = "warp_resume_agent_session";
 
 const EMBEDDED_DECLARATIONS: &str = include_str!("../../resources/cli_agent_resume/agents.toml");
@@ -280,8 +283,15 @@ impl ResumeDeclarations {
         while index < args.len() {
             let arg = args[index].as_ref();
             index += 1;
-            if !arg.starts_with('-') {
-                continue;
+            // The flags end at the first word that is neither a flag nor a value one consumed —
+            // `--` says so explicitly, a positional says so by being one. No declared agent takes
+            // an allowlisted flag after its prompt positional, so past that point a flag-shaped
+            // word is text the user wrote rather than a choice they made, and reading it as a
+            // choice is how a prompt quoting `--permission-mode` becomes a recorded posture. This
+            // is the second of two barriers: the caller tokenizes the line the way the shell does,
+            // so a quoted prompt arrives here as one word to stop on.
+            if arg == "--" || !arg.starts_with('-') {
+                break;
             }
 
             let (spelling, inline_value) = match arg.split_once('=') {
@@ -326,9 +336,9 @@ impl ResumeDeclarations {
 
     /// The allowlisted flags `agent` declares as choosing a permission posture.
     ///
-    /// Read only by `declared_permission_posture_flags_are_exactly_the_acknowledged_ones`, which
-    /// is what it is for: a newly declared posture flag has to be acknowledged there before it
-    /// can ship.
+    /// Exposed so the declared set can be pinned against an acknowledged one: marking a flag as
+    /// choosing a posture is an R22 decision, and it has to be made deliberately rather than by
+    /// editing the declaration file.
     pub fn permission_posture_flags(&self, agent: CLIAgent) -> Vec<&str> {
         let Some(declaration) = self.agents.get(&agent) else {
             return Vec::new();
@@ -529,6 +539,20 @@ const MAX_INVOCATION_LENGTH: usize = 64;
 fn is_flag_spelling(candidate: &str) -> bool {
     candidate.starts_with("--")
         && ValueShape::BareToken.accepts(&candidate[2..], MAX_INVOCATION_LENGTH)
+}
+
+/// `command` in the form the pane's shell keeps out of its history file.
+///
+/// R18: a resume must leave no trace in the user's history, and [`RESUME_HISTORY_MARKER`] only
+/// achieves that where the shell can be told which command patterns to omit. Fish cannot, so it
+/// gets the mechanism it does have: a leading space, which fish omits from history as default,
+/// non-configurable behavior. A shell Warp cannot identify keeps the marker alone rather than a
+/// space some shells would pass straight through to the command.
+pub fn history_suppressed_resume_command(shell_type: Option<ShellType>, command: String) -> String {
+    match shell_type {
+        Some(ShellType::Fish) => format!(" {command}"),
+        _ => command,
+    }
 }
 
 /// Wraps `value` in single quotes, which every shell Warp bootstraps treats as fully

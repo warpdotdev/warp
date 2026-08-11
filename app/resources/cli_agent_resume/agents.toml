@@ -37,6 +37,13 @@
 # tokenized, so carrying one risks turning the user's prompt into an argument.
 # That rules out Claude Code's `--add-dir` and `--mcp-config`.
 #
+# Nor does a flag whose value names a file Warp cannot validate belong here. A
+# shape checks the string, never what the file says, and a resume runs unattended
+# at startup — so replaying such a pointer replays whatever the file has come to
+# hold since. That rules out Claude Code's `--settings`, which can carry hooks
+# and a permission mode: a code-execution pointer, and one the posture freshness
+# window does not bound because it is not a posture flag.
+#
 # An agent absent from this file simply does not offer resume, which is the safe
 # default and needs no code change:
 #   Gemini  - its `--resume` has not been verified against a released CLI, and
@@ -61,7 +68,6 @@ identifier = { shape = "bare_token", max_length = 128 }
 "--dangerously-skip-permissions" = { shape = "boolean", permission_posture = true }
 "--strict-mcp-config" = { shape = "boolean" }
 "--agent" = { shape = "bare_token", max_length = 64 }
-"--settings" = { shape = "path_like", max_length = 512 }
 
 [agents.Codex]
 # `codex resume <session-id>`, the shape Warp's own headless driver already

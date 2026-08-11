@@ -394,6 +394,7 @@ use crate::terminal::block_list_viewport::{
     ScrollState, ViewportState,
 };
 use crate::terminal::bootstrap::init_subshell_command;
+use crate::terminal::cli_agent_resume::history_suppressed_resume_command;
 use crate::terminal::cli_agent_sessions::event::{
     CLI_AGENT_NOTIFICATION_SENTINEL, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource,
     CLIAgentEventType, parse_event,
@@ -16300,6 +16301,10 @@ impl TerminalView {
             return;
         }
 
+        // Decided here rather than where the invocation is built, because which mechanism keeps a
+        // line out of history is a property of the pane's shell and nothing upstream knows it.
+        let command =
+            history_suppressed_resume_command(self.active_session_shell_type(ctx), command);
         self.input.update(ctx, |input, ctx| {
             input.execute_agent_session_resume(&command, ctx);
         });

@@ -2839,7 +2839,15 @@ fn read_sqlite_data(
                 anyhow::Error::new(err).context("Error purging orphaned agent session rows")
             );
         }
-        let recorded_agent_sessions = get_all_recorded_agent_sessions(conn)?;
+        // Reading them must not cost it either: a table only an off-by-default feature reads
+        // costs the panes whatever agent they were running when it fails, never the windows, tabs
+        // and panes themselves.
+        let recorded_agent_sessions = get_all_recorded_agent_sessions(conn).unwrap_or_else(|err| {
+            report_error!(
+                anyhow::Error::new(err).context("Error reading recorded agent session rows")
+            );
+            HashMap::new()
+        });
 
         // Load active MCP servers from database
         let running_mcp_servers = load_active_mcp_servers(conn)?;

@@ -1208,6 +1208,12 @@ pub(crate) fn resolve_agent_session_claims(
                 if recorded.session_id.is_empty() {
                     continue;
                 }
+                // Only a pane that could plausibly resume competes. A winner that goes on to fail
+                // the gate would otherwise take the identifier out of reach of a pane that would
+                // have passed it, and neither would come back.
+                if !could_resume_from_snapshot(terminal, recorded) {
+                    continue;
+                }
 
                 let rank = ClaimRank {
                     in_landing_window: Some(window_index) == active_window_index,
@@ -1237,6 +1243,29 @@ pub(crate) fn resolve_agent_session_claims(
     }
 
     winners.into_values().map(|(_, uuid)| uuid).collect()
+}
+
+/// Whether a pane restoring from `snapshot` could resume `recorded`, as far as a store read
+/// before any window exists can tell.
+///
+/// These are exactly the checks [`resume_eligibility`] makes that need no live pane, repeated
+/// here so the claim is contested only by panes that might win something by it. Ownership itself
+/// stays out: that is what this decides.
+fn could_resume_from_snapshot(
+    snapshot: &TerminalPaneSnapshot,
+    recorded: &RecordedAgentSession,
+) -> bool {
+    // A cwd reaches the snapshot only for a local session, and a pane Warp drives itself always
+    // snapshots an input config, so a pane missing either was never one to relaunch in.
+    let Some(cwd) = &snapshot.cwd else {
+        return false;
+    };
+    snapshot.input_config.is_some()
+        && ResumeDeclarations::embedded().supports(recorded.agent)
+        // The pane comes up in its snapshot cwd when that directory still resolves, which is the
+        // same comparison the gate makes against the directory the pane actually reached.
+        && existing_directory(&recorded.directory)
+            .is_some_and(|recorded| existing_directory(Path::new(cwd)) == Some(recorded))
 }
 
 /// How strong a pane's claim to a recorded identifier is, ordered worst to best by field so that

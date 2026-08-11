@@ -89,6 +89,7 @@ use crate::settings::PrivacySettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::system::SystemStats;
+use crate::terminal::CLIAgent;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::cli_agent_resume::{
     PERMISSION_POSTURE_FRESHNESS, RESUME_HISTORY_MARKER, RecordedFlag,
@@ -105,8 +106,7 @@ use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_tty::TerminalManager;
 use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::model::block::{BlockId, SerializedBlock};
-use crate::terminal::model::terminal_model::BlockIndex;
-use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
+use crate::terminal::model::terminal_model::{BlockIndex, ConversationTranscriptViewerStatus};
 use crate::terminal::model_events::ModelEvent as TerminalModelEvent;
 use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::{
@@ -4005,10 +4005,10 @@ fn restored_terminal_pane_reports_the_uuid_its_recorded_session_is_keyed_by() {
         initialize_app(&mut app);
 
         let pane_uuid = vec![7, 7, 7];
-        let recorded = crate::app_state::RecordedAgentSession {
-            agent: crate::terminal::CLIAgent::Claude,
+        let recorded = app_state::RecordedAgentSession {
+            agent: CLIAgent::Claude,
             session_id: "session-1".to_owned(),
-            flags: vec![crate::terminal::cli_agent_resume::RecordedFlag {
+            flags: vec![RecordedFlag {
                 name: "--model".to_owned(),
                 value: Some("opus".to_owned()),
             }],
@@ -4110,7 +4110,7 @@ fn pane_group_reporting_model_events(
 /// has been the pane's foreground command for long enough.
 fn start_cli_agent_session(
     terminal_view_id: EntityId,
-    agent: crate::terminal::CLIAgent,
+    agent: CLIAgent,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
     CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
@@ -4207,22 +4207,22 @@ fn complete_block_in_pane(
 
 /// The block a finished agent command leaves behind.
 fn completed_user_block(command: &str) -> BlockType {
-    BlockType::User(UserBlockCompleted {
-        index: BlockIndex::zero(),
-        serialized_block: Arc::new(SerializedBlock::new_for_test(
+    BlockType::User(UserBlockCompleted::new_for_test(
+        BlockIndex::zero(),
+        Arc::new(SerializedBlock::new_for_test(
             command.as_bytes().to_vec(),
             vec![],
         )),
-        command: command.to_owned(),
-        command_with_obfuscated_secrets: command.to_owned(),
-        output_truncated: String::new(),
-        output_truncated_with_obfuscated_secrets: String::new(),
-        was_part_of_agent_interaction: false,
-        was_warp_authored: false,
-        started_at: None,
-        num_output_lines: 0,
-        num_output_lines_truncated: 0,
-    })
+        command.to_owned(),
+        command.to_owned(),
+        String::new(),
+        String::new(),
+        false,
+        false,
+        None,
+        0,
+        0,
+    ))
 }
 
 /// The uuid of the group's only terminal pane, which is the key its recorded state is stored
@@ -4263,6 +4263,7 @@ fn terminal_pane_uuid(pane_group: &ViewHandle<PaneGroup>, pane_id: PaneId, app: 
 #[test]
 fn pane_records_each_identifier_its_agent_reports_in_order() {
     App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
         initialize_app(&mut app);
         let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
         let pane_uuid = only_terminal_pane_uuid(&pane_group, &app);
@@ -4272,7 +4273,7 @@ fn pane_records_each_identifier_its_agent_reports_in_order() {
                 .active_session_view(ctx)
                 .expect("the group should have an active terminal view")
                 .id();
-            start_cli_agent_session(terminal_view_id, crate::terminal::CLIAgent::Claude, ctx);
+            start_cli_agent_session(terminal_view_id, CLIAgent::Claude, ctx);
             terminal_view_id
         });
 
@@ -4305,7 +4306,7 @@ fn record_agent_session_in_pane(
         let terminal_view = panes
             .active_session_view(ctx)
             .expect("the group should have an active terminal view");
-        start_cli_agent_session(terminal_view.id(), crate::terminal::CLIAgent::Claude, ctx);
+        start_cli_agent_session(terminal_view.id(), CLIAgent::Claude, ctx);
         terminal_view
     });
     let terminal_view_id = terminal_view.id();
@@ -4321,6 +4322,7 @@ fn record_agent_session_in_pane(
 #[test]
 fn pane_whose_agent_exited_records_that_it_has_nothing_to_resume() {
     App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
         initialize_app(&mut app);
         let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
         let pane_uuid = only_terminal_pane_uuid(&pane_group, &app);
@@ -4344,6 +4346,7 @@ fn pane_whose_agent_exited_records_that_it_has_nothing_to_resume() {
 #[test]
 fn pane_whose_agent_is_suspended_keeps_its_recorded_state() {
     App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
         initialize_app(&mut app);
         let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
         let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
@@ -4379,6 +4382,7 @@ fn pane_whose_agent_is_suspended_keeps_its_recorded_state() {
 #[test]
 fn pane_detached_for_close_or_teardown_keeps_its_recorded_state() {
     App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
         initialize_app(&mut app);
         let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
         record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
@@ -4409,6 +4413,7 @@ fn undone_close_leaves_the_pane_still_owning_its_recorded_state() {
     let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(true);
 
     App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
         initialize_app(&mut app);
         let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
         record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
@@ -4457,6 +4462,7 @@ fn undone_close_leaves_the_pane_still_owning_its_recorded_state() {
 #[test]
 fn permanently_removed_pane_has_its_recorded_state_cleared() {
     App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
         initialize_app(&mut app);
         let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
         let pane_uuid = only_terminal_pane_uuid(&pane_group, &app);
@@ -4484,6 +4490,7 @@ fn permanently_removed_pane_has_its_recorded_state_cleared() {
 #[test]
 fn pane_moved_out_of_its_group_keeps_its_recorded_state() {
     App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
         initialize_app(&mut app);
         let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
         record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
@@ -4520,6 +4527,7 @@ fn pane_moved_out_of_its_group_keeps_its_recorded_state() {
 #[test]
 fn burst_of_tool_call_events_from_one_agent_collapses_to_one_write() {
     App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
         initialize_app(&mut app);
         let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
         let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
@@ -4548,6 +4556,7 @@ fn burst_of_tool_call_events_from_one_agent_collapses_to_one_write() {
 #[test]
 fn pane_that_replaced_its_agent_does_not_record_an_absent_session() {
     App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
         initialize_app(&mut app);
         let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
         let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
@@ -4555,7 +4564,7 @@ fn pane_that_replaced_its_agent_does_not_record_an_absent_session() {
         let _ = captured_agent_session_writes(&model_events);
 
         pane_group.update(&mut app, |_, ctx| {
-            start_cli_agent_session(terminal_view_id, crate::terminal::CLIAgent::Codex, ctx);
+            start_cli_agent_session(terminal_view_id, CLIAgent::Codex, ctx);
         });
 
         assert_eq!(
@@ -4572,6 +4581,7 @@ fn pane_that_replaced_its_agent_does_not_record_an_absent_session() {
 #[test]
 fn pane_without_a_local_directory_records_none_and_stays_ineligible() {
     App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
         initialize_app(&mut app);
         let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
         let pane_uuid = only_terminal_pane_uuid(&pane_group, &app);
@@ -4612,6 +4622,7 @@ fn pane_without_a_local_directory_records_none_and_stays_ineligible() {
 #[test]
 fn pane_records_nothing_when_session_restore_is_off() {
     App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
         initialize_app(&mut app);
         GeneralSettings::handle(&app).update(&mut app, |settings, ctx| {
             settings
@@ -4634,6 +4645,31 @@ fn pane_records_nothing_when_session_restore_is_off() {
     });
 }
 
+// The capture is the feature, not a preparation for it: with the flag off nothing can act on what
+// a pane records, and writing the agent, identifier, flags and directory of every pane for a
+// disabled feature is state the user never opted into.
+#[test]
+fn pane_records_nothing_while_the_feature_is_off() {
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(false);
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+
+        pane_group.update(&mut app, |_, ctx| {
+            complete_block_in_pane(&terminal_view, completed_user_block("claude"), ctx);
+        });
+        // The permanent-close path writes on its own, and it is behind the same flag.
+        pane_group.update(&mut app, |panes, ctx| panes.clean_up_panes(ctx));
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![],
+            "with the feature off, a pane records neither its agent nor its absence"
+        );
+    });
+}
+
 // R19: the persisted value is a purpose-built struct, and the session context it is derived from
 // carries the user's prompts, the agent's replies, its summaries and its tool previews. None of
 // that may reach the store, so this pins the recorded field set exhaustively and checks each
@@ -4641,6 +4677,7 @@ fn pane_records_nothing_when_session_restore_is_off() {
 #[test]
 fn recorded_agent_session_carries_no_prompt_response_summary_or_tool_preview() {
     App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
         initialize_app(&mut app);
         let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
 
@@ -4653,7 +4690,7 @@ fn recorded_agent_session_carries_no_prompt_response_summary_or_tool_preview() {
                 sessions.set_session(
                     terminal_view_id,
                     CLIAgentSession {
-                        agent: crate::terminal::CLIAgent::Claude,
+                        agent: CLIAgent::Claude,
                         status: CLIAgentSessionStatus::InProgress,
                         session_context: CLIAgentSessionContext {
                             cwd: Some("SENSITIVE-cwd".to_owned()),
@@ -4713,7 +4750,7 @@ fn recorded_agent_session_carries_no_prompt_response_summary_or_tool_preview() {
 /// A recording for a pane that was running Claude in `directory` under `session_id`.
 fn recorded_session_for_test(session_id: &str, directory: &Path) -> RecordedAgentSession {
     RecordedAgentSession {
-        agent: crate::terminal::CLIAgent::Claude,
+        agent: CLIAgent::Claude,
         session_id: session_id.to_owned(),
         flags: vec![],
         directory: directory.to_path_buf(),
@@ -4760,15 +4797,15 @@ fn startup_restore_for_test(
 /// reason about without a window existing.
 fn window_snapshot_for_test(panes: Vec<TerminalPaneSnapshot>) -> WindowSnapshot {
     WindowSnapshot {
-        tabs: vec![crate::app_state::TabSnapshot {
+        tabs: vec![app_state::TabSnapshot {
             custom_title: None,
             root: PaneNodeSnapshot::Branch(BranchSnapshot {
-                direction: crate::app_state::SplitDirection::Horizontal,
+                direction: app_state::SplitDirection::Horizontal,
                 children: panes
                     .into_iter()
                     .map(|pane| {
                         (
-                            crate::app_state::PaneFlex(1.),
+                            app_state::PaneFlex(1.),
                             PaneNodeSnapshot::Leaf(LeafSnapshot {
                                 is_focused: false,
                                 custom_vertical_tabs_title: None,
@@ -4924,6 +4961,41 @@ fn resume_claims_go_to_the_pane_in_the_window_the_user_lands_in() {
     assert_eq!(claims, HashSet::from([background_pane, undisputed_pane]));
 }
 
+// AE9: the claim is settled before a window exists, so a pane that could never resume must not
+// take an identifier with it. Ranking it first and rejecting it later leaves the pane that would
+// have resumed holding a lost claim, and neither comes back.
+#[test]
+fn a_pane_that_could_not_resume_does_not_win_a_claim_from_one_that_could() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let eligible = PaneUuid(vec![1]);
+    let ineligible = PaneUuid(vec![2]);
+    let sessions = HashMap::from([
+        (
+            eligible.clone(),
+            recorded_session_for_test("shared", directory.path()),
+        ),
+        (
+            ineligible.clone(),
+            RecordedAgentSession {
+                // Observed last, and last in a window that ranks every other way the same, so the
+                // tie-break would hand it the identifier.
+                observed_at: recorded_session_for_test("shared", directory.path()).observed_at
+                    + chrono::Duration::hours(1),
+                ..recorded_session_for_test("shared", &directory.path().join("gone"))
+            },
+        ),
+    ]);
+    let windows = vec![window_snapshot_for_test(vec![
+        local_pane_snapshot_for_test(&eligible.0, Some(directory.path())),
+        local_pane_snapshot_for_test(&ineligible.0, Some(directory.path())),
+    ])];
+
+    assert_eq!(
+        resolve_agent_session_claims(&windows, Some(0), &sessions),
+        HashSet::from([eligible])
+    );
+}
+
 // AE9: exactly one pane resumes per identifier, so the pane that lost the claim is ineligible
 // even though everything about the pane itself is fine.
 #[test]
@@ -4995,7 +5067,7 @@ fn resume_is_ineligible_for_an_agent_without_a_resume_declaration() {
     let directory = tempfile::tempdir().expect("temp dir");
     let pane_uuid = PaneUuid(vec![1]);
     let mut recorded = recorded_session_for_test("session-1", directory.path());
-    recorded.agent = crate::terminal::CLIAgent::Gemini;
+    recorded.agent = CLIAgent::Gemini;
     let agent_restore =
         startup_restore_for_test([(pane_uuid.clone(), recorded)], [pane_uuid.clone()]);
 
@@ -5106,7 +5178,7 @@ fn every_resume_rejection_carries_its_own_reason() {
     let mut without_identifier = recorded.clone();
     without_identifier.session_id = String::new();
     let mut undeclared_agent = recorded.clone();
-    undeclared_agent.agent = crate::terminal::CLIAgent::Gemini;
+    undeclared_agent.agent = CLIAgent::Gemini;
     let missing_directory = recorded_session_for_test("session-1", &directory.path().join("gone"));
 
     let claimed =
@@ -5256,7 +5328,7 @@ fn restored_panes_with_armed_resume(
         .into_iter()
         .map(|pane| {
             (
-                crate::app_state::PaneFlex(1.),
+                app_state::PaneFlex(1.),
                 PaneNodeSnapshot::Leaf(LeafSnapshot {
                     is_focused: false,
                     custom_vertical_tabs_title: None,
@@ -5266,7 +5338,7 @@ fn restored_panes_with_armed_resume(
         })
         .collect();
     let layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Branch(BranchSnapshot {
-        direction: crate::app_state::SplitDirection::Horizontal,
+        direction: app_state::SplitDirection::Horizontal,
         children,
     })));
 
@@ -5623,7 +5695,7 @@ fn a_resume_reports_the_recorded_age_in_bracketing_bands() {
 #[test]
 fn the_reported_resume_outcome_carries_nothing_of_the_session() {
     let recorded = RecordedAgentSession {
-        agent: crate::terminal::CLIAgent::Claude,
+        agent: CLIAgent::Claude,
         session_id: "SENSITIVE-session-id".to_owned(),
         flags: vec![RecordedFlag {
             name: "--SENSITIVE-flag".to_owned(),

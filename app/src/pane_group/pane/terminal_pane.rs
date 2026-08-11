@@ -14,6 +14,7 @@ use url::Url;
 #[cfg(not(target_family = "wasm"))]
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
+use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_util::path::EscapeChar;
 use warpui::{
@@ -51,7 +52,6 @@ use crate::app_state::{
     AmbientAgentPaneSnapshot, LeafContents, RecordedAgentSession, TerminalPaneSnapshot,
 };
 use crate::code::buffer_location::LocalOrRemotePath;
-use crate::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
 use crate::pane_group::CodeSource;
 use crate::pane_group::Event::OpenConversationHistory;
@@ -245,12 +245,13 @@ impl TerminalPane {
 
     /// Instructs the SQLite thread to drop whatever agent state was recorded for this session.
     ///
-    /// Sent from the permanent-close branch of [`Self::detach`] only, and behind the same guard
-    /// [`Self::delete_blocks`] uses. A pane hidden for close comes back if the user undoes the
-    /// close, and what it recorded is exactly what resumes its agent then (R20) — only a pane
-    /// that will never return leaves a row that nothing can claim.
+    /// Only for a pane that will never come back: a pane hidden for close returns if the user
+    /// undoes the close, and what it recorded is exactly what resumes its agent then (R20), so a
+    /// row is garbage only once nothing can claim it.
     pub(in crate::pane_group) fn delete_recorded_agent_session(&self, ctx: &AppContext) {
-        if !AppExecutionMode::as_ref(ctx).can_save_session() {
+        if !FeatureFlag::AgentSessionResume.is_enabled()
+            || !AppExecutionMode::as_ref(ctx).can_save_session()
+        {
             return;
         }
 
@@ -726,9 +727,12 @@ fn capture_agent_session(
         return;
     }
 
-    // The same gate block saving uses: a user who turned session restore off, or a Warp that is
-    // not an interactive app, has nothing recorded about their panes.
-    if !*GeneralSettings::as_ref(ctx).restore_session
+    // Nothing about a pane's agent is written for a feature nothing can act on, so a build with
+    // the flag off records exactly what it did before this existed. On top of that, the same gate
+    // block saving uses: a user who turned session restore off, or a Warp that is not an
+    // interactive app, has nothing recorded about their panes.
+    if !FeatureFlag::AgentSessionResume.is_enabled()
+        || !*GeneralSettings::as_ref(ctx).restore_session
         || !AppExecutionMode::as_ref(ctx).can_save_session()
     {
         return;
@@ -785,7 +789,11 @@ fn capture_agent_session(
             }
             None
         }
-        _ => return,
+        // Neither says anything new about the conversation: the agent starting is followed by the
+        // identifier arriving on its own event, and opening or closing the pane's input is a UI
+        // state with no bearing on what a restart would reattach to.
+        CLIAgentSessionsModelEvent::Started { .. }
+        | CLIAgentSessionsModelEvent::InputSessionChanged { .. } => return,
     };
 
     let mut last_sent = agent_capture.last_sent.lock();
@@ -924,10 +932,14 @@ fn recorded_resume_flags(
         return Vec::new();
     }
 
-    // Splitting on whitespace splits a quoted value too, but every shape the allowlist declares
-    // is a bare token, so a value that needed quoting was never one a resume could carry.
-    let args = resolved.split_whitespace().skip(1).collect::<Vec<_>>();
-    ResumeDeclarations::embedded().extract_resume_flags(agent, &args)
+    // Tokenized the way the shell reads the line, so a quoted prompt stays one word. Splitting on
+    // whitespace would read the flag-shaped words inside `claude "use --permission-mode
+    // bypassPermissions"` as flags the user chose, and record an elevation they never asked for.
+    // A line that does not tokenize is one nothing here can account for, so it contributes none.
+    let Ok(words) = shell_words::split(&resolved) else {
+        return Vec::new();
+    };
+    ResumeDeclarations::embedded().extract_resume_flags(agent, words.get(1..).unwrap_or_default())
 }
 
 fn retrieve_shared_session_link(manager: &Manager, terminal_view_id: &EntityId) -> Option<Url> {
