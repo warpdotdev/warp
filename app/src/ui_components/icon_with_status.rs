@@ -270,11 +270,6 @@ pub(crate) fn render_icon_with_status_with_badge_style(
     }
 }
 
-// Ambient/cloud runs keep the legacy `OzCloud` mark as a hold-over until a cloud
-// variant of the Warp brand mark (`Icon::Agent`) exists; without it, local and cloud
-// runs would render the identical glyph and lose the distinction reviewers rely on to
-// tell them apart at a glance (see PR #11022's merge-resolution discussion). Local runs
-// use the Warp mark.
 fn oz_agent_glyph(is_ambient: bool) -> WarpIcon {
     if is_ambient {
         WarpIcon::OzCloud
