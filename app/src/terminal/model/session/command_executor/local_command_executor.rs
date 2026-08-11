@@ -14,6 +14,26 @@ use crate::safe_warn;
 use crate::terminal::shell::{Shell, ShellType};
 
 #[cfg(unix)]
+fn is_owned_process_group_leader(pid: u32) -> bool {
+    use nix::unistd::{Pid, getpgid};
+
+    // A pid of 0 means "the caller's own process group", and `-(1u32 as i32)`
+    // is -1, which broadcasts to every process the caller is allowed to
+    // signal. Neither is ever a legitimate process group we track, so refuse
+    // them before they can reach `kill(2)`.
+    if pid < 2 {
+        return false;
+    }
+
+    // We only ever create process groups whose id equals their leader's own
+    // pid (see `Command::new_with_process_group`), so a pid that is no
+    // longer its own group leader can't be the group we registered: either
+    // it has exited and the pid was recycled by an unrelated process, or it
+    // was never a group leader at all.
+    matches!(getpgid(Some(Pid::from_raw(pid as i32))), Ok(pgid) if pgid.as_raw() == pid as i32)
+}
+
+#[cfg(unix)]
 fn kill_all_processes_in_process_group(pid: u32) -> Result<(), nix::Error> {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
@@ -22,10 +42,23 @@ fn kill_all_processes_in_process_group(pid: u32) -> Result<(), nix::Error> {
 }
 #[cfg(unix)]
 fn terminate_process_group(process_group_id: u32) {
-    if let Err(error) = kill_all_processes_in_process_group(process_group_id) {
-        match error {
-            nix::errno::Errno::ESRCH | nix::errno::Errno::EPERM => {}
-            _ => log::warn!("Failed to kill process group {process_group_id}: {error}"),
+    if !is_owned_process_group_leader(process_group_id) {
+        log::warn!(
+            "Skipping SIGKILL of process group {process_group_id}: it is no longer a process group we own"
+        );
+        return;
+    }
+
+    match kill_all_processes_in_process_group(process_group_id) {
+        Ok(()) => log::info!("Sent SIGKILL to process group {process_group_id}"),
+        Err(error @ nix::errno::Errno::ESRCH) => {
+            log::info!("Process group {process_group_id} had already exited: {error}");
+        }
+        Err(error @ nix::errno::Errno::EPERM) => {
+            log::warn!("Not permitted to kill process group {process_group_id}: {error}");
+        }
+        Err(error) => {
+            log::warn!("Failed to kill process group {process_group_id}: {error}");
         }
     }
 }

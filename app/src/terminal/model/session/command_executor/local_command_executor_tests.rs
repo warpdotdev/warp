@@ -4,6 +4,7 @@ mod unix {
     use std::fs::{self, File, OpenOptions};
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
+    use std::os::unix::process::ExitStatusExt as _;
     use std::path::Path;
     use std::time::Duration;
 
@@ -210,5 +211,82 @@ mod unix {
                 "descendant-ran"
             );
         });
+    }
+
+    fn spawn_sleep(own_process_group: bool) -> std::process::Child {
+        let mut cmd = command::blocking::Command::new("/bin/sleep");
+        cmd.arg("5");
+        if own_process_group {
+            // SAFETY: `setpgid` is async-signal-safe (see signal-safety(7)),
+            // and only makes the child the leader of a new process group
+            // with its own pid, mirroring `Command::new_with_process_group`.
+            unsafe {
+                cmd.pre_exec(|| {
+                    if libc::setpgid(0, 0) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+        cmd.spawn().expect("spawn /bin/sleep")
+    }
+
+    // The full PID-reuse TOCTOU (register a pid, let the real child be
+    // reaped, splice in a decoy process group leader that recycles the same
+    // pid, then confirm the decoy survives cancellation) isn't covered here:
+    // deterministically forcing the OS to recycle a specific pid isn't
+    // practical in a unit test. These tests instead cover the guard logic
+    // directly.
+
+    #[test]
+    fn owned_process_group_leader_rejects_pid_below_two() {
+        assert!(!is_owned_process_group_leader(0));
+        assert!(!is_owned_process_group_leader(1));
+    }
+
+    #[test]
+    fn owned_process_group_leader_rejects_non_leader_pid() {
+        // A normal child inherits its parent's process group, so its pid is
+        // not its own group leader.
+        let mut child = spawn_sleep(false);
+        assert!(!is_owned_process_group_leader(child.id()));
+        child.kill().ok();
+        child.wait().ok();
+    }
+
+    #[test]
+    fn owned_process_group_leader_accepts_real_group_leader() {
+        let mut child = spawn_sleep(true);
+        assert!(is_owned_process_group_leader(child.id()));
+        child.kill().ok();
+        child.wait().ok();
+    }
+
+    #[test]
+    fn terminate_process_group_kills_owned_leader() {
+        let mut child = spawn_sleep(true);
+
+        terminate_process_group(child.id());
+
+        let status = child.wait().expect("wait for sleep");
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
+    }
+
+    #[test]
+    fn terminate_process_group_skips_non_leader_pid() {
+        let mut child = spawn_sleep(false);
+
+        // The child isn't a process group leader, so this must not reach
+        // `kill(2)` with a negative pid derived from it.
+        terminate_process_group(child.id());
+
+        assert_eq!(
+            child.try_wait().expect("poll sleep"),
+            None,
+            "non-leader pid should not have been signaled"
+        );
+        child.kill().ok();
+        child.wait().ok();
     }
 }
