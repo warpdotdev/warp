@@ -353,6 +353,10 @@ pub enum ModelEvent {
     /// Recording and clearing are one event rather than two so that everything a pane says about
     /// its agent stays in one order: a clear that overtook the record it supersedes would leave a
     /// finished agent looking resumable.
+    ///
+    /// A pane removed for good clears through this same event rather than one of its own, for
+    /// that same reason: with one ordered, per-pane-coalesced stream the pane's last word wins,
+    /// whether it came from the agent ending or from the pane going away.
     SetAgentSession {
         pane_id: Vec<u8>,
         session: Option<RecordedAgentSession>,
