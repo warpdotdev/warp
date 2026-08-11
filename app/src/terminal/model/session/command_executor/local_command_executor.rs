@@ -22,12 +22,10 @@ fn kill_all_processes_in_process_group(pid: u32) -> Result<(), nix::Error> {
 }
 #[cfg(unix)]
 fn terminate_process_group(process_group_id: u32) {
-    // `child.id()` after a successful spawn is always a real, positive pid,
-    // so this is unreachable today. It's a cheap assertion against a future
-    // refactor feeding this path a pid that didn't come from a spawn: a pid
-    // of 0 means "the caller's own process group", and `-(1u32 as i32)` is
-    // -1, which broadcasts to every process the caller is allowed to
-    // signal.
+    // A pgid of 0 targets the caller's own process group, and 1 negates to
+    // -1, which SIGKILLs every process this user is allowed to signal.
+    // Neither is ever a legitimate target, so refuse them rather than let a
+    // bad pgid reach `kill`.
     if process_group_id < 2 {
         log::warn!("Refusing to signal process group {process_group_id}: pid is below 2");
         return;
