@@ -46,7 +46,7 @@ use crate::ai::onboarding::{
     onboarding_pricing_promotion_message,
 };
 use crate::ai::request_usage_model::AIRequestUsageModelEvent;
-use crate::app_state::{AppState, PaneUuid, WindowSnapshot};
+use crate::app_state::{AgentSessionRestore, AppState, PaneUuid, WindowSnapshot};
 use crate::appearance::Appearance;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::auth_override_warning_modal::{
@@ -797,6 +797,12 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
         if *GeneralSettings::as_ref(ctx).restore_session {
             let mut active_index = None;
             let mut normal_window_count = 0;
+            // This is the one restore pass that may resume agents; tabs restored from a snapshot
+            // later in the session go through the same code with this left unset.
+            let agent_restore = AgentSessionRestore {
+                sessions: app_state.agent_sessions.clone(),
+                is_startup_restore: true,
+            };
             for (idx, window) in app_state.windows.iter().enumerate() {
                 // If this window is a quake window, hide it by default.
                 if window.quake_mode {
@@ -834,6 +840,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                                 NewWorkspaceSource::Restored {
                                     window_snapshot: window.clone(),
                                     block_lists: app_state.block_lists.clone(),
+                                    agent_restore: agent_restore.clone(),
                                 },
                                 ctx,
                             );
@@ -874,6 +881,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                                     NewWorkspaceSource::Restored {
                                         window_snapshot: window.clone(),
                                         block_lists: app_state.block_lists.clone(),
+                                        agent_restore: agent_restore.clone(),
                                     },
                                     ctx,
                                 );
@@ -926,6 +934,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                             NewWorkspaceSource::Restored {
                                 window_snapshot: window.clone(),
                                 block_lists: app_state.block_lists.clone(),
+                                agent_restore: agent_restore.clone(),
                             },
                             ctx,
                         );
@@ -1618,6 +1627,7 @@ pub enum NewWorkspaceSource {
     Restored {
         window_snapshot: WindowSnapshot,
         block_lists: Arc<HashMap<PaneUuid, Vec<SerializedBlockListItem>>>,
+        agent_restore: AgentSessionRestore,
     },
     Session {
         options: Box<NewTerminalOptions>,
@@ -3130,6 +3140,7 @@ impl RootView {
                             .with_initial_directory_opt(path_if_directory(path).map(Into::into)),
                     )),
                     Arc::new(HashMap::new()),
+                    AgentSessionRestore::default(),
                     None,
                     ctx,
                 );
@@ -3305,6 +3316,7 @@ impl RootView {
                 workspace.add_tab_with_pane_layout(
                     PanesLayout::SingleTerminal(Box::default()),
                     Arc::new(HashMap::new()),
+                    AgentSessionRestore::default(),
                     None,
                     ctx,
                 );
@@ -3350,6 +3362,7 @@ impl RootView {
             workspace.add_tab_with_pane_layout(
                 PanesLayout::SingleTerminal(Box::default()),
                 Arc::new(HashMap::new()),
+                AgentSessionRestore::default(),
                 None,
                 ctx,
             );

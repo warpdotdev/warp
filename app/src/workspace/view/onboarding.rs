@@ -7,6 +7,7 @@ use warp_core::execution_mode::AppExecutionMode;
 use warp_errors::report_error;
 use warpui::{SingletonEntity as _, ViewContext};
 
+use crate::app_state::AgentSessionRestore;
 use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::settings::AISettings;
 use crate::terminal::view::{
@@ -137,6 +138,7 @@ impl Workspace {
                         ..Default::default()
                     })),
                     Arc::new(HashMap::new()),
+                    AgentSessionRestore::default(),
                     None,
                     ctx,
                 );
