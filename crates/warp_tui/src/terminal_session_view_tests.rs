@@ -5631,6 +5631,37 @@ fn terminal_wakeup_redraws_only_the_focused_session() {
         assert!(!background.update(&mut app, |view, ctx| { view.handle_terminal_wakeup(ctx) }));
     });
 }
+
+#[test]
+fn terminal_wakeup_focuses_a_new_long_running_command() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let input_id = view.read(&app, |view, _| view.input_view.id());
+
+        view.update(&mut app, |view, ctx| {
+            view.terminal_model
+                .lock()
+                .simulate_long_running_block("cat", "");
+            assert!(view.input_target().pty_owns_input());
+            assert_eq!(
+                ctx.focused_view_id(fixture.window_id),
+                Some(input_id),
+                "the composer remains focused until the delayed terminal wakeup"
+            );
+
+            assert!(view.handle_terminal_wakeup(ctx));
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.focused_view_id(fixture.window_id),
+                Some(view.id()),
+                "the PTY-owning session must receive input after the wakeup"
+            );
+        });
+    });
+}
 #[test]
 fn background_focus_reconciliation_does_not_steal_foreground_focus() {
     App::test((), |mut app| async move {

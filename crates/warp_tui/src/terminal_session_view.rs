@@ -3240,6 +3240,12 @@ impl TuiTerminalSessionView {
         }
         let is_focused = self.is_focused_session(ctx);
         if is_focused {
+            let pty_owns_input = self
+                .session_state(ctx)
+                .is_ok_and(|state| state.input_target().pty_owns_input());
+            if pty_owns_input && self.input_view.is_focused(ctx) {
+                self.focus_current_owner(ctx);
+            }
             ctx.notify();
         }
         is_focused
