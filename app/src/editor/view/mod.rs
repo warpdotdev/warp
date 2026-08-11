@@ -800,10 +800,17 @@ pub fn init(ctx: &mut AppContext) {
             "Clear selected lines",
             EditorAction::ClearAndCopyLines,
         )
-        .with_context_predicate(id!("EditorView") & !id!("IMEOpen") & !id!("Vim"))
-        // Mac only because otherwise this would conflict with the keybinding to clear all blocks.
-        // NOTE ctrl-u exists as a default binding for this action that works across all platforms.
-        .with_mac_key_binding("cmd-shift-K"),
+        // Deliberately ships with no default chord. It used to take mac `cmd-shift-K`, which
+        // `workspace:open_session_search` now owns; because keymap precedence is reverse
+        // registration order and `editor::init` runs after `workspace::init`, this binding won
+        // that chord inside any focused editor — including a CLI agent's rich input, which is
+        // exactly where session search is most wanted.
+        //
+        // Nothing is lost: `editor_view:clear_and_copy_lines` above binds the same
+        // `EditorAction::ClearAndCopyLines` to `ctrl-u` on every platform. This entry stays
+        // registered so it remains listed and rebindable in Settings, and so anyone who already
+        // bound it in keybindings.yaml keeps their binding.
+        .with_context_predicate(id!("EditorView") & !id!("IMEOpen") & !id!("Vim")),
         EditableBinding::new(
             "editor_view:cut_all_right",
             "Cut all right",

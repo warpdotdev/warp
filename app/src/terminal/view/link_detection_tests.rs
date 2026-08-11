@@ -9,6 +9,38 @@ use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::WithinModel;
 
 #[test]
+fn temp_repro_relative_path_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let docs = dir.path().join("docs");
+    std::fs::create_dir(&docs).unwrap();
+    let file = docs.join("uat_scenarios_3_and_7_test_data.md");
+    std::fs::write(&file, "# Hello\n").unwrap();
+
+    let blockgrid = crate::test_util::blockgrid::mock_blockgrid(
+        "› [file] docs/uat_scenarios_3_and_7_test_data.md (25.5KB)",
+    );
+    // Hover in the middle of the relative path.
+    let possible_paths = blockgrid
+        .grid_handler()
+        .possible_file_paths_at_point(Point { row: 0, col: 20 });
+    eprintln!("possible paths: {possible_paths:#?}");
+
+    let candidates: Vec<_> = possible_paths
+        .into_iter()
+        .map(WithinModel::AltScreen)
+        .collect();
+
+    let link = TerminalView::compute_valid_paths(
+        dir.path().to_str().unwrap(),
+        candidates.into_iter(),
+        1000,
+        None,
+    );
+    eprintln!("link result: {link:#?}");
+    assert!(link.is_some(), "relative path should resolve to a link");
+}
+
+#[test]
 fn strips_only_sentence_periods() {
     // A trailing period after a real file name is sentence punctuation.
     assert_eq!(

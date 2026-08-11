@@ -394,6 +394,9 @@ pub(crate) fn apply_cli_agent_state_update(
                             draft_text: None,
                             custom_command_prefix: None,
                             received_rich_notification: false,
+                            blocked_since: None,
+                            success_seen: false,
+                            marked_unread: false,
                             // Viewer input is managed by the sync protocol,
                             // not local status-change auto-toggle.
                             should_auto_toggle_input: false,

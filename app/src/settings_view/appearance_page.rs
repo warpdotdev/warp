@@ -93,11 +93,11 @@ use crate::window_settings::{
 use crate::workspace::WorkspaceAction;
 use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
 use crate::workspace::tab_settings::{
-    DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs, PreserveActiveTabColor,
-    ShowCodeReviewButton, ShowIndicatorsButton, ShowVerticalTabPanelInRestoredWindows,
-    TabCloseButtonPosition, TabSettings, TabSettingsChangedEvent,
-    UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
-    WorkspaceDecorationVisibility, canonical_directory_key,
+    DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs, PreserveActiveTabColor, RailShowTasks,
+    RailTaskInfo, ShowCodeReviewButton, ShowIndicatorsButton,
+    ShowVerticalTabPanelInRestoredWindows, TabCloseButtonPosition, TabLineCount, TabSettings,
+    TabSettingsChangedEvent, UseLatestUserPromptAsConversationTitleInTabNames, UseProjectLayout,
+    UseVerticalTabs, WorkspaceDecorationVisibility, canonical_directory_key,
 };
 use crate::{send_telemetry_from_ctx, themes};
 
@@ -133,6 +133,14 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 ) {
     // Add all the toggle settings from the Appearance Page that you want to show up on the Command Palette here.
     let mut toggle_binding_pairs = vec![
+        ToggleSettingActionPair::new(
+            "project layout",
+            builder(SettingsAction::AppearancePageToggle(
+                AppearancePageAction::ToggleProjectLayout,
+            )),
+            context,
+            flags::PROJECT_LAYOUT_CONTEXT_FLAG,
+        ),
         ToggleSettingActionPair::new(
             "compact mode",
             builder(SettingsAction::AppearancePageToggle(
@@ -516,6 +524,10 @@ pub enum AppearancePageAction {
     ToggleJumpToBottomOfBlockButton,
     ToggleShowBlockDividers,
     ToggleCompactMode,
+    ToggleProjectLayout,
+    ToggleTwoLineTabs,
+    ToggleRailShowTasks,
+    SetRailTaskInfo(RailTaskInfo),
     ToggleCursorBlink,
     ToggleRespectSystemTheme,
     ToggleOpenWindowsAtCustomSize,
@@ -572,6 +584,7 @@ pub struct AppearanceSettingsPageView {
     font_family_dropdown: ViewHandle<FilterableDropdown<AppearancePageAction>>,
     font_weight_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     #[allow(dead_code)]
+    rail_task_info_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     thin_strokes_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     enforce_min_contrast_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     input_mode_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
@@ -655,6 +668,10 @@ impl TypedActionView for AppearanceSettingsPageView {
             ToggleJumpToBottomOfBlockButton => self.toggle_jump_to_bottom_of_block_button(ctx),
             ToggleShowBlockDividers => self.toggle_show_block_dividers(ctx),
             ToggleCompactMode => self.toggle_compact_mode(ctx),
+            ToggleProjectLayout => self.toggle_project_layout(ctx),
+            ToggleTwoLineTabs => self.toggle_two_line_tabs(ctx),
+            ToggleRailShowTasks => self.toggle_rail_show_tasks(ctx),
+            SetRailTaskInfo(value) => self.set_rail_task_info(value, ctx),
             ToggleCursorBlink => self.toggle_cursor_blink(ctx),
             ToggleOpenWindowsAtCustomSize => self.toggle_open_windows_at_custom_size(ctx),
             ToggleRespectSystemTheme => self.toggle_respect_system_theme(ctx),
@@ -1164,6 +1181,36 @@ impl AppearanceSettingsPageView {
             dropdown
         });
 
+        let rail_task_info_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            let values = vec![
+                RailTaskInfo::AgentSession,
+                RailTaskInfo::UserInstruction,
+                RailTaskInfo::Command,
+                RailTaskInfo::WorkingDirectory,
+                RailTaskInfo::Branch,
+            ];
+            let current_value = *TabSettings::as_ref(ctx).rail_task_info.value();
+            let selected_index = values
+                .iter()
+                .position(|val| *val == current_value)
+                .unwrap_or_default();
+            dropdown.add_items(
+                values
+                    .into_iter()
+                    .map(|val| {
+                        DropdownItem::new(
+                            Self::rail_task_info_item_label(val),
+                            AppearancePageAction::SetRailTaskInfo(val),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+            dropdown.set_selected_by_index(selected_index, ctx);
+            dropdown
+        });
+
         let thin_strokes_dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = Dropdown::new(ctx);
 
@@ -1348,6 +1395,7 @@ impl AppearanceSettingsPageView {
             blur_state: Default::default(),
             font_family_dropdown,
             font_weight_dropdown,
+            rail_task_info_dropdown,
             thin_strokes_dropdown,
             input_mode_dropdown,
             input_type_radio_state,
@@ -1541,6 +1589,13 @@ impl AppearanceSettingsPageView {
         }
         tab_settings_widgets.push(Box::new(PreserveActiveTabColorWidget::default()));
 
+        if FeatureFlag::Projects.is_enabled() {
+            tab_settings_widgets.push(Box::new(ProjectLayoutWidget::default()));
+            tab_settings_widgets.push(Box::new(TwoLineTabsWidget::default()));
+            tab_settings_widgets.push(Box::new(RailShowTasksWidget::default()));
+            tab_settings_widgets.push(Box::new(RailTaskInfoWidget::default()));
+        }
+
         if FeatureFlag::VerticalTabs.is_enabled() {
             tab_settings_widgets.push(Box::new(VerticalTabsWidget::default()));
             tab_settings_widgets.push(Box::new(
@@ -1707,6 +1762,16 @@ impl AppearanceSettingsPageView {
             AppIcon::Starburst => "Starburst",
             AppIcon::Sticker => "Sticker",
             AppIcon::WarpOne => "Warp 1",
+        }
+    }
+
+    fn rail_task_info_item_label(val: RailTaskInfo) -> &'static str {
+        match val {
+            RailTaskInfo::AgentSession => "Agent session name",
+            RailTaskInfo::UserInstruction => "Latest instruction",
+            RailTaskInfo::Command => "Last command",
+            RailTaskInfo::WorkingDirectory => "Working directory",
+            RailTaskInfo::Branch => "Branch",
         }
     }
 
@@ -2314,6 +2379,45 @@ impl AppearanceSettingsPageView {
                 terminal_settings
                     .spacing_mode
                     .set_value(current_value.other_mode(), ctx)
+            );
+        });
+    }
+
+    /// Toggles listing each project's tasks in the project rail.
+    pub fn toggle_rail_show_tasks(&mut self, ctx: &mut ViewContext<Self>) {
+        TabSettings::handle(ctx).update(ctx, |tab_settings, ctx| {
+            let current_value = *tab_settings.rail_show_tasks;
+            report_if_error!(tab_settings.rail_show_tasks.set_value(!current_value, ctx));
+        });
+    }
+
+    /// Chooses what each task row in the project rail shows.
+    pub fn set_rail_task_info(&mut self, value: &RailTaskInfo, ctx: &mut ViewContext<Self>) {
+        let value = *value;
+        TabSettings::handle(ctx).update(ctx, |tab_settings, ctx| {
+            report_if_error!(tab_settings.rail_task_info.set_value(value, ctx));
+        });
+    }
+
+    /// Toggles tabs between one and two lines of information.
+    pub fn toggle_two_line_tabs(&mut self, ctx: &mut ViewContext<Self>) {
+        TabSettings::handle(ctx).update(ctx, |tab_settings, ctx| {
+            let next = match tab_settings.tab_line_count {
+                TabLineCount::SingleLine => TabLineCount::TwoLine,
+                TabLineCount::TwoLine => TabLineCount::SingleLine,
+            };
+            report_if_error!(tab_settings.tab_line_count.set_value(next, ctx));
+        });
+    }
+
+    /// Toggles the Projects × Tasks layout (project rail + project-scoped tabs).
+    pub fn toggle_project_layout(&mut self, ctx: &mut ViewContext<Self>) {
+        TabSettings::handle(ctx).update(ctx, |tab_settings, ctx| {
+            let current_value = *tab_settings.use_project_layout;
+            report_if_error!(
+                tab_settings
+                    .use_project_layout
+                    .set_value(!current_value, ctx)
             );
         });
     }
@@ -4981,6 +5085,175 @@ impl SettingsWidget for PreserveActiveTabColorWidget {
                 })
                 .finish(),
             None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct ProjectLayoutWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for ProjectLayoutWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "project layout projects rail tasks tabs repository worktree"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let tab_settings = TabSettings::as_ref(app);
+
+        render_body_item::<AppearancePageAction>(
+            "Group sessions by project".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                UseProjectLayout::storage_key(),
+                UseProjectLayout::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*tab_settings.use_project_layout)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AppearancePageAction::ToggleProjectLayout);
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct TwoLineTabsWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for TwoLineTabsWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "two line tabs subtitle agent session command height"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let tab_settings = TabSettings::as_ref(app);
+        let is_two_line = matches!(tab_settings.tab_line_count, TabLineCount::TwoLine);
+
+        render_body_item::<AppearancePageAction>(
+            "Show two lines on tabs".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                TabLineCount::storage_key(),
+                TabLineCount::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(is_two_line)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AppearancePageAction::ToggleTwoLineTabs);
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct RailShowTasksWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for RailShowTasksWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "project rail tasks list status per task"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let tab_settings = TabSettings::as_ref(app);
+
+        render_body_item::<AppearancePageAction>(
+            "List tasks in the project rail".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                RailShowTasks::storage_key(),
+                RailShowTasks::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*tab_settings.rail_show_tasks)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AppearancePageAction::ToggleRailShowTasks);
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct RailTaskInfoWidget {}
+
+impl SettingsWidget for RailTaskInfoWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "project rail task label agent session instruction command branch"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_dropdown_item(
+            appearance,
+            "Task rows show",
+            None,
+            None,
+            LocalOnlyIconState::for_setting(
+                RailTaskInfo::storage_key(),
+                RailTaskInfo::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            None,
+            &view.rail_task_info_dropdown,
         )
     }
 }

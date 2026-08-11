@@ -49,9 +49,11 @@ use anyhow::Context as _;
 #[cfg(target_os = "macos")]
 use anyhow::Result;
 use autoupdate::AutoupdateStage;
+use chrono::{DateTime, Utc};
 #[cfg(target_os = "macos")]
 use command::blocking::Command;
 use futures::Future;
+use futures::stream::AbortHandle;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 pub(crate) use onboarding::OnboardingTutorial;
@@ -77,7 +79,7 @@ use warp_core::ui::Icon;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::phenomenon::PhenomenonStyle;
-use warp_core::ui::theme::{AnsiColors, Fill};
+use warp_core::ui::theme::{AnsiColors, Fill, WarpTheme};
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_editor::editor::NavigationKey;
 use warp_errors::{report_error, report_if_error};
@@ -86,22 +88,25 @@ use warp_util::path::{LineAndColumnArg, user_friendly_path};
 use warpui::accessibility::{
     AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
 };
+use warpui::r#async::Timer;
 use warpui::clipboard::ClipboardContent;
 #[cfg(target_family = "wasm")]
 use warpui::elements::Percentage;
 use warpui::elements::{
-    Align, Border, CacheOption, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, Dismiss, DispatchEventResult, DragAxis, Draggable,
-    DraggableState, DropTarget, Element, Empty, EventHandler, Expanded, Fill as ElementFill, Flex,
-    Highlight, Hoverable, Icon as WarpUiIcon, Image, MainAxisAlignment, MainAxisSize,
-    MouseInBehavior, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect,
-    SavePosition, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
+    Align, Border, CacheOption, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle,
+    ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
+    DispatchEventResult, DragAxis, DragBarSide, Draggable, DraggableState, DropTarget, Element,
+    Empty, EventHandler, Expanded, Fill as ElementFill, Flex, Highlight, Hoverable,
+    Icon as WarpUiIcon, Image, MainAxisAlignment, MainAxisSize, MouseInBehavior, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, Rect, Resizable, ResizableStateHandle, SavePosition,
+    ScrollbarWidth, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
+    resizable_state_handle,
 };
-use warpui::fonts::{Properties, Weight};
+use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::keymap::Context;
-use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
+use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback, ModalButton};
 use warpui::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
 use warpui::platform::{
     Cursor, FilePickerConfiguration, FullscreenState, SystemTheme, TerminationMode,
@@ -126,8 +131,8 @@ use self::vertical_tabs::{
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use super::action::AutoCloudHandoffTrigger;
 use super::action::{
-    InitContent, NewSessionMenuAnchor, RestoreConversationLayout, TabContextMenuAnchor,
-    VerticalTabsPaneContextMenuTarget, WorkspaceAction,
+    InitContent, NewSessionMenuAnchor, RailTaskMenuTarget, RestoreConversationLayout,
+    TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget, WorkspaceAction,
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use super::auto_handoff::AutoCloudHandoffController;
@@ -149,8 +154,9 @@ use super::rewind_confirmation_dialog::{
     RewindConfirmationDialog, RewindConfirmationEvent, RewindDialogSource,
 };
 use super::tab_settings::{
-    HeaderToolbarChipSelection, NewTabPlacement, TabSettings, TabSettingsChangedEvent,
-    VerticalTabsDisplayGranularity, WorkspaceDecorationVisibility,
+    HeaderToolbarChipSelection, NewTabPlacement, TabLineCount, TabSettings,
+    TabSettingsChangedEvent, VerticalTabsDisplayGranularity, WorkspaceDecorationVisibility,
+    project_layout_active, vertical_tabs_layout_active,
 };
 use super::util::{
     PaneViewLocator, TabMovement, TerminalSessionFallbackBehavior, WelcomeTipsViewState,
@@ -163,7 +169,7 @@ use crate::ai::agent::CancellationReason;
 use crate::ai::agent::api::ServerConversationToken;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::conversation::AIAgentHarness;
-use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentInput, EntrypointType};
 #[cfg(target_family = "wasm")]
 use crate::ai::agent_conversations_model::AgentConversationsModelEvent;
@@ -211,6 +217,7 @@ use crate::ai::blocklist::{
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 #[cfg(target_family = "wasm")]
 use crate::ai::conversation_details_panel::ConversationDetailsPanel;
+use crate::ai::conversation_status_ui::{StatusElementStyle, render_status_element};
 use crate::ai::conversation_utils;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
 use crate::ai::execution_profiles::ExecutionProfileId;
@@ -317,6 +324,9 @@ use crate::resource_center::{
 };
 use crate::reward_view::{RewardEvent, RewardKind, RewardView};
 use crate::root_view::{NewWorkspaceSource, OpenLaunchConfigArg, quake_mode_window_id};
+use crate::search::command_palette::agent_sessions::{
+    self, AgentSessionCandidate, CandidateOrigin,
+};
 use crate::search::command_palette::view::{
     Event as CommandPaletteEvent, NavigationMode, View as CommandPalette,
 };
@@ -338,10 +348,13 @@ use crate::server::server_api::{ServerApi, ServerApiProvider, ServerTime};
 use crate::server::telemetry::{
     AddTabWithShellSource, AnonymousUserSignupEntrypoint, CloseTarget, EnvVarTelemetryMetadata,
     FileTreeSource, KnowledgePaneEntrypoint, LaunchConfigUiLocation,
-    MCPServerCollectionPaneEntrypoint, NotificationsTurnedOnSource, OpenedWarpAISource,
-    PaletteSource, SharingDialogSource, TabRenameEvent, TierLimitHitEvent, WarpDriveSource,
+    MCPServerCollectionPaneEntrypoint, NotificationAgentVariant, NotificationsTurnedOnSource,
+    OpenedWarpAISource, PaletteSource, SharingDialogSource, TabRenameEvent, TierLimitHitEvent,
+    WarpDriveSource,
 };
-use crate::session_management::{SessionNavigationData, SessionSource, TabNavigationData};
+use crate::session_management::{
+    RunningSessionSummary, SessionNavigationData, SessionSource, TabNavigationData,
+};
 use crate::settings::cloud_preferences::CloudPreferencesSettings;
 use crate::settings::{
     AISettings, AISettingsChangedEvent, AccessibilitySettings, AliasExpansionSettings,
@@ -363,9 +376,10 @@ use crate::settings_view::{SettingsSection, SettingsView, SettingsViewEvent, fla
 use crate::shell_indicator::ShellIndicatorType;
 use crate::tab::{
     COMPACT_TAB_WIDTH_THRESHOLD, ColorPickerTarget, MOVE_TO_GROUP_LABEL, NewSessionMenuItem,
-    PaneNameMenuTarget, SelectedTabColor, TAB_BAR_BORDER_HEIGHT, TAB_INDICATOR_HEIGHT,
-    TAB_PIN_INDICATOR_ICON_SIZE, TAB_PIN_VANISH_THRESHOLD, TabBarState, TabComponent, TabData,
-    TabTelemetryAction, color_picker_menu_items, tab_position_id, uses_vertical_tabs,
+    PaneNameMenuTarget, SelectedTabColor, TAB_BAR_BORDER_HEIGHT, TAB_COLOR_ICON_PATH,
+    TAB_INDICATOR_HEIGHT, TAB_NO_COLOR_ICON_PATH, TAB_PIN_INDICATOR_ICON_SIZE,
+    TAB_PIN_VANISH_THRESHOLD, TabBarState, TabComponent, TabData, TabTelemetryAction,
+    color_picker_menu_items, tab_position_id, uses_vertical_tabs,
 };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
@@ -387,7 +401,12 @@ use crate::terminal::available_shells::AvailableShells;
 use crate::terminal::block_list_viewport::InputMode;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
-use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
+use crate::terminal::cli_agent_sessions::session_scan::{
+    self, ClaudeSessionScanModel, ScannedSession,
+};
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentSession, CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+};
 use crate::terminal::enable_auto_reload_modal::{
     EnableAutoReloadModal, EnableAutoReloadModalEvent,
 };
@@ -426,19 +445,24 @@ use crate::terminal::view::load_ai_conversation::{
 };
 use crate::terminal::view::ssh_file_upload::FileUploadId;
 use crate::terminal::view::{
-    AgentOnboardingVersion, ConversationRestorationInNewPaneType, LeftPanelTargetView,
-    NOTIFICATIONS_TROUBLESHOOT_URL, OnboardingIntention, OnboardingVersion, SyncEvent,
-    SyncInputType, TerminalAction,
+    AgentOnboardingVersion, BlockNotification, ConversationRestorationInNewPaneType,
+    LeftPanelTargetView, NOTIFICATIONS_TROUBLESHOOT_URL, NotificationsTrigger, OnboardingIntention,
+    OnboardingVersion, SyncEvent, SyncInputType, TerminalAction,
 };
 use crate::terminal::warpify::settings::WarpifySettings;
-use crate::terminal::{self, BlockListSettings, SizeInfo, TerminalModel, TerminalView};
+use crate::terminal::{
+    self, AudibleBell, BlockListSettings, CLIAgent, SizeInfo, TerminalModel, TerminalView,
+};
 use crate::themes::theme::{AnsiColorIdentifier, RespectSystemTheme, ThemeKind};
 use crate::themes::theme_chooser::{ThemeChooser, ThemeChooserEvent, ThemeChooserMode};
 use crate::themes::theme_creator_modal::{ThemeCreatorModal, ThemeCreatorModalEvent};
 use crate::themes::theme_deletion_modal::{ThemeDeletionModal, ThemeDeletionModalEvent};
 use crate::tips::{TipsEvent, TipsView};
+use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
 use crate::ui_components::buttons::{combo_inner_button, icon_button_with_color};
+use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
+use crate::ui_components::icon_with_status::{IconWithStatusVariant, render_icon_with_status};
 use crate::ui_components::red_notification_dot::RedNotificationDot;
 use crate::ui_components::window_focus_dimming::WindowFocusDimming;
 use crate::ui_components::{blended_colors, icons};
@@ -495,7 +519,19 @@ use crate::workspace::cross_window_tab_drag::{
 };
 use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
+use crate::workspace::nag_engine::{BlockedTask, NagEngine, NagOutcome, NagPolicy, NagSummary};
 use crate::workspace::one_time_modal_model::OneTimeModalModel;
+use crate::workspace::project_key::ProjectKey;
+use crate::workspace::project_layout::{self, ProjectId, ProjectLayout};
+use crate::workspace::project_priorities::{ProjectPriorities, RailProjectRow, rail_project_rows};
+use crate::workspace::rail_clear_shells::{
+    RailShellRow, clear_shells_detail, clear_shells_prompt, cleared_shells_label, projects_of,
+    shells_to_clear,
+};
+use crate::workspace::rail_triage::{
+    self, ProjectTriage, RailChip, RailTask, RailUrgency, TaskTriage, chip_counts,
+    next_chip_target, rail_header_controls, rail_task_order,
+};
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::TabCloseButtonPosition;
@@ -556,9 +592,38 @@ const MAX_FONT_SIZE: f32 = 25.0;
 const FONT_SIZE_INCREMENT: f32 = 1.0;
 
 pub const TAB_BAR_HEIGHT: f32 = 34.;
-/// Height for all panel headers (tab bar, warp drive, resource center, theme chooser, etc.).
-/// This ensures consistent header heights across all UI panels.
-pub const PANEL_HEADER_HEIGHT: f32 = TAB_BAR_HEIGHT;
+/// Tab bar height when tabs show a second line of information
+/// ([`TabLineCount::TwoLine`]). Tab height itself is content-driven, so this
+/// only has to give the taller pill room; the extra is the 10pt subtitle line
+/// plus its 1px spacing.
+pub const TAB_BAR_TWO_LINE_HEIGHT: f32 = 48.;
+/// Height for all panel headers (warp drive, resource center, theme chooser,
+/// etc.).
+///
+/// Deliberately its own constant rather than an alias of [`TAB_BAR_HEIGHT`]:
+/// the tab bar grows when tabs are two-line, and those panels must not grow
+/// with it.
+pub const PANEL_HEADER_HEIGHT: f32 = 34.;
+
+/// Starting width of the project rail, before the user drags it.
+const RAIL_DEFAULT_WIDTH: f32 = 168.;
+/// How narrow the rail may be dragged. Deliberately well below
+/// [`RAIL_DEFAULT_WIDTH`] — [`ResizableState::clamp_size`] applies these bounds
+/// on the first layout pass, so a minimum above the default would silently
+/// *widen* the rail instead of leaving it where it starts. Project names
+/// ellipsize and task labels wrap, so a narrow rail stays usable.
+const RAIL_MIN_WIDTH: f32 = 120.;
+/// The rail is a navigation aid, never the main event: cap it at half the
+/// window so it cannot crowd out the terminal.
+const RAIL_MAX_WIDTH_RATIO: f32 = 0.5;
+/// How often the rail repaints so its wait ages ("3m") stay honest.
+///
+/// Coarse on purpose: ages render in whole minutes, so this is already twice
+/// as often as the smallest visible change, and the rail is redrawn for free
+/// on every real agent event anyway. Only runs while something is blocked —
+/// see `Workspace::rail_wait_age_refresh`.
+const RAIL_WAIT_AGE_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+
 /// The hover area height for states where the tab bar is revealed on hover.
 const TAB_BAR_HOVER_HEIGHT: f32 = 12.;
 const TAB_BAR_PADDING_LEFT: f32 = 4.;
@@ -566,8 +631,23 @@ const TAB_BAR_PADDING_RIGHT: f32 = 8.;
 const TITLE_BAR_SEARCH_BAR_MAX_WIDTH: f32 = 320.;
 const TITLE_BAR_SEARCH_BAR_SLOT_PADDING: f32 = 8.;
 
-// The total height taken up by the tab bar, including its bottom border.
+// The total height taken up by the single-line tab bar, including its bottom border.
 pub const TOTAL_TAB_BAR_HEIGHT: f32 = TAB_BAR_HEIGHT + TAB_BAR_BORDER_HEIGHT;
+
+/// The tab bar's height for the configured line count.
+pub fn tab_bar_height(ctx: &AppContext) -> f32 {
+    match TabSettings::as_ref(ctx).tab_line_count {
+        TabLineCount::SingleLine => TAB_BAR_HEIGHT,
+        TabLineCount::TwoLine => TAB_BAR_TWO_LINE_HEIGHT,
+    }
+}
+
+/// The tab bar's total height including its bottom border, for the configured
+/// line count. The macOS titlebar is sized from this, which is what positions
+/// the traffic lights.
+pub fn total_tab_bar_height(ctx: &AppContext) -> f32 {
+    tab_bar_height(ctx) + TAB_BAR_BORDER_HEIGHT
+}
 
 const TAB_BAR_ICON_PADDING: f32 = 4.;
 
@@ -660,6 +740,18 @@ pub(crate) const NEW_FILE_BINDING_NAME: &str = "workspace:new_file";
 pub(crate) const NEW_AGENT_TAB_BINDING_NAME: &str = "workspace:new_agent_tab";
 pub(crate) const NEW_AMBIENT_AGENT_TAB_BINDING_NAME: &str = "workspace:new_ambient_agent_tab";
 pub(crate) const TOGGLE_TAB_CONFIGS_MENU_BINDING_NAME: &str = "workspace:toggle_tab_configs_menu";
+/// Starts a new project (the rail header's "+" button dispatches this same
+/// binding's action, so its tooltip can show whatever shortcut the user has
+/// assigned).
+pub(crate) const NEW_PROJECT_BINDING_NAME: &str = "workspace:new_project";
+/// Opens the session-search popup (the rail header's magnifier dispatches this
+/// same binding's action, so its tooltip shows whatever shortcut the user has
+/// assigned).
+pub(crate) const SESSION_SEARCH_BINDING_NAME: &str = "workspace:open_session_search";
+/// Closes the shells with no agent on them (the rail header's trash can
+/// dispatches this same binding's action, so its tooltip shows whatever
+/// shortcut the user has assigned — by default, none).
+pub(crate) const CLEAR_SHELLS_BINDING_NAME: &str = "workspace:clear_shells_without_agents";
 
 // Editable left panel toolbelt keybindings.
 pub(crate) const LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME: &str =
@@ -715,6 +807,15 @@ lazy_static! {
 enum TabConfigsMenuOpenSource {
     KeyboardShortcut,
     Pointer,
+}
+
+/// Why a tab is being activated. Restore-time activation is mechanical --
+/// every tab passes through it while the window is rebuilt -- so it must
+/// not carry user-activation side effects like starting a deferred shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TabActivationSource {
+    User,
+    Restore,
 }
 
 /// This enumerates the different kinds of banners we show to the user.
@@ -1013,6 +1114,11 @@ pub struct Workspace {
     /// Tracks tab activation order (most-recently-used first).
     /// Each entry is the `pane_group.id()` of the corresponding tab.
     tab_mru_order: Vec<EntityId>,
+    /// The project currently selected in the project rail (Herdr-style
+    /// Projects × Tasks layout, gated by `FeatureFlag::Projects`). This is a
+    /// derived runtime value kept equal to the project of the active tab; it is
+    /// not persisted (reconstructed from the restored active tab).
+    selected_project: Option<ProjectId>,
     pub(crate) hovered_tab_index: Option<TabBarHoverIndex>,
     tab_bar_hover_state: MouseStateHandle,
     tab_fixed_width: Option<f32>,
@@ -1021,6 +1127,54 @@ pub struct Workspace {
     pub(crate) tab_groups: HashMap<TabGroupId, TabGroup>,
     /// Per-group hover state for the horizontal tab bar.
     horizontal_tab_group_mouse_states: RefCell<HashMap<TabGroupId, HorizontalTabGroupMouseStates>>,
+    /// Per-project hover/click state for the project rail (created once per
+    /// project and persisted across renders, per the MouseStateHandle rule).
+    project_rail_mouse_states: RefCell<HashMap<ProjectId, MouseStateHandle>>,
+    /// Per-task hover/click state for the project rail's task rows, keyed by
+    /// pane group so it survives reordering.
+    rail_task_mouse_states: RefCell<HashMap<EntityId, MouseStateHandle>>,
+    /// Hover/click state for the rail's dormant task rows, keyed by task
+    /// identity (agent + session id) — a dormant task has no pane group.
+    rail_dormant_mouse_states: RefCell<HashMap<(CLIAgent, String), MouseStateHandle>>,
+    /// Hover/click state for the rail header's jump-chips, one per chip kind.
+    /// Created once and persisted, per the MouseStateHandle rule — a handle
+    /// built inline while rendering registers no mouse interaction at all.
+    rail_chip_mouse_states: RefCell<HashMap<RailChip, MouseStateHandle>>,
+    /// Keeps the rail's wait ages ("3m") current while some agent is waiting.
+    ///
+    /// Lifecycle, all of it driven from
+    /// [`Self::sync_rail_wait_age_refresh`]: armed when a session enters
+    /// `Blocked`, self-reschedules every
+    /// [`RAIL_WAIT_AGE_REFRESH_INTERVAL`] for as long as anything is still
+    /// blocked, and aborted the moment nothing is — the rail is otherwise a
+    /// pure function of models that already notify, so a permanently ticking
+    /// repaint would be waste. Dropping the workspace drops the handle and
+    /// cancels the spawn with it.
+    rail_wait_age_refresh: Option<AbortHandle>,
+    /// Repeats the "an agent is waiting on you" announcement until the wait
+    /// actually ends (spec §6). Rules live in [`NagEngine`]; this field is the
+    /// per-window state they run on.
+    ///
+    /// A workspace rather than the singleton `CLIAgentSessionsModel`, because
+    /// every input and every output is window-shaped: only a `ViewContext` can
+    /// send a desktop notification, "the user is looking at it" means *this*
+    /// window's active tab, and the project rank a task's cadence depends on
+    /// comes from the tab→project projection the workspace already computes.
+    /// A singleton would have to pick a window to speak through and would
+    /// coalesce waiters the user sees on different screens into one banner.
+    nag_engine: NagEngine,
+    /// Timer driving [`Self::nag_engine`], a sibling of
+    /// [`Self::rail_wait_age_refresh`] with the same lifecycle: armed while
+    /// something is blocked, self-rescheduling at the interval the engine asks
+    /// for, aborted the moment the engine goes idle.
+    nag_poll: Option<AbortHandle>,
+    /// Scroll position of the project rail. Held here rather than rebuilt each
+    /// render so the scroll offset survives repaints.
+    project_rail_scroll_state: ClippedScrollStateHandle,
+    /// Dragged width of the project rail. Session-lived, matching the vertical
+    /// tabs panel, which likewise owns its handle rather than registering with
+    /// [`ResizableData`] — the rail width is not part of session restoration.
+    project_rail_resizable_state: ResizableStateHandle,
     tab_rename_editor: ViewHandle<EditorView>,
     pane_rename_editor: ViewHandle<EditorView>,
     tab_group_rename_editor: ViewHandle<EditorView>,
@@ -1052,6 +1206,11 @@ pub struct Workspace {
     changelog_model: ModelHandle<ChangelogModel>,
     palette: ViewHandle<CommandPalette>,
     ctrl_tab_palette: ViewHandle<CommandPalette>,
+    /// The session-search popup. A third palette instance rather than a mode of
+    /// the main one, because its mixer holds a single source whose contents are
+    /// a snapshot taken on open — resetting the main palette's mixer to that and
+    /// back would race with whatever it was already showing.
+    session_search_palette: ViewHandle<CommandPalette>,
     mouse_states: WorkspaceMouseStates,
     settings_pane: ViewHandle<SettingsView>,
     import_modal: ViewHandle<ImportModal>,
@@ -1097,6 +1256,12 @@ pub struct Workspace {
     header_toolbar_editor_modal: ViewHandle<HeaderToolbarEditorModal>,
     header_toolbar_context_menu: ViewHandle<Menu<WorkspaceAction>>,
     show_header_toolbar_context_menu: Option<Vector2F>,
+    project_rail_context_menu: ViewHandle<Menu<WorkspaceAction>>,
+    /// Where the project rail's context menu is anchored, when open.
+    show_project_rail_context_menu: Option<Vector2F>,
+    task_rail_context_menu: ViewHandle<Menu<WorkspaceAction>>,
+    /// Where the rail task row's context menu is anchored, when open.
+    show_task_rail_context_menu: Option<Vector2F>,
     /// Dropdown menu for the title-bar team-switcher pill.
     team_switcher_menu: ViewHandle<Menu<WorkspaceAction>>,
     show_team_switcher_menu: bool,
@@ -1216,7 +1381,7 @@ impl Workspace {
         self.suppress_detach_panes_on_window_close = value;
     }
     fn tab_rename_editor_font_size(ctx: &AppContext, appearance: &Appearance) -> f32 {
-        if FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs {
+        if vertical_tabs_layout_active(ctx) {
             match *TabSettings::as_ref(ctx)
                 .vertical_tabs_display_granularity
                 .value()
@@ -2377,7 +2542,7 @@ impl Workspace {
     /// Opens the vertical tabs panel if the setting was enabled.
     /// Called from the onboarding flow before the session config modal is shown.
     pub(crate) fn open_vertical_tabs_panel_if_enabled(&mut self, ctx: &mut ViewContext<Self>) {
-        if FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs {
+        if vertical_tabs_layout_active(ctx) {
             self.vertical_tabs_panel_open = true;
             self.sync_window_button_visibility(ctx);
             ctx.notify();
@@ -2895,6 +3060,18 @@ impl Workspace {
             me.handle_palette_event(event, ctx);
         });
 
+        // `SessionSearch` and not `CtrlTab`: this popup is driven by typing, and
+        // the ctrl-tab mode hides the search bar. It renders like `Normal` for
+        // exactly that reason, and differs only in what the mode switches on —
+        // the debounced transcript-content search, its footer, and the
+        // suppressed "no results" placeholder, none of which the two ordinary
+        // palettes should carry.
+        let session_search_palette = ctx
+            .add_typed_action_view(|ctx| CommandPalette::new(NavigationMode::SessionSearch, ctx));
+        ctx.subscribe_to_view(&session_search_palette, |me, _, event, ctx| {
+            me.handle_palette_event(event, ctx);
+        });
+
         let auth_manager = AuthManager::handle(ctx);
         ctx.subscribe_to_model(&auth_manager, Self::handle_auth_manager_event);
 
@@ -2930,6 +3107,16 @@ impl Workspace {
         ctx.observe(&RelaunchModel::handle(ctx), |_, _, ctx| {
             ctx.notify();
         });
+
+        // The on-disk session scan lands asynchronously; without this the rail
+        // would keep showing the pre-scan rows until some other event repainted
+        // it. Also kicked once here so the rail is populated on the first
+        // paint after a restart, before the user touches anything.
+        if ctx.has_singleton_model::<ClaudeSessionScanModel>() {
+            ctx.observe(&ClaudeSessionScanModel::handle(ctx), |_, _, ctx| {
+                ctx.notify();
+            });
+        }
 
         let changelog_model = ChangelogModel::handle(ctx);
         ctx.subscribe_to_model(&changelog_model, |me, _, event, ctx| {
@@ -3385,11 +3572,21 @@ impl Workspace {
             tabs: Vec::new(),
             active_tab_index: 0,
             tab_mru_order: Vec::new(),
+            selected_project: None,
             hovered_tab_index: None,
             tab_bar_hover_state: Default::default(),
             traffic_light_mouse_states: Default::default(),
             tab_groups: HashMap::new(),
             horizontal_tab_group_mouse_states: RefCell::default(),
+            project_rail_mouse_states: RefCell::default(),
+            rail_task_mouse_states: RefCell::default(),
+            rail_dormant_mouse_states: RefCell::default(),
+            rail_chip_mouse_states: RefCell::default(),
+            rail_wait_age_refresh: None,
+            nag_engine: NagEngine::default(),
+            nag_poll: None,
+            project_rail_scroll_state: ClippedScrollStateHandle::new(),
+            project_rail_resizable_state: resizable_state_handle(RAIL_DEFAULT_WIDTH),
             tab_rename_editor: Self::tab_rename_editor(ctx),
             pane_rename_editor: Self::pane_rename_editor(ctx),
             tab_group_rename_editor: Self::tab_group_rename_editor(ctx),
@@ -3412,6 +3609,7 @@ impl Workspace {
             welcome_tips_view,
             palette,
             ctrl_tab_palette,
+            session_search_palette,
             mouse_states: Default::default(),
             previous_theme: None,
             settings_pane,
@@ -3462,6 +3660,10 @@ impl Workspace {
             header_toolbar_editor_modal: Self::build_header_toolbar_editor_modal(ctx),
             header_toolbar_context_menu: Self::build_header_toolbar_context_menu(ctx),
             show_header_toolbar_context_menu: None,
+            project_rail_context_menu: Self::build_project_rail_context_menu(ctx),
+            show_project_rail_context_menu: None,
+            task_rail_context_menu: Self::build_task_rail_context_menu(ctx),
+            show_task_rail_context_menu: None,
             team_switcher_menu: Self::build_team_switcher_menu(ctx),
             show_team_switcher_menu: false,
             is_user_menu_open: false,
@@ -3732,6 +3934,326 @@ impl Workspace {
         {
             ctx.notify();
         }
+        // Status changes are the only thing that can start or end a wait, so
+        // this is the one place the refresh timer needs re-evaluating.
+        self.sync_rail_wait_age_refresh(ctx);
+        // A wait starting or ending is also the one thing the nag engine must
+        // never learn about late: an agent that just unblocked has to stop
+        // nagging now, not at the next tick.
+        self.poll_nag_engine(ctx);
+    }
+
+    /// Arms or disarms the rail's wait-age refresh to match reality.
+    ///
+    /// Idempotent: an already-armed timer is left alone rather than restarted,
+    /// so a burst of status events cannot stack up ticks.
+    fn sync_rail_wait_age_refresh(&mut self, ctx: &mut ViewContext<Self>) {
+        let needed = project_layout_active(ctx) && CLIAgentSessionsModel::as_ref(ctx).any_blocked();
+        match (needed, self.rail_wait_age_refresh.is_some()) {
+            (true, false) => self.schedule_rail_wait_age_refresh(ctx),
+            (false, true) => {
+                if let Some(handle) = self.rail_wait_age_refresh.take() {
+                    handle.abort();
+                }
+            }
+            (true, true) | (false, false) => {}
+        }
+    }
+
+    /// One tick of the wait-age refresh, rescheduling itself while the wait
+    /// lasts.
+    ///
+    /// Self-rescheduling `Timer::after` + `AbortHandle`, per the `Heartbeat`
+    /// pattern (`terminal/shared_session/network/heartbeat.rs`) — the async
+    /// runtime here has no interval primitive. The interval is deliberately
+    /// coarse: the ages render in whole minutes, so a repaint every 30s is
+    /// already twice as often as the smallest visible change.
+    fn schedule_rail_wait_age_refresh(&mut self, ctx: &mut ViewContext<Self>) {
+        let handle = ctx.spawn(
+            async move { Timer::after(RAIL_WAIT_AGE_REFRESH_INTERVAL).await },
+            |me, _, ctx| {
+                // The tick has fired, so the stored handle is spent whatever
+                // happens next; clearing it first is what lets `sync` re-arm.
+                me.rail_wait_age_refresh = None;
+                ctx.notify();
+                me.sync_rail_wait_age_refresh(ctx);
+            },
+        );
+        self.rail_wait_age_refresh = Some(handle.abort_handle());
+    }
+
+    /// Whether the nag engine may speak at all.
+    ///
+    /// Three existing gates, no new setting (spec §6): the project layout,
+    /// because rank — which decides both the debounce and the cadence — only
+    /// exists there and a user who never opted into the rail must not start
+    /// getting repeat banners; `NotificationsMode::Enabled`, because the
+    /// `Unset` case is the discovery banner the one-shot path still owns; and
+    /// `is_needs_attention_enabled`, which is the user's existing "stop telling
+    /// me an agent is blocked" switch and therefore the engine's off switch.
+    fn nag_engine_enabled(ctx: &AppContext) -> bool {
+        let notifications = &SessionSettings::as_ref(ctx).notifications;
+        project_layout_active(ctx)
+            && matches!(notifications.mode, NotificationsMode::Enabled)
+            && notifications.is_needs_attention_enabled
+    }
+
+    /// Every agent in this window that is currently waiting on the user, as the
+    /// nag engine sees it.
+    ///
+    /// Read fresh on every poll rather than remembered, so a project that gains
+    /// a rank, or a tab the user switches to, takes effect immediately.
+    ///
+    /// Every *visible pane*, not just each tab's focused one as the rail's row
+    /// triage does. The rail can settle for one row per tab because a row is a
+    /// label; a notification cannot, because the one-shot `NeedsAttention`
+    /// notification is now suppressed in favour of this engine, and a blocked
+    /// agent in the other half of a split would otherwise be announced by
+    /// nobody. The trust gate is shared with the rail
+    /// ([`Self::is_rich_cli_session`]), so the two can never disagree about
+    /// whose `Blocked` is believable.
+    ///
+    /// `window_is_frontmost` is passed in rather than read here because it
+    /// belongs to the window, not to any tab, and the same answer decides both
+    /// what counts as "in view" and whether an announcement may raise a banner.
+    fn blocked_nag_tasks(&self, window_is_frontmost: bool, ctx: &AppContext) -> Vec<BlockedTask> {
+        // Polls are driven by session events, which arrive on every agent turn
+        // in every window, so the overwhelmingly common answer is "nobody is
+        // waiting". One hash-map scan settles that before any per-tab work or
+        // the priority-list clone.
+        let sessions = CLIAgentSessionsModel::as_ref(ctx);
+        if !sessions.any_blocked() {
+            return Vec::new();
+        }
+        let priorities = TabSettings::as_ref(ctx).project_priorities.value().clone();
+        let nag_policies = TabSettings::as_ref(ctx)
+            .project_nag_policies
+            .value()
+            .clone();
+        let mut tasks = Vec::new();
+        for (index, tab) in self.tabs.iter().enumerate() {
+            let pane_group = tab.pane_group.as_ref(ctx);
+            // `terminal_views` rather than `visible_terminal_views`: an
+            // off-tree child-agent pane can block on a permission prompt too,
+            // and since its one-shot notification is now suppressed, leaving it
+            // out here would mean nobody announces it at all.
+            let waiting: Vec<EntityId> = pane_group
+                .terminal_views(ctx)
+                .into_iter()
+                .map(|terminal_view| terminal_view.as_ref(ctx).id())
+                .filter(|terminal_view_id| {
+                    sessions.session(*terminal_view_id).is_some_and(|session| {
+                        Self::is_rich_cli_session(session)
+                            && matches!(session.status, CLIAgentSessionStatus::Blocked { .. })
+                    })
+                })
+                .collect();
+            if waiting.is_empty() {
+                continue;
+            }
+            // Resolved once per waiting tab rather than per pane: project
+            // detection walks the filesystem's repo cache, and every pane in a
+            // tab shares the tab's project anyway.
+            let project = ProjectLayout::project_of_tab_data(tab, ctx);
+            let ranked = priorities.contains(&project);
+            let override_policy = match &project {
+                ProjectId::Key(key) => nag_policies.policy_for(key),
+                ProjectId::Other => None,
+            };
+            let policy = NagPolicy::resolve(override_policy, ranked);
+            // Muted projects never reach the engine at all: `summarize` counts
+            // and names whatever it is given, so a muted task passed in would
+            // still inflate the banner it was meant to be silent for.
+            if policy == NagPolicy::Muted {
+                continue;
+            }
+            let label = project.display_name();
+            // "Seen" needs the pane to actually be on screen, so being in the
+            // active tab of a frontmost window is necessary but not sufficient
+            // — a pane the layout tree does not draw is not being looked at
+            // however active its tab is.
+            let on_screen: Vec<EntityId> = if window_is_frontmost && index == self.active_tab_index
+            {
+                pane_group
+                    .visible_terminal_views(ctx)
+                    .into_iter()
+                    .map(|terminal_view| terminal_view.as_ref(ctx).id())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            tasks.extend(waiting.into_iter().map(|id| BlockedTask {
+                id,
+                policy,
+                project: label.clone(),
+                in_view: on_screen.contains(&id),
+            }));
+        }
+        tasks
+    }
+
+    /// One pass of the nag engine: observe, decide, announce, re-arm the timer.
+    ///
+    /// Safe to call from anywhere something the engine reads might have
+    /// changed — a status event, a tab switch, its own tick. Polling is cheap
+    /// and idempotent; the engine's own deadlines decide whether anything is
+    /// actually said.
+    fn poll_nag_engine(&mut self, ctx: &mut ViewContext<Self>) {
+        if !Self::nag_engine_enabled(ctx) {
+            // Switched off underneath us. Forget the cycle rather than freeze
+            // it, so re-enabling starts fresh instead of firing a nag whose
+            // deadline was computed while nobody was watching.
+            self.nag_engine.reset();
+            self.cancel_nag_poll();
+            return;
+        }
+
+        // Read once and used twice: an agent waiting in the active tab of a
+        // window nobody is looking at has not been seen, and a banner over a
+        // window nobody is looking at is not noise.
+        let window_is_frontmost = Some(ctx.window_id()) == ctx.windows().active_window();
+        let blocked = self.blocked_nag_tasks(window_is_frontmost, ctx);
+        let outcome = self.nag_engine.poll(&blocked, instant::Instant::now());
+        Self::announce_nag(&outcome, window_is_frontmost, ctx);
+
+        self.cancel_nag_poll();
+        if let Some(delay) = outcome.next_poll {
+            self.schedule_nag_poll(delay, ctx);
+        }
+    }
+
+    /// Aborts the pending nag tick, if any.
+    fn cancel_nag_poll(&mut self) {
+        if let Some(handle) = self.nag_poll.take() {
+            handle.abort();
+        }
+    }
+
+    /// Schedules the next nag tick.
+    ///
+    /// Self-rescheduling `Timer::after` + `AbortHandle` like
+    /// [`Self::schedule_rail_wait_age_refresh`], but at the interval the engine
+    /// asks for rather than a fixed one: the next interesting moment is a
+    /// debounce expiring, a cadence coming due or an acknowledgement grace
+    /// running out, and those are minutes apart.
+    fn schedule_nag_poll(&mut self, delay: Duration, ctx: &mut ViewContext<Self>) {
+        let handle = ctx.spawn(async move { Timer::after(delay).await }, |me, _, ctx| {
+            // The tick is spent whatever happens next; clearing it first is
+            // what lets the poll arm the following one.
+            me.nag_poll = None;
+            me.poll_nag_engine(ctx);
+        });
+        self.nag_poll = Some(handle.abort_handle());
+    }
+
+    /// Delivers one poll's announcement: an OS banner, a bare sound, or
+    /// nothing at all.
+    ///
+    /// The two paths are disjoint by construction (spec §8): a banner only when
+    /// this window is *not* frontmost, a sound-without-banner only when it is.
+    /// They can therefore never double up on the same announcement.
+    fn announce_nag(outcome: &NagOutcome, window_is_frontmost: bool, ctx: &mut ViewContext<Self>) {
+        let Some(&announced) = outcome.announced.first() else {
+            return;
+        };
+        let notifications = SessionSettings::as_ref(ctx).notifications.value().clone();
+
+        // Suppressing the banner while Warp is frontmost is the existing rule
+        // (`TerminalView::is_navigated_away_from_window`) and it stays: an OS
+        // banner over the window the user is already in is noise. The *sound*
+        // is deliberately not suppressed with it (spec §6). The announced set
+        // never contains a task the user is looking at — the engine
+        // acknowledges those — so a sound here always means "something you
+        // cannot see is waiting", which is the case of being deep in project A
+        // while B blocks.
+        if window_is_frontmost {
+            if notifications.play_notification_sound
+                && let Err(error) = AudibleBell::as_ref(ctx).ring()
+            {
+                log::warn!("Unable to ring the waiting-agent bell: {error:#}");
+            }
+            return;
+        }
+
+        let (content, agent_variant) = match &outcome.summary {
+            // Several waiters: one banner naming the projects, never one
+            // banner each. No single agent to attribute it to either.
+            Some(NagSummary { title, body }) => (
+                BlockNotification {
+                    title: title.clone(),
+                    body: body.clone(),
+                },
+                None,
+            ),
+            // A single waiter has better copy available than any summary: the
+            // agent's own question, formatted exactly as the one-shot
+            // `NeedsAttention` notification formats it.
+            None => {
+                let sessions = CLIAgentSessionsModel::as_ref(ctx);
+                let Some(session) = sessions.session(announced) else {
+                    return;
+                };
+                let context = &session.session_context;
+                let title = context
+                    .query
+                    .as_deref()
+                    .filter(|query| !query.is_empty())
+                    .or(context.summary.as_deref().filter(|s| !s.is_empty()))
+                    .unwrap_or(session.agent.command_prefix())
+                    .to_owned();
+                let description = match &session.status {
+                    CLIAgentSessionStatus::Blocked { message } => {
+                        message.clone().unwrap_or_default()
+                    }
+                    // Unreachable: the engine is only ever handed blocked
+                    // tasks. Falling back to an empty body beats a panic on a
+                    // notification path.
+                    CLIAgentSessionStatus::InProgress
+                    | CLIAgentSessionStatus::Success
+                    | CLIAgentSessionStatus::Failed { .. } => String::new(),
+                };
+                (
+                    NotificationsTrigger::NeedsAttention
+                        .create_notification_content(title, description),
+                    Some(NotificationAgentVariant::CLIAgent(session.agent.into())),
+                )
+            }
+        };
+
+        ctx.send_desktop_notification(
+            UserNotification::new_with_sound(
+                content.title,
+                content.body,
+                // No click target: a coalesced banner speaks for several panes
+                // and has no single one to focus. Routing a lone waiter's
+                // click would need the `PaneId` this path never resolves, and
+                // the rail's waiting chip already jumps to the next blocked
+                // task in one click.
+                None,
+                notifications.play_notification_sound,
+            ),
+            |_, notification_error, ctx| {
+                if let NotificationSendError::Other { error_message } = &notification_error {
+                    report_error!(
+                        "Unknown error when sending a waiting-agent notification",
+                        extra: { "error_message" => %error_message }
+                    );
+                }
+                send_telemetry_from_ctx!(
+                    TelemetryEvent::NotificationFailedToSend {
+                        error: notification_error,
+                    },
+                    ctx
+                );
+            },
+        );
+        send_telemetry_from_ctx!(
+            TelemetryEvent::NotificationSent {
+                trigger: NotificationsTrigger::NeedsAttention,
+                agent_variant,
+            },
+            ctx
+        );
     }
 
     /// Handle session settings changes.
@@ -3754,6 +4276,11 @@ impl Workspace {
         // When Notifications settings change, request system notification permissions if needed.
         if let SessionSettingsChangedEvent::Notifications { .. } = event {
             self.request_notification_permissions_if_needed(ctx);
+            // The notification settings are the nag engine's on/off switch, and
+            // an agent may already be waiting when they are flipped — without
+            // this, turning notifications back on would stay silent until the
+            // next status event, which for a stuck agent may never come.
+            self.poll_nag_engine(ctx);
         }
     }
 
@@ -3801,9 +4328,60 @@ impl Workspace {
                 self.sync_window_button_visibility(ctx);
                 ctx.notify();
             }
+            TabSettingsChangedEvent::TabPrimaryInfo { .. }
+            | TabSettingsChangedEvent::TabSecondaryInfo { .. }
+            | TabSettingsChangedEvent::RailShowTasks { .. }
+            | TabSettingsChangedEvent::RailTaskInfo { .. } => {
+                // Tab text is derived at render time, so a repaint is enough.
+                ctx.notify();
+            }
+            TabSettingsChangedEvent::ProjectPriorities { .. } => {
+                // The rail's banding is derived from the list at render time,
+                // so a repaint is the whole update.
+                ctx.notify();
+            }
+            TabSettingsChangedEvent::ProjectNagPolicies { .. } => {
+                // A project may have just been muted while one of its agents
+                // sits blocked and armed: re-poll so the engine drops it now
+                // rather than at the next status event.
+                self.poll_nag_engine(ctx);
+                ctx.notify();
+            }
+            TabSettingsChangedEvent::ProjectColors { .. } => {
+                // Header labels read the map at render time; a repaint is the
+                // whole update.
+                ctx.notify();
+            }
+            TabSettingsChangedEvent::TabLineCount { .. } => {
+                // Changing the line count changes the tab bar's height, which the
+                // macOS titlebar (and therefore the traffic lights) is sized from.
+                self.update_titlebar_height(ctx);
+                ctx.notify();
+            }
+            TabSettingsChangedEvent::UseProjectLayout { .. } => {
+                if project_layout_active(ctx) {
+                    // Seed the rail selection from the active tab so the
+                    // active-in-selected invariant holds as soon as the layout
+                    // is switched on. Project mode owns the left rail and puts
+                    // tasks on the top bar, so the vertical panel stays closed.
+                    self.selected_project = self
+                        .tabs
+                        .get(self.active_tab_index)
+                        .map(|tab| ProjectLayout::project_of_tab_data(tab, ctx));
+                    self.vertical_tabs_panel_open = false;
+                    // The rail has just become visible; populate its dormant
+                    // rows from disk rather than waiting for the first click.
+                    self.refresh_claude_session_scan(ctx);
+                } else {
+                    self.selected_project = None;
+                    self.vertical_tabs_panel_open = vertical_tabs_layout_active(ctx);
+                }
+                self.sync_panel_positions_from_config(ctx);
+                self.sync_window_button_visibility(ctx);
+                ctx.notify();
+            }
             TabSettingsChangedEvent::ShowVerticalTabPanelInRestoredWindows { .. } => {
-                if FeatureFlag::VerticalTabs.is_enabled()
-                    && *TabSettings::as_ref(ctx).use_vertical_tabs
+                if vertical_tabs_layout_active(ctx)
                     && *TabSettings::as_ref(ctx).show_vertical_tab_panel_in_restored_windows
                 {
                     self.vertical_tabs_panel_open = true;
@@ -4006,7 +4584,12 @@ impl Workspace {
                     self.left_panel_open = restored_left_panel_open;
                 }
 
-                self.activate_tab_internal(active_tab_index, ctx);
+                // Of all the activations a restore performs, this is the one
+                // that means "this tab is what the user will see", so it keeps
+                // user semantics and starts the tab's deferred shell. The
+                // per-tab activations inside `add_tab_with_pane_layout` above
+                // are the mechanical ones and stay deferred.
+                self.activate_tab_internal_from(active_tab_index, TabActivationSource::User, ctx);
                 self.check_and_trigger_onboarding(ctx);
             }
             NewWorkspaceSource::FromTemplate { window_template } => {
@@ -4146,8 +4729,7 @@ impl Workspace {
         workspace_setting: &NewWorkspaceSource,
         ctx: &AppContext,
     ) -> bool {
-        let should_default_open =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let should_default_open = vertical_tabs_layout_active(ctx);
 
         match workspace_setting {
             NewWorkspaceSource::Restored {
@@ -5194,6 +5776,10 @@ impl Workspace {
     }
 
     fn tab_navigation_data(&self, window_id: WindowId, ctx: &AppContext) -> Vec<TabNavigationData> {
+        // In project mode the Ctrl-Tab palette lists only the selected project's
+        // tasks, so most-recently-used cycling stays inside the project the user
+        // is working in rather than jumping across projects.
+        let project_visible = self.project_visible_indices(ctx);
         self.tab_mru_order
             .iter()
             .filter_map(|&pane_group_id| {
@@ -5202,6 +5788,11 @@ impl Workspace {
                     .iter()
                     .enumerate()
                     .find(|(_, t)| t.pane_group.id() == pane_group_id)?;
+                if let Some(visible) = &project_visible
+                    && !visible.contains(&tab_index)
+                {
+                    return None;
+                }
                 let title = tab.pane_group.as_ref(ctx).display_title(ctx);
                 let subtitle = tab
                     .pane_group
@@ -5316,7 +5907,26 @@ impl Workspace {
 
     /// This function is meant to be used by other actions to perform the logic to update the
     /// view's state. It's not meant to be invoked directly by an action.
+    ///
+    /// Activations reached this way are attributed to the user; see
+    /// [`Self::activate_tab_internal_from`] for the restore-time variant.
     pub fn activate_tab_internal(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        self.activate_tab_internal_from(index, TabActivationSource::User, ctx);
+    }
+
+    /// [`Self::activate_tab_internal`] with explicit provenance.
+    ///
+    /// Everything here -- the active tab index, the MRU order, the window
+    /// title, closing the palette and the agent management view -- runs for
+    /// both sources, because window restore genuinely depends on each tab
+    /// passing through activation. Only the side effects that mean "the user
+    /// chose this tab" are conditioned on `source`.
+    pub(crate) fn activate_tab_internal_from(
+        &mut self,
+        index: usize,
+        source: TabActivationSource,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if index < self.tab_count() {
             // If the command palette is open when the tab is switched using a keybinding,
             // we want to close the palette so that we don't get into a state where the palette
@@ -5331,7 +5941,7 @@ impl Workspace {
             }
 
             self.set_active_tab_index(index, ctx);
-            self.focus_active_tab(ctx);
+            self.focus_active_tab_from(source, ctx);
             self.update_window_title(ctx);
         }
     }
@@ -5401,6 +6011,439 @@ impl Workspace {
         }
     }
 
+    /// When project mode is active and a project is selected, the raw
+    /// `Workspace::tabs` indices visible under it (in tab order). `None` means
+    /// no project filtering — the feature is off or nothing is selected — and
+    /// callers fall back to operating over all tabs. This is the single filter
+    /// every navigation/render path consults, so what renders and what
+    /// navigates always agree.
+    fn project_visible_indices(&self, ctx: &AppContext) -> Option<Vec<usize>> {
+        if !project_layout_active(ctx) {
+            return None;
+        }
+        let selected = self.selected_project.as_ref()?;
+        Some(ProjectLayout::compute(&self.tabs, ctx).visible_tab_indices(selected))
+    }
+
+    /// The most-recently-used tab among `indices`, by consulting
+    /// `tab_mru_order`. Indices not present in the MRU order sort last.
+    fn mru_tab_index(&self, indices: &[usize]) -> Option<usize> {
+        indices.iter().copied().min_by_key(|&index| {
+            let pane_group_id = self.tabs[index].pane_group.id();
+            self.tab_mru_order
+                .iter()
+                .position(|id| *id == pane_group_id)
+                .unwrap_or(usize::MAX)
+        })
+    }
+
+    /// Selects a project in the rail by activating that project's
+    /// most-recently-used visible tab, preserving the invariant that the active
+    /// tab belongs to the selected project. If the project has no open tabs, the
+    /// selection is set directly.
+    pub(crate) fn select_project(&mut self, project: &ProjectId, ctx: &mut ViewContext<Self>) {
+        self.refresh_claude_session_scan(ctx);
+        let visible = ProjectLayout::compute(&self.tabs, ctx).visible_tab_indices(project);
+        match self.mru_tab_index(&visible) {
+            Some(index) => self.set_active_tab_index(index, ctx),
+            None => self.selected_project = Some(project.clone()),
+        }
+    }
+
+    /// The sessions the last on-disk scan found, or an empty slice when the
+    /// scan model is not registered (headless/test harnesses).
+    fn scanned_sessions(ctx: &AppContext) -> Vec<ScannedSession> {
+        if !ctx.has_singleton_model::<ClaudeSessionScanModel>() {
+            return Vec::new();
+        }
+        ClaudeSessionScanModel::as_ref(ctx).sessions().to_vec()
+    }
+
+    /// Kicks an off-thread rescan of Claude's state for every directory the
+    /// rail could show a task for: each open tab's directory plus every stored
+    /// handle's. Those are exactly the paths the projection buckets by, which
+    /// is why the scan never has to reverse a `~/.claude/projects` directory
+    /// name back into a cwd — that mapping is lossy and would guess wrong on
+    /// any path whose separators and `-` are indistinguishable after encoding.
+    ///
+    /// Called from user actions rather than a watcher or a timer, so a session
+    /// started in another terminal shows up on the next project interaction
+    /// rather than instantly. That is the deliberate cost of adding no new
+    /// background machinery.
+    fn refresh_claude_session_scan(&self, ctx: &mut ViewContext<Self>) {
+        use crate::terminal::cli_agent_sessions::handle_store::AgentSessionHandlesModel;
+
+        if !FeatureFlag::ResumeProjectTasks.is_enabled()
+            || !ctx.has_singleton_model::<ClaudeSessionScanModel>()
+        {
+            return;
+        }
+        let mut dirs: Vec<PathBuf> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| {
+                let pane_group = tab.pane_group.as_ref(ctx);
+                // Falls back to the restored startup directory so a tab whose
+                // shell has not started yet (lazy startup) still contributes.
+                pane_group
+                    .active_session_path(ctx)
+                    .or_else(|| pane_group.restored_terminal_startup_directory())
+            })
+            .collect();
+        dirs.extend(
+            AgentSessionHandlesModel::as_ref(ctx)
+                .handles()
+                .iter()
+                .map(|handle| PathBuf::from(&handle.cwd)),
+        );
+        dirs.sort();
+        dirs.dedup();
+        if dirs.is_empty() {
+            return;
+        }
+        ClaudeSessionScanModel::handle(ctx).update(ctx, |model, ctx| {
+            model.refresh(dirs, ctx);
+        });
+    }
+
+    /// Resumes a dormant agent task from the project rail: opens a new tab at
+    /// the handle's stored cwd with the agent's resume command **prefilled,
+    /// never executed** — the user reviews the exact command and submits it
+    /// themselves. The new tab becomes active, and the active∈selected
+    /// invariant re-points the rail at the task's project.
+    ///
+    /// A new tab is always used, never an existing pane: a pane's project is
+    /// derived from its cwd, so restoring into a pane of another project would
+    /// silently re-bucket that tab.
+    ///
+    /// The authority split is enforced here by *lookup order*, not by a check:
+    /// the "resume in place" pane is derived from the stored handle, so a
+    /// session Warp never witnessed — which has no handle — cannot reach that
+    /// branch and always opens a fresh tab at its scanned directory.
+    fn resume_dormant_agent_task(
+        &mut self,
+        agent: CLIAgent,
+        session_id: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::terminal::cli_agent_sessions::handle_store::AgentSessionHandlesModel;
+
+        if !FeatureFlag::ResumeProjectTasks.is_enabled() {
+            return;
+        }
+        let handle = AgentSessionHandlesModel::as_ref(ctx)
+            .get(agent, &session_id)
+            .cloned();
+        let cwd = match &handle {
+            Some(handle) => handle.cwd.clone(),
+            // Unwitnessed: the scan is the only thing that knows this session
+            // exists, and all it knows is a directory — never a pane.
+            None => {
+                // The scan only ever produces Claude sessions, so another
+                // agent reaching here is a row with no source at all.
+                if agent != CLIAgent::Claude || !ctx.has_singleton_model::<ClaudeSessionScanModel>()
+                {
+                    return;
+                }
+                let Some(scanned) = ClaudeSessionScanModel::as_ref(ctx)
+                    .session(&session_id)
+                    .cloned()
+                else {
+                    return;
+                };
+                // A row can outlive the transcript it was built from, and
+                // resuming a session Claude has pruned fails outright. Cheap
+                // stat, and only on the click.
+                if !session_scan::transcript_exists(Path::new(&scanned.cwd), &session_id) {
+                    log::warn!("Scanned session transcript vanished before resume");
+                    return;
+                }
+                scanned.cwd
+            }
+        };
+        // Validation lives inside resume_command: an id that fails it yields
+        // no command, and the click does nothing rather than guessing.
+        let Some(command) = crate::terminal::cli_agent_resume::resume_command(agent, &session_id)
+        else {
+            return;
+        };
+        // Resume in place when the pane that ran this session is still open AND
+        // still sits in the session's directory: opening a second tab for work
+        // already in front of the user would be noise.
+        //
+        // The directory check is not optional. An agent's resume lookup is
+        // scoped to the working directory, so prefilling into a pane that has
+        // `cd`-ed elsewhere (or restored to a different startup directory)
+        // fails with "No conversation found with session ID". When the pane has
+        // drifted, fall through to a new tab opened at the stored cwd.
+        let owning_pane = handle.and_then(|handle| {
+            let pane_uuid = handle.pane_uuid.clone();
+            self.tabs.iter().position(|tab| {
+                let pane_group = tab.pane_group.as_ref(ctx);
+                pane_group
+                    .find_terminal_pane_by_session_uuid(&pane_uuid)
+                    .is_some()
+                    && pane_group.held_session_directory(ctx).as_deref() == Some(cwd.as_str())
+            })
+        });
+        if let Some(tab_index) = owning_pane {
+            self.activate_tab_internal(tab_index, ctx);
+            match self
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .active_session_view(ctx)
+            {
+                Some(terminal_view) => terminal_view.update(ctx, |terminal, ctx| {
+                    terminal.prefill_command(&command, ctx);
+                }),
+                None => log::warn!("No terminal view to prefill when resuming in place"),
+            }
+            return;
+        }
+
+        // The cwd is load-bearing: the agent's own resume lookup is scoped to
+        // the directory the session ran in. If it is gone (deleted worktree),
+        // surface that instead of resuming somewhere wrong.
+        let directory = PathBuf::from(&cwd);
+        if !directory.is_dir() {
+            let window_id = ctx.window_id();
+            WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                let toast =
+                    DismissibleToast::error(format!("Can't resume here — {cwd} no longer exists."));
+                toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+            });
+            return;
+        }
+
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                initial_directory: Some(directory),
+                hide_homepage: true,
+                ..Default::default()
+            })),
+            Arc::new(HashMap::new()),
+            None, /*custom_tab_title*/
+            ctx,
+        );
+        match self
+            .active_tab_pane_group()
+            .as_ref(ctx)
+            .active_session_view(ctx)
+        {
+            Some(terminal_view) => terminal_view.update(ctx, |terminal, ctx| {
+                terminal.prefill_command(&command, ctx);
+            }),
+            None => log::warn!("No terminal view to prefill after resuming a dormant agent task"),
+        }
+    }
+
+    /// One [`RailShellRow`] per live tab, with every reason *not* to close it
+    /// already resolved.
+    ///
+    /// Deliberately computed on demand rather than per frame: `pane_has_agent`
+    /// repeats the conversation and handle lookups a row's label already does,
+    /// and `pane_sessions` walks every pane, so the rail must not pay for any
+    /// of it on each repaint merely to keep a button enabled.
+    fn rail_shell_rows(&self, ctx: &AppContext) -> Vec<RailShellRow> {
+        let layout = ProjectLayout::compute(&self.tabs, ctx);
+        self.tabs
+            .iter()
+            .enumerate()
+            .map(|(tab_index, tab)| {
+                let pane_group = tab.pane_group.as_ref(ctx);
+                let sessions: Vec<_> = pane_group
+                    .pane_sessions(tab.pane_group.id(), tab.pane_group.window_id(ctx), ctx)
+                    .collect();
+                RailShellRow {
+                    tab_index,
+                    has_agent: crate::workspace::tab_title::pane_has_agent(pane_group, ctx),
+                    // The same source of truth the quit warning counts
+                    // processes with, one level down: `RunningSessionSummary`
+                    // is what `UnsavedStateSummary` asks, and asking it
+                    // directly keeps this read-only (no auto-save side effect,
+                    // no `&mut AppContext`).
+                    is_busy: !RunningSessionSummary::new(&sessions)
+                        .long_running_cmds
+                        .is_empty(),
+                    // Two counts rather than one because they exclude different
+                    // things: the tree length rules out splits, while the
+                    // terminal-view count reaches `pane_contents` and so also
+                    // rules out an off-tree child agent pane or a swapped-in
+                    // replacement — neither of which the agent check above
+                    // would see, since their conversations hang off a
+                    // different view. The last condition is what makes the
+                    // pane a terminal at all: a code or notebook pane (whose
+                    // unsaved edits nothing here has vouched for) has no
+                    // focused session view.
+                    is_lone_terminal: pane_group.pane_count() == 1
+                        && pane_group.terminal_views(ctx).len() == 1
+                        && pane_group.focused_session_view(ctx).is_some(),
+                    is_shared: pane_group.is_terminal_pane_being_shared(ctx),
+                    project: layout
+                        .project_of_tab(tab_index)
+                        .map(ProjectId::display_name)
+                        .unwrap_or_default(),
+                }
+            })
+            .collect()
+    }
+
+    /// Closes every plain shell in this window, after asking.
+    ///
+    /// Confirm-then-close rather than a filter: a mis-click on a filter costs a
+    /// second click, a mis-click here costs tabs. The dialog names the count
+    /// and the projects so the user can recognise what is about to disappear,
+    /// and it is built the same way `close_tabs` builds its quit warning — a
+    /// platform-native alert, so this reads as the same weight of decision as
+    /// closing a tab with a process in it.
+    ///
+    /// Scoped to this window: `self.tabs` is per-window, so a second window's
+    /// shells are that window's button to press.
+    fn clear_shells_without_agents(&mut self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::Projects.is_enabled() {
+            return;
+        }
+        let rows = self.rail_shell_rows(ctx);
+        let selection = shells_to_clear(&rows, Some(self.active_tab_index));
+        if selection.is_empty() {
+            // Not a confirmation — there is nothing to confirm. But a button
+            // that does nothing visible reads as broken, so say why.
+            let window_id = ctx.window_id();
+            WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    DismissibleToast::default("No shells without agents to close.".to_owned()),
+                    window_id,
+                    ctx,
+                );
+            });
+            return;
+        }
+
+        // Identified by pane group, never by index: tabs can open and close
+        // while the dialog is up, and an index would then name a different tab.
+        let targets: Vec<EntityId> = selection
+            .iter()
+            .filter_map(|index| self.tabs.get(*index).map(|tab| tab.pane_group.id()))
+            .collect();
+        let prompt = clear_shells_prompt(selection.len());
+        let detail = clear_shells_detail(&projects_of(&rows, &selection));
+        let confirm_self = ctx.handle();
+        let dialog = AlertDialogWithCallbacks::for_app(
+            prompt,
+            detail,
+            vec![
+                ModalButton::for_app("Close", move |ctx| {
+                    if let Some(workspace) = confirm_self.upgrade(ctx) {
+                        workspace.update(ctx, |workspace, ctx| {
+                            workspace.close_shells_by_pane_group_id(&targets, ctx);
+                        });
+                    }
+                }),
+                ModalButton::for_app("Cancel", |_ctx| { /* Dismissing is the whole action. */ }),
+            ],
+            |_ctx| { /* Nothing to suppress: this modal is only ever asked for. */ },
+        );
+
+        // Same two-platform split as `close_tabs`: macOS gets the real native
+        // sheet, Linux and Windows get the in-window stand-in.
+        if cfg!(all(not(target_family = "wasm"), target_os = "macos")) {
+            AppContext::show_native_platform_modal(ctx, dialog);
+        } else if cfg!(all(
+            not(target_family = "wasm"),
+            any(target_os = "linux", windows)
+        )) {
+            self.show_native_modal(dialog, ctx);
+        }
+    }
+
+    /// Closes the confirmed shells, re-checking each one first.
+    ///
+    /// The re-check is not paranoia: a command can start, an agent can attach
+    /// or the user can switch tabs while the dialog is up, and every one of
+    /// those makes a tab ineligible after it was counted.
+    ///
+    /// Closes through [`PaneGroup::close_pane`] rather than closing the tab
+    /// directly so the close takes the repo's own undo path: with a single
+    /// visible pane, `close_pane` emits `Event::Exited { add_to_undo_stack:
+    /// true }`, which this workspace turns into `close_tab` and so into an
+    /// entry on the undo-close stack.
+    ///
+    /// The toast counts the tabs this dispatched a close for, which is the most
+    /// it can honestly claim: `Event::Exited` is delivered after this update
+    /// finishes, so `self.tabs` still holds every closing tab when the count is
+    /// taken and there is no survivor set to recount against.
+    fn close_shells_by_pane_group_id(
+        &mut self,
+        pane_group_ids: &[EntityId],
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let rows = self.rail_shell_rows(ctx);
+        let still_eligible: Vec<EntityId> = shells_to_clear(&rows, Some(self.active_tab_index))
+            .iter()
+            .filter_map(|index| self.tabs.get(*index).map(|tab| tab.pane_group.id()))
+            .collect();
+        let closing: Vec<EntityId> = pane_group_ids
+            .iter()
+            .filter(|pane_group_id| still_eligible.contains(pane_group_id))
+            .copied()
+            .collect();
+
+        for pane_group_id in &closing {
+            let Some(pane_group) = self
+                .tabs
+                .iter()
+                .find(|tab| tab.pane_group.id() == *pane_group_id)
+                .map(|tab| tab.pane_group.clone())
+            else {
+                continue;
+            };
+            // Safe by construction rather than by check: `is_lone_terminal`
+            // required `focused_session_view` — which *is*
+            // `terminal_view_from_pane_id(focused_pane_id(..))` — to resolve,
+            // so this group's focused pane is its one terminal pane.
+            let pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
+            pane_group.update(ctx, |pane_group, ctx| {
+                pane_group.close_pane(pane_id, ctx);
+            });
+        }
+
+        let closed = closing.len();
+        if closed == 0 {
+            return;
+        }
+        let window_id = ctx.window_id();
+        WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::default(cleared_shells_label(closed)),
+                window_id,
+                ctx,
+            );
+        });
+    }
+
+    /// The directory a new tab should open in so it becomes a task under the
+    /// selected project, rather than landing in another project (or "Other").
+    ///
+    /// Uses the working directory of the project's most-recently-used tab,
+    /// which keeps `+` inside the specific worktree the user was last in —
+    /// the project key is the repo's shared git dir, which for a linked
+    /// worktree points at the *main* checkout, so it is not a usable cwd.
+    /// Returns `None` (falling back to the default startup directory) when the
+    /// feature is off, nothing is selected, or the project is remote.
+    fn selected_project_startup_directory(&self, ctx: &AppContext) -> Option<PathBuf> {
+        if !project_layout_active(ctx) {
+            return None;
+        }
+        let selected = self.selected_project.as_ref()?;
+        let visible = ProjectLayout::compute(&self.tabs, ctx).visible_tab_indices(selected);
+        let index = self.mru_tab_index(&visible)?;
+        self.tabs[index]
+            .pane_group
+            .as_ref(ctx)
+            .active_session_path(ctx)
+            .filter(|path| path.is_dir())
+    }
+
     /// Change the active tab index. This must be used instead of setting `self.active_tab_index`
     /// directly, as it updates related state.
     pub(crate) fn set_active_tab_index(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
@@ -5425,10 +6468,31 @@ impl Workspace {
             self.tab_mru_order.retain(|id| *id != pane_group_id);
             self.tab_mru_order.insert(0, pane_group_id);
         }
-        if self.vertical_tabs_panel_open
-            && FeatureFlag::VerticalTabs.is_enabled()
-            && *TabSettings::as_ref(ctx).use_vertical_tabs
-        {
+
+        // Projects × Tasks invariant: the active tab always belongs to the
+        // selected project, so activating any tab re-points the rail selection
+        // at that tab's project. Only maintained when the feature is enabled.
+        if project_layout_active(ctx) {
+            let project = self
+                .tabs
+                .get(index)
+                .map(|tab| ProjectLayout::project_of_tab_data(tab, ctx));
+            if let Some(project) = project {
+                self.selected_project = Some(project);
+            }
+            // Doubles as the startup kick: the first tab activation after a
+            // restore is the earliest `&mut` moment at which the tab set (and
+            // therefore the set of directories worth scanning) is known. The
+            // model's own per-directory interval keeps repeated tab switches
+            // from re-reading anything.
+            self.refresh_claude_session_scan(ctx);
+            // Switching to a waiting agent's tab is how the user acknowledges
+            // it, and the nag has to fall silent *now* rather than at the next
+            // tick — otherwise the banner they just walked over to answer
+            // arrives anyway. Switching away re-arms it, on the engine's grace.
+            self.poll_nag_engine(ctx);
+        }
+        if self.vertical_tabs_panel_open && vertical_tabs_layout_active(ctx) {
             self.vertical_tabs_panel.scroll_to_tab(index);
         }
 
@@ -6265,6 +7329,300 @@ impl Workspace {
         ctx.notify();
     }
 
+    fn build_project_rail_context_menu(
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<Menu<WorkspaceAction>> {
+        // `prevent_interaction_with_other_elements` is load-bearing here: the
+        // menu floats over a clickable project row, and without it the click
+        // that dismisses the menu falls through and re-selects the project.
+        let menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .with_drop_shadow()
+                .prevent_interaction_with_other_elements()
+        });
+        ctx.subscribe_to_view(&menu, |me, _, event, ctx| {
+            if let MenuEvent::Close { .. } = event {
+                me.show_project_rail_context_menu = None;
+                ctx.notify();
+            }
+        });
+        menu
+    }
+
+    /// Opens the project rail's right-click menu for `project`.
+    ///
+    /// The items are contextual to the project's current place in the priority
+    /// list: add or remove (never both), and move up/down only where the move
+    /// exists. `ProjectId::Other` is unrankable — no stable identity across
+    /// restarts — so it gets no menu at all rather than one whose every entry
+    /// would do nothing.
+    fn show_project_rail_context_menu(
+        &mut self,
+        project: &ProjectId,
+        position: Vector2F,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::Projects.is_enabled() {
+            return;
+        }
+        let ProjectId::Key(_) = project else {
+            return;
+        };
+        let priorities = TabSettings::as_ref(ctx).project_priorities.value().clone();
+        let target = Some(project.clone());
+        let mut items = vec![if priorities.contains(project) {
+            MenuItemFields::new("Remove from priorities")
+                .with_on_select_action(WorkspaceAction::RemoveProjectFromPriorities(target.clone()))
+                .into_item()
+        } else {
+            MenuItemFields::new("Add to priorities")
+                .with_on_select_action(WorkspaceAction::AddProjectToPriorities(target.clone()))
+                .into_item()
+        }];
+        if priorities.can_move_up(project) {
+            // Same action as "Add to priorities": `with_added_to_top` promotes
+            // an already-ranked project rather than duplicating it. Worth its
+            // own entry because promoting is the common edit — a project just
+            // became urgent — and stepping it up one rank at a time is the
+            // part of ranking that gets tedious first.
+            items.push(
+                MenuItemFields::new("Move to top")
+                    .with_on_select_action(WorkspaceAction::AddProjectToPriorities(target.clone()))
+                    .into_item(),
+            );
+            items.push(
+                MenuItemFields::new("Move up")
+                    .with_on_select_action(WorkspaceAction::MoveProjectUpInPriorities(
+                        target.clone(),
+                    ))
+                    .into_item(),
+            );
+        }
+        if priorities.can_move_down(project) {
+            items.push(
+                MenuItemFields::new("Move down")
+                    .with_on_select_action(WorkspaceAction::MoveProjectDownInPriorities(target))
+                    .into_item(),
+            );
+        }
+        // Notification policy: one radio row per level, the checkmark showing
+        // the *effective* policy (override or rank-derived default) so the
+        // menu reads as the current state, not just the stored override.
+        if let ProjectId::Key(key) = project {
+            let nag_policies = TabSettings::as_ref(ctx).project_nag_policies.value();
+            let effective =
+                NagPolicy::resolve(nag_policies.policy_for(key), priorities.contains(project));
+            for (label, level) in [
+                ("Notifications: muted", NagPolicy::Muted),
+                ("Notifications: normal", NagPolicy::Normal),
+                ("Notifications: urgent", NagPolicy::Urgent),
+            ] {
+                let mut fields = MenuItemFields::new(label).with_on_select_action(
+                    WorkspaceAction::SetProjectNagPolicy(Some(project.clone()), Some(level)),
+                );
+                if level == effective {
+                    fields = fields.with_icon(icons::Icon::Check);
+                }
+                items.push(fields.into_item());
+            }
+
+            // Identity colour: the same dot palette the tab-bar color picker
+            // uses. Clicking the current colour clears it (toggle), matching
+            // the tab picker's behavior.
+            let terminal_colors = Appearance::as_ref(ctx).theme().terminal_colors().normal;
+            let current_color = TabSettings::as_ref(ctx)
+                .project_colors
+                .value()
+                .color_for(key);
+            items.push(MenuItem::ItemsRow {
+                items: TAB_COLOR_OPTIONS
+                    .iter()
+                    .map(|color_option| {
+                        let color = color_option.to_ansi_color(&terminal_colors);
+                        let selected = current_color == Some(*color_option);
+                        MenuItemFields::new_with_icon(
+                            if selected {
+                                TAB_NO_COLOR_ICON_PATH
+                            } else {
+                                TAB_COLOR_ICON_PATH
+                            },
+                            color.into(),
+                            color_option.to_string(),
+                        )
+                        .no_highlight_on_hover()
+                        .with_on_select_action(
+                            WorkspaceAction::SetProjectColor(
+                                Some(project.clone()),
+                                if selected { None } else { Some(*color_option) },
+                            ),
+                        )
+                    })
+                    .collect(),
+            });
+        }
+        self.project_rail_context_menu
+            .update(ctx, |menu, ctx| menu.set_items(items, ctx));
+        self.show_project_rail_context_menu = Some(position);
+        ctx.focus(&self.project_rail_context_menu);
+        ctx.notify();
+    }
+
+    fn build_task_rail_context_menu(
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<Menu<WorkspaceAction>> {
+        // `prevent_interaction_with_other_elements` for the same reason as the
+        // project menu: the menu floats over clickable task rows.
+        let menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .with_drop_shadow()
+                .prevent_interaction_with_other_elements()
+        });
+        ctx.subscribe_to_view(&menu, |me, _, event, ctx| {
+            if let MenuEvent::Close { .. } = event {
+                me.show_task_rail_context_menu = None;
+                ctx.notify();
+            }
+        });
+        menu
+    }
+
+    /// Opens the right-click menu for one rail task row. The single entry
+    /// reflects the row's current read state; rows with nothing to mark (a
+    /// plain shell, a scanned session with no handle) get no menu at all.
+    fn show_task_rail_context_menu(
+        &mut self,
+        task: &RailTaskMenuTarget,
+        position: Vector2F,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::Projects.is_enabled() {
+            return;
+        }
+        let unread = match task {
+            RailTaskMenuTarget::Live(terminal_view_id) => {
+                let Some(session) = CLIAgentSessionsModel::as_ref(ctx).session(*terminal_view_id)
+                else {
+                    return;
+                };
+                session.has_unseen_success() || session.marked_unread
+            }
+            RailTaskMenuTarget::Dormant { agent, session_id } => {
+                use crate::terminal::cli_agent_sessions::handle_store::AgentSessionHandlesModel;
+                let Some(handle) = AgentSessionHandlesModel::as_ref(ctx).get(*agent, session_id)
+                else {
+                    return;
+                };
+                handle.marked_unread
+            }
+        };
+        let item = if unread {
+            MenuItemFields::new("Mark as read")
+                .with_on_select_action(WorkspaceAction::MarkRailTaskRead(task.clone()))
+                .into_item()
+        } else {
+            MenuItemFields::new("Mark as unread")
+                .with_on_select_action(WorkspaceAction::MarkRailTaskUnread(task.clone()))
+                .into_item()
+        };
+        self.task_rail_context_menu
+            .update(ctx, |menu, ctx| menu.set_items(vec![item], ctx));
+        self.show_task_rail_context_menu = Some(position);
+        ctx.focus(&self.task_rail_context_menu);
+        ctx.notify();
+    }
+
+    fn set_rail_task_unread(
+        &mut self,
+        task: &RailTaskMenuTarget,
+        unread: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| match task {
+            RailTaskMenuTarget::Live(terminal_view_id) => {
+                if unread {
+                    sessions.mark_unread(*terminal_view_id, ctx);
+                } else {
+                    sessions.mark_success_seen(*terminal_view_id, ctx);
+                }
+            }
+            RailTaskMenuTarget::Dormant { agent, session_id } => {
+                sessions.set_dormant_read_state(*agent, session_id.clone(), unread, ctx);
+            }
+        });
+    }
+
+    /// Applies `update` to the priority list for `target`, or for the rail's
+    /// selected project when `target` is `None` (the Command Palette path,
+    /// which cannot carry a row identity).
+    ///
+    /// Unrankable buckets ([`ProjectId::Other`]) and a rail with nothing
+    /// selected both fall through as no-ops.
+    fn update_project_priorities(
+        &mut self,
+        target: Option<&ProjectId>,
+        ctx: &mut ViewContext<Self>,
+        update: impl FnOnce(&ProjectPriorities, &ProjectKey) -> ProjectPriorities,
+    ) {
+        if !FeatureFlag::Projects.is_enabled() {
+            return;
+        }
+        let Some(ProjectId::Key(key)) = target.or(self.selected_project.as_ref()).cloned() else {
+            return;
+        };
+        TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+            let updated = update(settings.project_priorities.value(), &key);
+            report_if_error!(settings.project_priorities.set_value(updated, ctx));
+        });
+        ctx.notify();
+    }
+
+    /// Sets or clears the per-project notification override; see
+    /// [`ProjectNagPolicies`](super::tab_settings::ProjectNagPolicies). A
+    /// `None` target falls back to the rail's selected project (the Command
+    /// Palette path).
+    fn update_project_nag_policy(
+        &mut self,
+        target: Option<&ProjectId>,
+        policy: Option<NagPolicy>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::Projects.is_enabled() {
+            return;
+        }
+        let Some(ProjectId::Key(key)) = target.or(self.selected_project.as_ref()).cloned() else {
+            return;
+        };
+        TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+            let updated = settings
+                .project_nag_policies
+                .value()
+                .with_policy(&key, policy);
+            report_if_error!(settings.project_nag_policies.set_value(updated, ctx));
+        });
+        ctx.notify();
+    }
+
+    /// Sets or clears the project's rail identity colour. A `None` target
+    /// falls back to the rail's selected project (the Command Palette path).
+    fn update_project_color(
+        &mut self,
+        target: Option<&ProjectId>,
+        color: Option<AnsiColorIdentifier>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::Projects.is_enabled() {
+            return;
+        }
+        let Some(ProjectId::Key(key)) = target.or(self.selected_project.as_ref()).cloned() else {
+            return;
+        };
+        TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+            let updated = settings.project_colors.value().with_color(&key, color);
+            report_if_error!(settings.project_colors.set_value(updated, ctx));
+        });
+        ctx.notify();
+    }
+
     fn open_header_toolbar_editor(&mut self, ctx: &mut ViewContext<Self>) {
         if !FeatureFlag::ConfigurableToolbar.is_enabled() {
             return;
@@ -6990,8 +8348,7 @@ impl Workspace {
         anchor: NewSessionMenuAnchor,
         ctx: &ViewContext<Self>,
     ) -> f32 {
-        let use_vertical_tabs =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let use_vertical_tabs = vertical_tabs_layout_active(ctx);
         match anchor {
             NewSessionMenuAnchor::AddTabButton(position)
                 if use_vertical_tabs && self.vertical_tabs_panel_open =>
@@ -7019,8 +8376,7 @@ impl Workspace {
     }
 
     fn toggle_tab_configs_menu(&mut self, ctx: &mut ViewContext<Self>) {
-        let use_vertical_tabs =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let use_vertical_tabs = vertical_tabs_layout_active(ctx);
         if self.show_new_session_dropdown_menu.is_some() {
             self.close_new_session_dropdown_menu(ctx);
             return;
@@ -11911,6 +13267,7 @@ impl Workspace {
             },
             CtrlTabBehavior::CycleMostRecentSession | CtrlTabBehavior::CycleMostRecentTab => {
                 self.current_workspace_state.is_palette_open = false;
+                self.current_workspace_state.is_session_search_palette_open = false;
                 let palette_was_open = self.current_workspace_state.is_ctrl_tab_palette_open;
                 if !palette_was_open {
                     self.open_palette_action(
@@ -11947,6 +13304,11 @@ impl Workspace {
     }
 
     pub fn activate_prev_tab(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(visible) = self.project_visible_indices(ctx) {
+            let index = project_layout::cycle_prev(&visible, self.active_tab_index);
+            self.activate_tab(index, ctx);
+            return;
+        }
         let index = if self.vertical_tabs_panel.search_query.is_empty() {
             if self.active_tab_index > 0 {
                 self.active_tab_index - 1
@@ -11971,6 +13333,11 @@ impl Workspace {
     }
 
     pub fn activate_next_tab(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(visible) = self.project_visible_indices(ctx) {
+            let index = project_layout::cycle_next(&visible, self.active_tab_index);
+            self.activate_tab(index, ctx);
+            return;
+        }
         let index = if self.vertical_tabs_panel.search_query.is_empty() {
             if self.active_tab_index + 1 < self.tabs.len() {
                 self.active_tab_index + 1
@@ -11997,6 +13364,19 @@ impl Workspace {
         if self.tabs.len() > 1 {
             let target_index = self.tabs.len() - 1;
             self.activate_tab(target_index, ctx);
+        }
+    }
+
+    /// Activates the `num`-th tab (1-based). In project mode this counts within
+    /// the selected project's visible tabs; otherwise it is the raw index.
+    pub fn activate_tab_by_number(&mut self, num: usize, ctx: &mut ViewContext<Self>) {
+        let nth = num.saturating_sub(1);
+        let index = match self.project_visible_indices(ctx) {
+            Some(visible) => visible.get(nth).or_else(|| visible.last()).copied(),
+            None => Some(nth),
+        };
+        if let Some(index) = index {
+            self.activate_tab(index, ctx);
         }
     }
 
@@ -12310,10 +13690,15 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         // Figure out what indices we want to delete for the "other tabs" case.
-        let indices_to_remove = (0..self.tabs.len()).filter(|i| *i != index);
+        // In project mode this is scoped to the selected project's visible tabs,
+        // so it never closes tabs belonging to another project.
+        let indices_to_remove: Vec<usize> = match self.project_visible_indices(ctx) {
+            Some(visible) => visible.into_iter().filter(|i| *i != index).collect(),
+            None => (0..self.tabs.len()).filter(|i| *i != index).collect(),
+        };
 
         let tabs_closed = self.close_tabs(
-            indices_to_remove,
+            indices_to_remove.into_iter(),
             OpenDialogSource::CloseOtherTabs { tab_index: index },
             skip_confirmation,
             true,
@@ -12340,12 +13725,24 @@ impl Workspace {
         skip_confirmation: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        let indices_to_remove = match direction {
-            TabMovement::Left => 0..index,
-            TabMovement::Right => (index + 1)..self.tabs.len(),
+        // In project mode, "left/right" is relative to the tab's position within
+        // its project's visible tabs, so other projects' tabs are never closed.
+        let indices_to_remove: Vec<usize> = match self.project_visible_indices(ctx) {
+            Some(visible) => {
+                let pos = visible.iter().position(|&i| i == index);
+                match (direction, pos) {
+                    (TabMovement::Left, Some(p)) => visible[..p].to_vec(),
+                    (TabMovement::Right, Some(p)) => visible[p + 1..].to_vec(),
+                    _ => Vec::new(),
+                }
+            }
+            None => match direction {
+                TabMovement::Left => (0..index).collect(),
+                TabMovement::Right => ((index + 1)..self.tabs.len()).collect(),
+            },
         };
         let tabs_closed = self.close_tabs(
-            indices_to_remove,
+            indices_to_remove.into_iter(),
             OpenDialogSource::CloseTabsDirection {
                 tab_index: index,
                 direction,
@@ -12692,14 +14089,19 @@ impl Workspace {
             .map(PathBuf::from)
             .filter(|path| path.is_dir());
 
-        let startup_directory = startup_directory_from_conversation.or_else(|| {
-            self.get_new_tab_startup_directory(
-                new_session_source,
-                previous_session_window_id,
-                chosen_shell.as_ref(),
-                ctx,
-            )
-        });
+        // In project mode, `+` creates a task inside the selected project, so the
+        // new tab shows up under the project the user is looking at. A restored
+        // conversation's own directory still wins.
+        let startup_directory = startup_directory_from_conversation
+            .or_else(|| self.selected_project_startup_directory(ctx))
+            .or_else(|| {
+                self.get_new_tab_startup_directory(
+                    new_session_source,
+                    previous_session_window_id,
+                    chosen_shell.as_ref(),
+                    ctx,
+                )
+            });
 
         self.add_tab_with_pane_layout(
             PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
@@ -12845,7 +14247,22 @@ impl Workspace {
         self.tabs.insert(insert_idx, TabData::new(new_pane_group));
         self.tab_mru_order
             .push(self.tabs[insert_idx].pane_group.id());
-        self.activate_tab_internal(insert_idx, ctx);
+        // Window restore adds every saved tab through here, so each one is
+        // genuinely activated in turn; those activations are mechanical, not a
+        // user picking a tab, and must not start deferred shells.
+        //
+        // `is_restoration` stands in for "this is window restore": every other
+        // caller passing a `PanesLayout::Snapshot` builds a synthetic
+        // non-terminal leaf (settings, get-started, cloud notebook, cloud
+        // workflow, local file notebook), which owns no shell at all, so
+        // classifying those as `Restore` is behavior-neutral rather than merely
+        // harmless.
+        let activation_source = if is_restoration {
+            TabActivationSource::Restore
+        } else {
+            TabActivationSource::User
+        };
+        self.activate_tab_internal_from(insert_idx, activation_source, ctx);
 
         // Inherit the active tab's group membership (skipped for top-level tabs).
         if let Some(group_id) = inherited_group_id {
@@ -14270,9 +15687,8 @@ impl Workspace {
             || self.traffic_light_mouse_states.are_traffic_lights_hovered();
 
         // Check if any of the menus/popups rendered relative to the tab bar are open.
-        let is_vertical_tabs_active = FeatureFlag::VerticalTabs.is_enabled()
-            && *TabSettings::as_ref(app).use_vertical_tabs
-            && self.vertical_tabs_panel_open;
+        let is_vertical_tabs_active =
+            vertical_tabs_layout_active(app) && self.vertical_tabs_panel_open;
         let is_tab_menu_open = self.show_tab_bar_overflow_menu
             || (self.show_tab_right_click_menu.is_some() && !is_vertical_tabs_active)
             || (self.show_new_session_dropdown_menu.is_some() && !is_vertical_tabs_active)
@@ -14334,7 +15750,7 @@ impl Workspace {
     /// Updates the titlebar height to match the scaled tab bar height.
     pub fn update_titlebar_height(&self, ctx: &mut ViewContext<Self>) {
         let zoom_factor = WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor();
-        let scaled_tab_bar_height = (TOTAL_TAB_BAR_HEIGHT * zoom_factor) as f64;
+        let scaled_tab_bar_height = (total_tab_bar_height(ctx) * zoom_factor) as f64;
 
         if let Some(platform_window) = ctx.windows().platform_window(ctx.window_id()) {
             platform_window
@@ -14485,6 +15901,207 @@ impl Workspace {
         ctx.notify();
     }
 
+    /// Opens the session-search popup over a snapshot of every CLI-agent
+    /// session Warp can name.
+    fn open_session_search_palette(&mut self, ctx: &mut ViewContext<Self>) {
+        // A session started in another terminal only exists on disk, and the
+        // scan is only kicked by user actions. Opening the popup is exactly
+        // such an action; the results land for the next open if the scan is
+        // still running, which is the same deal the rail makes.
+        self.refresh_claude_session_scan(ctx);
+
+        let candidates = self.agent_session_candidates(ctx);
+        // The same list, handed to the content search as its corpus: a popup
+        // that can name a session should be able to look inside it. Set here,
+        // once per open, for the same reason the candidates are — walking the
+        // tabs and resolving a project per directory is far too much to redo
+        // between keystrokes.
+        self.set_transcript_digest_corpus(&candidates, ctx);
+
+        self.session_search_palette.update(ctx, |view, ctx| {
+            view.reset(ctx);
+        });
+
+        let mixer = self
+            .session_search_palette
+            .as_ref(ctx)
+            .search_bar
+            .as_ref(ctx)
+            .mixer()
+            .clone();
+        let data_source_store = self
+            .session_search_palette
+            .as_ref(ctx)
+            .data_source_store
+            .clone();
+        data_source_store.update(ctx, |store, ctx| {
+            store.reset_session_search_mixer(mixer, candidates, ctx);
+        });
+
+        self.session_search_palette.update(ctx, |view, ctx| {
+            // Set the offset BEFORE the filter: the source is synchronous, so
+            // results arrive during `set_active_query_filter` and the offset has
+            // to already be stored when the selection is first placed.
+            //
+            // The offset is 1 because the top row is the section separator, and
+            // `SelectionUpdate::Top` — unlike Up/Down — does not skip
+            // non-interactable items. Without it, Enter on a freshly opened
+            // popup accepts a header and silently does nothing.
+            view.set_initial_selection_offset(1, ctx);
+            view.set_active_query_filter(QueryFilter::AgentSessions, ctx);
+        });
+
+        ctx.notify();
+    }
+
+    /// Hands the transcript digest the sessions it may look inside.
+    ///
+    /// The corpus is the popup's own candidate list, minus nothing: the digest
+    /// drops the agents it cannot read (only Claude keeps a per-cwd transcript
+    /// store) rather than having that rule restated at every call site.
+    /// Replacing it also drops whatever the previous popup published, so a
+    /// reopened popup cannot show hits from a corpus it no longer offers.
+    fn set_transcript_digest_corpus(
+        &self,
+        candidates: &[AgentSessionCandidate],
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::terminal::cli_agent_sessions::transcript_digest::{
+            DigestTarget, TranscriptDigestModel,
+        };
+
+        if !ctx.has_singleton_model::<TranscriptDigestModel>() {
+            return;
+        }
+        let corpus: Vec<DigestTarget> = candidates
+            .iter()
+            .map(|candidate| DigestTarget {
+                agent: candidate.agent,
+                session_id: candidate.session_id.clone(),
+                project_name: candidate.project_name.clone(),
+                task_name: candidate.task_name.clone(),
+                cwd: candidate.cwd.clone(),
+            })
+            .collect();
+        TranscriptDigestModel::handle(ctx).update(ctx, |digest, ctx| {
+            digest.set_corpus(corpus, ctx);
+        });
+    }
+
+    /// Every CLI-agent session the popup can offer, from all three sources:
+    /// the sessions running in open tabs, the durable handle store, and the
+    /// on-disk scan.
+    ///
+    /// Assembled once per open rather than per keystroke — it walks every tab
+    /// and resolves a project for every distinct directory, which is far too
+    /// much to redo between characters.
+    fn agent_session_candidates(&self, ctx: &AppContext) -> Vec<AgentSessionCandidate> {
+        use crate::terminal::cli_agent_sessions::handle_store::AgentSessionHandlesModel;
+
+        if !FeatureFlag::ResumeProjectTasks.is_enabled() {
+            return Vec::new();
+        }
+
+        // `ProjectKey::for_path` can hit repo detection, and a machine with a
+        // few hundred scanned sessions has far fewer distinct directories than
+        // sessions — so resolve each directory once, as `compute_with_handles`
+        // does for the rail.
+        let mut project_name_by_cwd: HashMap<String, String> = HashMap::new();
+        let mut project_name_for_cwd = |cwd: &str| -> String {
+            project_name_by_cwd
+                .entry(cwd.to_owned())
+                .or_insert_with(|| {
+                    ProjectKey::for_path(&LocalOrRemotePath::Local(PathBuf::from(cwd)), ctx)
+                        .map(ProjectId::Key)
+                        .unwrap_or(ProjectId::Other)
+                        .display_name()
+                })
+                .clone()
+        };
+
+        // The scan owns names (a `/rename` lands in the transcript, not in the
+        // cached handle title), so its labels are joined in by session id.
+        let scanned = Self::scanned_sessions(ctx);
+        let scanned_by_id: HashMap<&str, &ScannedSession> = scanned
+            .iter()
+            .map(|session| (session.session_id.as_str(), session))
+            .collect();
+
+        let mut live = Vec::new();
+        for tab in &self.tabs {
+            let pane_group = tab.pane_group.as_ref(ctx);
+            let Some(terminal_view) = pane_group.focused_session_view(ctx) else {
+                continue;
+            };
+            let Some(session) = CLIAgentSessionsModel::as_ref(ctx).session(terminal_view.id())
+            else {
+                continue;
+            };
+            let Some(session_id) = session.session_context.session_id.clone() else {
+                // Still starting up: no id yet means nothing to resume to.
+                continue;
+            };
+            let cwd = pane_group
+                .active_session_path(ctx)
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            live.push(AgentSessionCandidate {
+                agent: session.agent,
+                session_id,
+                project_name: project_name_for_cwd(&cwd),
+                // The rail's own label resolution, so a session is called the
+                // same thing in the rail and in the popup.
+                task_name: crate::workspace::tab_title::rail_task_label(pane_group, ctx),
+                cwd,
+                origin: CandidateOrigin::Live,
+                last_active: None,
+            });
+        }
+
+        let handles = AgentSessionHandlesModel::as_ref(ctx)
+            .handles()
+            .iter()
+            .map(|handle| AgentSessionCandidate {
+                agent: handle.agent,
+                session_id: handle.session_id.clone(),
+                project_name: project_name_for_cwd(&handle.cwd),
+                task_name: project_layout::dormant_label(
+                    scanned_by_id
+                        .get(handle.session_id.as_str())
+                        .and_then(|session| session.label.as_deref()),
+                    handle.title.as_deref(),
+                    handle.agent,
+                    &handle.session_id,
+                ),
+                cwd: handle.cwd.clone(),
+                origin: CandidateOrigin::Handle,
+                last_active: Some(handle.last_seen_at.and_utc()),
+            })
+            .collect();
+
+        let scanned = scanned
+            .iter()
+            .map(|session| AgentSessionCandidate {
+                // The scan reads Claude Code's transcript layout, so every
+                // session it produces is a Claude session by construction.
+                agent: CLIAgent::Claude,
+                session_id: session.session_id.clone(),
+                project_name: project_name_for_cwd(&session.cwd),
+                task_name: project_layout::dormant_label(
+                    session.label.as_deref(),
+                    None,
+                    CLIAgent::Claude,
+                    &session.session_id,
+                ),
+                cwd: session.cwd.clone(),
+                origin: CandidateOrigin::Scanned,
+                last_active: Some(DateTime::<Utc>::from(session.modified)),
+            })
+            .collect();
+
+        agent_sessions::candidate::merge(live, handles, scanned)
+    }
+
     fn open_ctrl_tab_palette(
         &mut self,
         query_filter: QueryFilter,
@@ -14609,6 +16226,7 @@ impl Workspace {
     ) {
         self.current_workspace_state.is_palette_open = false;
         self.current_workspace_state.is_ctrl_tab_palette_open = false;
+        self.current_workspace_state.is_session_search_palette_open = false;
         self.tab_bar_pinned_by_popup = false;
         self.sync_window_button_visibility(ctx);
         if focus_active_tab
@@ -14700,6 +16318,8 @@ impl Workspace {
         }
         if matches!(source, PaletteSource::CtrlTab { .. }) {
             self.current_workspace_state.is_ctrl_tab_palette_open = true;
+        } else if matches!(mode, PaletteMode::SessionSearch) {
+            self.current_workspace_state.is_session_search_palette_open = true;
         } else {
             self.current_workspace_state.is_palette_open = true;
         }
@@ -14721,9 +16341,23 @@ impl Workspace {
             PaletteMode::WarpDrive => self.open_warp_drive_palette(ctx),
             PaletteMode::Files => self.open_files_palette(ctx),
             PaletteMode::Conversations => self.open_conversations_palette(ctx),
+            PaletteMode::SessionSearch => self.open_session_search_palette(ctx),
         }
 
-        ctx.focus(&self.palette);
+        // Focus has to follow the palette that is actually rendered. Ctrl+Tab
+        // tolerates focusing the main palette because it takes no typed input,
+        // but the session-search popup is driven entirely by typing: focusing
+        // the wrong instance leaves it on screen swallowing nothing while every
+        // keystroke goes to an off-screen palette.
+        match mode {
+            PaletteMode::SessionSearch => ctx.focus(&self.session_search_palette),
+            PaletteMode::Command
+            | PaletteMode::Navigation
+            | PaletteMode::LaunchConfig
+            | PaletteMode::WarpDrive
+            | PaletteMode::Files
+            | PaletteMode::Conversations => ctx.focus(&self.palette),
+        }
 
         send_telemetry_from_ctx!(TelemetryEvent::PaletteSearchOpened { mode, source }, ctx);
 
@@ -14767,11 +16401,18 @@ impl Workspace {
             .current_workspace_state
             .is_any_non_palette_modal_open(ctx)
         {
-            let is_palette_mode_already_open =
+            // The session-search popup lives in its own palette instance, so
+            // "already open" is its own flag rather than the main palette's
+            // active filter — which never becomes `AgentSessions`.
+            let is_palette_mode_already_open = if matches!(palette_mode, PaletteMode::SessionSearch)
+            {
+                self.current_workspace_state.is_session_search_palette_open
+            } else {
                 self.palette.as_ref(ctx).is_mode_enabled(palette_mode, ctx)
                     && ((matches!(source, PaletteSource::CtrlTab { .. })
                         && self.current_workspace_state.is_ctrl_tab_palette_open)
-                        || self.current_workspace_state.is_palette_open);
+                        || self.current_workspace_state.is_palette_open)
+            };
             if is_palette_mode_already_open {
                 self.close_palette(true, None, ctx);
             } else {
@@ -15077,6 +16718,7 @@ impl Workspace {
     pub fn is_palette_open(&self) -> bool {
         self.current_workspace_state.is_palette_open
             || self.current_workspace_state.is_ctrl_tab_palette_open
+            || self.current_workspace_state.is_session_search_palette_open
     }
 
     pub fn is_workflow_modal_open(&self) -> bool {
@@ -18667,6 +20309,7 @@ impl Workspace {
         // in case it was used to open the theme chooser.
         self.current_workspace_state.is_palette_open = false;
         self.current_workspace_state.is_ctrl_tab_palette_open = false;
+        self.current_workspace_state.is_session_search_palette_open = false;
         self.previous_workspace_state = Some(self.current_workspace_state);
         self.current_workspace_state.is_ai_assistant_panel_open = false;
         self.current_workspace_state.is_theme_chooser_open = true;
@@ -19440,9 +21083,37 @@ impl Workspace {
             || self.changelog_model.as_ref(ctx).is_check_pending()
     }
 
+    /// Focuses the active tab on behalf of the user; see
+    /// [`Self::focus_active_tab_from`] for the restore-time variant.
     pub(crate) fn focus_active_tab(&mut self, ctx: &mut ViewContext<Self>) {
+        self.focus_active_tab_from(TabActivationSource::User, ctx);
+    }
+
+    /// [`Self::focus_active_tab`] with explicit provenance.
+    ///
+    /// The focus itself is unconditional -- restore relies on it to leave each
+    /// rebuilt tab in a consistent focus state. Only the deferred-shell start
+    /// is gated.
+    pub(crate) fn focus_active_tab_from(
+        &mut self,
+        source: TabActivationSource,
+        ctx: &mut ViewContext<Self>,
+    ) {
         self.active_tab_pane_group().update(ctx, |tab, ctx| {
             tab.focus(ctx);
+            // Activating a tab is the moment a restored tab's deferred shell
+            // starts. Deliberately here rather than inside `PaneGroup::focus`,
+            // which pane-group construction also calls -- see the note on
+            // `TerminalPane::focus`.
+            //
+            // Restore-time activations are excluded: rebuilding a window walks
+            // every saved tab through activation, so starting a shell here
+            // would start all of them (measured: 46 of 48 restored tabs
+            // spawned a shell where only the visible one should have).
+            match source {
+                TabActivationSource::User => tab.ensure_focused_session_started(ctx),
+                TabActivationSource::Restore => {}
+            }
         })
     }
 
@@ -19898,7 +21569,7 @@ impl Workspace {
                 // Insertion divider before this member when a pane drop lands
                 // here (into the group at `idx`).
                 if show_before_indicator(self.hovered_tab_index, idx, Some(group.id)) {
-                    row.add_child(self.render_tab_hover_indicator(appearance));
+                    row.add_child(self.render_tab_hover_indicator(appearance, ctx));
                 }
                 let tab = &self.tabs[idx];
                 let effective_color = tab.color();
@@ -19926,7 +21597,7 @@ impl Workspace {
                 first_index + run_len,
                 Some(group.id),
             ) {
-                row.add_child(self.render_tab_hover_indicator(appearance));
+                row.add_child(self.render_tab_hover_indicator(appearance, ctx));
             }
         }
 
@@ -20391,8 +22062,7 @@ impl Workspace {
         appearance: &Appearance,
         ctx: &AppContext,
     ) -> Box<dyn Element> {
-        let vertical_tabs_active =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let vertical_tabs_active = vertical_tabs_layout_active(ctx);
 
         let (is_active, tooltip_text, action, keybinding_name, save_position_id) =
             if vertical_tabs_active {
@@ -20663,13 +22333,20 @@ impl Workspace {
             .finish()
     }
 
-    fn render_tab_hover_indicator(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_tab_hover_indicator(
+        &self,
+        appearance: &Appearance,
+        ctx: &AppContext,
+    ) -> Box<dyn Element> {
+        // Inset slightly from the bar so the indicator reads as sitting between
+        // tabs rather than butting into the border, at either line count.
+        let height = (tab_bar_height(ctx) - 2.).max(0.);
         ConstrainedBox::new(
             Rect::new()
                 .with_background(appearance.theme().accent())
                 .finish(),
         )
-        .with_height(32.)
+        .with_height(height)
         .with_width(4.)
         .finish()
     }
@@ -20861,8 +22538,7 @@ impl Workspace {
         }
 
         // Check if vertical tabs mode is active
-        let vertical_tabs_active =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let vertical_tabs_active = vertical_tabs_layout_active(ctx);
 
         // Render config-driven left-side toolbar buttons (both horizontal and vertical tabs)
         let knowledge_center_closed = true;
@@ -20983,8 +22659,10 @@ impl Workspace {
 
             // Collapse tabs into render slots: each ungrouped tab is a
             // `Single`, and each contiguous run of same-group tabs is one
-            // `Group`.
-            let slots = self.tab_bar_slots();
+            // `Group`. In project mode the bar is filtered to the selected
+            // project's visible tabs.
+            let project_visible = self.project_visible_indices(ctx);
+            let slots = self.tab_bar_slots(project_visible.as_deref());
 
             // Render each slot in the tab bar, either an individual tab or tab group.
             for slot in &slots {
@@ -21010,7 +22688,7 @@ impl Workspace {
                         // Ungrouped insertion just before the group; a drop into
                         // the group highlights the group itself instead.
                         if show_before_indicator(self.hovered_tab_index, *first_index, None) {
-                            tab_bar.add_child(self.render_tab_hover_indicator(appearance));
+                            tab_bar.add_child(self.render_tab_hover_indicator(appearance, ctx));
                         }
                         // Filtered above; the group must exist in `tab_groups`.
                         let group = self.tab_groups[group_id].clone();
@@ -21031,7 +22709,7 @@ impl Workspace {
                         // only matches an ungrouped insertion.
                         if !is_transferred && show_before_indicator(self.hovered_tab_index, i, None)
                         {
-                            tab_bar.add_child(self.render_tab_hover_indicator(appearance));
+                            tab_bar.add_child(self.render_tab_hover_indicator(appearance, ctx));
                         }
                         if is_transferred {
                             tab_bar.add_child(
@@ -21057,7 +22735,7 @@ impl Workspace {
             {
                 tab_bar.add_child(self.render_ghost_tab_slot(appearance, ctx));
             } else if show_before_indicator(self.hovered_tab_index, self.tabs.len(), None) {
-                tab_bar.add_child(self.render_tab_hover_indicator(appearance));
+                tab_bar.add_child(self.render_tab_hover_indicator(appearance, ctx));
             }
 
             if ContextFlag::CreateNewSession.is_enabled() {
@@ -21105,8 +22783,7 @@ impl Workspace {
         if !item.is_available(ctx) {
             return None;
         }
-        let vertical_tabs_active =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let vertical_tabs_active = vertical_tabs_layout_active(ctx);
         let inner = match item {
             HeaderToolbarItemKind::TabsPanel => self.render_left_toggle_button(appearance, ctx),
             HeaderToolbarItemKind::ToolsPanel => {
@@ -22041,8 +23718,7 @@ impl Workspace {
             None => active_content,
         };
 
-        let vertical_tabs_active =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(app).use_vertical_tabs;
+        let vertical_tabs_active = vertical_tabs_layout_active(app);
         let pane_group = self.active_tab_pane_group().as_ref(app);
         let is_right_open = pane_group.right_panel_open;
         let is_right_maximized = is_right_open && pane_group.is_right_panel_maximized;
@@ -22587,8 +24263,7 @@ impl Workspace {
         let mut contents = contents;
 
         let traffic_light_data = traffic_light_data(app, self.window_id);
-        let vertical_tabs_active =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(app).use_vertical_tabs;
+        let vertical_tabs_active = vertical_tabs_layout_active(app);
         // Add a spacer for the traffic light buttons on Windows/Linux.
         if traffic_light_data.is_some_and(|data| data.side == TrafficLightSide::Right)
             && *side == PanelPosition::Right
@@ -22653,6 +24328,961 @@ impl Workspace {
         }
     }
 
+    /// The CLI agent session behind a tab's focused pane, if it is one whose
+    /// status can be trusted.
+    ///
+    /// Only plugin-backed sessions with rich status qualify — a session that
+    /// cannot really know it is blocked must not claim to be (the same gating
+    /// as the per-row badge in `agent_icon.rs`). Shared by the header
+    /// aggregate and the rail's row triage so the two can never disagree
+    /// about which sessions count.
+    fn tab_rich_cli_session<'a>(tab: &TabData, ctx: &'a AppContext) -> Option<&'a CLIAgentSession> {
+        let terminal_view = tab.pane_group.as_ref(ctx).focused_session_view(ctx)?;
+        let terminal_view_id = terminal_view.as_ref(ctx).id();
+        CLIAgentSessionsModel::as_ref(ctx)
+            .session(terminal_view_id)
+            .filter(|session| Self::is_rich_cli_session(session))
+    }
+
+    /// Whether a session's own protocol status can be believed.
+    ///
+    /// Extracted so the pane-level consumers (the nag engine, which looks at
+    /// every visible pane) apply exactly the gate the tab-level ones do — a
+    /// session that cannot really know it is blocked must neither tint a row
+    /// nor ring a bell.
+    fn is_rich_cli_session(session: &CLIAgentSession) -> bool {
+        session.listener.is_some() && session.supports_rich_status()
+    }
+
+    /// Everything the rail's triage needs from one tab: the status its badge
+    /// shows, plus the two facts only a CLI agent session knows — how long it
+    /// has been waiting, and whether its result has been looked at.
+    fn tab_triage(tab: &TabData, ctx: &AppContext) -> TaskTriage {
+        let session = Self::tab_rich_cli_session(tab, ctx);
+        TaskTriage {
+            status: Self::tab_conversation_status(tab, ctx),
+            blocked_for: session.and_then(CLIAgentSession::blocked_duration),
+            has_unseen_success: session.is_some_and(CLIAgentSession::has_unseen_success),
+            marked_unread: session.is_some_and(|session| session.marked_unread),
+        }
+    }
+
+    /// The agent status of a single tab, matching what the tab itself displays:
+    /// a CLI agent's own protocol status first, then a long-running shell
+    /// command as in-progress, otherwise the focused session's active
+    /// conversation status (ignoring empty/passive ones).
+    fn tab_conversation_status(tab: &TabData, ctx: &AppContext) -> Option<ConversationStatus> {
+        let terminal_view = tab.pane_group.as_ref(ctx).focused_session_view(ctx)?;
+        let terminal_view_ref = terminal_view.as_ref(ctx);
+        // A user-typed `claude` blocked on a permission prompt IS a
+        // long-running command, so the long-running check must not come first:
+        // it buried every plain CLI pane's Blocked under InProgress, and the
+        // project header could never say "waiting on you". Only plugin-backed
+        // sessions with rich status get a say here — a session that cannot
+        // really know it is blocked must not claim to be (same gating as the
+        // per-row badge in `agent_icon.rs`).
+        let cli_status = Self::tab_rich_cli_session(tab, ctx)
+            .map(|session| session.status.to_conversation_status());
+        if let Some(status @ ConversationStatus::Blocked { .. }) = cli_status {
+            return Some(status);
+        }
+        if terminal_view_ref.is_long_running() {
+            return Some(ConversationStatus::InProgress);
+        }
+        let Some(conversation) =
+            BlocklistAIHistoryModel::as_ref(ctx).active_conversation(terminal_view_ref.id())
+        else {
+            // No conversation to consult (a plain CLI pane): the agent's own
+            // non-blocked status is still the truth worth aggregating —
+            // Success here is what lets a finished agent read as done.
+            return cli_status;
+        };
+        if conversation.is_empty() || conversation.is_entirely_passive() {
+            return None;
+        }
+        Some(conversation.status().clone())
+    }
+
+    /// Aggregates the agent status of a project's tasks into the one status
+    /// worth showing on its rail row.
+    ///
+    /// A task that needs the user (blocked on an approval, or waiting for
+    /// input) wins over one that is merely working — with many projects open,
+    /// "which project is waiting on me?" is the question the rail should answer
+    /// at a glance. Projects with no agent activity get no indicator.
+    ///
+    /// The precedence itself lives in [`RailUrgency`], which also carries the
+    /// escalation and the "unseen result" state the badge alone cannot express;
+    /// the returned aggregate bundles the winning status with the *worst*
+    /// child's wait so the header can render both without three parallel
+    /// `Option`s having to be kept in step.
+    ///
+    /// This is the sole replacement for the old `project_status`, whose one
+    /// caller was the rail's project row.
+    fn project_triage(tasks: &[(usize, TaskTriage)]) -> ProjectTriage {
+        rail_triage::project_triage(tasks.iter().map(|(_, triage)| triage))
+    }
+
+    /// One triage pass over every task row the rail knows about, in the same
+    /// order [`ProjectLayout::projects`] lists the projects.
+    ///
+    /// The row tints, the project-header aggregates and the header chips all
+    /// read from this one pass, so they cannot disagree with each other — and
+    /// no tab is inspected more than once per frame. Computed even when task
+    /// rows are hidden, because the chips count tasks the rail is not drawing.
+    fn rail_task_triage(
+        &self,
+        layout: &ProjectLayout,
+        ctx: &AppContext,
+    ) -> Vec<Vec<(usize, TaskTriage)>> {
+        layout
+            .projects()
+            .iter()
+            .map(|entry| {
+                layout
+                    .visible_tab_indices(&entry.id)
+                    .into_iter()
+                    .filter_map(|index| Some((index, Self::tab_triage(self.tabs.get(index)?, ctx))))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The color a triaged rail row wears, or `None` to leave it as it renders
+    /// today.
+    ///
+    /// Drawn from the same theme roles the status badges already use
+    /// (`ConversationStatus::status_icon_and_color`), so the rail follows a
+    /// user's theme instead of hard-coding the mock's hexes. Only the red
+    /// escalation is genuinely new: a blocked row is yellow and a finished one
+    /// green in the shared palette already.
+    fn rail_urgency_color(urgency: RailUrgency, theme: &WarpTheme) -> Option<ColorU> {
+        match urgency {
+            RailUrgency::Overdue => Some(theme.ansi_fg_red()),
+            RailUrgency::Waiting => Some(theme.ansi_fg_yellow()),
+            RailUrgency::Unseen => Some(theme.ansi_fg_green()),
+            // Working needs nothing from the user, so it keeps the ordinary
+            // row color; the spinning badge alone says "busy".
+            RailUrgency::Running => None,
+        }
+    }
+
+    /// The rail's "Projects" title row, with the two jump-chips.
+    ///
+    /// The chips are navigation affordances, not a second list: the waiting
+    /// chip counts every agent waiting on the user *anywhere* — including the
+    /// unranked band, which is the escape hatch for "the rank-8 project is on
+    /// fire" — and the done chip does the same for finished-but-unseen
+    /// results. Clicking one activates the next such task going down the rail,
+    /// wrapping, so repeated clicks walk the whole set. A chip whose count is
+    /// zero is not rendered: an empty counter is noise, and its absence is
+    /// itself the signal that nothing needs attention.
+    fn render_rail_header(
+        &self,
+        rows: &[RailProjectRow],
+        task_triage: &[Vec<(usize, TaskTriage)>],
+        ctx: &AppContext,
+    ) -> Box<dyn Element> {
+        const CHIP_FONT_SIZE: f32 = 10.;
+
+        let appearance = Appearance::as_ref(ctx);
+        let theme = appearance.theme();
+        let font_family = appearance.ui_font_family();
+        let muted_color = theme.sub_text_color(theme.background());
+
+        // The chips see every task the rail knows about, in render order —
+        // including projects whose task rows are collapsed, since a hidden row
+        // is exactly the one a jump chip has to be able to reach.
+        let by_project: Vec<Vec<RailTask>> = task_triage
+            .iter()
+            .map(|project| {
+                project
+                    .iter()
+                    .map(|(tab_index, triage)| RailTask {
+                        tab_index: *tab_index,
+                        urgency: triage.urgency(),
+                    })
+                    .collect()
+            })
+            .collect();
+        let tasks = rail_task_order(rows, &by_project);
+        let counts = chip_counts(&tasks);
+
+        let mut header_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.)
+            .with_child(
+                Expanded::new(
+                    1.,
+                    Text::new_inline("Projects".to_string(), font_family, 11.)
+                        .with_color(muted_color.into())
+                        .finish(),
+                )
+                .finish(),
+            );
+
+        // Word labels rather than the mock's emoji: the rail's UI font renders
+        // ⏳/✅ inconsistently across platforms, and a chip that falls back to a
+        // tofu box is worse than one that just says what it counts.
+        for (chip, label, color) in [
+            (RailChip::Blocked, "waiting", theme.ansi_fg_yellow()),
+            (RailChip::Unseen, "done", theme.ansi_fg_green()),
+        ] {
+            let count = counts.get(chip);
+            if count == 0 {
+                continue;
+            }
+            // Cycling starts from the active tab, so consecutive clicks walk
+            // the set instead of bouncing between the same two rows.
+            let Some(target) = next_chip_target(&tasks, chip, Some(self.active_tab_index)) else {
+                continue;
+            };
+            let Some(pane_group_id) = self.tabs.get(target).map(|tab| tab.pane_group.id()) else {
+                continue;
+            };
+            let mouse_state = self
+                .rail_chip_mouse_states
+                .borrow_mut()
+                .entry(chip)
+                .or_default()
+                .clone();
+            header_row.add_child(Self::render_rail_chip(
+                format!("{count} {label}"),
+                color,
+                pane_group_id,
+                mouse_state,
+                font_family,
+                CHIP_FONT_SIZE,
+            ));
+        }
+
+        let tab_settings = TabSettings::as_ref(ctx);
+        // The two controls disagree about `rail_show_tasks` on purpose; the
+        // reason lives with the decision, in `rail_header_controls`.
+        let controls = rail_header_controls(
+            FeatureFlag::ResumeProjectTasks.is_enabled(),
+            *tab_settings.rail_show_tasks,
+        );
+
+        if controls.session_search {
+            header_row.add_child(
+                self.render_tab_bar_icon_button(
+                    appearance,
+                    icons::Icon::Search,
+                    &self.mouse_states.rail_session_search_button,
+                    WorkspaceAction::TogglePalette {
+                        mode: PaletteMode::SessionSearch,
+                        source: PaletteSource::RailHeader,
+                    },
+                    "Find a session".to_string(),
+                    keybinding_name_to_display_string(SESSION_SEARCH_BINDING_NAME, ctx),
+                    false,
+                    false,
+                )
+                .finish(),
+            );
+        }
+
+        // Clearing the shells, in the slot the funnel used to occupy. A trash
+        // can rather than a filter glyph because it no longer hides anything —
+        // it closes tabs — and never a lit "on" state: this is a one-shot
+        // command, not a mode the rail can be left in.
+        //
+        // Always enabled, never greyed out on an empty selection: deciding that
+        // would mean running the whole agent/busy/shared scan on every repaint,
+        // and the click path says "no shells without agents to close" for free.
+        if controls.clear_shells {
+            header_row.add_child(
+                self.render_tab_bar_icon_button(
+                    appearance,
+                    icons::Icon::Trash,
+                    &self.mouse_states.rail_clear_shells_button,
+                    WorkspaceAction::ClearShellsWithoutAgents,
+                    "Clear shells without agents".to_string(),
+                    keybinding_name_to_display_string(CLEAR_SHELLS_BINDING_NAME, ctx),
+                    false,
+                    false,
+                )
+                .finish(),
+            );
+        }
+
+        // Reuses `OpenRepository` (the same action the top-level "Open
+        // repository" entrypoint dispatches) rather than a new action: it
+        // already does everything a new rail row needs — folder picker,
+        // `ProjectManagementModel` upsert, and opening a tab in the chosen
+        // directory, which is what actually makes the row exist.
+        header_row.add_child(
+            self.render_tab_bar_icon_button(
+                appearance,
+                icons::Icon::Plus,
+                &self.mouse_states.rail_new_project_button,
+                WorkspaceAction::OpenRepository { path: None },
+                "New project".to_string(),
+                keybinding_name_to_display_string(NEW_PROJECT_BINDING_NAME, ctx),
+                false,
+                false,
+            )
+            .finish(),
+        );
+
+        Container::new(header_row.finish())
+            .with_padding_left(12.)
+            .with_padding_right(8.)
+            .with_padding_top(10.)
+            .with_padding_bottom(6.)
+            .finish()
+    }
+
+    /// One header jump-chip: a small tinted pill that activates a task's tab
+    /// and focuses its pane.
+    ///
+    /// Dispatches the very action the rail's task rows use, so a chip jump and
+    /// a row click land the user in exactly the same place.
+    fn render_rail_chip(
+        label: String,
+        color: ColorU,
+        pane_group_id: EntityId,
+        mouse_state: MouseStateHandle,
+        font_family: FamilyId,
+        font_size: f32,
+    ) -> Box<dyn Element> {
+        Hoverable::new(mouse_state, move |state| {
+            Container::new(
+                Text::new_inline(label.clone(), font_family, font_size)
+                    .with_color(color)
+                    .finish(),
+            )
+            .with_padding_left(6.)
+            .with_padding_right(6.)
+            .with_padding_top(1.)
+            .with_padding_bottom(1.)
+            .with_background(coloru_with_opacity(
+                color,
+                if state.is_hovered() { 24 } else { 12 },
+            ))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+            .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(WorkspaceAction::ActivateTaskByPaneGroupId(pane_group_id));
+        })
+        .finish()
+    }
+
+    /// The rail's header badge: the status's own icon, but the rail's triage
+    /// color.
+    ///
+    /// The shared status palette knows exactly one "blocked" yellow, so it
+    /// cannot express the orange→red escalation on its own. Overriding only
+    /// the color (never the icon) keeps an escalated header recognizably the
+    /// same badge, just louder.
+    fn render_rail_status_badge(
+        triage: &ProjectTriage,
+        icon_size: f32,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        struct RailStatusBadge {
+            status: ConversationStatus,
+            color: ColorU,
+        }
+        impl StatusElementStyle for RailStatusBadge {
+            fn status_icon_and_color(&self, theme: &WarpTheme) -> (icons::Icon, ColorU) {
+                (
+                    StatusElementStyle::status_icon_and_color(&self.status, theme).0,
+                    self.color,
+                )
+            }
+        }
+
+        let status = triage.status.clone()?;
+        match triage
+            .urgency
+            .and_then(|urgency| Self::rail_urgency_color(urgency, appearance.theme()))
+        {
+            Some(color) => Some(render_status_element(
+                &RailStatusBadge { status, color },
+                icon_size,
+                appearance,
+            )),
+            None => Some(render_status_element(&status, icon_size, appearance)),
+        }
+    }
+
+    /// The thin "unranked" divider between the rail's two project bands: a
+    /// hairline, the label, a hairline. Rendered only when both bands have
+    /// rows, so it always marks a real boundary.
+    fn render_rail_band_divider(
+        font_size: f32,
+        side_margin: f32,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        const DIVIDER_LABEL: &str = "UNRANKED";
+        let theme = appearance.theme();
+        let rule = || {
+            Expanded::new(
+                1.,
+                ConstrainedBox::new(
+                    Rect::new()
+                        .with_background_color(theme.outline().into_solid())
+                        .finish(),
+                )
+                .with_height(1.)
+                .finish(),
+            )
+            .finish()
+        };
+        Container::new(
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(6.)
+                .with_child(rule())
+                .with_child(
+                    Text::new_inline(
+                        DIVIDER_LABEL.to_string(),
+                        appearance.ui_font_family(),
+                        font_size,
+                    )
+                    .with_color(theme.disabled_ui_text_color().into())
+                    .finish(),
+                )
+                .with_child(rule())
+                .finish(),
+        )
+        .with_margin_left(side_margin + 10.)
+        .with_margin_right(side_margin + 10.)
+        .with_padding_top(8.)
+        .with_padding_bottom(4.)
+        .finish()
+    }
+
+    /// Renders the project rail (Herdr-style Projects × Tasks layout): one
+    /// clickable row per open project. Clicking a project dispatches
+    /// `WorkspaceAction::SelectProject`, which activates that project's
+    /// most-recently-used tab (and, via the active∈selected invariant, filters
+    /// the top tab bar to it). The selected project row is highlighted, and rows
+    /// highlight on hover. Only shown when the feature is enabled and more than
+    /// one project is open.
+    ///
+    /// Projects are laid out in two bands: those the user has ranked (in rank
+    /// order, each showing its 1-based rank), then the "unranked" divider, then
+    /// everything else in first-seen order. Right-clicking a row manages its
+    /// rank.
+    fn render_project_rail(&self, ctx: &AppContext) -> Box<dyn Element> {
+        const ROW_CORNER_RADIUS: f32 = 6.;
+        const ROW_SIDE_MARGIN: f32 = 6.;
+        const PROJECT_STATUS_ICON_SIZE: f32 = 10.;
+        const TASK_ICON_SIZE: f32 = 14.;
+        /// Width of the rank gutter. Fixed rather than intrinsic so every
+        /// project name starts at the same x, ranked or not.
+        const RANK_GUTTER_WIDTH: f32 = 14.;
+        const RANK_FONT_SIZE: f32 = 10.;
+        // Matches TAB_GROUP_MEMBER_INDENT, so nesting reads the same as the
+        // vertical tabs' grouped members.
+        const TASK_ROW_INDENT: f32 = 12.;
+        /// Dormant rows per project. The rail is a navigation aid: past tasks
+        /// must never push a project's live tasks out of view.
+        const MAX_DORMANT_TASK_ROWS: usize = 5;
+
+        let appearance = Appearance::as_ref(ctx);
+        let theme = appearance.theme();
+        let font_family = appearance.ui_font_family();
+        let text_color = theme.main_text_color(theme.background());
+        let muted_color = theme.sub_text_color(theme.background());
+        // Fainter than the task labels: the rank is a reference number, not
+        // something to read down the list.
+        let rank_color = theme.disabled_ui_text_color();
+        let selected_bg = internal_colors::fg_overlay_2(theme);
+        let hover_bg = internal_colors::fg_overlay_1(theme);
+        // Dormant rows come from the durable handle store plus the on-disk scan
+        // of Claude's own state, so a project with no open tabs still appears —
+        // which is what keeps the rail populated after a restart, where
+        // `compute`'s tabs-only projection is empty. Both are read from cached
+        // models here; the scan itself never runs on the render path.
+        let layout = if FeatureFlag::ResumeProjectTasks.is_enabled() {
+            use crate::terminal::cli_agent_sessions::handle_store::AgentSessionHandlesModel;
+            let live = CLIAgentSessionsModel::as_ref(ctx).live_session_ids();
+            let handles = AgentSessionHandlesModel::as_ref(ctx).handles().to_vec();
+            let scanned = Self::scanned_sessions(ctx);
+            ProjectLayout::compute_with_handles(&self.tabs, &handles, &live, &scanned, ctx)
+        } else {
+            ProjectLayout::compute(&self.tabs, ctx)
+        };
+        let selected = self.selected_project.clone();
+        let show_tasks = *TabSettings::as_ref(ctx).rail_show_tasks;
+        // Rank sorts the rail into two bands. The order is a pure function of
+        // this list, never of agent activity: a sidebar earns its keep through
+        // spatial memory, so a project must not move because one of its agents
+        // changed state.
+        let priorities = TabSettings::as_ref(ctx).project_priorities.value().clone();
+        let project_colors = TabSettings::as_ref(ctx).project_colors.value().clone();
+        let projects = layout.projects();
+        let rows = rail_project_rows(projects, &priorities);
+        // Reserve the gutter only once something is ranked, so a user who
+        // never opens the feature sees exactly today's rail.
+        let has_ranked_band = rows
+            .iter()
+            .any(|row| matches!(row, RailProjectRow::Project { rank: Some(_), .. }));
+        // One triage pass feeds the row tints, the header badges and the
+        // chips, indexed the same way `rows` indexes `projects`.
+        let task_triage = self.rail_task_triage(&layout, ctx);
+
+        // Header stays put; only the project/task list scrolls.
+        let header = self.render_rail_header(&rows, &task_triage, ctx);
+
+        let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
+
+        for row in rows {
+            let (project_index, entry, rank) = match row {
+                RailProjectRow::UnrankedDivider => {
+                    column.add_child(Self::render_rail_band_divider(
+                        RANK_FONT_SIZE,
+                        ROW_SIDE_MARGIN,
+                        appearance,
+                    ));
+                    continue;
+                }
+                // Indices come from the same slice `rows` was built from, so
+                // this cannot miss; skipping beats panicking on the render path.
+                RailProjectRow::Project { index, rank } => match projects.get(index) {
+                    Some(entry) => (index, entry, rank),
+                    None => continue,
+                },
+            };
+            // `task_triage` is indexed the same way, having been built from
+            // the same `projects` slice.
+            let tasks = task_triage
+                .get(project_index)
+                .map_or(&[][..], Vec::as_slice);
+            let is_selected = selected.as_ref() == Some(&entry.id);
+            let mouse_state = self
+                .project_rail_mouse_states
+                .borrow_mut()
+                .entry(entry.id.clone())
+                .or_default()
+                .clone();
+            let label = entry.display_name.clone();
+            // Identity colour (option B): only the project header label wears
+            // it. Task rows keep their urgency tint — a green task row must
+            // never be mistaken for a green-chosen project.
+            let identity_color: Option<ColorU> = match &entry.id {
+                ProjectId::Key(key) => project_colors.color_for(key).map(|identifier| {
+                    theme.ansi_fg(identifier.to_ansi_color(&theme.terminal_colors().normal))
+                }),
+                ProjectId::Other => None,
+            };
+            let dispatch_id = entry.id.clone();
+            // The click closure takes ownership of `dispatch_id`, so the
+            // right-click path needs its own copy of the row's identity.
+            let menu_id = entry.id.clone();
+            // Surfaces the project's aggregate agent status, so a project that
+            // is blocked on the user is visible without selecting it, plus the
+            // wait age of its worst child so a collapsed rail still says how
+            // long the oldest fire has been burning.
+            let triage = Self::project_triage(tasks);
+            let header_age = triage.wait_age();
+            let header_age_color = triage
+                .urgency
+                .and_then(|urgency| Self::rail_urgency_color(urgency, theme))
+                .map(Fill::from)
+                .unwrap_or(muted_color);
+            let row = Hoverable::new(mouse_state, move |state| {
+                let mut row_content =
+                    Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+                if has_ranked_band {
+                    // Ranks read 1-based; the stored rank is the list index.
+                    // An unranked row still gets the (empty) gutter so the
+                    // names in both bands stay on one left edge.
+                    let rank_label = rank.map(|rank| (rank + 1).to_string()).unwrap_or_default();
+                    row_content.add_child(
+                        ConstrainedBox::new(
+                            Text::new_inline(rank_label, font_family, RANK_FONT_SIZE)
+                                .with_color(rank_color.into())
+                                .finish(),
+                        )
+                        .with_width(RANK_GUTTER_WIDTH)
+                        .finish(),
+                    );
+                }
+                row_content.add_child(
+                    Expanded::new(
+                        1.,
+                        Text::new_inline(label, font_family, 13.)
+                            .with_clip(ClipConfig::ellipsis())
+                            .with_color(match identity_color {
+                                Some(color) => color,
+                                None => text_color.into(),
+                            })
+                            .finish(),
+                    )
+                    .finish(),
+                );
+                if let Some(age) = header_age.clone() {
+                    row_content.add_child(
+                        Container::new(
+                            Text::new_inline(age, font_family, RANK_FONT_SIZE)
+                                .with_color(header_age_color.into())
+                                .finish(),
+                        )
+                        .with_margin_right(4.)
+                        .finish(),
+                    );
+                }
+                if let Some(badge) =
+                    Self::render_rail_status_badge(&triage, PROJECT_STATUS_ICON_SIZE, appearance)
+                {
+                    row_content.add_child(badge);
+                }
+                let mut container = Container::new(row_content.finish())
+                    .with_padding_left(10.)
+                    .with_padding_right(10.)
+                    .with_padding_top(5.)
+                    .with_padding_bottom(5.)
+                    .with_margin_left(ROW_SIDE_MARGIN)
+                    .with_margin_right(ROW_SIDE_MARGIN)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)));
+                if is_selected {
+                    container = container.with_background(selected_bg);
+                } else if state.is_hovered() {
+                    container = container.with_background(hover_bg);
+                }
+                container.finish()
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::SelectProject(dispatch_id.clone()));
+            })
+            .on_right_click(move |ctx, _, position| {
+                ctx.dispatch_typed_action(WorkspaceAction::ShowProjectRailContextMenu {
+                    project: menu_id.clone(),
+                    position,
+                });
+            })
+            .finish();
+            column.add_child(row);
+
+            if !show_tasks {
+                continue;
+            }
+            // One row per task, each with its own status. The project row's
+            // aggregate can only say "something here needs you"; these say
+            // which one.
+            for (index, task_triage) in tasks {
+                let index = *index;
+                let Some(tab) = self.tabs.get(index) else {
+                    continue;
+                };
+                // The row's color state, from the same pass the header read:
+                // orange while an agent waits on the user, red once the wait
+                // passes the escalation threshold, green for a result nobody
+                // has looked at, and today's rendering for everything else.
+                let task_tint = task_triage
+                    .urgency()
+                    .and_then(|urgency| Self::rail_urgency_color(urgency, theme))
+                    .map(Fill::from);
+                let task_age = task_triage.wait_age();
+                let pane_group = tab.pane_group.as_ref(ctx);
+                let pane_group_id = tab.pane_group.id();
+                let is_active = index == self.active_tab_index;
+                let task_mouse_state = self
+                    .rail_task_mouse_states
+                    .borrow_mut()
+                    .entry(pane_group_id)
+                    .or_default()
+                    .clone();
+                let task_label = crate::workspace::tab_title::rail_task_label(pane_group, ctx);
+                // A tab whose agent has exited but whose session is stored is
+                // resumable in place; clicking it prefills the resume command
+                // rather than merely focusing a dead shell.
+                let resumable = crate::workspace::tab_title::stored_handle_for_tab(pane_group, ctx)
+                    .map(|(agent, session_id, _)| (agent, session_id));
+                // Right-click identity: a tab whose agent exited is marked
+                // through its durable handle (the live session is gone); any
+                // other row marks its live session. Rows with neither (plain
+                // shells) get no menu — `show_task_rail_context_menu` no-ops.
+                let focused_view = pane_group.focused_session_view(ctx);
+                let menu_target = match &resumable {
+                    Some((agent, session_id)) => Some(RailTaskMenuTarget::Dormant {
+                        agent: *agent,
+                        session_id: session_id.clone(),
+                    }),
+                    None => focused_view
+                        .as_ref()
+                        .map(|view| RailTaskMenuTarget::Live(view.id())),
+                };
+                // Branch + PR line under the label. The branch shows whenever
+                // the terminal knows one; the PR chip only when this terminal
+                // already subscribes to its repo's GitHub model
+                // (`needs_pr_info`) — the rail never starts a `gh` poller of
+                // its own, so rows without a subscription show branch only.
+                let task_meta = focused_view.as_ref().and_then(|view| {
+                    let view = view.as_ref(ctx);
+                    let branch = view.current_git_branch(ctx);
+                    let pr = view.current_pr_info(ctx);
+                    if branch.is_none() && pr.is_none() {
+                        return None;
+                    }
+                    let mut meta = Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_spacing(6.);
+                    if let Some(branch) = branch {
+                        // Shrinkable, as at the vertical-tabs call sites: the
+                        // branch element is a row with a flexible child, so it
+                        // must be laid out with a bounded width.
+                        meta.add_child(
+                            Shrinkable::new(
+                                1.,
+                                vertical_tabs::render_git_branch_text(
+                                    &branch,
+                                    muted_color,
+                                    10.,
+                                    appearance,
+                                ),
+                            )
+                            .finish(),
+                        );
+                    }
+                    if let Some(pr) = pr {
+                        let pr_color = match pr.state.as_str() {
+                            "OPEN" => theme.ansi_fg_green(),
+                            "MERGED" => theme.ansi_fg_magenta(),
+                            _ => theme.ansi_fg_red(),
+                        };
+                        let draft = if pr.draft { " (draft)" } else { "" };
+                        meta.add_child(
+                            Text::new_inline(format!("#{}{draft}", pr.number), font_family, 10.)
+                                .with_clip(ClipConfig::ellipsis())
+                                .with_color(pr_color)
+                                .finish(),
+                        );
+                    }
+                    Some(meta.finish())
+                });
+                let task_icon = focused_view
+                    .as_ref()
+                    .and_then(|view| terminal_view_agent_icon_variant(view.as_ref(ctx), ctx))
+                    .map(|variant| {
+                        render_icon_with_status(
+                            variant,
+                            TASK_ICON_SIZE,
+                            0.,
+                            theme,
+                            theme.background(),
+                        )
+                    });
+                let task_row = Hoverable::new(task_mouse_state, move |state| {
+                    let mut row_content = Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                        .with_spacing(6.);
+                    if let Some(icon) = task_icon {
+                        row_content.add_child(icon);
+                    }
+                    let mut label_column =
+                        Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
+                    label_column.add_child(
+                        // `Text::new` soft-wraps, so a long session name or
+                        // instruction spills onto another line instead of
+                        // being cut off.
+                        Text::new(task_label, font_family, 12.)
+                            // The tint outranks the active/inactive
+                            // shading: "this agent is waiting on you" is
+                            // the more urgent thing for the label to say
+                            // than "this is the row you are standing on",
+                            // which the row background already says.
+                            .with_color(match &task_tint {
+                                Some(tint) => (*tint).into(),
+                                None if is_active => text_color.into(),
+                                None => muted_color.into(),
+                            })
+                            .finish(),
+                    );
+                    if let Some(meta) = task_meta {
+                        label_column.add_child(meta);
+                    }
+                    row_content.add_child(Expanded::new(1., label_column.finish()).finish());
+                    // The wait age rides on the row rather than only the
+                    // header, so a glance down the rail ranks the fires
+                    // without having to open any of them.
+                    if let Some(age) = task_age.clone() {
+                        row_content.add_child(
+                            Text::new_inline(age, font_family, 10.)
+                                .with_color(match &task_tint {
+                                    Some(tint) => (*tint).into(),
+                                    None => muted_color.into(),
+                                })
+                                .finish(),
+                        );
+                    }
+                    let mut container = Container::new(row_content.finish())
+                        .with_padding_left(10.)
+                        .with_padding_right(10.)
+                        .with_padding_top(4.)
+                        .with_padding_bottom(4.)
+                        .with_margin_left(ROW_SIDE_MARGIN + TASK_ROW_INDENT)
+                        .with_margin_right(ROW_SIDE_MARGIN)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                            ROW_CORNER_RADIUS,
+                        )));
+                    if is_active {
+                        container = container.with_background(selected_bg);
+                    } else if state.is_hovered() {
+                        container = container.with_background(hover_bg);
+                    }
+                    container.finish()
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| match &resumable {
+                    // The tab's agent has exited but its session is stored:
+                    // clicking resumes it right here, in the pane that ran it.
+                    Some((agent, session_id)) => {
+                        ctx.dispatch_typed_action(WorkspaceAction::ResumeDormantAgentTask {
+                            agent: *agent,
+                            session_id: session_id.clone(),
+                        })
+                    }
+                    None => ctx.dispatch_typed_action(WorkspaceAction::ActivateTaskByPaneGroupId(
+                        pane_group_id,
+                    )),
+                })
+                .on_right_click(move |ctx, _, position| {
+                    if let Some(task) = &menu_target {
+                        ctx.dispatch_typed_action(WorkspaceAction::ShowTaskRailContextMenu {
+                            task: task.clone(),
+                            position,
+                        });
+                    }
+                })
+                .finish();
+                column.add_child(task_row);
+            }
+
+            // Dormant tasks: sessions with no open tab, listed after the live
+            // ones. Same row shape — "live" is a property of the row, not a
+            // separate section — distinguished only by a muted label and a
+            // status-less icon. Capped so they can never bury live tasks.
+            for task in layout
+                .dormant_tasks_for_project(&entry.id)
+                .into_iter()
+                .take(MAX_DORMANT_TASK_ROWS)
+            {
+                let key = (task.agent, task.session_id.clone());
+                let dormant_mouse_state = self
+                    .rail_dormant_mouse_states
+                    .borrow_mut()
+                    .entry(key.clone())
+                    .or_default()
+                    .clone();
+                let label = task.label.clone();
+                // A manually unread-marked dormant row wears the same green a
+                // live "results unseen" row does — it is the same signal.
+                let dormant_tint = task
+                    .marked_unread
+                    .then(|| Self::rail_urgency_color(RailUrgency::Unseen, theme))
+                    .flatten();
+                let icon = render_icon_with_status(
+                    IconWithStatusVariant::CLIAgent {
+                        agent: task.agent,
+                        // No status: the session is not running.
+                        status: None,
+                        is_ambient: false,
+                    },
+                    TASK_ICON_SIZE,
+                    0.,
+                    theme,
+                    theme.background(),
+                );
+                let (agent, session_id) = key;
+                let menu_session_id = session_id.clone();
+                let dormant_row = Hoverable::new(dormant_mouse_state, move |state| {
+                    let mut row_content = Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                        .with_spacing(6.);
+                    row_content.add_child(icon);
+                    row_content.add_child(
+                        Expanded::new(
+                            1.,
+                            Text::new(label, font_family, 12.)
+                                .with_color(match dormant_tint {
+                                    Some(tint) => tint,
+                                    None => muted_color.into(),
+                                })
+                                .finish(),
+                        )
+                        .finish(),
+                    );
+                    let mut container = Container::new(row_content.finish())
+                        .with_padding_left(10.)
+                        .with_padding_right(10.)
+                        .with_padding_top(4.)
+                        .with_padding_bottom(4.)
+                        .with_margin_left(ROW_SIDE_MARGIN + TASK_ROW_INDENT)
+                        .with_margin_right(ROW_SIDE_MARGIN)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                            ROW_CORNER_RADIUS,
+                        )));
+                    // Never `selected_bg`: a dormant row can never be active.
+                    if state.is_hovered() {
+                        container = container.with_background(hover_bg);
+                    }
+                    container.finish()
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(WorkspaceAction::ResumeDormantAgentTask {
+                        agent,
+                        session_id: session_id.clone(),
+                    });
+                })
+                .on_right_click(move |ctx, _, position| {
+                    ctx.dispatch_typed_action(WorkspaceAction::ShowTaskRailContextMenu {
+                        task: RailTaskMenuTarget::Dormant {
+                            agent,
+                            session_id: menu_session_id.clone(),
+                        },
+                        position,
+                    });
+                })
+                .finish();
+                column.add_child(dormant_row);
+            }
+        }
+
+        let scrollable_rows = ClippedScrollable::vertical(
+            self.project_rail_scroll_state.clone(),
+            column.finish(),
+            ScrollbarWidth::Custom(4.),
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            ElementFill::None,
+        )
+        .with_overlayed_scrollbar()
+        .finish();
+
+        // `MainAxisSize::Max` + the `Shrinkable` are load-bearing: a scrollable
+        // inside an unbounded column does not scroll.
+        let rail = Flex::column()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(header)
+            .with_child(Shrinkable::new(1., scrollable_rows).finish())
+            .finish();
+
+        // Dragging the right edge sets the rail's width, the same way the
+        // vertical tabs panel is resized. `on_resize` -> `notify()` is
+        // load-bearing: without a repaint the drag has no visible effect.
+        Resizable::new(self.project_rail_resizable_state.clone(), rail)
+            .with_dragbar_side(DragBarSide::Right)
+            .on_resize(|ctx, _| {
+                ctx.notify();
+            })
+            .with_bounds_callback(Box::new(|window_size| {
+                let max_width = window_size.x() * RAIL_MAX_WIDTH_RATIO;
+                (RAIL_MIN_WIDTH, max_width.max(RAIL_MIN_WIDTH))
+            }))
+            .finish()
+    }
+
     fn render_panels(
         &self,
         app: &AppContext,
@@ -22662,12 +25292,20 @@ impl Workspace {
         let mut panels_view = Flex::row();
         let mut prev_panel_added = false;
 
+        // Project rail (Herdr-style Projects × Tasks layout) sits at the far
+        // left, as an outer sibling of the existing panels. Shown whenever the
+        // layout is on — including with a single project — so the rail is a
+        // stable part of the window rather than something that appears and
+        // disappears as projects are opened and closed.
+        if !hide_vertical_tabs && project_layout_active(app) {
+            panels_view.add_child(self.render_project_rail(app));
+            panels_view.add_child(Self::render_panel_separator(app));
+        }
+
         // Config-driven vertical-tabs-era panels (left side).
         // Hidden for simplified WASM views (notebooks, shared sessions, etc.)
         // where these panels are unnecessary.
-        let vertical_tabs_active = !hide_vertical_tabs
-            && FeatureFlag::VerticalTabs.is_enabled()
-            && *TabSettings::as_ref(app).use_vertical_tabs;
+        let vertical_tabs_active = !hide_vertical_tabs && vertical_tabs_layout_active(app);
 
         // In vertical tabs mode, config-driven panels are rendered here.
         // In horizontal tabs mode, they're rendered inside render_banner_and_active_tab.
@@ -22986,6 +25624,10 @@ impl Workspace {
 
         if *session_settings.honor_ps1 {
             context.set.insert(flags::HONOR_PS1_CONTEXT_FLAG);
+        }
+
+        if *tab_settings.use_project_layout {
+            context.set.insert(flags::PROJECT_LAYOUT_CONTEXT_FLAG);
         }
 
         if session_settings
@@ -23859,7 +26501,7 @@ impl TypedActionView for Workspace {
 
         match action {
             ActivateTab(index) => self.activate_tab(*index, ctx),
-            ActivateTabByNumber(num) => self.activate_tab(num.saturating_sub(1), ctx),
+            ActivateTabByNumber(num) => self.activate_tab_by_number(*num, ctx),
             ActivatePrevTab => self.activate_prev_tab(ctx),
             OpenLaunchConfigSaveModal => self.open_launch_config_save_modal(ctx),
             ActivateNextTab => self.activate_next_tab(ctx),
@@ -23898,6 +26540,48 @@ impl TypedActionView for Workspace {
                 );
             }
             SetActiveTabName(name) => self.set_active_tab_name(name, ctx),
+            SelectProject(project) => self.select_project(project, ctx),
+            ShowProjectRailContextMenu { project, position } => {
+                self.show_project_rail_context_menu(project, *position, ctx)
+            }
+            ShowTaskRailContextMenu { task, position } => {
+                self.show_task_rail_context_menu(task, *position, ctx)
+            }
+            MarkRailTaskRead(task) => self.set_rail_task_unread(task, false, ctx),
+            MarkRailTaskUnread(task) => self.set_rail_task_unread(task, true, ctx),
+            AddProjectToPriorities(project) => self.update_project_priorities(
+                project.as_ref(),
+                ctx,
+                ProjectPriorities::with_added_to_top,
+            ),
+            RemoveProjectFromPriorities(project) => self.update_project_priorities(
+                project.as_ref(),
+                ctx,
+                ProjectPriorities::with_removed,
+            ),
+            MoveProjectUpInPriorities(project) => self.update_project_priorities(
+                project.as_ref(),
+                ctx,
+                ProjectPriorities::with_moved_up,
+            ),
+            MoveProjectDownInPriorities(project) => self.update_project_priorities(
+                project.as_ref(),
+                ctx,
+                ProjectPriorities::with_moved_down,
+            ),
+            SetProjectNagPolicy(project, policy) => {
+                self.update_project_nag_policy(project.as_ref(), *policy, ctx)
+            }
+            SetProjectColor(project, color) => {
+                self.update_project_color(project.as_ref(), *color, ctx)
+            }
+            ActivateTaskByPaneGroupId(pane_group_id) => {
+                self.activate_tab_by_pane_group_id(*pane_group_id, ctx)
+            }
+            ResumeDormantAgentTask { agent, session_id } => {
+                self.resume_dormant_agent_task(*agent, session_id.clone(), ctx)
+            }
+            ClearShellsWithoutAgents => self.clear_shells_without_agents(ctx),
             SetActiveTabColor(color) => {
                 // When the active tab is in a group, redirect to the group's color.
                 // The tab color selection menu is hidden when a tab is part of a group
@@ -24723,10 +27407,7 @@ impl TypedActionView for Workspace {
                 }
             }
             ToggleVerticalTabsSettingsPopup => {
-                if FeatureFlag::VerticalTabs.is_enabled()
-                    && *TabSettings::as_ref(ctx).use_vertical_tabs
-                    && self.vertical_tabs_panel_open
-                {
+                if vertical_tabs_layout_active(ctx) && self.vertical_tabs_panel_open {
                     self.vertical_tabs_panel.show_settings_popup =
                         !self.vertical_tabs_panel.show_settings_popup;
                     ctx.notify();
@@ -26418,6 +29099,22 @@ impl View for Workspace {
             }
         }
 
+        // Priority commands act on the rail's selected project, so they are
+        // only offered when there is one and it has a stable identity to rank
+        // (`ProjectId::Other` never does). Splitting add from remove lets the
+        // palette label track the project's current state, the way pin/unpin
+        // does for tabs.
+        if let Some(project @ ProjectId::Key(_)) = self.selected_project.as_ref() {
+            context.set.insert("Workspace_SelectedProjectRankable");
+            if TabSettings::as_ref(app)
+                .project_priorities
+                .value()
+                .contains(project)
+            {
+                context.set.insert("Workspace_SelectedProjectRanked");
+            }
+        }
+
         // "Remove from group" is valid when there's an unambiguous target: a
         // 2+ multi-selection that shares one group, or—failing that—an active
         // tab that's in a group. Mirrors the multi-tab right-click menu, which
@@ -26646,8 +29343,7 @@ impl View for Workspace {
         );
 
         if !use_simplified_wasm_tab_bar
-            && FeatureFlag::VerticalTabs.is_enabled()
-            && *TabSettings::as_ref(app).use_vertical_tabs
+            && vertical_tabs_layout_active(app)
             && self.vertical_tabs_panel_open
             && self.vertical_tabs_panel.show_settings_popup
         {
@@ -26668,8 +29364,7 @@ impl View for Workspace {
             );
         }
 
-        if FeatureFlag::VerticalTabs.is_enabled()
-            && *TabSettings::as_ref(app).use_vertical_tabs
+        if vertical_tabs_layout_active(app)
             && self.vertical_tabs_panel_open
             && let Some(vertical_tabs::DetailSidecarOverlay {
                 anchor_position_id,
@@ -26758,6 +29453,30 @@ impl View for Workspace {
             );
         }
 
+        if let Some(position) = self.show_project_rail_context_menu {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.project_rail_context_menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    position,
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
+        }
+
+        if let Some(position) = self.show_task_rail_context_menu {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.task_rail_context_menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    position,
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
+        }
+
         if self.show_team_switcher_menu {
             stack.add_positioned_overlay_child(
                 ChildView::new(&self.team_switcher_menu).finish(),
@@ -26811,9 +29530,7 @@ impl View for Workspace {
         }
 
         if let Some((tab_idx, right_click_menu_anchor)) = self.show_tab_right_click_menu {
-            let is_vertical = FeatureFlag::VerticalTabs.is_enabled()
-                && *TabSettings::as_ref(app).use_vertical_tabs
-                && self.vertical_tabs_panel_open;
+            let is_vertical = vertical_tabs_layout_active(app) && self.vertical_tabs_panel_open;
             if tab_bar_mode.has_tab_bar() || is_vertical {
                 let positioning = if is_vertical {
                     match right_click_menu_anchor {
@@ -26873,9 +29590,7 @@ impl View for Workspace {
         // Rendered for both the horizontal tab bar and the vertical tabs panel
         // — the right-click handlers on both surfaces dispatch the same action.
         if let Some((_tab_idx, anchor)) = self.show_tab_selection_right_click_menu {
-            let is_vertical = FeatureFlag::VerticalTabs.is_enabled()
-                && *TabSettings::as_ref(app).use_vertical_tabs
-                && self.vertical_tabs_panel_open;
+            let is_vertical = vertical_tabs_layout_active(app) && self.vertical_tabs_panel_open;
             if tab_bar_mode.has_tab_bar() || is_vertical {
                 let position = match anchor {
                     TabContextMenuAnchor::Pointer(position) => position,
@@ -26905,9 +29620,7 @@ impl View for Workspace {
 
         // Tab group more-options menu (reuses the `tab_right_click_menu` view).
         if let Some((group_id, anchor)) = self.show_tab_group_right_click_menu {
-            let is_vertical = FeatureFlag::VerticalTabs.is_enabled()
-                && *TabSettings::as_ref(app).use_vertical_tabs
-                && self.vertical_tabs_panel_open;
+            let is_vertical = vertical_tabs_layout_active(app) && self.vertical_tabs_panel_open;
             let positioning = match (is_vertical, anchor) {
                 (true, TabContextMenuAnchor::VerticalTabsKebab) => {
                     let tabs_side = Self::tabs_panel_side(
@@ -26960,9 +29673,7 @@ impl View for Workspace {
         // Render the new session dropdown menu. This is outside the tab bar visibility
         // gate because it can also be opened from the vertical tabs panel.
         if let Some(menu_anchor) = self.show_new_session_dropdown_menu {
-            let is_vertical = FeatureFlag::VerticalTabs.is_enabled()
-                && *TabSettings::as_ref(app).use_vertical_tabs
-                && self.vertical_tabs_panel_open;
+            let is_vertical = vertical_tabs_layout_active(app) && self.vertical_tabs_panel_open;
 
             match (is_vertical, menu_anchor) {
                 (true, NewSessionMenuAnchor::AddTabButton(_)) => {
@@ -27190,6 +29901,13 @@ impl View for Workspace {
             stack.add_child(ChildView::new(&self.ctrl_tab_palette).finish());
         }
 
+        // An overlay child like the main palette, not a plain child like
+        // ctrl-tab's: the overlay path is what carries the `Dismiss` focus trap
+        // and click-outside-to-close that a typed-into popup needs.
+        if self.current_workspace_state.is_session_search_palette_open {
+            stack.add_overlay_child(ChildView::new(&self.session_search_palette).finish());
+        }
+
         if self.current_workspace_state.is_require_login_modal_open {
             stack.add_child(ChildView::new(&self.require_login_modal).finish());
         }
@@ -27234,9 +29952,7 @@ impl View for Workspace {
         }
 
         if self.should_show_session_config_tab_config_chip() {
-            let use_vertical = FeatureFlag::VerticalTabs.is_enabled()
-                && *TabSettings::as_ref(app).use_vertical_tabs
-                && self.vertical_tabs_panel_open;
+            let use_vertical = vertical_tabs_layout_active(app) && self.vertical_tabs_panel_open;
             let chip =
                 self.render_session_config_tab_config_chip(use_vertical, Appearance::as_ref(app));
             if use_vertical {
@@ -27782,8 +30498,7 @@ impl View for Workspace {
         }
 
         // Add workspace-wide UI event handling.
-        let stack = if FeatureFlag::VerticalTabs.is_enabled()
-            && *TabSettings::as_ref(app).use_vertical_tabs
+        let stack = if vertical_tabs_layout_active(app)
             && self.vertical_tabs_panel_open
             // The vertical-tabs detail sidecar can become stale if the pointer moves through a
             // covered region (for example, its scrollbar gutter) and the row/sidecar hoverables
@@ -28028,10 +30743,20 @@ impl Workspace {
     /// Collapses `self.tabs` into layout slots: each ungrouped tab is a `Single`,
     /// and each contiguous run of same-group tabs becomes one `Group`. Shared by
     /// tab/group rendering and insertion index calculations.
-    fn tab_bar_slots(&self) -> Vec<TabBarSlot> {
-        let grouped_tabs_enabled = FeatureFlag::GroupedTabs.is_enabled();
+    /// Builds the top tab bar's layout slots. When `visible` is `Some` (project
+    /// mode), only those raw `Workspace::tabs` indices are shown and manual
+    /// tab-groups are suppressed — the project is the grouping dimension, and
+    /// suppressing groups also avoids the contiguous-run hazard of interleaving
+    /// projects within a group. `TabBarSlot` still carries the real tab index.
+    fn tab_bar_slots(&self, visible: Option<&[usize]>) -> Vec<TabBarSlot> {
+        let grouped_tabs_enabled = FeatureFlag::GroupedTabs.is_enabled() && visible.is_none();
         let mut slots: Vec<TabBarSlot> = Vec::with_capacity(self.tabs.len());
         for (idx, tab) in self.tabs.iter().enumerate() {
+            if let Some(visible) = visible
+                && !visible.contains(&idx)
+            {
+                continue;
+            }
             let group_id = if grouped_tabs_enabled {
                 tab.group_id.filter(|gid| self.tab_groups.contains_key(gid))
             } else {
@@ -28105,7 +30830,10 @@ impl Workspace {
         // group, never inside; each ungrouped tab keeps its own row. Rects
         // clipped by overflow or outside the tab bar are dropped.
         let mut visible_tabs: Vec<(usize, RectF)> = Vec::with_capacity(self.tabs.len());
-        for slot in self.tab_bar_slots() {
+        // Use the same project filter the tab bar renders with, so drag
+        // insertion geometry matches what is on screen in project mode.
+        let project_visible = self.project_visible_indices(ctx);
+        for slot in self.tab_bar_slots(project_visible.as_deref()) {
             match slot {
                 TabBarSlot::Single { index } => {
                     if let Some(tab_position) =
@@ -28465,8 +31193,7 @@ impl Workspace {
                     // the normal reorder path below: the placeholder is
                     // detached mid cross-window drag and shouldn't churn group
                     // membership.
-                    let use_vertical_tabs = FeatureFlag::VerticalTabs.is_enabled()
-                        && *TabSettings::as_ref(ctx).use_vertical_tabs;
+                    let use_vertical_tabs = vertical_tabs_layout_active(ctx);
                     let new_index = if use_vertical_tabs {
                         self.calculate_updated_tab_index_vertical(current_index, position, ctx)
                     } else {
@@ -28607,8 +31334,7 @@ impl Workspace {
             return;
         }
 
-        let use_vertical_tabs =
-            FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
+        let use_vertical_tabs = vertical_tabs_layout_active(ctx);
         let groups_enabled = FeatureFlag::GroupedTabs.is_enabled();
 
         if groups_enabled {

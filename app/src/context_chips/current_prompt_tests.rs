@@ -650,6 +650,9 @@ fn test_cli_agent_footer_chips_require_a_visible_supported_footer() {
             draft_text: None,
             custom_command_prefix: None,
             received_rich_notification: false,
+            blocked_since: None,
+            success_seen: false,
+            marked_unread: false,
         };
 
         CLIAgentSessionsModel::handle(&app).update(&mut app, |sessions, ctx| {

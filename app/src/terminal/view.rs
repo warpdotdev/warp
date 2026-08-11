@@ -536,6 +536,7 @@ use crate::view_components::{DismissibleToast, ToastFlavor};
 use crate::workflows::WorkflowSelectionSource;
 use crate::workflows::workflow::Workflow;
 use crate::workspace::sync_inputs::SyncedInputState;
+use crate::workspace::tab_settings::project_layout_active;
 use crate::workspace::view::cloud_agent_capacity_modal::CloudAgentCapacityModalVariant;
 use crate::workspace::{
     CommandSearchOptions, ForkAIConversationParams, ForkFromExchange,
@@ -9454,6 +9455,21 @@ impl TerminalView {
         })
     }
 
+    /// Puts `text` in the input without arming it to run.
+    ///
+    /// [`Self::set_pending_command`] sounds like this but is not: a *pending*
+    /// command means "the user submitted it and it has not reached the shell
+    /// yet", so `execute_pending_command` fires it on the next
+    /// `BootstrapPrecmdDone` or `BlockCompleted`. For a command the user has
+    /// not asked for yet — resuming an agent session, where they want to read
+    /// the restored conversation first — that is the wrong contract: the shell
+    /// finishes bootstrapping and the command runs on its own.
+    pub fn prefill_command(&self, text: &str, ctx: &mut ViewContext<Self>) {
+        self.input.update(ctx, |input, ctx| {
+            input.system_insert(text, ctx);
+        });
+    }
+
     pub fn set_pending_command_queue(
         &mut self,
         commands: Vec<String>,
@@ -12111,6 +12127,9 @@ impl TerminalView {
                                                         custom_command_prefix:
                                                             custom_command_prefix.clone(),
                                                         received_rich_notification: false,
+                                                        blocked_since: None,
+                                                        success_seen: false,
+                                                        marked_unread: false,
                                                     },
                                                     ctx,
                                                 );
@@ -13498,6 +13517,26 @@ impl TerminalView {
                     }
                 }
             }
+        }
+
+        // A blocked CLI agent belongs to the workspace's nag engine wherever
+        // the project rail is on (spec §6): it owns the *first* announcement
+        // as well as the repeats. Two owners is not an option — the unranked
+        // 60s debounce means the first announcement deliberately does not
+        // happen when the status arrives, and the engine also announces cases
+        // this path cannot (a sound while Warp is frontmost but the waiting
+        // agent's tab is not), so leaving this one in would double every
+        // banner a ranked project raises. `NotificationsMode::Unset` is
+        // excluded: that case is the discovery banner below, which the engine
+        // does not raise.
+        if matches!(status, CLIAgentSessionStatus::Blocked { .. })
+            && project_layout_active(ctx)
+            && matches!(
+                SessionSettings::as_ref(ctx).notifications.mode,
+                NotificationsMode::Enabled
+            )
+        {
+            return;
         }
 
         // Desktop notifications — only when navigated away and not in-progress.

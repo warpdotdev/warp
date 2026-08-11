@@ -50,7 +50,8 @@ use crate::window_settings::WindowSettings;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::{
-    TabCloseButtonPosition, TabSettings, VerticalTabsDisplayGranularity,
+    TabCloseButtonPosition, TabPrimaryInfo, TabSettings, VerticalTabsDisplayGranularity,
+    vertical_tabs_layout_active,
 };
 use crate::workspace::{
     PaneViewLocator, TabBarDropTargetData, TabBarLocation, TabContextMenuAnchor, WorkspaceAction,
@@ -88,7 +89,7 @@ fn tab_group_menu_entry_flags(
 /// Exposed so binding-description overrides in `workspace/mod.rs` and context-
 /// menu builders here can share a single predicate.
 pub fn uses_vertical_tabs(ctx: &AppContext) -> bool {
-    FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs
+    vertical_tabs_layout_active(ctx)
 }
 
 const WARP_2_TAB_COLOR_OPACITY: Opacity = 25;
@@ -110,6 +111,16 @@ const TAB_CLOSE_BUTTON_HORIZONTAL_INSET: f32 = 2.0;
 const TAB_PINNED_CONTENT_HORIZONTAL_PADDING: f32 = 26.0;
 // Width below which a pinned tab/group header drops its idle pin (shared so both
 // vanish together), early enough that the pin never overlaps the centered title/icon.
+/// Font size of a two-line tab's secondary line, matching the vertical
+/// tabs' compact subtitle.
+const TAB_SUBTITLE_FONT_SIZE: f32 = 10.;
+
+/// Widest a single-line tab may grow.
+const TAB_MAX_WIDTH: f32 = 200.;
+/// Widest a two-line tab may grow. Session names and instructions are prose,
+/// so they need noticeably more room than a shell title.
+const TAB_MAX_WIDTH_TWO_LINE: f32 = 320.;
+
 pub(crate) const TAB_PIN_VANISH_THRESHOLD: f32 = 70.0;
 
 /// Represents the user's manual tab-color selection state.
@@ -193,8 +204,8 @@ pub struct TabData {
     pub pinned: bool,
 }
 
-const TAB_COLOR_ICON_PATH: &str = "bundled/svg/ellipse.svg";
-const TAB_NO_COLOR_ICON_PATH: &str = "bundled/svg/no_color_ellipse.svg";
+pub(crate) const TAB_COLOR_ICON_PATH: &str = "bundled/svg/ellipse.svg";
+pub(crate) const TAB_NO_COLOR_ICON_PATH: &str = "bundled/svg/no_color_ellipse.svg";
 
 impl TabData {
     pub fn new(pane_group: ViewHandle<PaneGroup>) -> Self {
@@ -918,6 +929,12 @@ pub struct TabComponent<'a> {
     /// both the in-selection highlight and the right-click menu dispatch
     /// (multi-tab menu vs single-tab menu).
     is_in_multi_tab_selection: bool,
+    /// Smaller second line, when the tab is configured to show two lines.
+    /// `None` keeps the historical single-line tab exactly as it was.
+    subtitle: Option<String>,
+    /// Overrides the clip direction of the title when the project layout picks
+    /// what the line shows. `None` keeps the historical heuristic.
+    title_clips_start: Option<bool>,
 }
 
 /// Structure that holds TabComponent styles.
@@ -984,7 +1001,17 @@ impl<'a> TabComponent<'a> {
         ctx: &'a AppContext,
     ) -> Self {
         let appearance = Appearance::as_ref(ctx);
-        let title = tab.pane_group.as_ref(ctx).display_title(ctx);
+        let title = crate::workspace::tab_title::tab_title(tab.pane_group.as_ref(ctx), ctx);
+        let subtitle =
+            crate::workspace::tab_title::tab_secondary_line(tab.pane_group.as_ref(ctx), ctx);
+        // Only a working-directory line wants its front trimmed; session names
+        // and instructions are prose and must keep their opening words.
+        let title_clips_start = FeatureFlag::Projects.is_enabled().then(|| {
+            matches!(
+                TabSettings::as_ref(ctx).tab_primary_info,
+                TabPrimaryInfo::WorkingDirectory
+            )
+        });
 
         let active_pane_is_ambient_agent_session = tab
             .pane_group
@@ -1080,6 +1107,8 @@ impl<'a> TabComponent<'a> {
             sole_grouped_member: false,
             locator,
             is_in_multi_tab_selection: false,
+            subtitle,
+            title_clips_start,
         }
     }
 
@@ -1279,6 +1308,32 @@ impl<'a> TabComponent<'a> {
         format!("tab_text_{}", self.tab_index)
     }
 
+    /// The smaller, muted second line of a two-line tab.
+    ///
+    /// Suppressed while renaming (the editor owns the first line) and on tabs
+    /// too narrow to fit a title, where a second line would only add another
+    /// clipped-to-nothing row.
+    fn render_tab_subtitle(&self) -> Option<Box<dyn Element>> {
+        if self.is_tab_being_renamed() {
+            return None;
+        }
+        let subtitle = self.subtitle.as_ref()?;
+        let theme = self.appearance.theme();
+        Some(
+            Text::new_inline(
+                subtitle.clone(),
+                self.styles
+                    .default
+                    .font_family_id
+                    .expect("Font family defined"),
+                TAB_SUBTITLE_FONT_SIZE,
+            )
+            .with_clip(ClipConfig::ellipsis())
+            .with_color(theme.sub_text_color(theme.background()).into())
+            .finish(),
+        )
+    }
+
     fn render_tab_content(&self) -> Box<dyn Element> {
         let styles = if self.is_active_tab() {
             self.styles.default.merge(self.styles.active)
@@ -1298,7 +1353,12 @@ impl<'a> TabComponent<'a> {
                         .set_border_width(0.),
                 )
                 .with_style(UiComponentStyles {
-                    margin: Some(Coords::default().top(if self.grouped_member {
+                    margin: Some(Coords::default().top(if self.subtitle.is_some() {
+                        // Two-line mode: the subtitle is hidden while renaming, so
+                        // the single-line editor is already centered in the taller
+                        // row. The nudges below would push it back off-center.
+                        0.
+                    } else if self.grouped_member {
                         // Reduce the top margin for grouped tabs to make it appear centered.
                         2.
                     } else if FeatureFlag::NewTabStyling.is_enabled() {
@@ -1573,7 +1633,24 @@ impl<'a> TabComponent<'a> {
         self.render_tab_container_internal(is_hovered, is_tab_dragging)
     }
 
+    /// Widest a tab may grow. Two-line tabs carry prose (a session name over an
+    /// instruction) rather than a short shell title, so they get more room —
+    /// otherwise both lines clip to uselessness.
+    fn max_tab_width(&self) -> f32 {
+        if self.subtitle.is_some() {
+            TAB_MAX_WIDTH_TWO_LINE
+        } else {
+            TAB_MAX_WIDTH
+        }
+    }
+
     fn should_clip_text_start(&self) -> bool {
+        // Paths read better with the front trimmed ("…/dev/mifos/app"), but
+        // prose does not: clipping the start of an agent title or instruction
+        // hides the very words that identify it.
+        if let Some(clips_start) = self.title_clips_start {
+            return clips_start;
+        }
         !self.has_custom_title && !self.has_ai_conversation_title()
     }
 
@@ -1662,18 +1739,38 @@ impl<'a> TabComponent<'a> {
         };
 
         let build_full_content = |reserve_pin_space: bool| -> Box<dyn Element> {
+            let subtitle_element = self.render_tab_subtitle();
+            // With two lines, centering would float the indicator between them;
+            // align to the top so it sits beside the title, matching the
+            // vertical tabs' compact row.
+            let cross_axis_alignment = if subtitle_element.is_some() {
+                warpui::elements::CrossAxisAlignment::Start
+            } else {
+                warpui::elements::CrossAxisAlignment::Center
+            };
             let mut flex_row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_main_axis_alignment(MainAxisAlignment::Center)
-                .with_cross_axis_alignment(warpui::elements::CrossAxisAlignment::Center);
+                .with_cross_axis_alignment(cross_axis_alignment);
             if let Some(indicator) = self.render_indicator() {
                 flex_row.add_child(indicator);
             }
+            // Keep the `SavePosition` wrapping whatever the text column is: the
+            // hover tooltip anchors to this id.
+            let text_content: Box<dyn Element> = match subtitle_element {
+                Some(subtitle) => Flex::column()
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_cross_axis_alignment(warpui::elements::CrossAxisAlignment::Start)
+                    .with_spacing(1.)
+                    .with_child(self.render_tab_content())
+                    .with_child(subtitle)
+                    .finish(),
+                None => self.render_tab_content(),
+            };
             flex_row.add_child(
                 Shrinkable::new(
                     1.0,
-                    SavePosition::new(self.render_tab_content(), &self.tab_text_position_id())
-                        .finish(),
+                    SavePosition::new(text_content, &self.tab_text_position_id()).finish(),
                 )
                 .finish(),
             );
@@ -1959,6 +2056,7 @@ impl UiComponent for TabComponent<'_> {
         let tooltip_git_branch = self.tooltip_git_branch.clone();
         let tab_text_position_id = self.tab_text_position_id();
         let tooltip_mouse_state = self.tab.tooltip_mouse_state.clone();
+        let max_tab_width = self.max_tab_width();
 
         // Main tab hover (for close button, etc - no delay)
         let mut tab = Hoverable::new(tab_mouse_state, move |state| {
@@ -2151,7 +2249,7 @@ impl UiComponent for TabComponent<'_> {
         } else {
             // Use dynamic sizing when not hovering
             ConstrainedBox::new(tab.finish())
-                .with_max_width(200.)
+                .with_max_width(max_tab_width)
                 .finish()
         };
 

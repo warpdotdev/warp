@@ -222,6 +222,10 @@ pub enum QueryFilter {
 
     /// Include only conversations whose most recent directory matches the session's current working directory.
     CurrentDirectoryConversations,
+
+    /// Filter results for known CLI-agent sessions (live, stored and scanned),
+    /// as shown by the session-search popup.
+    AgentSessions,
 }
 
 impl QueryFilter {
@@ -262,6 +266,7 @@ impl QueryFilter {
             QueryFilter::CurrentDirectoryConversations => {
                 "Search conversations in current directory"
             }
+            QueryFilter::AgentSessions => "Search agent sessions",
         }
     }
 
@@ -294,6 +299,11 @@ impl QueryFilter {
             QueryFilter::BaseModels => &NO_FILTER_ATOM,
             QueryFilter::FullTerminalUseModels => &NO_FILTER_ATOM,
             QueryFilter::CurrentDirectoryConversations => &NO_FILTER_ATOM,
+            // Deliberately atom-less: the session-search popup applies this
+            // filter itself, and a real atom would make the search bar strip a
+            // matching prefix out of whatever the user typed
+            // (`SearchBar::on_buffer_changed`).
+            QueryFilter::AgentSessions => &NO_FILTER_ATOM,
         }
     }
 
@@ -326,6 +336,7 @@ impl QueryFilter {
             QueryFilter::BaseModels => "base models",
             QueryFilter::FullTerminalUseModels => "full terminal use models",
             QueryFilter::CurrentDirectoryConversations => "current directory conversations",
+            QueryFilter::AgentSessions => "agent sessions",
         }
     }
 
@@ -365,6 +376,7 @@ impl QueryFilter {
             QueryFilter::BaseModels => None,
             QueryFilter::FullTerminalUseModels => None,
             QueryFilter::CurrentDirectoryConversations => None,
+            QueryFilter::AgentSessions => Some("bundled/svg/terminal-input.svg"),
         }
     }
 }

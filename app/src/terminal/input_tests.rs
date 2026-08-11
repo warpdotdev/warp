@@ -8924,6 +8924,9 @@ fn open_rich_input_for_terminal(terminal: &ViewHandle<TerminalView>, app: &mut A
                     draft_text: None,
                     custom_command_prefix: None,
                     received_rich_notification: false,
+                    blocked_since: None,
+                    success_seen: false,
+                    marked_unread: false,
                 },
                 ctx,
             );
