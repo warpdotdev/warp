@@ -3900,6 +3900,14 @@ impl Workspace {
                 // every group stays exactly as it is, as an ordinary manual
                 // group.
                 self.sweep_tabs_for_auto_grouping(ctx);
+                // Groups the sweep did not have to create — ones an earlier run
+                // of the mode left behind — are keyed already and so are never
+                // reached by the coloring at keying time.
+                self.sweep_tab_group_colors(ctx);
+                ctx.notify();
+            }
+            TabSettingsChangedEvent::AutoGroupTabColors { .. } => {
+                self.sweep_tab_group_colors(ctx);
                 ctx.notify();
             }
         }
@@ -7459,14 +7467,27 @@ impl Workspace {
             .unwrap_or(tab_index);
         self.set_active_tab_index(new_active, ctx);
 
+        // Read before the prune below destroys it: when the tab was the sole
+        // member, this group is about to disappear and the new one takes over
+        // its project, so its colour has to come across with the key.
+        let replaced = previous_group_id.and_then(|gid| self.replaced_group_color(gid));
+
         if let Some(prev_group_id) = previous_group_id {
             self.prune_empty_tab_group(prev_group_id, ctx);
         }
 
+        // Only a group the prune actually destroyed is being replaced. One that
+        // still holds other members keeps its own colour, and the new group has
+        // nothing of the user's to inherit.
+        let replaced = match previous_group_id {
+            Some(previous) if !self.tab_groups.contains_key(&previous) => replaced,
+            _ => None,
+        };
+
         // A group made from one tab is that tab's project's group, so the tab
         // is back under automation from here on (R14). No-op while the mode is
         // off or the tab's project is unknown.
-        self.adopt_project_key_for_new_group(group_id, pane_group_id, ctx);
+        self.adopt_project_key_for_new_group(group_id, pane_group_id, replaced, ctx);
 
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
@@ -23312,6 +23333,9 @@ impl Workspace {
         }
         if *tab_settings.auto_group_tabs.value() {
             context.set.insert(flags::AUTO_GROUP_TABS_FLAG);
+        }
+        if *tab_settings.auto_group_tab_colors.value() {
+            context.set.insert(flags::AUTO_GROUP_TAB_COLORS_FLAG);
         }
         if *tab_settings
             .show_vertical_tab_panel_in_restored_windows

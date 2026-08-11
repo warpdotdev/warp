@@ -1,6 +1,9 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use super::{GitResolution, ProjectKey, ProjectKeyInput, display_name, resolve};
+use warp_core::ui::theme::AnsiColorIdentifier::{Blue, Green, Yellow};
+
+use super::{GitResolution, ProjectKey, ProjectKeyInput, derived_color, display_name, resolve};
 
 fn key(path: &str) -> ProjectKey {
     ProjectKey(PathBuf::from(path))
@@ -169,4 +172,63 @@ fn a_name_is_left_unqualified_when_nothing_collides() {
 
     assert_eq!(display_name(&a, &all), "api");
     assert_eq!(display_name(&b, &all), "web");
+}
+
+// Derived colors. Stability across runs is the whole point, so the hash is
+// pinned by a golden test rather than only by its properties.
+
+#[test]
+fn one_key_always_derives_the_same_color() {
+    let key = key("/work/api/.git");
+
+    assert_eq!(derived_color(&key), derived_color(&key.clone()));
+}
+
+#[test]
+fn worktrees_of_one_repository_derive_one_color() {
+    let main = in_repo("/work/api", "/work/api/.git", &[]).unwrap();
+    let feature = in_repo("/tmp/wt-feature", "/work/api/.git", &[]).unwrap();
+
+    assert_eq!(derived_color(&main), derived_color(&feature));
+}
+
+#[test]
+fn a_qualified_name_does_not_change_the_color() {
+    // `display_name` turns this into `services/api` as soon as another `api`
+    // shows up in the window; the color must not move with it.
+    let key = key("/work/services/api/.git");
+    let color_alone = derived_color(&key);
+
+    let all = [key.clone(), self::key("/work/vendor/api/.git")];
+    assert_eq!(display_name(&key, &all), "services/api");
+    assert_eq!(derived_color(&key), color_alone);
+}
+
+#[test]
+fn colors_are_pinned_to_specific_keys() {
+    // Golden: changing the hash function repaints every existing group, so it
+    // must never happen by accident.
+    assert_eq!(derived_color(&key("/work/api/.git")), Blue);
+    assert_eq!(derived_color(&key("/work/web/.git")), Green);
+    assert_eq!(derived_color(&key("/repos/api.git")), Yellow);
+    assert_eq!(derived_color(&key("/Users/me/notes")), Blue);
+}
+
+#[test]
+fn nearby_keys_spread_across_the_palette() {
+    // Not a guarantee the function can make for arbitrary input — six draws
+    // from six buckets average about 4 distinct — but sibling paths differing
+    // in one segment are the shape real projects have, and a hash that keyed on
+    // length or on a prefix would collapse them.
+    // Keyed by name because `AnsiColorIdentifier` is not `Hash`.
+    let colors: HashSet<String> = ["api", "web", "cli", "docs", "infra", "sdk"]
+        .iter()
+        .map(|name| derived_color(&key(&format!("/work/{name}/.git"))).to_string())
+        .collect();
+
+    assert!(
+        colors.len() >= 4,
+        "six sibling projects landed on {} colors",
+        colors.len()
+    );
 }

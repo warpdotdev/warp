@@ -169,3 +169,46 @@ fn header_toolbar_chip_selection_custom_empty_reports_all_absent() {
         assert!(!config.contains_item(&item));
     }
 }
+
+#[test]
+fn auto_group_tab_colors_defaults_to_false() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(!*settings.auto_group_tab_colors);
+        });
+    });
+}
+
+#[test]
+fn auto_group_tab_colors_round_trips_through_storage() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        TabSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings.auto_group_tab_colors.set_value(true, ctx).unwrap();
+        });
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(*settings.auto_group_tab_colors.value());
+        });
+
+        TabSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .auto_group_tab_colors
+                .set_value(false, ctx)
+                .unwrap();
+        });
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(!*settings.auto_group_tab_colors.value());
+        });
+    });
+}
+
+#[test]
+fn auto_group_tab_colors_sits_under_the_tabs_appearance_path() {
+    assert_eq!(
+        AutoGroupTabColors::toml_path(),
+        Some("appearance.tabs.auto_group_tab_colors")
+    );
+}
