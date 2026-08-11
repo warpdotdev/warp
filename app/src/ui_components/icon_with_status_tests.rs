@@ -32,8 +32,9 @@ fn ambient_warp_agent_circle_keeps_purple_background_in_all_themes() {
 
 /// The brand circle covers only `CIRCLE_RATIO` of the footprint the component reserves, and
 /// `corner_overlay_offset` positions the status badge against that footprint's bottom-right
-/// corner. Both only line up while the circle is centered in the footprint: left-aligned, the
-/// badge lands clear of the circle and the caller's trailing gap grows by the slack.
+/// corner. The two only meet while the circle is centered: left-aligned, the circle pulls up and
+/// to the left while the badge stays put, so the badge floats detached instead of tucking into the
+/// circle's edge. The footprint itself is reserved either way, so this is what a caller sees.
 #[test]
 fn brand_circle_is_centered_in_the_reserved_footprint() {
     use pathfinder_geometry::vector::vec2f;
