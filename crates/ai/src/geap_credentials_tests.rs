@@ -13,6 +13,27 @@ fn binding() -> GeapMintBinding {
 }
 
 #[test]
+fn geap_is_expired_semantics() {
+    assert!(
+        GeapCredentials::new(
+            "expired".into(),
+            Some(SystemTime::now() - Duration::from_secs(1)),
+        )
+        .is_expired()
+    );
+    // The proactive lead window does not count as hard expiry.
+    assert!(
+        !GeapCredentials::new(
+            "near".into(),
+            Some(SystemTime::now() + Duration::from_secs(60)),
+        )
+        .is_expired()
+    );
+    // An unknown expiry cannot prove that the token is dead.
+    assert!(!GeapCredentials::new("unknown".into(), None).is_expired());
+}
+
+#[test]
 fn admin_config_status_flags_only_non_429_4xx() {
     assert!(is_admin_config_status(Some(400)));
     assert!(is_admin_config_status(Some(401)));

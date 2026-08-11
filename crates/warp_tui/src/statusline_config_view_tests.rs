@@ -76,20 +76,29 @@ fn toggle_and_reorder_are_reflected_in_saved_config() {
         assert_eq!(
             saved.order,
             [
-                TuiStatuslineItem::AutoQueue,
+                // VimModeIndicator is a default-on statusline item, so it is expected
+                // in the saved order at its position in TuiStatuslineItem::ALL.
+                TuiStatuslineItem::VimModeIndicator,
                 TuiStatuslineItem::AutoApprove,
                 TuiStatuslineItem::Model,
                 TuiStatuslineItem::WorkingDirectory,
                 TuiStatuslineItem::GitBranch,
+                TuiStatuslineItem::GitBranchStatus,
                 TuiStatuslineItem::GitDiffStatus,
+                TuiStatuslineItem::GitHubPullRequest,
                 TuiStatuslineItem::CreditUsage,
                 TuiStatuslineItem::ContextWindowUsage,
+                TuiStatuslineItem::Date,
+                TuiStatuslineItem::Time12Hour,
+                TuiStatuslineItem::Time24Hour,
+                TuiStatuslineItem::AgentTodoList,
+                TuiStatuslineItem::VoiceInput,
             ]
         );
         assert_eq!(
             saved.enabled,
             [
-                TuiStatuslineItem::AutoApprove,
+                TuiStatuslineItem::VimModeIndicator,
                 TuiStatuslineItem::Model,
                 TuiStatuslineItem::WorkingDirectory,
                 TuiStatuslineItem::GitBranch,

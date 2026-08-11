@@ -102,7 +102,7 @@ impl InlineHistoryMenuDataSource {
             include_commands,
             include_prompts,
         };
-        let suggestions = history.up_arrow_suggestions_for_terminal_view(
+        let suggestions = history.up_arrow_suggestions_for_terminal_surface(
             self.terminal_view_id,
             session_id,
             config,
@@ -111,20 +111,18 @@ impl InlineHistoryMenuDataSource {
 
         let mut results: Vec<QueryResult<AcceptHistoryItem>> = Vec::new();
         for suggestion in suggestions {
-            if !trimmed_query.is_empty() && !suggestion.text().starts_with(trimmed_query) {
+            let normalized_text = suggestion.normalized_text();
+            if !trimmed_query.is_empty() && !normalized_text.starts_with(trimmed_query) {
                 continue;
             }
+            let normalized_text = normalized_text.to_owned();
 
             let (search_item, score) = match suggestion {
                 HistoryInputSuggestion::Command { entry } => {
-                    let command = entry.command.trim();
-                    if command.is_empty() {
-                        continue;
-                    }
                     let timestamp = entry.start_ts.unwrap_or_else(Local::now);
                     (
                         InlineHistoryItem::command(
-                            command.to_string(),
+                            normalized_text,
                             entry.linked_workflow_data(),
                             timestamp,
                         )
@@ -132,17 +130,11 @@ impl InlineHistoryMenuDataSource {
                         OrderedFloat(results.len() as f64),
                     )
                 }
-                HistoryInputSuggestion::AIQuery { entry } => {
-                    let query_text = entry.query_text.trim();
-                    if query_text.is_empty() {
-                        continue;
-                    }
-                    (
-                        InlineHistoryItem::ai_prompt(query_text.to_string(), entry.start_time)
-                            .with_prefix_match_len(prefix_match_len),
-                        OrderedFloat(results.len() as f64),
-                    )
-                }
+                HistoryInputSuggestion::AIQuery { entry } => (
+                    InlineHistoryItem::ai_prompt(normalized_text, entry.start_time)
+                        .with_prefix_match_len(prefix_match_len),
+                    OrderedFloat(results.len() as f64),
+                ),
             };
 
             results.push(QueryResult::from(search_item.with_score(score)));
@@ -277,7 +269,7 @@ impl SyncDataSource for InlineHistoryMenuDataSource {
 
         let command_entries = if include_commands {
             history
-                .up_arrow_suggestions_for_terminal_view(
+                .up_arrow_suggestions_for_terminal_surface(
                     self.terminal_view_id,
                     session_id,
                     UpArrowHistoryConfig {
@@ -288,14 +280,10 @@ impl SyncDataSource for InlineHistoryMenuDataSource {
                 )
                 .into_iter()
                 .filter_map(|suggestion| {
+                    let command = suggestion.normalized_text().to_owned();
                     let HistoryInputSuggestion::Command { entry } = &suggestion else {
                         return None;
                     };
-
-                    let command = entry.command.trim();
-                    if command.is_empty() {
-                        return None;
-                    }
                     if !trimmed_query.is_empty() && !command.starts_with(trimmed_query) {
                         return None;
                     }
@@ -308,7 +296,7 @@ impl SyncDataSource for InlineHistoryMenuDataSource {
                         order,
                         sort_timestamp,
                         item: MenuItem::Command {
-                            command: command.to_string(),
+                            command,
                             linked_workflow_data: entry.linked_workflow_data(),
                             display_timestamp,
                             prefix_match_len,

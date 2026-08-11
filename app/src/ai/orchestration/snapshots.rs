@@ -70,6 +70,13 @@ pub enum OptionBadge {
     Default,
     Recent,
     Connected,
+    /// Constructed by `warp_tui` (the TUI ask-question card). The variant
+    /// lives here so both frontends share a single `OptionBadge` type.
+    /// The lint is suppressed because the construction site is in the
+    /// downstream `warp_tui` crate, which is invisible to clippy when
+    /// linting `warp` in isolation.
+    #[allow(dead_code)]
+    Recommended,
 }
 
 /// Load state of the catalog backing a snapshot.

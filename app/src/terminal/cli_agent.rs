@@ -267,7 +267,7 @@ impl CLIAgent {
             // up in a follow-up once an officially licensed SVG is available.
             CLIAgent::Vibe => None,
             CLIAgent::Antigravity => Some(Icon::AntigravityLogo),
-            CLIAgent::WarpTui => None,
+            CLIAgent::WarpTui => Some(Icon::Warp),
             CLIAgent::Unknown => None,
         }
     }
@@ -328,7 +328,7 @@ impl CLIAgent {
     }
 
     /// Whether Warp should show its CLI-agent footer for this agent.
-    pub(super) fn supports_cli_agent_footer(&self) -> bool {
+    pub(crate) fn supports_cli_agent_footer(&self) -> bool {
         !matches!(self, CLIAgent::WarpTui)
     }
 
@@ -350,7 +350,7 @@ impl CLIAgent {
             CLIAgent::Hermes => Some(HERMES_PURPLE),
             CLIAgent::Vibe => Some(MISTRAL_ORANGE),
             CLIAgent::Antigravity => Some(ANTIGRAVITY_COLOR),
-            CLIAgent::WarpTui => None,
+            CLIAgent::WarpTui => Some(ColorU::black()),
             CLIAgent::Unknown => None,
         }
     }

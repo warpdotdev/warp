@@ -34,6 +34,7 @@ pub struct TuiShimmeringText {
     /// The clock the band's phase is derived from.
     clock: AnimationClock,
     modifier: Modifier,
+    grouped_suffix_glyph_count: usize,
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
 }
@@ -56,6 +57,7 @@ impl TuiShimmeringText {
             config,
             clock,
             modifier: Modifier::empty(),
+            grouped_suffix_glyph_count: 0,
             size: None,
             origin: None,
         }
@@ -64,6 +66,15 @@ impl TuiShimmeringText {
     /// Adds `modifier` (e.g. [`Modifier::BOLD`]) to every painted cell.
     pub fn with_modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.union(modifier);
+        self
+    }
+
+    /// Appends `suffix` and makes all of its glyphs sample one shared shimmer
+    /// intensity.
+    pub fn with_grouped_suffix(mut self, suffix: impl AsRef<str>) -> Self {
+        let suffix = suffix.as_ref();
+        self.grouped_suffix_glyph_count = suffix.chars().count();
+        self.text.push_str(suffix);
         self
     }
 }
@@ -104,13 +115,23 @@ impl TuiElement for TuiShimmeringText {
 
         let glyph_count = self.text.chars().count();
         let center = shimmer_math::shimmer_center(glyph_count, self.clock.elapsed(), &self.config);
+        let grouped_suffix = (self.grouped_suffix_glyph_count > 0).then(|| {
+            let start = glyph_count - self.grouped_suffix_glyph_count;
+            (
+                start,
+                start + (self.grouped_suffix_glyph_count.saturating_sub(1) / 2),
+            )
+        });
 
         for (index, char) in self.text.chars().enumerate() {
             let x = index.min(usize::from(u16::MAX)) as u16;
             if x >= size.width {
                 break;
             }
-            let intensity = shimmer_math::intensity_at(index, center, &self.config);
+            let shimmer_index = grouped_suffix
+                .filter(|(start, _)| index >= *start)
+                .map_or(index, |(_, center)| center);
+            let intensity = shimmer_math::intensity_at(shimmer_index, center, &self.config);
             let color =
                 shimmer_math::shimmer_color_at(self.base_color, self.shimmer_color, intensity);
             let style = TuiStyle::default()

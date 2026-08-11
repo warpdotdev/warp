@@ -37,7 +37,7 @@ jobs:
     runs-on: namespace-profile-ubuntu-small
     steps:
       - name: Check out code
-        uses: namespacelabs/nscloud-checkout-action@938f5d2d403d6224d9a0c0dc559b1dae09c2ede4 # v8.1.1
+        uses: namespacelabs/nscloud-checkout-action@445c25d7009680597d73eb03c4e1cd5be522ed73 # v9.0.0
         with:
           # Check out the default branch (not the release tag) so the skill
           # files and scripts are always available — older release tags may

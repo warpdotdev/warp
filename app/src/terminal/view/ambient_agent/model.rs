@@ -25,7 +25,7 @@ use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
 use crate::ai::ambient_agents::{AgentSource, AmbientAgentTaskId};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::{HandoffCommitFailure, HandoffCreated};
+use crate::ai::blocklist::handoff::{HandoffCommitFailure, HandoffCreated, handoff_dispatch_error};
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::execution_profiles::{
     CloudAgentComputerUseState, resolve_cloud_agent_computer_use_state,
@@ -586,18 +586,7 @@ impl AmbientAgentViewModel {
                 return;
             }
         }
-        let error = match &failure.issue {
-            CloudAgentStartupIssue::Blocked(CloudAgentStartupBlocker::GitHubAuthRequired {
-                message,
-                ..
-            })
-            | CloudAgentStartupIssue::Failed(
-                CloudAgentStartupFailure::Capacity { message }
-                | CloudAgentStartupFailure::OutOfCredits { message }
-                | CloudAgentStartupFailure::ServerOverloaded { message }
-                | CloudAgentStartupFailure::Other { message },
-            ) => message.clone(),
-        };
+        let error = handoff_dispatch_error(&failure.issue);
         send_telemetry_from_ctx!(CloudAgentTelemetryEvent::DispatchFailed { error }, ctx);
         if let Some(derived_workspace_had_content) = failure.derived_workspace_had_content {
             send_telemetry_from_ctx!(

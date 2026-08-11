@@ -60,8 +60,9 @@ use vec1::Vec1;
 use vim::vim::{VimHandler, VimMode};
 use warp_cli::agent::Harness;
 use warp_completer::completer::{
-    self, CompleterOptions, CompletionContext, CompletionsFallbackStrategy, Description, Match,
-    MatchStrategy, MatchType, PathSeparators, SuggestionResults,
+    self, CompleterOptions, CompletionContext, CompletionsFallbackStrategy, Description,
+    ExplicitTabCompletion, MatchStrategy, MatchType, PathSeparators, PreparedSuggestion,
+    SuggestionResults,
 };
 use warp_completer::meta::{HasSpan, Spanned};
 use warp_completer::parsers::LiteCommand;
@@ -183,6 +184,9 @@ use crate::ai::blocklist::{
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::connected_self_hosted_workers::{
+    ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
+};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::conversation_export::export_conversation_markdown;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
@@ -250,9 +254,10 @@ use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::SyncId;
 use crate::server::server_api::ServerApi;
-use crate::server::server_api::ai::AttachmentFileInfo;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::server::server_api::ai::AttachmentInput;
+use crate::server::server_api::ai::{AIClient, AttachmentFileInfo};
+use crate::server::server_api::presigned_upload::upload_to_target;
 use crate::server::telemetry::{
     AICommandSearchEntrypoint, AgentModeAutoDetectionFalsePositivePayload,
     AgentModeAutoDetectionSettingOrigin, AnonymousUserSignupEntrypoint, CommandXRayTrigger,
@@ -1815,6 +1820,116 @@ impl DeferredRemoteOperations {
     }
 }
 
+/// Per-attachment outcome from [`upload_pending_attachments_to_task`].
+enum TaskAttachmentUploadOutcome {
+    /// Successfully uploaded to the task's storage bucket. `attachment_id` is the
+    /// server-assigned identifier the new VM downloads at startup.
+    Uploaded {
+        attachment_id: String,
+        file_name: String,
+    },
+    /// Could not be uploaded — decode error, size limit exceeded, or HTTP failure.
+    /// `error` is a human-readable message suitable for display.
+    Failed { file_name: String, error: String },
+}
+
+/// Decode, size-check, and upload `pending_attachments` to the given task's storage
+/// via presigned upload targets obtained from the server. Returns one
+/// [`TaskAttachmentUploadOutcome`] per input attachment in the same order.
+///
+/// The outer `Err` is returned only when [`AIClient::prepare_attachments_for_upload`] fails
+/// (meaning no individual uploads were attempted). Decode errors, size-limit violations,
+/// and individual HTTP failures are surfaced as [`TaskAttachmentUploadOutcome::Failed`]
+/// entries so each caller can choose its own error-handling policy (fail-fast vs. best-effort).
+async fn upload_pending_attachments_to_task(
+    ai_client: Arc<dyn AIClient>,
+    server_api: Arc<ServerApi>,
+    task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+    pending_attachments: Vec<PendingAttachment>,
+) -> anyhow::Result<Vec<TaskAttachmentUploadOutcome>> {
+    let n = pending_attachments.len();
+    // Reserve a slot for each input attachment; filled below in original order.
+    let mut outcomes: Vec<Option<TaskAttachmentUploadOutcome>> =
+        std::iter::repeat_with(|| None).take(n).collect();
+    // Collect successfully decoded files together with their original index so we can
+    // zip the prepare-upload response back to the correct outcome slot.
+    let mut files_to_upload: Vec<(usize, String, String, Vec<u8>)> = Vec::new();
+
+    for (i, attachment) in pending_attachments.into_iter().enumerate() {
+        let decoded = match attachment {
+            PendingAttachment::File(file) => std::fs::read(&file.file_path)
+                .map(|bytes| (file.file_name.clone(), file.mime_type.clone(), bytes))
+                .map_err(|e| (file.file_name, format!("Failed to read attachment: {e}"))),
+            PendingAttachment::Image(image) => base64::engine::general_purpose::STANDARD
+                .decode(&image.data)
+                .map(|bytes| (image.file_name.clone(), image.mime_type.clone(), bytes))
+                .map_err(|e| (image.file_name, format!("Failed to decode attachment: {e}"))),
+        };
+        match decoded {
+            Ok((file_name, mime_type, bytes)) => {
+                if bytes.len() > MAX_ATTACHMENT_SIZE_BYTES {
+                    outcomes[i] = Some(TaskAttachmentUploadOutcome::Failed {
+                        file_name: file_name.clone(),
+                        error: format!("{file_name} exceeds the 10 MB attachment limit"),
+                    });
+                } else {
+                    files_to_upload.push((i, file_name, mime_type, bytes));
+                }
+            }
+            Err((file_name, error)) => {
+                outcomes[i] = Some(TaskAttachmentUploadOutcome::Failed { file_name, error });
+            }
+        }
+    }
+
+    if !files_to_upload.is_empty() {
+        let file_infos: Vec<AttachmentFileInfo> = files_to_upload
+            .iter()
+            .map(|(_, name, mime, _)| AttachmentFileInfo {
+                filename: name.clone(),
+                mime_type: mime.clone(),
+            })
+            .collect();
+
+        let prepare_response = ai_client
+            .prepare_attachments_for_upload(&task_id, &file_infos)
+            .await?;
+
+        if prepare_response.attachments.len() != files_to_upload.len() {
+            anyhow::bail!(
+                "Attachment upload preparation returned {} targets for {} files",
+                prepare_response.attachments.len(),
+                files_to_upload.len()
+            );
+        }
+
+        for ((orig_idx, file_name, mime_type, file_bytes), upload_info) in files_to_upload
+            .iter()
+            .zip(prepare_response.attachments.iter())
+        {
+            let target = upload_info.resolve_upload_target(mime_type);
+            let result =
+                upload_to_target(server_api.http_client(), &target, file_bytes.clone()).await;
+
+            outcomes[*orig_idx] = Some(match result {
+                Ok(()) => TaskAttachmentUploadOutcome::Uploaded {
+                    attachment_id: upload_info.attachment_id.clone(),
+                    file_name: file_name.clone(),
+                },
+                Err(e) => TaskAttachmentUploadOutcome::Failed {
+                    file_name: file_name.clone(),
+                    error: format!("{e:#}"),
+                },
+            });
+        }
+    }
+
+    Ok(outcomes
+        .into_iter()
+        .map(|o| o.expect("all slots filled during upload_pending_attachments_to_task"))
+        .collect())
+}
+
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
 
@@ -2459,6 +2574,16 @@ impl Input {
                 self.menu_positioning_provider.clone(),
                 ctx,
             );
+            // Re-render when connected workers change so the host selector shows/hides
+            // (it isn't mounted while hidden to drive this itself).
+            ctx.subscribe_to_model(
+                &ConnectedSelfHostedWorkersModel::handle(ctx),
+                |_me, _, event, ctx| {
+                    if matches!(event, ConnectedSelfHostedWorkersEvent::Changed) {
+                        ctx.notify();
+                    }
+                },
+            );
             let (auth_secret_selector, auth_secret_ftux_view) = Self::build_auth_secret_selector(
                 view_model.clone(),
                 self.menu_positioning_provider.clone(),
@@ -2655,6 +2780,7 @@ impl Input {
                 // The UseAgentToolbar shares this same AgentInputFooter instance,
                 // so its subscriber always fires alongside ours for every chip click.
                 AgentInputFooterEvent::WriteToPty(_)
+                | AgentInputFooterEvent::InsertIntoCLIPty(_)
                 | AgentInputFooterEvent::InsertIntoCLIRichInput(_)
                 | AgentInputFooterEvent::ToggleCodeReviewPane(_)
                 | AgentInputFooterEvent::ToggleFileExplorer(_)
@@ -3090,7 +3216,7 @@ impl Input {
             None
         };
 
-        let terminal_input_message_bar = ctx.add_view(|ctx| {
+        let terminal_input_message_bar = ctx.add_typed_action_view(|ctx| {
             TerminalInputMessageBar::new(
                 model.clone(),
                 ai_input_model.clone(),
@@ -3112,7 +3238,12 @@ impl Input {
         current_prompt.update(ctx, |prompt_type, ctx| {
             if let PromptType::Dynamic { prompt } = prompt_type {
                 prompt.update(ctx, |current_prompt, ctx| {
-                    current_prompt.subscribe_to_input_editor(editor.clone(), ctx);
+                    current_prompt.subscribe_to_input_editor(
+                        editor.clone(),
+                        agent_view_controller.clone(),
+                        terminal_view_id,
+                        ctx,
+                    );
                 });
             }
         });
@@ -4111,10 +4242,30 @@ impl Input {
                 }
                 true
             }
-            AIQueryRouting::NewCloudVm { .. } => {
+            AIQueryRouting::NewCloudVm { task_id } => {
                 if FeatureFlag::HandoffCloudCloud.is_enabled() {
                     let prompt = self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned();
-                    ctx.emit(Event::SubmitCloudFollowup { prompt });
+                    let pending_attachments = self
+                        .ai_context_model
+                        .as_ref(ctx)
+                        .pending_attachments()
+                        .to_vec();
+                    if Self::should_upload_cloud_followup_attachments(&pending_attachments) {
+                        self.freeze_input_in_loading_state(ctx);
+                        self.upload_files_then_submit_cloud_followup(
+                            task_id,
+                            prompt,
+                            pending_attachments,
+                            ctx,
+                        );
+                    } else {
+                        if !pending_attachments.is_empty() {
+                            log::warn!(
+                                "Cannot upload cloud follow-up attachments: CloudModeImageContext is disabled"
+                            );
+                        }
+                        ctx.emit(Event::SubmitCloudFollowup { prompt });
+                    }
                 } else {
                     // Cloud-to-cloud follow-up is unavailable; block rather than run locally.
                     self.show_ephemeral_error_toast(
@@ -4132,6 +4283,10 @@ impl Input {
                 true
             }
         }
+    }
+
+    fn should_upload_cloud_followup_attachments(pending_attachments: &[PendingAttachment]) -> bool {
+        !pending_attachments.is_empty() && FeatureFlag::CloudModeImageContext.is_enabled()
     }
 
     /// Primary entry point for submitting the input buffer as an AI query. Routes to the correct
@@ -7642,6 +7797,23 @@ impl Input {
                 editor.set_text_colors(TextColors::from_appearance(appearance), ctx);
             });
         }
+    }
+
+    /// Restores a VM-down cloud follow-up after an attachment upload fails. Unlike
+    /// [`Self::unfreeze_agent_input`], this path runs on a disconnected cloud pane rather than an
+    /// active shared-session viewer, so it must restore the visible prompt and editable state
+    /// directly.
+    fn restore_cloud_followup_input_after_upload_failure(
+        &mut self,
+        prompt: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.editor.update(ctx, |editor, ctx| {
+            editor.set_buffer_text(prompt, ctx);
+            editor.set_interaction_state(InteractionState::Editable, ctx);
+            let appearance: &Appearance = Appearance::as_ref(ctx);
+            editor.set_text_colors(TextColors::from_appearance(appearance), ctx);
+        });
     }
 
     pub fn reset_after_cloud_followup_submission(&mut self, ctx: &mut ViewContext<Self>) {
@@ -11831,7 +12003,7 @@ impl Input {
         let input_config = self.ai_input_model.as_ref(ctx).input_config();
         let config = UpArrowHistoryConfig::for_input_config(&input_config);
 
-        History::as_ref(ctx).up_arrow_suggestions_for_terminal_view(
+        History::as_ref(ctx).up_arrow_suggestions_for_terminal_surface(
             self.terminal_view_id,
             self.active_block_session_id(),
             config,
@@ -12398,130 +12570,113 @@ impl Input {
                 });
             }
             Some(results) => {
-                match (results.single_prefix_suggestion(), completions_trigger) {
-                    (Some(only_prefix_suggestion), CompletionsTrigger::Keybinding) => {
-                        // If there is exactly one prefix suggestion, just insert into the buffer.
+                let query = results.replacement_span.slice(&buffer_text);
+                let buffer_text_original = buffer_text
+                    [0..self.start_byte_index_of_last_selection(ctx).as_usize()]
+                    .to_string();
+                let decision = if completions_trigger == CompletionsTrigger::Keybinding {
+                    results.explicit_tab_completion(query, self.path_separators(ctx).all)
+                } else {
+                    ExplicitTabCompletion::Open {
+                        suggestions: results
+                            .prepare_for_query(query, self.path_separators(ctx).all),
+                        replacement_span: results.replacement_span,
+                    }
+                };
+                let prepared_suggestions: Vec<PreparedSuggestion> = match decision {
+                    ExplicitTabCompletion::NoAction => {
+                        self.suggestions_mode_model.update(ctx, |model, ctx| {
+                            model.set_mode(InputSuggestionsMode::Closed, ctx);
+                        });
+                        ctx.notify();
+                        return;
+                    }
+                    ExplicitTabCompletion::InsertSingle {
+                        suggestion,
+                        replacement_span,
+                    } => {
                         self.insert_completion_result_into_editor(
-                            only_prefix_suggestion.replacement(),
-                            results.replacement_span.start(),
+                            &suggestion.suggestion.replacement,
+                            replacement_span.start(),
                             Executing::No,
                             ctx,
                         );
+                        ctx.notify();
+                        return;
                     }
-                    (_, completions_trigger) => {
-                        let buffer_text_original = buffer_text
-                            [0..self.start_byte_index_of_last_selection(ctx).as_usize()]
-                            .to_string();
+                    ExplicitTabCompletion::InsertCommonPrefixAndOpen {
+                        common_prefix,
+                        suggestions,
+                        replacement_span,
+                    } => {
+                        self.insert_completion_prefix_into_editor(
+                            ctx,
+                            &common_prefix,
+                            replacement_span.start(),
+                        );
+                        suggestions
+                    }
+                    ExplicitTabCompletion::Open { suggestions, .. } => suggestions,
+                };
 
-                        if completions_trigger == CompletionsTrigger::Keybinding
-                            && let Some(common_prefix) = longest_common_prefix(
-                                results
-                                    .suggestions
-                                    .iter()
-                                    .filter(|suggestion| {
-                                        // Ignore fuzzy matches and case-insensitive matches
-                                        // when calculating the longest common prefix, so we
-                                        // are able to insert a common prefix more often.
-                                        matches!(
-                                            suggestion.match_type,
-                                            Match::Prefix {
-                                                is_case_sensitive: true
-                                            } | Match::Exact {
-                                                is_case_sensitive: true
-                                            }
-                                        )
-                                    })
-                                    .map(|suggestion| suggestion.replacement()),
-                            )
-                        {
-                            // Insert the common prefix if it is longer than what the user has
-                            // already typed. This check is necessary because the suggestions
-                            // are case-insensitive, while the common prefix is necessarily
-                            // case-sensitive. That can lead to the common prefix being shorter
-                            // than the input, causing confusing behavior where the input is
-                            // truncated. Also, only fill in the common prefix if the
-                            // replacement itself is a prefix of the common prefix. If there
-                            // are only fuzzy completions, then it's possible this is not the
-                            // case, and we don't want to fill in the common prefix in that
-                            // case.
-                            let replacement_start = results.replacement_span.start();
-                            let current_word = &buffer_text_original[replacement_start
-                                ..self.start_byte_index_of_last_selection(ctx).as_usize()];
-                            if common_prefix.len() > results.replacement_span.distance()
-                                && common_prefix.starts_with(current_word)
-                            {
-                                self.insert_completion_prefix_into_editor(
-                                    ctx,
-                                    common_prefix,
-                                    results.replacement_span.start(),
-                                );
-                            }
-                        }
+                // If not using completions as you type, then
+                // clear any autosuggestions when tab completions are open.
+                // The autosuggestion will be repopulated when the menu is closed.
+                // We don't do this for completions as you type because the user would
+                // otherwise hardly see autosuggestons.
+                if FeatureFlag::RemoveAutosuggestionDuringTabCompletions.is_enabled()
+                    && !self.is_completions_while_typing_turned_on(ctx)
+                {
+                    self.editor.update(ctx, |view, ctx| {
+                        view.clear_autosuggestion(ctx);
+                    });
+                }
 
-                        // If not using completions as you type, then
-                        // clear any autosuggestions when tab completions are open.
-                        // The autosuggestion will be repopulated when the menu is closed.
-                        // We don't do this for completions as you type because the user would
-                        // otherwise hardly see autosuggestons.
-                        if FeatureFlag::RemoveAutosuggestionDuringTabCompletions.is_enabled()
-                            && !self.is_completions_while_typing_turned_on(ctx)
-                        {
-                            self.editor.update(ctx, |view, ctx| {
-                                view.clear_autosuggestion(ctx);
-                            });
-                        }
-
-                        // Decide where to render the tab completion menu.
-                        // If we're rendering it at a specific position, let's make sure
-                        // that position exists in the position cache.
-                        let position = self.tab_completions_menu_position(
-                            &results,
-                            &buffer_text_original,
+                // Decide where to render the tab completion menu.
+                // If we're rendering it at a specific position, let's make sure
+                // that position exists in the position cache.
+                let position =
+                    self.tab_completions_menu_position(&results, &buffer_text_original, ctx);
+                let menu_position = if let Some(position) = position {
+                    self.editor.update(ctx, |editor, ctx| {
+                        editor.cache_buffer_point(
+                            position,
+                            COMPLETIONS_START_OF_REPLACEMENT_SPAN_POSITION_ID,
                             ctx,
                         );
-                        let menu_position = if let Some(position) = position {
-                            self.editor.update(ctx, |editor, ctx| {
-                                editor.cache_buffer_point(
-                                    position,
-                                    COMPLETIONS_START_OF_REPLACEMENT_SPAN_POSITION_ID,
-                                    ctx,
-                                );
-                            });
-                            TabCompletionsMenuPosition::AtStartOfReplacementSpan
-                        } else {
-                            TabCompletionsMenuPosition::AtLastCursor
-                        };
+                    });
+                    TabCompletionsMenuPosition::AtStartOfReplacementSpan
+                } else {
+                    TabCompletionsMenuPosition::AtLastCursor
+                };
 
-                        self.suggestions_mode_model.update(ctx, |m, ctx| {
-                            m.set_mode(
-                                InputSuggestionsMode::CompletionSuggestions {
-                                    replacement_start: results.replacement_span.start(),
-                                    buffer_text_original,
-                                    completion_results: results.clone(),
-                                    trigger: completions_trigger,
-                                    menu_position,
-                                },
-                                ctx,
-                            );
-                        });
+                self.suggestions_mode_model.update(ctx, |model, ctx| {
+                    model.set_mode(
+                        InputSuggestionsMode::CompletionSuggestions {
+                            replacement_start: results.replacement_span.start(),
+                            buffer_text_original,
+                            completion_results: results.clone(),
+                            trigger: completions_trigger,
+                            menu_position,
+                        },
+                        ctx,
+                    );
+                });
 
-                        let preselect_option = if self.is_classic_completions_enabled(ctx) {
-                            TabCompletionsPreselectOption::Unselected
-                        } else {
-                            TabCompletionsPreselectOption::First
-                        };
+                let preselect_option = if self.is_classic_completions_enabled(ctx) {
+                    TabCompletionsPreselectOption::Unselected
+                } else {
+                    TabCompletionsPreselectOption::First
+                };
 
-                        self.input_suggestions
-                            .update(ctx, |input_suggestions, ctx| {
-                                input_suggestions.prefix_search_for_tab_completion(
-                                    results.replacement_span.slice(&buffer_text),
-                                    &results,
-                                    preselect_option,
-                                    ctx,
-                                );
-                            });
-                    }
-                }
+                self.input_suggestions
+                    .update(ctx, |input_suggestions, ctx| {
+                        input_suggestions.set_prepared_tab_completions(
+                            prepared_suggestions,
+                            preselect_option,
+                            ctx,
+                        );
+                    });
             }
         }
         ctx.notify();
@@ -14413,6 +14568,62 @@ impl Input {
         true
     }
 
+    /// Upload pending attachments to the task definition before emitting the text-only cloud
+    /// follow-up event. `SubmitCloudFollowup` only carries the prompt text, so this helper owns
+    /// the prompt and attachment payloads until the async upload either succeeds and submits the
+    /// prompt or fails and restores the input. A new VM execution downloads these task attachments
+    /// during startup.
+    fn upload_files_then_submit_cloud_followup(
+        &mut self,
+        task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        prompt: String,
+        pending_attachments: Vec<PendingAttachment>,
+        ctx: &mut ViewContext<Self>,
+    ) -> SpawnedFutureHandle {
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let server_api = ServerApiProvider::as_ref(ctx).get();
+
+        ctx.spawn(
+            async move {
+                // Fail fast: any per-attachment failure (decode, size-limit, or HTTP) is fatal
+                // on the VM-down follow-up path; the user can fix the attachment and retry.
+                let outcomes = upload_pending_attachments_to_task(
+                    ai_client,
+                    server_api,
+                    task_id,
+                    pending_attachments,
+                )
+                .await
+                .map_err(|e| format!("Failed to prepare attachment uploads: {e:#}"))?;
+                for outcome in &outcomes {
+                    if let TaskAttachmentUploadOutcome::Failed { error, .. } = outcome {
+                        return Err(error.clone());
+                    }
+                }
+                Ok::<(), String>(())
+            },
+            move |input, result, ctx| {
+                if let Err(error) = result {
+                    input.restore_cloud_followup_input_after_upload_failure(&prompt, ctx);
+                    let window_id = ctx.window_id();
+                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!("Couldn't upload attachment: {error}")),
+                            window_id,
+                            ctx,
+                        );
+                    });
+                    return;
+                }
+
+                input.ai_context_model.update(ctx, |context_model, ctx| {
+                    context_model.clear_pending_attachments(ctx);
+                });
+                ctx.emit(Event::SubmitCloudFollowup { prompt });
+            },
+        )
+    }
+
     fn emit_input_buffer_submitted_telemetry(&self, ctx: &mut ViewContext<Self>) {
         let input_model = self.ai_input_model.as_ref(ctx);
         let block_id = self.model.lock().active_block_id().clone();
@@ -14491,59 +14702,30 @@ impl Input {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let server_api = ServerApiProvider::as_ref(ctx).get();
 
-        // Decode all images upfront; drop any that fail so that file_infos
-        // and files_to_upload stay in sync (they're zipped later).
-        let mut files_to_upload: Vec<(String, String, Vec<u8>)> = pending_images
+        // Combine images and files into a unified list so
+        // `upload_pending_attachments_to_task` can handle both kinds uniformly.
+        let pending_attachments: Vec<PendingAttachment> = pending_images
             .iter()
-            .filter_map(|img| {
-                base64::engine::general_purpose::STANDARD
-                    .decode(&img.data)
-                    .map(|bytes| (img.file_name.clone(), img.mime_type.clone(), bytes))
-                    .map_err(|e| {
-                        report_error!(
-                            anyhow::Error::new(e).context("Failed to decode base64 image"),
-                            extra: { "file_name" => %img.file_name }
-                        )
-                    })
-                    .ok()
-            })
+            .cloned()
+            .map(PendingAttachment::Image)
+            .chain(pending_files.iter().cloned().map(PendingAttachment::File))
             .collect();
-
-        // Also read non-image files from disk and add them to the upload list.
-        for file in pending_files {
-            match std::fs::read(&file.file_path) {
-                Ok(bytes) => {
-                    if bytes.len() > MAX_ATTACHMENT_SIZE_BYTES {
-                        log::warn!(
-                            "Skipping file {} ({} bytes) — exceeds 10MB limit",
-                            file.file_name,
-                            bytes.len()
-                        );
-                        continue;
-                    }
-                    files_to_upload.push((file.file_name.clone(), file.mime_type.clone(), bytes));
-                }
-                Err(e) => {
-                    log::warn!("Failed to read file {}: {e}", file.file_path.display());
-                }
-            }
-        }
-
-        let file_infos: Vec<AttachmentFileInfo> = files_to_upload
-            .iter()
-            .map(|(name, mime, _)| AttachmentFileInfo {
-                filename: name.clone(),
-                mime_type: mime.clone(),
-            })
-            .collect();
+        let pending_count = pending_attachments.len();
 
         ctx.spawn(
             async move {
-                let response = match ai_client
-                    .prepare_attachments_for_upload(&task_id, &file_infos)
-                    .await
+                // Best-effort: continue with successful uploads even when individual
+                // attachments fail (decode / size-limit / HTTP). Return `None` only when
+                // the prepare call fails entirely (maps to the "too many attachments" toast).
+                let outcomes = match upload_pending_attachments_to_task(
+                    ai_client,
+                    server_api,
+                    task_id,
+                    pending_attachments,
+                )
+                .await
                 {
-                    Ok(resp) => resp,
+                    Ok(outcomes) => outcomes,
                     Err(e) => {
                         log::error!(
                             "Failed to prepare attachment uploads for task {task_id}: {e:#}"
@@ -14553,41 +14735,28 @@ impl Input {
                 };
 
                 let mut uploaded = Vec::new();
-                for ((file_name, mime_type, file_bytes), upload_info) in
-                    files_to_upload.iter().zip(response.attachments.iter())
-                {
-                    let result = server_api
-                        .http_client()
-                        .put(&upload_info.upload_url)
-                        .header("Content-Type", mime_type.as_str())
-                        .body(file_bytes.clone())
-                        .send()
-                        .await;
-
-                    match result {
-                        Ok(resp) if resp.status().is_success() => {
+                for outcome in outcomes {
+                    match outcome {
+                        TaskAttachmentUploadOutcome::Uploaded {
+                            attachment_id,
+                            file_name,
+                        } => {
                             uploaded.push(AgentAttachment::FileReference {
-                                attachment_id: upload_info.attachment_id.clone(),
-                                file_name: file_name.clone(),
+                                attachment_id,
+                                file_name,
                             });
                         }
-                        Ok(resp) => {
-                            log::warn!(
-                                "Failed to upload attachment {file_name}: unexpected HTTP status {}",
-                                resp.status()
-                            );
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to upload attachment {file_name}: {e}");
+                        TaskAttachmentUploadOutcome::Failed { file_name, error } => {
+                            log::warn!("Failed to upload attachment {file_name}: {error}");
                         }
                     }
                 }
 
-                if uploaded.len() < files_to_upload.len() {
+                if uploaded.len() < pending_count {
                     log::warn!(
                         "Only {}/{} attachments uploaded successfully",
                         uploaded.len(),
-                        files_to_upload.len()
+                        pending_count
                     );
                 }
 

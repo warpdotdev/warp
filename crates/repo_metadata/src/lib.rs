@@ -52,7 +52,7 @@ pub use entry::{
 };
 // Re-export the local model's event under its original name for backward compatibility.
 pub use local_model::RepositoryMetadataEvent;
-pub use repository::Repository;
+pub use repository::{Repository, RepositoryWatchMode};
 pub use watcher::{DirectoryWatcher, RepositoryUpdate, TargetFile};
 
 #[cfg(not(target_family = "wasm"))]

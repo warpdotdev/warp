@@ -7,8 +7,8 @@ use warp::tui_export::{
     AIActionStatus, AIAgentActionId, AIAgentActionResultType, AIConversationId,
     AskUserQuestionAction, AskUserQuestionAnswerItem, AskUserQuestionEffect, AskUserQuestionItem,
     AskUserQuestionPhase, AskUserQuestionResult, AskUserQuestionSession, BlocklistAIActionEvent,
-    BlocklistAIActionModel, BlocklistAIHistoryModel, OptionFooter, OptionRow, OptionSnapshot,
-    OptionSourceStatus,
+    BlocklistAIActionModel, BlocklistAIHistoryModel, OptionBadge, OptionFooter, OptionRow,
+    OptionSnapshot, OptionSourceStatus,
 };
 use warpui::SingletonEntity;
 use warpui_core::r#async::{SpawnedFutureHandle, Timer};
@@ -144,20 +144,11 @@ impl TuiAskQuestionView {
             if event.action_id() != &me.action_id {
                 return;
             }
-            if matches!(
-                event,
-                BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(_)
-            ) {
-                ctx.focus(&me.selector);
-            }
             if matches!(event, BlocklistAIActionEvent::FinishedAction { .. }) {
                 me.abort_auto_advance();
             }
             me.invalidate_layout(ctx);
         });
-        if view.is_waiting_on_answers(ctx) {
-            ctx.focus(&selector);
-        }
         view
     }
 
@@ -207,7 +198,7 @@ impl TuiAskQuestionView {
                 id: index.to_string(),
                 label: option.label.clone(),
                 harness: None,
-                badge: None,
+                badge: option.recommended.then_some(OptionBadge::Recommended),
                 disabled_reason: None,
             })
             .collect();

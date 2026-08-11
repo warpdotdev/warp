@@ -1,3 +1,4 @@
+pub(crate) mod agent_cli_launch_modal;
 pub(crate) mod auto_handoff_sleep_modal;
 mod build_plan_migration_modal;
 pub(crate) mod cloud_agent_capacity_modal;
@@ -501,6 +502,9 @@ use crate::workspace::tab_settings::TabCloseButtonPosition;
 use crate::workspace::toast_stack::{
     ToastStack, ToastStack as WorkspaceToastStack, ToastStackEvent as WorkspaceToastStackEvent,
 };
+use crate::workspace::view::agent_cli_launch_modal::{
+    AgentCliLaunchModal, AgentCliLaunchModalEvent,
+};
 use crate::workspace::view::auto_handoff_sleep_modal::{
     AutoHandoffSleepModal, AutoHandoffSleepModalEvent,
 };
@@ -583,6 +587,8 @@ const THEME_CHOOSER_RATIO: f32 = 3.5;
 
 /// Save position for the tab bar.
 pub(crate) const TAB_BAR_POSITION_ID: &str = "workspace_view:tab_bar";
+const TEAM_SWITCHER_PILL_POSITION_ID: &str = "workspace_view:team_switcher_pill";
+const TEAM_SWITCHER_DOT_ALPHA: u8 = 204;
 
 /// Save position for the vertical tabs panel.
 /// HOA onboarding callouts anchor relative to this position, so whichever code
@@ -1091,6 +1097,9 @@ pub struct Workspace {
     header_toolbar_editor_modal: ViewHandle<HeaderToolbarEditorModal>,
     header_toolbar_context_menu: ViewHandle<Menu<WorkspaceAction>>,
     show_header_toolbar_context_menu: Option<Vector2F>,
+    /// Dropdown menu for the title-bar team-switcher pill.
+    team_switcher_menu: ViewHandle<Menu<WorkspaceAction>>,
+    show_team_switcher_menu: bool,
     theme_creator_modal: ViewHandle<ThemeCreatorModal>,
     theme_deletion_modal: ViewHandle<ThemeDeletionModal>,
     suggested_agent_mode_workflow_modal: ViewHandle<SuggestedAgentModeWorkflowModal>,
@@ -1098,6 +1107,7 @@ pub struct Workspace {
     oz_launch_modal: ModalWithTab<LaunchModal<OzLaunchSlide>>,
     openwarp_launch_modal: ViewHandle<OpenWarpLaunchModal>,
     orchestration_launch_modal: ViewHandle<OrchestrationLaunchModal>,
+    agent_cli_launch_modal: ViewHandle<AgentCliLaunchModal>,
     feature_intro_modal: ViewHandle<FeatureIntroModal>,
     /// Tab that first received the feature-intro popover. The popover stays
     /// pinned to this tab for the rest of its lifetime so switching tabs does
@@ -3003,6 +3013,11 @@ impl Workspace {
             me.handle_orchestration_launch_modal_event(event, ctx);
         });
 
+        let agent_cli_launch_view = ctx.add_typed_action_view(AgentCliLaunchModal::new);
+        ctx.subscribe_to_view(&agent_cli_launch_view, |me, _, event, ctx| {
+            me.handle_agent_cli_launch_modal_event(event, ctx);
+        });
+
         let feature_intro_view = ctx.add_typed_action_view(FeatureIntroModal::new);
         ctx.subscribe_to_view(&feature_intro_view, |me, _, event, ctx| {
             me.handle_feature_intro_modal_event(event, ctx);
@@ -3308,7 +3323,8 @@ impl Workspace {
             }
             AISettingsChangedEvent::IsActiveAIEnabled { .. }
             | AISettingsChangedEvent::ThinkingDisplayMode { .. }
-            | AISettingsChangedEvent::PromptSubmissionMode { .. } => {
+            | AISettingsChangedEvent::PromptSubmissionMode { .. }
+            | AISettingsChangedEvent::AutoApproveBypassesCommandDenylist { .. } => {
                 ctx.notify();
             }
             AISettingsChangedEvent::ShowAgentNotifications { .. } => {
@@ -3334,6 +3350,8 @@ impl Workspace {
                         me.focus_openwarp_launch_modal(ctx);
                     } else if model_ref.is_orchestration_launch_modal_open() {
                         me.focus_orchestration_launch_modal(ctx);
+                    } else if model_ref.is_agent_cli_launch_modal_open() {
+                        me.focus_agent_cli_launch_modal(ctx);
                     } else if model_ref.is_auto_handoff_sleep_modal_open() {
                         me.focus_auto_handoff_sleep_modal(ctx);
                     } else if model_ref.is_free_ai_removal_modal_open() {
@@ -3444,6 +3462,8 @@ impl Workspace {
             header_toolbar_editor_modal: Self::build_header_toolbar_editor_modal(ctx),
             header_toolbar_context_menu: Self::build_header_toolbar_context_menu(ctx),
             show_header_toolbar_context_menu: None,
+            team_switcher_menu: Self::build_team_switcher_menu(ctx),
+            show_team_switcher_menu: false,
             is_user_menu_open: false,
             tab_bar_pinned_by_popup: false,
             user_menu,
@@ -3479,6 +3499,7 @@ impl Workspace {
             },
             openwarp_launch_modal: openwarp_launch_view,
             orchestration_launch_modal: orchestration_launch_view,
+            agent_cli_launch_modal: agent_cli_launch_view,
             feature_intro_modal: feature_intro_view,
             feature_intro_tab_pane_group_id: None,
             auto_handoff_sleep_modal: auto_handoff_sleep_view,
@@ -4033,6 +4054,13 @@ impl Workspace {
                 );
                 self.check_and_trigger_onboarding(ctx);
             }
+            NewWorkspaceSource::TeamSwitched { .. } => {
+                self.configure_empty_workspace(
+                    None, /* previous_active_window */
+                    None, /* shell */
+                    ctx,
+                );
+            }
             NewWorkspaceSource::NotebookFromFilePath { file_path } => {
                 self.add_tab_for_file_notebook(file_path, ctx);
             }
@@ -4143,6 +4171,7 @@ impl Workspace {
             | NewWorkspaceSource::Session { .. }
             | NewWorkspaceSource::AgentSession { .. }
             | NewWorkspaceSource::AmbientAgent
+            | NewWorkspaceSource::TeamSwitched { .. }
             | NewWorkspaceSource::NotebookFromFilePath { .. } => should_default_open,
             #[cfg(not(target_family = "wasm"))]
             NewWorkspaceSource::SharedSessionAsViewer { .. }
@@ -6086,6 +6115,136 @@ impl Workspace {
         menu
     }
 
+    fn build_team_switcher_menu(ctx: &mut ViewContext<Self>) -> ViewHandle<Menu<WorkspaceAction>> {
+        let menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .with_drop_shadow()
+                .prevent_interaction_with_other_elements()
+        });
+        ctx.subscribe_to_view(&menu, |me, _, event, ctx| {
+            if let MenuEvent::Close { .. } = event {
+                me.show_team_switcher_menu = false;
+                ctx.notify();
+            }
+        });
+        menu
+    }
+
+    fn show_team_switcher_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
+        let window_id = self.window_id;
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        // Only meaningful when the user can switch teams.
+        if !user_workspaces.can_switch_teams() {
+            return;
+        }
+        let Some(workspace) = user_workspaces.current_workspace() else {
+            return;
+        };
+        let current_team_uid = user_workspaces.team_uid_for_window(window_id);
+        let mut items: Vec<MenuItem<WorkspaceAction>> = vec![
+            MenuItemFields::new("Switch team")
+                .with_disabled(true)
+                .into_item(),
+        ];
+        items.extend(workspace.teams.iter().map(|team| {
+            let uid = team.uid;
+            let mut fields = MenuItemFields::new(team.name.clone())
+                .with_on_select_action(WorkspaceAction::OpenNewWindowForTeam { team_uid: uid });
+            fields = if Some(uid) == current_team_uid {
+                fields.with_icon(icons::Icon::Check)
+            } else {
+                fields.with_indent()
+            };
+            fields.into_item()
+        }));
+        self.team_switcher_menu
+            .update(ctx, |menu, ctx| menu.set_items(items, ctx));
+        self.show_team_switcher_menu = true;
+        ctx.focus(&self.team_switcher_menu);
+        ctx.notify();
+    }
+
+    /// Renders the team-switcher pill shown in the title-bar top-right, to the
+    /// left of the right-side toolbar actions
+    fn render_team_switcher_pill(
+        &self,
+        appearance: &Appearance,
+        ctx: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        // Only show when the user has access to more than one team available to them.
+        if !user_workspaces.can_switch_teams() {
+            return None;
+        }
+        let current_team = user_workspaces.team_for_window(self.window_id)?;
+        let team_name = current_team.name.clone();
+        let team_color_hex = current_team.color.clone();
+        let theme = appearance.theme();
+        let text_color = theme.foreground();
+        let pill_bg_normal = internal_colors::fg_overlay_1(theme);
+        let pill_bg_hover = internal_colors::fg_overlay_2(theme);
+
+        // Parse the team color for the dot; fall back to a neutral theme grey
+        // (matching the server contract / admin UI default) if invalid/missing.
+        let mut dot_color = team_color_hex
+            .as_deref()
+            .and_then(|hex| warp_core::ui::color::hex_color::coloru_from_hex_string(hex).ok())
+            .unwrap_or_else(|| internal_colors::neutral_5(theme));
+        dot_color.a = TEAM_SWITCHER_DOT_ALPHA;
+
+        let pill = Hoverable::new(self.mouse_states.team_switcher_pill.clone(), move |state| {
+            let dot = ConstrainedBox::new(
+                Rect::new()
+                    .with_background(Fill::Solid(dot_color))
+                    .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
+                    .finish(),
+            )
+            .with_width(8.)
+            .with_height(8.)
+            .finish();
+
+            let name_text = Text::new_inline(
+                team_name.clone(),
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(text_color.into())
+            .with_clip(ClipConfig::ellipsis())
+            .finish();
+
+            let row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(4.)
+                .with_child(dot)
+                .with_child(ConstrainedBox::new(name_text).with_max_width(120.).finish())
+                .finish();
+
+            Container::new(row)
+                .with_background(if state.is_hovered() {
+                    pill_bg_hover
+                } else {
+                    pill_bg_normal
+                })
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+                .with_padding_left(8.)
+                .with_padding_right(8.)
+                .with_padding_top(4.)
+                .with_padding_bottom(4.)
+                .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(WorkspaceAction::ShowTeamSwitcherMenu);
+        })
+        .finish();
+
+        Some(
+            Container::new(SavePosition::new(pill, TEAM_SWITCHER_PILL_POSITION_ID).finish())
+                .with_margin_left(TAB_BAR_PADDING_LEFT)
+                .finish(),
+        )
+    }
+
     fn show_header_toolbar_context_menu(
         &mut self,
         position: Vector2F,
@@ -6270,6 +6429,7 @@ impl Workspace {
                     LocalOrRemotePath::Local(path.clone()),
                     session,
                     layout,
+                    Some(code_source),
                     ctx,
                 );
             }
@@ -6383,7 +6543,13 @@ impl Workspace {
                             // Jupyter notebook) instead of always opening remote
                             // files as raw code in the editor.
                             if let FileTarget::MarkdownViewer(layout) = target {
-                                self.open_file_notebook(location.clone(), None, *layout, ctx);
+                                self.open_file_notebook(
+                                    location.clone(),
+                                    None,
+                                    *layout,
+                                    Some(code_source),
+                                    ctx,
+                                );
                             } else {
                                 self.open_code(
                                     code_source,
@@ -6450,7 +6616,7 @@ impl Workspace {
                     line_col,
                     CodeSource::Link {
                         path,
-                        range_start: None,
+                        range_start: line_col,
                         range_end: None,
                     },
                     ctx,
@@ -8484,6 +8650,7 @@ impl Workspace {
         path: LocalOrRemotePath,
         session: Option<Arc<Session>>,
         layout: EditorLayout,
+        code_source: Option<CodeSource>,
         ctx: &mut ViewContext<Self>,
     ) {
         let existing_file_pane = {
@@ -8504,11 +8671,14 @@ impl Workspace {
             });
             return;
         }
+        // The notebook viewer renders markdown rather than raw lines, but it
+        // hands this source back when the user toggles to the raw code view, so
+        // keeping it preserves the requested line for that view.
         let pane = FilePane::new(
             Some(path),
             session,
             #[cfg(feature = "local_fs")]
-            None,
+            code_source,
             ctx,
         );
 
@@ -10587,7 +10757,7 @@ impl Workspace {
                     *line_col,
                     CodeSource::Link {
                         path: path.clone(),
-                        range_start: None,
+                        range_start: *line_col,
                         range_end: None,
                     },
                     ctx,
@@ -11636,6 +11806,7 @@ impl Workspace {
         WindowSnapshot {
             tabs,
             active_tab_index,
+            team_uid: UserWorkspaces::as_ref(app).team_uid_for_window(window_id),
             bounds: window_bounds,
             fullscreen_state: window_fullscreen_state,
             quake_mode,
@@ -12868,7 +13039,7 @@ impl Workspace {
     ) {
         let source = CodeSource::Link {
             path: file_path,
-            range_start: None,
+            range_start: line_and_column,
             range_end: None,
         };
         let pane = CodePane::new(source, line_and_column, ctx);
@@ -15568,7 +15739,7 @@ impl Workspace {
             })
         });
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let execution = execute_handoff(pending, ai_client, Some(materialize), ctx);
+        let execution = execute_handoff(pending, ai_client, None, Some(materialize), ctx);
         ctx.spawn(execution, move |workspace, outcome, ctx| match outcome {
             HandoffCommitOutcome::Rejected { mut pending, error } => {
                 let restoration = pending.take_restoration();
@@ -16018,7 +16189,7 @@ impl Workspace {
                 #[cfg(feature = "local_fs")]
                 {
                     let layout = *EditorSettings::as_ref(ctx).open_file_layout.value();
-                    self.open_file_notebook(path.clone(), Some(session.clone()), layout, ctx);
+                    self.open_file_notebook(path.clone(), Some(session.clone()), layout, None, ctx);
                 }
             }
             pane_group::Event::MoveToSpace {
@@ -16911,7 +17082,11 @@ impl Workspace {
                     *line_col,
                     CodeSource::Link {
                         path: path.clone(),
-                        range_start: None,
+                        // Keep the requested line on the source: consumers that
+                        // re-derive the jump target from the `CodeSource` (e.g.
+                        // `CodePane::pre_attach`) would otherwise open the file
+                        // at the top instead of the requested line.
+                        range_start: *line_col,
                         range_end: None,
                     },
                     ctx,
@@ -18828,6 +19003,22 @@ impl Workspace {
             OrchestrationLaunchModalEvent::Close => {
                 OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
                     model.mark_orchestration_launch_modal_dismissed(ctx);
+                });
+                self.focus_active_tab(ctx);
+                ctx.notify();
+            }
+        }
+    }
+
+    fn handle_agent_cli_launch_modal_event(
+        &mut self,
+        event: &AgentCliLaunchModalEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            AgentCliLaunchModalEvent::Close => {
+                OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.mark_agent_cli_launch_modal_dismissed(ctx);
                 });
                 self.focus_active_tab(ctx);
                 ctx.notify();
@@ -21029,6 +21220,10 @@ impl Workspace {
         appearance: &Appearance,
         ctx: &AppContext,
     ) {
+        if let Some(pill) = self.render_team_switcher_pill(appearance, ctx) {
+            target.add_child(pill);
+        }
+
         if let Some(update_pill) = self.render_tab_overflow_menu(ctx, appearance) {
             target.add_child(
                 Container::new(update_pill)
@@ -21171,7 +21366,7 @@ impl Workspace {
         let tab_bar_border =
             Border::bottom(TAB_BAR_BORDER_HEIGHT).with_border_fill(appearance.theme().outline());
 
-        let mut tab_bar_container = Container::new(
+        let tab_bar_element = Container::new(
             EventHandler::new(Clipped::new(self.render_tab_bar_hoverable(bar_contents)).finish())
                 .on_back_mouse_down(move |ctx, _app, _position| {
                     ctx.dispatch_typed_action(WorkspaceAction::ActivatePrevTab);
@@ -21183,12 +21378,8 @@ impl Workspace {
                 })
                 .finish(),
         )
-        .with_border(tab_bar_border);
-        if FeatureFlag::NewTabStyling.is_enabled() {
-            tab_bar_container = tab_bar_container
-                .with_background(internal_colors::fg_overlay_1(appearance.theme()));
-        }
-        let tab_bar_element = tab_bar_container.finish();
+        .with_border(tab_bar_border)
+        .finish();
 
         let dimming_color = appearance.theme().background().into();
         SavePosition::new(
@@ -21985,7 +22176,7 @@ impl Workspace {
                         error_description: error.to_string(),
                     },
                     variant: BannerButtonVariant::Naked,
-                    icon: Some(Icon::Oz),
+                    icon: Some(Icon::Agent),
                     more_info_button_action: None,
                 });
         Some(WorkspaceBannerFields {
@@ -23162,6 +23353,13 @@ impl Workspace {
                 .set
                 .insert(flags::INCLUDE_AGENT_COMMANDS_IN_HISTORY_FLAG);
         }
+
+        if *ai_settings.auto_approve_bypasses_command_denylist.value() {
+            context
+                .set
+                .insert(flags::AUTO_APPROVE_BYPASSES_COMMAND_DENYLIST_FLAG);
+        }
+
         if *ai_settings.memory_enabled.value() {
             context.set.insert(flags::AI_RULES_FLAG);
         }
@@ -23389,9 +23587,9 @@ impl Workspace {
     }
 
     fn team_uid(&self, app: &AppContext) -> Option<ServerId> {
-        // TODO this is a stop gap for now - ideally a specific team uid should
-        // be passed into each event
-        UserWorkspaces::as_ref(app).current_team_uid()
+        UserWorkspaces::as_ref(app)
+            .team_for_window(self.window_id)
+            .map(|team| team.uid)
     }
 
     fn initiate_user_signup(
@@ -23450,6 +23648,10 @@ impl Workspace {
 
     fn focus_orchestration_launch_modal(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.focus(&self.orchestration_launch_modal);
+    }
+
+    fn focus_agent_cli_launch_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.focus(&self.agent_cli_launch_modal);
     }
 
     fn show_feature_intro_modal(&mut self, id: FeatureIntroId, ctx: &mut ViewContext<Self>) {
@@ -24164,10 +24366,8 @@ impl TypedActionView for Workspace {
                 send_telemetry_from_ctx!(TelemetryEvent::UserMenuUpgradeClicked, ctx);
 
                 let auth_state = AuthStateProvider::as_ref(ctx).get();
-                let user_workspaces = UserWorkspaces::as_ref(ctx);
-
-                let upgrade_url = if let Some(team) = user_workspaces.current_team() {
-                    UserWorkspaces::upgrade_link_for_team(team.uid)
+                let upgrade_url = if let Some(team_uid) = self.team_uid(ctx) {
+                    UserWorkspaces::upgrade_link_for_team(team_uid)
                 } else {
                     let user_id = auth_state.user_id().unwrap_or_default();
                     UserWorkspaces::upgrade_link(user_id)
@@ -25332,24 +25532,34 @@ impl TypedActionView for Workspace {
                 session_id,
                 task_id,
             } => {
-                if let Some((_, locator)) =
-                    self.find_pane_with_ambient_agent_conversation(*task_id, ctx)
+                // An existing pane for this run is only reusable if it can host the live session.
+                // A read-only pane (e.g. a conversation transcript viewer opened earlier for the
+                // same run) must not be reused: focusing it would leave the user staring at a
+                // non-interactive transcript instead of a writable terminal. In that case fall
+                // through to opening a fresh shared-session tab.
+                let existing_pane = self.find_pane_with_ambient_agent_conversation(*task_id, ctx);
+                let mut attached_locator = None;
+                if let Some((_, locator)) = existing_pane
+                    && let Some(pane_group) = self
+                        .get_pane_group_view_with_id(locator.pane_group_id)
+                        .cloned()
                 {
-                    self.focus_pane(locator, ctx);
-                    if let Some(pane_group) =
-                        self.get_pane_group_view_with_id(locator.pane_group_id)
-                    {
-                        pane_group.update(ctx, |pane_group, ctx| {
-                            pane_group.attach_execution_session_to_ambient_pane(
-                                locator.pane_id,
-                                *session_id,
-                                ctx,
-                            );
-                        });
+                    let attached = pane_group.update(ctx, |pane_group, ctx| {
+                        pane_group.attach_execution_session_to_ambient_pane(
+                            locator.pane_id,
+                            *session_id,
+                            ctx,
+                        )
+                    });
+                    if attached {
+                        attached_locator = Some(locator);
                     }
-                } else {
+                }
+
+                match attached_locator {
+                    Some(locator) => self.focus_pane(locator, ctx),
                     // Attaching to a known ambient run: build the pane in ambient mode.
-                    self.add_tab_for_joining_shared_session(*session_id, true, ctx);
+                    None => self.add_tab_for_joining_shared_session(*session_id, true, ctx),
                 }
             }
             OpenConversationTranscriptViewer {
@@ -25649,6 +25859,34 @@ impl TypedActionView for Workspace {
                 log::info!(
                     "Orchestration launch modal state: old={old_value}, new={new_value}, feature_flag_enabled={}",
                     FeatureFlag::OrchestrationLaunchModal.is_enabled()
+                );
+            }
+            #[cfg(debug_assertions)]
+            OpenAgentCliLaunchModal => {
+                OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.force_open_agent_cli_launch_modal(ctx);
+                });
+                ctx.notify();
+            }
+            #[cfg(debug_assertions)]
+            ResetAgentCliLaunchModalState => {
+                let old_value =
+                    *AISettings::as_ref(ctx).did_check_to_trigger_agent_cli_launch_modal;
+                AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
+                    if let Err(e) = ai_settings
+                        .did_check_to_trigger_agent_cli_launch_modal
+                        .set_value(false, ctx)
+                    {
+                        log::warn!(
+                            "Failed to reset Warp Agent CLI launch modal dismissed setting: {e}"
+                        );
+                    }
+                });
+                let new_value =
+                    *AISettings::as_ref(ctx).did_check_to_trigger_agent_cli_launch_modal;
+                log::info!(
+                    "Warp Agent CLI launch modal state: old={old_value}, new={new_value}, feature_flag_enabled={}",
+                    FeatureFlag::AgentCliLaunchModal.is_enabled()
                 );
             }
             #[cfg(debug_assertions)]
@@ -26047,6 +26285,29 @@ impl TypedActionView for Workspace {
             }
             SyncTrafficLights => {
                 self.sync_window_button_visibility(ctx);
+            }
+            OpenNewWindowForTeam { team_uid } => {
+                let team_uid = *team_uid;
+                let existing_window_id = ctx
+                    .windows()
+                    .ordered_window_ids()
+                    .into_iter()
+                    .chain(ctx.window_ids())
+                    .find(|window_id| {
+                        UserWorkspaces::as_ref(ctx).team_uid_for_window(*window_id)
+                            == Some(team_uid)
+                    });
+                if let Some(window_id) = existing_window_id {
+                    ctx.windows().show_window_and_focus_app(window_id);
+                } else {
+                    crate::root_view::open_new_with_workspace_source(
+                        NewWorkspaceSource::TeamSwitched { team_uid },
+                        ctx,
+                    );
+                }
+            }
+            ShowTeamSwitcherMenu => {
+                self.show_team_switcher_dropdown(ctx);
             }
         };
         if action.should_save_app_state_on_action() {
@@ -26494,6 +26755,19 @@ impl View for Workspace {
                     position,
                     ParentOffsetBounds::WindowByPosition,
                     ParentAnchor::TopLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
+        }
+
+        if self.show_team_switcher_menu {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.team_switcher_menu).finish(),
+                OffsetPositioning::offset_from_save_position_element(
+                    TEAM_SWITCHER_PILL_POSITION_ID,
+                    vec2f(0., 4.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::BottomLeft,
                     ChildAnchor::TopLeft,
                 ),
             );
@@ -27045,6 +27319,10 @@ impl View for Workspace {
             stack.add_child(ChildView::new(&self.orchestration_launch_modal).finish());
         }
 
+        if should_show_modal && one_time_modal_model.is_agent_cli_launch_modal_open() {
+            stack.add_child(ChildView::new(&self.agent_cli_launch_modal).finish());
+        }
+
         if should_show_modal && one_time_modal_model.is_auto_handoff_sleep_modal_open() {
             stack.add_child(ChildView::new(&self.auto_handoff_sleep_modal).finish());
         }
@@ -27361,7 +27639,9 @@ impl View for Workspace {
             );
         }
 
-        let window_corner_radius = app.windows().window_corner_radius();
+        let window_corner_radius = app
+            .windows()
+            .window_corner_radius_for_window(self.window_id);
         let workspace = Container::new(stack.finish()).with_corner_radius(window_corner_radius);
 
         let mut stack = Stack::new();

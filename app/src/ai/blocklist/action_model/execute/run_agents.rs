@@ -16,6 +16,8 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
+use warp_core::telemetry::TelemetryEvent as _;
+use warp_core::{send_telemetry_from_app_ctx, send_telemetry_from_ctx};
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::start_agent::{StartAgentExecutor, StartAgentOutcome};
@@ -24,6 +26,9 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentInput,
     StartAgentExecutionMode,
+};
+use crate::ai::blocklist::telemetry::{
+    BlocklistOrchestrationTelemetryEvent, run_agents_completed_event,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::document::plan_publication::{
@@ -34,6 +39,7 @@ use crate::ai::orchestration::{
     OrchestrationConfigState, can_execute_with_auth_secret,
     populate_default_auth_secret_for_execution,
 };
+use crate::features::FeatureFlag;
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
 /// this window (e.g. binary not found, server error), the slot is failed
@@ -390,21 +396,33 @@ impl RunAgentsExecutor {
             &self.launched_agents,
             ctx,
         ) {
-            return ActionExecution::Sync(AIAgentActionResultType::RunAgents(
-                RunAgentsResult::Denied { reason },
-            ));
+            let result = RunAgentsResult::Denied { reason };
+            send_telemetry_from_ctx!(
+                BlocklistOrchestrationTelemetryEvent::RunAgentsCompleted(
+                    run_agents_completed_event(parent_conversation_id, &request, &result)
+                ),
+                ctx
+            );
+            return ActionExecution::Sync(AIAgentActionResultType::RunAgents(result));
         }
+        let telemetry_request = request.clone();
 
         let receiver =
             self.dispatch_prepared_run_agents(action_id, request, parent_conversation_id, ctx);
 
-        ActionExecution::new_async(
-            async move { receiver.recv().await },
-            |result, _| match result {
-                Ok(r) => AIAgentActionResultType::RunAgents(r),
-                Err(_) => AIAgentActionResultType::RunAgents(RunAgentsResult::Cancelled),
-            },
-        )
+        ActionExecution::new_async(async move { receiver.recv().await }, move |result, ctx| {
+            let result = match result {
+                Ok(result) => result,
+                Err(_) => RunAgentsResult::Cancelled,
+            };
+            send_telemetry_from_app_ctx!(
+                BlocklistOrchestrationTelemetryEvent::RunAgentsCompleted(
+                    run_agents_completed_event(parent_conversation_id, &telemetry_request, &result,)
+                ),
+                ctx
+            );
+            AIAgentActionResultType::RunAgents(result)
+        })
     }
 
     pub(super) fn should_autoexecute(
@@ -416,6 +434,19 @@ impl RunAgentsExecutor {
             return false;
         };
         if AppExecutionMode::as_ref(ctx).is_autonomous() {
+            return true;
+        }
+        // Child conversations live in hidden panes where a confirmation card
+        // would be invisible and hang the run. Always auto-execute — even
+        // with `MultiLevelOrchestration` disabled — so the policy checks in
+        // `prepare_request_for_execution` (including the multi-level gate)
+        // fail the call gracefully with a Denied result instead of a card.
+        // Children inherit the parent surface's execution profile via
+        // `inherit_child_agent_settings`, so run-wide permissions carry over.
+        if BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&input.conversation_id)
+            .is_some_and(|c| c.is_child_agent_conversation())
+        {
             return true;
         }
         let mut resolved_request = request.clone();
@@ -498,6 +529,18 @@ fn prepare_request_for_execution(
 
     if AppExecutionMode::as_ref(ctx).is_autonomous() {
         return None;
+    }
+
+    // A child conversation cannot present a confirmation card (hidden pane),
+    // so when the multi-level surfaces are disabled its `run_agents` call
+    // must be denied outright rather than falling through to the
+    // interactive path.
+    if !FeatureFlag::MultiLevelOrchestration.is_enabled()
+        && BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&parent_conversation_id)
+            .is_some_and(|c| c.is_child_agent_conversation())
+    {
+        return Some("Multi-level orchestration is not enabled on this client.".to_string());
     }
 
     if status.is_some_and(|status| status.is_disapproved()) {

@@ -1,5 +1,8 @@
 use instant::Instant;
-use warp::tui_export::{BlocklistAIHistoryModel, ConversationStatus};
+use warp::tui_export::{
+    BlocklistAIHistoryModel, CloudAgentStartupAuthFlow, CloudAgentStartupPresentation,
+    ConversationStatus, loaded_subtree_rollup,
+};
 use warp_errors::report_error;
 use warpui::SingletonEntity as _;
 use warpui_core::r#async::Timer;
@@ -27,6 +30,7 @@ use crate::orchestration_tab_bar::{
 };
 use crate::session_registry::TuiSessions;
 use crate::tab_bar::{TuiTabBarConfig, TuiTabBarEvent, TuiTabBarView};
+use crate::terminal_session_view::CTRL_C_KILL_CHILD_HINT;
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::centered_in_viewport;
 
@@ -53,6 +57,11 @@ pub(crate) struct TuiCloudRunView {
     orchestration_tab_bar: ViewHandle<TuiTabBarView>,
     orchestration_tabs_focused: bool,
     exit_confirmation: ExitConfirmation,
+    /// True while the kill-child confirmation window is armed for this cloud
+    /// run view. The cloud run view is always a child, so any armed ctrl-c
+    /// targets it rather than the whole TUI. Works in tandem with
+    /// `exit_confirmation` for the timing window.
+    child_kill_armed: bool,
     surface_id: EntityId,
 }
 
@@ -107,8 +116,14 @@ impl TuiCloudRunView {
                 let Ok(page_anchor) = page_anchor.clone().try_into() else {
                     return;
                 };
+                let Some(level_anchor) = view
+                    .compute_orchestration_tab_snapshot(ctx)
+                    .map(|snapshot| snapshot.anchor_conversation_id)
+                else {
+                    return;
+                };
                 TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.set_explicit_page(page_anchor, ctx);
+                    model.set_explicit_page(level_anchor, page_anchor, ctx);
                 });
             }
         });
@@ -118,6 +133,7 @@ impl TuiCloudRunView {
             orchestration_tab_bar,
             orchestration_tabs_focused: false,
             exit_confirmation: ExitConfirmation::default(),
+            child_kill_armed: false,
             surface_id: ctx.view_id(),
         }
     }
@@ -221,25 +237,31 @@ impl TuiCloudRunView {
                 link_instruction: None,
                 link_url: None,
             },
-            TuiCloudRunStartup::Blocked(blocker) => CloudRunDisplayState {
-                status: ConversationStatus::Blocked {
-                    blocked_action: blocker.message().to_owned(),
-                },
-                status_label: "GitHub authentication required".to_string(),
-                detail: Some(format!(
-                    "{} Authenticate, then run the orchestration request again.",
-                    blocker.message()
-                )),
-                link_instruction: Some("to authenticate or click the link below"),
-                link_url: Some(blocker.primary_url().to_string()),
-            },
-            TuiCloudRunStartup::Failed(failure) => CloudRunDisplayState {
-                status: ConversationStatus::Error,
-                status_label: "Cloud run failed to start".to_string(),
-                detail: Some(failure.message().to_string()),
-                link_instruction: None,
-                link_url: None,
-            },
+            TuiCloudRunStartup::Blocked(blocker) => {
+                let presentation = CloudAgentStartupPresentation::github_auth(
+                    blocker.primary_url(),
+                    CloudAgentStartupAuthFlow::RerunOrchestrationRequest,
+                );
+                CloudRunDisplayState {
+                    status: ConversationStatus::Blocked {
+                        blocked_action: presentation.detail.clone(),
+                    },
+                    status_label: presentation.title.to_string(),
+                    detail: Some(presentation.detail),
+                    link_instruction: Some("to authenticate or click the link below"),
+                    link_url: presentation.primary_url,
+                }
+            }
+            TuiCloudRunStartup::Failed(failure) => {
+                let presentation = CloudAgentStartupPresentation::failure(failure.message());
+                CloudRunDisplayState {
+                    status: ConversationStatus::Error,
+                    status_label: presentation.title.to_string(),
+                    detail: Some(presentation.detail),
+                    link_instruction: None,
+                    link_url: None,
+                }
+            }
             TuiCloudRunStartup::Spawned => {
                 let status = state
                     .conversation_id()
@@ -273,7 +295,129 @@ impl TuiCloudRunView {
         self.display_state(ctx).link_url
     }
 
+    /// The kill target while the bar is focused, with its loaded-descendant
+    /// count: a selected child tab of the rendered level, or the drilled-in
+    /// anchor itself when it occupies the main-tab slot (anchor ≠ root). The
+    /// root tab is never a kill target. Drives the bar-focused single-press
+    /// kill path and its footer.
+    fn bar_focused_kill_target(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<(warp::tui_export::AIConversationId, usize)> {
+        let snapshot = self.compute_orchestration_tab_snapshot(ctx)?;
+        if snapshot.selected_conversation_id != snapshot.anchor_conversation_id {
+            let nested_descendants = snapshot
+                .children
+                .iter()
+                .find(|child| child.conversation_id == snapshot.selected_conversation_id)
+                .and_then(|child| child.subtree_rollup.as_ref())
+                .map(|rollup| rollup.descendant_count)
+                .unwrap_or_default();
+            return Some((snapshot.selected_conversation_id, nested_descendants));
+        }
+        // A drilled-in anchor only exists under multi-level orchestration
+        // (flag off keeps anchor == root), so single-press subtree kill
+        // cannot reach flag-off trees.
+        if snapshot.anchor_conversation_id == snapshot.root_conversation_id {
+            return None;
+        }
+        let nested_descendants = loaded_subtree_rollup(
+            BlocklistAIHistoryModel::as_ref(ctx),
+            snapshot.anchor_conversation_id,
+        )
+        .map(|rollup| rollup.descendant_count)
+        .unwrap_or_default();
+        Some((snapshot.anchor_conversation_id, nested_descendants))
+    }
+
+    /// Kills a child conversation and (with multi-level orchestration
+    /// enabled) its loaded subtree, deepest-first: tombstones them, deletes
+    /// them from history, and removes their sessions.
+    fn kill_child_agent(
+        &mut self,
+        conversation_id: warp::tui_export::AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.exit_confirmation.disarm();
+        self.child_kill_armed = false;
+        self.orchestration_tabs_focused = false;
+        // Pre-resolve the root session id before the kill clears the snapshot.
+        let root_session_id = self
+            .compute_orchestration_tab_snapshot(ctx)
+            .and_then(|snap| {
+                let history = BlocklistAIHistoryModel::as_ref(ctx);
+                TuiSessions::as_ref(ctx)
+                    .session_ids_by_conversation(history)
+                    .get(&snap.root_conversation_id)
+                    .copied()
+            });
+        TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+            model.kill_child_agent_subtree(conversation_id, ctx);
+        });
+        if let Some(session_id) = root_session_id {
+            TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.focus_session(session_id, ctx);
+            });
+        }
+    }
+
     fn handle_interrupt(&mut self, ctx: &mut ViewContext<Self>) {
+        // Path 1: tab-bar focused + killable tab selected (a level child, or
+        // the drilled-in anchor occupying the main-tab slot) → single ctrl-c
+        // kills that agent and its loaded subtree, per kill_child_agent.
+        if self.orchestration_tabs_focused
+            && let Some((child_id, _)) = self.bar_focused_kill_target(ctx)
+        {
+            self.kill_child_agent(child_id, ctx);
+            return;
+        }
+
+        // Path 2: this cloud run view is itself a child → double ctrl-c kills it.
+        // The cloud run view is always a child in the orchestration tree; the
+        // double-press prevents an accidental single ctrl-c from losing the run.
+        if let Some(own_conversation_id) = self.state.as_ref(ctx).conversation_id() {
+            let now = Instant::now();
+            if self.child_kill_armed && self.exit_confirmation.should_exit(now) {
+                // Second ctrl-c: kill this cloud run and return to root.
+                let conversation_id = own_conversation_id;
+                self.exit_confirmation.disarm();
+                self.child_kill_armed = false;
+                self.orchestration_tabs_focused = false;
+                // Pre-resolve the root session before the kill clears the snapshot.
+                let root_session_id =
+                    self.compute_orchestration_tab_snapshot(ctx)
+                        .and_then(|snap| {
+                            let history = BlocklistAIHistoryModel::as_ref(ctx);
+                            TuiSessions::as_ref(ctx)
+                                .session_ids_by_conversation(history)
+                                .get(&snap.root_conversation_id)
+                                .copied()
+                        });
+                TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.kill_child_agent_subtree(conversation_id, ctx);
+                });
+                if let Some(session_id) = root_session_id {
+                    TuiSessions::handle(ctx).update(ctx, |sessions, ctx| {
+                        sessions.focus_session(session_id, ctx);
+                    });
+                }
+                return;
+            }
+            // First ctrl-c: arm the kill window.
+            self.child_kill_armed = true;
+            let window_expires_at = self.exit_confirmation.arm(now);
+            ctx.spawn(Timer::after(CTRL_C_EXIT_WINDOW), move |view, _, ctx| {
+                if view.exit_confirmation.disarm_expired(window_expires_at) {
+                    view.child_kill_armed = false;
+                    ctx.notify();
+                }
+            });
+            ctx.notify();
+            return;
+        }
+
+        // Fallback: no conversation id yet (still dispatching) → standard double-press
+        // exit behavior so the user can still close the TUI.
         let now = Instant::now();
         if self.exit_confirmation.should_exit(now) {
             ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -444,7 +588,16 @@ impl TuiView for TuiCloudRunView {
         };
         if self.orchestration_tab_bar.as_ref(ctx).has_tabs() {
             let footer = if self.orchestration_tabs_focused {
-                render_cloud_orchestration_tab_footer(&builder)
+                let nested_descendants = self
+                    .bar_focused_kill_target(ctx)
+                    .map(|(_, nested)| nested)
+                    .unwrap_or_default();
+                render_cloud_orchestration_tab_footer(&builder, nested_descendants)
+            } else if self.child_kill_armed && self.exit_confirmation.is_armed() {
+                TuiText::new(CTRL_C_KILL_CHILD_HINT)
+                    .with_style(builder.muted_text_style())
+                    .truncate()
+                    .finish()
             } else {
                 TuiText::new("Shift + ↑ sub-agents")
                     .with_style(builder.muted_text_style())
@@ -459,6 +612,18 @@ impl TuiView for TuiCloudRunView {
                 .child(TuiChildView::new(&self.orchestration_tab_bar).finish())
                 .flex_child(session)
                 .finish()
+        } else if self.child_kill_armed && self.exit_confirmation.is_armed() {
+            // Even when this run has no sub-agents, show the kill-child hint
+            // so the user can see the confirmation before the second ctrl-c.
+            let hint = TuiContainer::new(
+                TuiText::new(CTRL_C_KILL_CHILD_HINT)
+                    .with_style(builder.muted_text_style())
+                    .truncate()
+                    .finish(),
+            )
+            .with_padding_x(2)
+            .finish();
+            TuiFlex::column().flex_child(body).child(hint).finish()
         } else {
             body
         }
@@ -481,7 +646,7 @@ impl TypedActionView for TuiCloudRunView {
                 self.set_orchestration_tab_focus(true, ctx);
             }
             TuiCloudRunAction::NavigateOrchestrationTabs(action) => {
-                let key = action.target(self.orchestration_tab_bar.as_ref(ctx));
+                let key = action.target(self.orchestration_tab_bar.as_ref(ctx), ctx);
                 self.switch_to_orchestration_tab(key, true, ctx);
             }
         }

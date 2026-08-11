@@ -67,7 +67,7 @@ impl SearchItem for WarpAISearchItem {
         };
 
         let icon = if FeatureFlag::AgentMode.is_enabled() {
-            UIIcon::Oz
+            UIIcon::Agent
                 .to_warpui_icon(
                     appearance
                         .theme()

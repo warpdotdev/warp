@@ -20,6 +20,7 @@ use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::output::{self, TableFormat};
+use crate::ai::runner_display::{arch_display, macos_version_display, os_display};
 use crate::server::server_api::ServerApiProvider;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
@@ -428,29 +429,6 @@ fn sort_by_to_gql(sort_by: RunnerSortByArg) -> RunnerSortBy {
     match sort_by {
         RunnerSortByArg::Name => RunnerSortBy::Name,
         RunnerSortByArg::LastUpdated => RunnerSortBy::LastUpdated,
-    }
-}
-
-fn os_display(os: RunnerOs) -> &'static str {
-    match os {
-        RunnerOs::Linux => "Linux",
-        RunnerOs::Macos => "macOS",
-    }
-}
-
-fn arch_display(arch: RunnerArch) -> &'static str {
-    match arch {
-        RunnerArch::X8664 => "x86-64",
-        RunnerArch::Aarch64 => "aarch64",
-    }
-}
-
-fn macos_version_display(version: RunnerMacOsVersion) -> &'static str {
-    match version {
-        RunnerMacOsVersion::Macos14 => "macOS 14",
-        RunnerMacOsVersion::Macos15 => "macOS 15",
-        RunnerMacOsVersion::Macos26 => "macOS 26",
-        RunnerMacOsVersion::Macos27 => "macOS 27",
     }
 }
 

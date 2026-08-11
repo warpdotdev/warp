@@ -15,7 +15,7 @@ use crate::ai::llms::LLMPreferences;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::network::NetworkStatus;
-use crate::persistence::model::AgentConversationData;
+use crate::persistence::model::{AgentConversationData, ConversationUsageMetadata};
 use crate::server::server_api::ServerApiProvider;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -34,6 +34,31 @@ fn restored_conversation(conversation_data: Option<AgentConversationData>) -> AI
         conversation_data,
     )
     .unwrap()
+}
+
+fn conversation_data_with_provider_cost(
+    total_provider_cost_in_cents: Option<f32>,
+) -> AgentConversationData {
+    AgentConversationData {
+        server_conversation_token: None,
+        conversation_usage_metadata: Some(ConversationUsageMetadata {
+            total_provider_cost_in_cents,
+            ..Default::default()
+        }),
+        reverted_action_ids: None,
+        forked_from_server_conversation_token: None,
+        artifacts_json: None,
+        parent_agent_id: None,
+        agent_name: None,
+        orchestration_harness_type: None,
+        parent_conversation_id: None,
+        is_remote_child: false,
+        root_task_is_optimistic: None,
+        run_id: None,
+        autoexecute_override: None,
+        last_event_sequence: None,
+        pinned: false,
+    }
 }
 
 fn restored_conversation_with_root_description(description: &str) -> AIConversation {
@@ -595,6 +620,137 @@ fn restored_conversation_with_empty_task_list_creates_in_progress_optimistic_roo
     assert_eq!(conversation.status(), &ConversationStatus::InProgress);
     assert!(conversation.status_error_message().is_none());
 }
+#[test]
+fn restored_conversation_seeds_known_provider_cost_baseline() {
+    let conversation = restored_conversation(Some(conversation_data_with_provider_cost(Some(3.2))));
+    let totals = conversation.usage_totals();
+
+    assert_eq!(totals.cost_in_cents, Some(3.2));
+    assert!(totals.has_usage);
+}
+#[test]
+fn empty_task_restore_seeds_known_provider_cost_baseline() {
+    let conversation = AIConversation::new_restored_synthesizing_on_empty(
+        AIConversationId::new(),
+        vec![],
+        Some(conversation_data_with_provider_cost(Some(3.2))),
+    )
+    .expect("empty-task restore should synthesize a root");
+
+    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
+    assert!(conversation.usage_totals().has_usage);
+}
+
+/// APP-4952 regression: the ticket's confirmed failing sequence. A restored
+/// conversation with a known 3.2¢ server baseline plus a 1.2¢ follow-up must
+/// display 4.4¢ — never 0.0¢ (dropped baseline) or 1.2¢ (increment only).
+/// Covers both the strict and the lenient restore constructor.
+#[test]
+fn restored_usage_totals_preserve_server_provider_cost_and_add_follow_up() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let strict_restore =
+            restored_conversation(Some(conversation_data_with_provider_cost(Some(3.2))));
+        let lenient_restore = AIConversation::new_restored_synthesizing_on_empty(
+            AIConversationId::new(),
+            vec![],
+            Some(conversation_data_with_provider_cost(Some(3.2))),
+        )
+        .expect("empty-task restore should synthesize a root");
+
+        for mut conversation in [strict_restore, lenient_restore] {
+            app.read(|ctx| {
+                conversation
+                    .update_cost_and_usage_for_request(
+                        None,
+                        vec![stream_token_usage("model-a", 10, 2, 1.2)],
+                        Some(credits_usage_metadata(1.0, 0.0)),
+                        false,
+                        ctx,
+                    )
+                    .expect("follow-up usage should update");
+            });
+
+            let totals = conversation.usage_totals();
+            let cost = totals
+                .cost_in_cents
+                .expect("a restored known baseline stays known");
+            assert!(
+                (cost - 4.4).abs() < 1e-6,
+                "3.2¢ baseline + 1.2¢ follow-up must total 4.4¢, got {cost}"
+            );
+            assert!(totals.has_usage);
+        }
+    });
+}
+
+/// A restored conversation whose persisted metadata shows no usage evidence
+/// must keep the footer's usage entry hidden — local persistence always
+/// writes a metadata blob, so presence alone is not usage.
+#[test]
+fn restored_zero_usage_metadata_keeps_footer_usage_hidden() {
+    let conversation = restored_conversation(Some(conversation_data_with_provider_cost(None)));
+
+    let totals = conversation.usage_totals();
+    assert!(!totals.has_usage);
+    assert_eq!(totals.cost_in_cents, None);
+}
+
+/// A present provider cost is affirmative evidence even at 0.0: the server
+/// only records a cost once a turn completed accounting, so a restored
+/// known-zero baseline must surface the footer as a truthful $0.00 rather
+/// than staying hidden or reading as unknown.
+#[test]
+fn restored_known_zero_cost_marks_usage_with_known_zero_baseline() {
+    let conversation = restored_conversation(Some(conversation_data_with_provider_cost(Some(0.0))));
+
+    let totals = conversation.usage_totals();
+    assert!(totals.has_usage);
+    assert_eq!(totals.cost_in_cents, Some(0.0));
+}
+
+#[test]
+fn restored_metadata_with_credits_marks_usage_even_without_provider_cost() {
+    let conversation = restored_conversation(Some(AgentConversationData {
+        conversation_usage_metadata: Some(ConversationUsageMetadata {
+            credits_spent: 2.5,
+            ..Default::default()
+        }),
+        ..conversation_data_with_provider_cost(None)
+    }));
+
+    let totals = conversation.usage_totals();
+    assert!(totals.has_usage);
+    assert_eq!(totals.cost_in_cents, None);
+}
+
+#[test]
+fn restored_legacy_conversation_keeps_provider_cost_unavailable_after_follow_up() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation =
+            restored_conversation(Some(conversation_data_with_provider_cost(None)));
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    None,
+                    vec![stream_token_usage("legacy-model", 10, 2, 1.5)],
+                    Some(credits_usage_metadata(1.0, 0.0)),
+                    false,
+                    ctx,
+                )
+                .expect("follow-up usage should update");
+        });
+
+        let totals = conversation.usage_totals();
+        assert_eq!(totals.cost_in_cents, None);
+        assert!(totals.has_usage);
+    });
+}
 
 #[test]
 fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
@@ -727,7 +883,11 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
         let mut conversation = AIConversation::new(false, false);
         assert_eq!(
             conversation.usage_totals(),
-            ConversationUsageTotals::default()
+            ConversationUsageTotals {
+                credits_spent: 0.0,
+                cost_in_cents: Some(0.0),
+                has_usage: false,
+            }
         );
 
         app.read(|ctx| {
@@ -756,7 +916,14 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
 
         let totals = conversation.usage_totals();
         assert!((totals.credits_spent - 3.5).abs() < 1e-6);
-        assert!((totals.cost_in_cents - 2.7).abs() < 1e-6);
+        assert!(
+            (totals
+                .cost_in_cents
+                .expect("new conversation cost is known")
+                - 2.7)
+                .abs()
+                < 1e-6
+        );
     });
 }
 

@@ -13,6 +13,8 @@ mod overlay;
 mod recording_metadata;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
+#[cfg(any(macos, linux))]
+mod thumbnail;
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -112,22 +114,25 @@ pub fn background_supported() -> bool {
 }
 
 /// Ends the background computer-use session owned by `owner` (the client conversation id),
-/// restoring the user's original keyboard focus.
+/// releasing the session state that outlives individual action batches.
 ///
 /// On macOS a background session activates the target window and installs focus-suppression
 /// taps; this tears down only the windows owned by `owner`, deactivates them, and re-activates the
 /// app that was frontmost before the session, so the user's keystrokes return to where they were.
-/// Scoping by owner keeps concurrent background sessions (e.g. another conversation driving a
-/// different window) intact. Idempotent and a no-op when `owner` has no active session, and on
-/// platforms without background per-window control.
+/// On Linux X11 a background session drives a session-scoped agent seat (a second input seat
+/// shared across the session's action batches so state like a held mouse button mid-drag
+/// survives between batches); this removes `owner`'s seat, its on-screen cursor, and any input
+/// state it still holds. Scoping by owner keeps concurrent background sessions (e.g. another
+/// conversation driving a different window) intact. Idempotent and a no-op when `owner` has no
+/// active session, and on platforms without background per-window control.
 ///
 /// Call this whenever a computer-use session ends — normal completion, cancellation, or teardown.
 pub fn end_background_session(owner: &str) {
-    #[cfg(macos)]
+    #[cfg(any(macos, linux))]
     {
         imp::end_background_session(owner);
     }
-    #[cfg(not(macos))]
+    #[cfg(not(any(macos, linux)))]
     {
         let _ = owner;
     }
@@ -312,6 +317,41 @@ pub async fn finalized_video_duration(input: &Path) -> Result<Duration, Recordin
         let _ = input;
         Err(RecordingError::Finalize {
             reason: "video duration probing is unsupported on this platform".to_string(),
+        })
+    }
+}
+
+/// Generates a PR video thumbnail for `video`: extracts a representative,
+/// downscaled frame with ffmpeg, composites a centered play-button glyph, and
+/// writes the PNG to a sibling `{artifact_uid}-thumb.png`. Returns the thumbnail
+/// path; the caller owns cleanup of both the video and the thumbnail.
+///
+/// `artifact_uid` is the uploaded video's artifact UID; the server links the
+/// thumbnail to its video by the `{artifact_uid}-thumb.png` filename convention.
+///
+/// Best-effort by design: the caller treats any error as "no thumbnail" and
+/// falls back to a plain link, never blocking the video upload or PR creation.
+/// Recording and ffmpeg are only available on macOS and Linux; every other
+/// platform reports thumbnail generation as unsupported (recording itself does
+/// not run there either).
+pub async fn generate_video_thumbnail(
+    video: &Path,
+    artifact_uid: &str,
+) -> Result<PathBuf, RecordingError> {
+    #[cfg(any(macos, linux))]
+    {
+        thumbnail::generate_video_thumbnail(
+            video,
+            thumbnail::DEFAULT_THUMBNAIL_MAX_WIDTH,
+            artifact_uid,
+        )
+        .await
+    }
+    #[cfg(not(any(macos, linux)))]
+    {
+        let _ = (video, artifact_uid);
+        Err(RecordingError::Finalize {
+            reason: "video thumbnail generation is unsupported on this platform".to_string(),
         })
     }
 }
@@ -689,10 +729,12 @@ impl PointerSession {
         }
     }
 
-    /// Records a press or move resolved at `point`. A press (`Down`) sets the
-    /// active button and last point; a move updates the last point while a
-    /// button is held. A new press while a button is already active replaces it
-    /// (the prior incomplete press is closed as a held drag by the classifier).
+    /// Records a press or coordinate-carrying pointer sample resolved at
+    /// `point`. A press (`Down`) sets the active button and last point; a move
+    /// or scroll sample updates the last point (the pointer physically warped
+    /// there before the wheel turned) without touching the active button. A
+    /// new press while a button is already active replaces it (the prior
+    /// incomplete press is closed as a held drag by the classifier).
     pub fn record_press_or_move(
         &self,
         kind: PointerEventKind,
