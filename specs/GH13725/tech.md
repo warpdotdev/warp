@@ -61,6 +61,12 @@ The **notebook/plan editor** surfaces (`app/src/code/editor/`, `app/src/ai/ai_do
 - **(iii) Heading slug matching + click resolution: SMALL.** The click branch, the scroll call, and the per-click heading walk all exist. The work is a slug normalizer and one comparison change.
 - **(iv) Cross-document fragment navigation: MEDIUM.** The file-open, tab-focus, and dedup machinery exists, but three latent resolution defects (item 6) block even a fragment-less bare `file.md` link, and the deferred scroll after load is genuinely new state.
 
+### Sequencing
+
+Items (i) and (iii) are the natural first slice: together they fix the issue's headline case and repair markdown-native fragment links, and neither depends on the other. Item (ii) follows cheaply because it reuses (iii)'s click-time walk rather than adding a parsed anchor node — the two share a single resolver, so building them separately would mean writing that resolver twice. Item (iv) is last and largest, and it carries item 6's repairs as hard prerequisites: without them a plain relative link is already broken, so the cross-document feature has no working baseline to build on.
+
+This ordering describes how the work decomposes for review, not a staged rollout — the product spec's delivery-scope section is the authoritative statement of what ships together. Item (ii)'s visible-literal-tag consequence (product invariant 5, item 3 below) ships as current known behavior, tracked for improvement as #13982 rather than held back.
+
 ## Proposed changes
 
 ### 1. `<a href="…">text</a>` inline token

@@ -77,3 +77,13 @@ Out of scope (explicit non-goals):
 15. Anchors work inside other block constructs, because anchor parsing is ordinary inline content: an `<a href>` inside a table cell, a list item, or a blockquote renders and resolves normally, and a heading inside those constructs is addressable by its slug per invariant 4. The sole exception is code — inline code spans and fenced code blocks — where anchor markup stays literal per invariant 10.
 
 16. Resolution is computed against the document's current content at click time, so a fragment link keeps working after the document is edited — adding, renaming, or deleting a heading changes what resolves on the *next* click with no stale-cache window. A renamed heading's old slug simply becomes a miss per invariant 7.
+
+## Delivery scope
+
+All sixteen invariants above are one deliverable. They are listed here as three groups only to show how the work decomposes if it needs to be split for review — not as a staged rollout where users would see a partial feature.
+
+- **Anchor links and heading resolution** — invariants 1 through 12, plus 14 through 16. This is the slice that fixes the issue's headline case, and it is the highest-value one because it repairs markdown-native `[text](#heading)` links too, which gain nothing from HTML tag parsing on its own.
+- **Explicit `<a id>`/`<a name>` targets** — the target half of invariants 5 and 6. This completes the hand-built table-of-contents case for authors who anchor mid-paragraph rather than at a heading. It costs very little on top of the previous group because it reuses the same click-time resolution walk rather than introducing a parsed anchor node.
+- **Cross-document fragments** — invariant 13, together with the three resolution repairs the tech spec details. These repairs are prerequisites rather than polish: without them even a plain `[text](other-file.md)` link misroutes to the browser or silently no-ops, so the fragment feature cannot work without them.
+
+**One known limitation ships with this feature and is not deferred out of it:** a bare `<a id="x"></a>` remains visible as literal text in the rendered document (invariant 5). This is current, intended behavior — not a bug to be found later. Hiding the tag requires a content-model representation that survives `to_markdown` on save, or the author's anchor is silently deleted by the next edit; that work is tracked separately as #13982 so the representation can be designed deliberately rather than chosen under implementation pressure.
