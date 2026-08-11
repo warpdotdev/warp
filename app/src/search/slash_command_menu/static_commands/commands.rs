@@ -127,6 +127,35 @@ pub const API_KEYS: StaticCommand = StaticCommand {
     auto_enter_ai_mode: false,
     argument: None,
 };
+
+pub const CONNECT_GROK: StaticCommand = StaticCommand {
+    name: "/connect-grok",
+    description: "Connect your Grok (X Premium / SuperGrok) account",
+    kind: SlashCommandKind::ConnectGrok,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
+pub const MANAGE_BILLING: StaticCommand = StaticCommand {
+    name: "/manage-billing",
+    description: "Open the team billing page in your browser",
+    kind: SlashCommandKind::ManageBilling,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+pub const UPGRADE: StaticCommand = StaticCommand {
+    name: "/upgrade",
+    description: "Open the Warp upgrade page in your browser",
+    kind: SlashCommandKind::Upgrade,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
 pub const THEME: StaticCommand = StaticCommand {
     name: "/theme",
     description: "Set color theme",
@@ -882,7 +911,7 @@ impl Default for Registry {
 impl Registry {
     pub fn new() -> Self {
         let mut commands = HashMap::new();
-        for command in all_commands(settings::settings_mode()) {
+        for command in all_commands_for_all_surfaces() {
             debug_assert!(
                 !command
                     .availability
@@ -920,7 +949,15 @@ impl Registry {
     }
 }
 
+#[cfg(test)]
 fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
+    all_commands_for_all_surfaces()
+        .into_iter()
+        .filter(|command| command.supports_surface(settings_mode))
+        .collect()
+}
+
+fn all_commands_for_all_surfaces() -> Vec<StaticCommand> {
     let mut commands = vec![
         ADD_MCP,
         ADD_PROMPT.clone(),
@@ -932,6 +969,9 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         INDEX,
         INIT,
         API_KEYS,
+        CONNECT_GROK,
+        UPGRADE,
+        MANAGE_BILLING,
         LOGOUT,
         MCP,
         OPEN_PROJECT_RULES,
@@ -1052,7 +1092,6 @@ fn all_commands(settings_mode: settings::SettingsMode) -> Vec<StaticCommand> {
         commands.push(HARNESS.clone());
         commands.push(ENVIRONMENT.clone());
     }
-    commands.retain(|command| command.supports_surface(settings_mode));
 
     commands
 }

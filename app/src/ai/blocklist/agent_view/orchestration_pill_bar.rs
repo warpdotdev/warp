@@ -49,8 +49,8 @@ use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::{
 };
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::orchestration_topology::{
-    aggregated_orchestrator_status, descendant_conversation_ids_in_spawn_order,
-    descendant_conversations_in_pill_order,
+    LoadedSubtreeRollup, aggregated_orchestrator_status, child_conversations_in_pill_order,
+    loaded_subtree_rollup, orchestration_root_conversation_id,
 };
 use crate::ai::blocklist::telemetry::{
     BlocklistOrchestrationTelemetryEvent, PillBarActionKind, PillBarInteractionEvent,
@@ -190,6 +190,25 @@ struct PillSpec {
     pin_state: PillPinState,
     /// Child running on a remote worker; drives the cloud-shaped badge variant.
     is_remote_child: bool,
+    /// Present when this child is itself an orchestrator: rolled-up state of
+    /// its subtree, rendered as a trailing "group" badge on the pill.
+    subtree_rollup: Option<LoadedSubtreeRollup>,
+}
+
+/// Everything `pill_specs` computes for one render of the bar. The bar is a
+/// drill-down view: it anchors on one conversation and renders only that
+/// conversation's DIRECT children, with breadcrumbs back up the tree when
+/// the anchored level sits below the root.
+struct PillBarContents {
+    anchor_id: AIConversationId,
+    /// Root of the orchestration tree when the anchor is not itself the
+    /// root; drives the leading breadcrumb pill.
+    breadcrumb_root_id: Option<AIConversationId>,
+    /// The anchor's direct parent when it is neither the anchor nor already
+    /// covered by the root breadcrumb (i.e. the anchor sits 2+ levels below
+    /// the root); rendered after the root breadcrumb.
+    breadcrumb_parent_id: Option<AIConversationId>,
+    specs: Vec<PillSpec>,
 }
 
 #[derive(Clone, Copy)]
@@ -224,6 +243,7 @@ fn pill_body_position_id(conversation_id: AIConversationId) -> String {
 
 fn pill_label_width(
     label: &str,
+    font_size: f32,
     font_properties: Properties,
     appearance: &Appearance,
     app: &AppContext,
@@ -237,7 +257,7 @@ fn pill_label_width(
     let line = text_layout_system.layout_line(
         label,
         LineStyle {
-            font_size: appearance.monospace_font_size() - 1.,
+            font_size,
             line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
@@ -299,6 +319,10 @@ pub enum OrchestrationPillBarAction {
     PillClicked {
         conversation_id: AIConversationId,
         pill_kind: PillKind,
+        /// Set for the leading breadcrumb pills so telemetry can tell
+        /// drill-up navigation apart from same-level pill switches
+        /// (navigation itself only depends on `pill_kind`).
+        is_breadcrumb: bool,
     },
 }
 
@@ -353,7 +377,11 @@ impl OrchestrationPillBar {
             BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
             | BlocklistAIHistoryEvent::AppendedExchange { .. }
             | BlocklistAIHistoryEvent::SetActiveConversation { .. }
-            | BlocklistAIHistoryEvent::StartedNewConversation { .. } => {
+            | BlocklistAIHistoryEvent::StartedNewConversation { .. }
+            // A remote child's run-id linkage can land after
+            // StartedNewConversation; pill contents and badges keyed on run
+            // linkage must refresh when it does.
+            | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. } => {
                 this.ensure_mouse_states(ctx);
                 ctx.notify();
             }
@@ -568,16 +596,18 @@ impl OrchestrationPillBar {
         let Some(active_conversation) = history.conversation(&active_id) else {
             return;
         };
-        let orchestrator_id = parent_conversation_id(active_conversation, ctx).unwrap_or(active_id);
+        let anchor_id = drill_down_anchor_id(active_id, active_conversation, ctx);
         // Track only ids that are still rendered; retain step prevents leaking
         // handles for old orchestrators / children when switching views.
         let mut alive: HashSet<AIConversationId> = HashSet::new();
-        alive.insert(orchestrator_id);
-        if let Some(parent_id) = parent_conversation_id(active_conversation, ctx) {
-            alive.insert(parent_id);
-        }
-        for child_id in descendant_conversation_ids_in_spawn_order(history, orchestrator_id) {
-            alive.insert(child_id);
+        alive.insert(anchor_id);
+        alive.insert(active_id);
+        // The breadcrumb pills anchor on the tree root and the anchor's parent.
+        let (breadcrumb_root_id, breadcrumb_parent_id) = breadcrumb_ids(history, anchor_id);
+        alive.extend(breadcrumb_root_id);
+        alive.extend(breadcrumb_parent_id);
+        for child_id in history.child_conversation_ids_of(&anchor_id) {
+            alive.insert(*child_id);
         }
         let mut mouse_states = self.mouse_states.borrow_mut();
         let mut overflow_states = self.overflow_button_mouse_states.borrow_mut();
@@ -594,10 +624,9 @@ impl OrchestrationPillBar {
         // pane's tree, so pruning here would clobber pins in other panes.
     }
 
-    /// Builds the ordered pill list along with the orchestrator id it was
-    /// built for (used to key the shared horizontal scroll handle), or
-    /// `None` when nothing should render.
-    fn pill_specs(&self, app: &AppContext) -> Option<(AIConversationId, Vec<PillSpec>)> {
+    /// Builds the drill-down pill bar contents for the active conversation,
+    /// or `None` when nothing should render.
+    fn pill_specs(&self, app: &AppContext) -> Option<PillBarContents> {
         let active_id = self
             .agent_view_controller
             .as_ref(app)
@@ -606,39 +635,42 @@ impl OrchestrationPillBar {
         let history = BlocklistAIHistoryModel::as_ref(app);
         let active_conversation = history.conversation(&active_id)?;
 
-        // Anchor the bar on the orchestrator root regardless of which
-        // conversation is active so navigation between siblings is symmetric.
-        let orchestrator_id = parent_conversation_id(active_conversation, app).unwrap_or(active_id);
-        let orchestrator = history.conversation(&orchestrator_id)?;
+        let anchor_id = drill_down_anchor_id(active_id, active_conversation, app);
+        let anchor = history.conversation(&anchor_id)?;
 
-        // Use the shared canonical pill ordering so the visible row and
-        // keyboard navigation cannot drift.
-        let children: Vec<_> = descendant_conversations_in_pill_order(history, orchestrator_id)
+        // Per-level ordering is shared with keyboard navigation, but the two
+        // consume it differently: cycling walks the whole tree while the bar
+        // renders only the anchor's DIRECT children — deeper levels are
+        // reached by drilling into a group pill, and the bar follows the
+        // keyboard selection by re-anchoring (`drill_down_anchor_id`).
+        let children: Vec<_> = child_conversations_in_pill_order(history, anchor_id)
             .into_iter()
             .filter_map(|descendant| history.conversation(&descendant.conversation_id))
             .collect();
 
-        // Nothing to show if the orchestrator has no children yet.
+        // Nothing to show if the anchor has no children yet.
         if children.is_empty() {
             return None;
         }
+        let (breadcrumb_root_id, breadcrumb_parent_id) = breadcrumb_ids(history, anchor_id);
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
         let mut specs = Vec::with_capacity(1 + children.len());
 
-        // Orchestrator pill first; never pinned. Its badge aggregates the tree,
+        // Anchor pill first; never pinned. Its badge aggregates its subtree,
         // while child pills show per-child status.
         specs.push(PillSpec {
-            conversation_id: orchestrator_id,
-            label: orchestrator_label(orchestrator),
+            conversation_id: anchor_id,
+            label: orchestrator_label(anchor),
             avatar_color: theme.ansi_fg_cyan(),
             avatar_glyph: AvatarGlyph::Icon(Icon::Agent),
-            status: Some(aggregated_orchestrator_status(history, orchestrator_id)),
-            is_selected: orchestrator_id == active_id,
+            status: Some(aggregated_orchestrator_status(history, anchor_id)),
+            is_selected: anchor_id == active_id,
             kind: PillKind::Orchestrator,
             pin_state: PillPinState::Unpinned,
-            is_remote_child: false,
+            is_remote_child: anchor.is_remote_child(),
+            subtree_rollup: None,
         });
 
         // Stamp each child's current pin state; partitioning happens at render.
@@ -653,6 +685,9 @@ impl OrchestrationPillBar {
             } else {
                 PillPinState::Unpinned
             };
+            // A child with children of its own renders as a "group" pill:
+            // its own status on the avatar plus a rolled-up subtree badge.
+            let subtree_rollup = loaded_subtree_rollup(history, child.id());
             specs.push(PillSpec {
                 conversation_id: child.id(),
                 label: name.to_string(),
@@ -663,10 +698,52 @@ impl OrchestrationPillBar {
                 kind: PillKind::Child,
                 pin_state,
                 is_remote_child: child.is_remote_child(),
+                subtree_rollup,
             });
         }
 
-        Some((orchestrator_id, specs))
+        Some(PillBarContents {
+            anchor_id,
+            breadcrumb_root_id,
+            breadcrumb_parent_id,
+            specs,
+        })
+    }
+}
+
+/// Resolves the breadcrumb targets shown while the bar is drilled below the
+/// tree root: the root itself, plus the anchor's direct parent when that
+/// parent is a distinct intermediate level (anchor 2+ levels below the
+/// root). When the parent IS the root only the root breadcrumb is returned,
+/// so the bar never shows duplicate affordances.
+fn breadcrumb_ids(
+    history: &BlocklistAIHistoryModel,
+    anchor_id: AIConversationId,
+) -> (Option<AIConversationId>, Option<AIConversationId>) {
+    let root_id = orchestration_root_conversation_id(history, anchor_id)
+        .filter(|root_id| *root_id != anchor_id);
+    let parent_id = history
+        .conversation(&anchor_id)
+        .and_then(|anchor| history.resolved_parent_conversation_id_for_conversation(anchor))
+        .filter(|parent_id| Some(*parent_id) != root_id && *parent_id != anchor_id);
+    (root_id, parent_id)
+}
+
+/// Resolves which conversation's level the drill-down bar shows for
+/// `active_id`: a conversation with children anchors its own level, while a
+/// leaf anchors its parent's level so sibling navigation stays symmetric. At
+/// orchestration depth 1 this matches the historical root-anchored behavior
+/// exactly.
+fn drill_down_anchor_id(
+    active_id: AIConversationId,
+    active_conversation: &AIConversation,
+    app: &AppContext,
+) -> AIConversationId {
+    let history = BlocklistAIHistoryModel::as_ref(app);
+    if history.child_conversation_ids_of(&active_id).is_empty() {
+        parent_conversation_id(active_conversation, app).unwrap_or(active_id)
+    } else {
+        active_id
     }
 }
 
@@ -720,29 +797,34 @@ fn orchestrator_label(orchestrator: &AIConversation) -> String {
 }
 
 impl OrchestrationPillBar {
-    /// Resolves the source-conversation / total-pills / total-pinned
-    /// triple used to enrich every `PillBarInteraction` event. Returns
-    /// `None` when there is no active orchestration tree to attribute
-    /// the interaction to.
+    /// Resolves the anchor / root / total-pills / total-pinned tuple used
+    /// to enrich every `PillBarInteraction` event. The anchor becomes the
+    /// payload's `source_conversation_id`; the tree root rides alongside
+    /// so drilled-down interactions stay attributable to their tree.
+    /// Returns `None` when there is no active orchestration tree to
+    /// attribute the interaction to.
     fn pill_bar_telemetry_context(
         &self,
         app: &AppContext,
-    ) -> Option<(AIConversationId, usize, usize)> {
-        let (orchestrator_id, specs) = self.pill_specs(app)?;
-        let total_pills = specs.len();
-        let total_pinned = specs
+    ) -> Option<(AIConversationId, AIConversationId, usize, usize)> {
+        let contents = self.pill_specs(app)?;
+        let total_pills = contents.specs.len();
+        let total_pinned = contents
+            .specs
             .iter()
             .filter(|spec| matches!(spec.pin_state, PillPinState::Pinned))
             .count();
-        Some((orchestrator_id, total_pills, total_pinned))
+        let root_id = contents.breadcrumb_root_id.unwrap_or(contents.anchor_id);
+        Some((contents.anchor_id, root_id, total_pills, total_pinned))
     }
 
     /// Pill kind for `target_id` in the current pill specs. Defaults
     /// to `Child` if the id is no longer in the bar.
     fn pill_kind_for(&self, target_id: AIConversationId, app: &AppContext) -> PillBarPillKind {
         self.pill_specs(app)
-            .and_then(|(_, specs)| {
-                specs
+            .and_then(|contents| {
+                contents
+                    .specs
                     .into_iter()
                     .find(|spec| spec.conversation_id == target_id)
                     .map(|spec| spec.kind.telemetry_kind())
@@ -794,7 +876,7 @@ impl OrchestrationPillBar {
         switch_outcome: Option<PillSwitchOutcome>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let Some((source_conversation_id, total_pills, total_pinned)) =
+        let Some((source_conversation_id, root_conversation_id, total_pills, total_pinned)) =
             self.pill_bar_telemetry_context(ctx)
         else {
             return;
@@ -806,6 +888,7 @@ impl OrchestrationPillBar {
                 total_pills,
                 total_pinned,
                 source_conversation_id,
+                root_conversation_id,
                 target_conversation_id,
                 switch_outcome,
             }),
@@ -1003,6 +1086,7 @@ impl TypedActionView for OrchestrationPillBar {
             OrchestrationPillBarAction::PillClicked {
                 conversation_id,
                 pill_kind,
+                is_breadcrumb,
             } => {
                 let id = *conversation_id;
                 let self_terminal_view_id =
@@ -1020,7 +1104,12 @@ impl TypedActionView for OrchestrationPillBar {
                 } else {
                     PillSwitchOutcome::SwitchedInPlace
                 };
-                self.emit_pill_switch(pill_kind.telemetry_kind(), id, outcome, ctx);
+                let telemetry_kind = if *is_breadcrumb {
+                    PillBarPillKind::Breadcrumb
+                } else {
+                    pill_kind.telemetry_kind()
+                };
+                self.emit_pill_switch(telemetry_kind, id, outcome, ctx);
                 if is_open_elsewhere {
                     self.navigate_to_conversation_pane(id, ctx);
                 } else {
@@ -1051,7 +1140,13 @@ impl View for OrchestrationPillBar {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        let Some((orchestrator_id, specs)) = self.pill_specs(app) else {
+        let Some(PillBarContents {
+            anchor_id,
+            breadcrumb_root_id,
+            breadcrumb_parent_id,
+            specs,
+        }) = self.pill_specs(app)
+        else {
             return Empty::new().finish();
         };
 
@@ -1088,6 +1183,20 @@ impl View for OrchestrationPillBar {
         let mut orchestrator_pill: Option<Box<dyn Element>> = None;
         let mut pinned_pills: Vec<Box<dyn Element>> = Vec::new();
         let mut unpinned_pills: Vec<Box<dyn Element>> = Vec::new();
+        // Leading breadcrumbs while drilled into a sub-level of the
+        // orchestration tree: the root first, then the anchor's direct
+        // parent when it is an intermediate level of its own.
+        let breadcrumb_pills: Vec<Box<dyn Element>> = [
+            breadcrumb_root_id.map(|root_id| (root_id, PillKind::Orchestrator)),
+            breadcrumb_parent_id.map(|parent_id| (parent_id, PillKind::Child)),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|(target_id, pill_kind)| {
+            let mouse_state = mouse_states.entry(target_id).or_default().clone();
+            render_breadcrumb_pill(target_id, pill_kind, mouse_state, app)
+        })
+        .collect();
         for spec in specs {
             let mouse_state = mouse_states
                 .entry(spec.conversation_id)
@@ -1131,6 +1240,9 @@ impl View for OrchestrationPillBar {
         drop(overflow_states);
         drop(pin_states);
 
+        for pill in breadcrumb_pills {
+            row.add_child(pill);
+        }
         if let Some(pill) = orchestrator_pill {
             row.add_child(pill);
         }
@@ -1153,7 +1265,7 @@ impl View for OrchestrationPillBar {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let horizontal_scroll_state =
-            OrchestrationPillBarModel::as_ref(app).horizontal_scroll_state_for(orchestrator_id);
+            OrchestrationPillBarModel::as_ref(app).horizontal_scroll_state_for(anchor_id);
         let scrollable = NewScrollable::horizontal(
             SingleAxisConfig::Clipped {
                 handle: horizontal_scroll_state,
@@ -1652,6 +1764,141 @@ fn navigation_action_for_pill(kind: PillKind, conversation_id: AIConversationId)
     }
 }
 
+/// Leading breadcrumb pill shown while the bar is drilled into a sub-level
+/// of the orchestration tree. Clicking it navigates to `target_id` — the
+/// tree root (`PillKind::Orchestrator`) or an intermediate parent
+/// (`PillKind::Child`, revealed via its hidden pane like any child pill).
+fn render_breadcrumb_pill(
+    target_id: AIConversationId,
+    pill_kind: PillKind,
+    mouse_state: MouseStateHandle,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let pill_rest_bg = theme
+        .background()
+        .blend(&internal_colors::fg_overlay_2(theme))
+        .into_solid();
+    let pill_hover_bg = theme
+        .background()
+        .blend(&internal_colors::fg_overlay_3(theme))
+        .into_solid();
+    let text_color = internal_colors::fg_overlay_6(theme).into_solid();
+    let label = BlocklistAIHistoryModel::as_ref(app)
+        .conversation(&target_id)
+        .map(|conversation| match pill_kind {
+            PillKind::Orchestrator => orchestrator_label(conversation),
+            PillKind::Child => conversation
+                .agent_name()
+                .filter(|name| !name.is_empty())
+                .unwrap_or("Agent")
+                .to_string(),
+        })
+        .unwrap_or_else(|| "Orchestrator".to_string());
+
+    Hoverable::new(mouse_state, move |hover_state| {
+        let background = if hover_state.is_hovered() || hover_state.is_clicked() {
+            pill_hover_bg
+        } else {
+            pill_rest_bg
+        };
+        let chevron =
+            ConstrainedBox::new(Icon::ChevronLeft.to_warpui_icon(text_color.into()).finish())
+                .with_width(PILL_ICON_SIZE)
+                .with_height(PILL_ICON_SIZE)
+                .finish();
+        let label_text = Text::new(
+            label,
+            appearance.ui_font_family(),
+            appearance.monospace_font_size() - 1.,
+        )
+        .with_color(text_color)
+        .soft_wrap(false)
+        .with_clip(ClipConfig::ellipsis())
+        .finish();
+        let row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(PILL_CONTENT_GAP)
+            .with_child(chevron)
+            .with_child(
+                ConstrainedBox::new(label_text)
+                    .with_max_width(PILL_LABEL_MAX_WIDTH)
+                    .finish(),
+            )
+            .finish();
+        ConstrainedBox::new(
+            Container::new(row)
+                .with_padding_left(PILL_HORIZONTAL_PADDING_LEFT)
+                .with_padding_right(PILL_HORIZONTAL_PADDING_RIGHT)
+                .with_background_color(background)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(PILL_RADIUS)))
+                .finish(),
+        )
+        .with_height(PILL_HEIGHT)
+        .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _app, _| {
+        ctx.dispatch_typed_action(OrchestrationPillBarAction::PillClicked {
+            conversation_id: target_id,
+            pill_kind,
+            is_breadcrumb: true,
+        });
+    })
+    .finish()
+}
+
+/// Horizontal padding inside the subtree badge around its count text.
+const SUBTREE_BADGE_HORIZONTAL_PADDING: f32 = 5.;
+
+/// Fixed slot width for a group pill's subtree badge: fits the count text
+/// and is never narrower than the trailing slice the hover 3-dot overlay
+/// occupies, so swapping the badge out for the dots never resizes the pill.
+fn subtree_rollup_badge_slot_width(
+    rollup: &LoadedSubtreeRollup,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> f32 {
+    let text_width = pill_label_width(
+        &rollup.descendant_count.to_string(),
+        appearance.monospace_font_size() - 2.,
+        Properties::default(),
+        appearance,
+        app,
+    );
+    (text_width + 2. * SUBTREE_BADGE_HORIZONTAL_PADDING).max(OVERFLOW_BUTTON_LABEL_RESERVE)
+}
+
+/// Compact trailing badge on a "group" pill: the number of agents in the
+/// child's subtree, tinted with the subtree's aggregated status color.
+fn render_subtree_rollup_badge(
+    rollup: &LoadedSubtreeRollup,
+    theme: &WarpTheme,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let (_, color) = rollup
+        .status
+        .status_icon_and_color(theme, StatusColorStyle::Standard);
+    let text = Text::new(
+        rollup.descendant_count.to_string(),
+        appearance.ui_font_family(),
+        appearance.monospace_font_size() - 2.,
+    )
+    .with_color(color)
+    .soft_wrap(false)
+    .finish();
+    Container::new(text)
+        .with_padding_left(SUBTREE_BADGE_HORIZONTAL_PADDING)
+        .with_padding_right(SUBTREE_BADGE_HORIZONTAL_PADDING)
+        .with_padding_top(1.)
+        .with_padding_bottom(1.)
+        .with_background_color(coloru_with_opacity(color, 10))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(PILL_RADIUS)))
+        .finish()
+}
+
 /// 1px vertical divider between the pinned and unpinned sections.
 fn render_pinned_divider(app: &AppContext) -> Box<dyn Element> {
     const DIVIDER_HEIGHT: f32 = 16.;
@@ -1736,6 +1983,7 @@ fn render_pill(
     let avatar_glyph = spec.avatar_glyph;
     let status = spec.status;
     let is_remote_child = spec.is_remote_child;
+    let subtree_rollup = spec.subtree_rollup;
 
     // Per Figma: fg_overlay_2 at rest, fg_overlay_3 on hover, composed over
     // the theme background. Pre-blend to a solid so the avatar cutout ring
@@ -1778,9 +2026,18 @@ fn render_pill(
         };
         // At rest, labels use the full budget. When dots are visible, keep
         // the rest-state slot width but reserve its trailing slice so the
-        // overlay does not cover glyphs or shift sibling pills.
-        let hover_label_slot_width = show_dots.then(|| {
-            pill_label_width(&label, label_style, appearance, app).min(PILL_LABEL_MAX_WIDTH)
+        // overlay does not cover glyphs or shift sibling pills. Group pills
+        // skip the label reserve: their trailing badge slot (below) already
+        // absorbs the overlay.
+        let hover_label_slot_width = (show_dots && subtree_rollup.is_none()).then(|| {
+            pill_label_width(
+                &label,
+                appearance.monospace_font_size() - 1.,
+                label_style,
+                appearance,
+                app,
+            )
+            .min(PILL_LABEL_MAX_WIDTH)
         });
 
         let label_text = Text::new(
@@ -1901,13 +2158,30 @@ fn render_pill(
         // determined by the label alone, and the dots can visually clip
         // the trailing edge of the text when shown without making the
         // pill itself wider or shifting siblings.
-        let row = Flex::row()
+        let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(leading_label_spacing)
             .with_child(leading)
-            .with_child(label_element)
-            .finish();
+            .with_child(label_element);
+        // Group pills append a rolled-up subtree badge after the label. The
+        // badge occupies a fixed-width slot; while the 3-dot overlay is
+        // shown the slot renders empty so the dots never overlap the badge,
+        // and the pill's width stays constant across the swap.
+        if let Some(rollup) = &subtree_rollup {
+            let slot_width = subtree_rollup_badge_slot_width(rollup, appearance, app);
+            let slot_content: Box<dyn Element> = if show_dots {
+                Empty::new().finish()
+            } else {
+                render_subtree_rollup_badge(rollup, theme, appearance)
+            };
+            row = row.with_child(
+                ConstrainedBox::new(Align::new(slot_content).finish())
+                    .with_width(slot_width)
+                    .finish(),
+            );
+        }
+        let row = row.finish();
 
         // Constrain pill to a fixed height so the half-stadium corner radius
         // renders as a clean continuous shape rather than awkwardly clamping.
@@ -1987,6 +2261,7 @@ fn render_pill(
         ctx.dispatch_typed_action(OrchestrationPillBarAction::PillClicked {
             conversation_id,
             pill_kind: kind,
+            is_breadcrumb: false,
         });
     })
     .on_right_click(move |ctx, _app, _| {

@@ -236,7 +236,8 @@ impl<P: BackingView> PaneView<P> {
         match event {
             PaneConfigurationEvent::ShowAccentBorderUpdated
             | PaneConfigurationEvent::DimEvenIfFocusedUpdated => ctx.notify(),
-            PaneConfigurationEvent::RefreshPaneHeaderOverflowMenuItems => {
+            PaneConfigurationEvent::RefreshPaneHeaderOverflowMenuItems
+            | PaneConfigurationEvent::SharedSessionLinkChanged => {
                 let child = self.child(ctx);
                 let items = child.read(ctx, |view, ctx| view.pane_header_overflow_menu_items(ctx));
                 self.header.update(ctx, |header, ctx| {
@@ -246,6 +247,11 @@ impl<P: BackingView> PaneView<P> {
                 self.header.update(ctx, |header, ctx| {
                     header.set_toolbelt_buttons(buttons, ctx);
                 });
+                if matches!(event, PaneConfigurationEvent::SharedSessionLinkChanged) {
+                    self.header.update(ctx, |header, ctx| {
+                        header.refresh_shared_session_link(ctx);
+                    });
+                }
                 ctx.notify();
             }
             PaneConfigurationEvent::ShareableObjectChanged(object) => {

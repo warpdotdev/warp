@@ -46,11 +46,13 @@ pub mod onboarding;
 pub(crate) mod orchestration;
 pub(crate) mod persisted_workspace;
 pub(crate) mod predict;
+pub(crate) mod pricing_promotion;
 #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
 pub(crate) mod remote_agent_context;
 pub(crate) mod remote_context_files;
 pub mod request_usage_model;
 pub(crate) mod restored_conversations;
+pub(crate) mod runner_display;
 pub(crate) mod skills;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod tui_api_keys;

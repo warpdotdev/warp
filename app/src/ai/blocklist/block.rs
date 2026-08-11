@@ -989,6 +989,11 @@ pub struct AIBlock {
     /// requested actions and requested commands are completed or cancelled.
     finish_reason: Option<FinishReason>,
 
+    /// `true` while agent-view Cmd-Up/Cmd-Down transcript navigation targets this block's user
+    /// query. Renders a navigation ring around the query row so the stop stays visibly
+    /// identifiable even when the viewport doesn't move.
+    is_agent_transcript_navigation_target: bool,
+
     directory_context: DirectoryContext,
     view_id: EntityId,
 
@@ -1506,6 +1511,7 @@ impl AIBlock {
             num_attached_context_blocks,
             has_attached_context_selected_text,
             finish_reason: None,
+            is_agent_transcript_navigation_target: false,
             directory_context: DirectoryContext { pwd, home_dir },
             view_id: ctx.view_id(),
             detected_links_state,
@@ -4478,6 +4484,23 @@ impl AIBlock {
             .inputs_to_render(app)
             .iter()
             .any(|input| input.display_query().is_some())
+    }
+
+    /// `true` while agent-view transcript navigation targets this block's user query.
+    pub fn is_agent_transcript_navigation_target(&self) -> bool {
+        self.is_agent_transcript_navigation_target
+    }
+
+    /// Flags or unflags this block as the transcript navigation target.
+    pub fn set_agent_transcript_navigation_target(
+        &mut self,
+        is_target: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.is_agent_transcript_navigation_target != is_target {
+            self.is_agent_transcript_navigation_target = is_target;
+            ctx.notify();
+        }
     }
 
     /// `true` if the AI block is "finished".

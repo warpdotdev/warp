@@ -215,6 +215,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(UndoCloseStack::new);
     app.add_singleton_model(|_| IgnoredSuggestionsModel::new(vec![]));
     app.add_singleton_model(|_| PricingInfoModel::new());
+    app.add_singleton_model(crate::ai::pricing_promotion::PricingPromotionState::new);
     app.add_singleton_model(AIDocumentModel::new);
     app.add_singleton_model(|_| History::new(vec![]));
     app.add_singleton_model(|_| GitHubAuthNotifier::new());
@@ -1403,6 +1404,91 @@ fn test_ambient_transcript_restore_uses_generic_viewer_when_handoff_disabled() {
             assert_eq!(
                 model.conversation_transcript_viewer_status(),
                 Some(&ConversationTranscriptViewerStatus::ViewingAmbientConversation(task_id))
+            );
+        });
+    });
+}
+
+/// REMOTE-2208: attaching a live execution session to a read-only conversation transcript
+/// viewer is impossible (it is backed by a mock manager with no network), so the attach must
+/// report failure. Reporting success left the caller focused on a transcript with no input box
+/// — the "session opens but the terminal is not interactive" symptom — instead of falling back
+/// to opening a fresh, writable shared-session tab.
+#[test]
+fn attach_execution_session_refuses_read_only_transcript_viewer_pane() {
+    let _handoff = FeatureFlag::HandoffCloudCloud.override_enabled(false);
+    let _setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        let task_id = new_ambient_agent_task_id();
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.load_data_into_conversation_transcript_viewer(
+                cloud_conversation_with_ambient_task(task_id),
+                Some(task_id),
+                ctx,
+            );
+        });
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let terminal_view = panes
+                .active_session_view(ctx)
+                .expect("transcript viewer should have an active terminal view");
+            let pane_id = panes
+                .find_pane_id_for_terminal_view(terminal_view.id(), ctx)
+                .expect("transcript viewer pane should be found");
+            assert!(
+                terminal_view.as_ref(ctx).model.lock().is_read_only(),
+                "precondition: the transcript viewer pane is read-only",
+            );
+
+            assert!(
+                !panes.attach_execution_session_to_ambient_pane(pane_id, SessionId::new(), ctx),
+                "a read-only transcript viewer must not report a successful live-session attach",
+            );
+        });
+    });
+}
+
+/// REMOTE-2208: the read-only state is cleared as part of reattaching, so it must only be
+/// cleared when a join actually starts. A caller that gets `false` opens a fresh pane instead,
+/// and clearing eagerly would leave this pane looking writable while attached to nothing.
+#[test]
+fn attach_execution_session_keeps_read_only_state_when_the_attach_fails() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let terminal_view = panes
+                .active_session_view(ctx)
+                .expect("mock pane group should have an active terminal view");
+            let pane_id = panes
+                .find_pane_id_for_terminal_view(terminal_view.id(), ctx)
+                .expect("active terminal view should have a pane");
+
+            // A plain terminal pane's manager is not a shared-session viewer, so the attach below
+            // fails at the downcast — the same shape as a manager that is already connecting.
+            terminal_view.update(ctx, |view, _| {
+                view.model
+                    .lock()
+                    .set_shared_session_status(SharedSessionStatus::FinishedViewer);
+            });
+            assert!(
+                terminal_view.as_ref(ctx).model.lock().is_read_only(),
+                "precondition: the pane is in a finished, read-only state",
+            );
+
+            assert!(
+                !panes.attach_execution_session_to_ambient_pane(pane_id, SessionId::new(), ctx),
+                "precondition: this attach cannot succeed",
+            );
+            assert!(
+                terminal_view.as_ref(ctx).model.lock().is_read_only(),
+                "a failed attach must leave the pane read-only so the caller's fresh-tab fallback \
+                 is not shadowed by a pane that looks writable but joined nothing",
             );
         });
     });
@@ -3349,4 +3435,91 @@ fn decide_remote_child_hydration_empty_token_falls_back() {
             "empty/whitespace token={empty_token:?} must fall through to Fallback",
         );
     }
+}
+
+/// APP-5243: closing a file pane only hides it while undo-close is available, and the same view is
+/// reattached without reopening its file. Releasing the file on close would therefore leave a
+/// restored pane rendering content that can never update again. The file is released only once the
+/// pane is permanently discarded.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_undo_close_keeps_a_file_pane_watching_its_file() {
+    use warp_files::FileModel;
+
+    let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(FileModel::new);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("notes.md");
+        std::fs::write(&path, "# before").expect("write file");
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let pane = FilePane::new(
+                Some(LocalOrRemotePath::Local(path.clone())),
+                None,
+                None,
+                ctx,
+            );
+            panes.add_pane_with_direction(Direction::Right, pane, true, ctx);
+        });
+
+        let (file_pane_id, file_view) = pane_group.read(&app, |panes, ctx| {
+            panes
+                .file_notebook_panes(ctx)
+                .next()
+                .expect("the file pane should exist")
+        });
+
+        // Let the read settle so the pane is fully loaded and watching.
+        let loaded = file_view.update(&mut app, |view, ctx| {
+            let file_id = view.file_id_for_test().expect("the file should be open");
+            let future_handle = FileModel::as_ref(ctx)
+                .get_future_handle(file_id)
+                .expect("Loading future should be present");
+            ctx.await_spawned_future(future_handle.future_id())
+        });
+        loaded.await;
+
+        // Close the way the pane header's close button does, which is the path that reaches
+        // `BackingView::close` before the pane group hides the pane.
+        file_view.update(&mut app, BackingView::close);
+        pane_group.update(&mut app, |panes, ctx| {
+            assert!(
+                panes.is_pane_hidden_for_close(file_pane_id),
+                "closing should hide the pane for undo rather than discard it"
+            );
+            assert!(
+                panes.restore_closed_pane(file_pane_id, ctx),
+                "the closed pane should be restorable"
+            );
+        });
+
+        app.read(|ctx| {
+            let file_id = file_view
+                .as_ref(ctx)
+                .file_id_for_test()
+                .expect("a restored pane should still hold its file open");
+            assert!(
+                FileModel::as_ref(ctx).file_path(file_id).is_some(),
+                "a restored pane should still be tracked by the file model"
+            );
+        });
+
+        // Permanently discarding the pane does release it.
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.close_pane(file_pane_id, ctx);
+            panes.cleanup_closed_pane(file_pane_id, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                file_view.as_ref(ctx).file_id_for_test().is_none(),
+                "a permanently discarded pane should release its file"
+            );
+        });
+    });
 }

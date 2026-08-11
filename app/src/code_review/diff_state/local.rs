@@ -52,7 +52,7 @@ cfg_if::cfg_if! {
         use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
         use repo_metadata::{
             repository::{RepositorySubscriber, SubscriberId},
-            RepoMetadataError, Repository, RepositoryUpdate,
+            RepoMetadataError, Repository, RepositoryUpdate, RepositoryWatchMode,
         };
         use async_channel::Sender;
         use warpui::ModelHandle;
@@ -976,6 +976,7 @@ impl LocalDiffStateModel {
             async_channel::unbounded();
         let start = new_repository.update(ctx, |new_repository, ctx| {
             new_repository.start_watching(
+                RepositoryWatchMode::GitRepository,
                 Box::new(LocalDiffStateModelRepositorySubscriber {
                     repository_update_tx,
                 }),
@@ -2369,6 +2370,17 @@ impl LocalDiffStateModel {
                 // no baseline so no editor is constructed for them.
                 repo_path.join(file_path).is_file().then(String::new)
             }
+            GitFileStatus::Renamed { old_path } => {
+                // The file only exists under its new path in the working tree; at HEAD it still
+                // lives at the old path. Mirror the merge-base path (see `file_diff_for_path`)
+                // and read the baseline content from `old_path`.
+                log::debug!(
+                    "[GIT OPERATION] local.rs get_file_content_at_head git show HEAD:{old_path}"
+                );
+                run_git_command(repo_path, &["show", &format!("HEAD:{old_path}")])
+                    .await
+                    .ok()
+            }
             _ => {
                 log::debug!(
                     "[GIT OPERATION] local.rs get_file_content_at_head git show HEAD:{file_path}"
@@ -2488,15 +2500,22 @@ impl LocalDiffStateModel {
                         file_path,
                     ]
                 }
-                GitFileStatus::Renamed { .. } => {
-                    // For renamed files - compare against index
+                GitFileStatus::Renamed { old_path } => {
+                    // Compare the working tree directly against HEAD, passing both the
+                    // old and new paths (mirroring the merge-base branch above). This
+                    // covers every staged/unstaged combination of the rename and any
+                    // content edit: comparing against the index alone (as before) produced
+                    // an empty diff whenever the rename and edit were both staged, since
+                    // the working tree then matched the index exactly.
                     vec![
                         "diff",
                         "--no-ext-diff",
                         "--patch-with-raw",
                         "-z",
                         "--no-color",
+                        "HEAD",
                         "--",
+                        old_path,
                         file_path,
                     ]
                 }

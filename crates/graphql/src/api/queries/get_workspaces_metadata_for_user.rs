@@ -122,6 +122,7 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
                 usageSource
                 creditsUsed
                 costCents
+                attributedTeamUid
               }
             }
           }
@@ -203,6 +204,7 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
         overages {
           pricePerRequestUsdCents
         }
+        promotionMessage
       }
     }
   }

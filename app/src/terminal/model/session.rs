@@ -1726,7 +1726,7 @@ pub fn get_local_hostname() -> Result<String> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 pub mod testing {
     use super::command_executor::testing::TestCommandExecutor;
     use super::*;

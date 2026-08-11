@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -19,6 +19,102 @@ fn kill_all_processes_in_process_group(pid: u32) -> Result<(), nix::Error> {
     use nix::unistd::Pid;
     // Killing a negative PID kills all processes in this process group
     kill(Pid::from_raw(-(pid as i32)), Signal::SIGKILL)
+}
+#[cfg(unix)]
+fn terminate_process_group(process_group_id: u32) {
+    if let Err(error) = kill_all_processes_in_process_group(process_group_id) {
+        match error {
+            nix::errno::Errno::ESRCH | nix::errno::Errno::EPERM => {}
+            _ => log::warn!("Failed to kill process group {process_group_id}: {error}"),
+        }
+    }
+}
+#[cfg(not(unix))]
+fn terminate_process_group(_: u32) {}
+
+#[derive(Debug, Default)]
+struct ActiveProcessGroups {
+    process_groups: Mutex<HashMap<u32, Arc<ActiveProcessGroup>>>,
+}
+
+#[derive(Debug)]
+struct ActiveProcessGroup {
+    id: u32,
+}
+
+impl ActiveProcessGroups {
+    fn register(&self, process_group_id: u32) -> Arc<ActiveProcessGroup> {
+        let process_group = Arc::new(ActiveProcessGroup {
+            id: process_group_id,
+        });
+        self.process_groups
+            .lock()
+            .insert(process_group_id, process_group.clone());
+        process_group
+    }
+
+    fn remove(&self, process_group: &Arc<ActiveProcessGroup>) -> bool {
+        let mut process_groups = self.process_groups.lock();
+        if !process_groups
+            .get(&process_group.id)
+            .is_some_and(|active| Arc::ptr_eq(active, process_group))
+        {
+            return false;
+        }
+        process_groups.remove(&process_group.id);
+        true
+    }
+
+    fn complete(&self, process_group: &Arc<ActiveProcessGroup>) {
+        self.remove(process_group);
+    }
+
+    fn cancel(&self, process_group: &Arc<ActiveProcessGroup>) {
+        if self.remove(process_group) {
+            terminate_process_group(process_group.id);
+        }
+    }
+
+    fn cancel_all(&self) {
+        let process_groups = self
+            .process_groups
+            .lock()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for process_group in process_groups {
+            self.cancel(&process_group);
+        }
+    }
+}
+
+struct SpawnedChildCleanup {
+    process_group: Option<Arc<ActiveProcessGroup>>,
+    active_process_groups: Arc<ActiveProcessGroups>,
+}
+
+impl SpawnedChildCleanup {
+    fn new(process_group_id: u32, active_process_groups: Arc<ActiveProcessGroups>) -> Self {
+        let process_group = active_process_groups.register(process_group_id);
+        Self {
+            process_group: Some(process_group),
+            active_process_groups,
+        }
+    }
+
+    fn complete(mut self) {
+        if let Some(process_group) = self.process_group.take() {
+            self.active_process_groups.complete(&process_group);
+        }
+    }
+}
+
+impl Drop for SpawnedChildCleanup {
+    fn drop(&mut self) {
+        if let Some(process_group) = self.process_group.take() {
+            self.active_process_groups.cancel(&process_group);
+        }
+    }
 }
 
 enum CommandBuilder<'a> {
@@ -62,6 +158,10 @@ impl CommandBuilder<'_> {
     }
 }
 
+#[cfg(test)]
+#[path = "local_command_executor_tests.rs"]
+mod tests;
+
 /// `CommandExecutor` implementation that executes the given `command` in a forked subshell process
 /// where the current working directory is set to `current_dir_path` and $PATH is set
 /// according to environment_variables. This is typically used to run generator commands for local sessions.
@@ -70,7 +170,7 @@ pub struct LocalCommandExecutor {
     local_shell_path: Option<PathBuf>,
     shell_type: ShellType,
 
-    spawned_children_pids: Arc<Mutex<HashSet<u32>>>,
+    active_process_groups: Arc<ActiveProcessGroups>,
 }
 
 impl LocalCommandExecutor {
@@ -78,7 +178,7 @@ impl LocalCommandExecutor {
         Self {
             local_shell_path,
             shell_type,
-            spawned_children_pids: Arc::new(Mutex::new(HashSet::new())),
+            active_process_groups: Arc::default(),
         }
     }
 
@@ -201,8 +301,8 @@ impl LocalCommandExecutor {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        let child_pid = child.id();
-        self.spawned_children_pids.lock().insert(child_pid);
+        let child_cleanup =
+            SpawnedChildCleanup::new(child.id(), self.active_process_groups.clone());
 
         let output = child
             .output()
@@ -215,8 +315,9 @@ impl LocalCommandExecutor {
                 );
                 anyhow!(e)
             });
-
-        self.spawned_children_pids.lock().remove(&child_pid);
+        if output.is_ok() {
+            child_cleanup.complete();
+        }
         output
     }
 }
@@ -249,19 +350,6 @@ impl CommandExecutor for LocalCommandExecutor {
     }
 
     fn cancel_active_commands(&self) {
-        let spawned_children_pids = std::mem::take(&mut *self.spawned_children_pids.lock());
-        for _pid in spawned_children_pids {
-            // TODO(roland): handle for windows
-            #[cfg(unix)]
-            if let Err(e) = kill_all_processes_in_process_group(_pid) {
-                match e {
-                    // Ignore errors that occur when the process is no longer running,
-                    // or if we cannot kill all processes in the process group.  These
-                    // are expected to happen occasionally.
-                    nix::errno::Errno::ESRCH | nix::errno::Errno::EPERM => {}
-                    _ => log::warn!("Failed to kill process {_pid}: {e}"),
-                }
-            }
-        }
+        self.active_process_groups.cancel_all();
     }
 }

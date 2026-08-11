@@ -12,6 +12,7 @@ mod screenshot;
 mod seat;
 pub(crate) mod windows;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -43,8 +44,14 @@ pub struct Actor {
     /// character typed.
     keyboard_mapping: xproto::GetKeyboardMappingReply,
     /// The agent seat used for background window targets, created lazily by the first
-    /// window-targeted action and removed when the actor is dropped.
-    agent: Option<seat::AgentSeat>,
+    /// window-targeted action. Owner-tagged actors (the in-app session path) share the
+    /// session-scoped seat from [`seat::shared_for_session`], so input state that spans action
+    /// batches — most importantly a held button mid-drag — survives the per-batch actor
+    /// teardown. Owner-less actors (the developer CLI) hold a private seat removed when the
+    /// actor is dropped.
+    agent: Option<Arc<seat::AgentSeat>>,
+    /// The background-session owner (the client conversation id) keying the shared agent seat.
+    background_session_owner: Option<String>,
 }
 
 impl Actor {
@@ -76,6 +83,7 @@ impl Actor {
             screen_index,
             keyboard_mapping,
             agent: None,
+            background_session_owner: None,
         })
     }
 
@@ -86,6 +94,13 @@ impl Actor {
     fn screen(&self) -> &xproto::Screen {
         &self.conn.setup().roots[self.screen_index]
     }
+}
+
+/// Ends the background computer-use session owned by `owner`: removes the session's shared
+/// agent seat (and its on-screen cursor), implicitly releasing any input state — held buttons,
+/// the agent keyboard's focus — it still holds.
+pub fn end_background_session(owner: &str) {
+    seat::end_session(owner);
 }
 
 /// Probes whether the display supports the XInput2 device hierarchy required for background,
@@ -171,6 +186,10 @@ impl crate::Actor for Actor {
         Some(crate::Platform::LinuxX11)
     }
 
+    fn set_background_session_owner(&mut self, owner: Option<String>) {
+        self.background_session_owner = owner;
+    }
+
     async fn perform_actions(
         &mut self,
         actions: &[TargetedAction],
@@ -212,8 +231,14 @@ impl crate::Actor for Actor {
             }
         }
         if needs_agent_seat && self.agent.is_none() {
-            let agent_seat = seat::AgentSeat::new()
-                .map_err(|e| format!("Background window control is unavailable: {e}"))?;
+            // In-app sessions (owner-tagged) share the session's seat so a drag that spans
+            // batches keeps its button held; the owner-less CLI gets a private, actor-scoped
+            // seat.
+            let agent_seat = match &self.background_session_owner {
+                Some(owner) => seat::shared_for_session(owner),
+                None => seat::AgentSeat::new().map(Arc::new),
+            }
+            .map_err(|e| format!("Background window control is unavailable: {e}"))?;
             self.agent = Some(agent_seat);
         }
 
@@ -250,7 +275,7 @@ impl crate::Actor for Actor {
                         screen_mouse.focus_window_under_pointer()?;
                         screen_mouse.button_down(button)?;
                         last_mouse_position = Some(*at);
-                        record_down_move(
+                        record_positioned_event(
                             pointer_sink.as_ref(),
                             PointerEventKind::Down,
                             Some(*button),
@@ -266,7 +291,7 @@ impl crate::Actor for Actor {
                     Action::MouseMove { to } => {
                         screen_mouse.move_to(*to)?;
                         last_mouse_position = Some(*to);
-                        record_down_move(
+                        record_positioned_event(
                             pointer_sink.as_ref(),
                             PointerEventKind::Move,
                             None,
@@ -283,6 +308,14 @@ impl crate::Actor for Actor {
                         screen_mouse.move_to(*at)?;
                         screen_mouse.scroll(direction, distance)?;
                         last_mouse_position = Some(*at);
+                        record_positioned_event(
+                            pointer_sink.as_ref(),
+                            PointerEventKind::Scroll,
+                            None,
+                            target,
+                            *at,
+                            *at,
+                        );
                     }
                     Action::TypeText { text } => {
                         screen_keyboard.type_text(text)?;
@@ -316,7 +349,7 @@ impl crate::Actor for Actor {
                             agent_mouse.move_to(at)?;
                             agent_mouse.button_down(button)?;
                             last_mouse_position = Some(at);
-                            record_down_move(
+                            record_positioned_event(
                                 pointer_sink.as_ref(),
                                 PointerEventKind::Down,
                                 Some(*button),
@@ -335,7 +368,7 @@ impl crate::Actor for Actor {
                                 windows::window_local_to_root(&self.conn, root, window_id, *to)?;
                             agent_mouse.move_to(to)?;
                             last_mouse_position = Some(to);
-                            record_down_move(
+                            record_positioned_event(
                                 pointer_sink.as_ref(),
                                 PointerEventKind::Move,
                                 None,
@@ -349,6 +382,7 @@ impl crate::Actor for Actor {
                             direction,
                             distance,
                         } => {
+                            let local = *at;
                             let at =
                                 windows::window_local_to_root(&self.conn, root, window_id, *at)?;
                             // Scroll events are delivered by pointer position just like button
@@ -357,6 +391,14 @@ impl crate::Actor for Actor {
                             agent_mouse.move_to(at)?;
                             agent_mouse.scroll(direction, distance)?;
                             last_mouse_position = Some(at);
+                            record_positioned_event(
+                                pointer_sink.as_ref(),
+                                PointerEventKind::Scroll,
+                                None,
+                                target,
+                                local,
+                                at,
+                            );
                         }
                         Action::TypeText { text } => {
                             agent_seat.focus_window(window_id)?;
@@ -452,13 +494,14 @@ fn resolve_capture_point(
     }
 }
 
-/// Records a resolved press/move into the pointer sink, updating the recording-
+/// Records a resolved coordinate-carrying pointer event (a press, move, or
+/// scroll position sample) into the pointer sink, updating the recording-
 /// scoped pointer session so a later release (which carries no coordinate) can
 /// reuse the last point — even when that release arrives in a later
-/// `UseComputer` call. A down or move whose surface does not match the
-/// recording clears the session so a following release is not recorded at a
-/// stale coordinate.
-fn record_down_move(
+/// `UseComputer` call. An event whose surface does not match the recording
+/// clears the session so a following release is not recorded at a stale
+/// coordinate.
+fn record_positioned_event(
     pointer_sink: Option<&PointerSink>,
     kind: PointerEventKind,
     button: Option<MouseButton>,
@@ -475,9 +518,9 @@ fn record_down_move(
             push_pointer_event(sink, point, kind, button);
         }
         None => {
-            // Any unmatched down or move (a surface that isn't the recorded
-            // one) invalidates the active pointer state, so a following release
-            // is not recorded at a stale in-frame coordinate.
+            // Any unmatched coordinate-carrying event (a surface that isn't
+            // the recorded one) invalidates the active pointer state, so a
+            // following release is not recorded at a stale in-frame coordinate.
             sink.session.clear();
         }
     }

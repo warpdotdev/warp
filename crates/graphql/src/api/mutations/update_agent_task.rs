@@ -24,6 +24,10 @@ pub struct UpdateAgentTaskInput {
     pub conversation_id: Option<cynic::Id>,
     #[cynic(skip_serializing_if = "Option::is_none")]
     pub status_message: Option<AgentTaskStatusMessageInput>,
+    /// Deadline of an open post-failure debug window. Sent on its own during a refresh, so it
+    /// must never be paired with a `status_message` that would overwrite the failure text.
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub session_debug_until: Option<crate::scalars::Time>,
 }
 
 #[derive(cynic::InputObject, Debug)]

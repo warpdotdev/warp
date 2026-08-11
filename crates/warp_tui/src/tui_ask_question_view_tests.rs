@@ -12,7 +12,7 @@ use warpui_core::{App, TuiView as _, TypedActionView as _, ViewHandle};
 
 use super::{TuiAskQuestionView, TuiAskQuestionViewAction};
 use crate::option_selector::TuiOptionSelectorAction;
-use crate::test_fixtures::add_test_action_model;
+use crate::test_fixtures::{TestHostView, add_test_action_model};
 
 fn question(
     id: &str,
@@ -112,6 +112,8 @@ fn queue_question_action(app: &mut App, view: &ViewHandle<TuiAskQuestionView>) {
     action_model.update(app, |model, ctx| {
         queue_tui_permission_action(model, action, conversation_id, ctx);
     });
+    let selector = app.read(|ctx| view.as_ref(ctx).selector.clone());
+    selector.update(app, |_, ctx| ctx.focus_self());
 }
 
 fn present_active_view(app: &mut App, view: &ViewHandle<TuiAskQuestionView>) {
@@ -206,6 +208,118 @@ fn focusing_an_active_question_delegates_to_the_selector() {
         view.update(&mut app, |_, ctx| ctx.focus_self());
 
         assert!(app.read(|ctx| selector.is_focused(ctx)));
+    });
+}
+
+#[test]
+fn question_blocking_transition_does_not_replace_existing_focus() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action_model = add_test_action_model(&mut app);
+        let conversation_id = AIConversationId::new();
+        let action_id = AIAgentActionId::from("background-question".to_owned());
+        let questions = vec![question(
+            "single",
+            "Which shell?",
+            false,
+            false,
+            &["zsh", "fish"],
+        )];
+        let action = AIAgentAction {
+            id: action_id.clone(),
+            task_id: TaskId::new("task".to_owned()),
+            action: AIAgentActionType::AskUserQuestion {
+                questions: questions.clone(),
+            },
+            requires_result: true,
+        };
+        let action_model_for_view = action_model.clone();
+        let (window_id, foreground, _question_view) = app.update(|ctx| {
+            let (window_id, foreground) = ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |_| TestHostView,
+            );
+            let question_view = ctx.add_typed_action_tui_view(window_id, move |ctx| {
+                TuiAskQuestionView::new(
+                    action_model_for_view,
+                    conversation_id,
+                    action_id,
+                    questions,
+                    ctx,
+                )
+            });
+            foreground.update(ctx, |_, ctx| ctx.focus_self());
+            (window_id, foreground, question_view)
+        });
+
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, conversation_id, ctx);
+        });
+
+        assert_eq!(
+            app.read(|ctx| ctx.focused_view_id(window_id)),
+            Some(foreground.id()),
+            "a blocked question in a background session must not replace foreground focus"
+        );
+    });
+}
+
+#[test]
+fn already_blocked_question_does_not_replace_existing_focus_when_materialized() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action_model = add_test_action_model(&mut app);
+        let conversation_id = AIConversationId::new();
+        let action_id = AIAgentActionId::from("materialized-background-question".to_owned());
+        let questions = vec![question(
+            "single",
+            "Which shell?",
+            false,
+            false,
+            &["zsh", "fish"],
+        )];
+        let action = AIAgentAction {
+            id: action_id.clone(),
+            task_id: TaskId::new("task".to_owned()),
+            action: AIAgentActionType::AskUserQuestion {
+                questions: questions.clone(),
+            },
+            requires_result: true,
+        };
+        let (window_id, foreground) = app.update(|ctx| {
+            ctx.add_tui_window(
+                AddWindowOptions {
+                    window_style: WindowStyle::NotStealFocus,
+                    ..Default::default()
+                },
+                |_| TestHostView,
+            )
+        });
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action, conversation_id, ctx);
+        });
+        let action_model_for_view = action_model.clone();
+        app.update(|ctx| {
+            foreground.update(ctx, |_, ctx| ctx.focus_self());
+            ctx.add_typed_action_tui_view(window_id, move |ctx| {
+                TuiAskQuestionView::new(
+                    action_model_for_view,
+                    conversation_id,
+                    action_id,
+                    questions,
+                    ctx,
+                )
+            });
+        });
+
+        assert_eq!(
+            app.read(|ctx| ctx.focused_view_id(window_id)),
+            Some(foreground.id()),
+            "materializing an already-blocked background question must preserve foreground focus"
+        );
     });
 }
 #[test]

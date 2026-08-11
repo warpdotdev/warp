@@ -402,13 +402,24 @@ impl SharingDialog {
             .is_some_and(|target| matches!(target, ShareableObject::Session { .. }))
     }
 
+    pub(crate) fn has_shared_session_link(&self, app: &AppContext) -> bool {
+        self.has_shared_session_target() && self.target_link(app).is_some()
+    }
+
     pub fn show_qr_code(&mut self, ctx: &mut ViewContext<Self>) {
-        if matches!(self.target, Some(ShareableObject::Session { .. })) {
+        if self.has_shared_session_link(ctx) {
             self.set_open_menu(OpenMenuState::None, ctx);
             self.mode = SharingDialogMode::QrCode;
             ctx.focus_self();
             ctx.notify();
         }
+    }
+
+    pub(crate) fn refresh_shared_session_link(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.mode == SharingDialogMode::QrCode && !self.has_shared_session_link(ctx) {
+            self.mode = SharingDialogMode::Access;
+        }
+        ctx.notify();
     }
 
     /// Returns `true` if the target is an AI conversation that cannot be shared.
@@ -2787,7 +2798,7 @@ impl SharingDialog {
             .on_click(|ctx, _, _| ctx.dispatch_typed_action(SharingDialogAction::CopyLink))
             .finish();
 
-        let qr_button = matches!(self.target, Some(ShareableObject::Session { .. })).then(|| {
+        let qr_button = self.has_shared_session_link(app).then(|| {
             self.render_footer_icon_button(
                 Icon::QrCode,
                 SharingDialogAction::ShowQrCode,
@@ -2849,9 +2860,9 @@ impl View for SharingDialog {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
-        let (contents, width) = if self.mode == SharingDialogMode::QrCode
-            && matches!(self.target, Some(ShareableObject::Session { .. }))
-        {
+        let should_render_qr_code =
+            self.mode == SharingDialogMode::QrCode && self.has_shared_session_link(app);
+        let (contents, width) = if should_render_qr_code {
             (self.render_qr_dialog(appearance, app), QR_DIALOG_WIDTH)
         } else {
             let mut contents = Flex::column();
@@ -3007,3 +3018,7 @@ impl TypedActionView for SharingDialog {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

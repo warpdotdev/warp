@@ -252,4 +252,108 @@ fn test_save_missing_directory() {
     });
 }
 
+/// APP-5243: a bare relative file name has an empty parent, which platform watchers resolve to
+/// Warp's own process directory. Watching (or worse, unwatching) that directory is never what the
+/// caller asked for, so such files get no individual watcher at all.
+#[test]
+fn test_watch_path_ignores_empty_parents() {
+    assert_eq!(FileModel::watch_path_for(Path::new("README.md")), None);
+    assert_eq!(FileModel::watch_path_for(Path::new("")), None);
+    assert_eq!(
+        FileModel::watch_path_for(Path::new("docs/README.md")),
+        Some(PathBuf::from("docs"))
+    );
+
+    let directory = std::env::temp_dir().join("app-5243");
+    assert_eq!(
+        FileModel::watch_path_for(&directory.join("README.md")),
+        Some(directory)
+    );
+}
+
+/// Waits for the read that `FileModel::open` spawned to settle, whichever way it resolves.
+async fn await_load(receiver: &Receiver<TestFileModelEvent>) {
+    match receiver.recv().await.expect("Could not receive the result") {
+        TestFileModelEvent::FileLoaded { .. } | TestFileModelEvent::FailedToLoad(_) => (),
+        event => panic!("Expected a load result, got {event:?}"),
+    }
+}
+
+/// Registration and unregistration must use the exact same path, whichever entry point registered
+/// the watcher. `register_file_path` used to watch the file itself while `unsubscribe` unwatched
+/// its parent directory, so teardown removed a watch that was never added and left the real one
+/// behind — the same asymmetry class as the crash this fixes.
+#[test]
+fn test_registration_and_unregistration_use_the_same_path() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        let files = app.add_singleton_model(FileModel::new);
+        let receiver = setup_event_channel(app, &files);
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("watched.md");
+        std::fs::write(&path, "# watched").expect("write file");
+
+        // `register_file_path` registers up front...
+        let registered_id =
+            files.update(app, |model, ctx| model.register_file_path(&path, true, ctx));
+
+        // ...and `open` registers once the read succeeds. Both must land on the same directory.
+        let opened_id = files.update(app, |model, ctx| model.open(&path, true, ctx));
+        await_load(&receiver).await;
+
+        files.read(app, |model, _| {
+            let stored_path = model.file_path(opened_id).expect("stored path");
+            let watch_path = FileModel::watch_path_for(&stored_path).expect("watch path");
+            assert_eq!(Some(watch_path.as_path()), stored_path.parent());
+            assert_eq!(
+                model.registered_watch_path(registered_id),
+                Some(watch_path.as_path())
+            );
+            assert_eq!(
+                model.registered_watch_path(opened_id),
+                Some(watch_path.as_path())
+            );
+        });
+
+        // Unsubscribing releases exactly what was registered, and nothing is left tracked.
+        files.update(app, |model, ctx| {
+            model.unsubscribe(registered_id, ctx);
+            model.unsubscribe(opened_id, ctx);
+        });
+        files.read(app, |model, _| {
+            assert_eq!(model.registered_watch_path(registered_id), None);
+            assert_eq!(model.registered_watch_path(opened_id), None);
+            assert_eq!(model.file_path(registered_id), None);
+            assert_eq!(model.file_path(opened_id), None);
+        });
+    });
+}
+
+/// A file whose read fails never gets a watcher, so teardown must not try to remove one. This is
+/// the exact shape of the crash: an unresolved relative path failed to load, and unsubscribing it
+/// handed an empty directory to the platform watcher.
+#[test]
+fn test_a_failed_open_registers_no_watcher() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        let files = app.add_singleton_model(FileModel::new);
+        let receiver = setup_event_channel(app, &files);
+
+        let file_id = files.update(app, |model, ctx| {
+            model.open(Path::new("app-5243-does-not-exist.md"), true, ctx)
+        });
+        await_load(&receiver).await;
+
+        files.read(app, |model, _| {
+            assert_eq!(model.registered_watch_path(file_id), None);
+        });
+
+        files.update(app, |model, ctx| model.unsubscribe(file_id, ctx));
+        assert_eq!(files.read(app, |model, _| model.file_path(file_id)), None);
+    });
+}
+
 static TEST_FILE_CONTENT: &[u8] = include_bytes!("../test_data/test_file.rs");

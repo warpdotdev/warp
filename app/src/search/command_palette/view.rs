@@ -238,8 +238,14 @@ impl View {
         let binding_source = ctx.add_model(|_| BindingSource::None);
         let session_source = ctx.add_model(|_| SessionSource::None);
 
+        let window_id = ctx.window_id();
         let data_source_store = ctx.add_model(|ctx| {
-            DataSourceStore::new(binding_source.clone(), session_source.clone(), ctx)
+            DataSourceStore::new(
+                binding_source.clone(),
+                session_source.clone(),
+                window_id,
+                ctx,
+            )
         });
 
         ctx.observe(&binding_source, |me, _, ctx| {
