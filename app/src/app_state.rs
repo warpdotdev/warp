@@ -71,13 +71,6 @@ pub struct AgentSessionRestore {
 }
 
 impl AgentSessionRestore {
-    /// The state recorded for `pane_uuid`, and only on the startup restore pass.
-    pub fn recorded_on_startup(&self, pane_uuid: &PaneUuid) -> Option<&RecordedAgentSession> {
-        self.is_startup_restore
-            .then(|| self.sessions.get(pane_uuid))
-            .flatten()
-    }
-
     /// Whether `pane_uuid` is the pane that gets to resume the identifier it recorded.
     pub fn owns_recorded_identifier(&self, pane_uuid: &PaneUuid) -> bool {
         self.claimed_panes.contains(pane_uuid)
