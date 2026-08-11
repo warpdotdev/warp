@@ -104,6 +104,12 @@ fn run_query_does_not_panic_on_multibyte_content_straddling_truncation_boundary(
         let results = app.read(|app| data_source.run_query(&Query::from(""), app).unwrap());
 
         assert_eq!(results.len(), 1);
+        // The description should be floored to the char boundary before '世' (196 bytes in),
+        // dropping the multi-byte tail entirely, with exactly one ellipsis appended.
+        assert_eq!(
+            results[0].accessibility_label(),
+            format!("Workflow: multibyte - {}...", "a".repeat(196))
+        );
     })
 }
 
@@ -122,5 +128,9 @@ fn short_content_is_not_truncated() {
         let results = app.read(|app| data_source.run_query(&Query::from(""), app).unwrap());
 
         assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].accessibility_label(),
+            "Workflow: short - short content"
+        );
     })
 }
