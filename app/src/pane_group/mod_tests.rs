@@ -14,12 +14,15 @@ use persistence::model::{
 use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
+use serde_json::Value;
 use session_sharing_protocol::common::SessionId;
 use shared_session::permissions_manager::SessionPermissionsManager;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
+use warp_core::telemetry::TelemetryEvent as _;
 use warp_server_client::iap::IapManager;
 use warpui::platform::{WindowBounds, WindowStyle};
+use warpui::telemetry::EventPayload;
 use warpui::windowing::WindowManager;
 use warpui::windowing::state::ApplicationStage;
 use warpui::{App, ModelHandle};
@@ -30,6 +33,7 @@ use super::child_agent::{
     HiddenChildAgentConversationRequest, HiddenChildAgentTaskContext,
     create_hidden_child_agent_conversation,
 };
+use super::telemetry::{AgentSessionResumeTelemetryEvent, RecordedAgeBucket, ResumeOutcome};
 use super::*;
 use crate::ai::AIRequestUsageModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -86,7 +90,9 @@ use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::system::SystemStats;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
-use crate::terminal::cli_agent_resume::RESUME_HISTORY_MARKER;
+use crate::terminal::cli_agent_resume::{
+    PERMISSION_POSTURE_FRESHNESS, RESUME_HISTORY_MARKER, RecordedFlag,
+};
 use crate::terminal::cli_agent_sessions::event::parse_event;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
@@ -5414,5 +5420,408 @@ fn an_eligible_pane_restores_the_same_way_an_unrecorded_one_does() {
         );
         assert!(with_resume[0].1.is_some());
         assert!(without_recording[0].1.is_none());
+    });
+}
+
+/// The instant the resume-reporting tests restore at. Ages are expressed against it rather than
+/// against the clock, so a band boundary is a value the test states.
+fn resume_report_now() -> NaiveDateTime {
+    chrono::NaiveDate::from_ymd_opt(2026, 8, 11)
+        .expect("date should be valid")
+        .and_hms_opt(12, 0, 0)
+        .expect("time should be valid")
+}
+
+/// A recording of a Claude session last observed `age` before [`resume_report_now`].
+fn recorded_session_observed_ago(age: chrono::Duration) -> RecordedAgentSession {
+    RecordedAgentSession {
+        observed_at: resume_report_now() - age,
+        ..recorded_session_for_test("session-1", Path::new("/warp/recorded/directory"))
+    }
+}
+
+/// The payload `outcome` produces for a pane whose state was observed `age` ago.
+fn reported_resume_payload(age: chrono::Duration, outcome: ResumeOutcome) -> Value {
+    let recorded = recorded_session_observed_ago(age);
+    AgentSessionResumeTelemetryEvent::pane_restored(&recorded, outcome, resume_report_now())
+        .payload()
+        .expect("a reported resume outcome should carry a payload")
+}
+
+/// U8: the event the rollout gates count. A pane that came back with its session says so, and
+/// says which agent it was running — the two values every other number is read against.
+#[test]
+fn a_resumed_pane_reports_its_agent_and_a_resumed_outcome() {
+    let recorded = recorded_session_observed_ago(chrono::Duration::minutes(20));
+    let outcome = ResumeOutcome::for_verdict(&Ok(&recorded), true)
+        .expect("a pane that carried recorded state has an outcome to report");
+    let event =
+        AgentSessionResumeTelemetryEvent::pane_restored(&recorded, outcome, resume_report_now());
+
+    assert_eq!(event.name(), "AgentSessionResume.PaneRestore.Outcome");
+    assert_eq!(
+        event.payload(),
+        Some(serde_json::json!({
+            "agent": "Claude",
+            "outcome": "resumed",
+            "permission_flags_carried": true,
+            "recorded_age": "up_to_1h",
+        }))
+    );
+}
+
+/// R21: a pane the gate cleared that still armed nothing is the failure the rollout reads as
+/// "resume is not reliable". It must not arrive looking like a pane that was never eligible.
+#[test]
+fn a_resume_that_armed_nothing_reports_a_failed_outcome() {
+    let recorded = recorded_session_observed_ago(chrono::Duration::minutes(20));
+
+    assert_eq!(
+        ResumeOutcome::for_verdict(&Ok(&recorded), false),
+        Some(ResumeOutcome::Failed)
+    );
+    assert_eq!(
+        reported_resume_payload(chrono::Duration::minutes(20), ResumeOutcome::Failed)["outcome"],
+        serde_json::json!("failed")
+    );
+}
+
+/// U8: the outcomes are what a dashboard groups by, so each rejection has to arrive as its own
+/// value — except the one that means "this pane was never running an agent", which is every
+/// ordinary pane and says nothing about this feature.
+#[test]
+fn every_resume_rejection_reports_its_own_outcome() {
+    // Spelled out rather than derived from the mapping under test: these strings are the wire
+    // values a dashboard groups by, and the match stops a rejection added later from quietly
+    // reaching the field without one.
+    let expected_outcome = |reason| match reason {
+        ResumeIneligibility::NoRecordedSession => None,
+        ResumeIneligibility::NotStartupRestore => Some("not_startup_restore"),
+        ResumeIneligibility::NoSessionIdentifier => Some("no_session_identifier"),
+        ResumeIneligibility::AgentNotDeclared => Some("agent_not_declared"),
+        ResumeIneligibility::SharedSessionViewer => Some("shared_session_viewer"),
+        ResumeIneligibility::SessionNotLocal => Some("session_not_local"),
+        ResumeIneligibility::RecordedDirectoryMissing => Some("recorded_directory_missing"),
+        ResumeIneligibility::RestoredElsewhere => Some("restored_elsewhere"),
+        ResumeIneligibility::IdentifierClaimedByAnotherPane => {
+            Some("identifier_claimed_by_another_pane")
+        }
+    };
+    let reasons = [
+        ResumeIneligibility::NoRecordedSession,
+        ResumeIneligibility::NotStartupRestore,
+        ResumeIneligibility::NoSessionIdentifier,
+        ResumeIneligibility::AgentNotDeclared,
+        ResumeIneligibility::SharedSessionViewer,
+        ResumeIneligibility::SessionNotLocal,
+        ResumeIneligibility::RecordedDirectoryMissing,
+        ResumeIneligibility::RestoredElsewhere,
+        ResumeIneligibility::IdentifierClaimedByAnotherPane,
+    ];
+
+    for reason in reasons {
+        let verdict: Result<&RecordedAgentSession, ResumeIneligibility> = Err(reason);
+        let reported = ResumeOutcome::for_verdict(&verdict, false).map(|outcome| {
+            serde_json::to_value(outcome).expect("an outcome should serialize as a plain value")
+        });
+
+        assert_eq!(
+            reported,
+            expected_outcome(reason).map(|expected| serde_json::json!(expected)),
+            "{reason:?} should report its own outcome"
+        );
+    }
+
+    let distinct: HashSet<&str> = reasons
+        .iter()
+        .filter_map(|reason| expected_outcome(*reason))
+        .collect();
+    assert_eq!(
+        distinct.len(),
+        reasons.len() - 1,
+        "every rejection but the ordinary one should have a value of its own"
+    );
+}
+
+/// R22: the elevation the user chose rides along only while the observation behind it is recent,
+/// and whether it did is the half of the window's cost the age bands alone cannot show.
+#[test]
+fn a_resume_outside_the_freshness_window_reports_dropped_posture_flags() {
+    let window = chrono::Duration::from_std(PERMISSION_POSTURE_FRESHNESS)
+        .expect("the freshness window should fit a chrono duration");
+    let carried =
+        |age, outcome| reported_resume_payload(age, outcome)["permission_flags_carried"].clone();
+
+    assert_eq!(
+        carried(
+            window - chrono::Duration::minutes(1),
+            ResumeOutcome::Resumed
+        ),
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        carried(
+            window + chrono::Duration::minutes(1),
+            ResumeOutcome::Resumed
+        ),
+        serde_json::json!(false),
+        "a recording older than the window resumes without the posture the user chose"
+    );
+    assert_eq!(
+        carried(chrono::Duration::minutes(1), ResumeOutcome::Failed),
+        serde_json::json!(false),
+        "a pane that never launched carried nothing, however fresh its recording was"
+    );
+}
+
+/// U8: the bands R22's window is chosen from. They bracket the candidate windows, so the field
+/// distribution answers what moving the window to 6 or 24 hours would cost — the provisional 12
+/// hours is a band edge rather than a band.
+#[test]
+fn a_resume_reports_the_recorded_age_in_bracketing_bands() {
+    let bands = [
+        (chrono::Duration::minutes(2), "up_to_1h"),
+        (chrono::Duration::hours(1), "up_to_1h"),
+        (chrono::Duration::hours(3), "1h_to_6h"),
+        (chrono::Duration::hours(6), "1h_to_6h"),
+        (chrono::Duration::hours(9), "6h_to_12h"),
+        (chrono::Duration::hours(12), "6h_to_12h"),
+        (chrono::Duration::hours(18), "12h_to_24h"),
+        (chrono::Duration::hours(24), "12h_to_24h"),
+        (chrono::Duration::days(3), "1d_to_7d"),
+        (chrono::Duration::days(7), "1d_to_7d"),
+        (chrono::Duration::days(30), "over_7d"),
+        // A recording dated after the restart: the clock moved backwards, and no band can be
+        // claimed for an age nothing vouches for.
+        (chrono::Duration::minutes(-5), "unverifiable"),
+    ];
+
+    for (age, expected) in bands {
+        assert_eq!(
+            reported_resume_payload(age, ResumeOutcome::Resumed)["recorded_age"],
+            serde_json::json!(expected),
+            "state observed {age} before the restart belongs in {expected}"
+        );
+    }
+
+    // The window sits on the 6h_to_12h edge, which is what makes the bands readable as a cost:
+    // everything up to that edge is what carrying the posture flags currently covers.
+    assert_eq!(
+        RecordedAgeBucket::for_observation(
+            resume_report_now()
+                - chrono::Duration::from_std(PERMISSION_POSTURE_FRESHNESS)
+                    .expect("the freshness window should fit a chrono duration"),
+            resume_report_now(),
+        ),
+        RecordedAgeBucket::SixToTwelveHours
+    );
+}
+
+/// R20: the event measures the feature without shipping any of what the user was doing. The
+/// recorded state it is built from holds the session identifier, the flags off the user's own
+/// command and a path on their disk, and none of the three may reach the payload.
+#[test]
+fn the_reported_resume_outcome_carries_nothing_of_the_session() {
+    let recorded = RecordedAgentSession {
+        agent: crate::terminal::CLIAgent::Claude,
+        session_id: "SENSITIVE-session-id".to_owned(),
+        flags: vec![RecordedFlag {
+            name: "--SENSITIVE-flag".to_owned(),
+            value: Some("SENSITIVE-flag-value".to_owned()),
+        }],
+        directory: PathBuf::from("/SENSITIVE/directory"),
+        observed_at: resume_report_now() - chrono::Duration::hours(2),
+    };
+
+    let event = AgentSessionResumeTelemetryEvent::pane_restored(
+        &recorded,
+        ResumeOutcome::Resumed,
+        resume_report_now(),
+    );
+    // Destructured exhaustively on purpose: a field added to the event has to be looked at here
+    // before it can be reported.
+    let AgentSessionResumeTelemetryEvent::PaneRestored {
+        agent,
+        outcome,
+        permission_flags_carried,
+        recorded_age,
+    } = &event;
+    let reported = format!("{agent:?} {outcome:?} {permission_flags_carried} {recorded_age:?}");
+    let payload = event
+        .payload()
+        .expect("a reported resume outcome should carry a payload");
+    let serialized = payload.to_string();
+
+    for rendering in [&reported, &serialized] {
+        assert!(
+            !rendering.contains("SENSITIVE"),
+            "the event must carry nothing of the recorded session, got: {rendering}"
+        );
+        assert!(
+            !rendering.contains('/'),
+            "the event must carry no path, got: {rendering}"
+        );
+        assert!(
+            !rendering.contains("--"),
+            "the event must carry no flag off the user's command, got: {rendering}"
+        );
+    }
+    assert_eq!(
+        payload
+            .as_object()
+            .expect("the payload should be an object")
+            .keys()
+            .collect::<Vec<_>>(),
+        vec![
+            "agent",
+            "outcome",
+            "permission_flags_carried",
+            "recorded_age"
+        ],
+        "the payload is these four closed values and nothing else"
+    );
+    assert!(
+        !event.contains_ugc(),
+        "nothing the user generated reaches this event"
+    );
+}
+
+/// The reporting is part of the feature, so it is behind the same flag: nothing about a restart
+/// is measured where nothing about it is attempted.
+#[test]
+fn no_resume_outcome_is_reported_while_the_feature_is_off() {
+    let event = AgentSessionResumeTelemetryEvent::pane_restored(
+        &recorded_session_observed_ago(chrono::Duration::minutes(20)),
+        ResumeOutcome::Resumed,
+        resume_report_now(),
+    );
+
+    {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(false);
+        assert!(
+            !event.enablement_state().is_enabled(),
+            "the send path drops the event while the feature is off"
+        );
+    }
+
+    let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+    assert!(event.enablement_state().is_enabled());
+}
+
+/// Drains the resume outcomes recorded so far, waiting up to `wait` for `expected` of them: the
+/// send hands the event to the background executor, so a drain taken the instant a pane restored
+/// can be empty for reasons that have nothing to do with the pane.
+async fn recorded_resume_outcomes(
+    expected: usize,
+    wait: std::time::Duration,
+) -> Vec<(Option<Value>, bool)> {
+    let deadline = instant::Instant::now() + wait;
+    let mut recorded = Vec::new();
+    loop {
+        recorded.extend(
+            warpui::telemetry::flush_events()
+                .into_iter()
+                .filter_map(|event| match event.payload {
+                    EventPayload::NamedEvent { name, value, .. }
+                        if name == "AgentSessionResume.PaneRestore.Outcome" =>
+                    {
+                        Some((value, event.contains_ugc))
+                    }
+                    _ => None,
+                }),
+        );
+        if recorded.len() >= expected || instant::Instant::now() >= deadline {
+            return recorded;
+        }
+        warpui::r#async::Timer::after(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+/// U8: the restore path itself reports, once per pane that carried recorded state — the event is
+/// not a helper the path could be wired up without.
+#[test]
+fn a_restored_pane_reports_its_resume_outcome() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().to_path_buf();
+
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+        warpui::telemetry::flush_events();
+
+        let resuming_pane = PaneUuid(vec![1]);
+        let ordinary_pane = PaneUuid(vec![2]);
+        let recorded = RecordedAgentSession {
+            // Observed as the restart happens, so the age band and the posture rule have a
+            // definite answer here rather than one that depends on when the test runs.
+            observed_at: Utc::now().naive_utc(),
+            ..recorded_session_for_test("session-1", &path)
+        };
+
+        let restored = restored_panes_with_armed_resume(
+            &mut app,
+            vec![
+                local_pane_snapshot_for_test(&resuming_pane.0, Some(&path)),
+                local_pane_snapshot_for_test(&ordinary_pane.0, Some(&path)),
+            ],
+            startup_restore_for_test([(resuming_pane.clone(), recorded)], [resuming_pane.clone()]),
+        );
+        assert!(restored[0].1.is_some(), "the recorded pane should resume");
+
+        let reported = recorded_resume_outcomes(1, std::time::Duration::from_secs(5)).await;
+
+        assert_eq!(
+            reported.len(),
+            1,
+            "the pane that carried recorded state should report once, got: {reported:?}"
+        );
+        assert!(
+            recorded_resume_outcomes(1, std::time::Duration::from_millis(300))
+                .await
+                .is_empty(),
+            "the pane that carried no recorded state was not running an agent and reports nothing"
+        );
+        assert_eq!(
+            reported[0].0,
+            Some(serde_json::json!({
+                "agent": "Claude",
+                "outcome": "resumed",
+                "permission_flags_carried": true,
+                "recorded_age": "up_to_1h",
+            }))
+        );
+        assert!(!reported[0].1, "the event holds no user-generated content");
+    });
+}
+
+/// With the feature off, a restart is not measured either: the pane restores as a bare shell and
+/// says nothing about having been asked to resume.
+#[test]
+fn a_restored_pane_reports_no_resume_outcome_while_the_feature_is_off() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().to_path_buf();
+
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(false);
+        initialize_app(&mut app);
+        warpui::telemetry::flush_events();
+
+        let pane = PaneUuid(vec![1]);
+        let restored = restored_panes_with_armed_resume(
+            &mut app,
+            vec![local_pane_snapshot_for_test(&pane.0, Some(&path))],
+            startup_restore_for_test(
+                [(pane.clone(), recorded_session_for_test("session-1", &path))],
+                [pane.clone()],
+            ),
+        );
+        assert_eq!(restored[0].1, None, "nothing should have been armed");
+
+        let reported = recorded_resume_outcomes(1, std::time::Duration::from_millis(500)).await;
+
+        assert!(
+            reported.is_empty(),
+            "the feature reports nothing while it is off, got: {reported:?}"
+        );
     });
 }

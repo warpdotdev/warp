@@ -185,10 +185,12 @@ pub(crate) use child_agent::materialization::{
 };
 pub mod focus_state;
 pub mod pane;
+mod telemetry;
 pub mod tree;
 pub mod working_directories;
 use ambient_pane_restoration::AmbientRestoreKind;
 use focus_state::PaneGroupFocusState;
+use telemetry::{AgentSessionResumeTelemetryEvent, ResumeOutcome};
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]
@@ -1914,6 +1916,25 @@ impl PaneGroup {
                         None
                     }
                 };
+
+                // Every pane that carried recorded state reports what became of it, resumed or
+                // not: the rate and the reasons are the only view the rollout has of a feature
+                // that is silent by design. A pane with nothing recorded reports nothing — it
+                // was not running an agent, which says nothing about this. While the feature is
+                // off nothing is armed and, on the same flag, nothing is sent.
+                if let Some(recorded) = agent_restore.sessions.get(&uuid)
+                    && let Some(outcome) =
+                        ResumeOutcome::for_verdict(&resume_verdict, resume_command.is_some())
+                {
+                    send_telemetry_from_ctx!(
+                        AgentSessionResumeTelemetryEvent::pane_restored(
+                            recorded,
+                            outcome,
+                            Utc::now().naive_utc(),
+                        ),
+                        ctx
+                    );
+                }
 
                 // Filter conversation IDs to only include those that have task messages
                 // and are not entirely passive (ignored suggestions).
