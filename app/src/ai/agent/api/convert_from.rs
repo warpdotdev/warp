@@ -2,11 +2,12 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use ai::agent::action::LifecycleEventType as StartAgentLifecycleEventType;
-use ai::agent::action_result::StartAgentVersion;
-use ai::agent::convert::ToolToAIAgentActionError;
 use ai::agent::UnknownCitationTypeError;
-use ai::skills::SkillReference;
+use ai::agent::action::ReadSkillRequest;
+use ai::agent::convert::ToolToAIAgentActionError;
+use ai::skills::{
+    SkillPathOrigin, skill_reference_from_api_skill_ref, skill_reference_from_read_skill_ref,
+};
 use api::ask_user_question::question::QuestionType;
 use warp_core::channel::ChannelState;
 use warp_multi_agent_api as api;
@@ -21,9 +22,9 @@ use crate::ai::agent::util::parse_markdown_into_text_and_code_sections;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionType, AIAgentAttachment, AIAgentCitation, AIAgentInput,
     AIAgentOutputMessage, AIAgentText, AIAgentTodo, ArtifactCreatedData, CloneRepositoryURL,
-    MessageId, RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest,
-    StartAgentExecutionMode, SubagentCall, SubagentType, SuggestedAgentModeWorkflow, SuggestedRule,
-    Suggestions, SummarizationType, TodoOperation, UserQueryMode, WebFetchStatus, WebSearchStatus,
+    MessageId, RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest, SubagentCall,
+    SubagentType, SuggestedAgentModeWorkflow, SuggestedRule, Suggestions, SummarizationType,
+    TodoOperation, UserQueryMode, WebFetchStatus, WebSearchStatus,
 };
 use crate::ai::artifact_download::sanitized_basename;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
@@ -50,6 +51,18 @@ impl TryFrom<api::Attachment> for AIAgentAttachment {
     }
 }
 
+fn convert_read_skill(
+    read_skill: api::message::tool_call::ReadSkill,
+    skill_path_origin: &SkillPathOrigin,
+) -> Result<AIAgentActionType, ToolToAIAgentActionError> {
+    let Some(reference) = read_skill.skill_reference else {
+        return Err(ToolToAIAgentActionError::MissingSkillReference);
+    };
+    let skill = skill_reference_from_read_skill_ref(reference, skill_path_origin)
+        .map_err(|_| ToolToAIAgentActionError::MissingSkillReference)?;
+    Ok(AIAgentActionType::ReadSkill(ReadSkillRequest { skill }))
+}
+
 /// Converts proto UserQueryMode to the internal UserQueryMode type
 pub(crate) fn convert_user_query_mode(mode: Option<&api::UserQueryMode>) -> UserQueryMode {
     let Some(mode) = mode else {
@@ -61,21 +74,6 @@ pub(crate) fn convert_user_query_mode(mode: Option<&api::UserQueryMode>) -> User
         Some(api::user_query_mode::Type::Orchestrate(_)) => UserQueryMode::Orchestrate,
         None => UserQueryMode::Normal,
     }
-}
-
-fn convert_start_agent_lifecycle_event_type(
-    event_type: i32,
-) -> Option<StartAgentLifecycleEventType> {
-    let event_type = StartAgentLifecycleEventType::try_from(event_type).ok()?;
-    (event_type != StartAgentLifecycleEventType::Unspecified).then_some(event_type)
-}
-
-fn convert_start_agent_v2_harness_type(
-    harness: Option<api::start_agent_v2::execution_mode::Harness>,
-) -> Option<String> {
-    harness
-        .map(|harness| harness.r#type)
-        .filter(|harness_type| !harness_type.trim().is_empty())
 }
 
 /// Maps the proto `Harness` oneof to a client-side string identifier
@@ -94,33 +92,26 @@ pub(crate) fn convert_run_agents_harness(harness: Option<&api::Harness>) -> Opti
     )
 }
 
-fn convert_start_agent_execution_mode(
-    execution_mode: Option<api::start_agent::ExecutionMode>,
-) -> StartAgentExecutionMode {
-    match execution_mode.and_then(|execution_mode| execution_mode.mode) {
-        Some(api::start_agent::execution_mode::Mode::Remote(remote)) => {
-            StartAgentExecutionMode::remote_with_defaults(remote.environment_id)
-        }
-        Some(api::start_agent::execution_mode::Mode::Local(_)) | None => {
-            StartAgentExecutionMode::local_with_defaults()
-        }
-    }
-}
-
 fn convert_run_agents_execution_mode(
-    execution_mode: Option<api::run_agents::ExecutionMode>,
+    execution_mode: Option<api::run_agents::ExecutionModeOneOf>,
 ) -> RunAgentsExecutionMode {
     match execution_mode {
-        Some(api::run_agents::ExecutionMode::Remote(remote)) => RunAgentsExecutionMode::Remote {
-            environment_id: remote.environment_id,
-            worker_host: remote.worker_host,
-            computer_use_enabled: remote.computer_use_enabled,
-        },
-        Some(api::run_agents::ExecutionMode::Local(_)) | None => RunAgentsExecutionMode::Local,
+        Some(api::run_agents::ExecutionModeOneOf::Remote(remote)) => {
+            RunAgentsExecutionMode::Remote {
+                environment_id: remote.environment_id,
+                worker_host: remote.worker_host,
+                computer_use_enabled: remote.computer_use_enabled,
+                runner_id: remote.runner_id,
+            }
+        }
+        Some(api::run_agents::ExecutionModeOneOf::Local(_)) | None => RunAgentsExecutionMode::Local,
     }
 }
 
-fn convert_run_agents(run_agents: api::RunAgents) -> AIAgentActionType {
+fn convert_run_agents(
+    run_agents: api::RunAgents,
+    skill_path_origin: &SkillPathOrigin,
+) -> AIAgentActionType {
     let api::RunAgents {
         summary,
         base_prompt,
@@ -136,7 +127,7 @@ fn convert_run_agents(run_agents: api::RunAgents) -> AIAgentActionType {
         base_prompt,
         skills: skills
             .into_iter()
-            .filter_map(convert_skill_reference)
+            .filter_map(|skill| skill_reference_from_api_skill_ref(skill, skill_path_origin))
             .collect(),
         model_id,
         harness_type: convert_run_agents_harness(harness.as_ref()).unwrap_or_default(),
@@ -147,6 +138,8 @@ fn convert_run_agents(run_agents: api::RunAgents) -> AIAgentActionType {
                 name: config.name,
                 prompt: config.prompt,
                 title: config.title,
+                agent_identity_uid: config.agent_identity_uid,
+                model_id: config.model_id,
             })
             .collect(),
         plan_id,
@@ -155,48 +148,6 @@ fn convert_run_agents(run_agents: api::RunAgents) -> AIAgentActionType {
         // before Accept. The proto does not carry it.
         harness_auth_secret_name: None,
     })
-}
-
-fn convert_start_agent_v2_execution_mode(
-    execution_mode: Option<api::start_agent_v2::ExecutionMode>,
-) -> StartAgentExecutionMode {
-    match execution_mode.and_then(|execution_mode| execution_mode.mode) {
-        Some(api::start_agent_v2::execution_mode::Mode::Remote(remote)) => {
-            StartAgentExecutionMode::Remote {
-                environment_id: remote.environment_id,
-                skill_references: remote
-                    .skills
-                    .into_iter()
-                    .filter_map(convert_skill_reference)
-                    .collect(),
-                model_id: remote.model_id,
-                computer_use_enabled: remote.computer_use_enabled,
-                worker_host: remote.worker_host,
-                harness_type: convert_start_agent_v2_harness_type(remote.harness)
-                    .unwrap_or_default(),
-                title: remote.title,
-                // Auth secret is plumbed client-side via `RunAgentsRequest`;
-                // StartAgentV2 from the server never carries it.
-                auth_secret_name: None,
-            }
-        }
-        Some(api::start_agent_v2::execution_mode::Mode::Local(local)) => {
-            convert_start_agent_v2_harness_type(local.harness)
-                .map(StartAgentExecutionMode::local_harness)
-                .unwrap_or_else(StartAgentExecutionMode::local_with_defaults)
-        }
-        None => StartAgentExecutionMode::local_with_defaults(),
-    }
-}
-
-fn convert_skill_reference(skill_ref: api::SkillRef) -> Option<SkillReference> {
-    match skill_ref.skill_reference {
-        Some(api::skill_ref::SkillReference::Path(path)) => Some(SkillReference::Path(path.into())),
-        Some(api::skill_ref::SkillReference::BundledSkillId(id)) => {
-            Some(SkillReference::BundledSkillId(id))
-        }
-        None => None,
-    }
 }
 
 /// Unexpected errors when trying to convert an [`api::Message`] to an [`AIAgentOutputMessage`].
@@ -233,6 +184,7 @@ pub struct ConversionParams<'a> {
     pub task_id: &'a TaskId,
     pub current_todo_list: Option<&'a AIAgentTodoList>,
     pub active_code_review: Option<&'a CodeReview>,
+    pub skill_path_origin: &'a SkillPathOrigin,
 }
 
 /// Trait for converting an [`api::Message`] to an [`AIAgentOutputMessage`].
@@ -257,8 +209,8 @@ impl ConvertAPIMessageToClientOutputMessage for api::Message {
         let citations = self
             .citations
             .iter()
-            .map(|citation| (*citation).clone().try_into())
-            .collect::<Result<Vec<AIAgentCitation>, UnknownCitationTypeError>>()?;
+            .filter_map(|citation| AIAgentCitation::try_from((*citation).clone()).ok())
+            .collect::<Vec<AIAgentCitation>>();
 
         match message {
             api::message::Message::AgentOutput(output) => Ok(MaybeAIAgentOutputMessage::Message(
@@ -760,9 +712,15 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
             api::message::tool_call::Tool::RequestComputerUse(request_computer_use) => {
                 create_standard_action(request_computer_use.into())
             }
+            api::message::tool_call::Tool::StartRecording(start_recording) => {
+                create_standard_action(start_recording.try_into()?)
+            }
+            api::message::tool_call::Tool::StopRecording(stop_recording) => {
+                create_standard_action(stop_recording.into())
+            }
             api::message::tool_call::Tool::Subagent(subagent) => {
-                use api::message::tool_call::subagent::conversation_search_metadata::Target;
                 use api::message::tool_call::subagent::Metadata;
+                use api::message::tool_call::subagent::conversation_search_metadata::Target;
                 let subagent_type = match subagent.metadata {
                     Some(Metadata::Cli(_)) => SubagentType::Cli,
                     Some(Metadata::Research(_)) => SubagentType::Research,
@@ -804,44 +762,8 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                     subagent_type,
                 }))
             }
-            api::message::tool_call::Tool::StartAgent(start_agent) => {
-                create_standard_action(AIAgentActionType::StartAgent {
-                    version: StartAgentVersion::V1,
-                    name: start_agent.name,
-                    prompt: start_agent.prompt,
-                    execution_mode: convert_start_agent_execution_mode(start_agent.execution_mode),
-                    lifecycle_subscription: start_agent.lifecycle_subscription.map(
-                        |subscription| {
-                            subscription
-                                .event_types
-                                .into_iter()
-                                .filter_map(convert_start_agent_lifecycle_event_type)
-                                .collect()
-                        },
-                    ),
-                })
-            }
-            api::message::tool_call::Tool::StartAgentV2(start_agent) => {
-                create_standard_action(AIAgentActionType::StartAgent {
-                    version: StartAgentVersion::V2,
-                    name: start_agent.name,
-                    prompt: start_agent.prompt,
-                    execution_mode: convert_start_agent_v2_execution_mode(
-                        start_agent.execution_mode,
-                    ),
-                    lifecycle_subscription: start_agent.lifecycle_subscription.map(
-                        |subscription| {
-                            subscription
-                                .event_types
-                                .into_iter()
-                                .filter_map(convert_start_agent_lifecycle_event_type)
-                                .collect()
-                        },
-                    ),
-                })
-            }
             api::message::tool_call::Tool::RunAgents(orchestrate) => {
-                create_standard_action(convert_run_agents(orchestrate))
+                create_standard_action(convert_run_agents(orchestrate, params.skill_path_origin))
             }
             api::message::tool_call::Tool::SendMessageToAgent(send_message) => {
                 create_standard_action(AIAgentActionType::SendMessageToAgent {
@@ -854,7 +776,7 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                 create_standard_action(insert_review_comments.into())
             }
             api::message::tool_call::Tool::ReadSkill(read_skill) => {
-                create_standard_action(read_skill.try_into()?)
+                create_standard_action(convert_read_skill(read_skill, params.skill_path_origin)?)
             }
             api::message::tool_call::Tool::FetchConversation(fetch_conversation) => {
                 create_standard_action(fetch_conversation.into())
@@ -871,6 +793,12 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
             // them is not an error.
             api::message::tool_call::Tool::Server(_) => {
                 Ok(MaybeAIAgentAction::NoClientRepresentation)
+            }
+            api::message::tool_call::Tool::WaitForEvents(payload) => {
+                create_standard_action(AIAgentActionType::WaitForEvents {
+                    tool_call_id: self.tool_call_id.clone(),
+                    idle_timeout_seconds: payload.idle_timeout_seconds,
+                })
             }
             _ => Err(ToolToAIAgentActionError::UnexpectedTool),
         }
@@ -961,12 +889,6 @@ pub fn user_inputs_from_messages(messages: &[api::Message]) -> Vec<AIAgentInput>
                         api::message::system_query::Type::AutoCodeDiff(p) => {
                             inputs.push(AIAgentInput::AutoCodeDiffQuery {
                                 query: p.query.clone(),
-                                context: ctx,
-                            });
-                        }
-                        api::message::system_query::Type::FetchReviewComments(fetch) => {
-                            inputs.push(AIAgentInput::FetchReviewComments {
-                                repo_path: fetch.repo_path.clone(),
                                 context: ctx,
                             });
                         }

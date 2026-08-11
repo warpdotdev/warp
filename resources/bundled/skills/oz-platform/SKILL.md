@@ -12,11 +12,20 @@ Use the Oz REST API and CLI to:
 * Create and manage the environments in which cloud agents run
 * Provide secrets for cloud agents to use
 
+## Looking up documentation
+
+Prefer current, authoritative sources when answering questions or authoring skills about Oz platform behavior:
+* Start with https://docs.warp.dev/llms.txt to discover the relevant documentation page.
+* Every `docs.warp.dev` page has an agent-readable Markdown version at the same URL with `.md` appended. Fetch that version when reading documentation; for example, https://docs.warp.dev/agents/capabilities/computer-use.md.
+* For CLI commands and flags, also confirm the installed version's behavior with `{{warp_cli_binary_name}} help` or `{{warp_cli_binary_name}} help <subcommand>`.
+
+Treat the examples below as starting points, not the sole source of truth for details that can evolve, such as computer-use artifacts, CLI flags, and API behavior. If they conflict with the live Markdown documentation or CLI help, follow the live source.
+
 ## Command Line
 
 The Oz CLI is installed as `{{warp_cli_binary_name}}`. To get help output, use `{{warp_cli_binary_name}} help` or `{{warp_cli_binary_name}} help <subcommand>`.
 Prefer `--output-format text` to review the response, or `--output-format json` to parse fields with `jq`.
-You can find more information at https://docs.warp.dev/reference/cli.
+You can find more information at https://docs.warp.dev/reference/cli.md.
 
 The most important commands are:
 * `{{warp_cli_binary_name}} agent run-cloud`: Spawn a new cloud agent. You can configure the prompt, model, environment, and other settings.
@@ -45,8 +54,16 @@ Schedule an agent to summarize feedback every day at 8am UTC:
 
 ```sh
 $ {{warp_cli_binary_name}} schedule create --cron "0 8 * * *" \
+    --name "GitHub issue summary" \
     --prompt "Collect all feedback from new GitHub issues and provide a summary report" \
     --environment UA17BXYZ
+```
+
+List and inspect scheduled agents:
+
+```sh
+$ {{warp_cli_binary_name}} schedule list
+$ {{warp_cli_binary_name}} schedule get <schedule-id>
 ```
 
 Create a secret for cloud agents to use:
@@ -61,7 +78,7 @@ Oz has a REST API for starting and inspecting cloud agents.
 
 All API requests require authentication using an API key. The user can generate API keys in their Warp settings, on the `Platform` page (accessible via `{{warp_url_scheme}}://settings/platform`).
 
-You can find the full OpenAPI specification here: https://docs.warp.dev/reference/api-and-sdk
+You can find the API and SDK reference here: https://docs.warp.dev/reference/api-and-sdk.md.
 
 ### TypeScript / JavaScript SDK
 
@@ -104,7 +121,11 @@ curl -L -X GET {{warp_server_url}}/api/v1/agent/runs/5972cca4-a410-42af-930a-e56
 You can trigger Oz cloud agents from GitHub Actions workflows. This enables automation like:
 * Triaging issues when they're created or labeled
 * Running checks on pull requests
-* Scheduling periodic tasks via workflow dispatch
+* Responding to CI events or deployment triggers
+
+Use GitHub Actions when the trigger itself lives in GitHub: An event like an issue being opened, a PR being labeled, a push, or a CI workflow completing.
+
+For periodic/recurring work, prefer `{{warp_cli_binary_name}} schedule create` to enhance scheduled run tracking with the Oz platform.
 
 The agent will have access to the `gh` CLI to communicate back to the repository. Prefer prompting the agent to use `gh` vs. requiring the agent to respond with structured output for the GitHub workflow to parse.
 

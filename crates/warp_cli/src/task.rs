@@ -20,6 +20,17 @@ pub enum TaskCommand {
     Message(MessageCommand),
 }
 
+impl TaskCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            TaskCommand::List(_) => "run list",
+            TaskCommand::Get(_) => "run get",
+            TaskCommand::Conversation(_) => "run conversation",
+            TaskCommand::Message(_) => "run message",
+        }
+    }
+}
+
 /// Conversation-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub enum ConversationCommand {

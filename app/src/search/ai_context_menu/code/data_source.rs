@@ -86,12 +86,15 @@ impl CodeSymbolCache {
             spawner,
         };
 
-        ctx.subscribe_to_model(&RepoOutlines::handle(ctx), |me, event, ctx| match event {
-            RepoOutlinesEvent::OutlinesUpdated(repo_path) => {
-                me.symbol_cache.get_mut().remove(repo_path);
-                ctx.emit(());
-            }
-        });
+        ctx.subscribe_to_model(
+            &RepoOutlines::handle(ctx),
+            |me, _, event, ctx| match event {
+                RepoOutlinesEvent::OutlinesUpdated(repo_path) => {
+                    me.symbol_cache.get_mut().remove(repo_path);
+                    ctx.emit(());
+                }
+            },
+        );
 
         cache
     }

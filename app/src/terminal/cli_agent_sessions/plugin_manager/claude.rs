@@ -7,23 +7,23 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::{
-    compare_versions, run_cli_command_logged, CliAgentPluginManager, PluginInstallError,
-    PluginInstructionStep, PluginInstructions,
+    CliAgentPluginManager, PluginInstallError, PluginInstructionStep, PluginInstructions,
+    compare_versions, run_cli_command_logged,
 };
 use crate::terminal::model::session::LocalCommandExecutor;
 use crate::terminal::shell::ShellType;
 
 const PLUGIN_KEY: &str = "warp@claude-code-warp";
+const PLATFORM_PLUGIN_KEY: &str = "oz-harness-support@claude-code-warp";
+
 const MARKETPLACE_REPO: &str = "warpdotdev/claude-code-warp";
 const MARKETPLACE_NAME: &str = "claude-code-warp";
-
-const PLATFORM_PLUGIN_KEY: &str = "oz-harness-support@claude-code-warp";
-// Note: we will eventually publish this to the same marketplace repo, but are using the internal one as we build out multi-harness.
-const PLATFORM_MARKETPLACE_REPO: &str = "warpdotdev/claude-code-warp-internal";
 
 // Keep in sync with the plugin version in warpdotdev/claude-code-warp.
 // (See the Versioning section of that repo's README.)
 const MINIMUM_PLUGIN_VERSION: &str = "2.1.0";
+// Keep in sync with the oz-harness-support plugin version in warpdotdev/claude-code-warp.
+const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "1.1.2";
 
 pub(super) struct ClaudeCodePluginManager {
     executor: LocalCommandExecutor,
@@ -67,6 +67,31 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
             return false;
         };
         check_installed(&claude_dir)
+    }
+
+    fn is_platform_plugin_installed(&self) -> bool {
+        let Ok(claude_dir) = claude_home_dir() else {
+            return false;
+        };
+        check_platform_plugin_installed(&claude_dir)
+    }
+
+    fn platform_plugin_needs_update(&self) -> bool {
+        let Ok(claude_dir) = claude_home_dir() else {
+            return false;
+        };
+        match installed_platform_plugin_version(&claude_dir) {
+            Some(v) => compare_versions(&v, MINIMUM_PLATFORM_PLUGIN_VERSION).is_lt(),
+            // No version field means very old plugin.
+            None => check_platform_plugin_installed(&claude_dir),
+        }
+    }
+
+    fn has_local_marketplace_override(&self) -> bool {
+        let Ok(claude_dir) = claude_home_dir() else {
+            return false;
+        };
+        claude_code_marketplace_has_local_override(&claude_dir)
     }
 
     /// Runs `claude plugin` CLI commands via the session shell.
@@ -149,7 +174,7 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
     async fn install_platform_plugin(&self) -> Result<(), PluginInstallError> {
         let mut log = String::new();
         self.run_logged(
-            &["plugin", "marketplace", "add", PLATFORM_MARKETPLACE_REPO],
+            &["plugin", "marketplace", "add", MARKETPLACE_REPO],
             &mut log,
         )
         .await?;
@@ -157,32 +182,55 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
             .await?;
         Ok(())
     }
+
+    async fn update_platform_plugin(&self) -> Result<(), PluginInstallError> {
+        let mut log = String::new();
+        self.run_logged(
+            &["plugin", "marketplace", "add", MARKETPLACE_REPO],
+            &mut log,
+        )
+        .await?;
+        self.run_logged(&["plugin", "install", PLATFORM_PLUGIN_KEY], &mut log)
+            .await?;
+
+        let still_outdated = claude_home_dir()
+            .ok()
+            .and_then(|dir| installed_platform_plugin_version(&dir))
+            .map(|v| compare_versions(&v, MINIMUM_PLATFORM_PLUGIN_VERSION).is_lt())
+            .unwrap_or(true);
+        if still_outdated {
+            log.push_str("Post-update version check: platform plugin is still outdated\n");
+            return Err(PluginInstallError {
+                message: "Platform plugin update did not take effect".to_owned(),
+                log,
+            });
+        }
+        Ok(())
+    }
 }
 
-static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
-    PluginInstructions {
-        title: "Install Warp Plugin for Claude Code",
-        subtitle: "Ensure that jq is installed on your machine. Then, run these commands.",
-        steps: &[
-            PluginInstructionStep {
-                description: "Add the Warp plugin marketplace repository",
-                command: "claude plugin marketplace add warpdotdev/claude-code-warp",
-                executable: true,
-                link: None,
-            },
-            PluginInstructionStep {
-                description: "Install the Warp plugin",
-                command: "claude plugin install warp@claude-code-warp",
-                executable: true,
-                link: None,
-            },
-        ],
-        post_install_notes: &[
-            "Restart Claude Code to activate the plugin.",
-            "There are some known issues with Claude Code's plugin system. \
+static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
+    title: "Install Warp Plugin for Claude Code",
+    subtitle: "Ensure that jq is installed on your machine. Then, run these commands.",
+    steps: &[
+        PluginInstructionStep {
+            description: "Add the Warp plugin marketplace repository",
+            command: "claude plugin marketplace add warpdotdev/claude-code-warp",
+            executable: true,
+            link: None,
+        },
+        PluginInstructionStep {
+            description: "Install the Warp plugin",
+            command: "claude plugin install warp@claude-code-warp",
+            executable: true,
+            link: None,
+        },
+    ],
+    post_install_notes: &[
+        "Restart Claude Code to activate the plugin.",
+        "There are some known issues with Claude Code's plugin system. \
              If the plugin is not found after step 1, you can try manually adding an \"extraKnownMarketplaces\" entry to ~/.claude/settings.json.",
-        ],
-    }
+    ],
 });
 
 static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
@@ -212,6 +260,14 @@ static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| Plug
 });
 
 fn check_installed(claude_dir: &Path) -> bool {
+    check_plugin_installed(claude_dir, PLUGIN_KEY)
+}
+
+fn check_platform_plugin_installed(claude_dir: &Path) -> bool {
+    check_plugin_installed(claude_dir, PLATFORM_PLUGIN_KEY)
+}
+
+fn check_plugin_installed(claude_dir: &Path, plugin_key: &str) -> bool {
     let plugins_path = claude_dir.join("plugins").join("installed_plugins.json");
     let Ok(contents) = fs::read_to_string(plugins_path) else {
         return false;
@@ -221,7 +277,7 @@ fn check_installed(claude_dir: &Path) -> bool {
     };
     parsed
         .get("plugins")
-        .and_then(|p| p.get(PLUGIN_KEY))
+        .and_then(|p| p.get(plugin_key))
         .and_then(|v| v.as_array())
         .map(|arr| !arr.is_empty())
         .unwrap_or(false)
@@ -229,12 +285,21 @@ fn check_installed(claude_dir: &Path) -> bool {
 
 /// Reads the installed version string for the Warp plugin, if present.
 fn installed_version(claude_dir: &Path) -> Option<String> {
+    installed_plugin_version(claude_dir, PLUGIN_KEY)
+}
+
+/// Reads the installed version string for the Oz platform plugin, if present.
+fn installed_platform_plugin_version(claude_dir: &Path) -> Option<String> {
+    installed_plugin_version(claude_dir, PLATFORM_PLUGIN_KEY)
+}
+
+fn installed_plugin_version(claude_dir: &Path, plugin_key: &str) -> Option<String> {
     let plugins_path = claude_dir.join("plugins").join("installed_plugins.json");
     let contents = fs::read_to_string(plugins_path).ok()?;
     let parsed: Value = serde_json::from_str(&contents).ok()?;
     parsed
         .get("plugins")?
-        .get(PLUGIN_KEY)?
+        .get(plugin_key)?
         .as_array()?
         .first()?
         .get("version")?
@@ -242,10 +307,55 @@ fn installed_version(claude_dir: &Path) -> Option<String> {
         .map(|s| s.to_owned())
 }
 
-/// Checks `CLAUDE_HOME` env var first, falls back to `~/.claude`.
+fn claude_code_marketplace_has_local_override(claude_dir: &Path) -> bool {
+    let settings_path = claude_dir.join("settings.json");
+    let Ok(contents) = fs::read_to_string(settings_path) else {
+        return false;
+    };
+    let Ok(settings) = serde_json::from_str::<Value>(&contents) else {
+        return false;
+    };
+
+    settings
+        .get("extraKnownMarketplaces")
+        .and_then(|marketplaces| marketplaces.get(MARKETPLACE_NAME))
+        .map(marketplace_entry_has_local_path)
+        .unwrap_or(false)
+}
+
+fn marketplace_entry_has_local_path(entry: &Value) -> bool {
+    let Some(source) = entry.get("source") else {
+        return false;
+    };
+    match source {
+        Value::Object(source) => {
+            let source_kind = source.get("source").and_then(Value::as_str);
+            let path = source.get("path").and_then(Value::as_str);
+            source_kind == Some("directory") && path.map(is_local_marketplace_path).unwrap_or(false)
+        }
+        Value::String(source) => is_local_marketplace_path(source),
+        _ => false,
+    }
+}
+
+fn is_local_marketplace_path(source: &str) -> bool {
+    source.starts_with('/')
+        || source.starts_with("~/")
+        || source.starts_with("./")
+        || source.starts_with("../")
+        || source.starts_with("file://")
+}
+
+/// Resolves the dir the Claude CLI reads/writes its state from.
+///
+/// Honors `CLAUDE_CONFIG_DIR` (respected by the Claude CLI, and set by the Oz
+/// worker to a per-task dir), falling back to `~/.claude`. Must match where
+/// `claude plugin install` writes, else install/verify checks read the wrong dir.
 fn claude_home_dir() -> io::Result<PathBuf> {
-    if let Ok(claude_home) = env::var("CLAUDE_HOME") {
-        return Ok(PathBuf::from(claude_home));
+    if let Ok(dir) = env::var("CLAUDE_CONFIG_DIR")
+        && !dir.is_empty()
+    {
+        return Ok(PathBuf::from(dir));
     }
     dirs::home_dir()
         .map(|home| home.join(".claude"))

@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use warpui::elements::Empty;
 use warpui::platform::WindowStyle;
 use warpui::{App, AppContext, Element, Entity, ModelHandle, TypedActionView, View, ViewContext};
 
-use super::{SessionId, Sessions, SessionsEvent};
+use super::command_executor::testing::TestCommandExecutor;
+use super::{BootstrapSessionType, Session, SessionId, SessionInfo, Sessions, SessionsEvent};
 
 struct TestView {
     events: Vec<SessionsEvent>,
@@ -98,4 +100,77 @@ fn test_set_env_var_emits_no_event_when_no_change() {
             assert_eq!(view.events.len(), 1);
         });
     });
+}
+
+#[test]
+fn test_malicious_histfile_path_does_not_execute_injected_commands() {
+    App::test((), |_app| async move {
+        // If escaping is missing, `touch /tmp/warp_injection_test` would execute
+        // as a side effect of reading history.
+        let marker = "/tmp/warp_injection_test";
+        // Clean up in case a previous broken run left the marker.
+        let _ = std::fs::remove_file(marker);
+
+        let malicious_histfile = format!("/tmp/x'; touch {marker}; echo '");
+
+        let session_info = SessionInfo::new_for_test()
+            .with_session_type(BootstrapSessionType::WarpifiedRemote)
+            .with_histfile(Some(malicious_histfile));
+        let session = Session::new(session_info, Arc::new(TestCommandExecutor::default()));
+
+        // read_history for a WarpifiedRemote session calls read_history_from_file,
+        // which builds `cat '{escaped_path}'` and executes it via TestCommandExecutor
+        let _ = session.read_history(false).await;
+
+        assert!(
+            !std::path::Path::new(marker).exists(),
+            "Injected command executed — escaping regression!"
+        );
+    });
+}
+
+#[cfg(not(windows))]
+#[test]
+fn can_resolve_cwd_to_native_path_accepts_posix_path() {
+    let session = Session::test();
+    assert!(session.can_resolve_cwd_to_native_path("/Users/foo/bar"));
+}
+
+#[cfg(windows)]
+#[test]
+fn can_resolve_cwd_to_native_path_accepts_windows_drive_path() {
+    let session = Session::test();
+    assert!(session.can_resolve_cwd_to_native_path(r"E:\CLAUDE-BASE"));
+}
+
+#[cfg(windows)]
+#[test]
+fn can_resolve_cwd_to_native_path_rejects_unix_encoded_path_on_windows() {
+    let session_info =
+        SessionInfo::new_for_test().with_shell_type(crate::terminal::shell::ShellType::Bash);
+    let session = Session::new(session_info, Arc::new(TestCommandExecutor::default()));
+    assert!(!session.can_resolve_cwd_to_native_path("/E:/CLAUDE-BASE"));
+}
+
+#[cfg(windows)]
+#[test]
+fn powershell_read_command_embeds_escaped_path_without_args() {
+    use std::ffi::{OsStr, OsString};
+
+    use super::powershell_read_all_text_command;
+
+    // The path is embedded directly inside a single-quoted PowerShell literal.
+    let raw = r"C:\Users\dev\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt";
+    let command = powershell_read_all_text_command(OsStr::new(raw));
+    assert_eq!(
+        command,
+        OsString::from(format!("[System.IO.File]::ReadAllText('{raw}')"))
+    );
+
+    // A single quote in the path is doubled so it can't terminate the literal.
+    let command = powershell_read_all_text_command(OsStr::new(r"C:\o'brien\history.txt"));
+    assert_eq!(
+        command,
+        OsString::from(r"[System.IO.File]::ReadAllText('C:\o''brien\history.txt')")
+    );
 }

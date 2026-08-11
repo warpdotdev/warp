@@ -6,8 +6,8 @@ use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, Vi
 
 use crate::tab_configs::PickerStyle;
 use crate::util::git::{
-    detect_current_branch, get_all_branches, get_all_branches_with_known_main,
-    sort_branches_main_first, BranchEntry,
+    BranchEntry, detect_current_branch, get_all_branches, get_all_branches_with_known_main,
+    sort_branches_main_first,
 };
 use crate::view_components::{DropdownItem, FilterableDropdown};
 
@@ -197,10 +197,10 @@ impl BranchPicker {
 
                 // Add the default as the first item if it isn't already in the list
                 // (e.g. the user typed a branch name that doesn't exist locally yet).
-                if let Some(ref default) = me.default_value {
-                    if !branches.iter().any(|entry| entry.name == *default) {
-                        items.insert(0, DropdownItem::new(default.clone(), default.clone()));
-                    }
+                if let Some(ref default) = me.default_value
+                    && !branches.iter().any(|entry| entry.name == *default)
+                {
+                    items.insert(0, DropdownItem::new(default.clone(), default.clone()));
                 }
 
                 // Determine which branch to auto-select: explicit default

@@ -5,12 +5,12 @@ use warp_terminal::model::grid::cell;
 
 use super::*;
 use crate::features::FeatureFlag;
+use crate::terminal::SizeInfo;
 use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::cell::{Cell, Flags};
 use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::index::{Point, VisiblePoint, VisibleRow};
 use crate::terminal::model::secrets::ObfuscateSecrets;
-use crate::terminal::SizeInfo;
 
 // Scroll up moves lines upward.
 #[test]
@@ -1232,6 +1232,53 @@ fn test_empty_row_with_leading_wide_char_spacer_resize_panic() {
     // a panic where we failed to compute the content offset for the cursor, as flat
     // storage would have one too few rows, and the cursor position would be out of bounds.
     grid.resize(SizeInfo::new_without_font_metrics(2, 4));
+}
+
+#[test]
+fn test_shrink_cols_reflow_preserves_split_wide_char_as_wrapped_content() {
+    let mut grid = GridStorage::new(2, 6, 0, ObfuscateSecrets::No);
+    let mut wide_char = cell('Ｗ');
+    wide_char.flags.insert(Flags::WIDE_CHAR);
+    let mut spacer = Cell::default();
+    spacer.flags.insert(Flags::WIDE_CHAR_SPACER);
+
+    grid.set_stored_rows(
+        vec![
+            row::Row::new(6),
+            row::Row::from_vec(
+                vec![
+                    cell('a'),
+                    cell('b'),
+                    cell('c'),
+                    cell('d'),
+                    wide_char,
+                    spacer,
+                ],
+                6,
+            ),
+        ],
+        2,
+        6,
+    );
+
+    grid.resize(true, 2, 5, false);
+
+    let retained_boundary = &grid[VisibleRow(0)][4];
+    assert!(
+        retained_boundary
+            .flags
+            .contains(Flags::LEADING_WIDE_CHAR_SPACER)
+    );
+    assert!(!retained_boundary.flags.contains(Flags::WIDE_CHAR));
+
+    let wrapped_wide_char = &grid[VisibleRow(1)][0];
+    assert_eq!(wrapped_wide_char.c, 'Ｗ');
+    assert!(wrapped_wide_char.flags.contains(Flags::WIDE_CHAR));
+    assert!(
+        grid[VisibleRow(1)][1]
+            .flags
+            .contains(Flags::WIDE_CHAR_SPACER)
+    );
 }
 
 fn cell(c: char) -> Cell {

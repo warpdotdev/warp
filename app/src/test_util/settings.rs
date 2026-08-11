@@ -32,13 +32,15 @@ pub fn initialize_settings_for_tests_with_mode(
     use crate::settings::app_icon::AppIconSettings;
     use crate::settings::manager::SettingsManager;
     use crate::settings::{
-        init_and_register_user_preferences, AISettings, AccessibilitySettings,
-        AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
-        CloudPreferencesSettings, CodeSettings, DebugSettings, EmacsBindingsSettings, FontSettings,
-        GPUSettings, InputModeSettings, InputSettings, NativePreferenceSettings, PaneSettings,
-        SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings, ThemeSettings,
-        VimBannerSettings,
+        AISettings, AccessibilitySettings, AliasExpansionSettings, AppEditorSettings,
+        BlockVisibilitySettings, ChangelogSettings, CloudPreferencesSettings, CodeSettings,
+        DebugSettings, EmacsBindingsSettings, FontSettings, GPUSettings, InputModeSettings,
+        InputSettings, LocalControlSettings, NativePreferenceSettings, PaneSettings,
+        SameLinePromptBlockSettings, ScrollSettings, SelectionSettings,
+        SharedObjectLimitBannerSettings, SshSettings, ThemeSettings, TuiVoiceSettings,
+        VimBannerSettings, init_and_register_user_preferences,
     };
+    use crate::terminal::BlockListSettings;
     use crate::terminal::general_settings::GeneralSettings;
     use crate::terminal::keys_settings::KeysSettings;
     use crate::terminal::ligature_settings::LigatureSettings;
@@ -47,7 +49,6 @@ pub fn initialize_settings_for_tests_with_mode(
     use crate::terminal::settings::TerminalSettings;
     use crate::terminal::shared_session::settings::SharedSessionSettings;
     use crate::terminal::warpify::settings::WarpifySettings;
-    use crate::terminal::BlockListSettings;
     use crate::undo_close::UndoCloseSettings;
     use crate::user_config::WarpConfig;
     use crate::window_settings::WindowSettings;
@@ -57,6 +58,10 @@ pub fn initialize_settings_for_tests_with_mode(
     app.update(init_and_register_user_preferences);
     app.add_singleton_model(|_ctx| SettingsManager::default());
     app.add_singleton_model(WarpConfig::mock);
+    app.update(|ctx| {
+        // Register a no-op secure storage provider for testing.
+        warpui_extras::secure_storage::register_noop("test", ctx);
+    });
 
     AccessibilitySettings::register(app);
     app.update(AISettings::register_and_subscribe_to_events);
@@ -84,6 +89,9 @@ pub fn initialize_settings_for_tests_with_mode(
     InputSettings::register(app);
     KeysSettings::register(app);
     LigatureSettings::register(app);
+    if warp_core::features::FeatureFlag::WarpControlCli.is_enabled() {
+        LocalControlSettings::register(app);
+    }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
@@ -105,8 +113,10 @@ pub fn initialize_settings_for_tests_with_mode(
     TerminalSettings::register(app);
     PaneSettings::register(app);
     ThemeSettings::register(app);
+    TuiVoiceSettings::register(app);
     UndoCloseSettings::register(app);
     VimBannerSettings::register(app);
+    SharedObjectLimitBannerSettings::register(app);
     WarpDriveSettings::register(app);
     WindowSettings::register(app);
     SharedSessionSettings::register(app);
@@ -114,9 +124,6 @@ pub fn initialize_settings_for_tests_with_mode(
     SemanticSelection::register(app);
 
     app.update(|ctx| {
-        // Register a no-op secure storage provider for testing.
-        warpui_extras::secure_storage::register_noop("test", ctx);
-
         // Add settings models that are backed by secure storage, not user preferences.
         ctx.add_singleton_model(ai::api_keys::ApiKeyManager::new);
     });

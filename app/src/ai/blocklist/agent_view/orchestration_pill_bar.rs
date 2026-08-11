@@ -20,16 +20,16 @@ use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
     Align, AnchorPair, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, Element, Empty, Fill as ElementFill, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType, ParentAnchor,
-    ParentElement, ParentOffsetBounds, PositionedElementOffsetBounds, PositioningAxis, Radius,
-    SavePosition, ScrollbarWidth, Stack, Text, XAxisAnchor, YAxisAnchor,
-    DEFAULT_UI_LINE_HEIGHT_RATIO,
+    CornerRadius, CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, Element, Empty,
+    Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, OffsetType, ParentAnchor, ParentElement, ParentOffsetBounds,
+    PositionedElementOffsetBounds, PositioningAxis, Radius, SavePosition, ScrollbarWidth, Stack,
+    Text, XAxisAnchor, YAxisAnchor,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::{Cursor, LineStyle};
 use warpui::text_layout::{
-    ClipConfig, ClipDirection, ClipStyle, StyleAndFont, TextStyle, DEFAULT_TOP_BOTTOM_RATIO,
+    ClipConfig, ClipDirection, ClipStyle, DEFAULT_TOP_BOTTOM_RATIO, StyleAndFont, TextStyle,
 };
 use warpui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
@@ -47,11 +47,10 @@ use crate::ai::blocklist::agent_view::orchestration_conversation_links::{
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::{
     OrchestrationPillBarEvent, OrchestrationPillBarModel,
 };
-use crate::ai::blocklist::agent_view::{
-    agent_view_bg_color, AgentViewController, AgentViewControllerEvent,
-};
+use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::orchestration_topology::{
-    aggregated_orchestrator_status, descendant_conversation_ids_in_spawn_order,
+    LoadedSubtreeRollup, aggregated_orchestrator_status, child_conversations_in_pill_order,
+    loaded_subtree_rollup, orchestration_root_conversation_id,
 };
 use crate::ai::blocklist::telemetry::{
     BlocklistOrchestrationTelemetryEvent, PillBarActionKind, PillBarInteractionEvent,
@@ -64,7 +63,8 @@ use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::pane_group::pane::view::PaneHeaderAction;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::icon_with_status::{
-    self, render_icon_with_status, IconWithStatusVariant,
+    self, BadgeInnerShape, IconWithStatusVariant, StatusBadgeStyle,
+    render_icon_with_status_with_badge_style,
 };
 use crate::ui_components::icons::Icon;
 use crate::workspace::WorkspaceAction;
@@ -72,14 +72,27 @@ use crate::workspace::WorkspaceAction;
 const PILL_HEIGHT: f32 = 22.;
 const PILL_RADIUS: f32 = PILL_HEIGHT / 2.;
 const AVATAR_SIZE: f32 = 16.;
-/// `total_size` for the shared icon-with-status helper, chosen so the helper's
-/// brand-circle slot lands at `AVATAR_SIZE`.
-const AVATAR_WITH_STATUS_TOTAL_SIZE: f32 = AVATAR_SIZE / icon_with_status::CIRCLE_RATIO;
-const PILL_LABEL_MAX_WIDTH: f32 = 110.;
-const PILL_GAP: f32 = 6.;
-const PILL_GAP_WITH_STATUS: f32 = 2.;
+const PILL_AVATAR_SLOT_SIZE: f32 = 20.;
+const PILL_AVATAR_DISC_SIZE: f32 = PILL_AVATAR_SLOT_SIZE * icon_with_status::CIRCLE_RATIO;
+const AVATAR_WITH_STATUS_TOTAL_SIZE: f32 = PILL_AVATAR_SLOT_SIZE;
+const PILL_LABEL_MAX_WIDTH: f32 = 83.;
+const PILL_ROW_GAP: f32 = 8.;
+const PILL_CONTENT_GAP: f32 = 2.;
+const PILL_SELECTED_HOVER_CONTENT_GAP: f32 = 4.;
 const PILL_HORIZONTAL_PADDING_LEFT: f32 = 4.;
-const PILL_HORIZONTAL_PADDING_RIGHT: f32 = 10.;
+const PILL_HORIZONTAL_PADDING_RIGHT: f32 = 6.;
+const PILL_ICON_BUTTON_SIZE: f32 = 16.;
+const PILL_ICON_SIZE: f32 = 12.;
+const PILL_OVERFLOW_BUTTON_RIGHT_OFFSET: f32 = 4.;
+const STATIC_PILL_LABEL_MAX_WIDTH: f32 = 110.;
+const STATIC_PILL_HORIZONTAL_PADDING_RIGHT: f32 = 10.;
+/// Width of the overlaid horizontal scrollbar; thin hairline by design.
+const PILL_BAR_SCROLLBAR_WIDTH: f32 = 4.;
+/// Desired gap between the pills and the scrollbar thumb.
+const PILL_BAR_SCROLLBAR_GAP: f32 = 1.;
+/// Bottom gutter for the overlaid scrollbar. Its track sits 2px below the thumb
+/// (NewScrollable's `RIGHT_PADDING`), so gap = gutter - width - 2.
+const PILL_BAR_SCROLLBAR_GUTTER: f32 = PILL_BAR_SCROLLBAR_GAP + PILL_BAR_SCROLLBAR_WIDTH + 2.;
 
 /// Stable palette used to color child agent avatars deterministically by name.
 fn pill_palette(theme: &WarpTheme) -> [ColorU; 6] {
@@ -108,6 +121,7 @@ pub(crate) fn pill_initial(name: &str) -> char {
         .map(|c| c.to_ascii_uppercase())
         .unwrap_or('A')
 }
+
 /// Renders the orchestrator avatar disc shared by pill, breadcrumb, and transcript
 /// surfaces.
 pub(crate) fn render_orchestrator_avatar_disc(
@@ -117,7 +131,7 @@ pub(crate) fn render_orchestrator_avatar_disc(
 ) -> Box<dyn Element> {
     render_avatar_disc(
         theme.ansi_fg_cyan(),
-        AvatarGlyph::Icon(Icon::Oz),
+        AvatarGlyph::Icon(Icon::Agent),
         size,
         theme,
         appearance,
@@ -176,6 +190,25 @@ struct PillSpec {
     pin_state: PillPinState,
     /// Child running on a remote worker; drives the cloud-shaped badge variant.
     is_remote_child: bool,
+    /// Present when this child is itself an orchestrator: rolled-up state of
+    /// its subtree, rendered as a trailing "group" badge on the pill.
+    subtree_rollup: Option<LoadedSubtreeRollup>,
+}
+
+/// Everything `pill_specs` computes for one render of the bar. The bar is a
+/// drill-down view: it anchors on one conversation and renders only that
+/// conversation's DIRECT children, with breadcrumbs back up the tree when
+/// the anchored level sits below the root.
+struct PillBarContents {
+    anchor_id: AIConversationId,
+    /// Root of the orchestration tree when the anchor is not itself the
+    /// root; drives the leading breadcrumb pill.
+    breadcrumb_root_id: Option<AIConversationId>,
+    /// The anchor's direct parent when it is neither the anchor nor already
+    /// covered by the root breadcrumb (i.e. the anchor sits 2+ levels below
+    /// the root); rendered after the root breadcrumb.
+    breadcrumb_parent_id: Option<AIConversationId>,
+    specs: Vec<PillSpec>,
 }
 
 #[derive(Clone, Copy)]
@@ -188,10 +221,10 @@ enum AvatarGlyph {
 const OVERFLOW_MENU_WIDTH: f32 = 200.;
 /// Size in logical pixels of the 3-dot button at the trailing edge of each
 /// child pill.
-const OVERFLOW_BUTTON_SIZE: f32 = 16.;
-/// Label slot width reserved for the hover-only overflow button. The button
-/// sits 4px into the right padding, so it overlaps 12px of the label slot.
-const OVERFLOW_BUTTON_LABEL_RESERVE: f32 = OVERFLOW_BUTTON_SIZE - 4.;
+const OVERFLOW_BUTTON_SIZE: f32 = PILL_ICON_BUTTON_SIZE;
+/// How much of the label slot the overflow button overlays.
+const OVERFLOW_BUTTON_LABEL_RESERVE: f32 =
+    OVERFLOW_BUTTON_SIZE + PILL_OVERFLOW_BUTTON_RIGHT_OFFSET - PILL_HORIZONTAL_PADDING_RIGHT;
 
 /// Returns the saved-position id used to anchor the 3-dot menu to a
 /// specific child pill's overflow button. The id is global within the
@@ -210,6 +243,7 @@ fn pill_body_position_id(conversation_id: AIConversationId) -> String {
 
 fn pill_label_width(
     label: &str,
+    font_size: f32,
     font_properties: Properties,
     appearance: &Appearance,
     app: &AppContext,
@@ -223,7 +257,7 @@ fn pill_label_width(
     let line = text_layout_system.layout_line(
         label,
         LineStyle {
-            font_size: appearance.monospace_font_size() - 1.,
+            font_size,
             line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
@@ -285,6 +319,10 @@ pub enum OrchestrationPillBarAction {
     PillClicked {
         conversation_id: AIConversationId,
         pill_kind: PillKind,
+        /// Set for the leading breadcrumb pills so telemetry can tell
+        /// drill-up navigation apart from same-level pill switches
+        /// (navigation itself only depends on `pill_kind`).
+        is_breadcrumb: bool,
     },
 }
 
@@ -339,7 +377,11 @@ impl OrchestrationPillBar {
             BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
             | BlocklistAIHistoryEvent::AppendedExchange { .. }
             | BlocklistAIHistoryEvent::SetActiveConversation { .. }
-            | BlocklistAIHistoryEvent::StartedNewConversation { .. } => {
+            | BlocklistAIHistoryEvent::StartedNewConversation { .. }
+            // A remote child's run-id linkage can land after
+            // StartedNewConversation; pill contents and badges keyed on run
+            // linkage must refresh when it does.
+            | BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. } => {
                 this.ensure_mouse_states(ctx);
                 ctx.notify();
             }
@@ -554,16 +596,18 @@ impl OrchestrationPillBar {
         let Some(active_conversation) = history.conversation(&active_id) else {
             return;
         };
-        let orchestrator_id = parent_conversation_id(active_conversation, ctx).unwrap_or(active_id);
+        let anchor_id = drill_down_anchor_id(active_id, active_conversation, ctx);
         // Track only ids that are still rendered; retain step prevents leaking
         // handles for old orchestrators / children when switching views.
         let mut alive: HashSet<AIConversationId> = HashSet::new();
-        alive.insert(orchestrator_id);
-        if let Some(parent_id) = parent_conversation_id(active_conversation, ctx) {
-            alive.insert(parent_id);
-        }
-        for child_id in descendant_conversation_ids_in_spawn_order(history, orchestrator_id) {
-            alive.insert(child_id);
+        alive.insert(anchor_id);
+        alive.insert(active_id);
+        // The breadcrumb pills anchor on the tree root and the anchor's parent.
+        let (breadcrumb_root_id, breadcrumb_parent_id) = breadcrumb_ids(history, anchor_id);
+        alive.extend(breadcrumb_root_id);
+        alive.extend(breadcrumb_parent_id);
+        for child_id in history.child_conversation_ids_of(&anchor_id) {
+            alive.insert(*child_id);
         }
         let mut mouse_states = self.mouse_states.borrow_mut();
         let mut overflow_states = self.overflow_button_mouse_states.borrow_mut();
@@ -580,10 +624,9 @@ impl OrchestrationPillBar {
         // pane's tree, so pruning here would clobber pins in other panes.
     }
 
-    /// Builds the ordered pill list along with the orchestrator id it was
-    /// built for (used to key the shared horizontal scroll handle), or
-    /// `None` when nothing should render.
-    fn pill_specs(&self, app: &AppContext) -> Option<(AIConversationId, Vec<PillSpec>)> {
+    /// Builds the drill-down pill bar contents for the active conversation,
+    /// or `None` when nothing should render.
+    fn pill_specs(&self, app: &AppContext) -> Option<PillBarContents> {
         let active_id = self
             .agent_view_controller
             .as_ref(app)
@@ -592,40 +635,42 @@ impl OrchestrationPillBar {
         let history = BlocklistAIHistoryModel::as_ref(app);
         let active_conversation = history.conversation(&active_id)?;
 
-        // Anchor the bar on the orchestrator root regardless of which
-        // conversation is active so navigation between siblings is symmetric.
-        let orchestrator_id = parent_conversation_id(active_conversation, app).unwrap_or(active_id);
-        let orchestrator = history.conversation(&orchestrator_id)?;
+        let anchor_id = drill_down_anchor_id(active_id, active_conversation, app);
+        let anchor = history.conversation(&anchor_id)?;
 
-        // Walk the full descendant tree in pre-order, preserving each
-        // parent's child registration order so nested branches stay
-        // contiguous and grandchildren remain visible in the row.
-        let children: Vec<_> = descendant_conversation_ids_in_spawn_order(history, orchestrator_id)
+        // Per-level ordering is shared with keyboard navigation, but the two
+        // consume it differently: cycling walks the whole tree while the bar
+        // renders only the anchor's DIRECT children — deeper levels are
+        // reached by drilling into a group pill, and the bar follows the
+        // keyboard selection by re-anchoring (`drill_down_anchor_id`).
+        let children: Vec<_> = child_conversations_in_pill_order(history, anchor_id)
             .into_iter()
-            .filter_map(|id| history.conversation(&id))
+            .filter_map(|descendant| history.conversation(&descendant.conversation_id))
             .collect();
 
-        // Nothing to show if the orchestrator has no children yet.
+        // Nothing to show if the anchor has no children yet.
         if children.is_empty() {
             return None;
         }
+        let (breadcrumb_root_id, breadcrumb_parent_id) = breadcrumb_ids(history, anchor_id);
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
         let mut specs = Vec::with_capacity(1 + children.len());
 
-        // Orchestrator pill first; never pinned. Its badge aggregates the tree,
+        // Anchor pill first; never pinned. Its badge aggregates its subtree,
         // while child pills show per-child status.
         specs.push(PillSpec {
-            conversation_id: orchestrator_id,
-            label: orchestrator_label(orchestrator),
+            conversation_id: anchor_id,
+            label: orchestrator_label(anchor),
             avatar_color: theme.ansi_fg_cyan(),
-            avatar_glyph: AvatarGlyph::Icon(Icon::Oz),
-            status: Some(aggregated_orchestrator_status(history, orchestrator_id)),
-            is_selected: orchestrator_id == active_id,
+            avatar_glyph: AvatarGlyph::Icon(Icon::Agent),
+            status: Some(aggregated_orchestrator_status(history, anchor_id)),
+            is_selected: anchor_id == active_id,
             kind: PillKind::Orchestrator,
             pin_state: PillPinState::Unpinned,
-            is_remote_child: false,
+            is_remote_child: anchor.is_remote_child(),
+            subtree_rollup: None,
         });
 
         // Stamp each child's current pin state; partitioning happens at render.
@@ -640,6 +685,9 @@ impl OrchestrationPillBar {
             } else {
                 PillPinState::Unpinned
             };
+            // A child with children of its own renders as a "group" pill:
+            // its own status on the avatar plus a rolled-up subtree badge.
+            let subtree_rollup = loaded_subtree_rollup(history, child.id());
             specs.push(PillSpec {
                 conversation_id: child.id(),
                 label: name.to_string(),
@@ -650,10 +698,52 @@ impl OrchestrationPillBar {
                 kind: PillKind::Child,
                 pin_state,
                 is_remote_child: child.is_remote_child(),
+                subtree_rollup,
             });
         }
 
-        Some((orchestrator_id, specs))
+        Some(PillBarContents {
+            anchor_id,
+            breadcrumb_root_id,
+            breadcrumb_parent_id,
+            specs,
+        })
+    }
+}
+
+/// Resolves the breadcrumb targets shown while the bar is drilled below the
+/// tree root: the root itself, plus the anchor's direct parent when that
+/// parent is a distinct intermediate level (anchor 2+ levels below the
+/// root). When the parent IS the root only the root breadcrumb is returned,
+/// so the bar never shows duplicate affordances.
+fn breadcrumb_ids(
+    history: &BlocklistAIHistoryModel,
+    anchor_id: AIConversationId,
+) -> (Option<AIConversationId>, Option<AIConversationId>) {
+    let root_id = orchestration_root_conversation_id(history, anchor_id)
+        .filter(|root_id| *root_id != anchor_id);
+    let parent_id = history
+        .conversation(&anchor_id)
+        .and_then(|anchor| history.resolved_parent_conversation_id_for_conversation(anchor))
+        .filter(|parent_id| Some(*parent_id) != root_id && *parent_id != anchor_id);
+    (root_id, parent_id)
+}
+
+/// Resolves which conversation's level the drill-down bar shows for
+/// `active_id`: a conversation with children anchors its own level, while a
+/// leaf anchors its parent's level so sibling navigation stays symmetric. At
+/// orchestration depth 1 this matches the historical root-anchored behavior
+/// exactly.
+fn drill_down_anchor_id(
+    active_id: AIConversationId,
+    active_conversation: &AIConversation,
+    app: &AppContext,
+) -> AIConversationId {
+    let history = BlocklistAIHistoryModel::as_ref(app);
+    if history.child_conversation_ids_of(&active_id).is_empty() {
+        parent_conversation_id(active_conversation, app).unwrap_or(active_id)
+    } else {
+        active_id
     }
 }
 
@@ -678,7 +768,7 @@ pub fn render_static_agent_pill(name: &str, app: &AppContext) -> Box<dyn Element
         .with_child(avatar)
         .with_child(
             ConstrainedBox::new(label_text)
-                .with_max_width(PILL_LABEL_MAX_WIDTH)
+                .with_max_width(STATIC_PILL_LABEL_MAX_WIDTH)
                 .finish(),
         )
         .finish();
@@ -686,7 +776,7 @@ pub fn render_static_agent_pill(name: &str, app: &AppContext) -> Box<dyn Element
     ConstrainedBox::new(
         Container::new(row)
             .with_padding_left(PILL_HORIZONTAL_PADDING_LEFT)
-            .with_padding_right(PILL_HORIZONTAL_PADDING_RIGHT)
+            .with_padding_right(STATIC_PILL_HORIZONTAL_PADDING_RIGHT)
             .with_background_color(bg_color)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(PILL_RADIUS)))
             .finish(),
@@ -707,29 +797,34 @@ fn orchestrator_label(orchestrator: &AIConversation) -> String {
 }
 
 impl OrchestrationPillBar {
-    /// Resolves the source-conversation / total-pills / total-pinned
-    /// triple used to enrich every `PillBarInteraction` event. Returns
-    /// `None` when there is no active orchestration tree to attribute
-    /// the interaction to.
+    /// Resolves the anchor / root / total-pills / total-pinned tuple used
+    /// to enrich every `PillBarInteraction` event. The anchor becomes the
+    /// payload's `source_conversation_id`; the tree root rides alongside
+    /// so drilled-down interactions stay attributable to their tree.
+    /// Returns `None` when there is no active orchestration tree to
+    /// attribute the interaction to.
     fn pill_bar_telemetry_context(
         &self,
         app: &AppContext,
-    ) -> Option<(AIConversationId, usize, usize)> {
-        let (orchestrator_id, specs) = self.pill_specs(app)?;
-        let total_pills = specs.len();
-        let total_pinned = specs
+    ) -> Option<(AIConversationId, AIConversationId, usize, usize)> {
+        let contents = self.pill_specs(app)?;
+        let total_pills = contents.specs.len();
+        let total_pinned = contents
+            .specs
             .iter()
             .filter(|spec| matches!(spec.pin_state, PillPinState::Pinned))
             .count();
-        Some((orchestrator_id, total_pills, total_pinned))
+        let root_id = contents.breadcrumb_root_id.unwrap_or(contents.anchor_id);
+        Some((contents.anchor_id, root_id, total_pills, total_pinned))
     }
 
     /// Pill kind for `target_id` in the current pill specs. Defaults
     /// to `Child` if the id is no longer in the bar.
     fn pill_kind_for(&self, target_id: AIConversationId, app: &AppContext) -> PillBarPillKind {
         self.pill_specs(app)
-            .and_then(|(_, specs)| {
-                specs
+            .and_then(|contents| {
+                contents
+                    .specs
                     .into_iter()
                     .find(|spec| spec.conversation_id == target_id)
                     .map(|spec| spec.kind.telemetry_kind())
@@ -781,7 +876,7 @@ impl OrchestrationPillBar {
         switch_outcome: Option<PillSwitchOutcome>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let Some((source_conversation_id, total_pills, total_pinned)) =
+        let Some((source_conversation_id, root_conversation_id, total_pills, total_pinned)) =
             self.pill_bar_telemetry_context(ctx)
         else {
             return;
@@ -793,6 +888,7 @@ impl OrchestrationPillBar {
                 total_pills,
                 total_pinned,
                 source_conversation_id,
+                root_conversation_id,
                 target_conversation_id,
                 switch_outcome,
             }),
@@ -804,7 +900,7 @@ impl OrchestrationPillBar {
     /// the `FocusOpenedConversation` handler so the `PillClicked`
     /// handler can reuse the same nav logic without emitting the
     /// menu-driven `FocusOpenedConversation` telemetry event.
-    fn navigate_to_owner_pane(&self, id: AIConversationId, ctx: &mut ViewContext<Self>) {
+    fn navigate_to_conversation_pane(&self, id: AIConversationId, ctx: &mut ViewContext<Self>) {
         // "Focus pane" is purely a focus operation: the conversation
         // already lives in some other visible terminal view (verified
         // by `is_conversation_open_in_other_visible_view` at the call
@@ -813,15 +909,15 @@ impl OrchestrationPillBar {
         // `RestoreOrNavigateToConversation`: that path calls
         // `set_active_conversation_id` with whichever
         // `terminal_view_id` it receives, which would either
-        // re-transfer ownership to a stale id pulled from
+        // reassign the terminal surface to a stale id pulled from
         // `AgentConversationsModel::nav_data` or, worse, blank out
-        // the real owner pane while the conversation pops back into
+        // the real conversation pane while the conversation pops back into
         // the orchestrator.
         //
-        // Resolve the canonical owner directly from
+        // Resolve the canonical terminal surface directly from
         // `BlocklistAIHistoryModel` (the single source of truth) and
         // pick the appropriate focus action based on whether the
-        // owner pane lives in the same pane group as us:
+        // conversation pane lives in the same pane group as us:
         //   * Same pane group (sibling pane in this tab) —
         //     dispatch `TerminalAction::RevealChildAgent`. The pane
         //     group's handler walks visible terminal panes and calls
@@ -835,11 +931,11 @@ impl OrchestrationPillBar {
         //     dispatch `WorkspaceAction::FocusTerminalViewInWorkspace`,
         //     which walks all tabs/windows and activates the
         //     containing tab as needed.
-        let owner_view_id =
-            BlocklistAIHistoryModel::as_ref(ctx).terminal_view_id_for_conversation(&id);
-        let Some(owner_view_id) = owner_view_id else {
+        let conversation_view_id =
+            BlocklistAIHistoryModel::as_ref(ctx).terminal_surface_id_for_conversation(&id);
+        let Some(conversation_view_id) = conversation_view_id else {
             log::warn!(
-                "navigate_to_owner_pane: no canonical owner for {id:?}; falling back to switch-in-place"
+                "navigate_to_conversation_pane: no canonical terminal surface for {id:?}; falling back to switch-in-place"
             );
             ctx.dispatch_typed_action(
                 &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
@@ -851,8 +947,10 @@ impl OrchestrationPillBar {
             return;
         };
         let self_pane_group_id = self.agent_view_controller.as_ref(ctx).pane_group_id();
-        let owner_pane_group_id = pane_group_id_containing_terminal_view(owner_view_id, ctx);
-        if owner_pane_group_id.is_some() && owner_pane_group_id == self_pane_group_id {
+        let conversation_pane_group_id =
+            pane_group_id_containing_terminal_view(conversation_view_id, ctx);
+        if conversation_pane_group_id.is_some() && conversation_pane_group_id == self_pane_group_id
+        {
             ctx.dispatch_typed_action(
                 &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
                     TerminalAction::RevealChildAgent {
@@ -862,7 +960,7 @@ impl OrchestrationPillBar {
             );
         } else {
             ctx.dispatch_typed_action(&WorkspaceAction::FocusTerminalViewInWorkspace {
-                terminal_view_id: owner_view_id,
+                terminal_view_id: conversation_view_id,
             });
         }
     }
@@ -988,6 +1086,7 @@ impl TypedActionView for OrchestrationPillBar {
             OrchestrationPillBarAction::PillClicked {
                 conversation_id,
                 pill_kind,
+                is_breadcrumb,
             } => {
                 let id = *conversation_id;
                 let self_terminal_view_id =
@@ -1005,9 +1104,14 @@ impl TypedActionView for OrchestrationPillBar {
                 } else {
                     PillSwitchOutcome::SwitchedInPlace
                 };
-                self.emit_pill_switch(pill_kind.telemetry_kind(), id, outcome, ctx);
+                let telemetry_kind = if *is_breadcrumb {
+                    PillBarPillKind::Breadcrumb
+                } else {
+                    pill_kind.telemetry_kind()
+                };
+                self.emit_pill_switch(telemetry_kind, id, outcome, ctx);
                 if is_open_elsewhere {
-                    self.navigate_to_owner_pane(id, ctx);
+                    self.navigate_to_conversation_pane(id, ctx);
                 } else {
                     ctx.dispatch_typed_action(
                         &PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
@@ -1024,7 +1128,7 @@ impl TypedActionView for OrchestrationPillBar {
                     ctx,
                 );
                 self.close_menu(ctx);
-                self.navigate_to_owner_pane(*id, ctx);
+                self.navigate_to_conversation_pane(*id, ctx);
             }
         }
     }
@@ -1036,7 +1140,13 @@ impl View for OrchestrationPillBar {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        let Some((orchestrator_id, specs)) = self.pill_specs(app) else {
+        let Some(PillBarContents {
+            anchor_id,
+            breadcrumb_root_id,
+            breadcrumb_parent_id,
+            specs,
+        }) = self.pill_specs(app)
+        else {
             return Empty::new().finish();
         };
 
@@ -1047,7 +1157,7 @@ impl View for OrchestrationPillBar {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min)
             .with_main_axis_alignment(MainAxisAlignment::Start)
-            .with_spacing(PILL_GAP);
+            .with_spacing(PILL_ROW_GAP);
 
         // Resolve a persistent `MouseStateHandle` for each pill. If `ensure_mouse_states`
         // has not yet seen this id (e.g. mid-event-propagation race), insert a
@@ -1067,11 +1177,26 @@ impl View for OrchestrationPillBar {
         // the orchestrator pane, so any child whose owner differs from
         // this id has been split off into another pane/tab.
         let self_terminal_view_id = self.agent_view_controller.as_ref(app).terminal_view_id();
-        // Bucket pills so the row is: orchestrator, pinned, divider, unpinned.
-        // Spawn order within each child bucket is preserved by iteration order.
+        // Row layout: orchestrator, pinned, divider, unpinned. `pill_specs`
+        // already follows the canonical pill order, so partitioning preserves
+        // the exact order used by keyboard navigation.
         let mut orchestrator_pill: Option<Box<dyn Element>> = None;
         let mut pinned_pills: Vec<Box<dyn Element>> = Vec::new();
         let mut unpinned_pills: Vec<Box<dyn Element>> = Vec::new();
+        // Leading breadcrumbs while drilled into a sub-level of the
+        // orchestration tree: the root first, then the anchor's direct
+        // parent when it is an intermediate level of its own.
+        let breadcrumb_pills: Vec<Box<dyn Element>> = [
+            breadcrumb_root_id.map(|root_id| (root_id, PillKind::Orchestrator)),
+            breadcrumb_parent_id.map(|parent_id| (parent_id, PillKind::Child)),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|(target_id, pill_kind)| {
+            let mouse_state = mouse_states.entry(target_id).or_default().clone();
+            render_breadcrumb_pill(target_id, pill_kind, mouse_state, app)
+        })
+        .collect();
         for spec in specs {
             let mouse_state = mouse_states
                 .entry(spec.conversation_id)
@@ -1103,24 +1228,30 @@ impl View for OrchestrationPillBar {
             );
             match (kind, pin_state) {
                 (PillKind::Orchestrator, _) => orchestrator_pill = Some(pill),
-                (PillKind::Child, PillPinState::Pinned) => pinned_pills.push(pill),
-                (PillKind::Child, PillPinState::Unpinned) => unpinned_pills.push(pill),
+                (PillKind::Child, PillPinState::Pinned) => {
+                    pinned_pills.push(pill);
+                }
+                (PillKind::Child, PillPinState::Unpinned) => {
+                    unpinned_pills.push(pill);
+                }
             }
         }
         drop(mouse_states);
         drop(overflow_states);
         drop(pin_states);
 
+        for pill in breadcrumb_pills {
+            row.add_child(pill);
+        }
         if let Some(pill) = orchestrator_pill {
             row.add_child(pill);
         }
-        let has_pinned = !pinned_pills.is_empty();
         let has_unpinned = !unpinned_pills.is_empty();
         for pill in pinned_pills {
             row.add_child(pill);
         }
-        // Only show the divider when both sides actually have pills.
-        if has_pinned && has_unpinned {
+        // Divider between leading section (orchestrator + pinned) and unpinned.
+        if has_unpinned {
             row.add_child(render_pinned_divider(app));
         }
         for pill in unpinned_pills {
@@ -1134,32 +1265,38 @@ impl View for OrchestrationPillBar {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let horizontal_scroll_state =
-            OrchestrationPillBarModel::as_ref(app).horizontal_scroll_state_for(orchestrator_id);
+            OrchestrationPillBarModel::as_ref(app).horizontal_scroll_state_for(anchor_id);
         let scrollable = NewScrollable::horizontal(
             SingleAxisConfig::Clipped {
                 handle: horizontal_scroll_state,
-                child: row.finish(),
+                // Gutter goes inside the scrollable; outer padding can't clear
+                // the scrollbar since it sits outside the scrollbar's track.
+                child: Container::new(row.finish())
+                    .with_padding_bottom(PILL_BAR_SCROLLBAR_GUTTER)
+                    .finish(),
             },
             theme.nonactive_ui_detail().into(),
             theme.active_ui_detail().into(),
             ElementFill::None,
         )
-        // 4px overlaid scrollbar so the bar height stays constant
-        // whether or not the row overflows.
-        .with_horizontal_scrollbar(ScrollableAppearance::new(ScrollbarWidth::Custom(4.), true))
+        // Overlaid so the bar height stays constant whether or not it overflows.
+        .with_horizontal_scrollbar(ScrollableAppearance::new(
+            ScrollbarWidth::Custom(PILL_BAR_SCROLLBAR_WIDTH),
+            true,
+        ))
         // Let a standard vertical mouse wheel pan the bar horizontally;
         // trackpad horizontal swipes already work through the default path.
         .with_remap_cross_axis_wheel_to_main_axis(true)
         .with_propagate_mousewheel_if_not_handled(true)
         .finish();
 
-        // Padding lives outside the scrollable so it doesn't scroll away
-        // with the content.
+        // L/R padding outside so it doesn't scroll with the content; bottom is
+        // small since the scrollbar gutter is handled inside the scrollable.
         let bar = Container::new(scrollable)
             .with_padding_left(12.)
             .with_padding_right(12.)
             .with_padding_top(4.)
-            .with_padding_bottom(4.)
+            .with_padding_bottom(2.)
             .finish();
 
         // When the 3-dot menu is open, overlay it directly beneath the
@@ -1426,14 +1563,10 @@ fn render_hover_card(
     // harness (always when known). Hidden entirely when no chip applies.
     let mut chips: Vec<Box<dyn Element>> = Vec::new();
 
-    // Harness chip: defaults to Warp Agent (Oz) when server metadata
-    // hasn't loaded yet so the chip slot stays useful for in-progress
-    // local conversations. The brand color matches `harness_display`
-    // (e.g. orange for Claude Code, blue for Gemini CLI).
-    let harness = conversation
-        .server_metadata()
-        .map(|m| Harness::from(m.harness))
-        .unwrap_or(Harness::Oz);
+    // Harness chip: prefer the spawn-time `orchestration_harness_type`
+    // so child agents report their harness immediately; fall back to
+    // Oz so the chip slot stays populated.
+    let harness = conversation.orchestration_harness().unwrap_or(Harness::Oz);
     let harness_icon = harness_display::icon_for(harness);
     let harness_label = harness_display::display_name(harness).to_string();
     let harness_color = harness_display::brand_color(harness).unwrap_or(sub_text);
@@ -1567,6 +1700,13 @@ fn render_status_badge(
         .finish()
 }
 
+fn render_avatar_slot(avatar: Box<dyn Element>) -> Box<dyn Element> {
+    ConstrainedBox::new(Align::new(avatar).finish())
+        .with_width(PILL_AVATAR_SLOT_SIZE)
+        .with_height(PILL_HEIGHT)
+        .finish()
+}
+
 /// Renders a small icon + label chip used inside the hover details card.
 fn render_chip(
     icon: Icon,
@@ -1624,14 +1764,149 @@ fn navigation_action_for_pill(kind: PillKind, conversation_id: AIConversationId)
     }
 }
 
+/// Leading breadcrumb pill shown while the bar is drilled into a sub-level
+/// of the orchestration tree. Clicking it navigates to `target_id` — the
+/// tree root (`PillKind::Orchestrator`) or an intermediate parent
+/// (`PillKind::Child`, revealed via its hidden pane like any child pill).
+fn render_breadcrumb_pill(
+    target_id: AIConversationId,
+    pill_kind: PillKind,
+    mouse_state: MouseStateHandle,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let pill_rest_bg = theme
+        .background()
+        .blend(&internal_colors::fg_overlay_2(theme))
+        .into_solid();
+    let pill_hover_bg = theme
+        .background()
+        .blend(&internal_colors::fg_overlay_3(theme))
+        .into_solid();
+    let text_color = internal_colors::fg_overlay_6(theme).into_solid();
+    let label = BlocklistAIHistoryModel::as_ref(app)
+        .conversation(&target_id)
+        .map(|conversation| match pill_kind {
+            PillKind::Orchestrator => orchestrator_label(conversation),
+            PillKind::Child => conversation
+                .agent_name()
+                .filter(|name| !name.is_empty())
+                .unwrap_or("Agent")
+                .to_string(),
+        })
+        .unwrap_or_else(|| "Orchestrator".to_string());
+
+    Hoverable::new(mouse_state, move |hover_state| {
+        let background = if hover_state.is_hovered() || hover_state.is_clicked() {
+            pill_hover_bg
+        } else {
+            pill_rest_bg
+        };
+        let chevron =
+            ConstrainedBox::new(Icon::ChevronLeft.to_warpui_icon(text_color.into()).finish())
+                .with_width(PILL_ICON_SIZE)
+                .with_height(PILL_ICON_SIZE)
+                .finish();
+        let label_text = Text::new(
+            label,
+            appearance.ui_font_family(),
+            appearance.monospace_font_size() - 1.,
+        )
+        .with_color(text_color)
+        .soft_wrap(false)
+        .with_clip(ClipConfig::ellipsis())
+        .finish();
+        let row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(PILL_CONTENT_GAP)
+            .with_child(chevron)
+            .with_child(
+                ConstrainedBox::new(label_text)
+                    .with_max_width(PILL_LABEL_MAX_WIDTH)
+                    .finish(),
+            )
+            .finish();
+        ConstrainedBox::new(
+            Container::new(row)
+                .with_padding_left(PILL_HORIZONTAL_PADDING_LEFT)
+                .with_padding_right(PILL_HORIZONTAL_PADDING_RIGHT)
+                .with_background_color(background)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(PILL_RADIUS)))
+                .finish(),
+        )
+        .with_height(PILL_HEIGHT)
+        .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _app, _| {
+        ctx.dispatch_typed_action(OrchestrationPillBarAction::PillClicked {
+            conversation_id: target_id,
+            pill_kind,
+            is_breadcrumb: true,
+        });
+    })
+    .finish()
+}
+
+/// Horizontal padding inside the subtree badge around its count text.
+const SUBTREE_BADGE_HORIZONTAL_PADDING: f32 = 5.;
+
+/// Fixed slot width for a group pill's subtree badge: fits the count text
+/// and is never narrower than the trailing slice the hover 3-dot overlay
+/// occupies, so swapping the badge out for the dots never resizes the pill.
+fn subtree_rollup_badge_slot_width(
+    rollup: &LoadedSubtreeRollup,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> f32 {
+    let text_width = pill_label_width(
+        &rollup.descendant_count.to_string(),
+        appearance.monospace_font_size() - 2.,
+        Properties::default(),
+        appearance,
+        app,
+    );
+    (text_width + 2. * SUBTREE_BADGE_HORIZONTAL_PADDING).max(OVERFLOW_BUTTON_LABEL_RESERVE)
+}
+
+/// Compact trailing badge on a "group" pill: the number of agents in the
+/// child's subtree, tinted with the subtree's aggregated status color.
+fn render_subtree_rollup_badge(
+    rollup: &LoadedSubtreeRollup,
+    theme: &WarpTheme,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let (_, color) = rollup
+        .status
+        .status_icon_and_color(theme, StatusColorStyle::Standard);
+    let text = Text::new(
+        rollup.descendant_count.to_string(),
+        appearance.ui_font_family(),
+        appearance.monospace_font_size() - 2.,
+    )
+    .with_color(color)
+    .soft_wrap(false)
+    .finish();
+    Container::new(text)
+        .with_padding_left(SUBTREE_BADGE_HORIZONTAL_PADDING)
+        .with_padding_right(SUBTREE_BADGE_HORIZONTAL_PADDING)
+        .with_padding_top(1.)
+        .with_padding_bottom(1.)
+        .with_background_color(coloru_with_opacity(color, 10))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(PILL_RADIUS)))
+        .finish()
+}
+
 /// 1px vertical divider between the pinned and unpinned sections.
 fn render_pinned_divider(app: &AppContext) -> Box<dyn Element> {
-    const DIVIDER_HEIGHT: f32 = 14.;
+    const DIVIDER_HEIGHT: f32 = 16.;
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     ConstrainedBox::new(
         Container::new(Empty::new().finish())
-            .with_background(theme.outline())
+            .with_background(internal_colors::fg_overlay_3(theme))
             .finish(),
     )
     .with_width(1.)
@@ -1643,7 +1918,6 @@ fn render_pinned_divider(app: &AppContext) -> Box<dyn Element> {
 /// on hover doesn't jitter sibling pill widths. Solid glyph when pinned,
 /// outline when unpinned.
 fn render_pin_glyph_centered(is_pinned: bool, icon_color: ColorU) -> Box<dyn Element> {
-    let glyph_size = AVATAR_SIZE * 0.625;
     let icon_variant = if is_pinned {
         Icon::PinFilled
     } else {
@@ -1651,8 +1925,8 @@ fn render_pin_glyph_centered(is_pinned: bool, icon_color: ColorU) -> Box<dyn Ele
     };
     let glyph: Box<dyn Element> =
         ConstrainedBox::new(icon_variant.to_warpui_icon(icon_color.into()).finish())
-            .with_width(glyph_size)
-            .with_height(glyph_size)
+            .with_width(PILL_ICON_SIZE)
+            .with_height(PILL_ICON_SIZE)
             .finish();
 
     let centered = Flex::column()
@@ -1669,8 +1943,8 @@ fn render_pin_glyph_centered(is_pinned: bool, icon_color: ColorU) -> Box<dyn Ele
         )
         .finish();
     ConstrainedBox::new(centered)
-        .with_width(AVATAR_SIZE)
-        .with_height(AVATAR_SIZE)
+        .with_width(PILL_AVATAR_SLOT_SIZE)
+        .with_height(PILL_ICON_BUTTON_SIZE)
         .finish()
 }
 
@@ -1709,17 +1983,20 @@ fn render_pill(
     let avatar_glyph = spec.avatar_glyph;
     let status = spec.status;
     let is_remote_child = spec.is_remote_child;
+    let subtree_rollup = spec.subtree_rollup;
 
     // Per Figma: fg_overlay_2 at rest, fg_overlay_3 on hover, composed over
-    // the agent-view surface. Pre-blend to a solid so the avatar cutout ring
+    // the theme background. Pre-blend to a solid so the avatar cutout ring
     // matches the painted pill exactly.
-    let pill_rest_bg = Fill::from(agent_view_bg_color(app))
+    let pill_rest_bg = theme
+        .background()
         .blend(&internal_colors::fg_overlay_2(theme))
         .into_solid();
-    let pill_hover_bg = Fill::from(agent_view_bg_color(app))
+    let pill_hover_bg = theme
+        .background()
         .blend(&internal_colors::fg_overlay_3(theme))
         .into_solid();
-    let pill_text_color = internal_colors::text_main(theme, theme.background());
+    let pill_text_color = internal_colors::fg_overlay_6(theme).into_solid();
 
     // `Hoverable::new`'s build closure is `FnOnce` (see
     // `crates/warpui_core/src/elements/hoverable.rs`). We can therefore move
@@ -1744,18 +2021,23 @@ fn render_pill(
 
         let show_dots = show_overflow_button && (hover_state.is_hovered() || menu_is_open_for_this);
         let label_style = Properties {
-            weight: if is_selected {
-                Weight::Semibold
-            } else {
-                Weight::Normal
-            },
+            weight: Weight::Normal,
             ..Default::default()
         };
         // At rest, labels use the full budget. When dots are visible, keep
         // the rest-state slot width but reserve its trailing slice so the
-        // overlay does not cover glyphs or shift sibling pills.
-        let hover_label_slot_width = show_dots.then(|| {
-            pill_label_width(&label, label_style, appearance, app).min(PILL_LABEL_MAX_WIDTH)
+        // overlay does not cover glyphs or shift sibling pills. Group pills
+        // skip the label reserve: their trailing badge slot (below) already
+        // absorbs the overlay.
+        let hover_label_slot_width = (show_dots && subtree_rollup.is_none()).then(|| {
+            pill_label_width(
+                &label,
+                appearance.monospace_font_size() - 1.,
+                label_style,
+                appearance,
+                app,
+            )
+            .min(PILL_LABEL_MAX_WIDTH)
         });
 
         let label_text = Text::new(
@@ -1808,9 +2090,13 @@ fn render_pill(
                     theme,
                     appearance,
                 ),
-                None => {
-                    render_avatar_disc(avatar_color, avatar_glyph, AVATAR_SIZE, theme, appearance)
-                }
+                None => render_avatar_slot(render_avatar_disc(
+                    avatar_color,
+                    avatar_glyph,
+                    PILL_AVATAR_DISC_SIZE,
+                    theme,
+                    appearance,
+                )),
             },
             PillKind::Child => {
                 if show_pin_glyph {
@@ -1850,16 +2136,20 @@ fn render_pill(
                         appearance,
                     )
                 } else {
-                    render_avatar_disc(avatar_color, avatar_glyph, AVATAR_SIZE, theme, appearance)
+                    render_avatar_slot(render_avatar_disc(
+                        avatar_color,
+                        avatar_glyph,
+                        PILL_AVATAR_DISC_SIZE,
+                        theme,
+                        appearance,
+                    ))
                 }
             }
         };
-        // Tighter spacing only applies when the wider status-overlay avatar
-        // is showing; the pin glyph is a plain avatar-sized square.
-        let leading_label_spacing = if !show_pin_glyph && status.is_some() {
-            PILL_GAP_WITH_STATUS
+        let leading_label_spacing = if show_pin_glyph && is_selected {
+            PILL_SELECTED_HOVER_CONTENT_GAP
         } else {
-            PILL_GAP
+            PILL_CONTENT_GAP
         };
 
         // Body row contains just the avatar + label — the 3-dot button
@@ -1868,13 +2158,30 @@ fn render_pill(
         // determined by the label alone, and the dots can visually clip
         // the trailing edge of the text when shown without making the
         // pill itself wider or shifting siblings.
-        let row = Flex::row()
+        let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(leading_label_spacing)
             .with_child(leading)
-            .with_child(label_element)
-            .finish();
+            .with_child(label_element);
+        // Group pills append a rolled-up subtree badge after the label. The
+        // badge occupies a fixed-width slot; while the 3-dot overlay is
+        // shown the slot renders empty so the dots never overlap the badge,
+        // and the pill's width stays constant across the swap.
+        if let Some(rollup) = &subtree_rollup {
+            let slot_width = subtree_rollup_badge_slot_width(rollup, appearance, app);
+            let slot_content: Box<dyn Element> = if show_dots {
+                Empty::new().finish()
+            } else {
+                render_subtree_rollup_badge(rollup, theme, appearance)
+            };
+            row = row.with_child(
+                ConstrainedBox::new(Align::new(slot_content).finish())
+                    .with_width(slot_width)
+                    .finish(),
+            );
+        }
+        let row = row.finish();
 
         // Constrain pill to a fixed height so the half-stadium corner radius
         // renders as a clean continuous shape rather than awkwardly clamping.
@@ -1904,7 +2211,7 @@ fn render_pill(
                     theme,
                 ),
                 OffsetPositioning::offset_from_parent(
-                    vec2f(-PILL_HORIZONTAL_PADDING_RIGHT + 4., 0.),
+                    vec2f(-PILL_OVERFLOW_BUTTON_RIGHT_OFFSET, 0.),
                     ParentOffsetBounds::WindowByPosition,
                     ParentAnchor::MiddleRight,
                     ChildAnchor::MiddleRight,
@@ -1954,7 +2261,18 @@ fn render_pill(
         ctx.dispatch_typed_action(OrchestrationPillBarAction::PillClicked {
             conversation_id,
             pill_kind: kind,
+            is_breadcrumb: false,
         });
+    })
+    .on_right_click(move |ctx, _app, _| {
+        // Right-clicking a child pill should expose the same overflow
+        // actions as clicking the trailing 3-dot button. The menu is still
+        // anchored to that button's saved position: opening the menu forces
+        // `show_dots`, so the next render creates the anchor before the menu
+        // overlay is positioned.
+        if show_overflow_button {
+            ctx.dispatch_typed_action(OrchestrationPillBarAction::OpenMenu(conversation_id));
+        }
     })
     .finish();
 
@@ -1992,16 +2310,17 @@ fn render_overflow_button(
             None
         };
         let icon = ConstrainedBox::new(Icon::DotsVertical.to_warpui_icon(text_color).finish())
-            .with_width(OVERFLOW_BUTTON_SIZE)
-            .with_height(OVERFLOW_BUTTON_SIZE)
+            .with_width(PILL_ICON_SIZE)
+            .with_height(PILL_ICON_SIZE)
             .finish();
-        let mut container =
-            Container::new(icon).with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
+        let mut container = Container::new(Align::new(icon).finish())
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
         if let Some(bg) = bg {
             container = container.with_background(bg);
         }
         ConstrainedBox::new(container.finish())
-            .with_height(OVERFLOW_BUTTON_SIZE + 2.)
+            .with_width(OVERFLOW_BUTTON_SIZE)
+            .with_height(OVERFLOW_BUTTON_SIZE)
             .finish()
     })
     .with_cursor(Cursor::PointingHand)
@@ -2022,8 +2341,13 @@ fn render_overflow_button(
     SavePosition::new(button, &overflow_button_position_id(conversation_id)).finish()
 }
 
-/// Pill avatar with a status badge (cloud-shaped when remote), delegated to
-/// the shared icon-with-status helper.
+const PILL_BADGE_STYLE: StatusBadgeStyle = StatusBadgeStyle {
+    ring_ratio: 0.57,
+    icon_ratio: 0.36,
+    inner_shape: BadgeInnerShape::RoundedSquare { radius_px: 2.0 },
+};
+const PILL_BADGE_OVERHANG_RATIO: f32 = 0.05;
+
 fn render_avatar_with_status_overlay(
     avatar_color: ColorU,
     glyph: AvatarGlyph,
@@ -2033,29 +2357,41 @@ fn render_avatar_with_status_overlay(
     theme: &WarpTheme,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    // `Align` centers the disc in the helper's `total_size` box; without it
-    // the disc anchors top-left and sits ~2.5px higher than the orchestrator
-    // pill's plain avatar.
-    let avatar = Align::new(render_avatar_disc(
+    // Top-left anchor inside the helper's `total_size` box so the disc sits
+    // where Figma places it (TL of the slot, leaving the BR for the badge).
+    let avatar = render_avatar_disc(
         avatar_color,
         glyph,
         icon_with_status::circle_size(AVATAR_WITH_STATUS_TOTAL_SIZE),
         theme,
         appearance,
-    ))
-    .finish();
-    render_icon_with_status(
+    );
+    let lockup = render_icon_with_status_with_badge_style(
         IconWithStatusVariant::CustomAvatar {
             avatar,
             status: Some(status),
             is_ambient: is_remote_child,
         },
         AVATAR_WITH_STATUS_TOTAL_SIZE,
-        0.0,
+        PILL_BADGE_OVERHANG_RATIO,
+        PILL_BADGE_STYLE,
         theme,
         // Cutout ring color for the local badge; ignored by the cloud path.
         pill_background.into(),
+    );
+    // Bottom-anchor the lockup in the pill so the badge BR sits flush with
+    // the pill's bottom edge (matches Figma).
+    ConstrainedBox::new(
+        Flex::column()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(lockup)
+            .finish(),
     )
+    .with_width(PILL_AVATAR_SLOT_SIZE)
+    .with_height(PILL_HEIGHT)
+    .finish()
 }
 
 /// Renders the avatar circle as a colored disc with a centered glyph (letter
@@ -2168,9 +2504,6 @@ pub fn render_orchestration_breadcrumbs(
     if !FeatureFlag::AgentView.is_enabled() {
         return None;
     }
-    if !FeatureFlag::OrchestrationPillBar.is_enabled() {
-        return None;
-    }
     if !agent_view_controller.is_fullscreen() {
         return None;
     }
@@ -2223,13 +2556,13 @@ pub fn render_orchestration_breadcrumbs(
         .unwrap_or("Agent");
     let child_label = child_name.to_string();
 
-    // Parent crumb uses the Oz glyph on a neutral disc to match the
+    // Parent crumb uses the Warp logo on a neutral disc to match the
     // orchestrator pill in the pill bar.
     let parent_spec = CrumbSpec {
         conversation_id: parent_id,
         label: parent_label,
         avatar_color: theme.ansi_fg_cyan(),
-        avatar_glyph: AvatarGlyph::Icon(Icon::Oz),
+        avatar_glyph: AvatarGlyph::Icon(Icon::Agent),
         is_active: false,
     };
 
@@ -2375,7 +2708,7 @@ fn render_crumb(
         // rather than switching this (split-off child) pane to it.
         //
         // Pick the focus path based on where the parent's canonical
-        // owner pane lives, mirroring the orchestration pill bar's
+        // conversation pane lives, mirroring the orchestration pill bar's
         // "Focus pane" handler:
         //   * Same pane group as us (sibling pane in this tab) —
         //     dispatch `TerminalAction::RevealChildAgent`, which the
@@ -2388,17 +2721,20 @@ fn render_crumb(
         //     `WorkspaceAction::FocusTerminalViewInWorkspace`, which
         //     walks all tabs/windows and activates the containing tab
         //     as needed.
-        //   * No canonical owner anywhere — fall back to
+        //   * No canonical terminal surface anywhere — fall back to
         //     `SwitchAgentViewToConversation` so the breadcrumb stays
         //     useful even after the orchestrator pane has been closed
         //     and the parent conversation only persists in history.
-        if let Some(owner_view_id) =
-            BlocklistAIHistoryModel::as_ref(app).terminal_view_id_for_conversation(&conversation_id)
+        if let Some(conversation_view_id) = BlocklistAIHistoryModel::as_ref(app)
+            .terminal_surface_id_for_conversation(&conversation_id)
         {
             let self_pane_group_id =
                 pane_group_id_containing_terminal_view(self_terminal_view_id, app);
-            let owner_pane_group_id = pane_group_id_containing_terminal_view(owner_view_id, app);
-            if owner_pane_group_id.is_some() && owner_pane_group_id == self_pane_group_id {
+            let conversation_pane_group_id =
+                pane_group_id_containing_terminal_view(conversation_view_id, app);
+            if conversation_pane_group_id.is_some()
+                && conversation_pane_group_id == self_pane_group_id
+            {
                 ctx.dispatch_typed_action(
                     PaneHeaderAction::<TerminalAction, TerminalAction>::CustomAction(
                         TerminalAction::RevealChildAgent { conversation_id },
@@ -2407,7 +2743,7 @@ fn render_crumb(
                 return;
             }
             ctx.dispatch_typed_action(WorkspaceAction::FocusTerminalViewInWorkspace {
-                terminal_view_id: owner_view_id,
+                terminal_view_id: conversation_view_id,
             });
             return;
         }

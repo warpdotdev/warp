@@ -12,7 +12,7 @@ pub struct InputBufferModel {
 impl InputBufferModel {
     pub fn new(editor: &ViewHandle<EditorView>, ctx: &mut ModelContext<Self>) -> Self {
         let editor_clone = editor.downgrade();
-        ctx.subscribe_to_view(editor, move |me, event, ctx| match event {
+        ctx.subscribe_to_view(editor, move |me, _, event, ctx| match event {
             // This is intended to be the set of Editor view events that exhaustively
             // capture any changes to editor contents or cursor position.
             editor::Event::Edited(..)

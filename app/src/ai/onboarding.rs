@@ -1,13 +1,14 @@
-//! Onboarding-specific AI types and conversions.
+//! Onboarding-specific AI types, conversions and credit helpers.
 
 use ai::LLMId;
 use onboarding::slides::OnboardingModelInfo;
-use onboarding::OnboardingAuthState;
+use onboarding::{CreditPackOption, OnboardingAuthState};
 use warp_core::ui::icons::Icon;
 use warpui::{AppContext, SingletonEntity};
 
-use super::llms::{DisableReason, LLMInfo, LLMPreferences};
+use super::llms::{LLMInfo, LLMPreferences};
 use crate::auth::AuthStateProvider;
+use crate::pricing::{PricingInfoModel, onboarding_credit_pack_options};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 impl From<&LLMInfo> for OnboardingModelInfo {
@@ -15,8 +16,7 @@ impl From<&LLMInfo> for OnboardingModelInfo {
         Self {
             id: llm.id.clone(),
             title: llm.display_name.clone(),
-            icon: llm.provider.icon().unwrap_or(Icon::Oz),
-            requires_upgrade: matches!(llm.disable_reason, Some(DisableReason::RequiresUpgrade)),
+            icon: llm.provider.icon().unwrap_or(Icon::Agent),
             is_default: false,
         }
     }
@@ -26,7 +26,7 @@ pub fn build_onboarding_models(
     prefs: &LLMPreferences,
     app: &AppContext,
 ) -> (Vec<OnboardingModelInfo>, LLMId) {
-    let default_id = prefs.get_default_base_model().id.clone();
+    let default_id = prefs.get_default_base_model(app).id.clone();
     let models: Vec<OnboardingModelInfo> = prefs
         .get_base_llm_choices_for_agent_mode(app)
         .map(|llm| {
@@ -52,4 +52,27 @@ pub fn current_onboarding_auth_state(ctx: &AppContext) -> OnboardingAuthState {
     } else {
         OnboardingAuthState::FreeUser
     }
+}
+
+/// The ad-hoc credit packs to offer during onboarding, priced for the current
+/// viewer. Empty when the server hasn't sent pricing yet or the viewer's plan
+/// can't buy packs at all, which hides the option.
+pub fn onboarding_credit_packs(ctx: &AppContext) -> Vec<CreditPackOption> {
+    let workspaces = UserWorkspaces::as_ref(ctx);
+    let Some(policy) = workspaces.purchase_policy() else {
+        return Vec::new();
+    };
+    if !policy.allows_purchases() {
+        return Vec::new();
+    }
+    let Some(options) = PricingInfoModel::as_ref(ctx).addon_credits_options() else {
+        return Vec::new();
+    };
+    onboarding_credit_pack_options(options, policy.effective_premium_bps())
+}
+
+pub fn onboarding_pricing_promotion_message(ctx: &AppContext) -> Option<String> {
+    PricingInfoModel::as_ref(ctx)
+        .promotion_message()
+        .map(str::to_owned)
 }

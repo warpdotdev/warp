@@ -27,6 +27,15 @@ pub struct ChannelConfig {
     pub mcp_static_config: Option<McpStaticConfig>,
 }
 
+/// Configuration for GCP Identity-Aware Proxy authentication, present only on staging builds.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IapConfig {
+    /// The IAP OAuth2 client ID used as the audience for identity tokens.
+    pub audiences: Cow<'static, str>,
+    /// The service account email to impersonate when acquiring IAP credentials.
+    pub service_account_email: Cow<'static, str>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct WarpServerConfig {
     /// The root URL for the standard server pool.
@@ -38,6 +47,10 @@ pub struct WarpServerConfig {
     pub session_sharing_server_url: Option<Cow<'static, str>>,
     /// The API key to use when making requests to Firebase Authentication endpoints.
     pub firebase_auth_api_key: Cow<'static, str>,
+    /// Configuration for GCP Identity-Aware Proxy authentication, present only on
+    /// staging builds. [`None`] on production builds.
+    #[serde(default)]
+    pub iap_config: Option<IapConfig>,
 }
 
 impl WarpServerConfig {
@@ -47,6 +60,7 @@ impl WarpServerConfig {
             rtc_server_url: "wss://rtc.app.warp.dev/graphql/v2".into(),
             session_sharing_server_url: Some("wss://sessions.app.warp.dev".into()),
             firebase_auth_api_key: "AIzaSyBdy3O3S9hrdayLJxJ7mriBR4qgUaUygAs".into(),
+            iap_config: None,
         }
     }
 }
@@ -141,4 +155,17 @@ pub struct McpOAuthProviderConfig {
     pub client_id: Cow<'static, str>,
     /// The OAuth client secret registered for this channel.
     pub client_secret: Cow<'static, str>,
+    /// A separately registered native client that permits loopback redirects.
+    /// This must never be inferred from the custom-scheme client.
+    #[serde(default)]
+    pub loopback_client: Option<McpOAuthLoopbackClientConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct McpOAuthLoopbackClientConfig {
+    pub client_id: Cow<'static, str>,
+    /// Native OAuth clients should normally be public, but retain optional
+    /// secret support for providers that require one.
+    #[serde(default)]
+    pub client_secret: Option<Cow<'static, str>>,
 }

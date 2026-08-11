@@ -23,9 +23,9 @@ use warpui::{
     View, ViewContext, ViewHandle,
 };
 
+use super::BlockType;
 use super::model::{NotebooksEditorModel, RichTextEditorModelEvent};
 use super::view::EditorViewAction;
-use super::BlockType;
 use crate::appearance::Appearance;
 use crate::menu::MenuVariant;
 use crate::ui_components::buttons::icon_button;
@@ -372,7 +372,7 @@ impl View for Omnibar {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum OmnibarAction {
     /// Toggle bold styling on the selected text.
     BoldSelection,

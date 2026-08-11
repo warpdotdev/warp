@@ -5,31 +5,40 @@ use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
 use warpui::assets::asset_cache::AssetSource;
-use warpui::elements::{Container, Element, Empty, MouseStateHandle};
+use warpui::elements::{Element, Empty, MouseStateHandle};
 use warpui::keymap::Keystroke;
 use warpui::platform::OperatingSystem;
-use warpui::{AppContext, Entity, ModelHandle, SingletonEntity, View, ViewContext};
+use warpui::{
+    AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
+};
 
 use super::{AgentViewState, EphemeralMessageModel, EphemeralMessageModelEvent};
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent::{
     AIAgentExchangeId, AIAgentOutputStatus, FinishedAIAgentOutput, RenderableAIError,
 };
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
-use crate::ai::blocklist::agent_view::zero_state_block::render_ambient_credits_banner;
+use crate::ai::blocklist::agent_view::zero_state_block::{
+    render_ambient_credits_banner, render_dismissible_promo_pill,
+};
 use crate::ai::blocklist::agent_view::{
-    agent_view_bg_fill, is_in_cloud_context, AgentViewController, AgentViewControllerEvent,
+    AgentViewController, AgentViewControllerEvent, is_in_cloud_context,
 };
 use crate::ai::blocklist::{
-    ai_brand_color, BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIHistoryEvent,
-    BlocklistAIInputEvent, BlocklistAIInputModel,
+    BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIHistoryEvent,
+    BlocklistAIInputEvent, BlocklistAIInputModel, ai_brand_color,
 };
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentModelEvent};
-use crate::ai::mcp::templatable_manager::{FigmaMcpStatus, TemplatableMCPServerManagerEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::ai::mcp::templatable_manager::{FigmaMcpStatus, TemplatableMCPServerManagerEvent};
+use crate::ai::pricing_promotion::{
+    PricingPromotionState, PricingPromotionStateEvent, PricingPromotionSurface,
+};
 use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD,
 };
+use crate::auth::auth_manager::AuthManager;
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::settings::AISettings;
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
@@ -51,10 +60,9 @@ use crate::terminal::model::TerminalModel;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::blended_colors;
 use crate::util::bindings::keybinding_name_to_keystroke;
-use crate::workspace::tab_settings::{TabSettings, TabSettingsChangedEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
-use crate::BlocklistAIHistoryModel;
+use crate::workspace::tab_settings::{TabSettings, TabSettingsChangedEvent};
 
 const FIGMA_ICON_SIZE: f32 = 14.;
 
@@ -73,6 +81,10 @@ pub struct AgentMessageBarMouseStates {
     pub figma_install_button: MouseStateHandle,
     /// Mouse state handle for the "Enable Figma MCP" contextual button.
     pub figma_enable_button: MouseStateHandle,
+    /// Mouse state handle for dismissing the ambient credits banner.
+    pub ambient_credits_banner_close: MouseStateHandle,
+    pub pricing_promotion: MouseStateHandle,
+    pub pricing_promotion_close: MouseStateHandle,
 }
 
 /// Renders contextual hint text at the bottom of the agent view status bar.
@@ -96,6 +108,12 @@ pub struct AgentMessageBar {
 impl Entity for AgentMessageBar {
     type Event = ();
 }
+#[derive(Clone, Debug)]
+pub enum AgentMessageBarAction {
+    DismissAmbientCreditsBanner,
+    UpgradePricingPromotion,
+    DismissPricingPromotion,
+}
 
 impl AgentMessageBar {
     #[allow(clippy::too_many_arguments)]
@@ -112,12 +130,13 @@ impl AgentMessageBar {
         terminal_model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&agent_view_controller, |_, _, event, ctx| {
+        ctx.subscribe_to_model(&agent_view_controller, |me, _, event, ctx| {
             if matches!(
                 event,
                 AgentViewControllerEvent::EnteredAgentView { .. }
                     | AgentViewControllerEvent::ExitedAgentView { .. }
             ) {
+                me.record_visible_promotion(ctx);
                 ctx.notify();
             }
         });
@@ -164,6 +183,7 @@ impl AgentMessageBar {
                     me.ephemeral_message_model
                         .update(ctx, |m, ctx| m.try_dismiss_explicit_message(ctx));
                 }
+                me.record_visible_promotion(ctx);
                 ctx.notify();
             }
         });
@@ -183,7 +203,12 @@ impl AgentMessageBar {
                 ctx.notify();
             }
         });
-
+        ctx.subscribe_to_model(&PricingPromotionState::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, PricingPromotionStateEvent::Updated) {
+                me.record_visible_promotion(ctx);
+                ctx.notify();
+            }
+        });
         ctx.subscribe_to_model(&AIDocumentModel::handle(ctx), |_, _, event, ctx| {
             if matches!(event, AIDocumentModelEvent::DocumentVisibilityChanged(_)) {
                 ctx.notify();
@@ -208,26 +233,29 @@ impl AgentMessageBar {
             ctx.subscribe_to_model(
                 &TemplatableMCPServerManager::handle(ctx),
                 |_, model, event, ctx| {
-                    if let TemplatableMCPServerManagerEvent::StateChanged { uuid, .. } = event {
-                        if let Some(figma_mcp_uuid) =
+                    if let TemplatableMCPServerManagerEvent::StateChanged { uuid, .. } = event
+                        && let Some(figma_mcp_uuid) =
                             model.as_ref(ctx).get_figma_installation_uuid()
-                        {
-                            if uuid == &figma_mcp_uuid {
-                                ctx.notify();
-                            }
-                        }
+                        && uuid == &figma_mcp_uuid
+                    {
+                        ctx.notify();
                     }
                 },
             );
         }
 
         ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |_, _, event, ctx| {
-            if matches!(event, AIRequestUsageModelEvent::RequestUsageUpdated) {
+            if matches!(
+                event,
+                AIRequestUsageModelEvent::RequestUsageUpdated
+                    | AIRequestUsageModelEvent::CreditAvailabilityUpdated
+                    | AIRequestUsageModelEvent::AmbientCreditsBannerDismissed
+            ) {
                 ctx.notify();
             }
         });
 
-        Self {
+        let message_bar = Self {
             agent_view_controller,
             ephemeral_message_model,
             shortcut_view_model,
@@ -240,7 +268,9 @@ impl AgentMessageBar {
             terminal_model,
             mouse_states: AgentMessageBarMouseStates::default(),
             figma_detected: false,
-        }
+        };
+        message_bar.record_visible_promotion(ctx);
+        message_bar
     }
 }
 
@@ -279,6 +309,27 @@ impl AgentMessageBar {
         } else {
             None
         }
+    }
+
+    fn record_visible_promotion(&self, ctx: &mut ViewContext<Self>) {
+        if cfg!(target_family = "wasm")
+            || !self.agent_view_controller.as_ref(ctx).is_active()
+            || self
+                .input_suggestions_model
+                .as_ref(ctx)
+                .is_inline_menu_open()
+        {
+            return;
+        }
+        if PricingPromotionState::as_ref(ctx)
+            .visible_message(PricingPromotionSurface::AgentMessageBar, ctx)
+            .is_none()
+        {
+            return;
+        }
+        PricingPromotionState::handle(ctx).update(ctx, |state, ctx| {
+            state.record_displayed(PricingPromotionSurface::AgentMessageBar, ctx);
+        });
     }
 }
 
@@ -350,19 +401,36 @@ impl View for AgentMessageBar {
             return Empty::new().finish();
         };
 
-        // Show credits banner when user has ambient credits remaining.
         let right_element = if cfg!(target_family = "wasm") {
             None
-        } else if let Some(credits) =
-            AIRequestUsageModel::as_ref(app).ambient_only_credits_remaining()
+        } else if let Some(message) = PricingPromotionState::as_ref(app)
+            .visible_message(PricingPromotionSurface::AgentMessageBar, app)
         {
-            if credits >= AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD {
-                Some(render_ambient_credits_banner(credits, app))
-            } else {
-                None
-            }
+            Some(render_dismissible_promo_pill(
+                message,
+                appearance.theme().ansi_fg_green(),
+                Some(self.mouse_states.pricing_promotion.clone()),
+                Some(AgentMessageBarAction::UpgradePricingPromotion),
+                self.mouse_states.pricing_promotion_close.clone(),
+                AgentMessageBarAction::DismissPricingPromotion,
+                app,
+            ))
         } else {
-            None
+            let request_usage_model = AIRequestUsageModel::as_ref(app);
+            request_usage_model
+                .ambient_only_credits_remaining()
+                .filter(|credits| {
+                    *credits >= AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD
+                        && !request_usage_model.is_ambient_credits_banner_dismissed()
+                })
+                .map(|credits| {
+                    render_ambient_credits_banner(
+                        credits,
+                        self.mouse_states.ambient_credits_banner_close.clone(),
+                        AgentMessageBarAction::DismissAmbientCreditsBanner,
+                        app,
+                    )
+                })
         };
 
         // Append a Figma MCP chip to the message if applicable.
@@ -394,17 +462,37 @@ impl View for AgentMessageBar {
             Some(FigmaMcpStatus::Running) | None => {}
         }
 
-        let message_bar = render_standard_message_bar(message, right_element, app);
-        if self.agent_view_controller.as_ref(app).is_inline() {
-            Container::new(message_bar)
-                .with_background(agent_view_bg_fill(app))
-                .finish()
-        } else {
-            message_bar
-        }
+        render_standard_message_bar(message, right_element, app)
     }
 }
 
+impl TypedActionView for AgentMessageBar {
+    type Action = AgentMessageBarAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        match action {
+            AgentMessageBarAction::DismissAmbientCreditsBanner => {
+                AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.dismiss_ambient_credits_banner(ctx);
+                });
+            }
+            AgentMessageBarAction::UpgradePricingPromotion => {
+                PricingPromotionState::handle(ctx).update(ctx, |state, ctx| {
+                    state.record_clicked(PricingPromotionSurface::AgentMessageBar, ctx);
+                });
+                let upgrade_url = AuthManager::handle(ctx)
+                    .update(ctx, |auth_manager, _| auth_manager.upgrade_url());
+                ctx.open_url(&upgrade_url);
+            }
+            AgentMessageBarAction::DismissPricingPromotion => {
+                PricingPromotionState::handle(ctx).update(ctx, |state, ctx| {
+                    state.dismiss(PricingPromotionSurface::AgentMessageBar, ctx);
+                });
+                ctx.notify();
+            }
+        }
+    }
+}
 /// Arguments for agent message producers.
 #[derive(Copy, Clone)]
 pub struct AgentMessageArgs<'a> {
@@ -576,15 +664,11 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
             .with_is_disabled(!is_buffer_empty),
         );
 
-        let is_cloud_agent =
-            is_in_cloud_context(agent_view_controller.agent_view_state(), terminal_model);
+        let is_cloud_agent = is_in_cloud_context(terminal_model);
         let ai_settings = AISettings::as_ref(app);
 
         // Handoff to cloud only available for local agents.
-        if !is_cloud_agent
-            && ai_settings
-                .is_ampersand_handoff_enabled_for_conversation(Some(active_conversation), app)
-        {
+        if !is_cloud_agent && ai_settings.is_ampersand_handoff_enabled(app) {
             items.push(
                 MessageItem::clickable(
                     vec![
@@ -617,28 +701,27 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
         let has_conversation_been_updated_since_agent_view_entry =
             *original_conversation_length != active_conversation.exchange_count();
 
-        if !is_cloud_agent && !has_conversation_been_updated_since_agent_view_entry {
-            if let Some(conversations_keystroke) =
+        if !is_cloud_agent
+            && !has_conversation_been_updated_since_agent_view_entry
+            && let Some(conversations_keystroke) =
                 keybinding_name_to_keystroke(commands::CONVERSATIONS.name, app)
-            {
-                items.push(MessageItem::clickable(
-                    vec![
-                        MessageItem::keystroke(conversations_keystroke),
-                        MessageItem::text("open conversation"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(InputAction::ToggleConversationsMenu);
-                    },
-                    mouse_states.toggle_conversation_menu.clone(),
-                ));
-            }
+        {
+            items.push(MessageItem::clickable(
+                vec![
+                    MessageItem::keystroke(conversations_keystroke),
+                    MessageItem::text("open conversation"),
+                ],
+                |ctx| {
+                    ctx.dispatch_typed_action(InputAction::ToggleConversationsMenu);
+                },
+                mouse_states.toggle_conversation_menu.clone(),
+            ));
         }
 
         // Code review only works locally.
         #[cfg(not(target_family = "wasm"))]
         if !is_cloud_agent
-            && !ai_settings
-                .is_cloud_handoff_enabled_for_conversation(Some(active_conversation), app)
+            && !ai_settings.is_cloud_handoff_enabled(app)
             && *TabSettings::as_ref(app).show_code_review_button
         {
             let code_review_keystroke = if OperatingSystem::get().is_mac() {
@@ -759,12 +842,22 @@ fn should_fork_from_last_known_good_state(
         | RenderableAIError::ServerOverloaded
         | RenderableAIError::ContextWindowExceeded(_)
         | RenderableAIError::InvalidApiKey { .. }
-        | RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid { .. } => false,
-        RenderableAIError::InternalWarpError => true,
+        | RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid { .. }
+        | RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid => false,
+        // A shell-exit failure can't resume in this (now-dead) pane, but the user
+        // can fork from the last known good state to continue in a fresh one.
+        RenderableAIError::InternalWarpError | RenderableAIError::AgentExitedShell { .. } => true,
         RenderableAIError::Other {
             will_attempt_resume,
             ..
+        }
+        | RenderableAIError::TransientNetworkError {
+            will_attempt_resume,
+            ..
         } => !will_attempt_resume,
+        // Cloud startup failures mean the agent never started; there is no prior
+        // successful state to fork from.
+        RenderableAIError::CloudStartupFailed(_) => false,
     }
 }
 
@@ -803,24 +896,15 @@ impl MessageProvider<AgentMessageArgs<'_>> for ForkSlashCommandMessageProducer {
             }
         };
 
-        // `/fork` and `/continue-locally` open in a new pane with Enter and a new tab with
-        // Cmd/Ctrl+Enter. Other fork-like commands open in the current pane with Enter and a new
-        // pane with Cmd/Ctrl+Enter.
-        let primary_to_new_pane = command_name == commands::FORK.name || is_continue_locally;
-        let (primary_label, secondary_label) = if primary_to_new_pane {
-            (" new pane", " new tab")
-        } else {
-            (" current pane", " new pane")
-        };
-
+        // All fork-style commands open a new pane on Enter and a new tab on Cmd/Ctrl+Enter.
         Some(Message::new(vec![
             MessageItem::keystroke(Keystroke {
                 key: "enter".to_owned(),
                 ..Default::default()
             }),
-            MessageItem::text(primary_label),
+            MessageItem::text(" new pane"),
             MessageItem::keystroke(modifier_keystroke),
-            MessageItem::text(secondary_label),
+            MessageItem::text(" new tab"),
         ]))
     }
 }

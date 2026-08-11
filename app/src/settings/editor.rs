@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter};
 
-use enum_iterator::{all, Sequence};
+use enum_iterator::{Sequence, all};
 use serde::{Deserialize, Serialize};
 use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, Setting as _, SupportedPlatforms, SyncToCloud};
@@ -78,6 +78,38 @@ impl Display for CursorDisplayType {
     }
 }
 
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Deserialize,
+    Serialize,
+    Sequence,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "How line numbers are displayed in code editors.",
+    rename_all = "snake_case"
+)]
+pub enum CodeEditorLineNumberMode {
+    #[default]
+    Absolute,
+    Relative,
+}
+
+impl CodeEditorLineNumberMode {
+    pub fn dropdown_item_label(&self) -> &'static str {
+        match self {
+            Self::Absolute => "Absolute",
+            Self::Relative => "Relative",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub enum TabBehavior {
     #[default]
@@ -152,6 +184,7 @@ define_settings_group!(AppEditorSettings, settings: [
         default: CursorBlink::default(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         storage_key: "CursorBlink",
         toml_path: "appearance.cursor.cursor_blink",
@@ -162,6 +195,7 @@ define_settings_group!(AppEditorSettings, settings: [
         default: CursorDisplayType::default(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         storage_key: "CursorDisplayType",
         toml_path: "appearance.cursor.cursor_display_type",
@@ -172,6 +206,7 @@ define_settings_group!(AppEditorSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         toml_path: "text_editing.vim_mode_enabled",
         description: "Whether Vim keybindings are enabled.",
@@ -181,6 +216,7 @@ define_settings_group!(AppEditorSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "text_editing.vim_unnamed_system_clipboard",
         description: "Whether the Vim unnamed register uses the system clipboard.",
@@ -190,15 +226,27 @@ define_settings_group!(AppEditorSettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "text_editing.vim_status_bar",
         description: "Whether the Vim status bar is displayed.",
+    },
+    code_editor_line_number_mode: CodeEditorLineNumberModeSetting {
+        type: CodeEditorLineNumberMode,
+        default: CodeEditorLineNumberMode::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "text_editing.code_editor_line_number_mode",
+        description: "How line numbers are displayed in code editors.",
     },
     autocomplete_symbols: AutocompleteSymbols {
         type: bool,
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "text_editing.autocomplete_symbols",
         description: "Whether matching symbols like brackets and quotes are auto-completed.",
@@ -208,6 +256,7 @@ define_settings_group!(AppEditorSettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         storage_key: "Autosuggestions",
         toml_path: "terminal.input.autosuggestions.enabled",
@@ -218,6 +267,7 @@ define_settings_group!(AppEditorSettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "terminal.input.autosuggestions.keybinding_hint",
         description: "Whether autosuggestion keybinding hints are displayed.",
@@ -227,6 +277,7 @@ define_settings_group!(AppEditorSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "terminal.input.autosuggestions.show_ignore_button",
         description: "Whether the ignore button is shown for autosuggestions.",

@@ -9,32 +9,75 @@ use std::time::Duration;
 
 use futures::channel::oneshot;
 use session_sharing_protocol::common::{Role, SessionId};
+use session_sharing_protocol::sharer::SessionRetentionReason;
 use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
 use warp_completer::completer::CommandOutput;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
 use warp_terminal::model::grid::Dimensions;
 use warp_util::path::ShellFamily;
-use warp_util::sync::Condition;
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity as _, ViewHandle};
 
 use super::AgentDriverError;
+use crate::ai::agent::redaction::redact_secrets;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::attachments_download_dir;
 use crate::pane_group::NewTerminalOptions;
-use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
+use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
+use crate::terminal::TerminalView;
+use crate::terminal::model::RespectObfuscatedSecrets;
 use crate::terminal::model::block::{BlockId, SerializedBlock};
 use crate::terminal::model::find::RegexDFAs;
 use crate::terminal::model::grid::RespectDisplayedOutput;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::session::ExecuteCommandOptions;
-use crate::terminal::model::RespectObfuscatedSecrets;
 use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionSource};
 use crate::terminal::shell::ShellType;
-use crate::terminal::view::ConversationRestorationInNewPaneType;
-use crate::terminal::TerminalView;
+use crate::terminal::view::{ConversationRestorationInNewPaneType, Event};
 use crate::workspaces::user_workspaces::UserWorkspaces;
+
+/// Describes why a terminal session bootstrap failed.
+#[derive(Debug)]
+pub(crate) enum BootstrapError {
+    /// The PTY or shell process failed before the bootstrap script completed.
+    /// When `reason` is `Some`, the message is
+    /// "Shell spawn failed: {reason}. Check the Warp logs for details."
+    /// When `reason` is `None`, it is
+    /// "Shell spawn failed. Check the Warp logs for details."
+    PtySpawnFailed { reason: Option<String> },
+    /// The bootstrap script did not complete within the expected time.
+    TimedOut,
+    /// An unexpected internal error in the bootstrap channel
+    /// (e.g. the sender was dropped without sending).
+    InternalError,
+}
+
+impl std::fmt::Display for BootstrapError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BootstrapError::PtySpawnFailed { reason: Some(r) } => {
+                write!(
+                    f,
+                    "Shell spawn failed: {r}. Check the Warp logs for details."
+                )
+            }
+            BootstrapError::PtySpawnFailed { reason: None } => {
+                write!(f, "Shell spawn failed. Check the Warp logs for details.")
+            }
+            BootstrapError::TimedOut => write!(
+                f,
+                "Terminal session did not start within the expected time. \
+                 Check the Warp logs for details."
+            ),
+            BootstrapError::InternalError => {
+                write!(f, "An unexpected internal error occurred during bootstrap.")
+            }
+        }
+    }
+}
+
+impl std::error::Error for BootstrapError {}
 
 /// Describes why an agent's session-sharing request failed.
 #[derive(Debug, thiserror::Error)]
@@ -59,7 +102,8 @@ pub(crate) enum ShareSessionError {
 }
 
 const TERMINAL_SESSION_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
-const TERMINAL_SESSION_SHARE_DELAY: Duration = Duration::from_secs(10);
+/// The total time to wait for session sharing to start, including retries.
+const TERMINAL_SESSION_SHARE_DELAY: Duration = Duration::from_secs(20);
 
 /// Options for creating the terminal view before constructing a [`TerminalDriver`].
 pub(crate) struct TerminalDriverOptions {
@@ -79,6 +123,9 @@ pub(crate) enum TerminalDriverEvent {
         session_id: session_sharing_protocol::common::SessionId,
         join_url: String,
     },
+    /// A shared-session viewer sent input into this session: a command run in it, raw PTY bytes,
+    /// or an edit to the shared input. Emitted regardless of whether anything is listening.
+    SharedSessionViewerInput,
 }
 
 /// Manages the terminal session lifecycle for the agent driver.
@@ -90,19 +137,45 @@ pub(crate) enum TerminalDriverEvent {
 /// - Detecting block completion
 pub(crate) struct TerminalDriver {
     terminal_view: ViewHandle<TerminalView>,
-    session_bootstrapped: Condition,
+    /// Sender half of the bootstrap result channel. Exactly one of
+    /// `SessionBootstrapped`, `PtySpawnFailed`, or `Exited` (pre-bootstrap)
+    /// will send the outcome; all others no-op after the first send.
+    bootstrap_tx: Option<oneshot::Sender<Result<(), BootstrapError>>>,
+    /// Receiver half consumed by `wait_for_session_bootstrapped`.
+    bootstrap_rx: Option<oneshot::Receiver<Result<(), BootstrapError>>>,
     /// The session ID once sharing has been established.
     shared_session_id: Option<SessionId>,
     /// Receiver for the session sharing result. Present when sharing is expected
     /// and `wait_for_session_shared` has not yet been called.
     session_share_rx: Option<oneshot::Receiver<Result<(), ShareSessionError>>>,
     pending_share_requests: Vec<ShareRequest>,
-    waiting_command: Option<oneshot::Sender<ExitCode>>,
+    /// Resolves the in-flight command's exit status. Sent `Ok` when the
+    /// command's block completes, or
+    /// `Err(AgentDriverError::SetupCommandExitedShell)` if the shell process
+    /// exits while the command is still running.
+    waiting_command: Option<oneshot::Sender<Result<ExitCode, AgentDriverError>>>,
 
     /// State for the pending command we're expecting to start executing.
     /// The `String` is the expected command text, and the sender is used
-    /// to send the block ID to the waiting caller.
-    pending_command_start: Option<(String, oneshot::Sender<BlockId>)>,
+    /// to send the block ID to the waiting caller (or a shell-exit error if
+    /// the shell dies before the command starts).
+    pending_command_start: Option<(String, oneshot::Sender<Result<BlockId, AgentDriverError>>)>,
+
+    /// True once the shell process backing this session has exited
+    /// post-bootstrap. No further commands can execute, so
+    /// [`Self::execute_command`] fails fast with
+    /// [`AgentDriverError::SetupCommandExitedShell`].
+    shell_exited: bool,
+
+    /// The most recently submitted command (secret-redacted), used to
+    /// attribute a shell exit to the command that caused it. When the shell
+    /// dies mid-command, the exit path force-finishes the command's block
+    /// (with exit code 0) before `Event::Exited` is delivered, so at exit
+    /// time this — not any still-pending command — names the culprit.
+    ///
+    /// Stored redacted because it flows into error reports (server task
+    /// status, Sentry) via [`AgentDriverError::SetupCommandExitedShell`].
+    last_command: Option<String>,
 }
 
 impl Entity for TerminalDriver {
@@ -183,8 +256,6 @@ impl TerminalDriver {
         working_dir: PathBuf,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let session_bootstrapped = Condition::new();
-
         // Create a oneshot channel for session sharing when sharing is expected.
         // When sharing is disabled (or running against ngrok), leave both halves
         // as None so that `wait_for_session_shared` returns immediately.
@@ -226,13 +297,14 @@ impl TerminalDriver {
             });
         }
 
-        ctx.subscribe_to_view(&terminal_view, move |me, event, ctx| {
+        ctx.subscribe_to_view(&terminal_view, move |me, _, event, ctx| {
             me.handle_terminal_view_event(event, &mut session_share_tx, ctx);
         });
 
-        // If the session already bootstrapped before we subscribed, set the
-        // condition immediately so callers of `wait_for_session_bootstrapped`
-        // don't block forever.
+        let (bootstrap_tx_inner, bootstrap_rx) = oneshot::channel::<Result<(), BootstrapError>>();
+
+        // If bootstrap already completed before we subscribed, resolve the
+        // channel immediately so `wait_for_session_bootstrapped` doesn't block.
         let already_bootstrapped = terminal_view.read(ctx, |terminal, _| {
             terminal
                 .model
@@ -240,18 +312,24 @@ impl TerminalDriver {
                 .block_list()
                 .is_bootstrapping_precmd_done()
         });
-        if already_bootstrapped {
-            session_bootstrapped.set();
-        }
+        let bootstrap_tx = if already_bootstrapped {
+            let _ = bootstrap_tx_inner.send(Ok(()));
+            None
+        } else {
+            Some(bootstrap_tx_inner)
+        };
 
         Self {
             terminal_view,
-            session_bootstrapped,
+            bootstrap_tx,
+            bootstrap_rx: Some(bootstrap_rx),
             shared_session_id: None,
             session_share_rx,
             pending_share_requests: Vec::new(),
             waiting_command: None,
             pending_command_start: None,
+            shell_exited: false,
+            last_command: None,
         }
     }
 
@@ -302,7 +380,10 @@ impl TerminalDriver {
 
                 match request.subject {
                     ShareSubject::Team => {
-                        if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
+                        if let Some(team_uid) = UserWorkspaces::as_ref(ctx)
+                            .team_for_view(ctx)
+                            .map(|team| team.uid)
+                        {
                             terminal_view.update_session_team_permissions(
                                 Some(role),
                                 team_uid.to_string(),
@@ -410,16 +491,37 @@ impl TerminalDriver {
         })
     }
 
+    /// The error reported for commands affected by a shell exit, attributing
+    /// the most recently submitted command as the cause.
+    fn shell_exited_error(&self) -> AgentDriverError {
+        AgentDriverError::SetupCommandExitedShell {
+            command: self
+                .last_command
+                .clone()
+                .unwrap_or_else(|| "<unknown>".to_string()),
+        }
+    }
+
     /// Execute a command in the terminal and return a future that resolves to a
     /// [`CommandHandle`] once the command starts executing.
     pub fn execute_command(
         &mut self,
         command: &str,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<impl Future<Output = Result<CommandHandle, AgentDriverError>>, AgentDriverError>
-    {
-        let (exit_tx, exit_rx) = oneshot::channel::<ExitCode>();
-        let (start_tx, start_rx) = oneshot::channel::<BlockId>();
+    ) -> Result<
+        impl Future<Output = Result<CommandHandle, AgentDriverError>> + use<>,
+        AgentDriverError,
+    > {
+        // The shell process has exited, so no further commands can run in
+        // this session. Fail fast with the shell-exit error so callers
+        // (e.g. environment setup) report the failure instead of waiting
+        // forever on a command that can never start.
+        if self.shell_exited {
+            return Err(self.shell_exited_error());
+        }
+
+        let (exit_tx, exit_rx) = oneshot::channel::<Result<ExitCode, AgentDriverError>>();
+        let (start_tx, start_rx) = oneshot::channel::<Result<BlockId, AgentDriverError>>();
 
         // We should not be able to execute a command while we are still waiting on another one.
         // This is enforced by the caller by waiting on rx before continuing.
@@ -428,6 +530,12 @@ impl TerminalDriver {
         }
 
         let command_string = command.to_string();
+        // Store a secret-redacted copy for shell-exit attribution: the text
+        // flows into error reports (server task status, Sentry) if the shell
+        // dies, so never retain the raw command here.
+        let mut redacted_command = command_string.clone();
+        redact_secrets(&mut redacted_command);
+        self.last_command = Some(redacted_command);
         self.terminal_view.update(ctx, |terminal, ctx| {
             self.waiting_command = Some(exit_tx);
             self.pending_command_start = Some((command_string, start_tx));
@@ -437,7 +545,7 @@ impl TerminalDriver {
         Ok(async move {
             let block_id = start_rx
                 .await
-                .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
+                .map_err(|_| AgentDriverError::InvalidRuntimeState)??;
             Ok(CommandHandle {
                 exit_status_rx: exit_rx,
                 block_id,
@@ -456,7 +564,7 @@ impl TerminalDriver {
         &self,
         command: String,
         ctx: &ModelContext<Self>,
-    ) -> impl Future<Output = Result<CommandOutput, AgentDriverError>> {
+    ) -> impl Future<Output = Result<CommandOutput, AgentDriverError>> + use<> {
         let session = self.terminal_view.read(ctx, |terminal, app| {
             terminal
                 .active_block_session_id()
@@ -501,8 +609,10 @@ impl TerminalDriver {
         &mut self,
         target: &str,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<impl Future<Output = Result<CommandHandle, AgentDriverError>>, AgentDriverError>
-    {
+    ) -> Result<
+        impl Future<Output = Result<CommandHandle, AgentDriverError>> + use<>,
+        AgentDriverError,
+    > {
         let cd_command = self.build_cd_command(target, ctx);
         self.execute_command(&cd_command, ctx)
     }
@@ -519,7 +629,7 @@ impl TerminalDriver {
         &self,
         target: &str,
         ctx: &ModelContext<Self>,
-    ) -> impl Future<Output = Result<CommandOutput, AgentDriverError>> {
+    ) -> impl Future<Output = Result<CommandOutput, AgentDriverError>> + use<> {
         let cd_command = self.build_cd_command(target, ctx);
         self.execute_silent_command(cd_command, ctx)
     }
@@ -535,21 +645,27 @@ impl TerminalDriver {
 
     /// Returns a future that resolves when the session has bootstrapped.
     ///
-    /// This only waits for the `SessionBootstrapped` terminal view event.
+    /// The bootstrap result channel carries `Ok(())` on success or
+    /// `Err(BootstrapError)` on failure. If the channel times out, the error
+    /// is `BootstrapError::TimedOut`.
     pub fn wait_for_session_bootstrapped(
-        &self,
-    ) -> impl Future<Output = Result<(), AgentDriverError>> {
-        let session_bootstrapped = self.session_bootstrapped.clone();
+        &mut self,
+    ) -> impl Future<Output = Result<(), BootstrapError>> + use<> {
+        let bootstrap_rx = self.bootstrap_rx.take();
 
         async move {
-            session_bootstrapped
-                .wait()
-                .with_timeout(TERMINAL_SESSION_BOOTSTRAP_TIMEOUT)
-                .await
-                .map_err(|_| {
-                    log::error!("Timed out waiting for session bootstrap");
-                    AgentDriverError::BootstrapFailed
-                })
+            if let Some(rx) = bootstrap_rx {
+                // Map channel cancellation (sender dropped without sending)
+                // to InternalError — this shouldn't happen in practice.
+                let inner = async move { rx.await.unwrap_or(Err(BootstrapError::InternalError)) };
+                match inner.with_timeout(TERMINAL_SESSION_BOOTSTRAP_TIMEOUT).await {
+                    Ok(result) => result,
+                    Err(_timeout) => Err(BootstrapError::TimedOut),
+                }
+            } else {
+                // bootstrap_rx already consumed — shouldn't happen in normal flow.
+                Err(BootstrapError::InternalError)
+            }
         }
     }
 
@@ -560,7 +676,7 @@ impl TerminalDriver {
     /// - wait for session sharing later (e.g. right before running visible commands)
     pub fn wait_for_session_shared(
         &mut self,
-    ) -> impl Future<Output = Result<(), AgentDriverError>> {
+    ) -> impl Future<Output = Result<(), AgentDriverError>> + use<> {
         let rx = self.session_share_rx.take();
 
         async move {
@@ -571,27 +687,38 @@ impl TerminalDriver {
 
             match rx.with_timeout(TERMINAL_SESSION_SHARE_DELAY).await {
                 Ok(Ok(Ok(()))) => Ok(()),
-                Ok(Ok(Err(error))) => {
-                    log::error!("Session sharing failed: {error}");
-                    Err(AgentDriverError::ShareSessionFailed { error })
-                }
-                Ok(Err(_canceled)) => {
-                    log::error!("Session sharing channel dropped");
-                    Err(AgentDriverError::ShareSessionFailed {
-                        error: ShareSessionError::Interrupted,
-                    })
-                }
-                Err(_timeout) => {
-                    log::error!(
-                        "Timed out waiting for session sharing to start after {}s",
-                        TERMINAL_SESSION_SHARE_DELAY.as_secs()
-                    );
-                    Err(AgentDriverError::ShareSessionFailed {
-                        error: ShareSessionError::Timeout,
-                    })
-                }
+                Ok(Ok(Err(error))) => Err(AgentDriverError::ShareSessionFailed { error }),
+                Ok(Err(_canceled)) => Err(AgentDriverError::ShareSessionFailed {
+                    error: ShareSessionError::Interrupted,
+                }),
+                Err(_timeout) => Err(AgentDriverError::ShareSessionFailed {
+                    error: ShareSessionError::Timeout,
+                }),
             }
         }
+    }
+
+    pub fn extend_shared_session_retention(
+        &mut self,
+        reason: SessionRetentionReason,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.terminal_view.update(ctx, |terminal, ctx| {
+            if !terminal
+                .model
+                .lock()
+                .shared_session_status()
+                .is_active_sharer()
+            {
+                log::warn!(
+                    "Tried to extend shared session retention before sharing was active: {reason:?}"
+                );
+                return;
+            }
+
+            log::info!("Emitting request to extend shared session retention: {reason:?}");
+            ctx.emit(Event::ExtendSessionRetention { reason });
+        });
     }
 }
 
@@ -614,7 +741,7 @@ pub(crate) struct BlockOutputMatch {
 /// Also carries the [`BlockId`] so callers can retrieve the block snapshot
 /// after completion.
 pub(crate) struct CommandHandle {
-    exit_status_rx: oneshot::Receiver<ExitCode>,
+    exit_status_rx: oneshot::Receiver<Result<ExitCode, AgentDriverError>>,
     block_id: BlockId,
 }
 
@@ -631,7 +758,10 @@ impl Future for CommandHandle {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.exit_status_rx)
             .poll(cx)
-            .map(|result| result.map_err(|_| AgentDriverError::InvalidRuntimeState))
+            .map(|result| match result {
+                Ok(exit_status) => exit_status,
+                Err(_) => Err(AgentDriverError::InvalidRuntimeState),
+            })
     }
 }
 
@@ -645,7 +775,43 @@ impl TerminalDriver {
     ) {
         match event {
             crate::terminal::view::Event::SessionBootstrapped => {
-                self.session_bootstrapped.set();
+                if let Some(tx) = self.bootstrap_tx.take() {
+                    let _ = tx.send(Ok(()));
+                }
+            }
+            crate::terminal::view::Event::SharedSessionViewerInput => {
+                ctx.emit(TerminalDriverEvent::SharedSessionViewerInput);
+            }
+            crate::terminal::view::Event::PtySpawnFailed { reason } => {
+                // Signal the bootstrap waiter immediately so it doesn't wait
+                // for the full 60 s timeout when a spawn failure has already
+                // been confirmed.
+                if let Some(tx) = self.bootstrap_tx.take() {
+                    let _ = tx.send(Err(BootstrapError::PtySpawnFailed {
+                        reason: Some(reason.clone()),
+                    }));
+                }
+            }
+            crate::terminal::view::Event::Exited => {
+                // The shell process exited before bootstrap completed —
+                // cancel the wait immediately rather than sitting out the
+                // full 60 s timeout. No specific reason is known at this
+                // point; the logs will have details.
+                if let Some(tx) = self.bootstrap_tx.take() {
+                    let _ = tx.send(Err(BootstrapError::PtySpawnFailed { reason: None }));
+                }
+
+                // The shell is gone: no further command can start or finish.
+                // Fail any in-flight command (e.g. an environment setup
+                // command) with the shell-exit error so the run reports the
+                // failure instead of hanging until the sandbox is killed.
+                self.shell_exited = true;
+                if let Some((_, sender)) = self.pending_command_start.take() {
+                    let _ = sender.send(Err(self.shell_exited_error()));
+                }
+                if let Some(sender) = self.waiting_command.take() {
+                    let _ = sender.send(Err(self.shell_exited_error()));
+                }
             }
             crate::terminal::view::Event::SlowBootstrap => {
                 ctx.emit(TerminalDriverEvent::SlowBootstrap);
@@ -681,7 +847,7 @@ impl TerminalDriver {
                     let block_id = self.terminal_view.read(ctx, |terminal, _| {
                         terminal.model.lock().block_list().active_block_id().clone()
                     });
-                    let _ = sender.send(block_id);
+                    let _ = sender.send(Ok(block_id));
                 }
             }
             crate::terminal::view::Event::BlockCompleted { block, .. } => {
@@ -700,10 +866,14 @@ impl TerminalDriver {
                     // we instead simply make sure it was not a background block.
                     bootstrapping_done && !block.is_background
                 }) {
-                    let _ = sender.send(block.exit_code);
+                    let _ = sender.send(Ok(block.exit_code));
                 }
             }
             _ => (),
         }
     }
 }
+
+#[cfg(test)]
+#[path = "terminal_tests.rs"]
+mod tests;

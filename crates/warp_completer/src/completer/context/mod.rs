@@ -14,7 +14,7 @@ use smol_str::SmolStr;
 use typed_path::{TypedPath, TypedPathBuf};
 use warp_core::command::ExitCode;
 use warp_util::path::{EscapeChar, ShellFamily};
-use warpui::platform::OperatingSystem;
+use warpui_core::platform::OperatingSystem;
 
 use super::engine::EngineDirEntry;
 use crate::completer::TopLevelCommandCaseSensitivity;

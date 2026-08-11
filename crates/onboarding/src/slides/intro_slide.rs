@@ -1,29 +1,30 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use ui_components::{button, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button};
+use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
-use warpui::elements::shimmering_text::{
+use warpui_core::elements::shimmering_text::{
     ShimmerConfig, ShimmeringTextElement, ShimmeringTextStateHandle,
 };
-use warpui::elements::{
+use warpui_core::elements::{
     Align, ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Flex, FormattedTextElement,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Stack,
 };
-use warpui::keymap::Keystroke;
-use warpui::text_layout::TextAlignment;
-use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
-use warpui::{
+use warpui_core::keymap::Keystroke;
+use warpui_core::text_layout::TextAlignment;
+use warpui_core::ui_components::components::{UiComponent as _, UiComponentStyles};
+use warpui_core::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
     ViewContext,
 };
 
 use super::OnboardingSlide;
-use crate::model::OnboardingStateModel;
 use crate::OnboardingEvent;
+use crate::model::OnboardingStateModel;
 
 #[derive(Clone, Debug)]
 pub enum IntroSlideEvent {
@@ -125,6 +126,17 @@ impl View for IntroSlide {
 impl IntroSlide {
     fn get_started_clicked(&mut self, ctx: &mut ViewContext<Self>) {
         send_telemetry_from_ctx!(OnboardingEvent::GetStartedClicked, ctx);
+        if FeatureFlag::AccountFirstOnboarding.is_enabled() {
+            send_telemetry_from_ctx!(
+                OnboardingEvent::OnboardingAction {
+                    slide_name: "welcome".to_string(),
+                    action: "get_started".to_string(),
+                    account_class: None,
+                    experiment_arm: None,
+                },
+                ctx
+            );
+        }
 
         self.onboarding_state.update(ctx, |model, ctx| {
             model.next(ctx);

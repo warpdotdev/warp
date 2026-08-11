@@ -8,16 +8,15 @@ use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
 
+use super::ServerApi;
 #[cfg(feature = "local_fs")]
 pub use super::presigned_upload::FileUploadBody;
 pub use super::presigned_upload::UploadBody;
-use super::ServerApi;
 use crate::ai::agent::conversation::AIConversationId;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
-use crate::server::server_api::auth::AuthClient;
 
 /// A presigned upload target returned by the server.
 #[serde_with::serde_as]
@@ -25,6 +24,8 @@ use crate::server::server_api::auth::AuthClient;
 pub struct UploadTarget {
     pub url: String,
     pub method: String,
+    #[serde(default)]
+    #[serde_as(deserialize_as = "serde_with::DefaultOnNull")]
     pub headers: HashMap<String, String>,
     /// Ordered multipart form fields for POST uploads.
     #[serde(default)]
@@ -49,6 +50,9 @@ pub enum UploadFieldValue {
     Static { value: String },
     /// Client should compute CRC32C of the upload, base64-encode the 4-byte
     /// big-endian result, and send it as this field's value.
+    // `snake_case` would derive `content_crc32_c`, which does not match the
+    // `ContentCRC32CFieldValue` discriminator in warp-server's OpenAPI schema.
+    #[serde(rename = "content_crc32c")]
     ContentCrc32C,
     /// Client should use the raw upload bytes as this field's value.
     ContentData,
@@ -254,7 +258,7 @@ impl ServerApi {
 
         let url = format!("{}/api/v1/{}", crate::ChannelState::server_root_url(), path);
 
-        let mut request = self.client.get(&url);
+        let mut request = self.base_client.http_client().get(&url);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
@@ -291,7 +295,7 @@ impl ServerApi {
 
         let url = format!("{}/api/v1/{}", crate::ChannelState::server_root_url(), path);
 
-        let mut request = self.client.post(&url).json(body);
+        let mut request = self.base_client.http_client().post(&url).json(body);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
@@ -481,7 +485,7 @@ impl HarnessSupportClient for ServerApi {
     }
 
     fn http_client(&self) -> &http_client::Client {
-        &self.client
+        self.base_client.http_client()
     }
 }
 

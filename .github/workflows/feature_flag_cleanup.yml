@@ -14,6 +14,7 @@ jobs:
   analyze:
     name: Analyze feature flags
     runs-on: namespace-profile-ubuntu-small
+    if: github.repository_owner == 'warpdotdev'
     permissions:
       contents: read
       pull-requests: read
@@ -25,7 +26,7 @@ jobs:
       artifact_url: ${{ steps.upload_feature_flag_log.outputs.artifact-url }}
     steps:
       - name: Check out code
-        uses: namespacelabs/nscloud-checkout-action@938f5d2d403d6224d9a0c0dc559b1dae09c2ede4 # v8.1.1
+        uses: namespacelabs/nscloud-checkout-action@445c25d7009680597d73eb03c4e1cd5be522ed73 # v9.0.0
         with:
           fetch-depth: 0
 
@@ -155,13 +156,13 @@ jobs:
       contents: read
     steps:
       - name: Check out code
-        uses: namespacelabs/nscloud-checkout-action@938f5d2d403d6224d9a0c0dc559b1dae09c2ede4 # v8.1.1
+        uses: namespacelabs/nscloud-checkout-action@445c25d7009680597d73eb03c4e1cd5be522ed73 # v9.0.0
         with:
           ref: ${{ needs.analyze.outputs.analyzed_sha }}
           fetch-depth: 0
 
       - name: Setup Rust cache
-        uses: namespacelabs/nscloud-cache-action@a90bb5d4b27522ce881c6e98eebd7d7e6d1653f9 # v1.4.2
+        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3 # v1.6.0
         with:
           cache: rust
 
@@ -212,7 +213,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Check out code
-        uses: namespacelabs/nscloud-checkout-action@938f5d2d403d6224d9a0c0dc559b1dae09c2ede4 # v8.1.1
+        uses: namespacelabs/nscloud-checkout-action@445c25d7009680597d73eb03c4e1cd5be522ed73 # v9.0.0
         with:
           ref: ${{ needs.analyze.outputs.analyzed_sha }}
           fetch-depth: 0
@@ -229,7 +230,7 @@ jobs:
 
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           app-id: ${{ secrets.OZ_MGMT_GHA_APP_ID }}
           private-key: ${{ secrets.OZ_MGMT_GHA_PRIVATE_KEY }}
@@ -256,7 +257,7 @@ jobs:
           echo "Pull request created: ${{ steps.create_pr.outputs.pull-request-url }}"
         
       - name: Send Slack notification
-        uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
+        uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
         if: ${{ steps.create_pr.outputs.pull-request-operation == 'created' }}
         with:
           method: chat.postMessage

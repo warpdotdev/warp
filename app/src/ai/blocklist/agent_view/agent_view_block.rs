@@ -1,8 +1,8 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use settings::Setting;
-use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Empty, Expanded, Flex, Hoverable, MainAxisSize,
     MouseStateHandle, ParentElement, SavePosition, Shrinkable, Text,
@@ -18,15 +18,15 @@ use warpui::{
 };
 
 use super::{AgentViewController, AgentViewEntryOrigin};
+use crate::BlocklistAIHistoryModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::terminal::BlockListSettings;
 use crate::ui_components::blended_colors;
-use crate::ui_components::icon_with_status::{render_icon_with_status, IconWithStatusVariant};
+use crate::ui_components::icon_with_status::{IconWithStatusVariant, render_icon_with_status};
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ToastStack, WorkspaceAction};
-use crate::BlocklistAIHistoryModel;
 
 #[derive(Default)]
 struct StateHandles {
@@ -259,7 +259,7 @@ impl View for AgentViewEntryBlock {
             // If the agent_view_block's conversation no longer exists,
             // we assume that it has been deleted.
             return render_deleted_state(
-                self.origin,
+                self.origin.clone(),
                 self.cached_title.clone(),
                 appearance,
                 are_block_dividers_enabled,
@@ -297,7 +297,7 @@ impl View for AgentViewEntryBlock {
             Some("Restored")
         } else if !self.is_new
             && !matches!(
-                self.origin,
+                &self.origin,
                 AgentViewEntryOrigin::LongRunningCommand
                     | AgentViewEntryOrigin::AgentRequestedNewConversation
             )
@@ -379,7 +379,7 @@ impl View for AgentViewEntryBlock {
             .with_child(Container::new(fork_button).with_margin_left(8.).finish())
             .with_child(open_conversation_button);
 
-        let origin = self.origin;
+        let origin = self.origin.clone();
         let entry_block_id = self.view_id;
         let entry_block_position_id = get_agent_view_entry_block_position_id(entry_block_id);
         SavePosition::new(
@@ -390,7 +390,7 @@ impl View for AgentViewEntryBlock {
                     blended_colors::fg_overlay_1(appearance.theme())
                 };
                 render_block_container(
-                    origin,
+                    origin.clone(),
                     row.finish(),
                     background.into(),
                     appearance,

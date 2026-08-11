@@ -1,7 +1,7 @@
 [package]
 name = "onboarding"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors.workspace = true
 publish.workspace = true
 license.workspace = true
@@ -12,7 +12,7 @@ path = "src/bin/main.rs"
 required-features = ["bin"]
 
 [features]
-bin = ["warpui/log_named_telemetry_events"]
+bin = ["warpui_core/log_named_telemetry_events"]
 
 [dependencies]
 ai.workspace = true
@@ -30,5 +30,10 @@ strum.workspace = true
 strum_macros.workspace = true
 uuid.workspace = true
 warp_core = { workspace = true }
+warp_errors.workspace = true
 warpui.workspace = true
+warpui_core.workspace = true
 warp_logging.workspace = true
+
+[dev-dependencies]
+warp_core = { workspace = true, features = ["test-util"] }

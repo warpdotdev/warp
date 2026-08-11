@@ -3,24 +3,36 @@
 //! Queries are not rendered in blocks corresponding to requested command or requested action responses.
 
 use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
+use warp_core::ui::color::Opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Container, CornerRadius, DispatchEventResult, EventHandler, Flex, MainAxisAlignment,
-    MainAxisSize, ParentElement, Radius, Shrinkable, Wrap,
+    Border, Container, CornerRadius, DispatchEventResult, DropShadow, EventHandler, Flex,
+    MainAxisAlignment, MainAxisSize, ParentElement, Radius, Shrinkable, Wrap,
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::ui_components::chip::Chip;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, SingletonEntity};
 
-use super::common::{render_query_text, render_user_avatar, FindContext};
+use super::common::{FindContext, render_query_text, render_user_avatar};
+use crate::ai::blocklist::AttachmentType;
 use crate::ai::blocklist::block::view_impl::common::UserQueryProps;
 use crate::ai::blocklist::block::{AIBlockAction, DetectedLinksState, SecretRedactionState};
-use crate::ai::blocklist::AttachmentType;
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
+
+/// Width of the accent ring drawn around the user avatar while agent-view transcript
+/// navigation targets this query.
+const NAVIGATION_RING_BORDER_WIDTH: f32 = 2.;
+/// Blur radius of the accent halo behind the navigation ring.
+const NAVIGATION_HALO_BLUR_RADIUS: f32 = 6.;
+/// How far the accent halo extends beyond the avatar.
+const NAVIGATION_HALO_SPREAD_RADIUS: f32 = 1.5;
+/// Opacity (in percent) of the accent halo.
+const NAVIGATION_HALO_OPACITY: Opacity = 60;
 
 /// Data required to render the AI block query component.
 #[derive(Copy, Clone, Debug)]
@@ -36,6 +48,7 @@ pub(super) struct Props<'a> {
     pub(super) is_ai_input_enabled: bool,
     pub(super) attachments: &'a [(AttachmentType, String)],
     pub(super) find_context: Option<FindContext<'a>>,
+    pub(super) is_agent_transcript_navigation_target: bool,
 }
 
 pub(super) fn maybe_render(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
@@ -53,6 +66,7 @@ pub(super) fn maybe_render(props: Props, app: &AppContext) -> Option<Box<dyn Ele
             props.is_ai_input_enabled,
             props.attachments,
             props.find_context,
+            props.is_agent_transcript_navigation_target,
             app,
         )
     })
@@ -72,16 +86,36 @@ pub(crate) fn render_query(
     is_ai_input_enabled: bool,
     attachments: &[(AttachmentType, String)],
     find_context: Option<FindContext>,
+    is_agent_transcript_navigation_target: bool,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    let avatar = Container::new(render_user_avatar(
+    let mut avatar_container = Container::new(render_user_avatar(
         user_display_name,
         profile_image_path,
         avatar_color,
         app,
     ))
-    .with_margin_right(16.)
-    .finish();
+    .with_margin_right(16.);
+    if is_agent_transcript_navigation_target {
+        // Cmd-Up/Cmd-Down transcript navigation is stopped on this query: ring the avatar
+        // with the theme accent plus a soft accent halo so the stop is unmistakable even
+        // when the viewport doesn't move. The foreground border and the drop-shadow halo
+        // match the avatar's circular radius, reserve no layout space, and leave the query
+        // text and response untouched.
+        let accent = Appearance::as_ref(app).theme().accent();
+        avatar_container = avatar_container
+            .with_foreground_border(
+                Border::all(NAVIGATION_RING_BORDER_WIDTH).with_border_fill(accent),
+            )
+            .with_drop_shadow(DropShadow {
+                color: accent.with_opacity(NAVIGATION_HALO_OPACITY).into_solid(),
+                offset: vec2f(0., 0.),
+                blur_radius: NAVIGATION_HALO_BLUR_RADIUS,
+                spread_radius: NAVIGATION_HALO_SPREAD_RADIUS,
+            })
+            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)));
+    }
+    let avatar = avatar_container.finish();
 
     let properties = Properties {
         style: Style::Normal,

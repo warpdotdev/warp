@@ -4,8 +4,8 @@ use std::sync::LazyLock;
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{ChildView, MainAxisSize};
 use warpui::{
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _, View, ViewContext,
@@ -29,6 +29,7 @@ use crate::terminal::input::models::data_source::{AcceptModel, ModelSelectorData
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
 };
+use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
 use crate::view_components::alert::{Alert, AlertConfig};
@@ -105,11 +106,22 @@ pub struct InlineModelSelectorView {
     /// Controls whether or not we should filter the contents of the menu
     /// based on the contents of the input.
     filter_results_by_input: bool,
+    /// True when the selector was opened from the model chip with a pre-existing
+    /// prompt that we cleared so the input could be used to search models. The
+    /// prompt is stashed in the suggestions-mode buffer snapshot and restored
+    /// when the selector closes.
+    prompt_parked_for_search: bool,
+    /// Retained so a lazily-created ambient view model can be attached after construction on the
+    /// shared-session viewer path (see `set_ambient_agent_view_model`). It also lives inside the
+    /// search mixer; this handle points at the same model.
+    model_selector_data_source: ModelHandle<ModelSelectorDataSource>,
 }
 
 impl InlineModelSelectorView {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         terminal_view_id: EntityId,
+        ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
         suggestions_mode_model: ModelHandle<InputSuggestionsModeModel>,
         agent_view_controller: ModelHandle<AgentViewController>,
         input_buffer_model: &ModelHandle<InputBufferModel>,
@@ -117,7 +129,12 @@ impl InlineModelSelectorView {
         positioner: &ModelHandle<InlineMenuPositioner>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let data_source = ctx.add_model(|_| ModelSelectorDataSource::new(terminal_view_id));
+        let window_id = ctx.window_id();
+        let data_source = ctx.add_model(move |_| {
+            // Built without the ambient model; the setter (called below for construction and by
+            // the lazy shared-session viewer path) is the single point that attaches it.
+            ModelSelectorDataSource::new(terminal_view_id, window_id, None)
+        });
 
         let tab_configs = TAB_CONFIGS.clone();
         let initial_filters = tab_configs
@@ -251,7 +268,8 @@ impl InlineModelSelectorView {
             if model.as_ref(ctx).is_inline_model_selector() {
                 me.rerun_query(ctx);
             } else if model.as_ref(ctx).is_closed() {
-                me.filter_results_by_input = true;
+                me.set_filter_results_by_input(true);
+                me.set_prompt_parked_for_search(false);
                 me.mixer.update(ctx, |mixer, ctx| {
                     mixer.reset_results(ctx);
                 });
@@ -322,7 +340,8 @@ impl InlineModelSelectorView {
             | CLISubagentEvent::UpdatedControl { .. } => {
                 me.menu_view.update(ctx, |_, ctx| ctx.notify());
             }
-            CLISubagentEvent::UpdatedLastSnapshot
+            CLISubagentEvent::UpdatedInstruction { .. }
+            | CLISubagentEvent::UpdatedLastSnapshot
             | CLISubagentEvent::ToggledHideResponses
             | CLISubagentEvent::ControlHandedBackAfterTransfer => {}
         });
@@ -331,13 +350,12 @@ impl InlineModelSelectorView {
             &BlocklistAIHistoryModel::handle(ctx),
             move |me, _, event, ctx| {
                 if let BlocklistAIHistoryEvent::UpdatedConversationStatus {
-                    terminal_view_id: event_terminal_view_id,
+                    terminal_surface_id: event_terminal_surface_id,
                     ..
                 } = event
+                    && *event_terminal_surface_id == terminal_view_id
                 {
-                    if *event_terminal_view_id == terminal_view_id {
-                        me.menu_view.update(ctx, |_, ctx| ctx.notify());
-                    }
+                    me.menu_view.update(ctx, |_, ctx| ctx.notify());
                 }
             },
         );
@@ -362,14 +380,12 @@ impl InlineModelSelectorView {
                         menu.select_first_where(|item| item.id == id, ctx)
                     })
                 });
-                if !found_by_id {
-                    if let Some(idx) = selection.index {
-                        let count = me.menu_view.as_ref(ctx).result_count();
-                        if count > 0 {
-                            me.menu_view.update(ctx, |menu, ctx| {
-                                menu.select_idx(idx.min(count - 1), ctx);
-                            });
-                        }
+                if !found_by_id && let Some(idx) = selection.index {
+                    let count = me.menu_view.as_ref(ctx).result_count();
+                    if count > 0 {
+                        me.menu_view.update(ctx, |menu, ctx| {
+                            menu.select_idx(idx.min(count - 1), ctx);
+                        });
                     }
                 }
                 return;
@@ -389,7 +405,7 @@ impl InlineModelSelectorView {
             });
         });
 
-        Self {
+        let mut me = Self {
             menu_view,
             mixer,
             suggestions_mode_model,
@@ -397,7 +413,29 @@ impl InlineModelSelectorView {
             terminal_view_id,
             selection_before_tab_switch: None,
             filter_results_by_input: true,
+            prompt_parked_for_search: false,
+            model_selector_data_source: data_source,
+        };
+        // Route ambient wiring through the setter so construction and the lazy shared-session
+        // viewer path share one implementation.
+        if let Some(ambient_agent_view_model) = ambient_agent_view_model {
+            me.set_ambient_agent_view_model(ambient_agent_view_model, ctx);
         }
+        me
+    }
+
+    /// Attaches a lazily-created ambient agent view model to the picker's data source so a
+    /// shared-session viewer's follow-up lists the correct (cloud-pane) model set. Used when a
+    /// raw-link viewer only learns the run is ambient at `SessionJoined`. Idempotent.
+    pub fn set_ambient_agent_view_model(
+        &mut self,
+        ambient_agent_view_model: ModelHandle<AmbientAgentViewModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.model_selector_data_source
+            .update(ctx, |data_source, ctx| {
+                data_source.set_ambient_agent_view_model(ambient_agent_view_model, ctx);
+            });
     }
 
     fn menu_model<'a>(
@@ -448,6 +486,14 @@ impl InlineModelSelectorView {
 
     pub fn set_filter_results_by_input(&mut self, filter: bool) {
         self.filter_results_by_input = filter;
+    }
+
+    pub fn prompt_parked_for_search(&self) -> bool {
+        self.prompt_parked_for_search
+    }
+
+    pub fn set_prompt_parked_for_search(&mut self, parked: bool) {
+        self.prompt_parked_for_search = parked;
     }
 
     pub fn set_active_tab(&self, tab: InlineModelSelectorTab, ctx: &mut ViewContext<Self>) {

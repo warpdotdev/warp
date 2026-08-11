@@ -6,10 +6,10 @@ use warp_core::features::FeatureFlag;
 use warp_graphql::object_permissions::OwnerType;
 use warp_graphql::queries::api_keys::ApiKeyProperties as GqlApiKeyProperties;
 use warpui::elements::{
-    resizable_state_handle, Align, Border, ChildView, ConstrainedBox, Container,
-    CrossAxisAlignment, DragBarSide, Element, Empty, Expanded, Flex, FormattedTextElement,
-    HighlightedHyperlink, MainAxisSize, MouseStateHandle, Padding, ParentElement, Resizable,
-    ResizableStateHandle, Shrinkable, Text,
+    Align, Border, ChildView, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide, Element,
+    Empty, Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisSize,
+    MouseStateHandle, Padding, ParentElement, Resizable, ResizableStateHandle, Shrinkable, Text,
+    resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::text_layout::ClipConfig;
@@ -17,15 +17,15 @@ use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
+use super::SettingsSection;
 use super::platform::{
     CreateApiKeyModal, CreateApiKeyModalEvent, CreateApiKeyModalViewState, ExpireApiKeyButton,
     ExpireApiKeyButtonEvent,
 };
 use super::settings_page::{
-    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
-    CONTENT_FONT_SIZE, SUBHEADER_FONT_SIZE,
+    CONTENT_FONT_SIZE, MatchData, PageType, SUBHEADER_FONT_SIZE, SettingsPageMeta,
+    SettingsPageViewHandle, SettingsWidget,
 };
-use super::SettingsSection;
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
 use crate::editor::{
@@ -35,7 +35,6 @@ use crate::editor::{
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::search_bar::SearchBar;
 use crate::server::ids::ApiKeyUid;
-use crate::server::server_api::auth::AuthClient;
 use crate::ui_components::icons::Icon;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
@@ -126,10 +125,11 @@ impl PlatformPageView {
         }
 
         // Build and send the GraphQL query
-        let server_api = crate::server::server_api::ServerApiProvider::as_ref(ctx).get();
+        let auth_client =
+            crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
 
         ctx.spawn(
-            async move { server_api.list_api_keys().await },
+            async move { auth_client.list_api_keys().await },
             |me, res, ctx| {
                 me.is_loading = false;
                 match res {
@@ -489,7 +489,9 @@ impl PlatformPageWidget {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let text = vec![
-            FormattedTextFragment::plain_text("Create and manage API keys to allow other Oz cloud agents to access your Warp account.\nFor more information, visit the "),
+            FormattedTextFragment::plain_text(
+                "Create and manage API keys to allow other Oz cloud agents to access your Warp account.\nFor more information, visit the ",
+            ),
             FormattedTextFragment::hyperlink("Documentation.", API_KEY_DOCS_URL),
         ];
 

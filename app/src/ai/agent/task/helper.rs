@@ -130,16 +130,17 @@ impl ToolExt for api::message::tool_call::Tool {
             Tool::SuggestPrompt(_) => "suggest_prompt",
             Tool::OpenCodeReview(_) => "open_code_review",
             Tool::InitProject(_) => "init_project",
-            Tool::StartAgent(_) => "start_agent",
-            // Keep the logical tool name stable across the v1/v2 schema split so analytics,
-            // history, and UI handling continue to treat both as the same tool.
-            Tool::StartAgentV2(_) => "start_agent",
             Tool::Server(_) => "server",
             Tool::Subagent(_) => "subagent",
             Tool::AskUserQuestion(_) => "ask_user_question",
             Tool::SendMessageToAgent(_) => "send_message_to_agent",
             Tool::TransferShellCommandControlToUser(_) => "transfer_shell_command_control",
             Tool::RunAgents(_) => "orchestrate",
+            Tool::StartRecording(_) => "start_recording",
+            Tool::StopRecording(_) => "stop_recording",
+            // Matches the legacy server-handled name so analytics don't
+            // double-count the rollout.
+            Tool::WaitForEvents(_) => "wait_for_events",
         }
     }
 }

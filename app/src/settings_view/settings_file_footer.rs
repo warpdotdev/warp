@@ -19,10 +19,10 @@ use warpui::elements::{
 use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::platform::Cursor;
 
+use crate::WorkspaceAction;
 use crate::appearance::Appearance;
 use crate::settings::SettingsFileError;
 use crate::ui_components::icons::Icon;
-use crate::WorkspaceAction;
 
 /// Horizontal + vertical padding applied to the footer inside the sidebar.
 const FOOTER_PADDING: f32 = 12.;
@@ -251,7 +251,7 @@ pub fn render_settings_error_alert(
             text_color,
             mouse_states.alert_fix_with_oz_button.clone(),
             "Fix with Oz",
-            Some(Icon::Oz),
+            Some(Icon::Agent),
             /*bordered=*/ false,
             WorkspaceAction::FixSettingsWithOz { error_description },
         );

@@ -8,10 +8,10 @@ use warp::integration_testing::terminal::{
 };
 use warp::integration_testing::view_getters::{terminal_view, workspace_view};
 use warp::workspace::WorkspaceAction;
-use warpui::integration::TestStep;
-use warpui::{async_assert, async_assert_eq};
+use warpui_core::integration::TestStep;
+use warpui_core::{async_assert, async_assert_eq};
 
-use super::{new_builder, Builder};
+use super::{Builder, new_builder};
 use crate::util::{get_input_buffer, skip_if_powershell_core_2303};
 
 pub fn test_input_syncing_is_off_by_default() -> Builder {

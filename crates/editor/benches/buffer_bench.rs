@@ -6,7 +6,7 @@ use rand::rngs::StdRng;
 use warp_editor::content::buffer::Buffer;
 use warp_editor::content::selection_model::BufferSelectionModel;
 use warp_editor::content::text::IndentBehavior;
-use warpui::{App, ModelHandle};
+use warpui_core::{App, ModelHandle};
 
 const EDIT_SAMPLE_SIZE: usize = 10;
 const MAX_EDIT_REPLACEMENT_LENGTH: usize = 20;

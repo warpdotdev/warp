@@ -7,6 +7,7 @@ define_settings_group!(ChangelogSettings, settings: [
        default: true,
        supported_platforms: SupportedPlatforms::ALL,
        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+       surface: settings::SettingSurfaces::GUI,
        private: false,
        toml_path: "general.show_changelog_after_update",
        description: "Whether the changelog is shown after an update.",

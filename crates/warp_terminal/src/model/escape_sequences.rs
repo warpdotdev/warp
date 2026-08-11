@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
 use lazy_static::lazy_static;
-use warpui::keymap::Keystroke;
-use warpui::platform::OperatingSystem;
+use warpui_core::keymap::Keystroke;
+use warpui_core::platform::OperatingSystem;
 
-use super::mouse::{MouseAction, MouseButton, MouseState};
 use super::TermMode;
+use super::indexing::Point;
+use super::mouse::{MouseAction, MouseButton, MouseState};
 
 mod kitty_keyboard_protocol;
 
@@ -137,6 +138,17 @@ pub mod C1 {
     }
 }
 
+/// Wraps an escape sequence in a tmux DCS passthrough, doubling inner escapes
+/// so tmux forwards the sequence to the hosting terminal rather than
+/// intercepting it.
+pub fn tmux_passthrough(sequence: &str) -> String {
+    let esc = char::from(C0::ESC);
+    let escaped = sequence.replace(esc, "\x1b\x1b");
+    let dcs = C1::to_utf8(C1::DCS);
+    let st = C1::to_utf8(C1::ST);
+    format!("{dcs}tmux;{escaped}{st}")
+}
+
 /// Escape sequences used to control 'bracketed paste' mode.
 ///
 /// If the shell supports bracketed paste mode, these control sequences should be inserted at the
@@ -147,7 +159,7 @@ pub const BRACKETED_PASTE_END: &[u8] = &[C0::ESC, b'[', b'2', b'0', b'1', b'~'];
 
 #[allow(non_snake_case)]
 pub mod EscCodes {
-    use super::{ModeProvider, TermMode, C0, C1};
+    use super::{C0, C1, ModeProvider, TermMode};
 
     // Arrows-related escape codes
     pub const ARROW_UP: u8 = b'A';
@@ -246,7 +258,70 @@ impl<T: ModeProvider> ToEscapeSequence<T> for KeystrokeWithDetails<'_> {
         fn_keystroke_to_escape_sequence(keystroke, mode_provider)
             .or_else(|| keystroke_to_c0_control_code(keystroke, mode_provider))
             .or_else(|| cursor_movement_keystroke_to_escape_sequence(keystroke, mode_provider))
+            .or_else(|| delete_keystroke_to_escape_sequence(keystroke))
             .or_else(|| meta_keystroke_to_escape_sequence(keystroke, mode_provider))
+            .or_else(|| backspace_keystroke_to_escape_sequence(keystroke))
+    }
+}
+
+impl KeystrokeWithDetails<'_> {
+    /// Full keystroke → PTY bytes for a frontend that receives a single key
+    /// event per press — e.g. the headless TUI, whose crossterm input has no
+    /// separate typed-characters event and doesn't pre-encode `Ctrl+<letter>`.
+    /// (The GUI needs no equivalent: the OS hands it printable text as a
+    /// separate typed-characters event and `Ctrl+<letter>` already encoded as
+    /// its control byte.)
+    ///
+    /// Layers the frontend-agnostic fallbacks on top of
+    /// [`to_escape_sequence`](ToEscapeSequence::to_escape_sequence), in order:
+    /// 1. the shared encoder — kitty protocol, application-cursor mode,
+    ///    alt/meta ESC-prefixing, function/cursor keys, backspace, and the
+    ///    `Ctrl+<number>`/`Ctrl+space` C0 set;
+    /// 2. `Ctrl+<letter>` → its C0 byte (`Ctrl+A`..`Ctrl+Z` → `0x01`..`0x1A`),
+    ///    which the encoder leaves alone without the kitty protocol;
+    /// 3. printable text → its UTF-8 bytes (from `chars`);
+    /// 4. named control keys that carry no `chars` (enter/escape/tab/backspace)
+    ///    → their C0 bytes, so e.g. Escape can leave an editor's insert mode.
+    ///
+    /// Returns `None` when the key produces nothing to send.
+    pub fn to_pty_bytes<T: ModeProvider>(&self, mode_provider: &T) -> Option<Vec<u8>> {
+        if let Some(sequence) = self.to_escape_sequence(mode_provider) {
+            return Some(sequence);
+        }
+        if let Some(control_byte) = ctrl_letter_to_c0(self.keystroke) {
+            return Some(control_byte);
+        }
+        if let Some(chars) = self.chars.filter(|chars| !chars.is_empty()) {
+            return Some(chars.as_bytes().to_vec());
+        }
+        named_control_key_to_c0(&self.keystroke.key)
+    }
+}
+
+/// The C0 control byte for a `Ctrl+<letter>` combo (`Ctrl+A`..`Ctrl+Z` →
+/// `0x01`..`0x1A`). Returns `None` when Ctrl isn't held or the key isn't a
+/// single ASCII letter.
+fn ctrl_letter_to_c0(keystroke: &Keystroke) -> Option<Vec<u8>> {
+    if !keystroke.ctrl {
+        return None;
+    }
+    match keystroke.key.as_bytes() {
+        // `& 0x1f` folds a/A..z/Z onto 0x01..0x1A (Ctrl+A = 0x01, Ctrl+Z = 0x1A).
+        [byte] if byte.is_ascii_alphabetic() => Some(vec![byte.to_ascii_uppercase() & 0x1f]),
+        _ => None,
+    }
+}
+
+/// C0 bytes for named control keys that carry no `chars` and that the
+/// escape-sequence encoder leaves unmapped without the kitty protocol. The key
+/// strings match the crossterm→key-event conversion.
+fn named_control_key_to_c0(key: &str) -> Option<Vec<u8>> {
+    match key {
+        "enter" => Some(vec![C0::CR]),
+        "escape" => Some(vec![C0::ESC]),
+        "tab" => Some(vec![C0::HT]),
+        "backspace" => Some(vec![C0::DEL]),
+        _ => None,
     }
 }
 
@@ -289,87 +364,35 @@ impl<T: ModeProvider> ToEscapeSequence<T> for MouseState {
     }
 }
 
-pub trait ToModifierEscapeByte {
-    /// Returns the modifier escape byte represented by this T.
-    ///
-    /// The returned modifier byte is typically meant to be inserted into escape sequence
-    /// corresponding to the keystroke. See the implementation of this trait for
-    /// `Keystroke` for more details.
-    fn to_modifier_escape_byte(&self) -> Option<u8>;
-}
-
-impl ToModifierEscapeByte for Keystroke {
-    // Mirrors the [xterm implementation](https://www.xfree86.org/current/ctlseqs.html#PC-Style%20Function%20Keys).
-    fn to_modifier_escape_byte(&self) -> Option<u8> {
-        match self {
-            Keystroke {
-                shift: true,
-                alt: false,
-                ctrl: false,
-                meta: _,
-                cmd: _,
-                key: _,
-            } => Some(b'2'),
-            Keystroke {
-                shift: false,
-                alt: true,
-                ctrl: false,
-                meta: _,
-                cmd: _,
-                key: _,
-            } => Some(b'3'),
-            Keystroke {
-                shift: true,
-                alt: true,
-                ctrl: false,
-                meta: _,
-                cmd: _,
-                key: _,
-            } => Some(b'4'),
-            Keystroke {
-                shift: false,
-                alt: false,
-                ctrl: true,
-                meta: _,
-                cmd: _,
-                key: _,
-            } => Some(b'5'),
-            Keystroke {
-                shift: true,
-                alt: false,
-                ctrl: true,
-                meta: _,
-                cmd: _,
-                key: _,
-            } => Some(b'6'),
-            Keystroke {
-                shift: false,
-                alt: true,
-                ctrl: true,
-                meta: _,
-                cmd: _,
-                key: _,
-            } => Some(b'7'),
-            Keystroke {
-                shift: true,
-                alt: true,
-                ctrl: true,
-                meta: _,
-                cmd: _,
-                key: _,
-            } => Some(b'8'),
-            // meta can be basically treated the same way as alt...
-            Keystroke {
-                meta: true,
-                ctrl: _,
-                alt: _,
-                shift: _,
-                cmd: _,
-                key: _,
-            } => Some(b'3'),
-            _ => None,
-        }
+/// Encodes alt-screen wheel movement as mouse reports or SS3 arrow keys.
+pub fn alt_screen_scroll_to_pty_bytes<T: ModeProvider>(
+    lines_to_scroll: i32,
+    point: Point,
+    report_mouse: bool,
+    mode_provider: &T,
+) -> Option<Vec<u8>> {
+    if lines_to_scroll == 0 {
+        return None;
     }
+    if report_mouse {
+        return MouseState::new(
+            MouseButton::Wheel,
+            MouseAction::Scrolled {
+                delta: lines_to_scroll,
+            },
+            Default::default(),
+        )
+        .set_point(point)
+        .to_escape_sequence(mode_provider);
+    }
+
+    let arrow = if lines_to_scroll > 0 {
+        EscCodes::ARROW_UP
+    } else {
+        EscCodes::ARROW_DOWN
+    };
+    let sequence = EscCodes::build_escape_sequence_with_c1(C1::SS3, &[arrow]);
+    Some(sequence.repeat(lines_to_scroll.unsigned_abs() as usize))
 }
 
 /// Returns the appropriate escape sequence for the given fn key, which may or may not be modified
@@ -383,13 +406,11 @@ fn fn_keystroke_to_escape_sequence(
     match keystroke.key.as_str() {
         "f1" | "f2" | "f3" | "f4" | "f5" | "f6" | "f7" | "f8" | "f9" | "f10" | "f11" | "f12"
         | "f13" | "f14" | "f15" | "f16" | "f17" | "f18" | "f19" | "f20" => {
-            let modifier_byte = keystroke.to_modifier_escape_byte();
-            match modifier_byte {
-                Some(modifier_byte) => fn_keystroke_with_modifier_to_escape_sequence(
-                    keystroke.key.as_str(),
-                    modifier_byte,
-                ),
-                None => fn_keystroke_without_modifier_to_escape_sequence(keystroke.key.as_str()),
+            let modifier = modifier_param(keystroke);
+            if modifier > 1 {
+                fn_keystroke_with_modifier_to_escape_sequence(keystroke.key.as_str(), modifier)
+            } else {
+                fn_keystroke_without_modifier_to_escape_sequence(keystroke.key.as_str())
             }
         }
         _ => None,
@@ -432,28 +453,28 @@ fn fn_keystroke_without_modifier_to_escape_sequence(key: &str) -> Option<Vec<u8>
 ///
 /// Mapping from key to sequence is adapted from the xterm spec
 /// [here](https://www.xfree86.org/current/ctlseqs.html).
-fn fn_keystroke_with_modifier_to_escape_sequence(key: &str, modifier_byte: u8) -> Option<Vec<u8>> {
+fn fn_keystroke_with_modifier_to_escape_sequence(key: &str, modifier: u32) -> Option<Vec<u8>> {
     match key {
-        "f1" => Some([C1::CSI, format!("1;{}P", modifier_byte as char).as_bytes()].concat()),
-        "f2" => Some([C1::CSI, format!("1;{}Q", modifier_byte as char).as_bytes()].concat()),
-        "f3" => Some([C1::CSI, format!("1;{}R", modifier_byte as char).as_bytes()].concat()),
-        "f4" => Some([C1::CSI, format!("1;{}S", modifier_byte as char).as_bytes()].concat()),
-        "f5" => Some([C1::CSI, format!("15;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f6" => Some([C1::CSI, format!("17;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f7" => Some([C1::CSI, format!("18;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f8" => Some([C1::CSI, format!("19;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f9" => Some([C1::CSI, format!("20;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f10" => Some([C1::CSI, format!("21;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f11" => Some([C1::CSI, format!("23;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f12" => Some([C1::CSI, format!("24;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f13" => Some([C1::CSI, format!("25;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f14" => Some([C1::CSI, format!("26;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f15" => Some([C1::CSI, format!("28;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f16" => Some([C1::CSI, format!("29;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f17" => Some([C1::CSI, format!("31;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f18" => Some([C1::CSI, format!("32;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f19" => Some([C1::CSI, format!("33;{}~", modifier_byte as char).as_bytes()].concat()),
-        "f20" => Some([C1::CSI, format!("34;{}~", modifier_byte as char).as_bytes()].concat()),
+        "f1" => Some([C1::CSI, format!("1;{modifier}P").as_bytes()].concat()),
+        "f2" => Some([C1::CSI, format!("1;{modifier}Q").as_bytes()].concat()),
+        "f3" => Some([C1::CSI, format!("1;{modifier}R").as_bytes()].concat()),
+        "f4" => Some([C1::CSI, format!("1;{modifier}S").as_bytes()].concat()),
+        "f5" => Some([C1::CSI, format!("15;{modifier}~").as_bytes()].concat()),
+        "f6" => Some([C1::CSI, format!("17;{modifier}~").as_bytes()].concat()),
+        "f7" => Some([C1::CSI, format!("18;{modifier}~").as_bytes()].concat()),
+        "f8" => Some([C1::CSI, format!("19;{modifier}~").as_bytes()].concat()),
+        "f9" => Some([C1::CSI, format!("20;{modifier}~").as_bytes()].concat()),
+        "f10" => Some([C1::CSI, format!("21;{modifier}~").as_bytes()].concat()),
+        "f11" => Some([C1::CSI, format!("23;{modifier}~").as_bytes()].concat()),
+        "f12" => Some([C1::CSI, format!("24;{modifier}~").as_bytes()].concat()),
+        "f13" => Some([C1::CSI, format!("25;{modifier}~").as_bytes()].concat()),
+        "f14" => Some([C1::CSI, format!("26;{modifier}~").as_bytes()].concat()),
+        "f15" => Some([C1::CSI, format!("28;{modifier}~").as_bytes()].concat()),
+        "f16" => Some([C1::CSI, format!("29;{modifier}~").as_bytes()].concat()),
+        "f17" => Some([C1::CSI, format!("31;{modifier}~").as_bytes()].concat()),
+        "f18" => Some([C1::CSI, format!("32;{modifier}~").as_bytes()].concat()),
+        "f19" => Some([C1::CSI, format!("33;{modifier}~").as_bytes()].concat()),
+        "f20" => Some([C1::CSI, format!("34;{modifier}~").as_bytes()].concat()),
         _ => None,
     }
 }
@@ -480,6 +501,11 @@ fn keystroke_to_c0_control_code(
             ("6", C0::RS),
             ("7", C0::US),
             ("8", C0::DEL),
+            // Not in the VT-220 table, but xterm and every terminal since encode `ctrl-/` as US,
+            // and editors bind against it (Vim/Neovim's `<C-/>`). Unlike the other control-code
+            // punctuation (`ctrl-[`, `ctrl-\`, `ctrl-]`, ...), no platform keyboard layer folds
+            // `ctrl-/` into a control byte for us, so it has to be mapped here. See GH#4620.
+            ("/", C0::US),
         ]);
     }
 
@@ -494,6 +520,26 @@ fn keystroke_to_c0_control_code(
         return Some(vec![KEYSTROKE_TO_C0_CODE[keystroke.key.as_str()]]);
     }
     None
+}
+
+/// The xterm/Kitty numeric modifier parameter for a keystroke: `1 + bitmask`, where
+/// shift=1, alt=2, ctrl=4, super(cmd)=8. Meta ("Option as Meta" on macOS) maps to the alt
+/// bit, matching `keystroke_to_csi_u`. Returns 1 when no modifiers are held.
+fn modifier_param(keystroke: &Keystroke) -> u32 {
+    let mut modifier = 1;
+    if keystroke.shift {
+        modifier += 1;
+    }
+    if keystroke.alt || keystroke.meta {
+        modifier += 2;
+    }
+    if keystroke.ctrl {
+        modifier += 4;
+    }
+    if keystroke.cmd {
+        modifier += 8;
+    }
+    modifier
 }
 
 /// Returns the appropriate escape sequence for the given "cursor movement" keystroke.
@@ -519,27 +565,47 @@ fn cursor_movement_keystroke_to_escape_sequence(
     }
 
     let key = keystroke.key.as_str();
-    if !CURSOR_KEYSTROKE_TO_CONTROL_CODE.contains_key(key) {
+    let &final_byte = CURSOR_KEYSTROKE_TO_CONTROL_CODE.get(key)?;
+
+    let modifier = modifier_param(keystroke);
+    if modifier > 1 {
+        // Modified cursor keys always use the `CSI 1;<mods> <letter>` form (never SS3),
+        // matching xterm and the Kitty keyboard protocol. `<mods>` may be multiple digits
+        // (e.g. Cmd+Left → `CSI 1;9D`), which the legacy single-byte modifier could not encode.
+        let mut sequence = C1::CSI.to_vec();
+        sequence.extend_from_slice(b"1;");
+        sequence.extend_from_slice(modifier.to_string().as_bytes());
+        sequence.push(final_byte);
+        Some(sequence)
+    } else {
+        // Unmodified: SS3 in application-cursor mode, CSI otherwise.
+        let mut sequence = EscCodes::get_c1_sequence(mode_provider).to_vec();
+        sequence.push(final_byte);
+        Some(sequence)
+    }
+}
+
+/// Returns the escape sequence for a *modified* Delete key: `CSI 3;<mods> ~` (xterm / Kitty
+/// numbering, including Super for Cmd). This covers Cmd+Delete, Option+Delete, Ctrl+Delete, etc.
+///
+/// Delete owns a legacy escape code (`CSI 3 ~`), so under the Kitty keyboard protocol it keeps
+/// this `~` form with a modifier parameter rather than switching to CSI u.
+///
+/// Returns None for any non-Delete key and for *unmodified* Delete (whose existing encoding path
+/// is left untouched).
+fn delete_keystroke_to_escape_sequence(keystroke: &Keystroke) -> Option<Vec<u8>> {
+    if keystroke.key != "delete" {
         return None;
     }
-    let modifier_bytes = keystroke.to_modifier_escape_byte();
-    match modifier_bytes {
-        Some(modifier_bytes) => Some(
-            [
-                C1::CSI,
-                b"1;",
-                &[modifier_bytes, CURSOR_KEYSTROKE_TO_CONTROL_CODE[key]],
-            ]
-            .concat(),
-        ),
-        None => Some(
-            [
-                EscCodes::get_c1_sequence(mode_provider),
-                &[CURSOR_KEYSTROKE_TO_CONTROL_CODE[key]],
-            ]
-            .concat(),
-        ),
+    let modifier = modifier_param(keystroke);
+    if modifier == 1 {
+        return None;
     }
+    let mut sequence = C1::CSI.to_vec();
+    sequence.extend_from_slice(b"3;");
+    sequence.extend_from_slice(modifier.to_string().as_bytes());
+    sequence.push(b'~');
+    Some(sequence)
 }
 
 /// Returns the byte array corresponding to a special key, if a special key is provided.
@@ -590,6 +656,19 @@ fn meta_keystroke_to_escape_sequence(
         Some([&[C0::ESC], bytes].concat())
     } else {
         Some([&[C0::ESC], key.as_bytes()].concat())
+    }
+}
+
+/// Returns DEL (0x7f) for an unmodified or Shift-only Backspace.
+/// Guards against winit on Windows reporting `\x08` (Ctrl+H) for Shift+Backspace,
+/// which readline-style TUIs interpret as `backward-kill-word`. See GH#11342.
+fn backspace_keystroke_to_escape_sequence(keystroke: &Keystroke) -> Option<Vec<u8>> {
+    if keystroke.ctrl || keystroke.alt || keystroke.meta || keystroke.cmd {
+        return None;
+    }
+    match keystroke.key.as_str() {
+        "backspace" => Some(vec![C0::DEL]),
+        _ => None,
     }
 }
 

@@ -1,22 +1,21 @@
 use std::collections::HashMap;
 use std::future::Future;
 
-use futures::channel::oneshot;
+pub use cloud_object_models::{
+    CloudScheduledAmbientAgent, CloudScheduledAmbientAgentModel, ScheduledAmbientAgent,
+};
 use futures::FutureExt;
-use serde::{Deserialize, Serialize};
+use futures::channel::oneshot;
 use serde_json::{Map, Value};
 use warp_graphql::queries::get_scheduled_agent_history::ScheduledAgentHistory;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use super::AgentConfigSnapshot;
-use crate::cloud_object::model::generic_string_model::{
-    GenericStringModel, GenericStringObjectId, StringModel,
-};
-use crate::cloud_object::model::json_model::{JsonModel, JsonSerializer};
+use crate::cloud_object::model::generic_string_model::StringModel;
+use crate::cloud_object::model::json_model::JsonModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{
-    CloudObjectLookup as _, GenericCloudObject, GenericStringObjectFormat,
-    GenericStringObjectUniqueKey, JsonObjectType, Owner, Revision,
+    CloudObjectLookup as _, GenericStringObjectFormat, GenericStringObjectUniqueKey,
+    JsonObjectType, Owner, Revision,
 };
 use crate::drive::CloudObjectTypeAndId;
 use crate::server::cloud_objects::update_manager::{
@@ -25,47 +24,6 @@ use crate::server::cloud_objects::update_manager::{
 use crate::server::ids::{ClientId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::QueueItem;
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-/// A ScheduledAmbientAgent represents configuration for ambient agents that run on a cron schedule.
-pub struct ScheduledAmbientAgent {
-    /// Agent name
-    #[serde(default)]
-    pub name: String,
-    /// Cron schedule expression
-    #[serde(default)]
-    pub cron_schedule: String,
-    /// Whether the scheduled agent is enabled
-    #[serde(default)]
-    pub enabled: bool,
-    /// The prompt to use for the scheduled agent
-    #[serde(default)]
-    pub prompt: String,
-    /// The latest failure to execute this scheduled agent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_spawn_error: Option<String>,
-    /// Configuration for how the ambient agent should run.
-    #[serde(default, skip_serializing_if = "AgentConfigSnapshot::is_empty")]
-    pub agent_config: AgentConfigSnapshot,
-}
-
-pub type CloudScheduledAmbientAgent =
-    GenericCloudObject<GenericStringObjectId, CloudScheduledAmbientAgentModel>;
-pub type CloudScheduledAmbientAgentModel =
-    GenericStringModel<ScheduledAmbientAgent, JsonSerializer>;
-
-impl ScheduledAmbientAgent {
-    pub fn new(name: String, cron_schedule: String, enabled: bool, prompt: String) -> Self {
-        Self {
-            name,
-            cron_schedule,
-            enabled,
-            prompt,
-            last_spawn_error: None,
-            agent_config: Default::default(),
-        }
-    }
-}
 
 impl StringModel for ScheduledAmbientAgent {
     type CloudObjectType = CloudScheduledAmbientAgent;
@@ -183,7 +141,7 @@ impl ScheduledAgentManager {
         &self,
         schedule_id: SyncId,
         app: &AppContext,
-    ) -> impl warpui::r#async::Spawnable<Output = anyhow::Result<Option<ScheduledAgentHistory>>>
+    ) -> impl warpui::r#async::Spawnable<Output = anyhow::Result<Option<ScheduledAgentHistory>>> + use<>
     {
         let ai_client = ServerApiProvider::as_ref(app).get_ai_client();
 
@@ -200,37 +158,35 @@ impl ScheduledAgentManager {
 
     fn handle_update_manager_event(
         &mut self,
+        _: ModelHandle<UpdateManager>,
         event: &UpdateManagerEvent,
         _ctx: &mut ModelContext<Self>,
     ) {
-        if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
-            if let ObjectOperation::Delete { .. } = result.operation {
-                if let Some(server_id) = result.server_id {
-                    let sync_id = SyncId::ServerId(server_id);
-                    if let Some(tx) = self.pending_deletes.remove(&sync_id) {
-                        match result.success_type {
-                            OperationSuccessType::Success => {
-                                let _ = tx.send(Ok(()));
-                            }
-                            OperationSuccessType::Failure => {
-                                let _ = tx.send(Err(anyhow::anyhow!(
-                                    "Failed to delete scheduled ambient agent"
-                                )));
-                            }
-                            OperationSuccessType::Denied(ref message) => {
-                                let _ =
-                                    tx.send(Err(anyhow::anyhow!("Deletion denied: {}", message)));
-                            }
-                            OperationSuccessType::Rejection => {
-                                let _ =
-                                    tx.send(Err(anyhow::anyhow!("Deletion rejected by server")));
-                            }
-                            OperationSuccessType::FeatureNotAvailable => {
-                                let _ = tx.send(Err(anyhow::anyhow!(
-                                    "Scheduled ambient agents not available"
-                                )));
-                            }
-                        }
+        if let UpdateManagerEvent::ObjectOperationComplete { result } = event
+            && let ObjectOperation::Delete { .. } = result.operation
+            && let Some(server_id) = result.server_id
+        {
+            let sync_id = SyncId::ServerId(server_id);
+            if let Some(tx) = self.pending_deletes.remove(&sync_id) {
+                match result.success_type {
+                    OperationSuccessType::Success => {
+                        let _ = tx.send(Ok(()));
+                    }
+                    OperationSuccessType::Failure => {
+                        let _ = tx.send(Err(anyhow::anyhow!(
+                            "Failed to delete scheduled ambient agent"
+                        )));
+                    }
+                    OperationSuccessType::Denied(ref message) => {
+                        let _ = tx.send(Err(anyhow::anyhow!("Deletion denied: {}", message)));
+                    }
+                    OperationSuccessType::Rejection => {
+                        let _ = tx.send(Err(anyhow::anyhow!("Deletion rejected by server")));
+                    }
+                    OperationSuccessType::FeatureNotAvailable => {
+                        let _ = tx.send(Err(anyhow::anyhow!(
+                            "Scheduled ambient agents not available"
+                        )));
                     }
                 }
             }
@@ -243,7 +199,7 @@ impl ScheduledAgentManager {
         config: ScheduledAmbientAgent,
         owner: Owner,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<SyncId>> + Send + 'static {
+    ) -> impl Future<Output = anyhow::Result<SyncId>> + Send + 'static + use<> {
         let client_id = ClientId::default();
         let create_future = UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
             update_manager.create_scheduled_ambient_agent_online(config, client_id, owner, ctx)
@@ -258,7 +214,7 @@ impl ScheduledAgentManager {
         error_message: &'static str,
         modifier: F,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<F>
     where
         F: FnOnce(&mut ScheduledAmbientAgent) + Send + 'static,
     {
@@ -297,7 +253,7 @@ impl ScheduledAgentManager {
         &mut self,
         schedule_id: SyncId,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<> {
         self.modify_schedule(
             schedule_id,
             "Failed to pause schedule",
@@ -311,7 +267,7 @@ impl ScheduledAgentManager {
         &mut self,
         schedule_id: SyncId,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<> {
         self.modify_schedule(
             schedule_id,
             "Failed to unpause schedule",
@@ -326,7 +282,7 @@ impl ScheduledAgentManager {
         schedule_id: SyncId,
         params: UpdateScheduleParams,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<> {
         self.modify_schedule(
             schedule_id,
             "Failed to update schedule",
@@ -398,7 +354,7 @@ impl ScheduledAgentManager {
         &mut self,
         schedule_id: SyncId,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
+    ) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<> {
         let id_and_type = CloudObjectTypeAndId::GenericStringObject {
             object_type: GenericStringObjectFormat::Json(JsonObjectType::ScheduledAmbientAgent),
             id: schedule_id,

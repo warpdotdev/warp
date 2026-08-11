@@ -9,23 +9,25 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use async_channel::Sender;
+use futures::channel::oneshot;
+use futures::future::BoxFuture;
 use futures::io::{AsyncBufReadExt, BufReader};
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
-use remote_server::client::RemoteServerClient;
 use remote_server::manager::RemoteServerManager;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
-use repo_metadata::{CanonicalizedPath, Repository, RepositoryUpdate};
+use repo_metadata::{CanonicalizedPath, Repository, RepositoryUpdate, RepositoryWatchMode};
 use warp_core::HostId;
 use warp_util::content_version::ContentVersion;
 use warp_util::file::{FileId, FileLoadError, FileSaveError};
 use warp_util::standardized_path::StandardizedPath;
-use warpui::r#async::SpawnedFutureHandle;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use warpui_core::r#async::SpawnedFutureHandle;
+use warpui_core::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 
 pub mod text_file_reader;
@@ -48,7 +50,7 @@ pub enum FileModelEvent {
     },
     FailedToSave {
         id: FileId,
-        error: Rc<FileSaveError>,
+        error: Arc<FileSaveError>,
     },
     FileUpdated {
         id: FileId,
@@ -57,6 +59,10 @@ pub enum FileModelEvent {
         new_version: ContentVersion,
     },
 }
+
+/// Resolves with the outcome of one dispatched save. The sender is only
+/// dropped on app teardown, in which case the outcome is treated as success.
+pub type SaveFuture = BoxFuture<'static, Result<(), Arc<FileSaveError>>>;
 
 impl FileModelEvent {
     pub fn file_id(&self) -> FileId {
@@ -71,25 +77,39 @@ impl FileModelEvent {
 }
 
 /// Tracks how a file is being watched for changes.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 enum WatcherType {
     /// File is not being watched.
     #[default]
     None,
-    /// File is watched via individual file watcher.
-    Individual,
+    /// File is watched via an individual watcher on the directory recorded here.
+    ///
+    /// The registered path is stored rather than re-derived, so unregistration cannot drift from
+    /// registration, and so a file whose watcher was never registered is never unregistered.
+    Individual(PathBuf),
     /// File is watched via repository-level subscription.
     Repository,
 }
 
+impl WatcherType {
+    /// The directory this file is individually watched through, if any.
+    fn individual_watch_path(&self) -> Option<&Path> {
+        match self {
+            WatcherType::Individual(path) => Some(path),
+            WatcherType::None | WatcherType::Repository => None,
+        }
+    }
+}
+
 /// Per-file backing store.
-/// Remote files dispatch through [`RemoteServerClient`] via [`RemoteServerManager`].
+/// Remote files dispatch host-scoped requests through a
+/// [`RemoteServerManager`] `HostRequestHandle`.
 enum FileBackend {
     Local(LocalFile),
     Remote {
-        /// Identifies the remote host. The actual client is looked up from
+        /// Identifies the remote host. A `HostRequestHandle` is resolved from
         /// [`RemoteServerManager`] at call time, which naturally handles
-        /// disconnect (lookup returns `Err`) without holding an `Arc` alive
+        /// disconnect (the request fails) without holding an `Arc` alive
         /// per file.
         host_id: HostId,
         /// Platform-aware path on the remote host.
@@ -142,7 +162,7 @@ struct RepositorySubscription {
 }
 
 impl LocalFile {
-    fn new(path: PathBuf, watcher_type: WatcherType) -> Self {
+    fn new(path: PathBuf) -> Self {
         // If we cannot canonicalize the path, it could be because the file does not exist on disk yet.
         // In this case, keep its original input path.
         let canonicalized_path = CanonicalizedPath::try_from(&path)
@@ -151,8 +171,14 @@ impl LocalFile {
         Self {
             path: Some(canonicalized_path),
             version: None,
-            watcher_type,
+            watcher_type: WatcherType::None,
         }
+    }
+
+    /// The directory this file would be individually watched through. See
+    /// [`FileModel::watch_path_for`].
+    fn watch_path(&self) -> Option<PathBuf> {
+        FileModel::watch_path_for(self.path.as_deref()?)
     }
 
     /// Returns true if this file is subscribed to receive update events.
@@ -301,7 +327,7 @@ impl FileModel {
         let watcher =
             ctx.add_model(|ctx| BulkFilesystemWatcher::new(Duration::from_millis(200), ctx));
 
-        ctx.subscribe_to_model(&watcher, |me, event, ctx| {
+        ctx.subscribe_to_model(&watcher, |me, _, event, ctx| {
             me.handle_watcher_event(event, ctx);
         });
 
@@ -317,6 +343,15 @@ impl FileModel {
     #[cfg(feature = "test-util")]
     pub fn get_future_handle(&self, file_id: FileId) -> Option<SpawnedFutureHandle> {
         self.abort_handles.get(&file_id).cloned()
+    }
+
+    /// The directory this file is currently registered with the watcher through, if any.
+    #[cfg(test)]
+    fn registered_watch_path(&self, file_id: FileId) -> Option<&Path> {
+        self.file_state
+            .get_local(file_id)?
+            .watcher_type
+            .individual_watch_path()
     }
 
     fn handle_watcher_event(
@@ -337,7 +372,7 @@ impl FileModel {
     /// Register a remote file path and return a `FileId`.
     ///
     /// The returned `FileId` can be used with `save()` and `delete()` which
-    /// will dispatch to the remote backend via [`RemoteServerClient`].
+    /// will dispatch to the remote backend via `RemoteServerClient`.
     pub fn register_remote_file(&mut self, host_id: HostId, path: StandardizedPath) -> FileId {
         let file_id = FileId::new();
         self.file_state.insert_remote(file_id, host_id, path);
@@ -354,32 +389,36 @@ impl FileModel {
         ctx: &mut ModelContext<Self>,
     ) -> FileId {
         let file_id = FileId::new();
+        let mut local_file = LocalFile::new(file_path.to_owned());
 
-        let watcher_type = if subscribe_to_updates {
+        if subscribe_to_updates {
             // Try to use repository-level watching if available
             if let Some(repo_root) = self.get_or_create_repo_subscription(file_path, ctx) {
                 self.repo_path_mapping
                     .insert(file_path.to_path_buf(), repo_root);
-                WatcherType::Repository
-            } else {
-                // Fallback to individual file watcher
-                self.watcher.update(ctx, |watcher, _ctx| {
-                    std::mem::drop(watcher.register_path(
-                        file_path,
-                        WatchFilter::accept_all(),
-                        RecursiveMode::Recursive,
-                    ));
-                });
-                WatcherType::Individual
+                local_file.watcher_type = WatcherType::Repository;
+            } else if let Some(watch_path) = local_file.watch_path() {
+                // Fallback to an individual watcher, registered exactly the way `open` does it so
+                // that both entry points unregister the same path.
+                self.register_individual_watcher(&watch_path, ctx);
+                local_file.watcher_type = WatcherType::Individual(watch_path);
             }
-        } else {
-            WatcherType::None
-        };
+        }
 
-        let local_file = LocalFile::new(file_path.to_owned(), watcher_type);
         self.file_state.insert_local(file_id, local_file);
 
         file_id
+    }
+
+    /// Watches `watch_path` for the benefit of one individually-watched file.
+    fn register_individual_watcher(&mut self, watch_path: &Path, ctx: &mut ModelContext<Self>) {
+        self.watcher.update(ctx, |watcher, _ctx| {
+            std::mem::drop(watcher.register_path(
+                watch_path,
+                WatchFilter::accept_all(),
+                RecursiveMode::NonRecursive,
+            ));
+        });
     }
 
     /// Open a file to get its content asynchronously. This also opts in to receiving file watcher updates.
@@ -390,25 +429,22 @@ impl FileModel {
         ctx: &mut ModelContext<Self>,
     ) -> FileId {
         let file_id = FileId::new();
+        let mut local_file = LocalFile::new(file_path.to_owned());
 
-        // Determine watcher type before spawning async work
-        let watcher_type = if subscribe_to_updates {
-            // Try to use repository-level watching if available
+        // Repository watching is set up before the read; an individual watcher can only be
+        // registered once the file is known to exist, so it waits for the read to succeed.
+        let mut watch_individually = false;
+        if subscribe_to_updates {
             if let Some(repo_root) = self.get_or_create_repo_subscription(file_path, ctx) {
                 self.repo_path_mapping
                     .insert(file_path.to_path_buf(), repo_root);
-                WatcherType::Repository
+                local_file.watcher_type = WatcherType::Repository;
             } else {
-                // Will register individual watcher after file loads
-                WatcherType::Individual
+                watch_individually = true;
             }
-        } else {
-            WatcherType::None
-        };
+        }
 
         let file_path_buf = file_path.to_owned();
-        let file_path_clone = file_path_buf.clone();
-        let use_individual_watcher = watcher_type == WatcherType::Individual;
         let future = ctx.spawn(
             async move {
                 let contents = async_fs::read_to_string(&file_path_buf)
@@ -416,51 +452,69 @@ impl FileModel {
                     .map_err(FileLoadError::from);
                 (file_id, contents)
             },
-            move |me, (file_id, load_result), ctx| match load_result {
-                Ok(content) => {
-                    let version = ContentVersion::new();
-                    me.set_version(file_id, version);
+            move |me, (file_id, load_result), ctx| {
+                // A read can land after the caller unsubscribed (closing or reopening the file
+                // cancels, but the completion may already be queued). Registering a watcher or
+                // emitting for a file that is no longer tracked would resurrect state that its
+                // owner already tore down.
+                if me.file_state.get(file_id).is_none() {
+                    return;
+                }
+                match load_result {
+                    Ok(content) => {
+                        let version = ContentVersion::new();
+                        me.set_version(file_id, version);
 
-                    // Only register individual watcher if not using repo subscription.
-                    // Watch the parent directory (NonRecursive) instead of the file
-                    // itself so the watch survives editors that use a
-                    // delete+create/rename pattern (vim, sed -i, etc.). Watching
-                    // the file directly would lose the inotify watch when the
-                    // original inode is deleted.
-                    if use_individual_watcher {
-                        let watch_path = file_path_clone
-                            .parent()
-                            .map(|p| p.to_path_buf())
-                            .unwrap_or_else(|| file_path_clone.clone());
-                        me.watcher.update(ctx, |watcher, _ctx| {
-                            std::mem::drop(watcher.register_path(
-                                &watch_path,
-                                WatchFilter::accept_all(),
-                                RecursiveMode::NonRecursive,
-                            ));
+                        // Only register an individual watcher if not using a repo subscription,
+                        // and only record it once it has actually been registered.
+                        if watch_individually && let Some(watch_path) = me.watch_path(file_id) {
+                            me.register_individual_watcher(&watch_path, ctx);
+                            if let Some(FileBackend::Local(file)) = me.file_state.get_mut(file_id) {
+                                file.watcher_type = WatcherType::Individual(watch_path);
+                            }
+                        }
+
+                        ctx.emit(FileModelEvent::FileLoaded {
+                            content,
+                            id: file_id,
+                            version,
                         });
                     }
-
-                    ctx.emit(FileModelEvent::FileLoaded {
-                        content,
-                        id: file_id,
-                        version,
-                    });
-                }
-                Err(err) => {
-                    ctx.emit(FileModelEvent::FailedToLoad {
-                        id: file_id,
-                        error: Rc::new(err),
-                    });
+                    Err(err) => {
+                        ctx.emit(FileModelEvent::FailedToLoad {
+                            id: file_id,
+                            error: Rc::new(err),
+                        });
+                    }
                 }
             },
         );
 
-        let local_file = LocalFile::new(file_path.to_owned(), watcher_type);
         self.file_state.insert_local(file_id, local_file);
 
         self.abort_handles.insert(file_id, future);
         file_id
+    }
+
+    /// The directory an individually-watched file is watched through.
+    ///
+    /// The parent directory is watched (rather than the file) so the watch survives editors that
+    /// replace a file with delete+create or rename (vim, `sed -i`, ...), which would otherwise
+    /// drop the watch along with the original inode.
+    ///
+    /// Derived from the stored path so registration and unregistration always agree. `None` when
+    /// the file's path has no usable parent — a bare relative name such as `README.md` yields an
+    /// empty parent, which platform watchers resolve to Warp's own process directory.
+    fn watch_path(&self, file_id: FileId) -> Option<PathBuf> {
+        Self::watch_path_for(self.file_state.get_local(file_id)?.path.as_deref()?)
+    }
+
+    /// See [`Self::watch_path`].
+    fn watch_path_for(path: &Path) -> Option<PathBuf> {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())?;
+        Some(parent.to_path_buf())
     }
 
     pub async fn read_content_for_file(file_path: &Path) -> Result<String, FileLoadError> {
@@ -615,10 +669,10 @@ impl FileModel {
 
     /// Ensures all parent directories of the given path exist, creating them if necessary.
     pub async fn ensure_parent_directories(path: &Path) -> Result<(), io::Error> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                async_fs::create_dir_all(parent).await?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            async_fs::create_dir_all(parent).await?;
         }
         Ok(())
     }
@@ -635,62 +689,52 @@ impl FileModel {
             let path = file.path;
             let watcher_type = file.watcher_type;
 
-            if let Some(ref path) = path {
-                if !path_still_used {
-                    match watcher_type {
-                        WatcherType::Individual => {
-                            // Unwatch the parent directory (matching the register
-                            // in open() which watches the parent, not the file).
-                            // Only unregister if no other individually-watched
-                            // files share the same parent directory.
-                            let watch_path = path
-                                .parent()
-                                .map(|p| p.to_path_buf())
-                                .unwrap_or_else(|| path.clone());
-                            let other_files_share_parent =
-                                self.file_state.local_values().any(|f| {
-                                    f.watcher_type == WatcherType::Individual
-                                        && f.path
-                                            .as_deref()
-                                            .and_then(|p| p.parent())
-                                            .map(|p| p == watch_path)
-                                            .unwrap_or(false)
-                                });
-                            if !other_files_share_parent {
-                                self.watcher.update(ctx, |watcher, _ctx| {
-                                    std::mem::drop(watcher.unregister_path(&watch_path));
-                                });
-                            }
+            if let Some(ref path) = path
+                && !path_still_used
+            {
+                match watcher_type {
+                    // Unwatch exactly the directory that was registered for this file, and only
+                    // when no other individually-watched file is still using it.
+                    WatcherType::Individual(watch_path) => {
+                        let watch_path_still_used = self.file_state.local_values().any(|file| {
+                            file.watcher_type.individual_watch_path() == Some(watch_path.as_path())
+                        });
+                        if !watch_path_still_used {
+                            self.watcher.update(ctx, |watcher, _ctx| {
+                                std::mem::drop(watcher.unregister_path(&watch_path));
+                            });
                         }
-                        WatcherType::Repository => {
-                            if let Some((repo_root, unused_repo)) =
-                                self.repo_path_mapping.remove(path)
-                            {
-                                if unused_repo {
-                                    self.unsubscribe_from_repo(&repo_root, ctx);
-                                }
-                            }
-                        }
-                        WatcherType::None => {}
                     }
+                    WatcherType::Repository => {
+                        if let Some((repo_root, unused_repo)) = self.repo_path_mapping.remove(path)
+                            && unused_repo
+                        {
+                            self.unsubscribe_from_repo(&repo_root, ctx);
+                        }
+                    }
+                    WatcherType::None => {}
                 }
             }
         }
         // Remote files have no watcher to clean up.
     }
 
+    /// Saves the file's content, returning a future that resolves with the
+    /// write outcome. `FileSaved` / `FailedToSave` events are still emitted
+    /// for subscribers; the future is a per-request completion signal.
     pub fn save(
         &mut self,
         file_id: FileId,
         content: String,
         version: ContentVersion,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<(), FileSaveError> {
+    ) -> Result<SaveFuture, FileSaveError> {
         let backend = self
             .file_state
             .get(file_id)
             .ok_or(FileSaveError::NoFilePath(file_id))?;
 
+        let (tx, rx) = oneshot::channel();
         match backend {
             FileBackend::Local(_) => {
                 let file_path = self
@@ -713,8 +757,9 @@ impl FileModel {
                         })
                     },
                     move |me, write_result: Result<(), FileSaveError>, ctx| {
-                        match write_result {
-                            Ok(_) => {
+                        let result = write_result.map_err(Arc::new);
+                        match &result {
+                            Ok(()) => {
                                 me.set_version(file_id, version);
                                 ctx.emit(FileModelEvent::FileSaved {
                                     id: file_id,
@@ -723,46 +768,47 @@ impl FileModel {
                             }
                             Err(err) => ctx.emit(FileModelEvent::FailedToSave {
                                 id: file_id,
-                                error: Rc::new(err),
+                                error: err.clone(),
                             }),
                         };
+                        let _ = tx.send(result);
                     },
                 );
             }
             FileBackend::Remote { host_id, path } => {
-                let client = Self::resolve_remote_client(host_id, ctx)?;
+                let handle = RemoteServerManager::as_ref(ctx).host_request_handle(host_id);
                 let path = path.as_str().to_string();
-                let future = async move {
-                    client
-                        .write_file(path, content)
-                        .await
-                        .map_err(|e| e.to_string())
-                };
                 ctx.spawn(
-                    future,
-                    move |me, result: Result<(), String>, ctx| match result {
-                        Ok(()) => {
-                            me.set_version(file_id, version);
-                            ctx.emit(FileModelEvent::FileSaved {
-                                id: file_id,
-                                version,
-                            });
+                    async move { handle.write_file(path, content).await },
+                    move |me, result, ctx| {
+                        let result =
+                            result.map_err(|e| Arc::new(FileSaveError::RemoteError(e.to_string())));
+                        match &result {
+                            Ok(()) => {
+                                me.set_version(file_id, version);
+                                ctx.emit(FileModelEvent::FileSaved {
+                                    id: file_id,
+                                    version,
+                                });
+                            }
+                            Err(err) => {
+                                ctx.emit(FileModelEvent::FailedToSave {
+                                    id: file_id,
+                                    error: err.clone(),
+                                });
+                            }
                         }
-                        Err(err) => {
-                            ctx.emit(FileModelEvent::FailedToSave {
-                                id: file_id,
-                                error: Rc::new(FileSaveError::RemoteError(err)),
-                            });
-                        }
+                        let _ = tx.send(result);
                     },
                 );
             }
         }
 
-        Ok(())
+        Ok(async move { rx.await.unwrap_or(Ok(())) }.boxed())
     }
 
-    /// Renames a file and also saves its content.
+    /// Renames a file and also saves its content, returning a future that
+    /// resolves with the write outcome.
     // TODO: refactor this against [`FileModel::save`].
     pub fn rename_and_save(
         &mut self,
@@ -771,11 +817,12 @@ impl FileModel {
         content: String,
         version: ContentVersion,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<(), FileSaveError> {
+    ) -> Result<SaveFuture, FileSaveError> {
         let file_path = self
             .file_path(file_id)
             .ok_or(FileSaveError::NoFilePath(file_id))?;
 
+        let (tx, rx) = oneshot::channel();
         ctx.spawn(
             async move {
                 // Make sure the file we're renaming exists.
@@ -811,8 +858,9 @@ impl FileModel {
                     })
             },
             move |me, write_result: Result<(), FileSaveError>, ctx| {
-                match write_result {
-                    Ok(_) => {
+                let result = write_result.map_err(Arc::new);
+                match &result {
+                    Ok(()) => {
                         me.set_version(file_id, version);
                         ctx.emit(FileModelEvent::FileSaved {
                             id: file_id,
@@ -821,27 +869,30 @@ impl FileModel {
                     }
                     Err(err) => ctx.emit(FileModelEvent::FailedToSave {
                         id: file_id,
-                        error: Rc::new(err),
+                        error: err.clone(),
                     }),
                 };
+                let _ = tx.send(result);
             },
         );
 
-        Ok(())
+        Ok(async move { rx.await.unwrap_or(Ok(())) }.boxed())
     }
 
-    /// Deletes the specified file.
+    /// Deletes the specified file, returning a future that resolves with the
+    /// delete outcome.
     pub fn delete(
         &mut self,
         file_id: FileId,
         version: ContentVersion,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<(), FileSaveError> {
+    ) -> Result<SaveFuture, FileSaveError> {
         let backend = self
             .file_state
             .get(file_id)
             .ok_or(FileSaveError::NoFilePath(file_id))?;
 
+        let (tx, rx) = oneshot::channel();
         match backend {
             FileBackend::Local(_) => {
                 let file_path = self
@@ -864,8 +915,9 @@ impl FileModel {
                         })
                     },
                     move |me, delete_result: Result<(), FileSaveError>, ctx| {
-                        match delete_result {
-                            Ok(_) => {
+                        let result = delete_result.map_err(Arc::new);
+                        match &result {
+                            Ok(()) => {
                                 me.set_version(file_id, version);
                                 ctx.emit(FileModelEvent::FileSaved {
                                     id: file_id,
@@ -874,52 +926,43 @@ impl FileModel {
                             }
                             Err(err) => ctx.emit(FileModelEvent::FailedToSave {
                                 id: file_id,
-                                error: Rc::new(err),
+                                error: err.clone(),
                             }),
                         };
+                        let _ = tx.send(result);
                     },
                 );
             }
             FileBackend::Remote { host_id, path } => {
-                let client = Self::resolve_remote_client(host_id, ctx)?;
+                let handle = RemoteServerManager::as_ref(ctx).host_request_handle(host_id);
                 let path = path.as_str().to_string();
-                let future =
-                    async move { client.delete_file(path).await.map_err(|e| e.to_string()) };
                 ctx.spawn(
-                    future,
-                    move |me, result: Result<(), String>, ctx| match result {
-                        Ok(()) => {
-                            me.set_version(file_id, version);
-                            ctx.emit(FileModelEvent::FileSaved {
-                                id: file_id,
-                                version,
-                            });
+                    async move { handle.delete_file(path).await },
+                    move |me, result, ctx| {
+                        let result =
+                            result.map_err(|e| Arc::new(FileSaveError::RemoteError(e.to_string())));
+                        match &result {
+                            Ok(()) => {
+                                me.set_version(file_id, version);
+                                ctx.emit(FileModelEvent::FileSaved {
+                                    id: file_id,
+                                    version,
+                                });
+                            }
+                            Err(err) => {
+                                ctx.emit(FileModelEvent::FailedToSave {
+                                    id: file_id,
+                                    error: err.clone(),
+                                });
+                            }
                         }
-                        Err(err) => {
-                            ctx.emit(FileModelEvent::FailedToSave {
-                                id: file_id,
-                                error: Rc::new(FileSaveError::RemoteError(err)),
-                            });
-                        }
+                        let _ = tx.send(result);
                     },
                 );
             }
         }
 
-        Ok(())
-    }
-
-    /// Look up the `RemoteServerClient` for a given host at call time.
-    fn resolve_remote_client(
-        host_id: &HostId,
-        ctx: &AppContext,
-    ) -> Result<std::sync::Arc<RemoteServerClient>, FileSaveError> {
-        RemoteServerManager::as_ref(ctx)
-            .client_for_host(host_id)
-            .cloned()
-            .ok_or_else(|| {
-                FileSaveError::RemoteError(format!("Remote host {host_id} is not connected"))
-            })
+        Ok(async move { rx.await.unwrap_or(Ok(())) }.boxed())
     }
 
     pub fn set_version(&mut self, file_id: FileId, version: ContentVersion) {
@@ -956,6 +999,7 @@ impl FileModel {
         let (repository_update_tx, repository_update_rx) = async_channel::unbounded();
         let start = repository.update(ctx, |repo, ctx| {
             repo.start_watching(
+                RepositoryWatchMode::FilesystemOnly,
                 Box::new(FileRepositorySubscriber {
                     repository_update_tx,
                 }),
@@ -1144,22 +1188,22 @@ impl FileModel {
         for path in affected_paths {
             self.repo_path_mapping.remove(&path);
 
-            // Find the file(s) at this path and update their watcher type
+            // A file with no usable watch directory cannot fall back to an individual watcher, so
+            // it stops receiving updates rather than pretending to be watched.
+            let watch_path = Self::watch_path_for(&path);
             for (_, file) in self.file_state.local_iter_mut() {
                 if file.path.as_ref() == Some(&path) && file.watcher_type == WatcherType::Repository
                 {
-                    file.watcher_type = WatcherType::Individual;
+                    file.watcher_type = match &watch_path {
+                        Some(watch_path) => WatcherType::Individual(watch_path.clone()),
+                        None => WatcherType::None,
+                    };
                 }
             }
 
-            // Register individual file watcher
-            self.watcher.update(ctx, |watcher, _ctx| {
-                std::mem::drop(watcher.register_path(
-                    &path,
-                    WatchFilter::accept_all(),
-                    RecursiveMode::Recursive,
-                ));
-            });
+            if let Some(watch_path) = watch_path {
+                self.register_individual_watcher(&watch_path, ctx);
+            }
         }
     }
 

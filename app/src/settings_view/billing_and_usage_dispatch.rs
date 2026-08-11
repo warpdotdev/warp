@@ -3,17 +3,18 @@
 
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
-use warpui::elements::{ChildView, Container};
+use warpui::elements::ChildView;
 use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext, ViewHandle};
 
+use super::SettingsSection;
 use super::billing_and_usage_page::{BillingAndUsagePageEvent, BillingAndUsagePageView};
 use super::billing_and_usage_page_v2::BillingAndUsagePageV2View;
 use super::settings_page::{
-    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, HEADER_PADDING,
+    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
 };
-use super::SettingsSection;
 use crate::auth::{AuthManager, AuthStateProvider};
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::Workspace;
 
 pub struct BillingAndUsageDispatchView {
     page: PageType<Self>,
@@ -55,16 +56,18 @@ impl BillingAndUsageDispatchView {
         if !FeatureFlag::BillingAndUsagePageV2.is_enabled() {
             return false;
         }
-        UserWorkspaces::as_ref(ctx)
-            .current_workspace()
-            .is_some_and(|workspace| {
-                let bm = &workspace.billing_metadata;
-                bm.is_on_build_plan()
-                    || bm.is_on_build_max_plan()
-                    || bm.is_on_build_business_plan()
-                    || bm.is_enterprise_plan()
-                    || bm.is_free_plan()
-            })
+        Self::workspace_uses_v2(UserWorkspaces::as_ref(ctx).current_workspace())
+    }
+
+    fn workspace_uses_v2(workspace: Option<&Workspace>) -> bool {
+        workspace.is_none_or(|workspace| {
+            let bm = &workspace.billing_metadata;
+            bm.is_on_build_plan()
+                || bm.is_on_build_max_plan()
+                || bm.is_on_build_business_plan()
+                || bm.is_enterprise_plan()
+                || bm.is_free_plan()
+        })
     }
 
     pub fn get_modal_content(&self, app: &AppContext) -> Option<Box<dyn Element>> {
@@ -75,6 +78,10 @@ impl BillingAndUsageDispatchView {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "billing_and_usage_dispatch_tests.rs"]
+mod tests;
 
 impl Entity for BillingAndUsageDispatchView {
     type Event = BillingAndUsagePageEvent;
@@ -148,13 +155,10 @@ impl SettingsWidget for BillingAndUsageWidget {
         _appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let inner = if view.use_v2(app) {
+        if view.use_v2(app) {
             ChildView::new(&view.v2).finish()
         } else {
             ChildView::new(&view.v1).finish()
-        };
-        Container::new(inner)
-            .with_margin_top(HEADER_PADDING)
-            .finish()
+        }
     }
 }

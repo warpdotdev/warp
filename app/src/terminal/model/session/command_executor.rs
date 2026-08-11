@@ -3,7 +3,6 @@ mod in_band_command_executor;
 mod local_command_executor;
 #[cfg(feature = "local_tty")]
 mod msys2_command_executor;
-mod tmux_executor;
 #[cfg(feature = "local_tty")]
 mod wsl_command_executor;
 use std::collections::HashMap;
@@ -22,16 +21,18 @@ use anyhow::Result;
 use async_channel::{Receiver, Sender};
 use async_trait::async_trait;
 pub use in_band_command_executor::{
-    is_in_band_command, InBandCommand, InBandCommandCancelledEvent, InBandCommandExecutor,
-    InBandCommandOutputReceiver,
+    InBandCommand, InBandCommandCancelledEvent, InBandCommandExecutor, InBandCommandOutputReceiver,
+    is_in_band_command,
 };
 #[cfg(feature = "local_tty")]
 pub use local_command_executor::LocalCommandExecutor;
 pub use noop_command_executor::NoOpCommandExecutor;
 #[cfg(feature = "local_tty")]
 pub use remote_command_executor::RemoteCommandExecutor;
-pub use shared::{shell_escape_single_quotes, ExecutorCommandEvent};
+pub use shared::{ExecutorCommandEvent, shell_escape_single_quotes, shell_quote_arg};
 use warp_completer::completer::CommandOutput;
+#[cfg(feature = "local_tty")]
+use warp_errors::report_error;
 use warpui::ModelContext;
 
 use super::SessionInfo;
@@ -150,11 +151,10 @@ fn new_command_executor_for_local_tty_session(
     use msys2_command_executor::MSYS2CommandExecutor;
     use remote_server_executor::RemoteServerCommandExecutor;
     use settings::Setting as _;
-    use tmux_executor::TmuxCommandExecutor;
     use warpui::SingletonEntity as _;
     use wsl_command_executor::WslCommandExecutor;
 
-    use super::IsLegacySSHSession;
+    use super::IsSSHWrapperSession;
     use crate::features::FeatureFlag;
     use crate::remote_server::manager::RemoteServerManager;
     use crate::settings::DebugSettings;
@@ -162,8 +162,8 @@ fn new_command_executor_for_local_tty_session(
     use crate::terminal::model::session::{BootstrapSessionType, ShellLaunchData};
     use crate::terminal::shell::ShellType;
 
-    // When the remote server feature flag is enabled and the session is a
-    // legacy SSH session, use the remote server executor *if* the manager
+    // When the remote server feature flag is enabled and the session is an
+    // SSH wrapper session, use the remote server executor *if* the manager
     // already has a live `Connected` client for this session.
     //
     // By construction this branch is only reached after
@@ -175,37 +175,20 @@ fn new_command_executor_for_local_tty_session(
     // fall through to the existing ControlMaster-based
     // `RemoteCommandExecutor` below. This preserves the fallback behavior
     // described in specs/APP-3797.
-    if FeatureFlag::SshRemoteServer.is_enabled() {
-        if let IsLegacySSHSession::Yes { .. } = &session_info.is_legacy_ssh_session {
-            let session_id = session_info.session_id;
-            let maybe_client = RemoteServerManager::handle(ctx)
-                .read(ctx, |mgr, _| mgr.client_for_session(session_id).cloned());
-            if let Some(client) = maybe_client {
-                log::info!("creating a remote server executor for session {session_id:?}");
-                return Arc::new(RemoteServerCommandExecutor::new(session_id, client));
-            }
-            log::info!(
-                "SshRemoteServer flag on but no connected client for session {session_id:?}; \
-                 falling back to ControlMaster executor"
-            );
-        }
-    }
-
-    if FeatureFlag::SSHTmuxWrapper.is_enabled()
-        && session_info.tmux_control_mode
-        // We don't allow nested tmux warpification, so if our parent session is already warified using
-        // tmux then we shouldn't.
-        && !parent_session_info.is_some_and(|s| s.tmux_control_mode)
+    if FeatureFlag::SshRemoteServer.is_enabled()
+        && let IsSSHWrapperSession::Yes { .. } = &session_info.is_ssh_wrapper_session
     {
-        log::info!("creating a tmux executor!");
-        let executor = Arc::new(TmuxCommandExecutor::new(executor_command_tx.clone()));
-        let executor_clone = executor.clone();
-        ctx.spawn_stream_local(
-            in_band_command_output_rx,
-            move |_, event, _| executor_clone.handle_executed_command_event(event),
-            |_, _| {}, /* on_done */
+        let session_id = session_info.session_id;
+        let maybe_client = RemoteServerManager::handle(ctx)
+            .read(ctx, |mgr, _| mgr.client_for_session(session_id).cloned());
+        if let Some(client) = maybe_client {
+            log::info!("creating a remote server executor for session {session_id:?}");
+            return Arc::new(RemoteServerCommandExecutor::new(session_id, client));
+        }
+        log::info!(
+            "SshRemoteServer flag on but no connected client for session {session_id:?}; \
+                 falling back to ControlMaster executor"
         );
-        return executor;
     }
 
     let debug_settings = DebugSettings::as_ref(ctx);
@@ -215,9 +198,9 @@ fn new_command_executor_for_local_tty_session(
     let should_force_disable_in_band_generators =
         debug_settings.force_disable_in_band_generators.value();
 
-    let is_legacy_ssh_session = matches!(
-        &session_info.is_legacy_ssh_session,
-        IsLegacySSHSession::Yes { .. }
+    let is_ssh_wrapper_session = matches!(
+        &session_info.is_ssh_wrapper_session,
+        IsSSHWrapperSession::Yes { .. }
     );
 
     let shell_needs_in_band_executor = session_info.shell.force_in_band_command_executor();
@@ -267,7 +250,7 @@ fn new_command_executor_for_local_tty_session(
                         false,
                         "Docker sandbox sessions should be routed through the in-band executor"
                     );
-                    log::error!(
+                    report_error!(
                         "Docker sandbox session reached the local-executor branch; \
                          falling back to a no-op command executor. \
                          `launch_data_needs_in_band_executor` routing may have drifted."
@@ -309,18 +292,22 @@ fn new_command_executor_for_local_tty_session(
             }
         }
         BootstrapSessionType::WarpifiedRemote
-            if is_legacy_ssh_session
+            if is_ssh_wrapper_session
                 && !FeatureFlag::InBandGeneratorsForSSH.is_enabled()
                 && !force_use_in_band_generators =>
         {
-            if let IsLegacySSHSession::Yes { socket_path } = &session_info.is_legacy_ssh_session {
+            if let IsSSHWrapperSession::Yes { socket_path, .. } =
+                &session_info.is_ssh_wrapper_session
+            {
                 let wsl_distro = parent_session_info
                     .and_then(|session| session.wsl_name())
                     .map(ToOwned::to_owned);
-                log::info!("creating a legacy ssh executor!");
+                log::info!("creating a ControlMaster-based ssh executor!");
                 Arc::new(RemoteCommandExecutor::new(socket_path.clone(), wsl_distro))
             } else {
-                unreachable!("Unreachable because of match! above. Unfortunately if let guards in rust are still experimental.")
+                unreachable!(
+                    "Unreachable because of match! above. Unfortunately if let guards in rust are still experimental."
+                )
             }
         }
         _ => {
@@ -362,7 +349,7 @@ fn new_command_executor_for_local_tty_session(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 pub mod testing {
     use anyhow::anyhow;
     use command::r#async::Command;

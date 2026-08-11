@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::Context as _;
 use serde_json::{Map, Value};
 use warp_cli::mcp::MCPSpec;
+use warp_core::features::FeatureFlag;
 
 use crate::ai::ambient_agents::AgentConfigSnapshot;
 
@@ -19,6 +20,8 @@ pub struct AgentConfigSnapshotFile {
     pub name: Option<String>,
     #[serde(default)]
     pub environment_id: Option<String>,
+    #[serde(default)]
+    pub runner_id: Option<String>,
     #[serde(default)]
     pub model_id: Option<String>,
     #[serde(default)]
@@ -93,18 +96,22 @@ fn parse_yaml(input: &str) -> anyhow::Result<AgentConfigSnapshotFile> {
 }
 
 fn supported_keys_context() -> String {
-    "Supported keys: name, environment_id, model_id, base_prompt, mcp_servers, host, computer_use_enabled".to_string()
+    "Supported keys: name, environment_id, runner_id, model_id, base_prompt, mcp_servers, host, computer_use_enabled".to_string()
 }
 
 /// Convert an unwrapped `mcp_servers` map into runtime MCP specs for AgentDriver.
 ///
 /// Behavior:
-/// - Entries with `warp_id` become `MCPSpec::Uuid`.
+/// - Entries with a UUID `warp_id` become `MCPSpec::Uuid`.
+/// - Entries with any other non-empty `warp_id` (e.g. `"linear"`) become `MCPSpec::WellKnown`
+///   when `FeatureFlag::WellKnownMcpIds` is enabled (and are rejected otherwise);
+///   the server owns the set of recognized ids and unknown ids are skipped at resolution.
 /// - Entries with `command`/`url` remain as inline JSON (`MCPSpec::Json`) containing the unwrapped server map.
 pub fn mcp_specs_from_mcp_servers(
     mcp_servers: &Map<String, Value>,
 ) -> anyhow::Result<Vec<MCPSpec>> {
     let mut uuids: Vec<uuid::Uuid> = Vec::new();
+    let mut well_known: Vec<String> = Vec::new();
     let mut json_map: Map<String, Value> = Map::new();
 
     for (name, config) in mcp_servers {
@@ -113,10 +120,19 @@ pub fn mcp_specs_from_mcp_servers(
             .ok_or_else(|| anyhow::anyhow!("MCP server '{name}' config must be a JSON object"))?;
 
         if let Some(warp_id) = obj.get("warp_id").and_then(Value::as_str) {
-            let uuid = uuid::Uuid::parse_str(warp_id).map_err(|_| {
-                anyhow::anyhow!("MCP server '{name}' field 'warp_id' must be a UUID")
-            })?;
-            uuids.push(uuid);
+            if let Ok(uuid) = uuid::Uuid::parse_str(warp_id) {
+                uuids.push(uuid);
+            } else if !FeatureFlag::WellKnownMcpIds.is_enabled() {
+                return Err(anyhow::anyhow!(
+                    "MCP server '{name}' field 'warp_id' must be a UUID"
+                ));
+            } else if warp_id.trim().is_empty() {
+                return Err(anyhow::anyhow!(
+                    "MCP server '{name}' field 'warp_id' must be non-empty"
+                ));
+            } else {
+                well_known.push(warp_id.to_string());
+            }
         } else {
             json_map.insert(name.clone(), config.clone());
         }
@@ -124,8 +140,11 @@ pub fn mcp_specs_from_mcp_servers(
 
     uuids.sort();
     uuids.dedup();
+    well_known.sort();
+    well_known.dedup();
 
     let mut specs: Vec<MCPSpec> = uuids.into_iter().map(MCPSpec::Uuid).collect();
+    specs.extend(well_known.into_iter().map(MCPSpec::WellKnown));
 
     if !json_map.is_empty() {
         let json =
@@ -148,6 +167,7 @@ pub fn merge_with_precedence(
 
     let name = cli.name.or_else(|| file.name.clone());
     let environment_id = cli.environment_id.or_else(|| file.environment_id.clone());
+    let runner_id = cli.runner_id.or_else(|| file.runner_id.clone());
     let model_id = cli.model_id.or_else(|| file.model_id.clone());
     let base_prompt = cli.base_prompt.or_else(|| file.base_prompt.clone());
 
@@ -158,6 +178,7 @@ pub fn merge_with_precedence(
     AgentConfigSnapshot {
         name,
         environment_id,
+        runner_id,
         model_id,
         base_prompt,
         mcp_servers,
@@ -167,6 +188,7 @@ pub fn merge_with_precedence(
         computer_use_enabled,
         harness: cli.harness,
         harness_auth_secrets: cli.harness_auth_secrets,
+        additional_source_repos: None,
     }
 }
 

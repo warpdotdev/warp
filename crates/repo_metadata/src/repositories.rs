@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
-use futures::future::{ready, Either};
+use futures::future::{Either, ready};
 #[cfg(test)]
 use virtual_fs::{Stub, VirtualFS};
 use warp_util::host_id::HostId;
@@ -10,8 +10,8 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::{RemoteNavigationResult, RemotePath};
 use warp_util::standardized_path::StandardizedPath;
 #[cfg(test)]
-use warpui::r#async::FutureId;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use warpui_core::r#async::FutureId;
+use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::{DirectoryWatcher, Repository};
 
@@ -66,7 +66,7 @@ impl DetectedRepositories {
         source: RepoDetectionSource,
         remote_detect: Option<F>,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Option<LocalOrRemotePath>> {
+    ) -> impl Future<Output = Option<LocalOrRemotePath>> + use<F> {
         match remote_detect {
             None => {
                 // Local detection path.
@@ -93,7 +93,7 @@ impl DetectedRepositories {
         active_directory: &str,
         source: RepoDetectionSource,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Future<Output = Option<PathBuf>> {
+    ) -> impl Future<Output = Option<PathBuf>> + use<> {
         #[cfg(feature = "local_fs")]
         {
             use futures::channel::oneshot;
@@ -104,25 +104,25 @@ impl DetectedRepositories {
             };
 
             let local_key = path.to_local_path().map(LocalOrRemotePath::Local);
-            if let Some(ref key) = local_key {
-                if self.repository_roots.contains(key) {
-                    if let Some(local_path) = path.to_local_path() {
-                        if let Some(repository) = DirectoryWatcher::as_ref(ctx)
-                            .get_watched_directory_for_path(&local_path)
-                        {
-                            ctx.emit(DetectedRepositoriesEvent::DetectedGitRepo {
-                                repository: repository.clone(),
-                                source,
-                            });
-                            // Watcher is alive — use the cached result.
-                            return Either::Right(ready(path.to_local_path()));
-                        }
-                        // Watcher was cleaned up (e.g. diff state model dropped
-                        // and recreated). Fall through to the full scan which
-                        // will re-register the watcher.
-                    } else {
+            if let Some(ref key) = local_key
+                && self.repository_roots.contains(key)
+            {
+                if let Some(local_path) = path.to_local_path() {
+                    if let Some(repository) =
+                        DirectoryWatcher::as_ref(ctx).get_watched_directory_for_path(&local_path)
+                    {
+                        ctx.emit(DetectedRepositoriesEvent::DetectedGitRepo {
+                            repository: repository.clone(),
+                            source,
+                        });
+                        // Watcher is alive — use the cached result.
                         return Either::Right(ready(path.to_local_path()));
                     }
+                    // Watcher was cleaned up (e.g. diff state model dropped
+                    // and recreated). Fall through to the full scan which
+                    // will re-register the watcher.
+                } else {
+                    return Either::Right(ready(path.to_local_path()));
                 }
             }
 
@@ -218,12 +218,38 @@ impl DetectedRepositories {
     }
 
     /// Given a local or remote path, return its corresponding repo root.
-    /// This does not run the check against the actual file system.
-    /// Instead it checks against our cached path to root mapping.
+    ///
+    /// No git detection is performed; roots are looked up in our cached
+    /// path-to-root mapping. Note that for local paths this still hits the
+    /// file system: the path is canonicalized first (resolving symlinks and
+    /// requiring it to exist) so it can match the canonicalized cached roots.
+    /// If the input is already canonicalized, prefer
+    /// [`Self::get_root_for_canonical_path`], which performs no I/O.
     pub fn get_root_for_path(&self, path: &LocalOrRemotePath) -> Option<LocalOrRemotePath> {
         match path {
             LocalOrRemotePath::Local(local_path) => {
                 let std_path = StandardizedPath::from_local_canonicalized(local_path).ok()?;
+                self.find_local_repository_root(&std_path)
+            }
+            LocalOrRemotePath::Remote(remote_path) => self.find_remote_repository_root(remote_path),
+        }
+    }
+
+    /// Given a local or remote path, return its corresponding repo root.
+    /// This does not run the check against the actual file system.
+    /// Instead it checks against our cached path to root mapping.
+    ///
+    /// Local paths must already be canonicalized (symlinks resolved); they
+    /// are only normalized here, without any filesystem I/O. A
+    /// non-canonical path may fail to match the canonicalized cached roots
+    /// — use [`Self::get_root_for_path`] for such paths instead.
+    pub fn get_root_for_canonical_path(
+        &self,
+        path: &LocalOrRemotePath,
+    ) -> Option<LocalOrRemotePath> {
+        match path {
+            LocalOrRemotePath::Local(local_path) => {
+                let std_path = StandardizedPath::try_from_local(local_path).ok()?;
                 self.find_local_repository_root(&std_path)
             }
             LocalOrRemotePath::Remote(remote_path) => self.find_remote_repository_root(remote_path),
@@ -319,13 +345,14 @@ async fn find_git_repo(path: &Path) -> Option<GitRepoInfo> {
         }
 
         // First, check if the current directory is a bare git repository.
-        if let Some(dir_name) = current.file_name().and_then(|s| s.to_str()) {
-            if dir_name.ends_with(".git") && is_valid_git_dir(&current).await {
-                return Some(GitRepoInfo {
-                    working_tree_path: None,
-                    git_dir_path: current.clone(),
-                });
-            }
+        if let Some(dir_name) = current.file_name().and_then(|s| s.to_str())
+            && dir_name.ends_with(".git")
+            && is_valid_git_dir(&current).await
+        {
+            return Some(GitRepoInfo {
+                working_tree_path: None,
+                git_dir_path: current.clone(),
+            });
         }
 
         // Check for a .git directory.

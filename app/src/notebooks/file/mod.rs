@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
+#[cfg(not(target_family = "wasm"))]
+use remote_server::manager::RemoteServerManager;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::ICON_DIMENSIONS;
 use warp_editor::model::CoreEditorModel;
 #[cfg(feature = "local_fs")]
@@ -29,11 +32,11 @@ use warpui::{
     ViewHandle,
 };
 
-use super::context_menu::{show_rich_editor_context_menu, ContextMenuAction, ContextMenuState};
+use super::context_menu::{ContextMenuAction, ContextMenuState, show_rich_editor_context_menu};
 use super::editor::view::{EditorViewEvent, RichTextEditorConfig, RichTextEditorView};
 use super::link::{NotebookLinks, SessionSource};
 use super::telemetry::NotebookTelemetryAction;
-use super::{styles, NotebookLocation};
+use super::{NotebookLocation, styles};
 use crate::appearance::Appearance;
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
@@ -44,17 +47,23 @@ use crate::notebooks::editor::rich_text_styles;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::pane::view::header::components::{
-    render_pane_header_buttons, render_pane_header_title_text, render_three_column_header,
-    CenteredHeaderEdgeWidth,
+    CenteredHeaderEdgeWidth, render_pane_header_buttons, render_pane_header_title_text,
+    render_three_column_header,
 };
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::server::telemetry::{NotebookActionEvent, NotebookTelemetryMetadata, TelemetryEvent};
 use crate::settings::FontSettings;
 use crate::terminal::model::session::Session;
 use crate::ui_components::icons::Icon;
-pub use crate::util::openable_file_type::is_markdown_file;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
+// `renders_in_warp_notebook_viewer` is only consumed by non-wasm views
+// (`code::view` resolves to `view.rs` off-wasm and to `wasm.rs` on-wasm, and the
+// tooltips helper is `local_fs`-gated). Gate the re-export to match, otherwise it
+// is flagged as an unused import on the wasm build where those consumers are absent.
+#[cfg(not(target_family = "wasm"))]
+pub use crate::util::openable_file_type::renders_in_warp_notebook_viewer;
+pub use crate::util::openable_file_type::{is_jupyter_notebook_file, is_markdown_file};
 use crate::view_components::{MarkdownToggleEvent, MarkdownToggleView};
 use crate::workflows::{WorkflowSource, WorkflowType};
 use crate::workspace::ActiveSession;
@@ -69,15 +78,13 @@ pub enum MarkdownDisplayMode {
 
 /// View for a read-only notebook backed by a file, rather than Warp Drive.
 pub struct FileNotebookView {
-    /// The location of the open file. This is cached for displaying the title and breadcrumbs.
+    /// Cached for displaying the title and breadcrumbs.
     location: Option<FileLocation>,
-    /// Read-only rich text editor used to show the notebook contents.
+    /// Read-only view of the notebook contents.
     editor: ViewHandle<RichTextEditorView>,
     retry_button_mouse_state: MouseStateHandle,
-    /// Tracks the state for loading the backing Markdown file.
     file_state: FileState,
-    /// File watcher id for the currently opened file (if any). Only needed when we have local fs
-    /// access.
+    /// File watcher id for the currently opened file, if any.
     #[cfg(feature = "local_fs")]
     file_id: Option<FileId>,
     pane_configuration: ModelHandle<PaneConfiguration>,
@@ -85,11 +92,9 @@ pub struct FileNotebookView {
     links: ModelHandle<NotebookLinks>,
     context_menu: ContextMenuState<Self>,
     view_position_id: String,
-    /// Display mode for markdown content (rendered vs editable)
     markdown_display_mode: MarkdownDisplayMode,
     display_mode_segmented_control: ViewHandle<MarkdownToggleView>,
-    /// The CodeSource that was used to open this file, if it came from a CodePane.
-    /// This is preserved so we can restore it when toggling between raw and rendered Markdown.
+    /// Set when the file was opened from a CodePane, and restored on a raw/rendered toggle.
     #[cfg(feature = "local_fs")]
     code_source: Option<CodeSource>,
     /// Persistent hover state for the header title tooltip.
@@ -133,6 +138,7 @@ pub enum FileNotebookAction {
     OpenAsCode,
     ContextMenu(ContextMenuAction),
     ToggleMarkdownDisplayMode(MarkdownDisplayMode),
+    ToggleMaximized,
 }
 
 impl From<ContextMenuAction> for FileNotebookAction {
@@ -144,11 +150,9 @@ impl From<ContextMenuAction> for FileNotebookAction {
 /// Information about the notebook's backing file.
 #[derive(Debug, Clone)]
 enum SourceFile {
-    /// A file identified by a local or remote path.
     FileBased {
         path: LocalOrRemotePath,
-        /// The session context for this file. Only meaningful for local paths;
-        /// remote paths carry their own host information.
+        /// Only meaningful for local paths; remote paths carry their own host information.
         session: Option<Arc<Session>>,
     },
     /// Static content provided inline (not backed by a file on disk).
@@ -156,7 +160,6 @@ enum SourceFile {
 }
 
 impl SourceFile {
-    /// Returns the path for this source, if it is file-based.
     fn path(&self) -> Option<&LocalOrRemotePath> {
         match self {
             SourceFile::FileBased { path, .. } => Some(path),
@@ -164,7 +167,6 @@ impl SourceFile {
         }
     }
 
-    /// Returns the local path, if this is a local file-based source.
     fn local_path(&self) -> Option<&Path> {
         self.path().and_then(|p| p.to_local_path())
     }
@@ -186,12 +188,10 @@ enum FileState {
 }
 
 impl FileState {
-    /// Returns the path for the open file, if it is file-based.
     fn path(&self) -> Option<&LocalOrRemotePath> {
         self.source().and_then(|src| src.path())
     }
 
-    /// The path to the open file, if it exists and is local.
     fn local_path(&self) -> Option<&Path> {
         self.source().and_then(|src| src.local_path())
     }
@@ -297,16 +297,18 @@ impl FileNotebookView {
         }
     }
 
-    /// Set the CodeSource that was used to open this file.
-    /// This is preserved so we can restore it when toggling between raw and rendered Markdown.
     #[cfg(feature = "local_fs")]
     pub fn set_code_source(&mut self, source: Option<CodeSource>) {
         self.code_source = source;
     }
 
+    #[cfg(feature = "local_fs")]
+    pub fn code_source(&self) -> Option<&CodeSource> {
+        self.code_source.as_ref()
+    }
+
     pub fn title(&self) -> String {
-        // Prefer the location name that's been resolved against a Session, but if that's not
-        // available yet, fall back to the raw file path.
+        // `location` is only set once a Session resolves it, so fall back to the raw file path.
         self.location
             .as_ref()
             .map(|location| location.name.clone())
@@ -322,12 +324,20 @@ impl FileNotebookView {
         ctx.focus(&self.editor);
     }
 
-    /// Reset the rich text contents based on the given Markdown content.
+    /// Reset the rich text contents based on the given file content.
+    ///
+    /// Jupyter notebook rendering stays behind a feature flag until it launches.
     pub fn set_content(&mut self, content: &str, ctx: &mut ViewContext<Self>) {
         let doc_path = self.file_state.local_path().map(|p| p.to_path_buf());
+        let render_as_ipynb =
+            FeatureFlag::JupyterNotebookRendering.is_enabled() && self.is_jupyter_notebook_file();
         self.editor.update(ctx, |editor, ctx| {
-            editor.reset_with_markdown(content, ctx);
-            // Set the document path for resolving relative image paths
+            if render_as_ipynb {
+                editor.reset_with_ipynb(content, ctx);
+            } else {
+                editor.reset_with_markdown(content, ctx);
+            }
+            // Relative image paths in the content resolve against this.
             editor.model().update(ctx, |model, ctx| {
                 model.set_document_path(doc_path, ctx);
             });
@@ -346,7 +356,6 @@ impl FileNotebookView {
             )
     }
 
-    /// Set the notebook's location context.
     fn set_context(&mut self, path: &Path, session: Arc<Session>, ctx: &mut ViewContext<Self>) {
         self.location = Some(FileLocation::new(path, session.home_dir()));
         let title = self.title();
@@ -370,12 +379,9 @@ impl FileNotebookView {
 
     /// Open a file from a local or remote path.
     ///
-    /// For local paths, uses `FileModel` to load and watch for changes.
-    /// The `session` is used to resolve display names and link context for
-    /// local paths. If `None` for a local path, the view falls back to the
-    /// active local session when one becomes available. For remote paths the
-    /// session is ignored because the `RemotePath` already carries host info.
-    /// For remote paths, fetches content via the remote server.
+    /// `session` resolves display names and link context for local paths; when `None` the
+    /// view falls back to the active local session once one becomes available. Remote paths
+    /// ignore it because the `RemotePath` already carries host info.
     pub fn open(
         &mut self,
         path: LocalOrRemotePath,
@@ -384,7 +390,6 @@ impl FileNotebookView {
     ) {
         match path {
             LocalOrRemotePath::Local(local_path) => {
-                // For local paths, try to resolve a local session if none was provided.
                 let session = session.or_else(|| {
                     ActiveSession::as_ref(ctx)
                         .session(ctx.window_id())
@@ -407,12 +412,10 @@ impl FileNotebookView {
     ) {
         let local_path = path.into();
 
-        // If a session is available, initialize the location and link context now. Otherwise,
-        // we'll wait until one is available.
         if let Some(session) = &session {
             self.set_context(&local_path, session.clone(), ctx);
         } else {
-            // Set a temporary title until the context is available.
+            // Temporary title until a session resolves the real location.
             self.pane_configuration.update(ctx, |pane_config, ctx| {
                 pane_config.set_title(local_path.display().to_string(), ctx);
             });
@@ -425,13 +428,10 @@ impl FileNotebookView {
 
         #[cfg(feature = "local_fs")]
         {
-            // Cancel in-flight loads and unsubscribe from any previously opened file.
-            if let Some(prev_id) = self.file_id.take() {
-                FileModel::handle(ctx).update(ctx, |m, ctx| {
-                    m.cancel(prev_id);
-                    m.unsubscribe(prev_id, ctx)
-                });
-            }
+            // Reopening (e.g. "Try again") must not leave the previous read, its watcher, or its
+            // event subscription behind: `subscribe_to_model` appends, so re-subscribing without
+            // this would stack one stale closure per attempt.
+            self.release_file_model(ctx);
 
             let file_model = FileModel::handle(ctx);
             let file_id = file_model.update(ctx, |m, ctx| m.open(&local_path, true, ctx));
@@ -464,8 +464,6 @@ impl FileNotebookView {
                                 pane_config.refresh_pane_header_overflow_menu_items(ctx);
                             });
 
-                            // Notify the view to re-render now that file_state
-                            // has transitioned from Loading to Loaded.
                             ctx.notify();
 
                             // Trigger to save the open file path for session restoration.
@@ -509,6 +507,28 @@ impl FileNotebookView {
         }
     }
 
+    /// The [`FileId`] this view currently holds open, if any.
+    #[cfg(all(test, feature = "local_fs"))]
+    pub(crate) fn file_id_for_test(&self) -> Option<FileId> {
+        self.file_id
+    }
+
+    /// Releases everything this view holds in the shared [`FileModel`]: the in-flight read, the
+    /// file's watcher registration, and this view's subscription to the model's events.
+    ///
+    /// Safe to call when no file is open, and idempotent, so every teardown path can run it.
+    #[cfg(feature = "local_fs")]
+    pub(crate) fn release_file_model(&mut self, ctx: &mut ViewContext<Self>) {
+        let file_model = FileModel::handle(ctx);
+        if let Some(file_id) = self.file_id.take() {
+            file_model.update(ctx, |model, ctx| {
+                model.cancel(file_id);
+                model.unsubscribe(file_id, ctx);
+            });
+        }
+        ctx.unsubscribe_to_model(&file_model);
+    }
+
     /// Open static Markdown as a file pane.
     pub fn open_static(
         &mut self,
@@ -517,12 +537,7 @@ impl FileNotebookView {
         ctx: &mut ViewContext<Self>,
     ) {
         #[cfg(feature = "local_fs")]
-        {
-            // Unsubscribe from any previously opened file.
-            if let Some(prev_id) = self.file_id.take() {
-                FileModel::handle(ctx).update(ctx, |m, ctx| m.unsubscribe(prev_id, ctx));
-            }
-        }
+        self.release_file_model(ctx);
         self.set_content(content, ctx);
         let title = title.into();
         self.pane_configuration.update(ctx, |pane_config, ctx| {
@@ -532,7 +547,6 @@ impl FileNotebookView {
         self.file_state = FileState::Loaded(SourceFile::Static { title });
     }
 
-    /// Send a [`NotebookTelemetryAction`] telemetry event.
     fn send_telemetry_action(&self, action: NotebookTelemetryAction, ctx: &mut ViewContext<Self>) {
         send_telemetry_from_ctx!(
             TelemetryEvent::NotebookAction(NotebookActionEvent {
@@ -564,7 +578,6 @@ impl FileNotebookView {
         self.open(path, session, ctx);
     }
 
-    /// Open a remote file by fetching its content from the remote server.
     fn open_remote(&mut self, remote_path: RemotePath, ctx: &mut ViewContext<Self>) {
         let path_str = remote_path.path.as_str().to_string();
         let display_name = remote_path
@@ -585,21 +598,21 @@ impl FileNotebookView {
 
         let host_id = remote_path.host_id.clone();
         let manager = remote_server::manager::RemoteServerManager::handle(ctx);
-        let client = manager.as_ref(ctx).client_for_host(&host_id).cloned();
 
-        let Some(client) = client else {
-            safe_warn!(
-                safe: ("No remote server client for host when opening markdown file"),
-                full: ("No remote server client for host {host_id:?} when opening markdown file")
-            );
-            self.file_state = match mem::replace(&mut self.file_state, FileState::NoFile) {
-                FileState::Loading(source) => FileState::Error(source),
-                other => other,
-            };
-            ctx.notify();
-            return;
-        };
-
+        // The disconnection banner appears and disappears with the host's connection state.
+        let watched_host_id = host_id.clone();
+        ctx.subscribe_to_model(&manager, move |_me, _handle, event, ctx| {
+            use remote_server::manager::RemoteServerManagerEvent;
+            match event {
+                RemoteServerManagerEvent::HostDisconnected { host_id }
+                | RemoteServerManagerEvent::HostConnected { host_id }
+                    if *host_id == watched_host_id =>
+                {
+                    ctx.notify();
+                }
+                _ => {}
+            }
+        });
         let request = remote_server::proto::ReadFileContextRequest {
             files: vec![remote_server::proto::ReadFileContextFile {
                 path: path_str,
@@ -609,8 +622,9 @@ impl FileNotebookView {
             max_batch_bytes: None,
         };
 
+        let handle = manager.as_ref(ctx).host_request_handle(&host_id);
         ctx.spawn(
-            async move { client.read_file_context(request).await },
+            async move { handle.read_file_context(request).await },
             move |me, result, ctx| match result {
                 Ok(response) => {
                     if let Some(file_ctx) = response.file_contexts.first() {
@@ -667,7 +681,6 @@ impl FileNotebookView {
     #[cfg(feature = "local_fs")]
     fn open_as_code(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(path) = self.file_state.path().cloned() {
-            // Emit an event to the pane group to handle the replacement
             ctx.emit(FileNotebookEvent::Pane(PaneEvent::ReplaceWithCodePane {
                 path,
                 source: self.code_source.clone(),
@@ -675,12 +688,10 @@ impl FileNotebookView {
         }
     }
 
-    /// The path to the currently-open file (local or remote), if any.
     pub fn path(&self) -> Option<&LocalOrRemotePath> {
         self.file_state.path()
     }
 
-    /// The path to the currently-open file, if it is local.
     pub fn local_path(&self) -> Option<PathBuf> {
         self.file_state.local_path().map(Path::to_path_buf)
     }
@@ -699,6 +710,19 @@ impl FileNotebookView {
             .path()
             .map(|p| is_markdown_file(Path::new(&p.display_path())))
             .unwrap_or(false)
+    }
+
+    fn is_jupyter_notebook_file(&self) -> bool {
+        self.file_state
+            .path()
+            .map(|p| is_jupyter_notebook_file(Path::new(&p.display_path())))
+            .unwrap_or(false)
+    }
+
+    fn shows_markdown_toggle(&self) -> bool {
+        self.is_markdown_file()
+            || (FeatureFlag::JupyterNotebookRendering.is_enabled()
+                && self.is_jupyter_notebook_file())
     }
 
     fn update_editor_display_mode(&mut self, ctx: &mut ViewContext<Self>) {
@@ -772,8 +796,8 @@ impl FileNotebookView {
             | EditorViewEvent::EscapePressed
             | EditorViewEvent::TextSelectionChanged => (),
             EditorViewEvent::OpenFile { .. } => {
-                // We don't support opening files from the notebook view.
-                // File paths rely on a Session to be present, and this is only set from the AI document view today.
+                // We don't support opening files from the notebook view: file paths rely on a
+                // Session, which today is only set from the AI document view.
             }
         }
     }
@@ -789,11 +813,11 @@ impl FileNotebookView {
             let Some(path) = self.local_path() else {
                 return;
             };
-            if let Some(active_session) = handle.as_ref(ctx).session(ctx.window_id()) {
-                if active_session.is_local() {
-                    self.set_context(&path, active_session, ctx);
-                    ctx.unsubscribe_to_model(&handle);
-                }
+            if let Some(active_session) = handle.as_ref(ctx).session(ctx.window_id())
+                && active_session.is_local()
+            {
+                self.set_context(&path, active_session, ctx);
+                ctx.unsubscribe_to_model(&handle);
             }
         }
     }
@@ -840,7 +864,6 @@ impl FileNotebookView {
         }
     }
 
-    /// Render an error state for when loading the source file failed.
     fn render_error(&self, source: &SourceFile, appearance: &Appearance) -> Box<dyn Element> {
         let error_text_color = appearance
             .theme()
@@ -885,7 +908,6 @@ impl FileNotebookView {
         Align::new(error.finish()).finish()
     }
 
-    /// Render the loading state while the source file is still being read.
     fn render_loading(&self, source: &SourceFile, appearance: &Appearance) -> Box<dyn Element> {
         Align::new(
             appearance
@@ -898,7 +920,6 @@ impl FileNotebookView {
         .finish()
     }
 
-    /// Renders a placeholder for when no file has been specified.
     fn render_no_file(&self, appearance: &Appearance) -> Box<dyn Element> {
         Align::new(
             appearance
@@ -911,13 +932,36 @@ impl FileNotebookView {
         .finish()
     }
 
-    fn render_body(&self, appearance: &Appearance) -> Box<dyn Element> {
+    /// Returns `true` when this notebook is backed by a remote file whose
+    /// host no longer has any connected session.
+    #[cfg(not(target_family = "wasm"))]
+    fn is_remote_disconnected(&self, app: &AppContext) -> bool {
+        let Some(LocalOrRemotePath::Remote(remote_path)) = self.file_state.path() else {
+            return false;
+        };
+        RemoteServerManager::as_ref(app)
+            .client_for_host(&remote_path.host_id)
+            .is_none()
+    }
+
+    fn render_body(&self, appearance: &Appearance, _app: &AppContext) -> Box<dyn Element> {
         let body = match &self.file_state {
             FileState::NoFile => self.render_no_file(appearance),
             FileState::Loading(source) => self.render_loading(source, appearance),
             FileState::Error(source) => self.render_error(source, appearance),
             FileState::Loaded(_) => ChildView::new(&self.editor).finish(),
         };
+
+        #[cfg(not(target_family = "wasm"))]
+        if matches!(self.file_state, FileState::Loaded(_)) && self.is_remote_disconnected(_app) {
+            let banner =
+                crate::code::local_code_editor::render_remote_disconnected_banner(appearance);
+            let mut col = Flex::column();
+            col.add_child(banner);
+            col.add_child(Shrinkable::new(1., styles::wrap_body(body)).finish());
+            return col.finish();
+        }
+
         styles::wrap_body(body)
     }
 }
@@ -944,7 +988,7 @@ impl View for FileNotebookView {
 
         let column = Flex::column().with_children([
             self.render_title(appearance, font_settings),
-            Shrinkable::new(1., self.render_body(appearance)).finish(),
+            Shrinkable::new(1., self.render_body(appearance, app)).finish(),
         ]);
 
         let mut stack = Stack::new().with_child(column.finish());
@@ -981,7 +1025,8 @@ impl TypedActionView for FileNotebookView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             FileNotebookAction::Focus => ctx.focus_self(),
-            FileNotebookAction::Close => ctx.emit(FileNotebookEvent::Pane(PaneEvent::Close)),
+            // Route through `BackingView::close` so this takes the header close button's path.
+            FileNotebookAction::Close => BackingView::close(self, ctx),
             FileNotebookAction::FocusTerminalInput => {
                 ctx.emit(FileNotebookEvent::Pane(PaneEvent::FocusActiveSession))
             }
@@ -995,10 +1040,11 @@ impl TypedActionView for FileNotebookView {
             }
             #[cfg(feature = "local_fs")]
             FileNotebookAction::OpenInEditor => {
-                if let Some(local_path) = self.local_path() {
+                if self.is_jupyter_notebook_file() {
+                    self.open_as_code(ctx);
+                } else if let Some(local_path) = self.local_path() {
                     use crate::util::file::external_editor::EditorSettings;
                     use crate::util::openable_file_type::resolve_file_target;
-                    // Resolve target and emit event - workspace will handle all cases
                     let settings = EditorSettings::as_ref(ctx);
                     let target = resolve_file_target(&local_path, settings, None);
                     ctx.emit(FileNotebookEvent::OpenFileWithTarget {
@@ -1019,6 +1065,8 @@ impl TypedActionView for FileNotebookView {
             FileNotebookAction::ContextMenu(action) => {
                 if matches!(action, ContextMenuAction::Open(_)) {
                     self.send_telemetry_action(NotebookTelemetryAction::OpenContextMenu, ctx);
+                    let copy_file_path = self.file_state.path().map(|p| p.display_path());
+                    self.context_menu.set_copy_file_path(copy_file_path);
                 }
                 self.context_menu.handle_action(action, ctx);
             }
@@ -1047,6 +1095,12 @@ impl TypedActionView for FileNotebookView {
                     }
                 }
             }
+            FileNotebookAction::ToggleMaximized => {
+                ctx.emit(FileNotebookEvent::Pane(PaneEvent::ToggleMaximized));
+                self.pane_configuration.update(ctx, |pane_config, ctx| {
+                    pane_config.refresh_pane_header_overflow_menu_items(ctx);
+                });
+            }
         }
     }
 }
@@ -1066,10 +1120,22 @@ impl BackingView for FileNotebookView {
 
     fn pane_header_overflow_menu_items(
         &self,
-        _ctx: &AppContext,
+        ctx: &AppContext,
     ) -> Vec<MenuItem<FileNotebookAction>> {
-        let mut actions = vec![];
+        // Mirror the toggle that `CodeView` (the Raw markdown mode) exposes, so the Rendered
+        // markdown pane's overflow menu offers the same "Maximize pane" / "Minimize pane" entry.
+        let is_maximized = self
+            .focus_handle
+            .as_ref()
+            .is_some_and(|h| h.is_maximized(ctx));
+        let mut actions = vec![
+            MenuItemFields::toggle_pane_action(is_maximized)
+                .with_on_select_action(FileNotebookAction::ToggleMaximized)
+                .into_item(),
+        ];
+
         if let Some(SourceFile::FileBased { .. }) = self.file_state.source() {
+            actions.push(MenuItem::Separator);
             actions.push(
                 MenuItemFields::new("Refresh file")
                     .with_on_select_action(FileNotebookAction::ReloadFile)
@@ -1078,8 +1144,8 @@ impl BackingView for FileNotebookView {
 
             #[cfg(feature = "local_fs")]
             {
-                // The markdown rendered/raw toggle is always visible in the pane header, so we don't
-                // duplicate it in the overflow menu. Keep "Open in editor" available for local files.
+                // The markdown rendered/raw toggle is always visible in the pane header, so it is
+                // not duplicated here. "Open in editor" stays available for local files.
                 actions.push(
                     MenuItemFields::new("Open in editor")
                         .with_on_select_action(FileNotebookAction::OpenInEditor)
@@ -1096,14 +1162,11 @@ impl BackingView for FileNotebookView {
         actions
     }
 
+    /// Requests that the pane close. The file itself is released by
+    /// `FilePane::detach(DetachType::Closed)`, once the pane is permanently discarded: with
+    /// undo-close the pane is only hidden, and the same view is reattached without reopening its
+    /// file, so releasing here would leave a restored pane showing content that never updates.
     fn close(&mut self, ctx: &mut ViewContext<Self>) {
-        #[cfg(feature = "local_fs")]
-        {
-            // Unsubscribe from the file watcher before closing.
-            if let Some(prev_id) = self.file_id.take() {
-                FileModel::handle(ctx).update(ctx, |m, ctx| m.unsubscribe(prev_id, ctx));
-            }
-        }
         ctx.emit(FileNotebookEvent::Pane(PaneEvent::Close));
     }
 
@@ -1118,9 +1181,9 @@ impl BackingView for FileNotebookView {
     ) -> view::HeaderContent {
         let title = self.pane_configuration.as_ref(app).title().to_owned();
 
-        if self.is_markdown_file() {
-            // For markdown files we use a custom header
-            // so that the title stays centered identically in both rendered and raw (CodeView) modes.
+        if self.shows_markdown_toggle() {
+            // For markdown files (and rendered Jupyter notebooks) we use a custom header so the
+            // title stays centered identically in both rendered and raw (CodeView) modes.
             let appearance = Appearance::as_ref(app);
             let is_pane_dragging = ctx.draggable_state.is_dragging();
 
@@ -1153,7 +1216,6 @@ impl BackingView for FileNotebookView {
                 warpui::text_layout::ClipConfig::start(),
             );
 
-            // Wrap the title in a hoverable tooltip showing the full file path.
             let title_element: Box<dyn Element> =
                 if let Some(display_path) = self.file_state.path().map(|p| p.display_path()) {
                     use pathfinder_geometry::vector::vec2f;
@@ -1202,7 +1264,6 @@ impl BackingView for FileNotebookView {
                 has_custom_draggable_behavior: false,
             }
         } else {
-            // Non-markdown files: use the standard header.
             view::HeaderContent::Standard(view::StandardHeader {
                 title,
                 title_secondary: None,
@@ -1225,9 +1286,7 @@ impl BackingView for FileNotebookView {
 
 /// Location information for a file, used to show its title and context.
 struct FileLocation {
-    /// Breadcrumb path to the file.
     breadcrumbs: String,
-    /// The file's name.
     name: String,
 }
 

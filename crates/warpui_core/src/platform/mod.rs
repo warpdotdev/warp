@@ -40,8 +40,8 @@ use crate::rendering::{GPUPowerPreference, OnGPUDeviceSelected};
 use crate::text_layout::{ClipConfig, Line, StyleAndFont, TextAlignment, TextFrame};
 use crate::windowing::WindowCallbacks;
 use crate::{
-    geometry, rendering, AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx,
-    OptionalPlatformWindow, Scene, WindowId,
+    AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx, OptionalPlatformWindow,
+    Scene, WindowId, geometry, rendering,
 };
 
 #[cfg(not(target_family = "wasm"))]
@@ -194,7 +194,8 @@ pub trait Delegate: 'static {
 
     fn system_theme(&self) -> SystemTheme;
 
-    fn open_url(&self, url: &str);
+    /// Opens a URL in its default system handler and returns whether the launch request succeeded.
+    fn open_url(&self, url: &str) -> bool;
 
     /// Opens an absolute file path with native system API.
     fn open_file_path(&self, path: &Path);
@@ -216,7 +217,7 @@ pub trait Delegate: 'static {
 
     /// Retrieve the absolute path of given application's bundle and its executable.
     fn application_bundle_info(&self, bundle_identifier: &str)
-        -> Option<ApplicationBundleInfo<'_>>;
+    -> Option<ApplicationBundleInfo<'_>>;
 
     /// Create a window showing a modal dialog native to the platform. The modal will synchronously
     /// block all other interactions with the app until dismissed. The [`ModalId`] is a handle to
@@ -255,6 +256,10 @@ pub trait Delegate: 'static {
 
     fn register_global_shortcut(&self, shortcut: Keystroke);
     fn unregister_global_shortcut(&self, shortcut: &Keystroke);
+
+    /// Show or hide the application's Dock icon (macOS only).
+    /// Default no-op for platforms without a Dock concept.
+    fn set_dock_icon_visible(&self, _visible: bool) {}
 
     fn terminate_app(&self, termination_mode: TerminationMode);
 

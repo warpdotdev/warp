@@ -1,18 +1,12 @@
-use serde::{Deserialize, Serialize};
+pub use cloud_object_models::EnvVarSecretCommand;
 use warpui::ViewContext;
 
 use super::env_var_collection::{EnvVarCollectionView, VariableRowIndex};
-use crate::env_vars::active_env_var_collection_data::SavingStatus;
 use crate::env_vars::EnvVarValue;
+use crate::env_vars::active_env_var_collection_data::SavingStatus;
 
 mod command_dialog_view;
 pub(super) use command_dialog_view::{EnvVarCommandDialog, EnvVarCommandDialogEvent};
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct EnvVarSecretCommand {
-    pub name: String,
-    pub command: String,
-}
 
 impl EnvVarCollectionView {
     pub(super) fn display_command_dialog(
@@ -20,11 +14,11 @@ impl EnvVarCollectionView {
         index: Option<VariableRowIndex>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(VariableRowIndex(index)) = index {
-            if let EnvVarValue::Command(cmd) = &self.variable_rows[index].value {
-                self.env_var_command_dialog
-                    .update(ctx, |dialog, ctx| dialog.load(cmd, ctx))
-            }
+        if let Some(VariableRowIndex(index)) = index
+            && let EnvVarValue::Command(cmd) = &self.variable_rows[index].value
+        {
+            self.env_var_command_dialog
+                .update(ctx, |dialog, ctx| dialog.load(cmd, ctx))
         }
         self.dialog_open_states.env_var_command_dialog_open = true;
         self.update_open_modal_state(ctx);

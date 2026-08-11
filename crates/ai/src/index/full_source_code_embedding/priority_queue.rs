@@ -18,6 +18,14 @@ struct QueueEntry {
     metadata: WorkspaceMetadata,
 }
 
+/// Controls whether queued builds may be consumed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum BuildQueueState {
+    Paused,
+    #[default]
+    Running,
+}
+
 impl Hash for QueueEntry {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.metadata.path.hash(state);
@@ -35,6 +43,7 @@ impl Eq for QueueEntry {}
 #[derive(Debug, Default)]
 pub(super) struct BuildQueue {
     queue: PriorityQueue<QueueEntry, Priority>,
+    state: BuildQueueState,
 }
 
 impl BuildQueue {
@@ -46,7 +55,10 @@ impl BuildQueue {
         self.queue.iter().map(|(entry, _)| entry.metadata.clone())
     }
 
-    pub(super) fn new_with_persisted(snapshots_to_load: Vec<WorkspaceMetadata>) -> Self {
+    pub(super) fn new_with_persisted(
+        snapshots_to_load: Vec<WorkspaceMetadata>,
+        start_immediately: bool,
+    ) -> Self {
         let mut queue = PriorityQueue::new();
         queue.extend(
             snapshots_to_load
@@ -54,12 +66,35 @@ impl BuildQueue {
                 .sorted_by(WorkspaceMetadata::most_recently_touched)
                 .map(|entry| (QueueEntry { metadata: entry }, Priority::PersistedSnapshot)),
         );
+        let state = if start_immediately {
+            BuildQueueState::Running
+        } else {
+            BuildQueueState::Paused
+        };
 
-        Self { queue }
+        Self { queue, state }
+    }
+
+    pub(super) fn is_running(&self) -> bool {
+        self.state == BuildQueueState::Running
+    }
+
+    /// Starts consuming queued builds. Returns whether the queue transitioned to running.
+    pub(super) fn start(&mut self) -> bool {
+        match self.state {
+            BuildQueueState::Paused => {
+                self.state = BuildQueueState::Running;
+                true
+            }
+            BuildQueueState::Running => false,
+        }
     }
 
     /// Pulls the next index root path to sync from the priority queue and returns it.
     pub fn pick_next_sync(&mut self) -> Option<WorkspaceMetadata> {
+        if !self.is_running() {
+            return None;
+        }
         self.queue.pop().map(|(entry, _priority)| entry.metadata)
     }
 

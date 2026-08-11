@@ -20,6 +20,17 @@ pub struct ScheduleCommand {
 }
 
 impl ScheduleCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self.subcommand() {
+            Some(ScheduleSubcommand::Create(_)) | None => "schedule create",
+            Some(ScheduleSubcommand::List) => "schedule list",
+            Some(ScheduleSubcommand::Get(_)) => "schedule get",
+            Some(ScheduleSubcommand::Update(_)) => "schedule update",
+            Some(ScheduleSubcommand::Pause(_)) => "schedule pause",
+            Some(ScheduleSubcommand::Unpause(_)) => "schedule unpause",
+            Some(ScheduleSubcommand::Delete(_)) => "schedule delete",
+        }
+    }
     /// Get the specific scheduling subcommand. Returns `None` if using the `oz schedule` creation shorthand.
     pub fn subcommand(&self) -> Option<&ScheduleSubcommand> {
         self.subcommand.as_ref()

@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use comfy_table::Cell;
 use serde::Serialize;
-use warp_cli::model::ModelCommand;
 use warp_cli::GlobalOptions;
+use warp_cli::model::ModelCommand;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 

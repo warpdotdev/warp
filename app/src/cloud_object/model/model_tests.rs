@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use cloud_object_client::MockObjectClient;
 use lazy_static::lazy_static;
 use mockall::Sequence;
 use rand::Rng;
@@ -15,30 +16,26 @@ use crate::auth::{AuthStateProvider, UserUid};
 use crate::cloud_object::model::actions::ObjectActions;
 use crate::cloud_object::model::generic_string_model::GenericStringModel;
 use crate::cloud_object::model::view::{
-    CloudViewModel, EditorState, UpdateTimestamp, EDITOR_TIMEOUT_DURATION_MINUTES,
+    CloudViewModel, EDITOR_TIMEOUT_DURATION_MINUTES, EditorState, UpdateTimestamp,
 };
 use crate::cloud_object::{
     CloudObjectMetadata, CloudObjectPermissions, CloudObjectStatuses, CloudObjectSyncStatus,
     NumInFlightRequests, ObjectIdType, Owner, ServerMetadata, ServerPermissions,
 };
-use crate::drive::folders::{CloudFolderModel, FolderId};
 use crate::drive::DriveIndexVariant;
+use crate::drive::folders::{CloudFolderModel, FolderId};
 use crate::features::FeatureFlag;
 use crate::notebooks::{CloudNotebookModel, NotebookId};
 use crate::server::cloud_objects::listener::ObjectUpdateMessage;
 use crate::server::cloud_objects::update_manager::InitialLoadResponse;
 use crate::server::ids::{ServerId, ServerIdAndType};
-#[cfg(test)]
-use crate::server::server_api::object::MockObjectClient;
-use crate::server::server_api::object::ObjectClient;
-#[cfg(test)]
-use crate::server::server_api::team::MockTeamClient;
-#[cfg(test)]
-use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::object::ObjectClient;
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::settings::{init_and_register_user_preferences, Preference};
+use crate::settings::{Preference, init_and_register_user_preferences};
 use crate::system::SystemStats;
 use crate::workflows::CloudWorkflowModel;
 use crate::workspaces::team::Team;
@@ -1793,15 +1790,19 @@ fn test_shared_object_in_unshared_folder() {
             assert!(!notebook.is_trashed(cloud_model));
 
             // Check that iteration APIs include the notebook where it's expected.
-            assert!(cloud_model
-                .active_cloud_objects_in_space(Space::Shared, ctx)
-                .any(|obj| obj.uid() == notebook.uid()));
-            assert!(cloud_model
-                .active_cloud_objects_in_location_without_descendents(
-                    CloudObjectLocation::Space(Space::Shared),
-                    ctx
-                )
-                .any(|obj| obj.uid() == notebook.uid()));
+            assert!(
+                cloud_model
+                    .active_cloud_objects_in_space(Space::Shared, ctx)
+                    .any(|obj| obj.uid() == notebook.uid())
+            );
+            assert!(
+                cloud_model
+                    .active_cloud_objects_in_location_without_descendents(
+                        CloudObjectLocation::Space(Space::Shared),
+                        ctx
+                    )
+                    .any(|obj| obj.uid() == notebook.uid())
+            );
             assert_eq!(
                 cloud_model
                     .trashed_cloud_objects_in_space(Space::Shared, ctx)

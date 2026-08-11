@@ -6,29 +6,30 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use cfg_if::cfg_if;
 use chrono::{DateTime, Utc};
+pub use cloud_object_models::{
+    AgentModeCommandExecutionPredicate, DEFAULT_COMMAND_EXECUTION_ALLOWLIST,
+    DEFAULT_COMMAND_EXECUTION_DENYLIST,
+};
 use indexmap::IndexMap;
-use lazy_static::lazy_static;
 use regex::Regex;
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use settings::{
-    define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
+    RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud, define_settings_group,
 };
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
-use warpui::platform::keyboard::KeyCode;
+use warp_errors::report_if_error;
 use warpui::platform::OperatingSystem;
-use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, UpdateModel};
+use warpui::platform::keyboard::KeyCode;
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
 
-use crate::ai::agent::conversation::AIConversation;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::execution_profiles::ExecutionProfilesConfig;
 use crate::ai::request_usage_model::RequestLimitInfo;
 use crate::auth::AuthStateProvider;
-use crate::report_if_error;
 use crate::settings::PrivacySettings;
 use crate::terminal::CLIAgent;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -145,6 +146,7 @@ settings::macros::implement_setting_for_enum!(
     // Never sync to cloud to allow users to use different toggle keys on different devices,
     // especially given platform differences.
     SyncToCloud::Never,
+    surface: settings::SettingSurfaces::GUI,
     private: false,
     toml_path: "agents.voice.voice_input_toggle_key",
     description: "The key used to toggle voice input.",
@@ -275,6 +277,200 @@ impl VoiceInputToggleKey {
     }
 }
 
+/// The full ISO-639-1 language catalog offered in the voice-input Speech
+/// Language picker, as `(code, display_name)` pairs. The empty code is the
+/// `Auto-detect` sentinel: when it is the stored value, no language is forced
+/// and the transcription provider (Wispr Flow) auto-detects the language.
+/// Kept as a data table (rather than an enum) so the entire list stays easy to
+/// scan and extend; the picker is filterable, so the length is not a problem.
+pub const VOICE_INPUT_LANGUAGES: &[(&str, &str)] = &[
+    ("", "Auto-detect"),
+    ("ab", "Abkhaz"),
+    ("aa", "Afar"),
+    ("af", "Afrikaans"),
+    ("ak", "Akan"),
+    ("sq", "Albanian"),
+    ("am", "Amharic"),
+    ("ar", "Arabic"),
+    ("an", "Aragonese"),
+    ("hy", "Armenian"),
+    ("as", "Assamese"),
+    ("av", "Avaric"),
+    ("ae", "Avestan"),
+    ("ay", "Aymara"),
+    ("az", "Azerbaijani"),
+    ("bm", "Bambara"),
+    ("ba", "Bashkir"),
+    ("eu", "Basque"),
+    ("be", "Belarusian"),
+    ("bn", "Bengali"),
+    ("bh", "Bihari"),
+    ("bi", "Bislama"),
+    ("bs", "Bosnian"),
+    ("br", "Breton"),
+    ("bg", "Bulgarian"),
+    ("my", "Burmese"),
+    ("ca", "Catalan"),
+    ("ch", "Chamorro"),
+    ("ce", "Chechen"),
+    ("ny", "Chichewa"),
+    ("zh", "Chinese"),
+    ("cv", "Chuvash"),
+    ("kw", "Cornish"),
+    ("co", "Corsican"),
+    ("cr", "Cree"),
+    ("hr", "Croatian"),
+    ("cs", "Czech"),
+    ("da", "Danish"),
+    ("dv", "Divehi"),
+    ("nl", "Dutch"),
+    ("dz", "Dzongkha"),
+    ("en", "English"),
+    ("eo", "Esperanto"),
+    ("et", "Estonian"),
+    ("ee", "Ewe"),
+    ("fo", "Faroese"),
+    ("fj", "Fijian"),
+    ("fi", "Finnish"),
+    ("fr", "French"),
+    ("ff", "Fulah"),
+    ("gl", "Galician"),
+    ("lg", "Ganda"),
+    ("ka", "Georgian"),
+    ("de", "German"),
+    ("el", "Greek"),
+    ("gn", "Guarani"),
+    ("gu", "Gujarati"),
+    ("ht", "Haitian Creole"),
+    ("ha", "Hausa"),
+    ("he", "Hebrew"),
+    ("hz", "Herero"),
+    ("hi", "Hindi"),
+    ("ho", "Hiri Motu"),
+    ("hu", "Hungarian"),
+    ("is", "Icelandic"),
+    ("io", "Ido"),
+    ("ig", "Igbo"),
+    ("id", "Indonesian"),
+    ("ia", "Interlingua"),
+    ("ie", "Interlingue"),
+    ("iu", "Inuktitut"),
+    ("ik", "Inupiaq"),
+    ("ga", "Irish"),
+    ("it", "Italian"),
+    ("ja", "Japanese"),
+    ("jv", "Javanese"),
+    ("kl", "Kalaallisut"),
+    ("kn", "Kannada"),
+    ("kr", "Kanuri"),
+    ("ks", "Kashmiri"),
+    ("kk", "Kazakh"),
+    ("km", "Khmer"),
+    ("ki", "Kikuyu"),
+    ("rw", "Kinyarwanda"),
+    ("kv", "Komi"),
+    ("kg", "Kongo"),
+    ("ko", "Korean"),
+    ("ku", "Kurdish"),
+    ("kj", "Kwanyama"),
+    ("ky", "Kyrgyz"),
+    ("lo", "Lao"),
+    ("la", "Latin"),
+    ("lv", "Latvian"),
+    ("li", "Limburgish"),
+    ("ln", "Lingala"),
+    ("lt", "Lithuanian"),
+    ("lu", "Luba-Katanga"),
+    ("lb", "Luxembourgish"),
+    ("mk", "Macedonian"),
+    ("mg", "Malagasy"),
+    ("ms", "Malay"),
+    ("ml", "Malayalam"),
+    ("mt", "Maltese"),
+    ("gv", "Manx"),
+    ("mi", "Maori"),
+    ("mr", "Marathi"),
+    ("mh", "Marshallese"),
+    ("mn", "Mongolian"),
+    ("na", "Nauru"),
+    ("nv", "Navajo"),
+    ("ng", "Ndonga"),
+    ("ne", "Nepali"),
+    ("nd", "North Ndebele"),
+    ("se", "Northern Sami"),
+    ("no", "Norwegian"),
+    ("nb", "Norwegian Bokmal"),
+    ("nn", "Norwegian Nynorsk"),
+    ("ii", "Nuosu"),
+    ("oc", "Occitan"),
+    ("oj", "Ojibwe"),
+    ("cu", "Old Church Slavonic"),
+    ("or", "Oriya"),
+    ("om", "Oromo"),
+    ("os", "Ossetian"),
+    ("pi", "Pali"),
+    ("ps", "Pashto"),
+    ("fa", "Persian"),
+    ("pl", "Polish"),
+    ("pt", "Portuguese"),
+    ("pa", "Punjabi"),
+    ("qu", "Quechua"),
+    ("ro", "Romanian"),
+    ("rm", "Romansh"),
+    ("rn", "Rundi"),
+    ("ru", "Russian"),
+    ("sm", "Samoan"),
+    ("sg", "Sango"),
+    ("sa", "Sanskrit"),
+    ("sc", "Sardinian"),
+    ("gd", "Scottish Gaelic"),
+    ("sr", "Serbian"),
+    ("sn", "Shona"),
+    ("sd", "Sindhi"),
+    ("si", "Sinhala"),
+    ("sk", "Slovak"),
+    ("sl", "Slovenian"),
+    ("so", "Somali"),
+    ("nr", "South Ndebele"),
+    ("st", "Southern Sotho"),
+    ("es", "Spanish"),
+    ("su", "Sundanese"),
+    ("sw", "Swahili"),
+    ("ss", "Swati"),
+    ("sv", "Swedish"),
+    ("tl", "Tagalog"),
+    ("ty", "Tahitian"),
+    ("tg", "Tajik"),
+    ("ta", "Tamil"),
+    ("tt", "Tatar"),
+    ("te", "Telugu"),
+    ("th", "Thai"),
+    ("bo", "Tibetan"),
+    ("ti", "Tigrinya"),
+    ("to", "Tongan"),
+    ("ts", "Tsonga"),
+    ("tn", "Tswana"),
+    ("tr", "Turkish"),
+    ("tk", "Turkmen"),
+    ("tw", "Twi"),
+    ("uk", "Ukrainian"),
+    ("ur", "Urdu"),
+    ("ug", "Uyghur"),
+    ("uz", "Uzbek"),
+    ("ve", "Venda"),
+    ("vi", "Vietnamese"),
+    ("vo", "Volapuk"),
+    ("wa", "Walloon"),
+    ("cy", "Welsh"),
+    ("fy", "Western Frisian"),
+    ("wo", "Wolof"),
+    ("xh", "Xhosa"),
+    ("yi", "Yiddish"),
+    ("yo", "Yoruba"),
+    ("za", "Zhuang"),
+    ("zu", "Zulu"),
+];
+
 /// The default mode for new terminal sessions.
 #[derive(
     Default,
@@ -313,6 +509,7 @@ settings::macros::implement_setting_for_enum!(
     AISettings,
     SupportedPlatforms::ALL,
     SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    surface: settings::SettingSurfaces::GUI,
     private: false,
     toml_path: "general.default_session_mode",
     description: "The default mode for new terminal sessions.",
@@ -363,6 +560,7 @@ settings::macros::implement_setting_for_enum!(
     AISettings,
     SupportedPlatforms::ALL,
     SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    surface: settings::SettingSurfaces::GUI,
     private: false,
     toml_path: "agents.warp_agent.other.thinking_display_mode",
     description: "Controls how agent thinking traces are displayed after streaming.",
@@ -392,6 +590,396 @@ impl ThinkingDisplayMode {
 
     pub fn should_keep_expanded(&self) -> bool {
         matches!(self, ThinkingDisplayMode::AlwaysShow)
+    }
+}
+
+/// Controls how child-agent message bodies are displayed.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Controls how child-agent messages are displayed.",
+    rename_all = "snake_case"
+)]
+pub enum OrchestrationMessageDisplayMode {
+    /// Show child-agent messages while streaming, then collapse them.
+    ShowAndCollapse,
+    /// Keep child-agent message bodies expanded.
+    AlwaysShow,
+    /// Keep child-agent message bodies collapsed.
+    #[default]
+    AlwaysCollapse,
+}
+
+settings::macros::implement_setting_for_enum!(
+    OrchestrationMessageDisplayMode,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    surface: settings::SettingSurfaces::GUI,
+    private: false,
+    toml_path: "agents.warp_agent.other.orchestration_message_display_mode",
+    description: "Controls how child-agent messages are displayed.",
+);
+
+/// Which unit the usage entry displays in Warp Agent CLI.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Which unit the usage entry displays in Warp Agent CLI.",
+    rename_all = "snake_case"
+)]
+pub enum TuiUsageDisplayMode {
+    /// Credits spent — the same number the GUI's usage footer shows (default).
+    #[default]
+    Credits,
+    /// Provider dollar cost.
+    Cost,
+}
+
+settings::macros::implement_setting_for_enum!(
+    TuiUsageDisplayMode,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Never,
+    surface: settings::SettingSurfaces::TUI,
+    private: false,
+    toml_path: "agents.usage_display_mode",
+    description: "Which unit the usage entry displays in Warp Agent CLI: credits or provider cost.",
+);
+/// One configurable item in the Warp Agent CLI statusline.
+#[derive(
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Eq,
+    Copy,
+    Clone,
+    Hash,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "A configurable item in the Warp Agent CLI statusline.",
+    rename_all = "snake_case"
+)]
+#[serde(rename_all = "snake_case")]
+pub enum TuiStatuslineItem {
+    AutoApprove,
+    /// Vim mode indicator (NOR/INS/VIS/V-L/REP); hidden when vim mode is disabled.
+    VimModeIndicator,
+    Model,
+    WorkingDirectory,
+    GitBranch,
+    GitBranchStatus,
+    GitDiffStatus,
+    GitHubPullRequest,
+    CreditUsage,
+    ContextWindowUsage,
+    Date,
+    #[schemars(rename = "time_12_hour")]
+    Time12Hour,
+    #[schemars(rename = "time_24_hour")]
+    Time24Hour,
+    AgentTodoList,
+    VoiceInput,
+}
+
+impl TuiStatuslineItem {
+    pub const ALL: [Self; 15] = [
+        Self::AutoApprove,
+        Self::VimModeIndicator,
+        Self::Model,
+        Self::WorkingDirectory,
+        Self::GitBranch,
+        Self::GitBranchStatus,
+        Self::GitDiffStatus,
+        Self::GitHubPullRequest,
+        Self::CreditUsage,
+        Self::ContextWindowUsage,
+        Self::Date,
+        Self::Time12Hour,
+        Self::Time24Hour,
+        Self::AgentTodoList,
+        Self::VoiceInput,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AutoApprove => "Auto-approve indicator",
+            Self::VimModeIndicator => "Vim mode indicator",
+            Self::Model => "Model",
+            Self::WorkingDirectory => "Working directory",
+            Self::GitBranch => "Git branch",
+            Self::GitBranchStatus => "Git branch status",
+            Self::GitDiffStatus => "Git diff status",
+            Self::GitHubPullRequest => "GitHub pull request",
+            Self::CreditUsage => "Credit usage",
+            Self::ContextWindowUsage => "Context window usage",
+            Self::Date => "Date",
+            Self::Time12Hour => "Time (12 hour format)",
+            Self::Time24Hour => "Time (24 hour format)",
+            Self::AgentTodoList => "Agent to-do list",
+            Self::VoiceInput => "Voice input",
+        }
+    }
+}
+
+/// Ordered and enabled items in the Warp Agent CLI statusline.
+#[derive(
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Eq,
+    Clone,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+pub struct TuiStatuslineConfig {
+    pub order: Vec<TuiStatuslineItem>,
+    pub enabled: Vec<TuiStatuslineItem>,
+}
+
+impl Default for TuiStatuslineConfig {
+    fn default() -> Self {
+        Self {
+            order: TuiStatuslineItem::ALL.to_vec(),
+            enabled: vec![
+                TuiStatuslineItem::AutoApprove,
+                TuiStatuslineItem::VimModeIndicator,
+                TuiStatuslineItem::Model,
+                TuiStatuslineItem::WorkingDirectory,
+                TuiStatuslineItem::GitBranch,
+                TuiStatuslineItem::GitDiffStatus,
+            ],
+        }
+    }
+}
+
+impl TuiStatuslineConfig {
+    /// Returns a complete, duplicate-free catalog and a valid enabled subset.
+    pub fn normalized(&self) -> Self {
+        let is_legacy_config = !self.order.contains(&TuiStatuslineItem::VimModeIndicator);
+        let mut order = Vec::with_capacity(TuiStatuslineItem::ALL.len());
+        for item in self.order.iter().copied().chain(TuiStatuslineItem::ALL) {
+            if TuiStatuslineItem::ALL.contains(&item) && !order.contains(&item) {
+                order.push(item);
+            }
+        }
+
+        let mut enabled = Vec::with_capacity(self.enabled.len());
+        for item in self.enabled.iter().copied() {
+            if order.contains(&item) && !enabled.contains(&item) {
+                enabled.push(item);
+            }
+        }
+        if is_legacy_config {
+            enabled.insert(0, TuiStatuslineItem::VimModeIndicator);
+        }
+
+        Self { order, enabled }
+    }
+
+    pub fn is_enabled(&self, item: TuiStatuslineItem) -> bool {
+        self.enabled.contains(&item)
+    }
+}
+
+impl TuiUsageDisplayMode {
+    /// The other unit — clicking the usage entry flips to this.
+    pub fn toggled(self) -> Self {
+        match self {
+            TuiUsageDisplayMode::Credits => TuiUsageDisplayMode::Cost,
+            TuiUsageDisplayMode::Cost => TuiUsageDisplayMode::Credits,
+        }
+    }
+}
+
+impl OrchestrationMessageDisplayMode {
+    /// Display name for the settings dropdown.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            OrchestrationMessageDisplayMode::ShowAndCollapse => "Show & collapse",
+            OrchestrationMessageDisplayMode::AlwaysShow => "Always show",
+            OrchestrationMessageDisplayMode::AlwaysCollapse => "Always collapse",
+        }
+    }
+
+    pub fn command_palette_description(&self) -> &'static str {
+        match self {
+            OrchestrationMessageDisplayMode::ShowAndCollapse => {
+                "Set child-agent message display: show & collapse"
+            }
+            OrchestrationMessageDisplayMode::AlwaysShow => {
+                "Set child-agent message display: always show"
+            }
+            OrchestrationMessageDisplayMode::AlwaysCollapse => {
+                "Set child-agent message display: always collapse"
+            }
+        }
+    }
+
+    /// Whether child-agent message bodies should expand while streaming.
+    pub fn should_expand_agent_message_body(&self) -> bool {
+        matches!(
+            self,
+            OrchestrationMessageDisplayMode::ShowAndCollapse
+                | OrchestrationMessageDisplayMode::AlwaysShow
+        )
+    }
+
+    /// Whether child-agent message bodies should collapse after streaming.
+    pub fn should_collapse_agent_message_body_on_finish(&self) -> bool {
+        matches!(self, OrchestrationMessageDisplayMode::ShowAndCollapse)
+    }
+}
+
+/// Controls what happens when a user submits a new prompt while the agent is
+/// still responding to an earlier prompt.
+///
+/// This is the *default* used when a conversation has no explicit auto-queue
+/// override. Per-conversation overrides live on `QueuedQueryModel` and take
+/// precedence over this setting.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Default behavior when submitting a new prompt while the agent is still responding.",
+    rename_all = "snake_case"
+)]
+pub enum PromptSubmissionMode {
+    /// Cancel the in-flight response and submit the new prompt immediately
+    /// (default).
+    #[default]
+    Interrupt,
+    /// Hold the new prompt until the in-flight response finishes, then submit.
+    Queue,
+}
+
+settings::macros::implement_setting_for_enum!(
+    PromptSubmissionMode,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    surface: settings::SettingSurfaces::GUI,
+    private: false,
+    toml_path: "agents.warp_agent.other.default_prompt_submission_mode",
+    description: "Default behavior when submitting a new prompt while the agent is still responding.",
+    feature_flag: FeatureFlag::QueueSlashCommand,
+);
+
+impl PromptSubmissionMode {
+    /// Display name for the settings dropdown.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            PromptSubmissionMode::Interrupt => "Interrupt response",
+            PromptSubmissionMode::Queue => "Queue until response finishes",
+        }
+    }
+
+    pub fn command_palette_description(&self) -> &'static str {
+        match self {
+            PromptSubmissionMode::Interrupt => "Set default prompt submission: interrupt response",
+            PromptSubmissionMode::Queue => {
+                "Set default prompt submission: queue until response finishes"
+            }
+        }
+    }
+}
+
+/// What happens when a prompt is submitted while an agent controls an agent-requested
+/// long-running command (LRC).
+///
+/// Only consulted when [`PromptSubmissionMode`] is `Interrupt`: in `Queue` mode
+/// prompts always queue until the full response finishes, so this setting is
+/// hidden and ignored.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "What happens when a prompt is submitted while an agent controls an agent-requested long-running command.",
+    rename_all = "snake_case"
+)]
+pub enum LongRunningCommandSubmissionMode {
+    /// Send the prompt to the agent immediately, steering it mid-command.
+    SendImmediately,
+    /// Queue the prompt and send it to the agent when the command finishes
+    /// (default).
+    #[default]
+    QueueUntilCommandCompletes,
+}
+
+settings::macros::implement_setting_for_enum!(
+    LongRunningCommandSubmissionMode,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    surface: settings::SettingSurfaces::GUI,
+    private: false,
+    toml_path: "agents.warp_agent.other.long_running_command_submission_mode",
+    description: "What happens when a prompt is submitted while an agent controls an agent-requested long-running command.",
+    feature_flag: FeatureFlag::QueueSlashCommand,
+);
+
+impl LongRunningCommandSubmissionMode {
+    /// Display name for the settings dropdown.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            LongRunningCommandSubmissionMode::SendImmediately => "Send immediately",
+            LongRunningCommandSubmissionMode::QueueUntilCommandCompletes => {
+                "Queue until command finishes"
+            }
+        }
+    }
+
+    pub fn command_palette_description(&self) -> &'static str {
+        match self {
+            LongRunningCommandSubmissionMode::SendImmediately => {
+                "Set long-running command submission: send immediately"
+            }
+            LongRunningCommandSubmissionMode::QueueUntilCommandCompletes => {
+                "Set long-running command submission: queue until command finishes"
+            }
+        }
     }
 }
 
@@ -485,148 +1073,6 @@ pub enum AgentModeCodingPermissionsType {
     AllowReadingSpecificFiles,
 }
 
-/// Predicate types to match commands that can be executed by Agent Mode.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-enum AgentModeCommandExecutionPredicateType {
-    /// A regex with start (`^`) and end (`$`) anchors.
-    ///
-    /// We want regex rules to apply to the entire cmd string so we anchor them
-    /// (there isn't any efficient way to apply to the entire cmd string at match-time).
-    #[serde(with = "serde_regex")]
-    AnchoredRegex(Regex),
-}
-
-impl AgentModeCommandExecutionPredicateType {
-    fn new_regex(regex: &str) -> Result<Self, regex::Error> {
-        // Redundant anchors aren't a problem so we can unconditionally add them.
-        let anchored_regex = Regex::new(&format!("^{regex}$"))?;
-        Ok(Self::AnchoredRegex(anchored_regex))
-    }
-
-    fn matches(&self, cmd: &str) -> bool {
-        match self {
-            Self::AnchoredRegex(regex) => regex.is_match(cmd),
-        }
-    }
-}
-
-impl PartialEq for AgentModeCommandExecutionPredicateType {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::AnchoredRegex(a), Self::AnchoredRegex(b)) => {
-                // Indexing should be safe since they're guaranteed to have at least
-                // the anchors around them.
-                let a_unanchored = &a.as_str()[1..a.as_str().len() - 1];
-                let b_unanchored = &b.as_str()[1..b.as_str().len() - 1];
-                a_unanchored == b_unanchored
-            }
-        }
-    }
-}
-
-impl std::fmt::Display for AgentModeCommandExecutionPredicateType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::AnchoredRegex(regex) => {
-                write!(f, "{}", &regex.as_str()[1..regex.as_str().len() - 1])
-            }
-        }
-    }
-}
-
-/// A wrapper around [`AgentModeCommandExecutionPredicateType`] to enforce
-/// the use of the provided constructors rather than direct construction of the variants.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(transparent)]
-pub struct AgentModeCommandExecutionPredicate(AgentModeCommandExecutionPredicateType);
-
-impl schemars::JsonSchema for AgentModeCommandExecutionPredicate {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("AgentModeCommandExecutionPredicate")
-    }
-
-    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        // In the settings file, predicates are serialized as plain regex strings.
-        gen.subschema_for::<String>()
-    }
-}
-
-impl AgentModeCommandExecutionPredicate {
-    pub fn new_regex(regex: &str) -> Result<Self, regex::Error> {
-        Ok(Self(AgentModeCommandExecutionPredicateType::new_regex(
-            regex,
-        )?))
-    }
-
-    pub fn matches(&self, cmd: &str) -> bool {
-        self.0.matches(cmd)
-    }
-}
-
-impl std::fmt::Display for AgentModeCommandExecutionPredicate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl settings_value::SettingsValue for AgentModeCommandExecutionPredicate {
-    fn to_file_value(&self) -> serde_json::Value {
-        serde_json::Value::String(self.to_string())
-    }
-
-    fn from_file_value(value: &serde_json::Value) -> Option<Self> {
-        value.as_str().and_then(|s| Self::new_regex(s).ok())
-    }
-}
-
-lazy_static! {
-    // Matches optional args / options for a top-level command.
-    static ref OPTIONAL_ARGS_REGEX: Regex = Regex::new(r"(\s.*)?").expect("Can parse optional args regex");
-}
-
-cfg_if! {
-    // Compiling the regexes for the default command execution allowlist/denylist can be slow
-    // in an unoptimized build, so we use empty lists in unit tests.
-    if #[cfg(test)] {
-        lazy_static! {
-            pub static ref DEFAULT_COMMAND_EXECUTION_ALLOWLIST: Vec<AgentModeCommandExecutionPredicate> = vec![];
-            pub static ref DEFAULT_COMMAND_EXECUTION_DENYLIST: Vec<AgentModeCommandExecutionPredicate> = vec![];
-        }
-    } else {
-        lazy_static! {
-            pub static ref DEFAULT_COMMAND_EXECUTION_ALLOWLIST: Vec<AgentModeCommandExecutionPredicate> = vec![
-                AgentModeCommandExecutionPredicate::new_regex(&format!("cat{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default cat rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("echo{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default echo rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex("find .*").expect("Can parse default find rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("grep{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default grep rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("ls{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default ls rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex("which .*").expect("Can parse default which rule into regex"),
-            ];
-
-            pub static ref DEFAULT_COMMAND_EXECUTION_DENYLIST: Vec<AgentModeCommandExecutionPredicate> = vec![
-                AgentModeCommandExecutionPredicate::new_regex(&format!("bash{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default bash rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("fish{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default fish rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("pwsh{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default pwsh rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("sh{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default sh rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("zsh{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default zsh rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("curl{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default curl rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("eval{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default eval rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("exec{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default exec rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("source{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default source rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("wget{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default wget rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("dig{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default dig rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("nslookup{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default nslookup rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("host{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default host rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("ssh{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default ssh rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("scp{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default scp rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("rsync{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default rsync rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("telnet{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default telnet rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("rm{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default rm rule into regex"),
-            ];
-        }
-    }
-}
-
 /// Maps custom toolbar command regex patterns to CLI agent names.
 /// Keys are regex patterns (insertion-ordered), values are serialized CLIAgent names (e.g. "Claude").
 /// An empty string value means "Any CLI Agent" (CLIAgent::Unknown).
@@ -672,8 +1118,8 @@ impl schemars::JsonSchema for ToolbarCommandMap {
         std::borrow::Cow::Borrowed("ToolbarCommandMap")
     }
 
-    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        gen.subschema_for::<HashMap<String, String>>()
+    fn json_schema(r#gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        r#gen.subschema_for::<HashMap<String, String>>()
     }
 }
 
@@ -692,10 +1138,10 @@ impl settings_value::SettingsValue for ToolbarCommandMap {
 
     fn from_file_value(value: &serde_json::Value) -> Option<Self> {
         // Try map format first (using from_value to preserve insertion order), then legacy array format.
-        if value.is_object() {
-            if let Ok(map) = serde_json::from_value::<IndexMap<String, String>>(value.clone()) {
-                return Some(ToolbarCommandMap::new(map));
-            }
+        if value.is_object()
+            && let Ok(map) = serde_json::from_value::<IndexMap<String, String>>(value.clone())
+        {
+            return Some(ToolbarCommandMap::new(map));
         }
         if let Some(arr) = value.as_array() {
             let result: IndexMap<String, String> = arr
@@ -715,6 +1161,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.is_any_ai_enabled",
         description: "Controls whether all AI features are enabled.",
@@ -726,6 +1173,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.active_ai.enabled",
         description: "Controls whether proactive AI features like suggestions are enabled.",
@@ -734,9 +1182,10 @@ define_settings_group!(AISettings, settings: [
     // `is_ai_autodetection_enabled()` getter.
     ai_autodetection_enabled_internal: AIAutoDetectionEnabled {
         type: bool,
-        default: true,
+        default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         toml_path: "agents.warp_agent.input.ai_auto_detection_enabled",
         description: "Controls whether AI automatically detects natural language input.",
@@ -751,6 +1200,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.input.nld_in_terminal_enabled",
         description: "Controls whether natural language detection is enabled in the terminal input.",
@@ -760,6 +1210,7 @@ define_settings_group!(AISettings, settings: [
         default: String::new(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.input.ai_command_denylist",
         description: "Commands to exclude from AI natural language autodetection.",
@@ -771,6 +1222,7 @@ define_settings_group!(AISettings, settings: [
         default: true, // TODO(roland): revisit this when launched to stable
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.active_ai.intelligent_autosuggestions_enabled",
         description: "Controls whether AI-powered intelligent autosuggestions are enabled.",
@@ -785,6 +1237,7 @@ define_settings_group!(AISettings, settings: [
         default: true, // TODO(advait): revisit this when launched to stable
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.active_ai.agent_mode_query_suggestions_enabled",
         description: "Controls whether prompt suggestions are shown in agent mode.",
@@ -797,6 +1250,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.active_ai.code_suggestions_enabled",
         description: "Controls whether AI code suggestions are enabled.",
@@ -809,6 +1263,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.active_ai.natural_language_autosuggestions_enabled",
         description: "Controls whether ghosted text autosuggestions are shown for AI input queries.",
@@ -822,6 +1277,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.active_ai.shared_block_title_generation_enabled",
         description: "Controls whether titles are auto-generated when sharing blocks.",
@@ -833,6 +1289,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.active_ai.git_operations_autogen_enabled",
         description: "Controls whether AI auto-generates commit messages and PR title/body in the code review dialogs.",
@@ -844,6 +1301,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.active_ai.rule_suggestions_enabled",
         description: "Controls whether the agent suggests rules to save after responses.",
@@ -856,6 +1314,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.voice.voice_input_enabled",
         description: "Controls whether voice input is enabled for AI interactions.",
@@ -868,6 +1327,7 @@ define_settings_group!(AISettings, settings: [
         default: 0,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     // Whether or not the user has manually dismissed the voice input new feature popup.
@@ -876,11 +1336,25 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     // This field is used to store the key used for voice input toggling.
     // Note this is not the named key, but rather corresponds to the physical key.
     voice_input_toggle_key: VoiceInputToggleKey,
+    // Preferred spoken language for voice transcription. Stored as an ISO-639-1
+    // code (e.g. "es"); an empty string means Auto-detect. Options come from
+    // VOICE_INPUT_LANGUAGES.
+    voice_input_language: VoiceInputLanguage {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "agents.voice.voice_input_language",
+        description: "Preferred spoken language for voice input transcription.",
+    },
     // This is not a user-visible setting - it's merely a one-time flag to track if the user has
     // explicitly interacted with voice input. We use this to determine whether we should show a toast
     // to inform the user about voice input and auto-set the keybinding.
@@ -890,6 +1364,7 @@ define_settings_group!(AISettings, settings: [
         supported_platforms: SupportedPlatforms::DESKTOP,
         // Never sync to cloud to keep state separate across devices, since microphone access is per-device.
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
     // Predicates that Agent Mode can use to decide if it can execute
@@ -902,6 +1377,7 @@ define_settings_group!(AISettings, settings: [
         default: DEFAULT_COMMAND_EXECUTION_ALLOWLIST.clone(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         toml_path: "agents.profiles.agent_mode_command_execution_allowlist",
         description: "Commands that the agent can execute without explicit permission.",
@@ -916,6 +1392,7 @@ define_settings_group!(AISettings, settings: [
         default: DEFAULT_COMMAND_EXECUTION_DENYLIST.clone(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         toml_path: "agents.profiles.agent_mode_command_execution_denylist",
         description: "Commands that the agent must always ask before executing.",
@@ -929,6 +1406,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         toml_path: "agents.profiles.agent_mode_execute_readonly_commands",
         description: "Whether the agent can auto-execute read-only commands without asking.",
@@ -944,6 +1422,7 @@ define_settings_group!(AISettings, settings: [
         default: AgentModeCodingPermissionsType::default(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         toml_path: "agents.profiles.agent_mode_coding_permissions",
         description: "The file read permission level for the agent.",
@@ -960,10 +1439,42 @@ define_settings_group!(AISettings, settings: [
         default: vec![],
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         toml_path: "agents.profiles.agent_mode_coding_file_read_allowlist",
         description: "File paths the agent can read without asking for permission.",
     }
+    // The complete execution-profile collection shared by GUI and TUI.
+    // GUI cloud synchronization respects the user's settings-sync preference;
+    // TUI settings mode keeps this value local.
+    execution_profiles: ExecutionProfiles {
+        type: ExecutionProfilesConfig,
+        default: ExecutionProfilesConfig::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
+        private: false,
+        toml_path: "agents.execution_profiles",
+        max_table_depth: 2,
+        description: "AI execution profiles and their permissions.",
+    }
+    // Which unit the TUI footer's usage entry displays (credits or provider
+    // cost), flipped by clicking the entry.
+    //
+    // TUI-only and file-backed so the choice persists across TUI sessions.
+    usage_display_mode: TuiUsageDisplayMode,
+    // Ordered visibility configuration for the TUI's bottom statusline.
+    // TUI-only and local so separate devices can use different terminal layouts.
+    tui_statusline: TuiStatusline {
+        type: TuiStatuslineConfig,
+        default: TuiStatuslineConfig::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::TUI,
+        private: false,
+        toml_path: "agents.statusline",
+        description: "Controls the order and visibility of Warp Agent CLI statusline items.",
+    },
     // Whether or not the profile-level command autoexecution speedbump has been shown.
     //
     // Not a user-visible setting - we model it as a setting so we can track how often
@@ -973,6 +1484,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
     // Whether or not we should show the speedbump for auto-executing readonly cmds.
@@ -984,6 +1496,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
     // Whether or not we should show the speedbump for auto-writing to the PTY.
@@ -995,6 +1508,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
     // Whether or not we should show the speedbump for auto-reading files.
@@ -1006,6 +1520,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
     // Whether or not we should show the one-shot speedbump on Ask-User-Question cards.
@@ -1019,6 +1534,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
     // Whether to use locally loaded AWS credentials for Bedrock-enabled requests.
@@ -1027,6 +1543,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "cloud_platform.third_party_api_keys.aws_bedrock_credentials_enabled",
         description: "Whether Warp should use your local AWS credentials for Bedrock-enabled requests.",
@@ -1040,6 +1557,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "cloud_platform.third_party_api_keys.aws_bedrock_auto_login",
         description: "Whether to automatically run the AWS login command when Bedrock credentials expire.",
@@ -1050,6 +1568,7 @@ define_settings_group!(AISettings, settings: [
         default: "aws login".to_string(),
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "cloud_platform.third_party_api_keys.aws_bedrock_auth_refresh_command",
         description: "The command to run to refresh AWS credentials for Bedrock.",
@@ -1060,6 +1579,7 @@ define_settings_group!(AISettings, settings: [
         default: "default".to_string(),
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "cloud_platform.third_party_api_keys.aws_bedrock_profile",
         description: "The AWS profile name to use for Bedrock credentials.",
@@ -1072,7 +1592,23 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
+    }
+    // Whether to mint and attach Gemini Enterprise (GEAP) credentials to eligible agent
+    // requests, routing them through the workspace's Google Cloud project. Only consulted
+    // when the admin sets the GEAP host to RESPECT_USER_SETTING; ENFORCE bypasses it.
+    // Prefer [`UserWorkspaces::is_gemini_enterprise_credentials_enabled`] to interpret
+    // this setting.
+    gemini_enterprise_credentials_enabled: GeminiEnterpriseCredentialsEnabled {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "cloud_platform.third_party_api_keys.gemini_enterprise_credentials_enabled",
+        description: "Whether Warp should route eligible requests through your workspace's Gemini Enterprise Google Cloud project.",
     }
     // Whether or not the user wants agent mode requests to use their saved rules.
     memory_enabled: MemoryEnabled {
@@ -1080,6 +1616,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.knowledge.rules_enabled",
         description: "Whether the agent uses your saved rules during requests.",
@@ -1090,6 +1627,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.knowledge.warp_drive_context_enabled",
         description: "Whether Warp Drive context is included in AI requests.",
@@ -1103,6 +1641,7 @@ define_settings_group!(AISettings, settings: [
         default: vec![],
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
 
@@ -1115,6 +1654,7 @@ define_settings_group!(AISettings, settings: [
         default: vec![],
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
 
@@ -1126,6 +1666,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
 
@@ -1135,6 +1676,7 @@ define_settings_group!(AISettings, settings: [
         default: AIRequestQuotaInfo::default(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
 
@@ -1147,6 +1689,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
 
@@ -1155,6 +1698,7 @@ define_settings_group!(AISettings, settings: [
         default: None,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     },
 
@@ -1168,6 +1712,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
 
@@ -1181,6 +1726,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
 
@@ -1194,6 +1740,35 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
+        private: true,
+    }
+
+    // This is not a user-visible setting - it's merely a one-time flag to track if the
+    // Warp Agent CLI launch modal has been shown to the user.
+    //
+    // We model it as a setting so it's only shown once to a given user regardless of the number of
+    // devices they use.
+    did_check_to_trigger_agent_cli_launch_modal: DidShowAgentCliLaunchModal {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
+        private: true,
+    }
+
+    // This is not a user-visible setting - it's merely a one-time flag to track if the
+    // free-AI-removal notice modal has been shown to (or silently marked as seen for) the user.
+    //
+    // We model it as a setting so it's only shown once to a given user regardless of the number of
+    // devices they use.
+    did_check_to_trigger_free_ai_removal_modal: DidShowFreeAiRemovalModal {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
 
@@ -1204,6 +1779,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
 
@@ -1214,19 +1790,10 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.other.should_show_oz_updates_in_zero_state",
         description: "Whether the \"What's new\" section is shown in the agent view.",
-    }
-    // Controls whether Warp's built-in feedback skill is available to the Warp Agent.
-    feedback_bundled_skill_enabled: FeedbackBundledSkillEnabled {
-        type: bool,
-        default: true,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        private: false,
-        toml_path: "agents.warp_agent.other.feedback_bundled_skill_enabled",
-        description: "Whether Warp's built-in feedback skill is available to the Warp Agent.",
     }
 
     // Whether or not the user has enabled fallback to Warp credits for user-provided models.
@@ -1235,6 +1802,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
         private: false,
         storage_key: "CanUseWarpCreditsWithByok",
         toml_path: "cloud_platform.third_party_api_keys.can_use_warp_credits_with_byok",
@@ -1246,6 +1814,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.other.should_render_use_agent_toolbar_for_user_commands",
         description: "Whether to show the \"Use Agent\" footer for terminal commands.",
@@ -1258,6 +1827,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.third_party.should_render_cli_agent_toolbar",
         description: "Whether to show the CLI agent footer for coding agent commands.",
@@ -1270,6 +1840,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.third_party.auto_toggle_composer",
         description: "Whether CLI agent Rich Input automatically closes and reopens based on the agent's blocked state.",
@@ -1282,6 +1853,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.third_party.auto_open_composer_on_cli_agent_start",
         description: "Whether CLI agent Rich Input automatically opens when a CLI agent session starts.",
@@ -1296,9 +1868,23 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.third_party.auto_dismiss_composer_after_submit",
         description: "Whether CLI agent Rich Input automatically closes after the user submits a prompt.",
+    }
+
+    // When enabled, the Rich Input editor submits on Ctrl+Enter instead of Enter.
+    // Enter inserts a newline; Ctrl+Enter submits.
+    submit_on_ctrl_enter: SubmitRichInputOnCtrlEnter {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "agents.third_party.submit_on_ctrl_enter",
+        description: "When enabled, the Rich Input editor submits on Ctrl+Enter instead of Enter. Enter inserts a newline.",
     }
 
     // Maps custom toolbar command regex patterns to specific CLI agents.
@@ -1310,6 +1896,7 @@ define_settings_group!(AISettings, settings: [
         default: ToolbarCommandMap::default(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.third_party.cli_agent_toolbar_enabled_commands",
         max_table_depth: 1,
@@ -1327,31 +1914,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        private: true,
-    }
-
-    // This is not a user-visible setting - it tracks whether the FTU model picker callout
-    // has been shown to the user. We set this to `true` as soon as the callout is first
-    // displayed (not when it's dismissed), so it never re-appears.
-    //
-    // Note: this setting was originally named "dismissed" but we now use it to mean "shown".
-    // We kept the same setting key so that users who already dismissed the callout on an
-    // older client don't see it again.
-    ftu_model_callout_dismissed: FtuModelCalloutDismissed {
-        type: bool,
-        default: false,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        private: true,
-    }
-
-    // Tracks whether we've done the one-time auto-open of the conversation list for discoverability.
-    // Once set to true, the conversation list visibility will be restored from workspace state.
-    has_auto_opened_conversation_list: HasAutoOpenedConversationList {
-        type: bool,
-        default: false,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
 
@@ -1363,6 +1926,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
 
@@ -1378,6 +1942,7 @@ define_settings_group!(AISettings, settings: [
         default: String::new(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "general.default_tab_config_path",
     }
@@ -1389,6 +1954,7 @@ define_settings_group!(AISettings, settings: [
         default: warp_core::channel::ChannelState::channel().is_dogfood(),
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.other.cloud_agent_computer_use_enabled",
         description: "Whether computer use is enabled for cloud agent conversations.",
@@ -1403,6 +1969,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.mcp_servers.file_based_mcp_enabled",
         description: "Whether third-party file-based MCP servers are automatically detected.",
@@ -1410,6 +1977,19 @@ define_settings_group!(AISettings, settings: [
 
     // Controls how agent thinking/reasoning traces are displayed.
     thinking_display_mode: ThinkingDisplayMode,
+
+    // Controls how orchestration message bodies are expanded by default.
+    orchestration_message_display_mode: OrchestrationMessageDisplayMode,
+
+    // Default behavior when the user submits a new prompt while the agent is still
+    // responding. Per-conversation overrides live on `QueuedQueryModel`; this
+    // setting is the fallback used when a conversation has no explicit override.
+    default_prompt_submission_mode: PromptSubmissionMode,
+
+    // What happens when a prompt is submitted while an agent controls an agent-requested
+    // long-running command. Only consulted when `default_prompt_submission_mode` is `Interrupt`;
+    // per-LRC manual overrides live on `QueuedQueryModel`.
+    long_running_command_submission_mode: LongRunningCommandSubmissionMode,
 
     // Whether agent-executed shell commands should be included in command history
     // (up-arrow, Ctrl-R search, inline history menu).
@@ -1419,9 +1999,22 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.input.include_agent_commands_in_history",
         description: "Whether agent-executed commands are included in command history.",
+    }
+
+    // Whether fast forward / auto-approve can run commands that match the command denylist.
+    auto_approve_bypasses_command_denylist: AutoApproveBypassesCommandDenylist {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
+        private: false,
+        toml_path: "agents.warp_agent.other.auto_approve_bypasses_command_denylist",
+        description: "Whether auto-approve bypasses the command denylist.",
     }
 
     // Controls whether the conversation history view appears in the tools panel.
@@ -1430,6 +2023,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.other.show_conversation_history",
         description: "Whether conversation history appears in the tools panel.",
@@ -1442,6 +2036,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.other.show_agent_notifications",
         description: "Whether agent notifications are shown.",
@@ -1455,6 +2050,7 @@ define_settings_group!(AISettings, settings: [
         default: HashMap::default(),
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
 
@@ -1467,6 +2063,7 @@ define_settings_group!(AISettings, settings: [
         default: HashMap::default(),
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: true,
     }
 
@@ -1479,6 +2076,7 @@ define_settings_group!(AISettings, settings: [
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.other.agent_attribution_enabled",
         description: "Whether the Warp Agent adds an attribution co-author line to commit messages and pull requests it creates.",
@@ -1489,6 +2087,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.other.should_force_disable_cloud_handoff",
         description: "Whether to force-disable local-to-cloud handoff.",
@@ -1499,6 +2098,7 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.other.should_force_disable_ampersand_handoff",
         description: "Whether to force-disable the & prefix for cloud handoff compose mode.",
@@ -1509,9 +2109,39 @@ define_settings_group!(AISettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::MAC,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.other.auto_handoff_on_sleep_enabled",
         description: "Whether Warp automatically hands off local agent conversations to cloud when the computer is about to sleep.",
+    }
+
+    // This is not a user-visible setting - it's merely a one-time flag to track if the
+    // auto-handoff sleep modal has been shown to the user.
+    //
+    // We model it as a setting so it's only shown once to a given user regardless of the number of
+    // devices they use.
+    did_show_auto_handoff_sleep_modal: DidShowAutoHandoffSleepModal {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
+        private: true,
+    }
+
+    // Not a user-visible setting - it tracks which one-time feature-intro popups the
+    // user has already seen, keyed by the feature-intro id (see `FEATURE_INTROS`).
+    //
+    // We model it as a globally-synced setting (not respecting the user's sync setting)
+    // so each feature is announced at most once per user, regardless of how many devices
+    // they use. A feature is considered seen when its id is present and mapped to `true`.
+    seen_feature_intro_ids: SeenFeatureIntroIds {
+        type: HashMap<String, bool>,
+        default: HashMap::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        surface: settings::SettingSurfaces::GUI,
+        private: true,
     }
 ]);
 
@@ -1522,7 +2152,7 @@ impl AISettings {
         CompiledCommandsForCodingAgentToolbar::register(app);
 
         app.update_model(&Self::handle(app), |_me, ctx| {
-            ctx.subscribe_to_model(&FocusedTerminalInfo::handle(ctx), |_me, event, ctx| {
+            ctx.subscribe_to_model(&FocusedTerminalInfo::handle(ctx), |_me, _, event, ctx| {
                 if matches!(event, FocusedTerminalInfoEvent::TerminalInfoUpdated) {
                     // Pipe the event so that any view that listens for settings changes will be notified.
                     ctx.emit(AISettingsChangedEvent::IsAnyAIEnabled {
@@ -1558,6 +2188,22 @@ impl AISettings {
         *self.is_any_ai_enabled
             && !is_anonymous_or_logged_out
             && !self.is_ai_disabled_due_to_remote_session_org_policy(app)
+    }
+
+    /// Returns whether conversation history is available for the current
+    /// account and AI state.
+    ///
+    /// The stored `show_conversation_history` preference is kept separately so
+    /// an onboarding choice can take effect automatically after signup and AI
+    /// enablement without asking the user to toggle the setting again.
+    pub fn is_conversation_history_available(&self, app: &AppContext) -> bool {
+        self.is_any_ai_enabled(app)
+    }
+
+    /// Returns whether conversation history should currently appear in the
+    /// tools panel.
+    pub fn is_conversation_history_enabled(&self, app: &AppContext) -> bool {
+        *self.show_conversation_history && self.is_conversation_history_available(app)
     }
 
     pub fn default_session_mode(&self, app: &AppContext) -> DefaultSessionMode {
@@ -1649,6 +2295,12 @@ impl AISettings {
             && *self.voice_input_enabled_internal
     }
 
+    /// Preferred spoken language for voice transcription, or `None` for auto-detect.
+    pub fn voice_input_language_code(&self) -> Option<&str> {
+        let code = self.voice_input_language.as_str();
+        if code.is_empty() { None } else { Some(code) }
+    }
+
     /// Returns `true` if input autodetection is enabled.
     ///
     /// If `FeatureFlag::AgentView` is enabled, this specifically gates NLD enablement in the agent
@@ -1690,7 +2342,7 @@ impl AISettings {
     }
 
     pub fn is_orchestration_enabled(&self, app: &warpui::AppContext) -> bool {
-        FeatureFlag::OrchestrationV2.is_enabled() && self.is_any_ai_enabled(app)
+        self.is_any_ai_enabled(app)
     }
 
     /// Returns true when local-to-cloud handoff is effectively enabled.
@@ -1715,45 +2367,8 @@ impl AISettings {
             crate::workspaces::workspace::AdminEnablementSetting::Disable
         )
     }
-    pub fn is_cloud_handoff_enabled_for_conversation(
-        &self,
-        conversation: Option<&AIConversation>,
-        app: &warpui::AppContext,
-    ) -> bool {
-        self.is_cloud_handoff_enabled(app)
-            && !conversation
-                .is_some_and(|conversation| is_orchestration_conversation(conversation, app))
-    }
-
-    pub fn is_cloud_handoff_enabled_for_terminal_view(
-        &self,
-        terminal_view_id: EntityId,
-        app: &warpui::AppContext,
-    ) -> bool {
-        let active_conversation =
-            BlocklistAIHistoryModel::as_ref(app).active_conversation(terminal_view_id);
-        self.is_cloud_handoff_enabled_for_conversation(active_conversation, app)
-    }
-
     pub fn is_ampersand_handoff_enabled(&self, app: &warpui::AppContext) -> bool {
         self.is_cloud_handoff_enabled(app) && !*self.should_force_disable_ampersand_handoff
-    }
-    pub fn is_ampersand_handoff_enabled_for_conversation(
-        &self,
-        conversation: Option<&AIConversation>,
-        app: &warpui::AppContext,
-    ) -> bool {
-        self.is_cloud_handoff_enabled_for_conversation(conversation, app)
-            && !*self.should_force_disable_ampersand_handoff
-    }
-
-    pub fn is_ampersand_handoff_enabled_for_terminal_view(
-        &self,
-        terminal_view_id: EntityId,
-        app: &warpui::AppContext,
-    ) -> bool {
-        self.is_cloud_handoff_enabled_for_terminal_view(terminal_view_id, app)
-            && !*self.should_force_disable_ampersand_handoff
     }
 
     pub fn is_auto_handoff_on_sleep_enabled(&self, app: &warpui::AppContext) -> bool {
@@ -1777,10 +2392,11 @@ impl AISettings {
             .rev()
             .find(|cycle| cycle.end_date < Utc::now());
 
-        if let Some(cycle) = most_recent_completed_cycle {
-            if cycle.was_quota_exceeded && !cycle.banner_state.dismissed {
-                return true;
-            }
+        if let Some(cycle) = most_recent_completed_cycle
+            && cycle.was_quota_exceeded
+            && !cycle.banner_state.dismissed
+        {
+            return true;
         }
 
         false
@@ -1796,9 +2412,10 @@ impl AISettings {
             }
         }
 
-        report_if_error!(self
-            .ai_request_quota_info
-            .set_value(AIRequestQuotaInfo { cycle_history }, ctx));
+        report_if_error!(
+            self.ai_request_quota_info
+                .set_value(AIRequestQuotaInfo { cycle_history }, ctx)
+        );
     }
 
     /// Updates the quota info based on the latest RequestLimitInfo.
@@ -1824,12 +2441,12 @@ impl AISettings {
         let mut updated_existing_cycle = false;
 
         // Find or create a cycle that matches the current period
-        if let Some(current_cycle) = cycle_history.last_mut() {
-            if now <= current_cycle.end_date {
-                // Update existing cycle
-                current_cycle.was_quota_exceeded = is_quota_exceeded;
-                updated_existing_cycle = true;
-            }
+        if let Some(current_cycle) = cycle_history.last_mut()
+            && now <= current_cycle.end_date
+        {
+            // Update existing cycle
+            current_cycle.was_quota_exceeded = is_quota_exceeded;
+            updated_existing_cycle = true;
         }
 
         // Only create a new cycle if we didn't update an existing one
@@ -1844,9 +2461,10 @@ impl AISettings {
             cycle_history.push(new_cycle);
         }
 
-        report_if_error!(self
-            .ai_request_quota_info
-            .set_value(AIRequestQuotaInfo { cycle_history }, ctx));
+        report_if_error!(
+            self.ai_request_quota_info
+                .set_value(AIRequestQuotaInfo { cycle_history }, ctx)
+        );
     }
 
     pub fn is_command_denylist_editable(&self, app: &AppContext) -> bool {
@@ -1947,9 +2565,10 @@ impl AISettings {
             }
         };
 
-        report_if_error!(self
-            .voice_input_toggle_key
-            .set_value(voice_input_toggle_key, ctx));
+        report_if_error!(
+            self.voice_input_toggle_key
+                .set_value(voice_input_toggle_key, ctx)
+        );
 
         report_if_error!(self.explicitly_interacted_with_voice.set_value(true, ctx));
 
@@ -1975,9 +2594,10 @@ impl AISettings {
 
         let mut map = self.cli_agent_footer_enabled_commands.value().0.clone();
         map.insert(command.to_string(), String::new());
-        report_if_error!(self
-            .cli_agent_footer_enabled_commands
-            .set_value(ToolbarCommandMap::new(map), ctx));
+        report_if_error!(
+            self.cli_agent_footer_enabled_commands
+                .set_value(ToolbarCommandMap::new(map), ctx)
+        );
     }
 
     pub fn remove_cli_agent_footer_enabled_command(
@@ -1988,9 +2608,10 @@ impl AISettings {
         let command = command.trim();
         let mut map = self.cli_agent_footer_enabled_commands.value().0.clone();
         map.shift_remove(command);
-        report_if_error!(self
-            .cli_agent_footer_enabled_commands
-            .set_value(ToolbarCommandMap::new(map), ctx));
+        report_if_error!(
+            self.cli_agent_footer_enabled_commands
+                .set_value(ToolbarCommandMap::new(map), ctx)
+        );
     }
 
     pub fn set_cli_agent_for_command(
@@ -2005,9 +2626,29 @@ impl AISettings {
         }
         let value = agent.map(|a| a.to_serialized_name()).unwrap_or_default();
         map.insert(pattern.to_string(), value);
-        report_if_error!(self
-            .cli_agent_footer_enabled_commands
-            .set_value(ToolbarCommandMap::new(map), ctx));
+        report_if_error!(
+            self.cli_agent_footer_enabled_commands
+                .set_value(ToolbarCommandMap::new(map), ctx)
+        );
+    }
+
+    /// Whether the feature-intro popover with the given id key has been seen.
+    pub fn is_feature_intro_seen(&self, key: &str) -> bool {
+        self.seen_feature_intro_ids
+            .get(key)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Records that the feature-intro popover with the given id key has been seen,
+    /// so it is never shown again. No-op if already recorded.
+    pub fn mark_feature_intro_seen(&mut self, key: &str, ctx: &mut ModelContext<Self>) {
+        if self.is_feature_intro_seen(key) {
+            return;
+        }
+        let mut map = self.seen_feature_intro_ids.clone();
+        map.insert(key.to_owned(), true);
+        report_if_error!(self.seen_feature_intro_ids.set_value(map, ctx));
     }
 
     /// Whether the plugin install chip was dismissed for the given agent/host.
@@ -2044,18 +2685,13 @@ impl AISettings {
     ) {
         let mut map = self.plugin_update_chip_dismissed_for_version_map.clone();
         map.insert(key.to_owned(), version);
-        report_if_error!(self
-            .plugin_update_chip_dismissed_for_version_map
-            .set_value(map, ctx));
+        report_if_error!(
+            self.plugin_update_chip_dismissed_for_version_map
+                .set_value(map, ctx)
+        );
     }
 }
 
-fn is_orchestration_conversation(conversation: &AIConversation, app: &AppContext) -> bool {
-    conversation.has_parent_agent()
-        || !BlocklistAIHistoryModel::as_ref(app)
-            .child_conversation_ids_of(&conversation.id())
-            .is_empty()
-}
 /// Singleton model that caches compiled regexes for the `cli_agent_footer_enabled_commands`
 /// setting. Each entry pairs a compiled regex with the CLI agent it maps to.
 pub struct CompiledCommandsForCodingAgentToolbar {

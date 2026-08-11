@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use itertools::Itertools;
 use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity};
 
-use super::response_stream::{ResponseStream, ResponseStreamId};
 use super::BlocklistAIController;
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::CancellationReason;
+use super::response_stream::{ResponseStream, ResponseStreamId};
 use crate::BlocklistAIHistoryModel;
+use crate::ai::agent::CancellationReason;
+use crate::ai::agent::conversation::AIConversationId;
 
 pub(super) struct PendingResponseStreams {
     streams: HashMap<ResponseStreamId, ModelHandle<ResponseStream>>,
@@ -32,6 +32,23 @@ impl PendingResponseStreams {
         self.streams
             .keys()
             .any(|stream_id| conversation.is_processing_response_stream(stream_id))
+    }
+
+    /// Returns the IDs of all in-flight streams owned by the given conversation.
+    pub fn stream_ids_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+        app: &AppContext,
+    ) -> Vec<ResponseStreamId> {
+        let history_model = BlocklistAIHistoryModel::as_ref(app);
+        let Some(conversation) = history_model.conversation(&conversation_id) else {
+            return Vec::new();
+        };
+        self.streams
+            .keys()
+            .filter(|stream_id| conversation.is_processing_response_stream(stream_id))
+            .cloned()
+            .collect()
     }
 
     pub fn register_new_stream(

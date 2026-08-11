@@ -17,10 +17,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_channel::Sender;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use cloud_object_client::ObjectPermissionUpdateResult;
 use warp_graphql::object_permissions::AccessLevel;
 
 use crate::cloud_object::model::actions::{ObjectActionHistory, ObjectActionType};
@@ -29,10 +30,9 @@ use crate::cloud_object::{
     BulkCreateCloudObjectResult, BulkCreateGenericStringObjectsRequest, CreateCloudObjectResult,
     CreateObjectRequest, CreatedCloudObject, GenericStringObjectFormat,
     GenericStringObjectUniqueKey, JsonObjectType, ObjectDeleteResult, ObjectIdType,
-    ObjectMetadataUpdateResult, ObjectPermissionUpdateResult, ObjectPermissionsUpdateData,
-    ObjectType, ObjectsToUpdate, Owner, Revision, RevisionAndLastEditor, ServerFolder,
-    ServerMetadata, ServerNotebook, ServerObject, ServerPermissions, ServerPreference,
-    ServerWorkflow, UpdateCloudObjectResult,
+    ObjectMetadataUpdateResult, ObjectPermissionsUpdateData, ObjectType, ObjectsToUpdate, Owner,
+    Revision, RevisionAndLastEditor, ServerFolder, ServerMetadata, ServerNotebook, ServerObject,
+    ServerPermissions, ServerPreference, ServerWorkflow, UpdateCloudObjectResult,
 };
 use crate::drive::folders::FolderId;
 use crate::drive::sharing::SharingAccessLevel;

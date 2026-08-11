@@ -1,5 +1,6 @@
 mod cloud_mode_v2_view;
 mod data_source;
+mod mixer;
 mod search_item;
 pub(super) mod view;
 
@@ -9,6 +10,7 @@ use std::path::PathBuf;
 use ai::skills::SkillReference;
 pub use cloud_mode_v2_view::{CloudModeV2SlashCommandView, Section as CloudModeV2Section};
 pub use data_source::*;
+pub use mixer::{SlashCommandMixer, build_slash_command_mixer, slash_command_query};
 pub use view::{CloseReason, InlineSlashCommandView, SlashCommandsEvent};
 #[cfg(not(target_family = "wasm"))]
 use warp_cli::agent::Harness;
@@ -16,12 +18,13 @@ use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::AnsiColorIdentifier;
+use warp_errors::report_error;
 #[cfg(feature = "local_fs")]
 use warp_util::path::{CleanPathResult, LineAndColumnArg};
 use warpui::clipboard::ClipboardContent;
 use warpui::{AppContext, SingletonEntity, ViewContext};
 
-#[cfg(not(target_family = "wasm"))]
+use crate::TelemetryEvent;
 use crate::ai::agent::conversation::AIConversationId;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_conversations_model::AgentConversationsModel;
@@ -30,25 +33,30 @@ use crate::ai::agent_management::telemetry::AgentManagementTelemetryEvent;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::blocklist::agent_view::{
-    AgentViewEntryOrigin, DismissalStrategy, EphemeralMessage, ENTER_OR_EXIT_CONFIRMATION_WINDOW,
+    AgentViewEntryOrigin, DismissalStrategy, ENTER_OR_EXIT_CONFIRMATION_WINDOW, EphemeralMessage,
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, InputTypeAutoDetectionSource, SlashCommandRequest,
+    BlocklistAIHistoryModel, InputTypeAutoDetectionSource, PendingAttachment, QueuedQuery,
+    QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin, SlashCommandRequest,
 };
+use crate::ai::conversation_rename::rename_conversation;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
-use crate::search::slash_command_menu::static_commands::Availability;
+#[cfg(not(target_family = "wasm"))]
+use crate::search::slash_command_menu::static_commands::commands;
+use crate::search::slash_command_menu::static_commands::commands::COMMAND_REGISTRY;
+use crate::search::slash_command_menu::static_commands::{Availability, SlashCommandKind};
 use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 use crate::server::ids::SyncId;
-use crate::server::telemetry::SlashCommandAcceptedDetails;
+use crate::server::telemetry::{AgentModeAutoDetectionSettingOrigin, SlashCommandAcceptedDetails};
 use crate::settings::AISettings;
 use crate::tab::SelectedTabColor;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;
 use crate::terminal::input::inline_menu::{InlineMenuAction, InlineMenuType};
 use crate::terminal::input::message_bar::Message;
+use crate::terminal::input::models::InlineModelSelectorTab;
 use crate::terminal::input::slash_command_model::{
     SlashCommandEntryState, UpdatedSlashCommandModel,
 };
@@ -60,11 +68,11 @@ use crate::terminal::model::session::Session;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::color_dot;
 use crate::view_components::DismissibleToast;
+use crate::workflows::command_parser::compute_workflow_display_data;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
-use crate::TelemetryEvent;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AcceptSlashCommandOrSavedPrompt {
     SlashCommand {
         id: SlashCommandId,
@@ -80,6 +88,95 @@ pub enum AcceptSlashCommandOrSavedPrompt {
 }
 impl InlineMenuAction for AcceptSlashCommandOrSavedPrompt {
     const MENU_TYPE: InlineMenuType = InlineMenuType::SlashCommands;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlashCommandSelectionBehavior {
+    InsertCommandText(String),
+    Execute,
+}
+
+/// Shared menu-selection policy for static slash commands.
+///
+/// GUI and TUI both first decide whether accepting a menu row should insert the
+/// slash command text for further argument entry, or execute the command
+/// immediately. Surface-specific execution remains in `Input::execute_slash_command`
+/// for GUI and in `TuiTerminalSessionView::execute_tui_slash_command` for TUI.
+pub fn slash_command_selection_behavior(command: &StaticCommand) -> SlashCommandSelectionBehavior {
+    if command
+        .argument
+        .as_ref()
+        .is_some_and(|argument| !argument.should_execute_on_selection)
+    {
+        SlashCommandSelectionBehavior::InsertCommandText(format!("{} ", command.name))
+    } else {
+        SlashCommandSelectionBehavior::Execute
+    }
+}
+
+/// Whether an already-open slash command menu should close after the input becomes an exact
+/// static-command or skill match.
+///
+/// This preserves the GUI's existing behavior: exact input stays visible while multiple prior
+/// results remain, but a unique match or the start of argument entry closes the menu.
+pub fn should_close_slash_command_menu_for_exact_match(
+    result_count: usize,
+    argument_started: bool,
+) -> bool {
+    result_count < 2 || argument_started
+}
+
+/// Records a static slash command accepted from either the GUI or TUI surface.
+pub fn record_static_slash_command_accepted(
+    command_name: &str,
+    is_in_agent_view: bool,
+    ctx: &mut AppContext,
+) {
+    send_telemetry_from_ctx!(
+        TelemetryEvent::SlashCommandAccepted {
+            command_details: SlashCommandAcceptedDetails::StaticCommand {
+                command_name: command_name.to_owned(),
+            },
+            is_in_agent_view,
+        },
+        ctx
+    );
+}
+
+/// Records an input auto-detection setting toggle triggered from a TUI slash
+/// command (`/natural-language-detection`).
+///
+/// Mirrors the `SettingsPage` and `Banner` origins used by the GUI toggle paths,
+/// but reports the toggle as originating from a TUI slash command.
+pub fn record_autodetection_toggle_from_slash_command(
+    is_autodetection_enabled: bool,
+    ctx: &mut AppContext,
+) {
+    send_telemetry_from_ctx!(
+        TelemetryEvent::AgentModeToggleAutoDetectionSetting {
+            is_autodetection_enabled,
+            origin: AgentModeAutoDetectionSettingOrigin::SlashCommand,
+        },
+        ctx
+    );
+}
+
+/// Records a saved prompt accepted from either the GUI or TUI slash menu.
+pub fn record_saved_prompt_accepted(is_in_agent_view: bool, ctx: &mut AppContext) {
+    send_telemetry_from_ctx!(
+        TelemetryEvent::SlashCommandAccepted {
+            command_details: SlashCommandAcceptedDetails::SavedPrompt,
+            is_in_agent_view,
+        },
+        ctx
+    );
+}
+
+pub fn saved_prompt_text_for_id(id: &SyncId, ctx: &AppContext) -> Option<String> {
+    let workflow = CloudModel::as_ref(ctx).get_workflow(id)?;
+    workflow.model().data.is_agent_mode_workflow().then(|| {
+        compute_workflow_display_data(&workflow.model().data).command_with_replaced_arguments
+    })
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -171,34 +268,36 @@ impl Input {
         if !self.is_slash_command_available(command, ctx) {
             return;
         }
-        if command.argument.as_ref().is_none() {
-            self.execute_slash_command(
-                command, None, trigger, /*is_queued_prompt*/ false, ctx,
-            );
-        } else if command
-            .argument
-            .as_ref()
-            .is_some_and(|arg| arg.should_execute_on_selection)
-        {
-            // TODO (zachbai): this is a hack for Oz launch. Caller
-            // should probably be invoking `execute_slash_command` in this case.
-            let argument = if !self.suggestions_mode_model.as_ref(ctx).is_slash_commands() {
-                let trimmed = self.buffer_text(ctx).trim().to_owned();
-                (!trimmed.is_empty()).then_some(trimmed)
-            } else {
-                None
-            };
-            self.execute_slash_command(
-                command,
-                argument.as_ref(),
-                trigger,
-                /*is_queued_prompt*/ false,
-                ctx,
-            );
-        } else {
-            self.editor.update(ctx, |editor, ctx| {
-                editor.set_buffer_text(&format!("{} ", command.name), ctx);
-            });
+        match slash_command_selection_behavior(command) {
+            SlashCommandSelectionBehavior::Execute => {
+                // TODO (zachbai): this is a hack for Oz launch. Caller
+                // should probably be invoking `execute_slash_command` in this case.
+                let argument = if command
+                    .argument
+                    .as_ref()
+                    .is_some_and(|arg| arg.should_execute_on_selection)
+                    && !self.suggestions_mode_model.as_ref(ctx).is_slash_commands()
+                {
+                    let trimmed = self.buffer_text(ctx).trim().to_owned();
+                    (!trimmed.is_empty()).then_some(trimmed)
+                } else {
+                    None
+                };
+                self.execute_slash_command(
+                    command,
+                    argument.as_ref(),
+                    trigger,
+                    /*is_queued_prompt*/ false,
+                    None,
+                    None,
+                    ctx,
+                );
+            }
+            SlashCommandSelectionBehavior::InsertCommandText(text) => {
+                self.editor.update(ctx, |editor, ctx| {
+                    editor.set_buffer_text(&text, ctx);
+                });
+            }
         }
     }
 
@@ -224,7 +323,7 @@ impl Input {
         }
 
         match self.slash_command_model.as_ref(ctx).state().clone() {
-            SlashCommandEntryState::None | SlashCommandEntryState::DisabledUntilEmptyBuffer => {
+            SlashCommandEntryState::None => {
                 if self.suggestions_mode_model.as_ref(ctx).is_slash_commands() {
                     self.close_slash_commands_menu(ctx);
                 }
@@ -243,12 +342,12 @@ impl Input {
                 // a valid command in the input) OR if the user has started typing arguments, hide
                 // the menu.
                 if self.suggestions_mode_model.as_ref(ctx).is_slash_commands()
-                    && (self
-                        .inline_slash_commands_view
-                        .as_ref(ctx)
-                        .result_count(ctx)
-                        < 2
-                        || detected_command.argument.is_some())
+                    && should_close_slash_command_menu_for_exact_match(
+                        self.inline_slash_commands_view
+                            .as_ref(ctx)
+                            .result_count(ctx),
+                        detected_command.argument.is_some(),
+                    )
                 {
                     self.close_slash_commands_menu(ctx);
                 }
@@ -259,25 +358,25 @@ impl Input {
                     self.enter_ai_mode(Some(InputTypeAutoDetectionSource::SlashCommand), ctx);
                 }
 
-                if detected_command.command.name == commands::EDIT.name
+                if detected_command.command.kind == SlashCommandKind::Edit
                     && detected_command
                         .argument
                         .as_ref()
                         .is_some_and(|argument| argument.is_empty())
                     && self.suggestions_mode_model.as_ref(ctx).is_closed()
                 {
-                    self.open_completion_suggestions(CompletionsTrigger::Keybinding, ctx);
+                    self.open_completion_suggestions(CompletionsTrigger::SlashCommandAutoOpen, ctx);
                 }
             }
             SlashCommandEntryState::SkillCommand(detected_skill) => {
                 // Hide the menu once the user has started typing the prompt
                 if self.suggestions_mode_model.as_ref(ctx).is_slash_commands()
-                    && (self
-                        .inline_slash_commands_view
-                        .as_ref(ctx)
-                        .result_count(ctx)
-                        < 2
-                        || detected_skill.argument.is_some())
+                    && should_close_slash_command_menu_for_exact_match(
+                        self.inline_slash_commands_view
+                            .as_ref(ctx)
+                            .result_count(ctx),
+                        detected_skill.argument.is_some(),
+                    )
                 {
                     self.close_slash_commands_menu(ctx);
                 }
@@ -313,13 +412,7 @@ impl Input {
                 };
                 let is_in_agent_view = FeatureFlag::AgentView.is_enabled()
                     && self.agent_view_controller.as_ref(ctx).is_fullscreen();
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::SlashCommandAccepted {
-                        command_details: SlashCommandAcceptedDetails::SavedPrompt,
-                        is_in_agent_view,
-                    },
-                    ctx
-                );
+                record_saved_prompt_accepted(is_in_agent_view, ctx);
 
                 self.show_workflows_info_box_on_workflow_selection(
                     WorkflowType::Cloud(Box::new(workflow)),
@@ -361,12 +454,15 @@ impl Input {
     /// the agent was busy.
     ///
     /// Returns `true` if execution was 'handled' (whether or not it resulted in success or failure).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn execute_slash_command(
         &mut self,
         command: &StaticCommand,
         argument: Option<&String>,
         trigger: SlashCommandTrigger,
         is_queued_prompt: bool,
+        queued_conversation_id: Option<AIConversationId>,
+        queued_query_id: Option<QueuedQueryId>,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         fn show_error_toast(message: String, ctx: &mut ViewContext<Input>) {
@@ -387,19 +483,17 @@ impl Input {
         }
 
         // Handle the slash command action based on its kind
-        match command.name {
-            add_mcp if command.name == commands::ADD_MCP.name => {
+        match command.kind {
+            SlashCommandKind::AddMcp => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenAddMCPPane);
             }
-            add_prompt if command.name == commands::ADD_PROMPT.name => {
+            SlashCommandKind::AddPrompt => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenAddPromptPane);
             }
-            add_rule if command.name == commands::ADD_RULE.name => {
+            SlashCommandKind::AddRule => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenAddRulePane);
             }
-            agent_or_new
-                if command.name == commands::NEW.name || command.name == commands::AGENT.name =>
-            {
+            SlashCommandKind::Agent | SlashCommandKind::New => {
                 if !self
                     .ai_context_model
                     .as_ref(ctx)
@@ -452,7 +546,7 @@ impl Input {
                     origin: AgentViewEntryOrigin::SlashCommand { trigger },
                 });
             }
-            cloud_agent if command.name == commands::CLOUD_AGENT.name => {
+            SlashCommandKind::CloudAgent => {
                 let prompt = argument.and_then(|argument| {
                     let trimmed = argument.trim();
                     if trimmed.is_empty() {
@@ -466,10 +560,10 @@ impl Input {
                     initial_prompt: prompt,
                 });
             }
-            create_docker_sandbox if command.name == commands::CREATE_DOCKER_SANDBOX.name => {
+            SlashCommandKind::CreateDockerSandbox => {
                 ctx.emit(Event::CreateDockerSandbox);
             }
-            conversations if command.name == commands::CONVERSATIONS.name => {
+            SlashCommandKind::Conversations => {
                 if self.is_cloud_mode_input_v2_composing(ctx) {
                     self.suggestions_mode_model.update(ctx, |model, ctx| {
                         model.set_mode(InputSuggestionsMode::Closed, ctx);
@@ -488,7 +582,7 @@ impl Input {
                     ctx.dispatch_typed_action(&TerminalAction::OpenConversationsPalette);
                 }
             }
-            rename_tab if command.name == commands::RENAME_TAB.name => {
+            SlashCommandKind::RenameTab => {
                 let Some(name) = argument
                     .map(|name| name.trim())
                     .filter(|name| !name.is_empty())
@@ -502,7 +596,21 @@ impl Input {
 
                 ctx.dispatch_typed_action(&WorkspaceAction::SetActiveTabName(name.to_owned()));
             }
-            set_tab_color if command.name == commands::SET_TAB_COLOR.name => {
+            SlashCommandKind::RenameConversation => {
+                let Some(conversation_id) = self
+                    .ai_context_model
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx)
+                else {
+                    show_error_toast(
+                        "/rename-conversation requires an active conversation".to_owned(),
+                        ctx,
+                    );
+                    return true;
+                };
+                rename_conversation(conversation_id, argument.cloned().unwrap_or_default(), ctx);
+            }
+            SlashCommandKind::SetTabColor => {
                 let supported_options = || {
                     color_dot::TAB_COLOR_OPTIONS
                         .iter()
@@ -550,7 +658,7 @@ impl Input {
 
                 ctx.dispatch_typed_action(&WorkspaceAction::SetActiveTabColor(color));
             }
-            create_env if command.name == commands::CREATE_ENVIRONMENT.name => {
+            SlashCommandKind::CreateEnvironment => {
                 // If the user included args after the slash command, treat them as repo paths/URLs.
                 let repos = argument
                     .map(|arg| {
@@ -563,7 +671,7 @@ impl Input {
 
                 ctx.emit(Event::TriggerEnvironmentSetup { repos });
             }
-            create_project if command.name == commands::CREATE_NEW_PROJECT.name => {
+            SlashCommandKind::CreateNewProject => {
                 if argument.is_none_or(|args| args.is_empty()) {
                     show_error_toast(
                         "Please describe the project you want to create after /create-new-project"
@@ -576,7 +684,7 @@ impl Input {
                 let args = argument.expect("args are Some()");
                 self.initiate_create_new_project(args.to_owned(), ctx);
             }
-            edit if command.name == commands::EDIT.name => {
+            SlashCommandKind::Edit => {
                 #[cfg(feature = "local_fs")]
                 match argument {
                     Some(args) if !args.is_empty() => {
@@ -660,7 +768,7 @@ impl Input {
                     return true;
                 }
             }
-            export_to_clipboard if command.name == commands::EXPORT_TO_CLIPBOARD.name => {
+            SlashCommandKind::ExportToClipboard => {
                 let history = BlocklistAIHistoryModel::handle(ctx);
                 let Some(conversation) = history
                     .as_ref(ctx)
@@ -685,7 +793,39 @@ impl Input {
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }
-            export_to_file if command.name == commands::EXPORT_TO_FILE.name => {
+            SlashCommandKind::CopyDebuggingId => {
+                let conversation_id = self
+                    .ai_context_model
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx);
+                let debugging_payload = conversation_id
+                    .and_then(|conversation_id| {
+                        BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
+                    })
+                    .and_then(|conversation| conversation.debugging_server_conversation_token())
+                    .map(|token| token.debugging_payload(None));
+                match debugging_payload {
+                    Some(debugging_payload) => {
+                        ctx.clipboard()
+                            .write(ClipboardContent::plain_text(debugging_payload));
+                        let window_id = ctx.window_id();
+                        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                            toast_stack.add_ephemeral_toast(
+                                DismissibleToast::default(
+                                    "Debugging information copied to clipboard".to_owned(),
+                                ),
+                                window_id,
+                                ctx,
+                            );
+                        });
+                    }
+                    None => show_error_toast(
+                        "No debugging ID available for this conversation yet.".to_owned(),
+                        ctx,
+                    ),
+                }
+            }
+            SlashCommandKind::ExportToFile => {
                 #[cfg(not(target_family = "wasm"))]
                 {
                     self.export_conversation_to_file(
@@ -702,49 +842,49 @@ impl Input {
                     return true;
                 }
             }
-            index if command.name == commands::INDEX.name => {
+            SlashCommandKind::Index => {
                 ctx.dispatch_typed_action(&TerminalAction::IndexProjectSpeedbump);
             }
-            init if command.name == commands::INIT.name => {
+            SlashCommandKind::Init => {
                 ctx.dispatch_typed_action(&TerminalAction::InitProject);
             }
-            changelog if command.name == commands::CHANGELOG.name => {
+            SlashCommandKind::Changelog => {
                 if !FeatureFlag::Changelog.is_enabled() {
                     return false;
                 }
                 ctx.dispatch_typed_action(&WorkspaceAction::ViewLatestChangelog);
             }
-            feedback if command.name == commands::FEEDBACK.name => {
+            SlashCommandKind::Feedback => {
                 ctx.dispatch_typed_action(&WorkspaceAction::SendFeedback);
             }
-            open_code_review if command.name == commands::OPEN_CODE_REVIEW.name => {
+            SlashCommandKind::OpenCodeReview => {
                 ctx.dispatch_typed_action(&TerminalAction::ToggleCodeReviewPane {
                     entrypoint: CodeReviewPaneEntrypoint::SlashCommand,
                 });
             }
-            open_mcp_servers if command.name == commands::OPEN_MCP_SERVERS.name => {
+            SlashCommandKind::OpenMcpServers | SlashCommandKind::Mcp => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenViewMCPPane);
             }
-            open_settings_file if command.name == commands::OPEN_SETTINGS_FILE.name => {
+            SlashCommandKind::OpenSettingsFile => {
                 if !FeatureFlag::SettingsFile.is_enabled() || !cfg!(feature = "local_fs") {
                     return false;
                 }
                 ctx.dispatch_typed_action(&WorkspaceAction::OpenSettingsFile);
             }
-            open_project_rules if command.name == commands::OPEN_PROJECT_RULES.name => {
+            SlashCommandKind::OpenProjectRules => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenProjectRulesPane);
             }
-            open_rules if command.name == commands::OPEN_RULES.name => {
+            SlashCommandKind::OpenRules => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenRulesPane);
             }
-            edit_skill if command.name == commands::EDIT_SKILL.name => {
+            SlashCommandKind::EditSkill => {
                 if !FeatureFlag::ListSkills.is_enabled() {
                     return false;
                 }
                 // Open the skill selector menu - user will select a skill from the inline menu
                 self.open_skill_selector(ctx);
             }
-            invoke_skill if command.name == commands::INVOKE_SKILL.name => {
+            SlashCommandKind::InvokeSkill => {
                 if !FeatureFlag::ListSkills.is_enabled() {
                     return false;
                 }
@@ -755,7 +895,7 @@ impl Input {
                 // Open the skill selector menu for invocation - skill command will be inserted into buffer
                 self.open_invoke_skill_selector(ctx);
             }
-            host if command.name == commands::HOST.name => {
+            SlashCommandKind::Host => {
                 if !self.is_cloud_mode_input_v2_composing(ctx) {
                     return false;
                 }
@@ -773,10 +913,10 @@ impl Input {
                 self.open_v2_host_selector(ctx);
                 return true;
             }
-            harness if command.name == commands::HARNESS.name => {
+            SlashCommandKind::Harness => {
                 if !self.is_cloud_mode_input_v2_composing(ctx) {
                     // Defensive: the command is registered only when the V2 flag is on and its
-                    // availability requires CLOUD_AGENT_V2, so this branch should be unreachable.
+                    // availability requires CLOUD_MODE_V2_COMPOSER, so this branch should be unreachable.
                     return false;
                 }
                 self.suggestions_mode_model.update(ctx, |model, ctx| {
@@ -786,7 +926,7 @@ impl Input {
                 self.open_v2_harness_selector(ctx);
                 return true;
             }
-            environment if command.name == commands::ENVIRONMENT.name => {
+            SlashCommandKind::Environment => {
                 if !self.is_cloud_mode_input_v2_composing(ctx) {
                     return false;
                 }
@@ -797,7 +937,7 @@ impl Input {
                 self.open_v2_environment_selector(ctx);
                 return true;
             }
-            models if command.name == commands::MODEL.name => {
+            SlashCommandKind::Model => {
                 if self.is_cloud_mode_input_v2_composing(ctx) {
                     self.suggestions_mode_model.update(ctx, |model, ctx| {
                         model.set_mode(InputSuggestionsMode::Closed, ctx);
@@ -807,18 +947,32 @@ impl Input {
                         footer.open_v2_model_selector(ctx);
                     });
                     return true;
+                } else if trigger.is_keybinding() {
+                    // A keybinding may carry a pre-existing prompt in the buffer; open
+                    // like the model chip so the prompt is parked for search and
+                    // restored when a model is selected (or the selector is dismissed).
+                    self.open_model_selector_and_snapshot_prompt(
+                        InlineModelSelectorTab::BaseAgent,
+                        ctx,
+                    );
                 } else {
-                    self.open_model_selector(ctx);
+                    // Typed `/model`: the buffer holds the consumable command text.
+                    // Just switch into the model selector; `set_mode` snapshots the
+                    // buffer so it's restored on dismiss but cleared on selection.
+                    self.suggestions_mode_model.update(ctx, |model, ctx| {
+                        model.set_mode(InputSuggestionsMode::ModelSelector, ctx);
+                    });
+                    ctx.notify();
                 }
             }
-            profiles if command.name == commands::PROFILE.name => {
+            SlashCommandKind::Profile => {
                 if !FeatureFlag::InlineProfileSelector.is_enabled() {
                     return false;
                 }
 
                 self.open_profile_selector(ctx);
             }
-            prompts if command.name == commands::PROMPTS.name => {
+            SlashCommandKind::Prompts => {
                 if self.is_cloud_mode_input_v2_composing(ctx) {
                     self.apply_v2_slash_section_filter(CloudModeV2Section::Prompts, ctx);
                     return true;
@@ -829,34 +983,13 @@ impl Input {
                     return false;
                 }
             }
-            rewind if command.name == commands::REWIND.name => {
+            SlashCommandKind::Rewind => {
                 self.open_rewind_menu(ctx);
             }
-            pr_comments if command.name == commands::PR_COMMENTS.name => {
-                if !FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-                    return false;
-                }
-
-                let Some(repo_path) = self
-                    .active_session_path_if_local(ctx)
-                    .map(|path| path.to_path_buf())
-                    .map(|path| path.to_string_lossy().to_string())
-                else {
-                    log::error!("Expected a valid working directory since /pr-comments is only available from the terminal");
-                    return false;
-                };
-
-                self.ai_controller.update(ctx, move |controller, ctx| {
-                    controller.send_slash_command_request(
-                        SlashCommandRequest::FetchReviewComments { repo_path },
-                        ctx,
-                    )
-                });
-            }
-            usage if command.name == commands::USAGE.name => {
+            SlashCommandKind::Usage => {
                 ctx.dispatch_typed_action(&TerminalAction::OpenBillingAndUsagePane);
             }
-            remote_control if command.name == commands::REMOTE_CONTROL.name => {
+            SlashCommandKind::RemoteControl => {
                 if !FeatureFlag::CreatingSharedSessions.is_enabled()
                     || !FeatureFlag::HOARemoteControl.is_enabled()
                 {
@@ -873,7 +1006,7 @@ impl Input {
                 }
                 ctx.emit(Event::StartRemoteControl);
             }
-            cost if command.name == commands::COST.name => {
+            SlashCommandKind::Cost => {
                 let history = BlocklistAIHistoryModel::handle(ctx);
                 let conversation = history
                     .as_ref(ctx)
@@ -898,11 +1031,12 @@ impl Input {
                 }
             }
             #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-            move_to_cloud if command.name == commands::MOVE_TO_CLOUD.name => {
-                if !AISettings::as_ref(ctx)
-                    .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, ctx)
-                {
+            SlashCommandKind::MoveToCloud => {
+                if !AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx) {
                     return false;
+                }
+                if self.block_cloud_handoff_if_model_unsupported(ctx) {
+                    return true;
                 }
                 let prompt = argument
                     .map(|argument| argument.trim())
@@ -922,13 +1056,30 @@ impl Input {
                             entry_point: HandoffEntryPoint::SlashCommand,
                         },
                     );
+                } else if self.source_conversation_has_content(ctx) {
+                    // Empty `/handoff` with a non-empty source conversation:
+                    // dispatch the immediate empty-prompt handoff (continue /
+                    // snapshot rehydration); the workspace synthesizes the
+                    // launch and collects attachments.
+                    ctx.dispatch_typed_action_deferred(
+                        WorkspaceAction::OpenLocalToCloudHandoffPane {
+                            launch: None,
+                            environment_id: None,
+                            entry_point: HandoffEntryPoint::SlashCommand,
+                        },
+                    );
                 } else {
-                    // `/handoff` with no query enters `&` compose mode,
-                    // same as the footer chip.
-                    self.activate_cloud_handoff_compose(HandoffEntryPoint::SlashCommand, ctx);
+                    // Empty `/handoff` with no source content — surface a toast
+                    // so the user knows why nothing happened. The chip falls
+                    // back to `&` compose mode here; the slash-command flow
+                    // does not because it has no compose-draft state to seed.
+                    show_error_toast(
+                        "Nothing to hand off — start a conversation first.".to_owned(),
+                        ctx,
+                    );
                 }
             }
-            fork if command.name == commands::FORK.name => {
+            SlashCommandKind::Fork => {
                 let Some(conversation_id) = self
                     .ai_context_model
                     .as_ref(ctx)
@@ -938,11 +1089,15 @@ impl Input {
                     return true;
                 };
 
-                let destination = if trigger.is_cmd_or_ctrl_enter() {
-                    ForkedConversationDestination::NewTab
-                } else {
-                    ForkedConversationDestination::SplitPane
-                };
+                let destination =
+                    ForkedConversationDestination::for_fork_trigger(trigger.is_cmd_or_ctrl_enter());
+
+                // Move any pending attachments out of the source input so they travel with the
+                // initial prompt into the forked pane and no longer linger on the original input.
+                // Only drain them when a non-empty prompt will actually be sent; the fork drops
+                // attachments when there is no initial prompt, which would silently discard them.
+                let initial_attachments =
+                    self.maybe_take_attachments_for_initial_prompt(argument, ctx);
 
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
@@ -950,15 +1105,16 @@ impl Input {
                     summarize_after_fork: false,
                     summarization_prompt: None,
                     initial_prompt: argument.cloned(),
+                    initial_attachments,
                     destination,
                 });
             }
-            fork_from if command.name == commands::FORK_FROM.name => {
+            SlashCommandKind::ForkFrom => {
                 self.open_user_query_menu(UserQueryMenuAction::ForkFrom, ctx);
                 return true;
             }
             #[cfg(not(target_family = "wasm"))]
-            continue_locally if command.name == commands::CONTINUE_LOCALLY.name => {
+            SlashCommandKind::ContinueLocally => {
                 let Some(conversation_id) = self
                     .ai_context_model
                     .as_ref(ctx)
@@ -979,16 +1135,21 @@ impl Input {
                     return true;
                 }
 
-                let destination = if trigger.is_cmd_or_ctrl_enter() {
-                    ForkedConversationDestination::NewTab
-                } else {
-                    ForkedConversationDestination::SplitPane
-                };
+                let destination =
+                    ForkedConversationDestination::for_fork_trigger(trigger.is_cmd_or_ctrl_enter());
 
                 send_telemetry_from_ctx!(
                     AgentManagementTelemetryEvent::SlashCommandContinueLocally,
                     ctx
                 );
+
+                // Move any pending attachments out of the source input so they travel with the
+                // initial prompt into the continued local pane and no longer linger on the
+                // original input. Only drain them when a non-empty prompt will actually be sent;
+                // the fork drops attachments when there is no initial prompt, which would
+                // silently discard them.
+                let initial_attachments =
+                    self.maybe_take_attachments_for_initial_prompt(argument, ctx);
 
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
@@ -996,10 +1157,11 @@ impl Input {
                     summarize_after_fork: false,
                     summarization_prompt: None,
                     initial_prompt: argument.cloned(),
+                    initial_attachments,
                     destination,
                 });
             }
-            fork_and_compact if command.name == commands::FORK_AND_COMPACT.name => {
+            SlashCommandKind::ForkAndCompact => {
                 let Some(conversation_id) = self
                     .ai_context_model
                     .as_ref(ctx)
@@ -1012,11 +1174,8 @@ impl Input {
                     return true;
                 };
 
-                let destination = if trigger.is_cmd_or_ctrl_enter() {
-                    ForkedConversationDestination::SplitPane
-                } else {
-                    ForkedConversationDestination::CurrentPane
-                };
+                let destination =
+                    ForkedConversationDestination::for_fork_trigger(trigger.is_cmd_or_ctrl_enter());
 
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
@@ -1024,29 +1183,52 @@ impl Input {
                     summarize_after_fork: true,
                     summarization_prompt: None,
                     initial_prompt: argument.cloned(),
+                    initial_attachments: vec![],
                     destination,
                 });
             }
-            compact_and if command.name == commands::COMPACT_AND.name => {
-                if self
-                    .ai_context_model
-                    .as_ref(ctx)
-                    .selected_conversation_id(ctx)
-                    .is_none()
-                {
-                    show_error_toast(
-                        "/compact-and requires an active conversation".to_owned(),
-                        ctx,
-                    );
-                    return true;
+            SlashCommandKind::CompactAnd => {
+                let conversation_id = if is_queued_prompt {
+                    let Some(conversation_id) = queued_conversation_id else {
+                        report_error!("Queued /compact-and missing conversation id");
+                        return true;
+                    };
+                    conversation_id
+                } else {
+                    let Some(conversation_id) = self
+                        .ai_context_model
+                        .as_ref(ctx)
+                        .selected_conversation_id(ctx)
+                    else {
+                        show_error_toast(
+                            "/compact-and requires an active conversation".to_owned(),
+                            ctx,
+                        );
+                        return true;
+                    };
+                    conversation_id
                 };
 
-                ctx.dispatch_typed_action(&WorkspaceAction::SummarizeAIConversation {
-                    prompt: None,
-                    initial_prompt: argument.cloned(),
-                });
+                if is_queued_prompt {
+                    let Some(queued_query_id) = queued_query_id else {
+                        report_error!("Queued /compact-and missing queued query id");
+                        return true;
+                    };
+                    self.execute_queued_compact_and(
+                        conversation_id,
+                        queued_query_id,
+                        argument.cloned(),
+                        ctx,
+                    );
+                } else {
+                    let summarize = WorkspaceAction::SummarizeAIConversation {
+                        prompt: None,
+                        initial_prompt: argument.cloned(),
+                    };
+                    ctx.dispatch_typed_action(&summarize);
+                }
             }
-            queue if command.name == commands::QUEUE.name => {
+            SlashCommandKind::Queue => {
                 let Some(conversation_id) = self
                     .ai_context_model
                     .as_ref(ctx)
@@ -1062,43 +1244,75 @@ impl Input {
                 };
 
                 let history = BlocklistAIHistoryModel::handle(ctx);
-                let is_in_progress = history
+                // An empty conversation defaults to `InProgress` even though nothing is
+                // running, so exclude it here to auto-send rather than queue.
+                let should_queue = history
                     .as_ref(ctx)
                     .conversation(&conversation_id)
-                    .is_some_and(|c| c.status().is_in_progress() || c.status().is_blocked());
+                    .is_some_and(|c| {
+                        !c.is_empty() && (c.status().is_in_progress() || c.status().is_blocked())
+                    });
 
-                if is_in_progress {
-                    ctx.dispatch_typed_action(&WorkspaceAction::QueuePromptForConversation {
-                        prompt,
+                if should_queue {
+                    let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
+                        context_model.take_pending_attachments(ctx)
+                    });
+                    QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.append(
+                            conversation_id,
+                            QueuedQuery::new_with_attachments(
+                                prompt,
+                                QueuedQueryOrigin::QueueSlashCommand,
+                                attachments,
+                            ),
+                            ctx,
+                        );
                     });
                 } else {
-                    self.submit_queued_prompt(prompt, ctx);
+                    // Not in progress: submit immediately as a regular (non-queued) user query so
+                    // the live staging is sent and reset, rather than treated as a queued-row fire.
+                    self.submit_user_query_now(prompt, ctx);
                 }
             }
-            open_repo if command.name == commands::OPEN_REPO.name => {
+            SlashCommandKind::OpenRepo => {
                 if !FeatureFlag::InlineRepoMenu.is_enabled() {
                     return false;
                 }
                 self.open_repos_menu(ctx);
             }
-            command_that_just_sends_ai_request_with_prefix
-                if command.name == commands::COMPACT.name
-                    || command.name == commands::PLAN.name
-                    || command.name == commands::ORCHESTRATE.name =>
-            {
+            SlashCommandKind::Compact | SlashCommandKind::Plan | SlashCommandKind::Orchestrate => {
                 // These slash commands just send AI requests with the slash command text as a
                 // prefix, and special handling is done downstream as an implementation detail
                 // of handling user queries with specific slash command prefixes.
                 return false;
             }
-            _ => {
+            SlashCommandKind::AutoApprove
+            | SlashCommandKind::Statusline
+            | SlashCommandKind::ResetStatusline
+            | SlashCommandKind::ApiKeys
+            | SlashCommandKind::ConnectGrok
+            | SlashCommandKind::Upgrade
+            | SlashCommandKind::ManageBilling
+            | SlashCommandKind::ViewLogs
+            | SlashCommandKind::Voice
+            | SlashCommandKind::NaturalLanguageDetection
+            | SlashCommandKind::Theme
+            | SlashCommandKind::VimMode
+            | SlashCommandKind::Exit
+            | SlashCommandKind::Logout
+            | SlashCommandKind::Clear
+            | SlashCommandKind::Status => {
                 debug_assert!(
                     false,
-                    "Attempted to execute slash command with no handler: {}",
+                    "Attempted to execute TUI-only slash command in the GUI: {}",
                     command.name
                 );
                 return false;
             }
+            #[cfg(any(not(feature = "local_fs"), target_family = "wasm"))]
+            SlashCommandKind::MoveToCloud => return false,
+            #[cfg(target_family = "wasm")]
+            SlashCommandKind::ContinueLocally => return false,
         }
 
         // Leave the buffer alone when re-sending a queued prompt (the user may have typed
@@ -1128,15 +1342,7 @@ impl Input {
 
         let is_in_agent_view = FeatureFlag::AgentView.is_enabled()
             && self.agent_view_controller.as_ref(ctx).is_active();
-        send_telemetry_from_ctx!(
-            TelemetryEvent::SlashCommandAccepted {
-                command_details: SlashCommandAcceptedDetails::StaticCommand {
-                    command_name: command.name.to_owned(),
-                },
-                is_in_agent_view,
-            },
-            ctx
-        );
+        record_static_slash_command_accepted(command.name, is_in_agent_view, ctx);
         true
     }
 
@@ -1179,6 +1385,8 @@ impl Input {
                     argument.as_ref(),
                     SlashCommandTrigger::cmd_or_ctrl_enter(),
                     /*is_queued_prompt*/ false,
+                    None,
+                    None,
                     ctx,
                 )
             }
@@ -1190,13 +1398,9 @@ impl Input {
             SlashCommandEntryState::SkillCommand(detected_skill) => {
                 let reference = detected_skill.reference.clone();
                 let user_query = detected_skill.argument.clone();
-                self.execute_skill_command(
-                    reference, user_query, /*is_queued_prompt*/ false, ctx,
-                )
+                self.execute_skill_command(reference, user_query, None, None, ctx)
             }
-            SlashCommandEntryState::None
-            | SlashCommandEntryState::Composing { .. }
-            | SlashCommandEntryState::DisabledUntilEmptyBuffer => false,
+            SlashCommandEntryState::None | SlashCommandEntryState::Composing { .. } => false,
         }
     }
 
@@ -1280,6 +1484,8 @@ impl Input {
                     argument.as_ref(),
                     SlashCommandTrigger::input(),
                     /*is_queued_prompt*/ false,
+                    None,
+                    None,
                     ctx,
                 )
             }
@@ -1291,23 +1497,88 @@ impl Input {
             SlashCommandEntryState::SkillCommand(detected_skill) => {
                 let reference = detected_skill.reference.clone();
                 let user_query = detected_skill.argument.clone();
-                self.execute_skill_command(
-                    reference, user_query, /*is_queued_prompt*/ false, ctx,
-                )
+                self.execute_skill_command(reference, user_query, None, None, ctx)
             }
-            SlashCommandEntryState::None
-            | SlashCommandEntryState::Composing { .. }
-            | SlashCommandEntryState::DisabledUntilEmptyBuffer => false,
+            SlashCommandEntryState::None | SlashCommandEntryState::Composing { .. } => false,
         }
+    }
+
+    /// Drains pending attachments from the input's context model, but only when `argument`
+    /// contains a non-empty prompt. Forked conversations drop attachments when there is no
+    /// initial prompt to send, so draining them unconditionally would silently discard them;
+    /// leaving them staged in the source input instead loses nothing.
+    fn maybe_take_attachments_for_initial_prompt(
+        &mut self,
+        argument: Option<&String>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Vec<PendingAttachment> {
+        if argument.is_none_or(|argument| argument.trim().is_empty()) {
+            return Vec::new();
+        }
+        self.ai_context_model.update(ctx, |context_model, ctx| {
+            context_model.take_pending_attachments(ctx)
+        })
+    }
+
+    /// Sends a queued `/compact-and` summary and stores its follow-up on the original conversation.
+    pub(super) fn execute_queued_compact_and(
+        &mut self,
+        conversation_id: AIConversationId,
+        queued_query_id: QueuedQueryId,
+        initial_prompt: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let followup_attachments = QueuedQueryModel::as_ref(ctx)
+            .attachments_for(conversation_id, queued_query_id)
+            .to_vec();
+        self.ai_controller.update(ctx, move |controller, ctx| {
+            controller.send_queued_slash_command_request(
+                SlashCommandRequest::Summarize { prompt: None },
+                queued_query_id,
+                Some(conversation_id),
+                ctx,
+            );
+        });
+
+        let Some(initial_prompt) = initial_prompt.filter(|prompt| !prompt.trim().is_empty()) else {
+            return;
+        };
+        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new_with_attachments(
+                    initial_prompt,
+                    QueuedQueryOrigin::CompactAndSlashCommand,
+                    followup_attachments,
+                ),
+                ctx,
+            )
+        });
     }
 }
 
-/// Returns true when the conversation with `conversation_id` is associated with a cloud Oz
-/// `AmbientAgentTask`. Used as the defensive runtime gate for `/continue-locally` so a
-/// keybinding-triggered execution can't fall through onto a non-cloud-Oz conversation after
-/// the menu has been recomputed. Mirrors `SlashCommandDataSource::active_conversation_is_cloud_oz`.
+/// Whether executing the static slash `command` submits its text to the conversation as an AI
+/// prompt (handled downstream like a normal user query) rather than performing an immediate
+/// local action.
+///
+/// This is the single source of truth for the "reiterated as a prompt vs handled immediately"
+/// distinction: only `/compact`, `/plan`, and `/orchestrate` are sent as prompts (mirroring the
+/// `command_that_just_sends_ai_request_with_prefix` arm in [`Input::execute_slash_command`]).
+/// Every other slash command emits an immediate action (forking, switching model, opening a
+/// menu, etc.), so callers gating prompt queuing or shared-session forwarding should treat those
+/// as "run now".
+pub fn slash_command_is_submitted_as_prompt(command: &StaticCommand) -> bool {
+    matches!(
+        command.kind,
+        SlashCommandKind::Compact | SlashCommandKind::Plan | SlashCommandKind::Orchestrate
+    )
+}
+
+/// Returns true when the conversation with `conversation_id` is associated with an Oz
+/// `AmbientAgentTask`. Callers deciding between `/fork` and `/continue-locally` should also
+/// check the same `CLOUD_AGENT` context that gates `/continue-locally`.
 #[cfg(not(target_family = "wasm"))]
-fn conversation_is_cloud_oz_for_slash_command(
+pub(crate) fn conversation_is_cloud_oz_for_slash_command(
     conversation_id: AIConversationId,
     ctx: &AppContext,
 ) -> bool {
@@ -1332,6 +1603,38 @@ fn conversation_is_cloud_oz_for_slash_command(
     {
         Some(config) => config.harness_type == Harness::Oz,
         None => true,
+    }
+}
+
+/// Tooltip and slash command name for the fork button, returned as a unit so
+/// callers rendering the button and callers inserting the command always agree.
+#[cfg(not(target_family = "wasm"))]
+pub(crate) struct ForkButtonAction {
+    pub tooltip: &'static str,
+    pub command_name: &'static str,
+}
+
+/// Returns the tooltip and slash command for the fork button given an optional
+/// conversation ID. Uses `/continue-locally` for Oz conversations when `/fork`
+/// is unavailable in the current cloud-agent context, and `/fork` otherwise.
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn fork_button_action(
+    conversation_id: Option<AIConversationId>,
+    is_cloud_agent_context: bool,
+    ctx: &AppContext,
+) -> ForkButtonAction {
+    if is_cloud_agent_context
+        && conversation_id.is_some_and(|id| conversation_is_cloud_oz_for_slash_command(id, ctx))
+    {
+        ForkButtonAction {
+            tooltip: "Continue locally",
+            command_name: commands::CONTINUE_LOCALLY.name,
+        }
+    } else {
+        ForkButtonAction {
+            tooltip: "Fork conversation",
+            command_name: commands::FORK.name,
+        }
     }
 }
 

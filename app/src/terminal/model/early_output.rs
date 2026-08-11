@@ -1,13 +1,17 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::mem;
 
 use pathfinder_color::ColorU;
 use string_offset::CharOffset;
+use warp_errors::report_error;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 
 use super::ansi;
 use super::block::Block;
 use super::blocks::BlockList;
+use super::image_map::StoredImageMetadata;
+use super::iterm_image::ITermImage;
+use super::kitty::{KittyAction, KittyResponse};
 use super::selection::ScrollDelta;
 use super::session::SessionInfo;
 use crate::safe_debug;
@@ -213,14 +217,14 @@ impl EarlyOutput {
             // background output.
             // We can't correctly identify the command in advance when this happens, so
             // instead we fix the block list afterwards.
-            if !block_list.active_block().started() {
-                if let Some(background_block) = block_list.remove_background_block() {
-                    log::debug!("Repairing command from background block");
-                    block_list
-                        .active_block_mut()
-                        .copy_command_grid(background_block.output_grid());
-                    block_list.update_active_block_height();
-                }
+            if !block_list.active_block().started()
+                && let Some(background_block) = block_list.remove_background_block()
+            {
+                log::debug!("Repairing command from background block");
+                block_list
+                    .active_block_mut()
+                    .copy_command_grid(background_block.output_grid());
+                block_list.update_active_block_height();
             }
         }
     }
@@ -266,21 +270,26 @@ impl EarlyOutputHandler<'_> {
             }
         }
 
-        if let Some(mut block) = self.inner().pending_background_block.take() {
-            debug_assert!(
-                !block.started(),
-                "Started background blocks should be in the block list"
-            );
-            let retval = f(&mut block);
-            store_pending_block(self.block_list, block);
-            retval
-        } else if let Some(block) = self.block_list.background_block_mut() {
-            f(block)
-        } else {
-            let mut block = self.block_list.create_pending_background_block();
-            let retval = f(&mut block);
-            store_pending_block(self.block_list, block);
-            retval
+        match self.inner().pending_background_block.take() {
+            Some(mut block) => {
+                debug_assert!(
+                    !block.started(),
+                    "Started background blocks should be in the block list"
+                );
+                let retval = f(&mut block);
+                store_pending_block(self.block_list, block);
+                retval
+            }
+            _ => {
+                if let Some(block) = self.block_list.background_block_mut() {
+                    f(block)
+                } else {
+                    let mut block = self.block_list.create_pending_background_block();
+                    let retval = f(&mut block);
+                    store_pending_block(self.block_list, block);
+                    retval
+                }
+            }
         }
     }
 }
@@ -288,7 +297,7 @@ impl EarlyOutputHandler<'_> {
 /// Delegate for `EarlyOutput` that will eventually delegate the method to the
 /// background block/grid
 macro_rules! delegate {
-    ($self:ident.$method:ident( $( $arg:expr ),* )) => {
+    ($self:ident.$method:ident( $( $arg:expr_2021 ),* )) => {
         $self.with_background_output(|block| {
             block.$method($( $arg ),*)
         })
@@ -420,8 +429,16 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
         );
     }
 
-    fn precmd(&mut self, _data: ansi::PrecmdValue) {
-        panic!("Called EarlyOutput::precmd handler method instead of Block::precmd");
+    fn precmd_with_completion_metadata(&mut self, _data: ansi::PrecmdValue) {
+        panic!(
+            "Called EarlyOutput::precmd_with_completion_metadata handler method instead of Block::precmd_with_completion_metadata"
+        );
+    }
+
+    fn prompt_only_precmd(&mut self, _data: ansi::PromptMetadata) {
+        panic!(
+            "Called EarlyOutput::prompt_only_precmd handler method instead of Block::prompt_only_precmd"
+        );
     }
 
     /*
@@ -647,7 +664,7 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
     }
 
     fn prompt_marker(&mut self, _marker: ansi::PromptMarker) {
-        log::error!(
+        report_error!(
             "Received prompt_marker in EarlyOutput, but it should be sent to the active block by the blocklist"
         );
     }
@@ -670,5 +687,34 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
 
     fn query_keyboard_enhancement_flags<W: std::io::Write>(&mut self, writer: &mut W) {
         delegate!(self.query_keyboard_enhancement_flags(writer));
+    }
+
+    fn handle_completed_iterm_image(&mut self, image: ITermImage) {
+        let session_id = self.block_list.active_block().session_id();
+        self.with_background_output(|block| {
+            let had_visible_content = block.output_grid().has_visible_content();
+            block.handle_completed_iterm_image(image);
+            if !had_visible_content && block.output_grid().has_visible_content() && !block.started()
+            {
+                block.start_background(session_id);
+            }
+        });
+    }
+
+    fn handle_completed_kitty_action(
+        &mut self,
+        action: KittyAction,
+        metadata: &mut HashMap<u32, StoredImageMetadata>,
+    ) -> Option<KittyResponse> {
+        let session_id = self.block_list.active_block().session_id();
+        self.with_background_output(|block| {
+            let had_visible_content = block.output_grid().has_visible_content();
+            let retval = block.handle_completed_kitty_action(action, metadata);
+            if !had_visible_content && block.output_grid().has_visible_content() && !block.started()
+            {
+                block.start_background(session_id);
+            }
+            retval
+        })
     }
 }

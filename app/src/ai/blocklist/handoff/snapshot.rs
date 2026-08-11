@@ -1,25 +1,18 @@
-//! Snapshot upload pipeline for local-to-cloud handoff.
-//!
-//! Owns the async upload orchestration that was previously inlined in
-//! `Workspace::spawn_handoff_snapshot_upload`. Both local and remote SSH
-//! sessions flow through [`spawn_handoff_snapshot_upload`], which picks the
-//! right transport via [`SnapshotUploadTarget`] and converges on
-//! [`settle_handoff_snapshot_result`] to update the model.
+//! Snapshot derivation and upload used by the shared handoff commit pipeline.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use remote_server::proto::UploadHandoffSnapshotResponse;
 use warp_util::standardized_path::StandardizedPath;
-use warpui::{ModelHandle, SingletonEntity, ViewContext};
+use warpui::{SingletonEntity, ViewContext};
 
 use crate::ai::agent_sdk::driver::upload_snapshot_for_handoff;
-use crate::ai::blocklist::handoff::touched_repos::{derive_touched_workspace, TouchedWorkspace};
+use crate::ai::blocklist::handoff::touched_repos::{TouchedWorkspace, derive_touched_workspace};
 use crate::remote_server::manager::RemoteServerManager;
-use crate::server::server_api::ai::{AIClient, InitialSnapshotToken};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::{AIClient, InitialSnapshotToken};
 use crate::terminal::model::session::SessionId;
-use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, SnapshotUploadStatus};
 use crate::workspace::Workspace;
 
 // ---------------------------------------------------------------------------
@@ -31,7 +24,7 @@ use crate::workspace::Workspace;
 /// Maps 1:1 to the two success variants in `UploadHandoffSnapshotResponse`:
 /// either the server minted a token, or the workspace was empty (no files to
 /// upload).
-pub(crate) enum HandoffUploadResult {
+pub(super) enum HandoffUploadResult {
     /// The upload succeeded and the server returned a snapshot token.
     Uploaded(InitialSnapshotToken),
     /// The workspace had no files to upload (no repos, no orphans).
@@ -41,10 +34,9 @@ pub(crate) enum HandoffUploadResult {
 /// Determines whether the snapshot upload runs locally or delegates to a
 /// remote SSH daemon.
 ///
-/// Callers resolve this from `RemoteServerManager::client_for_session` before
-/// calling [`spawn_handoff_snapshot_upload`], keeping session-awareness out of
-/// the upload function itself.
-pub(crate) enum SnapshotUploadTarget {
+/// Callers resolve this from `RemoteServerManager::host_request_handle` before
+/// committing, keeping session-awareness out of the upload function itself.
+pub enum SnapshotUploadTarget {
     /// Run `derive_touched_workspace` + `upload_snapshot_for_handoff` locally.
     Local {
         ai_client: Arc<dyn AIClient>,
@@ -52,7 +44,7 @@ pub(crate) enum SnapshotUploadTarget {
     },
     /// Delegate to the remote server daemon via `UploadHandoffSnapshot` RPC.
     Remote {
-        client: Arc<remote_server::client::RemoteServerClient>,
+        handle: remote_server::manager::HostRequestHandle,
     },
 }
 
@@ -62,10 +54,8 @@ pub(crate) enum SnapshotUploadTarget {
 
 /// Convert an `UploadHandoffSnapshotResponse` (proto) into a domain result.
 ///
-/// Used by the remote branch of [`spawn_handoff_snapshot_upload`] to map the
-/// daemon's proto response into the same `Result<HandoffUploadResult>` that
-/// the local branch produces, so both converge on [`settle_handoff_snapshot_result`].
-pub(crate) fn try_upload_result_from_proto(
+/// Maps the daemon response into the same result used by the local branch.
+fn try_upload_result_from_proto(
     resp: UploadHandoffSnapshotResponse,
 ) -> Result<HandoffUploadResult, anyhow::Error> {
     if !resp.success {
@@ -116,48 +106,18 @@ pub(crate) fn upload_result_to_proto(
 // Upload pipeline
 // ---------------------------------------------------------------------------
 
-/// Spawns the async snapshot upload pipeline for a handoff pane.
-///
-/// Derives the touched workspace from `paths`, uploads repo patches + orphan
-/// files, and settles the snapshot status on the model. Shared by both the
-/// conversation-fork and fresh-launch handoff paths.
-///
-/// For remote SSH sessions the caller passes `SnapshotUploadTarget::Remote`;
-/// for local sessions `SnapshotUploadTarget::Local`. The function is
-/// session-agnostic — it never inspects the `RemoteServerManager` itself.
-pub(crate) fn spawn_handoff_snapshot_upload(
-    paths: Vec<StandardizedPath>,
-    target: SnapshotUploadTarget,
-    model_handle: ModelHandle<AmbientAgentViewModel>,
-    ctx: &mut ViewContext<Workspace>,
-) {
-    ctx.spawn(
-        upload_handoff_snapshot(paths, target),
-        move |_workspace, (derived_workspace, upload_result), ctx| {
-            model_handle.update(ctx, |model, model_ctx| {
-                if !model.is_local_to_cloud_handoff() {
-                    return;
-                }
-                model.set_pending_handoff_workspace(derived_workspace, model_ctx);
-                settle_handoff_snapshot_result(model, upload_result, model_ctx);
-            });
-            maybe_auto_submit_handoff(&model_handle, ctx);
-        },
-    );
-}
-
 /// Shared async upload function — agnostic to remote or local envs.
 ///
 /// Returns the derived workspace and the upload result. For remote sessions the
 /// daemon handles workspace derivation internally, so we return a default
 /// `TouchedWorkspace`.
-async fn upload_handoff_snapshot(
+pub(super) async fn upload_handoff_snapshot(
     paths: Vec<StandardizedPath>,
     target: SnapshotUploadTarget,
 ) -> (TouchedWorkspace, Result<HandoffUploadResult, anyhow::Error>) {
     match target {
-        SnapshotUploadTarget::Remote { client } => {
-            let result = match client.upload_handoff_snapshot(paths).await {
+        SnapshotUploadTarget::Remote { handle } => {
+            let result = match handle.upload_handoff_snapshot(paths).await {
                 Ok(resp) => try_upload_result_from_proto(resp),
                 Err(err) => Err(anyhow::anyhow!(err).context("Remote handoff snapshot RPC failed")),
             };
@@ -191,11 +151,13 @@ pub(crate) fn resolve_upload_target(
     session_id: SessionId,
     ctx: &mut ViewContext<Workspace>,
 ) -> SnapshotUploadTarget {
-    let remote_client = RemoteServerManager::as_ref(ctx)
-        .client_for_session(session_id)
+    let host_id = RemoteServerManager::as_ref(ctx)
+        .host_id_for_session(session_id)
         .cloned();
-    match remote_client {
-        Some(client) => SnapshotUploadTarget::Remote { client },
+    match host_id {
+        Some(host_id) => SnapshotUploadTarget::Remote {
+            handle: RemoteServerManager::as_ref(ctx).host_request_handle(&host_id),
+        },
         None => {
             let server_api_provider = ServerApiProvider::as_ref(ctx);
             SnapshotUploadTarget::Local {
@@ -204,50 +166,4 @@ pub(crate) fn resolve_upload_target(
             }
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Settle the snapshot upload status on the model from an upload result.
-///
-/// Shared by both local and remote handoff paths.
-fn settle_handoff_snapshot_result(
-    model: &mut AmbientAgentViewModel,
-    result: Result<HandoffUploadResult, anyhow::Error>,
-    model_ctx: &mut warpui::ModelContext<AmbientAgentViewModel>,
-) {
-    match result {
-        Ok(HandoffUploadResult::Uploaded(token)) => {
-            model.set_pending_handoff_snapshot_upload(
-                SnapshotUploadStatus::Uploaded(token),
-                model_ctx,
-            );
-        }
-        Ok(HandoffUploadResult::EmptyWorkspace) => {
-            model.set_pending_handoff_snapshot_upload(
-                SnapshotUploadStatus::SkippedEmptyWorkspace,
-                model_ctx,
-            );
-        }
-        Err(err) => {
-            log::warn!("Handoff snapshot upload failed: {err:#}");
-            model.record_handoff_snapshot_upload_failed(format!("{err}"), model_ctx);
-        }
-    }
-}
-
-/// If the handoff model has a queued auto-submit payload, submit it now.
-fn maybe_auto_submit_handoff(
-    model_handle: &ModelHandle<AmbientAgentViewModel>,
-    ctx: &mut ViewContext<Workspace>,
-) {
-    let launch = model_handle.update(ctx, |model, ctx| model.maybe_auto_submit_handoff(ctx));
-    let Some(launch) = launch else {
-        return;
-    };
-    model_handle.update(ctx, |model, ctx| {
-        model.submit_handoff(launch.prompt, launch.attachments.request_attachments, ctx);
-    });
 }

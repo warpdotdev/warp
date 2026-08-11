@@ -1,5 +1,5 @@
 use warpui::windowing::{StateEvent, WindowManager};
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 #[cfg(target_os = "macos")]
 mod mac;
@@ -27,6 +27,7 @@ mod non_mac {
 #[allow(unused_imports)]
 #[cfg(not(target_os = "macos"))]
 use non_mac::*;
+use warp_errors::report_error;
 
 pub struct DefaultTerminal {
     /// Whether the OS will treat Warp as the default app for scripts/executables.
@@ -54,7 +55,12 @@ impl DefaultTerminal {
     /// This is an OS-level setting. Unlike most other settings, where Warp is the source-of-truth
     /// for the value of the setting, it can be changed outside of Warp. We monitor if it gets
     /// changed externally by checking when Warp is focused.
-    fn handle_window_manager_event(&mut self, event: &StateEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_window_manager_event(
+        &mut self,
+        _: ModelHandle<WindowManager>,
+        event: &StateEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match event {
             StateEvent::ValueChanged { current, previous } => {
                 if current.active_window.is_some() && previous.active_window.is_none() {
@@ -92,7 +98,10 @@ impl DefaultTerminal {
     /// "unset" it unless we pick a new default terminal. Picking a new default is complicated.
     pub fn make_warp_default(&mut self, ctx: &mut ModelContext<Self>) {
         if let Err(e) = set_warp_as_default_terminal() {
-            log::error!("Error setting Warp as default terminal: {e:#}");
+            report_error!(
+                "Error setting Warp as default terminal",
+                extra: { "error" => %e }
+            );
         } else {
             self.set_is_warp_default(true, ctx);
         }

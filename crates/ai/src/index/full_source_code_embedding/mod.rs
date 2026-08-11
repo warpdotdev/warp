@@ -5,6 +5,7 @@ mod fragment_metadata;
 pub mod manager;
 mod merkle_tree;
 mod priority_queue;
+pub mod search_shaping;
 mod snapshot;
 pub mod store_client;
 mod sync_client;
@@ -14,12 +15,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub use codebase_index::{CodebaseIndex, RetrievalID, SyncProgress};
-pub use fragment_metadata::FragmentMetadata;
+pub use fragment_metadata::{FragmentLocation as FragmentMetadataLocation, FragmentMetadata};
 pub use merkle_tree::{ContentHash, NodeHash};
 pub use snapshot::SnapshotStorage;
 use string_offset::ByteOffset;
 pub use sync_client::SyncTask;
 use thiserror::Error;
+use warp_errors::{AnyhowErrorExt, ErrorExt, register_error};
 use warp_graphql::queries::rerank_fragments::FragmentLocationInput;
 
 #[derive(Error, Debug)]
@@ -55,6 +57,38 @@ pub enum Error {
     #[error("Failed to parse snapshot")]
     SnapshotParsingFailed,
 }
+
+impl ErrorExt for Error {
+    fn is_actionable(&self) -> bool {
+        match self {
+            Self::Io(_)
+            | Self::NotAGitRepository
+            | Self::BuildTreeError(_)
+            | Self::UnsupportedPlatform
+            | Self::FailedToGetMetadata(_)
+            | Self::FileSizeExceeded
+            | Self::FileSystemStateChanged
+            | Self::DiffMerkleTreeError(
+                DiffMerkleTreeError::Ignored
+                | DiffMerkleTreeError::Symlink
+                | DiffMerkleTreeError::MaxDepthExceeded
+                | DiffMerkleTreeError::ExceededMaxFileLimit,
+            ) => false,
+            Self::InvalidHash(_)
+            | Self::EmptyNodeContent
+            | Self::InconsistentState(_)
+            | Self::FailedToGenerateEmbeddings(_)
+            | Self::FailedToSyncIntermediateNodes(_)
+            | Self::DiffMerkleTreeError(
+                DiffMerkleTreeError::CurrentNodeMismatch(_) | DiffMerkleTreeError::Fragment(_),
+            )
+            | Self::SnapshotParsingFailed => true,
+            Self::Other(error) => error.is_actionable(),
+        }
+    }
+}
+
+register_error!(Error);
 
 // Based off of BuildTreeError in entry.rs
 #[derive(Debug, Error)]

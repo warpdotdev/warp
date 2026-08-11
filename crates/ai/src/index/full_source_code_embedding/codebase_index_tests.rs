@@ -10,11 +10,11 @@ use repo_metadata::DirectoryWatcher;
 use string_offset::ByteOffset;
 use virtual_fs::{Stub, VirtualFS};
 use warp_util::standardized_path::StandardizedPath;
-use warpui::{App, SingletonEntity};
+use warpui_core::{App, SingletonEntity};
 
 use super::{
-    CodebaseIndex, CodebaseIndexTimeStampMetadata, ServerSyncResult, TreeSourceSyncState,
-    DEFAULT_INCREMENAL_SYNC_FLUSH_INTERVAL,
+    CodebaseIndex, CodebaseIndexTimeStampMetadata, DEFAULT_INCREMENAL_SYNC_FLUSH_INTERVAL,
+    ServerSyncResult, TreeSourceSyncState,
 };
 use crate::index::full_source_code_embedding::changed_files::ChangedFiles;
 use crate::index::full_source_code_embedding::codebase_index::MAX_DEPTH;

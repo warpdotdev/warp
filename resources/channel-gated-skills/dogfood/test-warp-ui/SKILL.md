@@ -13,15 +13,34 @@ Use the `computer_use` tool to visually test that Warp looks and behaves as inte
 
 ## Running Warp
 
-Launch Warp from the repository root with:
+Launch Warp from the repository root. The exact command depends on which environment variable holds the API key:
 
-```bash
-cargo run -- --api-key $STAGING_USER_WARP_API_KEY
-```
+- If `WARP_API_KEY` is already set, omit the flag entirely — the `--api-key` flag is bound to `WARP_API_KEY`, so Warp reads it automatically:
 
-The `--api-key` flag authenticates using the API key from the `STAGING_USER_WARP_API_KEY` environment variable, so the app starts directly without interactive login prompts.
+  ```bash
+  cargo run --bin warp
+  ```
+
+- If the key is in `STAGING_USER_WARP_API_KEY` instead, pass it explicitly via the flag:
+
+  ```bash
+  cargo run --bin warp -- --api-key $STAGING_USER_WARP_API_KEY
+  ```
+
+Always pass `--bin warp` explicitly. That target builds the internal (dogfood) channel, which is the only channel that honors `--api-key` for the GUI app. A plain `cargo run` builds the OSS channel, which ignores the key and falls back to interactive onboarding.
+
+Authenticating this way starts the app directly without interactive login prompts.
 
 Initial builds may take several minutes; subsequent incremental builds are faster.
+
+### Verify the launch is authenticated
+
+After launching, confirm both of the following before testing:
+
+- Warp is **authenticated** — it opens straight to the terminal, NOT the logged-out onboarding/sign-in screen.
+- The `cargo run` stderr/terminal output does **not** contain the substring `provided but IGNORED`.
+
+If that warning appears (or the app is logged out), the wrong binary/channel was launched — stop and relaunch with `cargo run --bin warp`.
 
 ## Testing Workflow
 
@@ -41,7 +60,7 @@ Keep mocked changes minimal and focused — only change what's necessary to reac
 
 Call the `computer_use` tool with a task description that includes:
 
-- The command to build and launch Warp (typically `cargo run -- --api-key $STAGING_USER_WARP_API_KEY` from the repo root)
+- The command to build and launch Warp from the repo root: `cargo run --bin warp` when `WARP_API_KEY` is set in the environment, or `cargo run --bin warp -- --api-key $STAGING_USER_WARP_API_KEY` when the key is in `STAGING_USER_WARP_API_KEY` instead
 - Step-by-step instructions for navigating to the UI being tested
 - **Specific observations to report**: describe exactly what elements, text, colors, layout, or states the tool should observe and describe back
 - Do **not** include expected values in the task — the tool should report what it sees, not judge correctness

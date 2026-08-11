@@ -10,9 +10,9 @@ use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::contrast::{
-    foreground_color_with_minimum_contrast, MinimumAllowedContrast,
+    MinimumAllowedContrast, foreground_color_with_minimum_contrast,
 };
-use warp_core::ui::color::{coloru_with_opacity, Opacity, Rgb};
+use warp_core::ui::color::{Opacity, Rgb, coloru_with_opacity};
 use warp_core::ui::theme;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
@@ -29,15 +29,16 @@ use warpui::{
     View, ViewAsRef, ViewContext, ViewHandle,
 };
 
+use crate::BlocklistAIHistoryModel;
+use crate::ai::AIRequestUsageModel;
 use crate::ai::blocklist::block::cli_controller::CLISubagentController;
-use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::prompt::PromptIconButtonTheme;
+use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIInputModel, InputConfig, InputType,
 };
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::LLMPreferences;
-use crate::ai::AIRequestUsageModel;
 use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::network::NetworkStatus;
 #[cfg(not(target_family = "wasm"))]
@@ -53,8 +54,8 @@ use crate::terminal::model::block::BlockMetadata;
 use crate::terminal::model::session::SessionType;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::profile_model_selector::{
-    calculate_max_profile_name_width, calculate_scaled_font_size, ProfileModelSelector,
-    ProfileModelSelectorEvent,
+    ProfileModelSelector, ProfileModelSelectorEvent, calculate_max_profile_name_width,
+    calculate_scaled_font_size,
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
@@ -64,7 +65,6 @@ use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, NakedTheme, TooltipAlignment,
 };
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::BlocklistAIHistoryModel;
 
 pub enum AtContextMenuDisabledReason {
     #[cfg(target_family = "wasm")]
@@ -133,15 +133,15 @@ impl AtContextMenuDisabledReason {
                 // - WarpifiedRemote sessions with a connected remote server (host_id is Some)
                 //
                 // Block when:
-                // - Legacy SSH without a remote server upgrade
+                // - SSH wrapper session without a remote server upgrade
                 // - WarpifiedRemote still connecting (host_id is None)
                 //
-                // Note: is_legacy_ssh_session() is set at bootstrap time and stays true
+                // Note: is_ssh_wrapper_session() is set at bootstrap time and stays true
                 // even after the session transitions to WarpifiedRemote with a host_id.
                 // So we must check has_connected_remote_server first to avoid
                 // incorrectly blocking upgraded sessions.
                 let is_ssh_without_remote_server = !has_connected_remote_server
-                    && (session.is_legacy_ssh_session()
+                    && (session.is_ssh_wrapper_session()
                         || matches!(session_type, SessionType::WarpifiedRemote { host_id: None }));
                 let is_subshell = session.subshell_info().is_some();
                 (is_ssh_without_remote_server, is_subshell)
@@ -216,7 +216,7 @@ fn calculate_profile_model_selector_threshold(
     let model_name_char_count = active_llm.menu_display_name().chars().count() as f32;
     let model_text_width = model_name_char_count * em_width;
 
-    let result = if has_multiple_profiles {
+    if has_multiple_profiles {
         let profile_name_char_count = AIExecutionProfilesModel::as_ref(ctx)
             .active_profile(Some(terminal_view_id), ctx)
             .data()
@@ -229,8 +229,7 @@ fn calculate_profile_model_selector_threshold(
         font_size * 20.0 + profile_text_width + model_text_width
     } else {
         20.0 * font_size + base_constant + model_text_width
-    };
-    result
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -557,7 +556,7 @@ impl UniversalDeveloperInputButtonBar {
             &BlocklistAIHistoryModel::handle(ctx),
             |me, _, event, ctx| {
                 if event
-                    .terminal_view_id()
+                    .terminal_surface_id()
                     .is_some_and(|id| id != me.terminal_view_id)
                 {
                     return;

@@ -1,7 +1,7 @@
 //! Session-sharing logic related to the terminal view.
 
 pub(in crate::terminal::view) mod adapter;
-pub(in crate::terminal::view) mod cloud_conversation_continuation;
+pub(crate) mod cloud_conversation_continuation;
 mod conversation_ended_tombstone_view;
 pub(in crate::terminal::view) mod sharer;
 #[cfg(test)]

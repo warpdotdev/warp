@@ -2,23 +2,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_channel::Sender;
-use chrono::{DateTime, Utc};
+pub use cloud_object_client::ObjectUpdateMessage;
 use futures_util::stream::AbortHandle;
 use instant::Instant;
+use warp_errors::report_error;
 use warpui::r#async::Timer;
-use warpui::{Entity, ModelContext, RequestState, SingletonEntity};
+use warpui::{Entity, ModelContext, ModelHandle, RequestState, SingletonEntity};
 
 use super::update_manager::UpdateManager;
-use crate::cloud_object::model::actions::ObjectActionHistory;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
-use crate::cloud_object::{ServerCloudObject, ServerMetadata, ServerPermissions};
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
-use crate::report_error;
-use crate::server::ids::ServerId;
 use crate::server::retry_strategies::LISTENER_RETRY_STRATEGY;
 use crate::server::server_api::object::ObjectClient;
 use crate::system::{SystemStats, SystemStatsEvent};
-use crate::workspaces::user_profiles::UserProfileWithUID;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 lazy_static::lazy_static! {
@@ -74,52 +70,6 @@ pub struct Listener {
     /// Abort handle for a pending delayed refresh spawned after a long reconnection. Tracked so
     /// that it can be cancelled if the websocket disconnects again before the refresh fires.
     pending_refresh_abort_handle: Option<AbortHandle>,
-}
-
-#[derive(Debug, Clone)]
-#[allow(clippy::enum_variant_names)]
-pub enum ObjectUpdateMessage {
-    ObjectMetadataChanged {
-        metadata: ServerMetadata,
-    },
-    ObjectPermissionsChanged,
-    // TODO(CLD-2425): Replace `ObjectPermissionsChanged` with this.
-    ObjectPermissionsChangedV2 {
-        object_uid: ServerId,
-        permissions: ServerPermissions,
-        user_profiles: Vec<UserProfileWithUID>,
-    },
-    ObjectContentChanged {
-        server_object: Box<ServerCloudObject>,
-        last_editor: Option<UserProfileWithUID>,
-    },
-    ObjectDeleted {
-        object_uid: ServerId,
-    },
-    ObjectActionOccurred {
-        history: ObjectActionHistory,
-    },
-    TeamMembershipsChanged,
-    AmbientTaskUpdated {
-        task_id: String,
-        timestamp: DateTime<Utc>,
-    },
-}
-
-impl ObjectUpdateMessage {
-    fn as_str(&self) -> &'static str {
-        use ObjectUpdateMessage::*;
-        match self {
-            ObjectMetadataChanged { .. } => "ObjectMetadataChanged",
-            ObjectPermissionsChanged => "ObjectPermissionsChanged",
-            ObjectPermissionsChangedV2 { .. } => "ObjectPermissionsChanged (V2)",
-            ObjectContentChanged { .. } => "ObjectContentChanged",
-            ObjectDeleted { .. } => "ObjectDeleted",
-            ObjectActionOccurred { .. } => "ObjectActionOccurred",
-            TeamMembershipsChanged => "TeamMembershipsChanged",
-            AmbientTaskUpdated { .. } => "AmbientTaskUpdated",
-        }
-    }
 }
 
 impl Listener {
@@ -187,13 +137,14 @@ impl Listener {
     // If the user is part of a team, we should start subscribing for updates.
     fn handle_user_workspaces_event(
         &mut self,
+        _: ModelHandle<UserWorkspaces>,
         event: &UserWorkspacesEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let UserWorkspacesEvent::TeamsChanged = event {
-            if self.is_part_of_some_team(ctx) {
-                self.start_listener(ctx);
-            }
+        if let UserWorkspacesEvent::TeamsChanged = event
+            && self.is_part_of_some_team(ctx)
+        {
+            self.start_listener(ctx);
         }
     }
 
@@ -204,7 +155,12 @@ impl Listener {
     }
 
     // If the user has access to >= 1 cloud objects, we should subscribe for updates.
-    fn handle_cloud_model_event(&mut self, _event: &CloudModelEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_cloud_model_event(
+        &mut self,
+        _: ModelHandle<CloudModel>,
+        _event: &CloudModelEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if self.has_non_welcome_cloud_objects(ctx) {
             self.start_listener(ctx);
         }
@@ -215,7 +171,12 @@ impl Listener {
     // To get around this, we manually abort the future (effectively closing the websocket)
     // when the CPU goes to sleep and restart it when it's awakened.
     // https://linear.app/warpdotdev/issue/CLD-172/websocket-hangs-when-closed-during-cpu-sleep
-    fn handle_cpu_event(&mut self, event: &SystemStatsEvent, ctx: &mut ModelContext<Self>) {
+    fn handle_cpu_event(
+        &mut self,
+        _: ModelHandle<SystemStats>,
+        event: &SystemStatsEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
         match event {
             SystemStatsEvent::CpuWasAwakened => {
                 if let Some(abort_handle) = self.current_subscription_abort_handle.take() {
@@ -242,6 +203,7 @@ impl Listener {
 
     fn handle_network_status_changed_event(
         &mut self,
+        _: ModelHandle<NetworkStatus>,
         event: &NetworkStatusEvent,
         ctx: &mut ModelContext<Self>,
     ) {

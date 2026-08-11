@@ -51,9 +51,11 @@ fi
 # Install various binaries through cargo.
 "$PWD"/script/install_cargo_test_deps
 "$PWD"/script/install_cargo_release_deps
+"$PWD"/script/install_cargo_bundle
 
-# Install a version of cargo-bundle that supports the --profile flag
-cargo install cargo-bundle --git=https://github.com/burtonageo/cargo-bundle --rev ae4c76e92c08774bf54ff077b1c52e3d1cd6c16d
+# Homebrew asks for confirmation before installing by default; opt out so
+# bootstrap runs non-interactively.
+export HOMEBREW_NO_ASK=1
 
 # Update brew
 brew update
@@ -63,7 +65,15 @@ brew install getsentry/tools/sentry-cli
 brew install clang-format
 brew install create-dmg
 brew install multitime
-brew install powershell
+# Prefer the cask over the formula to avoid pulling in the dotnet formula
+# dependency, which fails to link when /opt/homebrew/bin/dotnet already
+# exists as a symlink to a non-Homebrew install (e.g. the
+# /usr/local/share/dotnet install from Microsoft or the Xcode toolchain).
+# Skip entirely when a working pwsh is already on PATH — covers an existing
+# cask install, a non-Homebrew /usr/local/bin/pwsh, or any other working pwsh.
+if ! pwsh --version >/dev/null 2>&1; then
+    brew install --cask powershell
+fi
 brew install pkgconf
 brew install llvm
 
@@ -78,7 +88,7 @@ if ! [ "$(command -v gcloud)" ]; then
     brew install google-cloud-sdk
 fi
 
-if [[ -z $(gcloud auth print-identity-token) ]]; then
+if [[ "${WARP_SKIP_GCLOUD_AUTH:-0}" != "1" ]] && [[ -z $(gcloud auth print-identity-token) ]]; then
     echo "gcloud CLI authentication missing.  Press enter to continue..."
     read var
     gcloud auth login

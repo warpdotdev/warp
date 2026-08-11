@@ -114,6 +114,32 @@ NSNumber *previouslyActiveAppPID;
 }
 @end
 
+// Activates the application and makes |window| key once that activation lands.
+//
+// `activateIgnoringOtherApps:` completes asynchronously, and AppKit picks the key window itself
+// when it does. In a multi-screen setup it prefers an ordinary window on another display over the
+// hotkey panel we just ordered front, so the panel loses focus moments after being shown. Re-keying
+// from NSApplicationDidBecomeActiveNotification is what makes the requested window win that race.
+static void activate_app_and_focus_window(NSWindow *window) {
+    NSApplication *app = [NSApplication sharedApplication];
+    if ([app isActive]) {
+        return;
+    }
+
+    // Declared __block so the block can reference the observer it is registering.
+    __block id observer;
+    observer = [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSApplicationDidBecomeActiveNotification
+                    object:nil
+                     queue:NULL
+                usingBlock:^(NSNotification *note __unused) {
+                  [window makeKeyAndOrderFront:nil];
+                  [[NSNotificationCenter defaultCenter] removeObserver:observer];
+                }];
+
+    [app activateIgnoringOtherApps:YES];
+}
+
 @interface WarpWindow : NSWindow <WarpWindowProtocol>
 @end
 
@@ -316,6 +342,15 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     }
 }
 
+@interface NSWindow (PrivateAPI)
+- (NSInteger)_resizeDirectionForMouseLocation:(NSPoint)location;
+@end
+
+@interface WarpWindow ()
+- (NSButton *)standardWindowButtonAtEvent:(NSEvent *)event;
+- (BOOL)eventIsOverResizeEdge:(NSEvent *)event;
+@end
+
 @implementation WarpWindow {
     // The windowState is managed on the Rust side.
     void *windowState;
@@ -332,6 +367,7 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     // macOS from cascading or clamping the window position while a tab-drag preview window is
     // being created and positioned under the cursor.
     BOOL _suppressFrameConstraintsDuringDrag;
+    BOOL _leftMouseDownStartedInNativeWindowChrome;
 }
 
 @synthesize testMode;
@@ -401,8 +437,50 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     return [super constrainFrameRect:frameRect toScreen:screen];
 }
 
+- (NSButton *)standardWindowButtonAtEvent:(NSEvent *)event {
+    NSWindowButton buttons[] = {
+        NSWindowCloseButton,
+        NSWindowMiniaturizeButton,
+        NSWindowZoomButton,
+    };
+
+    for (NSUInteger i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
+        NSButton *button = [self standardWindowButton:buttons[i]];
+        if (button && !button.hidden) {
+            NSPoint point = [button convertPoint:event.locationInWindow fromView:nil];
+            if (NSPointInRect(point, button.bounds)) {
+                return button;
+            }
+        }
+    }
+
+    return nil;
+}
+
+- (BOOL)eventIsOverResizeEdge:(NSEvent *)event {
+    if ((self.styleMask & NSWindowStyleMaskResizable) == 0) {
+        return NO;
+    }
+    if ([self respondsToSelector:@selector(_resizeDirectionForMouseLocation:)]) {
+        return [self _resizeDirectionForMouseLocation:event.locationInWindow] != -1;
+    }
+    return NO;
+}
+
 - (void)sendEvent:(NSEvent *)event {
     switch (event.type) {
+        case NSEventTypeLeftMouseDown: {
+            NSButton *windowButton = [self standardWindowButtonAtEvent:event];
+            if (windowButton) {
+                _leftMouseDownStartedInNativeWindowChrome = YES;
+                [super sendEvent:event];
+                break;
+            }
+            _leftMouseDownStartedInNativeWindowChrome = [self eventIsOverResizeEdge:event];
+            [super sendEvent:event];
+            break;
+        }
+
         // In some cases, NSWindow's default sendEvent: implementation will dispatch a MouseDown
         // event and subsequent MouseDragged events to the content view, but then dispatch the
         // remaining MouseDragged events and MouseUp event elsewhere.
@@ -412,10 +490,27 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
         // This breaks drag-and-drop for panes and tabs (see CLD-2581), so we work around it with
         // custom dispatching.
         case NSEventTypeLeftMouseUp:
-            [self.contentView mouseUp:event];
+            if (@available(macOS 27, *)) {
+                if (_leftMouseDownStartedInNativeWindowChrome) {
+                    [super sendEvent:event];
+                } else {
+                    [self.contentView mouseUp:event];
+                }
+            } else {
+                [self.contentView mouseUp:event];
+            }
+            _leftMouseDownStartedInNativeWindowChrome = NO;
             break;
         case NSEventTypeLeftMouseDragged:
-            [self.contentView mouseDragged:event];
+            if (@available(macOS 27, *)) {
+                if (_leftMouseDownStartedInNativeWindowChrome) {
+                    [super sendEvent:event];
+                } else {
+                    [self.contentView mouseDragged:event];
+                }
+            } else {
+                [self.contentView mouseDragged:event];
+            }
             break;
 
         // The NSWindow's default sendEvent: implementation does not propagate RightMouseDown events
@@ -677,8 +772,8 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
          NSWindowCollectionBehaviorFullScreenAuxiliary);
 
     [self setMovable:NO];
-    [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
     [self makeKeyAndOrderFront:nil];
+    activate_app_and_focus_window(self);
 }
 
 // Note this returns a retained object ("create" rule).
@@ -955,9 +1050,12 @@ void open_save_file_picker(void *callback, NSString *defaultFilename, NSString *
 }
 
 // Open a given url.
-void open_url(NSString *urlString) {
+BOOL open_url(NSString *urlString) {
     NSURL *url = [NSURL URLWithString:urlString];
-    [[NSWorkspace sharedWorkspace] openURL:url];
+    if (url == nil) {
+        return NO;
+    }
+    return [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
 void hide_app() {
@@ -994,22 +1092,7 @@ void show_window_and_focus_app(WarpWindow<WarpWindowProtocol> *window, bool brin
     // There are some edge cases with the hot key window in a multi-screen setup that toggling
     // the hotkey will activate the app and only bring forward a normal window. This code makes
     // sure that we are bringing forward the hotkey window
-    if (![[NSApplication sharedApplication] isActive]) {
-        // Creates a static observer so it can be referenced in the observer callback.
-        __block id observer;
-        observer = [[NSNotificationCenter defaultCenter]
-            addObserverForName:NSApplicationDidBecomeActiveNotification
-                        object:nil
-                         queue:NULL
-                    usingBlock:^(NSNotification *note __unused) {
-                      // Make key and order front again after the app has activated to make
-                      // sure the toggled window is focused after initializing.
-                      [window makeKeyAndOrderFront:nil];
-                      [[NSNotificationCenter defaultCenter] removeObserver:observer];
-                    }];
-
-        [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
-    }
+    activate_app_and_focus_window(window);
 }
 
 void hide_window(WarpWindow<WarpWindowProtocol> *window) {

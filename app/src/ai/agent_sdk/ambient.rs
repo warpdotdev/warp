@@ -3,9 +3,9 @@ use std::io::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{Context as _, anyhow};
 use comfy_table::Cell;
-use futures::{future, StreamExt};
+use futures::{StreamExt, future};
 use serde::Serialize;
 use warp_cli::agent::{Harness, OutputFormat, Prompt, RunCloudArgs};
 use warp_cli::json_filter::JsonOutput;
@@ -17,17 +17,18 @@ use warp_cli::task::{
 use warp_cli::{GlobalOptions, SortOrderArg};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
-use warpui::platform::TerminationMode;
 use warpui::r#async::{Spawnable, Timer};
+use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
-use super::common::{parse_ambient_task_id, EnvironmentChoice, ResolveConfigurationError};
-use crate::ai::agent::extract_user_query_mode;
+use super::common::{EnvironmentChoice, ResolveConfigurationError, parse_ambient_task_id};
+use crate::ServerApiProvider;
+use crate::ai::agent::{UserQueryMode, extract_user_query_mode};
 use crate::ai::agent_sdk::driver::attachments::{
-    process_attachment, MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY,
+    MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY, process_attachment,
 };
 use crate::ai::ambient_agents::spawn::{
-    spawn_task, AmbientAgentEvent, SessionJoinInfo, TASK_STATUS_POLLING_DURATION,
+    AmbientAgentEvent, SessionJoinInfo, TASK_STATUS_POLLING_DURATION, spawn_task,
 };
 use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::ai::ambient_agents::{
@@ -37,16 +38,15 @@ use crate::ai::artifacts::Artifact;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::{
     AIClient, AgentMessageHeader, AgentRunEvent, AgentSource, ArtifactType, ExecutionLocation,
     ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy, RunSortOrder,
     SendAgentMessageRequest, SendAgentMessageResponse, SpawnAgentRequest, TaskListFilter,
 };
-use crate::server::server_api::ServerApi;
 use crate::terminal::shared_session;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::ServerApiProvider;
 
 const MAX_LINE_WIDTH: usize = 90;
 const STREAM_RETRY_BACKOFF_STEPS: &[u64] = &[1, 2, 5, 10];
@@ -262,11 +262,8 @@ impl AmbientAgentRunner {
                 );
                 return;
             }
-
-            // TODO: Consider making the server's prompt field optional when skill is provided,
-            // rather than sending an empty string for skill-only invocations.
-            let prompt_string = match prompt {
-                Some(Prompt::PlainText(text)) => text,
+            let prompt = match prompt {
+                Some(Prompt::PlainText(text)) => Some(text),
                 Some(Prompt::SavedPrompt(id)) => {
                     // Resolve the saved prompt to pass along as the ambient agent query.
                     // We look up the prompt text here, rather than passing along the saved prompt ID,
@@ -290,7 +287,7 @@ impl AmbientAgentRunner {
 
                     match workflow {
                         Some(cloud_workflow) => match cloud_workflow.model().data.prompt() {
-                            Some(prompt_text) => prompt_text.to_string(),
+                            Some(prompt_text) => Some(prompt_text.to_string()),
                             None => {
                                 super::report_fatal_error(
                                     anyhow::anyhow!("'{id}' is not a saved prompt"),
@@ -308,8 +305,7 @@ impl AmbientAgentRunner {
                         }
                     }
                 }
-                // Skill-only invocation: use empty prompt, skill provides instructions
-                None => String::new(),
+                None => None,
             };
 
             let loaded_file = match args.config_file.file.as_deref() {
@@ -322,6 +318,23 @@ impl AmbientAgentRunner {
                 },
                 None => None,
             };
+
+            // The `--runner` CLI flag is gated in `run_agent`, but a config file
+            // can also set `runner_id`, which would otherwise bypass the gate.
+            if loaded_file
+                .as_ref()
+                .and_then(|f| f.file.runner_id.as_ref())
+                .is_some()
+                && !FeatureFlag::CloudRunners.is_enabled()
+            {
+                super::report_fatal_error(
+                    anyhow::anyhow!(
+                        "`runner_id` is set in the config file but runner support is not enabled"
+                    ),
+                    ctx,
+                );
+                return;
+            }
 
             // Validate and process attachments early, before environment selection
             // This ensures users don't have to go through env selection if attachment validation fails
@@ -367,14 +380,13 @@ impl AmbientAgentRunner {
             };
 
             let mut environment_args = args.environment;
-            if environment_args.environment.is_none() && !environment_args.no_environment {
-                if let Some(environment_id) = loaded_file
+            if environment_args.environment.is_none() && !environment_args.no_environment
+                && let Some(environment_id) = loaded_file
                     .as_ref()
                     .and_then(|f| f.file.environment_id.clone())
                 {
                     environment_args.environment = Some(environment_id);
                 }
-            }
 
             let environment_id = match EnvironmentChoice::resolve_for_create(environment_args, ctx)
             {
@@ -410,16 +422,20 @@ impl AmbientAgentRunner {
                     }
                 };
 
+            // When using a third-party harness, --model specifies a harness-specific
+            // model identifier (e.g. "sonnet", "claude-opus-4-8" for Claude Code;
+            // "gpt-5.5" for Codex) rather than an Oz model ID. Route it directly
+            // into HarnessConfig.model_id so it reaches the harness unchanged.
             let harness_override = (args.harness != Harness::Oz).then_some(HarnessConfig {
                 harness_type: args.harness,
-                model_id: None,
+                model_id: args.model.model.clone(),
                 reasoning_level: None,
             });
-            let harness_auth_secrets = args.claude_auth_secret.clone().map(|name| {
-                crate::ai::ambient_agents::task::HarnessAuthSecretsConfig {
-                    claude_auth_secret_name: Some(name),
-                    codex_auth_secret_name: None,
-                }
+            let harness_auth_secrets = (args.claude_auth_secret.is_some()
+                || args.codex_auth_secret.is_some())
+            .then(|| crate::ai::ambient_agents::task::HarnessAuthSecretsConfig {
+                claude_auth_secret_name: args.claude_auth_secret.clone(),
+                codex_auth_secret_name: args.codex_auth_secret.clone(),
             });
 
             let merged_config = super::config_file::merge_with_precedence(
@@ -427,7 +443,14 @@ impl AmbientAgentRunner {
                 AgentConfigSnapshot {
                     name: args.name,
                     environment_id,
-                    model_id: args.model.model.clone(),
+                    runner_id: args.runner,
+                    // For third-party harnesses the model goes into harness config above;
+                    // leave the Oz model_id slot empty so Oz validation is not attempted.
+                    model_id: if args.harness == Harness::Oz {
+                        args.model.model.clone()
+                    } else {
+                        None
+                    },
                     base_prompt: None,
                     mcp_servers: cli_mcp_servers,
                     profile_id: None,
@@ -436,20 +459,30 @@ impl AmbientAgentRunner {
                     computer_use_enabled: args.computer_use.computer_use_override(),
                     harness: harness_override,
                     harness_auth_secrets,
+                    additional_source_repos: None,
                 },
             );
 
             // We must wait until after workspace metadata is refreshed to check available LLMs.
-            let model_id = match merged_config
-                .model_id
-                .as_deref()
-                .map(|model_id| super::common::validate_agent_mode_base_model_id(model_id, ctx))
-                .transpose()
-            {
-                Ok(id) => id.map(|id| id.to_string()),
-                Err(err) => {
-                    super::report_fatal_error(err, ctx);
-                    return;
+            // For third-party harnesses, the model is in harness.model_id and is validated
+            // server-side. Clear the top-level model_id slot to prevent any Oz model ID
+            // that leaked in from a config file from being sent alongside the harness model.
+            let model_id = if merged_config.harness.is_some() {
+                None
+            } else {
+                match merged_config
+                    .model_id
+                    .as_deref()
+                    .map(|model_id| {
+                        super::common::validate_agent_mode_base_model_id(model_id, ctx)
+                    })
+                    .transpose()
+                {
+                    Ok(id) => id.map(|id| id.to_string()),
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
                 }
             };
 
@@ -470,7 +503,13 @@ impl AmbientAgentRunner {
                 None
             };
 
-            let (prompt, mode) = extract_user_query_mode(prompt_string);
+            let (prompt, mode) = match prompt {
+                Some(prompt) => {
+                    let (prompt, mode) = extract_user_query_mode(prompt);
+                    (Some(prompt), mode)
+                }
+                None => (None, UserQueryMode::Normal),
+            };
             let request = SpawnAgentRequest {
                 prompt,
                 mode,
@@ -491,6 +530,7 @@ impl AmbientAgentRunner {
                 conversation_id: args.conversation,
                 initial_snapshot_token: None,
                 snapshot_disabled: None,
+                orchestration_handoff: None,
             };
 
             let should_open = args.open;
@@ -543,7 +583,7 @@ impl AmbientAgentRunner {
                             }
                             AmbientAgentEvent::TimedOut => {
                                 let task_id_str = spawned_task_id.as_ref().map_or_else(|| "unknown".to_string(), |id| id.to_string());
-                                println!("Agent session with run ID {task_id_str} is not ready after {}s. Check for a sharing link in the ambient agent management panel. See https://docs.warp.dev/agent-platform/cloud-agents/managing-cloud-agents for details.", TASK_STATUS_POLLING_DURATION.as_secs());
+                                println!("Agent session with run ID {task_id_str} is not ready after {}s. Check for a sharing link in the ambient agent management panel. See https://docs.warp.dev/platform/managing-cloud-agents for details.", TASK_STATUS_POLLING_DURATION.as_secs());
                             }
                         },
                         Err(err) => {
@@ -557,8 +597,8 @@ impl AmbientAgentRunner {
 
             ctx.spawn(spawn_future, move |_, result, ctx| match result {
                 Ok(session_join_info) => {
-                    if should_open {
-                        if let Some(session_join_info) = session_join_info {
+                    if should_open
+                        && let Some(session_join_info) = session_join_info {
                             let url =
                                 match (super::is_running_in_warp(), session_join_info.session_id) {
                                     (true, Some(session_id)) => {
@@ -569,7 +609,6 @@ impl AmbientAgentRunner {
 
                             ctx.open_url(&url);
                         }
-                    }
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
                 }
                 Err(err) => {
@@ -941,6 +980,19 @@ impl AmbientAgentRunner {
                     lines.push(format!("    Path: {}", filepath));
                     if let Some(description) = description {
                         lines.push(format!("    Description: {}", description));
+                    }
+                }
+                Artifact::ExternalReference {
+                    reference_type,
+                    url,
+                    title,
+                    metadata,
+                } => {
+                    let title_str = title.as_deref().unwrap_or("Untitled reference");
+                    lines.push(format!("  {reference_type}: {title_str}"));
+                    lines.push(format!("    Link: {url}"));
+                    if let Some(metadata) = metadata {
+                        lines.push(format!("    Metadata: {metadata}"));
                     }
                 }
             }

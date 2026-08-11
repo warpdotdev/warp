@@ -1,6 +1,6 @@
 use super::*;
 use crate::util::git::{
-    parse_range, parse_unified_diff_header, sort_branches_main_first, BranchEntry,
+    BranchEntry, parse_range, parse_unified_diff_header, sort_branches_main_first,
 };
 
 #[test]
@@ -277,4 +277,182 @@ fn test_parse_git_status_file_without_spaces_still_works() {
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].0, "simple.txt");
     assert_eq!(result[0].1, GitFileStatus::Modified);
+}
+
+#[tokio::test]
+async fn untracked_directory_diff_is_empty_and_non_binary() {
+    let repo_dir = tempfile::tempdir().expect("create temp repo dir");
+    std::fs::create_dir(repo_dir.path().join("nested-repo")).expect("create nested dir");
+
+    // `git status` reports a nested repo/worktree as a single untracked
+    // directory entry (with a trailing slash). It must short-circuit to an
+    // empty non-binary diff — the error fallback would otherwise mislabel it
+    // as binary and the view would render "Binary file - no diff available"
+    // instead of "New empty file".
+    let diff = LocalDiffStateModel::get_file_diff(
+        repo_dir.path(),
+        "nested-repo/",
+        &GitFileStatus::Untracked,
+        false,
+        None,
+    )
+    .await
+    .expect("get_file_diff should succeed for an untracked directory");
+
+    assert!(!diff.is_binary);
+    assert_eq!(diff.hunks.len(), 0);
+    assert_eq!(diff.status, GitFileStatus::Untracked);
+}
+
+#[tokio::test]
+async fn untracked_directory_has_no_baseline_content() {
+    let repo_dir = tempfile::tempdir().expect("create temp repo dir");
+    std::fs::create_dir(repo_dir.path().join("nested-repo")).expect("create nested dir");
+    std::fs::write(repo_dir.path().join("new-file.txt"), "hello\n").expect("write file");
+
+    // No baseline for a directory entry, so no editor is constructed for it.
+    let dir_content = LocalDiffStateModel::get_file_content_at_head(
+        repo_dir.path(),
+        "nested-repo/",
+        &GitFileStatus::Untracked,
+    )
+    .await;
+    assert_eq!(dir_content, None);
+
+    // Regular untracked files keep their empty baseline.
+    let file_content = LocalDiffStateModel::get_file_content_at_head(
+        repo_dir.path(),
+        "new-file.txt",
+        &GitFileStatus::Untracked,
+    )
+    .await;
+    assert_eq!(file_content, Some(String::new()));
+}
+
+#[tokio::test]
+async fn renamed_file_content_at_head_reads_old_path() {
+    let repo_dir = tempfile::tempdir().expect("create temp repo dir");
+    let repo_path = repo_dir.path();
+
+    // Set up a real git repo with one committed file, then rename it in the working tree
+    // (without committing the rename) so HEAD only knows about the old path.
+    run_git_command(repo_path, &["init", "-b", "main"])
+        .await
+        .expect("git init");
+    run_git_command(repo_path, &["config", "user.email", "test@test.com"])
+        .await
+        .expect("git config email");
+    run_git_command(repo_path, &["config", "user.name", "Test"])
+        .await
+        .expect("git config name");
+    std::fs::write(repo_path.join("old.txt"), "hello world\n").expect("write old.txt");
+    run_git_command(repo_path, &["add", "old.txt"])
+        .await
+        .expect("git add");
+    run_git_command(repo_path, &["commit", "-m", "initial"])
+        .await
+        .expect("git commit");
+
+    // Rename in the working tree only — `old.txt` no longer exists at this path, so `git
+    // show HEAD:new.txt` would fail (the bug in APP-5111).
+    std::fs::rename(repo_path.join("old.txt"), repo_path.join("new.txt"))
+        .expect("rename old.txt to new.txt");
+
+    let content = LocalDiffStateModel::get_file_content_at_head(
+        repo_path,
+        "new.txt",
+        &GitFileStatus::Renamed {
+            old_path: "old.txt".to_string(),
+        },
+    )
+    .await;
+
+    // The baseline content at HEAD must come from the old path, not the new one, so the code
+    // review pane can render a diff instead of "Unable to load file content".
+    assert_eq!(content, Some("hello world\n".to_string()));
+}
+
+#[tokio::test]
+async fn staged_rename_and_modify_produces_non_empty_diff() {
+    let repo_dir = tempfile::tempdir().expect("create temp repo dir");
+    let repo_path = repo_dir.path();
+
+    run_git_command(repo_path, &["init", "-b", "main"])
+        .await
+        .expect("git init");
+    run_git_command(repo_path, &["config", "user.email", "test@test.com"])
+        .await
+        .expect("git config email");
+    run_git_command(repo_path, &["config", "user.name", "Test"])
+        .await
+        .expect("git config name");
+    std::fs::write(
+        repo_path.join("old.txt"),
+        "line one\nline two\nline three\n",
+    )
+    .expect("write old.txt");
+    run_git_command(repo_path, &["add", "old.txt"])
+        .await
+        .expect("git add");
+    run_git_command(repo_path, &["commit", "-m", "initial"])
+        .await
+        .expect("git commit");
+
+    // Stage both the rename and a content edit, so nothing is left unstaged (git status
+    // reports this as a plain "R " entry with no unstaged component).
+    run_git_command(repo_path, &["mv", "old.txt", "new.txt"])
+        .await
+        .expect("git mv");
+    std::fs::write(
+        repo_path.join("new.txt"),
+        "line one\nline two changed\nline three\n",
+    )
+    .expect("write new.txt");
+    run_git_command(repo_path, &["add", "new.txt"])
+        .await
+        .expect("git add new.txt");
+
+    let diff = LocalDiffStateModel::get_file_diff(
+        repo_path,
+        "new.txt",
+        &GitFileStatus::Renamed {
+            old_path: "old.txt".to_string(),
+        },
+        false,
+        None,
+    )
+    .await
+    .expect("get_file_diff should succeed for a fully staged rename+modify");
+
+    // A fully staged rename with a staged content edit must still render an inline diff
+    // instead of falling through to "File renamed without changes": comparing only the
+    // index against the working tree (as before the fix) produced an empty diff here,
+    // since both changes were already staged.
+    assert!(
+        !diff.is_empty(),
+        "expected a non-empty diff for a fully staged rename+modify"
+    );
+}
+
+#[tokio::test]
+async fn num_lines_in_file_if_non_binary_counts_lines_in_text_file() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let file_path = dir.path().join("file.txt");
+    std::fs::write(&file_path, "one\ntwo\nthree\n").expect("write file");
+
+    let num_lines = LocalDiffStateModel::num_lines_in_file_if_non_binary(&file_path)
+        .await
+        .expect("counting a regular file should succeed");
+    assert_eq!(num_lines, Some(3));
+}
+
+#[tokio::test]
+async fn num_lines_in_file_if_non_binary_errors_for_directory() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+
+    // Directories aren't countable. The metadata callers degrade this error
+    // to a 0-line contribution per entry instead of failing the whole
+    // metadata computation.
+    let result = LocalDiffStateModel::num_lines_in_file_if_non_binary(dir.path()).await;
+    assert!(result.is_err());
 }

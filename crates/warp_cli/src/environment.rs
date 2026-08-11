@@ -101,6 +101,19 @@ pub enum EnvironmentCommand {
     },
 }
 
+impl EnvironmentCommand {
+    pub(crate) fn as_str_for_tracing(&self) -> &'static str {
+        match self {
+            EnvironmentCommand::List => "environment list",
+            EnvironmentCommand::Image(_) => "environment image",
+            EnvironmentCommand::Create { .. } => "environment create",
+            EnvironmentCommand::Delete { .. } => "environment delete",
+            EnvironmentCommand::Get { .. } => "environment get",
+            EnvironmentCommand::Update { .. } => "environment update",
+        }
+    }
+}
+
 /// Common arguments for selecting an environment when creating an integration.
 #[derive(Args, Clone, Debug)]
 #[group(required = false, multiple = false)]

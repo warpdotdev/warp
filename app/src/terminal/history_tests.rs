@@ -3,8 +3,8 @@ use std::pin::pin;
 use std::sync::Arc;
 
 use chrono::Local;
-use futures::future::join_all;
 use futures::Future;
+use futures::future::join_all;
 use futures_lite::StreamExt;
 use itertools::Itertools;
 use warp_core::command::ExitCode;
@@ -12,6 +12,7 @@ use warpui::{App, ModelHandle};
 
 use super::{HistoryEntry, HistoryEvent, PersistedCommand, ShellHost};
 use crate::ai::agent::conversation::AIConversationId;
+use crate::terminal::History;
 use crate::terminal::model::block::{
     AgentInteractionMetadata, SerializedAIMetadata, SerializedBlock,
 };
@@ -20,7 +21,6 @@ use crate::terminal::model::session::command_executor::testing::TestCommandExecu
 use crate::terminal::model::session::{BootstrapSessionType, Session, SessionId, SessionInfo};
 use crate::terminal::model::test_utils::TestBlockBuilder;
 use crate::terminal::shell::ShellType;
-use crate::terminal::History;
 use crate::test_util::{Stub, VirtualFS};
 
 impl History {
@@ -39,11 +39,12 @@ impl History {
             if !is_session_initialized {
                 let (tx, rx) = async_channel::unbounded();
                 let history_handle_clone = history_handle.clone();
-                history_handle.update(app, move |_, ctx| {
-                    ctx.subscribe_to_model(&history_handle_clone, move |_, event, _| {
-                        let HistoryEvent::Initialized(event_id) = event;
-                        if session_id == *event_id {
-                            let _ = tx.try_send(());
+                app.update(|ctx| {
+                    ctx.subscribe_to_model(&history_handle_clone, move |_, event, _| match event {
+                        HistoryEvent::Initialized(event_id) => {
+                            if session_id == *event_id {
+                                let _ = tx.try_send(());
+                            }
                         }
                     });
                 });

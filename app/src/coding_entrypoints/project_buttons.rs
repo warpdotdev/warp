@@ -3,10 +3,10 @@ use std::borrow::Cow;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
+use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::blend::Blend as _;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow, Expanded,
     Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement as _,
@@ -21,7 +21,7 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
 };
 
-use crate::util::bindings::{keybinding_name_to_display_string, BindingGroup, CustomAction};
+use crate::util::bindings::{BindingGroup, CustomAction, keybinding_name_to_display_string};
 
 const BUTTON_MIN_WIDTH: f32 = 149.;
 

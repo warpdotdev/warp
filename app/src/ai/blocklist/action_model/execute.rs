@@ -16,10 +16,13 @@ pub(super) mod search_codebase;
 pub(super) mod send_message;
 pub(super) mod shell_command;
 pub(super) mod start_agent;
+pub(super) mod start_recording;
+pub(super) mod stop_recording;
 pub(super) mod suggest_new_conversation;
 pub(super) mod suggest_prompt;
 pub(super) mod upload_artifact;
 pub(super) mod use_computer;
+pub(super) mod wait_for_events;
 
 use std::any::Any;
 use std::path::PathBuf;
@@ -28,16 +31,16 @@ use std::sync::Arc;
 
 use ai::agent::action_result::{InsertReviewCommentsResult, RequestCommandOutputResult};
 pub use ask_user_question::AskUserQuestionExecutor;
-pub(crate) use call_mcp_tool::coerce_integer_args;
 use call_mcp_tool::CallMCPToolExecutor;
+pub(crate) use call_mcp_tool::coerce_integer_args;
 use create_documents::CreateDocumentsExecutor;
 use edit_documents::EditDocumentsExecutor;
 use fetch_conversation::FetchConversationExecutor;
 use file_glob::FileGlobExecutor;
-use futures::future::BoxFuture;
 #[cfg(feature = "local_fs")]
 use futures::AsyncReadExt;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use grep::GrepExecutor;
 #[cfg(feature = "local_fs")]
 use mime_guess::from_path;
@@ -47,27 +50,30 @@ pub(super) use read_files::ReadFilesExecutor;
 use read_mcp_resource::ReadMCPResourceExecutor;
 use read_skill::ReadSkillExecutor;
 use request_computer_use::RequestComputerUseExecutor;
-pub(crate) use request_file_edits::{apply_edits, FileReadResult, MalformedFinalLineProxyEvent};
 pub use request_file_edits::{
     EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent, EditResolvedEvent, EditStats,
     RequestFileEditsExecutor, RequestFileEditsFormatKind, RequestFileEditsTelemetryEvent,
 };
+pub(crate) use request_file_edits::{FileReadResult, MalformedFinalLineProxyEvent, apply_edits};
+pub use run_agents::{RunAgentsExecutor, RunAgentsExecutorEvent, RunAgentsSpawningSnapshot};
 #[cfg(test)]
 pub use run_agents::{compose_run_agents_child_prompt, run_agents_to_start_agent_mode};
-pub use run_agents::{RunAgentsExecutor, RunAgentsExecutorEvent, RunAgentsSpawningSnapshot};
 pub use send_message::SendMessageToAgentExecutor;
 use serde::{Deserialize, Serialize};
 pub use shell_command::{ShellCommandExecutor, ShellCommandExecutorEvent};
 pub use start_agent::{
-    StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest, StartAgentRequestId,
+    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
+    StartAgentRequestId,
 };
+use start_recording::StartRecordingExecutor;
+use stop_recording::StopRecordingExecutor;
 pub use suggest_new_conversation::NewConversationDecision;
 use suggest_new_conversation::SuggestNewConversationExecutor;
 pub use suggest_prompt::PromptSuggestionExecutor;
 use upload_artifact::UploadArtifactExecutor;
 use use_computer::UseComputerExecutor;
+use wait_for_events::WaitForEventsExecutor;
 use warp_core::execution_mode::AppExecutionMode;
-use warp_core::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
 use warp_files::{FileModel, TextFileReadResult};
 #[cfg(feature = "local_fs")]
@@ -78,28 +84,31 @@ use warpui::r#async::{Spawnable, SpawnableOutput};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::search_codebase::SearchCodebaseExecutor;
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentActionTypeDiscriminants, CancellationReason, FileContext,
-    FileLocations, ServerOutputId,
+    FileLocations, ReadFilesFailedFile, ServerOutputId,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::action_model::recording_controller::RecordingController;
+use crate::ai::blocklist::telemetry::send_run_agents_completed_telemetry;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 #[cfg(feature = "local_fs")]
 use crate::ai::{agent::AnyFileContent, paths::host_native_absolute_path};
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::session::command_executor::shell_quote_arg;
 use crate::terminal::model::session::{ExecuteCommandOptions, Session};
 use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::shell::ShellType;
 use crate::terminal::{ShellLaunchData, TerminalModel};
 #[cfg(feature = "local_fs")]
 use crate::util::image::{
-    is_supported_image_mime_type, process_image_for_agent, ProcessImageResult,
+    ProcessImageResult, is_supported_image_mime_type, process_image_for_agent,
 };
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::is_binary_file;
-use crate::BlocklistAIHistoryModel;
 
 /// Types of actions that can be executed in parallel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -257,12 +266,15 @@ pub struct BlocklistAIActionExecutor {
     create_documents_executor: ModelHandle<CreateDocumentsExecutor>,
     use_computer_executor: ModelHandle<UseComputerExecutor>,
     request_computer_use_executor: ModelHandle<RequestComputerUseExecutor>,
+    start_recording_executor: ModelHandle<StartRecordingExecutor>,
+    stop_recording_executor: ModelHandle<StopRecordingExecutor>,
     read_skill_executor: ModelHandle<ReadSkillExecutor>,
     fetch_conversation_executor: ModelHandle<FetchConversationExecutor>,
     start_agent_executor: ModelHandle<StartAgentExecutor>,
     run_agents_executor: ModelHandle<RunAgentsExecutor>,
     send_message_executor: ModelHandle<SendMessageToAgentExecutor>,
     ask_user_question_executor: ModelHandle<AskUserQuestionExecutor>,
+    wait_for_events_executor: ModelHandle<WaitForEventsExecutor>,
     /// The actions currently executing asynchronously, keyed by action ID.
     /// We track them per action rather than as a single slot so multiple actions from the same
     /// parallel phase can complete independently.
@@ -323,7 +335,9 @@ impl BlocklistAIActionExecutor {
         let use_computer_executor = ctx.add_model(|_| UseComputerExecutor::new());
         let request_computer_use_executor =
             ctx.add_model(|_| RequestComputerUseExecutor::new(terminal_view_id));
-        let read_skill_executor = ctx.add_model(|_| ReadSkillExecutor::new());
+        let start_recording_executor = ctx.add_model(|_| StartRecordingExecutor::new());
+        let stop_recording_executor = ctx.add_model(|_| StopRecordingExecutor::new());
+        let read_skill_executor = ctx.add_model(|_| ReadSkillExecutor::new(active_session.clone()));
         let fetch_conversation_executor = ctx.add_model(|_| FetchConversationExecutor::new());
         let start_agent_executor = ctx.add_model(StartAgentExecutor::new);
         let run_agents_executor = ctx
@@ -331,6 +345,8 @@ impl BlocklistAIActionExecutor {
         let send_message_executor = ctx.add_model(|_| SendMessageToAgentExecutor::new());
         let ask_user_question_executor =
             ctx.add_model(|_| AskUserQuestionExecutor::new(terminal_view_id));
+        let wait_for_events_executor =
+            ctx.add_model(|ctx| WaitForEventsExecutor::new(terminal_view_id, ctx));
         Self {
             shell_command_executor,
             read_files_executor,
@@ -348,6 +364,8 @@ impl BlocklistAIActionExecutor {
             create_documents_executor,
             use_computer_executor,
             request_computer_use_executor,
+            start_recording_executor,
+            stop_recording_executor,
             async_executing_actions: Default::default(),
             terminal_model,
             read_skill_executor,
@@ -356,6 +374,7 @@ impl BlocklistAIActionExecutor {
             run_agents_executor,
             send_message_executor,
             ask_user_question_executor,
+            wait_for_events_executor,
         }
     }
 
@@ -363,6 +382,29 @@ impl BlocklistAIActionExecutor {
         self.async_executing_actions
             .get(action_id)
             .map(|running| &running.action)
+    }
+
+    /// Returns the action_id of any running WaitForEvents action for the
+    /// given conversation. There is at most one (wait_for_events is
+    /// documented as exclusive within a turn).
+    pub(super) fn find_running_wait_for_events(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> Option<AIAgentActionId> {
+        self.async_executing_actions
+            .iter()
+            .find_map(|(action_id, running)| {
+                if running.conversation_id == conversation_id
+                    && matches!(
+                        running.action.action,
+                        AIAgentActionType::WaitForEvents { .. }
+                    )
+                {
+                    Some(action_id.clone())
+                } else {
+                    None
+                }
+            })
     }
 
     pub fn shell_command_executor(&self) -> &ModelHandle<ShellCommandExecutor> {
@@ -512,14 +554,17 @@ impl BlocklistAIActionExecutor {
             AIAgentActionType::RequestComputerUse(_) => self
                 .request_computer_use_executor
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::StartRecording { .. } => self
+                .start_recording_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::StopRecording { .. } => self
+                .stop_recording_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
             AIAgentActionType::ReadSkill(_) => self
                 .read_skill_executor
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
             AIAgentActionType::FetchConversation { .. } => self
                 .fetch_conversation_executor
-                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
-            AIAgentActionType::StartAgent { .. } => self
-                .start_agent_executor
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
             AIAgentActionType::SendMessageToAgent { .. } => self
                 .send_message_executor
@@ -529,6 +574,9 @@ impl BlocklistAIActionExecutor {
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
             AIAgentActionType::RunAgents(_) => self
                 .run_agents_executor
+                .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
+            AIAgentActionType::WaitForEvents { .. } => self
+                .wait_for_events_executor
                 .update(ctx, |executor, ctx| executor.preprocess_action(input, ctx)),
         }
     }
@@ -618,14 +666,12 @@ impl BlocklistAIActionExecutor {
                 comments,
                 base_branch,
             } => {
-                if FeatureFlag::PRCommentsSlashCommand.is_enabled() {
-                    ctx.emit(BlocklistAIActionExecutorEvent::InsertCodeReviewComments {
-                        action_id: action.id,
-                        repo_path: repo_path.clone(),
-                        comments: comments.clone(),
-                        base_branch: base_branch.clone(),
-                    });
-                }
+                ctx.emit(BlocklistAIActionExecutorEvent::InsertCodeReviewComments {
+                    action_id: action.id,
+                    repo_path: repo_path.clone(),
+                    comments: comments.clone(),
+                    base_branch: base_branch.clone(),
+                });
                 ActionExecution::<()>::Sync(AIAgentActionResultType::InsertReviewComments(
                     InsertReviewCommentsResult::Success {
                         repo_path: repo_path.to_string_lossy().to_string(),
@@ -696,16 +742,19 @@ impl BlocklistAIActionExecutor {
                 .request_computer_use_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
                 .into(),
+            AIAgentActionType::StartRecording { .. } => self
+                .start_recording_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::StopRecording { .. } => self
+                .stop_recording_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx)),
             AIAgentActionType::ReadSkill(_) => self
                 .read_skill_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
                 .into(),
             AIAgentActionType::FetchConversation { .. } => self
                 .fetch_conversation_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
-            AIAgentActionType::StartAgent { .. } => self
-                .start_agent_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
                 .into(),
             AIAgentActionType::SendMessageToAgent { .. } => self
@@ -717,6 +766,10 @@ impl BlocklistAIActionExecutor {
                 .into(),
             AIAgentActionType::RunAgents(_) => self
                 .run_agents_executor
+                .update(ctx, |executor, ctx| executor.execute(input, ctx))
+                .into(),
+            AIAgentActionType::WaitForEvents { .. } => self
+                .wait_for_events_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))
                 .into(),
         };
@@ -822,17 +875,66 @@ impl BlocklistAIActionExecutor {
                 self.search_codebase_executor.update(ctx, |executor, ctx| {
                     executor.cancel_execution(&running.action.id, ctx);
                 });
+            } else if matches!(running.action.action, AIAgentActionType::RunAgents(..)) {
+                self.run_agents_executor.update(ctx, |executor, ctx| {
+                    executor.cancel_execution(&running.action.id, ctx);
+                });
+            } else if matches!(
+                running.action.action,
+                AIAgentActionType::StartRecording { .. }
+            ) {
+                RecordingController::handle(ctx).update(ctx, |controller, _| {
+                    controller.abort_start(running.conversation_id);
+                });
+            } else if let AIAgentActionType::WaitForEvents { tool_call_id, .. } =
+                &running.action.action
+            {
+                // Drop the executor's pending entry; the shared cancel
+                // path emits FinishedAction(Cancelled).
+                let tool_call_id = tool_call_id.clone();
+                self.wait_for_events_executor.update(ctx, |executor, _| {
+                    executor.cancel_execution(&tool_call_id);
+                });
             }
+            let result = running.action.action.cancelled_result();
+            send_run_agents_completed_telemetry(
+                running.conversation_id,
+                &running.action.action,
+                &result,
+                ctx,
+            );
             ctx.emit(BlocklistAIActionExecutorEvent::FinishedAction {
                 result: Arc::new(AIAgentActionResult {
                     id: running.action.id.clone(),
                     task_id: running.action.task_id,
-                    result: running.action.action.cancelled_result(),
+                    result,
                 }),
                 conversation_id: running.conversation_id,
                 cancellation_reason: reason,
             });
         }
+    }
+
+    /// Drops executor-held per-action state now that the action has reached a
+    /// terminal result. Called from the action model's terminal-result choke
+    /// point (`handle_action_result`), which every outcome — success, failure,
+    /// or cancellation via any path — funnels through.
+    ///
+    /// Participation is per-executor opt-in: an executor may only be added
+    /// here if its per-action state is never read after the action's terminal
+    /// result. Prepared file edits qualify (consumed by execute, dead
+    /// otherwise). Do NOT add state that outlives completion, e.g. the
+    /// search-codebase executor's root repo paths (read at render time after
+    /// the action finishes) or long-running-command state (the command
+    /// outlives its action's snapshot result).
+    pub(super) fn discard_action_state(
+        &mut self,
+        action_id: &AIAgentActionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.request_file_edits_executor.update(ctx, |executor, _| {
+            executor.discard_pending(action_id);
+        });
     }
 
     pub fn cancel_all_running_async_actions_for_conversation(
@@ -909,14 +1011,17 @@ impl BlocklistAIActionExecutor {
             AIAgentActionType::RequestComputerUse(_) => self
                 .request_computer_use_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
+            AIAgentActionType::StartRecording { .. } => self
+                .start_recording_executor
+                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
+            AIAgentActionType::StopRecording { .. } => self
+                .stop_recording_executor
+                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::ReadSkill(_) => self
                 .read_skill_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::FetchConversation { .. } => self
                 .fetch_conversation_executor
-                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
-            AIAgentActionType::StartAgent { .. } => self
-                .start_agent_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::SendMessageToAgent { .. } => self
                 .send_message_executor
@@ -926,6 +1031,9 @@ impl BlocklistAIActionExecutor {
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
             AIAgentActionType::RunAgents(_) => self
                 .run_agents_executor
+                .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
+            AIAgentActionType::WaitForEvents { .. } => self
+                .wait_for_events_executor
                 .update(ctx, |executor, ctx| executor.should_autoexecute(input, ctx)),
         }
     }
@@ -972,22 +1080,33 @@ const MAX_FILE_READ_BYTES: usize = 1_000_000;
 pub struct ReadFileContextResult {
     /// [`FileContext`] data for all files that could be read.
     pub file_contexts: Vec<FileContext>,
+    /// Requested files that could not be read, each paired with a reason-specific
+    /// failure message (missing, too large, or unprocessable).
+    pub failed_files: Vec<ReadFilesFailedFile>,
+}
 
-    /// Expected absolute paths of requested files that did not exist or could
-    /// not be read (e.g. binary files that exceed the size limit).
-    pub missing_files: Vec<String>,
+/// Builds a single, reason-accurate summary from a batch of file-read failures,
+/// one `path: reason` entry per file. Shared by the agent-tool consumers
+/// (`read_files`, `get_files`, `search_codebase`) so they all surface the same
+/// per-file reason instead of a flat "do not exist" list.
+pub fn describe_failed_files(failed_files: &[ReadFilesFailedFile]) -> String {
+    failed_files
+        .iter()
+        .map(|failed_file| format!("{}: {}", failed_file.path, failed_file.message))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Reads the content of the given files at the given `FileLocations`.
 ///
-/// If any files do not exist, they are included in the `missing_files` field of the result.
+/// If any files do not exist, they are included in the `failed_files` field of the result.
 ///
-/// Binary files larger than the per-file byte limit are skipped and reported as oversized.
-/// Text files are truncated at the per-file limit via line streaming.
+/// Binary files larger than the per-file byte limit are skipped and reported as
+/// too large. Text files are truncated at the per-file limit via line streaming.
 /// If `max_file_bytes` is provided, it overrides the default per-file limit
 /// ([`MAX_FILE_READ_BYTES`]). Pass `None` to use the default.
 /// If `max_batch_bytes` is provided, the cumulative content of all files is capped at that
-/// budget; once exceeded, remaining files are reported as oversized.
+/// budget; once exceeded, remaining files are reported as too large.
 #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
 pub async fn read_local_file_context(
     file_names: &[FileLocations],
@@ -1005,7 +1124,7 @@ pub async fn read_local_file_context(
     {
         let mut result = ReadFileContextResult {
             file_contexts: Vec::new(),
-            missing_files: Vec::new(),
+            failed_files: Vec::new(),
         };
 
         let mut batch_bytes_remaining = max_batch_bytes;
@@ -1020,9 +1139,10 @@ pub async fn read_local_file_context(
             let metadata = match async_fs::metadata(&absolute_file_path).await {
                 Ok(m) => m,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    result
-                        .missing_files
-                        .push(absolute_file_path.to_string_lossy().to_string());
+                    result.failed_files.push(ReadFilesFailedFile {
+                        path: absolute_file_path.to_string_lossy().to_string(),
+                        message: "File does not exist".to_string(),
+                    });
                     continue;
                 }
                 Err(e) => return Err(anyhow::anyhow!(e)),
@@ -1096,7 +1216,27 @@ pub async fn read_local_file_context(
                     }
                     result.file_contexts.push(file_context);
                 }
-                BinaryFileReadResult::Missing => result.missing_files.push(path_str),
+                BinaryFileReadResult::NotFound => result.failed_files.push(ReadFilesFailedFile {
+                    path: path_str,
+                    message: "File does not exist".to_string(),
+                }),
+                BinaryFileReadResult::TooLarge {
+                    size_bytes,
+                    limit_bytes,
+                } => result.failed_files.push(ReadFilesFailedFile {
+                    path: path_str,
+                    message: format!(
+                        "File is too large to read ({} > {} limit). Downscale/compress it or read a smaller copy.",
+                        format_mb(size_bytes),
+                        format_mb(limit_bytes)
+                    ),
+                }),
+                BinaryFileReadResult::ProcessingFailed { detail } => {
+                    result.failed_files.push(ReadFilesFailedFile {
+                        path: path_str,
+                        message: format!("File could not be processed as an image: {detail}"),
+                    })
+                }
             }
         }
 
@@ -1148,6 +1288,13 @@ async fn is_file_content_binary_async(path: &std::path::Path) -> bool {
     is_buffer_binary(&buffer[..n])
 }
 
+/// Renders a byte count in megabytes with one decimal place (e.g. `3.5 MB`),
+/// matching the units used in the "too large" failure message.
+#[cfg(feature = "local_fs")]
+fn format_mb(bytes: usize) -> String {
+    format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+}
+
 #[cfg(feature = "local_fs")]
 enum BinaryFileReadResult {
     /// Successfully read as binary.
@@ -1155,8 +1302,16 @@ enum BinaryFileReadResult {
         file_context: FileContext,
         bytes_read: usize,
     },
-    /// File doesn't exist, exceeds the size limit, or couldn't be processed.
-    Missing,
+    /// The file does not exist on disk.
+    NotFound,
+    /// The file exists but exceeds the effective byte limit.
+    TooLarge {
+        size_bytes: usize,
+        limit_bytes: usize,
+    },
+    /// The file could not be processed (e.g. an image decode/resize failed, or
+    /// the processed image is still too large to send).
+    ProcessingFailed { detail: String },
 }
 
 /// Reads a binary file, applying image processing when applicable.
@@ -1168,12 +1323,15 @@ async fn read_binary_file_context(
     last_modified: Option<std::time::SystemTime>,
 ) -> anyhow::Result<BinaryFileReadResult> {
     if file_size > max_bytes {
-        return Ok(BinaryFileReadResult::Missing);
+        return Ok(BinaryFileReadResult::TooLarge {
+            size_bytes: file_size,
+            limit_bytes: max_bytes,
+        });
     }
 
     let content = match read_file_as_binary(path).await {
         Ok(content) => content,
-        Err(FileLoadError::DoesNotExist) => return Ok(BinaryFileReadResult::Missing),
+        Err(FileLoadError::DoesNotExist) => return Ok(BinaryFileReadResult::NotFound),
         Err(FileLoadError::IOError(e)) => return Err(anyhow::anyhow!(e)),
     };
 
@@ -1183,11 +1341,15 @@ async fn read_binary_file_context(
             ProcessImageResult::Success { data } => Some(data),
             ProcessImageResult::TooLarge => {
                 log::warn!("Image file too large after processing: {}", path.display());
-                return Ok(BinaryFileReadResult::Missing);
+                return Ok(BinaryFileReadResult::ProcessingFailed {
+                    detail: "the image is too large to send even after resizing".to_string(),
+                });
             }
             ProcessImageResult::Error(err) => {
                 log::warn!("Error processing image file {}: {err:?}", path.display());
-                return Ok(BinaryFileReadResult::Missing);
+                return Ok(BinaryFileReadResult::ProcessingFailed {
+                    detail: err.to_string(),
+                });
             }
         }
     } else {
@@ -1196,7 +1358,10 @@ async fn read_binary_file_context(
 
     let final_content = processed_content.unwrap_or(content);
     if final_content.len() > max_bytes {
-        return Ok(BinaryFileReadResult::Missing);
+        return Ok(BinaryFileReadResult::TooLarge {
+            size_bytes: final_content.len(),
+            limit_bytes: max_bytes,
+        });
     }
 
     let bytes_read = final_content.len();
@@ -1211,14 +1376,26 @@ async fn read_binary_file_context(
     })
 }
 
+fn build_is_file_path_command(path: &str, shell_type: ShellType) -> String {
+    let escaped_path = shell_quote_arg(path, shell_type);
+    if shell_type == ShellType::PowerShell {
+        format!("if (Test-Path -PathType Leaf {escaped_path}) {{ exit 0 }} else {{ exit 1 }}")
+    } else {
+        format!("test -f {escaped_path}")
+    }
+}
+
+fn build_is_git_repository_command(absolute_path: &str, shell_type: ShellType) -> String {
+    format!(
+        "git -C {} rev-parse",
+        shell_quote_arg(absolute_path, shell_type)
+    )
+}
+
 /// Returns true if the given path is a regular file on the session's filesystem.
 /// Runs a shell command on the session so it works for both local and remote sessions.
 async fn is_file_path(path: &str, session: &Session) -> bool {
-    let command = if session.shell().shell_type() == ShellType::PowerShell {
-        format!("if (Test-Path -PathType Leaf \"{path}\") {{ exit 0 }} else {{ exit 1 }}")
-    } else {
-        format!("test -f \"{path}\"")
-    };
+    let command = build_is_file_path_command(path, session.shell().shell_type());
     session
         .execute_command(&command, None, None, ExecuteCommandOptions::default())
         .await
@@ -1228,7 +1405,7 @@ async fn is_file_path(path: &str, session: &Session) -> bool {
 
 /// Returns true if git is installed and the given path is in a git repository.
 async fn is_git_repository(absolute_path: &str, session: &Session) -> anyhow::Result<bool> {
-    let git_command = format!("git -C \"{absolute_path}\" rev-parse");
+    let git_command = build_is_git_repository_command(absolute_path, session.shell().shell_type());
     let command_output = session
         .execute_command(
             git_command.as_str(),

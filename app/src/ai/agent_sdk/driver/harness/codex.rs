@@ -12,6 +12,8 @@ use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -19,23 +21,25 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::read_jsonl;
 use super::codex_transcript::{
-    codex_sessions_root, find_session_file, parse_session_meta, write_envelope, CodexResumeInfo,
-    CodexTranscriptEnvelope,
+    CodexResumeInfo, CodexTranscriptEnvelope, codex_sessions_root, find_session_file,
+    parse_session_meta, rehydrate_codex_transcript,
 };
 use super::json_utils::read_json_file_or_default;
 use super::{
-    write_temp_file, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness,
+    HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, write_temp_file,
 };
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
-use crate::ai::ambient_agents::task::HarnessModelConfig;
+use crate::ai::agent_sdk::setup_observability::{
+    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
+};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
-use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
 use crate::server::server_api::ServerApi;
+use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::model::block::BlockId;
-use crate::terminal::CLIAgent;
 
 pub(crate) struct CodexHarness;
 
@@ -43,6 +47,9 @@ pub(crate) struct CodexHarness;
 const CODEX_CLI_FORMAT: &str = "codex_cli";
 /// Slash command Codex's TUI recognises as a graceful shutdown.
 const CODEX_EXIT_COMMAND: &str = "/exit";
+/// Allow the Warp-installed Codex plugin hooks to run in vetted driver sessions
+/// without requiring an unattended `/hooks` review step.
+const CODEX_BYPASS_HOOK_TRUST_FLAG: &str = "--dangerously-bypass-hook-trust";
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -80,7 +87,14 @@ impl ThirdPartyHarness for CodexHarness {
             // OAuth refresh failures — all five Codex variants share this
             // substring (see upstream session/token messages).
             "could not be refreshed",
+            // Generically check for invalid request errors.
+            // Keep this last so more specific patterns can be matched first.
+            "\"type\": \"invalid_request_error\"",
         ]
+    }
+
+    fn requires_verified_platform_plugin(&self) -> bool {
+        FeatureFlag::CodexPlugin.is_enabled()
     }
 
     /// Fetch the codex transcript for the current task's conversation and wrap it into a
@@ -138,15 +152,15 @@ impl ThirdPartyHarness for CodexHarness {
         // to the user-turn prompt so codex treats it as immediate intent.
         // Order: resumption_prompt → context → prompt
         let mut parts: Vec<&str> = Vec::new();
-        if let Some(preamble) = resumption_prompt {
-            if !preamble.is_empty() {
-                parts.push(preamble);
-            }
+        if let Some(preamble) = resumption_prompt
+            && !preamble.is_empty()
+        {
+            parts.push(preamble);
         }
-        if let Some(ctx) = context {
-            if !ctx.is_empty() {
-                parts.push(ctx);
-            }
+        if let Some(ctx) = context
+            && !ctx.is_empty()
+        {
+            parts.push(ctx);
         }
         parts.push(prompt);
         let owned_prompt = parts.join("\n\n");
@@ -167,17 +181,20 @@ impl ThirdPartyHarness for CodexHarness {
 ///
 /// `--dangerously-bypass-approvals-and-sandbox` disables both the sandbox and approval
 /// prompts so the agent can run autonomously.
+/// `--dangerously-bypass-hook-trust` allows the orchestration plugin hooks installed by
+/// Warp to run without a manual hook review in unattended driver sessions. Driver setup
+/// verifies the Codex platform plugin before launching commands with this flag.
 /// `Some(session_id)` indicates that we want to resume that prior session. Unlike claude,
 /// codex does not support assigning a session_id to a new conversation.
 fn codex_command(cli_name: &str, session_id: Option<&Uuid>, prompt_path: &str) -> String {
     match session_id {
         Some(session_id) => format!(
-            "{cli_name} resume --dangerously-bypass-approvals-and-sandbox {session_id} \
+            "{cli_name} resume --dangerously-bypass-approvals-and-sandbox {CODEX_BYPASS_HOOK_TRUST_FLAG} {session_id} \
              \"$(cat '{prompt_path}')\""
         ),
         None => {
             format!(
-                "{cli_name} --dangerously-bypass-approvals-and-sandbox \"$(cat '{prompt_path}')\""
+                "{cli_name} --dangerously-bypass-approvals-and-sandbox {CODEX_BYPASS_HOOK_TRUST_FLAG} \"$(cat '{prompt_path}')\""
             )
         }
     }
@@ -228,19 +245,15 @@ impl CodexHarnessRunner {
             Some(CodexResumeInfo {
                 conversation_id,
                 session_id,
-                envelope,
+                mut envelope,
             }) => {
-                let sessions_root = codex_sessions_root().map_err(|e| {
-                    AgentDriverError::ConfigBuildFailed(
-                        e.context("Failed to resolve codex sessions root"),
-                    )
-                })?;
-                let path = write_envelope(&envelope, &sessions_root).map_err(|e| {
-                    AgentDriverError::ConfigBuildFailed(
-                        e.context("Failed to rehydrate codex transcript"),
-                    )
-                })?;
-                (Some(session_id), Some(conversation_id), Some(path))
+                let continuation = rehydrate_codex_transcript(&mut envelope, _working_dir)
+                    .map_err(AgentDriverError::ConfigBuildFailed)?;
+                (
+                    Some(session_id),
+                    Some(conversation_id),
+                    Some(continuation.transcript_path),
+                )
             }
             None => (None, None, None),
         };
@@ -313,7 +326,7 @@ impl HarnessRunner for CodexHarnessRunner {
                             .create_external_conversation(CODEX_CLI_FORMAT)
                             .await
                             .map_err(|e| {
-                                log::error!("Failed to create external conversation: {e}");
+                                report_error!(&e);
                                 AgentDriverError::ConfigBuildFailed(e)
                             })
                     })
@@ -336,6 +349,10 @@ impl HarnessRunner for CodexHarnessRunner {
             conversation_id,
             block_id: command_handle.block_id().clone(),
         };
+
+        setup_events
+            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
+            .await;
 
         Ok(command_handle)
     }
@@ -534,10 +551,10 @@ fn prepare_codex_environment_config(
 }
 
 fn codex_config_dir() -> Result<PathBuf> {
-    if let Ok(dir) = std::env::var(CODEX_HOME_ENV) {
-        if !dir.is_empty() {
-            return Ok(PathBuf::from(dir));
-        }
+    if let Ok(dir) = std::env::var(CODEX_HOME_ENV)
+        && !dir.is_empty()
+    {
+        return Ok(PathBuf::from(dir));
     }
     dirs::home_dir()
         .map(|home| home.join(CODEX_CONFIG_DIR))

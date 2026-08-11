@@ -7,8 +7,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use ai::diff_validation::{
-    fuzzy_match_diffs, fuzzy_match_v4a_diffs, AIRequestedCodeDiff, DiffDelta, DiffMatchFailures,
-    DiffType, ParsedDiff, SearchAndReplace, V4AHunk,
+    AIRequestedCodeDiff, DiffDelta, DiffMatchFailures, DiffType, ParsedDiff, SearchAndReplace,
+    V4AHunk, fuzzy_match_diffs, fuzzy_match_v4a_diffs,
 };
 use itertools::Itertools;
 use vec1::Vec1;
@@ -349,6 +349,10 @@ where
     let v4a_files: HashSet<String> = v4a_deltas.keys().cloned().collect();
     let new_file_paths: HashSet<String> = new_files.keys().cloned().collect();
     let deleted_file_paths: HashSet<String> = deleted_files.iter().cloned().collect();
+    let replacement_file_paths: HashSet<String> = new_file_paths
+        .intersection(&deleted_file_paths)
+        .cloned()
+        .collect();
 
     for (file_path, deltas) in search_replace_deltas {
         // If a file is also being explicitly created/deleted, skip applying edits to avoid
@@ -385,12 +389,18 @@ where
             result
                 .errors
                 .push(DiffApplicationError::MultipleFileCreation { file });
+        } else if replacement_file_paths.contains(&file) {
+            apply_replace_file(file, content, session_context, read_file, &mut result).await;
         } else {
             apply_create_file(file, content, session_context, read_file, &mut result).await;
         }
     }
 
     for file in deleted_files {
+        if replacement_file_paths.contains(&file) {
+            continue;
+        }
+
         if new_file_paths.contains(&file)
             || search_replace_files.contains(&file)
             || v4a_files.contains(&file)
@@ -405,6 +415,62 @@ where
     }
 
     result
+}
+
+async fn apply_replace_file<F, Fut>(
+    file_path: String,
+    content: String,
+    session_context: &SessionContext,
+    read_file: &F,
+    result: &mut DiffResult,
+) where
+    F: Fn(String) -> Fut,
+    Fut: Future<Output = FileReadResult>,
+{
+    let absolute_path = host_native_absolute_path(
+        &file_path,
+        session_context.shell(),
+        session_context.current_working_directory(),
+    );
+
+    match read_file(absolute_path.clone()).await {
+        FileReadResult::Found(file_content) => {
+            let num_lines = file_content.lines().count();
+            let replacement_line_range = if num_lines == 0 {
+                0..0
+            } else {
+                1..num_lines.saturating_add(1)
+            };
+
+            result.diffs.push(AIRequestedCodeDiff {
+                file_name: file_path,
+                diff_type: DiffType::update(
+                    vec![DiffDelta {
+                        replacement_line_range,
+                        insertion: content,
+                    }],
+                    None,
+                ),
+                failures: None,
+                original_content: file_content,
+            });
+        }
+        FileReadResult::NotFound => {
+            result
+                .errors
+                .push(DiffApplicationError::MissingFile { file: file_path });
+        }
+        FileReadResult::ReadError(err) => {
+            safe_warn!(
+                safe: ("Unable to read file for Agent Code: {err}"),
+                full: ("Unable to read file {absolute_path:?} for Agent Code: {err}")
+            );
+            result.errors.push(DiffApplicationError::ReadFailed {
+                file: file_path,
+                message: err,
+            });
+        }
+    }
 }
 
 /// Converts a file-creation request into a diff.
@@ -570,25 +636,25 @@ async fn apply_search_replace<F, Fut>(
 
             // Add warnings from the failure info - the `DiffMatchFailures` type includes both
             // fatal and non-fatal errors.
-            if let Some(failures) = fuzzy_match_diffs.failures.as_ref() {
-                if failures.missing_line_numbers > 0 {
-                    result.warnings.push(DiffWarning::MissingLineNumbers {
-                        count: failures.missing_line_numbers,
-                    });
-                }
+            if let Some(failures) = fuzzy_match_diffs.failures.as_ref()
+                && failures.missing_line_numbers > 0
+            {
+                result.warnings.push(DiffWarning::MissingLineNumbers {
+                    count: failures.missing_line_numbers,
+                });
             }
 
-            if fuzzy_match_diffs.warrants_failure() {
-                if let Some(failures) = fuzzy_match_diffs.failures.as_ref() {
-                    safe_warn!(
-                        safe: ("Failure(s) applying diff: {failures:?}"),
-                        full: ("Failure(s) applying diff for {absolute_path:?}: {failures:?}")
-                    );
-                    result.errors.push(DiffApplicationError::UnmatchedDiffs {
-                        file: file_path.clone(),
-                        match_failures: *failures,
-                    });
-                }
+            if fuzzy_match_diffs.warrants_failure()
+                && let Some(failures) = fuzzy_match_diffs.failures.as_ref()
+            {
+                safe_warn!(
+                    safe: ("Failure(s) applying diff: {failures:?}"),
+                    full: ("Failure(s) applying diff for {absolute_path:?}: {failures:?}")
+                );
+                result.errors.push(DiffApplicationError::UnmatchedDiffs {
+                    file: file_path.clone(),
+                    match_failures: *failures,
+                });
             }
             result.diffs.push(fuzzy_match_diffs);
         }
@@ -738,17 +804,17 @@ async fn apply_v4a_update<F, Fut>(
     } else {
         // Normal case: no rename or rename to non-existent file
         let diffs = fuzzy_match_v4a_diffs(&file_path, &deltas, rename_to, file_content);
-        if diffs.warrants_failure() {
-            if let Some(failures) = diffs.failures.as_ref() {
-                safe_warn!(
-                    safe: ("Failure(s) applying V4A diff: {failures:?}"),
-                    full: ("Failure(s) applying V4A diff for {absolute_path:?}: {failures:?}")
-                );
-                result.errors.push(DiffApplicationError::UnmatchedDiffs {
-                    file: file_path.clone(),
-                    match_failures: *failures,
-                });
-            }
+        if diffs.warrants_failure()
+            && let Some(failures) = diffs.failures.as_ref()
+        {
+            safe_warn!(
+                safe: ("Failure(s) applying V4A diff: {failures:?}"),
+                full: ("Failure(s) applying V4A diff for {absolute_path:?}: {failures:?}")
+            );
+            result.errors.push(DiffApplicationError::UnmatchedDiffs {
+                file: file_path.clone(),
+                match_failures: *failures,
+            });
         }
         result.diffs.push(diffs);
     }

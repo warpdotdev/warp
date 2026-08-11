@@ -4,11 +4,14 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use futures::stream::{self, BoxStream};
 use futures::StreamExt;
+use futures::stream::{self, BoxStream};
+use warp_errors::AnyhowErrorExt as _;
 
 use super::*;
+use crate::ai::agent_events::driver::agent_event_failure_should_log_error;
 use crate::server::server_api::ai::AgentRunEvent;
+use crate::server::server_api::presigned_upload::HttpStatusError;
 
 const ZERO_BACKOFF_STEPS: &[u64] = &[0];
 
@@ -28,7 +31,7 @@ impl FakeAgentEventSource {
 impl AgentEventSource for FakeAgentEventSource {
     async fn open_stream(
         &self,
-        _run_ids: &[String],
+        _filter: &AgentEventFilter,
         _since_sequence: i64,
     ) -> anyhow::Result<BoxStream<'static, anyhow::Result<AgentEventSourceItem>>> {
         let response = self
@@ -136,12 +139,14 @@ async fn driver_skips_duplicate_sequences_and_persists_new_cursor() {
     };
 
     let config = AgentEventDriverConfig {
-        run_ids: vec!["child-run".to_string()],
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
         since_sequence: 2,
         reconnect_backoff_steps: DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: None,
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -182,12 +187,14 @@ async fn driver_resets_failures_after_successful_event_delivery() {
     };
 
     let config = AgentEventDriverConfig {
-        run_ids: vec!["child-run".to_string()],
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
         since_sequence: 0,
         reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: None,
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -227,12 +234,14 @@ async fn driver_ignores_persist_cursor_errors() {
     };
 
     let config = AgentEventDriverConfig {
-        run_ids: vec!["child-run".to_string()],
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
         since_sequence: 0,
         reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: None,
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -261,12 +270,14 @@ async fn driver_ignores_driver_state_errors() {
     };
 
     let config = AgentEventDriverConfig {
-        run_ids: vec!["child-run".to_string()],
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
         since_sequence: 0,
         reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: None,
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -297,12 +308,14 @@ async fn driver_retries_initial_connection_until_stream_opens() {
     };
 
     let config = AgentEventDriverConfig {
-        run_ids: vec!["child-run".to_string()],
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
         since_sequence: 0,
         reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
         permanent_error_backoff_steps: DEFAULT_PERMANENT_ERROR_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: None,
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -357,12 +370,54 @@ fn failure_threshold_is_reached_at_and_above_limit() {
 }
 
 fn make_http_status_error(status: u16) -> anyhow::Error {
-    use crate::server::server_api::presigned_upload::HttpStatusError;
     anyhow::Error::new(HttpStatusError {
         status,
         body: "not found".to_string(),
     })
     .context("SSE stream error")
+}
+
+#[test]
+fn actionable_stream_status_reports_only_at_threshold_crossing() {
+    let err = make_http_status_error(400);
+    assert_eq!(
+        [
+            agent_event_failure_should_log_error(&err, 4, 5),
+            agent_event_failure_should_log_error(&err, 5, 5),
+            agent_event_failure_should_log_error(&err, 6, 5),
+        ],
+        [false, true, false]
+    );
+}
+
+#[test]
+fn zero_threshold_disables_stream_error_escalation() {
+    let err = make_http_status_error(400);
+    assert!(!agent_event_failure_should_log_error(&err, 1, 0));
+}
+
+#[test]
+fn non_actionable_stream_statuses_do_not_report_at_threshold() {
+    for status in [408, 429] {
+        let err = make_http_status_error(status);
+        assert!(
+            !agent_event_failure_should_log_error(&err, 5, 5),
+            "status {status}"
+        );
+    }
+}
+
+#[test]
+fn server_error_status_reports_at_threshold_crossing() {
+    let err = make_http_status_error(500);
+    assert!(agent_event_failure_should_log_error(&err, 5, 5));
+}
+
+#[test]
+fn http_status_error_actionability_follows_status_classification() {
+    assert!(make_http_status_error(400).is_actionable());
+    assert!(make_http_status_error(500).is_actionable());
+    assert!(!make_http_status_error(429).is_actionable());
 }
 
 #[tokio::test]
@@ -393,12 +448,14 @@ async fn driver_uses_slow_backoff_on_permanent_http_error() {
     // permanent=0s (instant). Proving backoff is 0s confirms the
     // permanent schedule was selected.
     let config = AgentEventDriverConfig {
-        run_ids: vec!["child-run".to_string()],
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
         since_sequence: 0,
         reconnect_backoff_steps: &[9999],
         permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: None,
     };
 
     run_agent_event_driver(source, config, &mut consumer)
@@ -416,6 +473,186 @@ async fn driver_uses_slow_backoff_on_permanent_http_error() {
         })
         .unwrap();
     assert_eq!(retry_backoff, Duration::from_secs(0));
+}
+
+#[tokio::test]
+async fn driver_gives_up_after_consecutive_auth_failures() {
+    // Every open attempt fails with a 401. With a give-up threshold of 3, the
+    // driver should stop and return an error rather than reconnecting forever.
+    let source = FakeAgentEventSource::new(vec![
+        Err(make_http_status_error(401)),
+        Err(make_http_status_error(401)),
+        Err(make_http_status_error(401)),
+    ]);
+    let mut consumer = RecordingConsumer {
+        stop_after: 1,
+        ..Default::default()
+    };
+
+    let config = AgentEventDriverConfig {
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
+        since_sequence: 0,
+        reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
+        proactive_reconnect_after: None,
+        failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: Some(3),
+        max_retry_duration: None,
+    };
+
+    let result = run_agent_event_driver(source, config, &mut consumer).await;
+    assert!(
+        result.is_err(),
+        "driver should give up on persistent auth errors"
+    );
+    assert!(consumer.handled_sequences.is_empty());
+}
+
+#[tokio::test]
+async fn driver_does_not_give_up_on_non_auth_error_when_only_auth_bounded() {
+    // A non-auth (500) error must not trip the auth give-up path: the driver
+    // reconnects and succeeds.
+    let source = FakeAgentEventSource::new(vec![
+        Err(make_http_status_error(500)),
+        Err(make_http_status_error(500)),
+        Err(make_http_status_error(500)),
+        ok_stream(vec![
+            Ok(AgentEventSourceItem::Open),
+            Ok(AgentEventSourceItem::Event(make_run_event(
+                1,
+                "new_message",
+                "child-run",
+                Some("msg-1"),
+            ))),
+        ]),
+    ]);
+    let mut consumer = RecordingConsumer {
+        stop_after: 1,
+        ..Default::default()
+    };
+
+    let config = AgentEventDriverConfig {
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
+        since_sequence: 0,
+        reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
+        proactive_reconnect_after: None,
+        failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: Some(3),
+        max_retry_duration: None,
+    };
+
+    run_agent_event_driver(source, config, &mut consumer)
+        .await
+        .unwrap();
+    assert_eq!(consumer.handled_sequences, vec![1]);
+}
+
+#[tokio::test]
+async fn driver_does_not_count_non_auth_failures_toward_auth_give_up() {
+    // Regression: the auth give-up must count only *consecutive* auth failures.
+    // A mix of non-auth failures followed by a single 401 must NOT trip a
+    // threshold-of-3 policy (only 1 consecutive auth failure has occurred).
+    let source = FakeAgentEventSource::new(vec![
+        Err(make_http_status_error(500)),
+        Err(make_http_status_error(500)),
+        Err(make_http_status_error(401)),
+        ok_stream(vec![
+            Ok(AgentEventSourceItem::Open),
+            Ok(AgentEventSourceItem::Event(make_run_event(
+                1,
+                "new_message",
+                "child-run",
+                Some("msg-1"),
+            ))),
+        ]),
+    ]);
+    let mut consumer = RecordingConsumer {
+        stop_after: 1,
+        ..Default::default()
+    };
+
+    let config = AgentEventDriverConfig {
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
+        since_sequence: 0,
+        reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
+        proactive_reconnect_after: None,
+        failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: Some(3),
+        max_retry_duration: None,
+    };
+
+    run_agent_event_driver(source, config, &mut consumer)
+        .await
+        .unwrap();
+    assert_eq!(consumer.handled_sequences, vec![1]);
+}
+
+#[tokio::test]
+async fn driver_resets_auth_streak_after_non_auth_failure() {
+    // A non-auth failure in the middle of an auth run resets the streak, so the
+    // driver only gives up once it sees a *fresh* run of 3 consecutive 401s.
+    let source = FakeAgentEventSource::new(vec![
+        Err(make_http_status_error(401)),
+        Err(make_http_status_error(500)),
+        Err(make_http_status_error(401)),
+        Err(make_http_status_error(401)),
+        Err(make_http_status_error(401)),
+    ]);
+    let mut consumer = RecordingConsumer {
+        stop_after: 1,
+        ..Default::default()
+    };
+
+    let config = AgentEventDriverConfig {
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
+        since_sequence: 0,
+        reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
+        proactive_reconnect_after: None,
+        failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: Some(3),
+        max_retry_duration: None,
+    };
+
+    // If the streak were not reset by the 500, the driver would give up before
+    // consuming all five responses; a give-up after exactly the last 401 means
+    // every response was consumed (the fake source panics if over-polled).
+    let result = run_agent_event_driver(source, config, &mut consumer).await;
+    assert!(
+        result.is_err(),
+        "driver should give up after a fresh run of 3 consecutive auth failures"
+    );
+    assert!(consumer.handled_sequences.is_empty());
+}
+
+#[tokio::test]
+async fn driver_gives_up_after_max_retry_duration() {
+    // A zero-length max retry window means the driver gives up on the first
+    // failure regardless of error class.
+    let source = FakeAgentEventSource::new(vec![Err(make_http_status_error(500))]);
+    let mut consumer = RecordingConsumer {
+        stop_after: 1,
+        ..Default::default()
+    };
+
+    let config = AgentEventDriverConfig {
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
+        since_sequence: 0,
+        reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
+        permanent_error_backoff_steps: ZERO_BACKOFF_STEPS,
+        proactive_reconnect_after: None,
+        failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: Some(Duration::from_secs(0)),
+    };
+
+    let result = run_agent_event_driver(source, config, &mut consumer).await;
+    assert!(
+        result.is_err(),
+        "driver should give up once the max retry duration elapses"
+    );
 }
 
 #[tokio::test]
@@ -444,12 +681,14 @@ async fn driver_uses_fast_backoff_on_transient_http_error() {
 
     // Set permanent backoff to something large so we can verify it was NOT used.
     let config = AgentEventDriverConfig {
-        run_ids: vec!["child-run".to_string()],
+        filter: AgentEventFilter::RunIds(vec!["child-run".to_string()]),
         since_sequence: 0,
         reconnect_backoff_steps: ZERO_BACKOFF_STEPS,
         permanent_error_backoff_steps: &[9999],
         proactive_reconnect_after: None,
         failures_before_error_log: DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+        auth_error_give_up_failures: None,
+        max_retry_duration: None,
     };
 
     run_agent_event_driver(source, config, &mut consumer)

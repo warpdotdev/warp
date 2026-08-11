@@ -29,7 +29,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use sha2::Digest;
 use syn::parse::Parse;
-use syn::{parse_macro_input, LitStr, Token};
+use syn::{LitStr, Token, parse_macro_input};
 use warp_util::assets::{ASSETS_DIR, ASYNC_ASSETS_DIR, BUNDLED_ASSETS_DIR, REMOTE_ASSETS_DIR};
 
 struct MacroArgs {
@@ -72,7 +72,7 @@ fn construct_bundled_asset(asset_name: &str, asset_dir: &str) -> Result<TokenStr
     if full_asset_path(asset_name, asset_dir).exists() {
         let full_location = format!("{asset_dir}/{asset_name}");
         Ok(quote! {
-            ::warpui::assets::asset_cache::AssetSource::Bundled {
+            ::warpui_core::assets::asset_cache::AssetSource::Bundled {
                 path: #full_location .into(),
             }
         })

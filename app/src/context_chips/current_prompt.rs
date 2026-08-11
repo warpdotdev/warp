@@ -3,43 +3,41 @@ use std::hash::{Hash as _, Hasher as _};
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::{pin_mut, FutureExt as _};
+use futures::{FutureExt as _, pin_mut};
 use itertools::Itertools;
-use settings::Setting as _;
-use warp_completer::completer::{CommandExitStatus, CommandOutput};
+use warp_completer::completer::CommandExitStatus;
+use warp_core::r#async::debounce;
 use warp_core::user_preferences::GetUserPreferences;
+use warp_errors::report_error;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
-#[cfg(feature = "local_fs")]
-use warpui::WeakModelHandle;
 use warpui::{
-    AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, ViewHandle,
+    AppContext, Entity, EntityId, ModelAsRef, ModelContext, ModelHandle, SingletonEntity,
+    ViewHandle, WeakModelHandle,
 };
 
 use super::context_chip::{
-    ChipAvailability, ChipDisabledReason, ChipFingerprintInput, ChipRuntimeCapabilities,
-    ContextChip, Environment, ExternalCommandsAvailability, GeneratorContext, PromptGenerator,
-    RefreshConfig, ShellCommandGenerator,
+    ChipAvailability, ChipFingerprintInput, ChipRuntimeCapabilities, ContextChip, Environment,
+    ExternalCommandsAvailability, GeneratorContext, PromptGenerator, RefreshConfig,
+    ShellCommandGenerator,
 };
 use super::logging::{ChipCommandLogEntry, PromptChipExecutionPhase, PromptChipLogger};
 use super::prompt::Prompt;
-use super::{chips_to_string, ChipResult, ChipValue, ContextChipKind};
-#[cfg(feature = "local_fs")]
-use crate::code_review::git_status_update::{GitRepoStatusEvent, GitRepoStatusModel};
-#[cfg(feature = "local_fs")]
+use super::{ChipResult, ChipValue, ContextChipKind, chips_to_string};
+use crate::CLIAgentSessionsModel;
+use crate::ai::blocklist::agent_view::AgentViewController;
+use crate::code_review::git_repo_model::{GitRepoStatusEvent, GitRepoStatusModel};
+use crate::code_review::github_repo_model::{GitHubRepoEvent, GitHubRepoModel};
 use crate::context_chips::display_chip::GitLineChanges;
-use crate::debounce::debounce;
 use crate::editor::EditorView;
 use crate::features::FeatureFlag;
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::report_if_error;
-use crate::settings::{InputSettings, WarpPromptSeparator};
+use crate::settings::{AISettings, AISettingsChangedEvent, InputSettings, WarpPromptSeparator};
 use crate::terminal::event::{BlockType, UserBlockCompleted};
 use crate::terminal::model::block::{Block, BlockMetadata};
 use crate::terminal::model::session::{ExecuteCommandOptions, Session, Sessions, SessionsEvent};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::session_settings::{
-    GithubPrPromptChipDefaultValidation, SessionSettings, SessionSettingsChangedEvent,
-    ToolbarChipSelection,
+    SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
 };
 use crate::terminal::view::{ContextMenuAction, PromptPart, PromptPosition, TerminalAction};
 
@@ -62,13 +60,6 @@ enum ChipUpdateStatus {
     Disabled,
     TimedOut,
     Error,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GithubPrPromptChipCommandOutcome {
-    Validated,
-    DeterministicAuthFailure,
-    RetryableFailure,
 }
 
 /// ChipState stores the state and point-in-time information related to a specific chip.
@@ -167,11 +158,16 @@ pub struct CurrentPrompt {
     sessions: ModelHandle<Sessions>,
     prompt_chip_logger: PromptChipLogger,
     update_tx: async_channel::Sender<()>,
+    agent_view_controller: Option<WeakModelHandle<AgentViewController>>,
+    terminal_view_id: Option<EntityId>,
 
-    /// When set, `ShellGitBranch` chip values are driven by filesystem events from
-    /// `GitRepoStatusModel` instead of the 30s periodic timer.
-    #[cfg(feature = "local_fs")]
+    /// When set, branch, branch status, and diff stats are populated from
+    /// `GitRepoStatusModel` filesystem events.
     git_repo_status: Option<WeakModelHandle<GitRepoStatusModel>>,
+
+    /// When set, the `GithubPullRequest` chip value is populated from
+    /// `GitHubRepoModel` for the current repository.
+    github_repo_model: Option<WeakModelHandle<GitHubRepoModel>>,
 }
 
 /// Context about the current terminal session, needed to update the prompt.
@@ -179,6 +175,18 @@ pub struct CurrentPrompt {
 struct PromptContext {
     active_block_metadata: BlockMetadata,
     environment: Environment,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ActiveChipSurfaces {
+    prompt: bool,
+    agent_footer: bool,
+    cli_agent_footer: bool,
+}
+
+impl ActiveChipSurfaces {
+    fn any(self) -> bool {
+        self.prompt || self.agent_footer || self.cli_agent_footer
+    }
 }
 
 #[derive(Clone)]
@@ -206,7 +214,7 @@ impl CurrentPrompt {
             &SessionSettings::handle(ctx),
             Self::handle_session_settings_changed,
         );
-        ctx.subscribe_to_model(&sessions, |me, event, ctx| {
+        ctx.subscribe_to_model(&sessions, |me, _, event, ctx| {
             if let SessionsEvent::EnvironmentVariablesUpdated { .. } = event {
                 me.update_states_with_new_context(ctx);
             }
@@ -239,30 +247,51 @@ impl CurrentPrompt {
             latest_context: None,
             prompt_chip_logger: PromptChipLogger::default(),
             update_tx,
+            agent_view_controller: None,
+            terminal_view_id: None,
             same_line_prompt_enabled: prompt.as_ref(ctx).same_line_prompt_enabled(),
             separator: prompt.as_ref(ctx).separator(),
-            #[cfg(feature = "local_fs")]
             git_repo_status: None,
+            github_repo_model: None,
         }
     }
 
     /// This is used to subscribe to an editor view (i.e. in the input) whose buffer
     /// we'd like to use to update chip state.
     pub fn subscribe_to_input_editor(
-        &self,
+        &mut self,
         editor: ViewHandle<EditorView>,
+        agent_view_controller: ModelHandle<AgentViewController>,
+        terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.agent_view_controller = Some(agent_view_controller.downgrade());
+        self.terminal_view_id = Some(terminal_view_id);
+
+        ctx.subscribe_to_model(&agent_view_controller, |me, _, _, ctx| {
+            me.update_states_with_new_context(ctx);
+        });
+
+        ctx.subscribe_to_model(
+            &CLIAgentSessionsModel::handle(ctx),
+            move |me, _, event, ctx| {
+                if event.terminal_view_id() == terminal_view_id {
+                    me.update_states_with_new_context(ctx);
+                }
+            },
+        );
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
+            if matches!(
+                event,
+                AISettingsChangedEvent::ShouldRenderCLIAgentToolbar { .. }
+            ) {
+                me.update_states_with_new_context(ctx);
+            }
+        });
         // A WeakViewHandle is used here to avoid leaking the terminal model
         let weak_editor_handle = editor.downgrade();
-        ctx.subscribe_to_view(&editor, move |me, _, ctx| {
-            // CurrentPrompt exists and this fn is called even if we're not using warp prompt.
-            // We don't need to do anything if we're honoring PS1 unless universal developer input
-            // or AgentView is enabled (agent view needs chips regardless of PS1 setting).
-            if *SessionSettings::as_ref(ctx).honor_ps1
-                && !InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx)
-                && !FeatureFlag::AgentView.is_enabled()
-            {
+        ctx.subscribe_to_view(&editor, move |me, _, _, ctx| {
+            if !me.active(ctx) {
                 return;
             }
             let Some(editor) = weak_editor_handle.upgrade(ctx) else {
@@ -270,28 +299,28 @@ impl CurrentPrompt {
             };
 
             let latest_context = me.latest_context.clone();
-            if let Some(context) = latest_context {
-                if let Some(session_id) = context.active_block_metadata.session_id() {
-                    let session = me
-                        .sessions
-                        .update(ctx, |sessions, _| sessions.get(session_id));
+            if let Some(context) = latest_context
+                && let Some(session_id) = context.active_block_metadata.session_id()
+            {
+                let session = me
+                    .sessions
+                    .update(ctx, |sessions, _| sessions.get(session_id));
 
-                    if let Some(session) = session {
-                        let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                        for (kind, state) in me.states.iter_mut() {
-                            state.should_render =
-                                kind.should_render(&buffer_text, session.aliases());
-                        }
-                        ctx.notify();
+                if let Some(session) = session {
+                    let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
+                    for (kind, state) in me.states.iter_mut() {
+                        state.should_render = kind.should_render(&buffer_text, session.aliases());
                     }
+                    ctx.notify();
                 }
             }
         });
+
+        self.update_states_with_new_context(ctx);
     }
 
     pub fn snapshot(&self) -> HashMap<ContextChipKind, Option<ChipValue>> {
-        let cur = self
-            .states
+        self.states
             .iter()
             .filter_map(|(kind, state)| {
                 if state.should_render && !matches!(state.availability, ChipAvailability::Hidden) {
@@ -300,8 +329,7 @@ impl CurrentPrompt {
                     None
                 }
             })
-            .collect();
-        cur
+            .collect()
     }
 
     pub fn on_click_snapshot(&self) -> HashMap<ContextChipKind, Vec<String>> {
@@ -331,19 +359,21 @@ impl CurrentPrompt {
 
     fn update_chip_value(&mut self, chip_kind: &ContextChipKind, value: Option<ChipValue>) {
         log::debug!("Updating prompt value of {chip_kind:?} to {value:?}");
-        if let Some(state) = self.states.get_mut(chip_kind) {
-            if state.last_computed_value != value {
-                state.last_computed_value = value;
-                state.update_status = ChipUpdateStatus::Ready;
-                let _ = self.update_tx.try_send(());
-            }
+        if let Some(state) = self.states.get_mut(chip_kind)
+            && state.last_computed_value != value
+        {
+            state.last_computed_value = value;
+            state.update_status = ChipUpdateStatus::Ready;
+            let _ = self.update_tx.try_send(());
         }
     }
 
     fn update_on_click_value(&mut self, chip_kind: &ContextChipKind, value: Option<Vec<String>>) {
         log::debug!("Updating prompt on_click value of {chip_kind:?} to {value:?}");
         let filter_values = match chip_kind {
-            ContextChipKind::ShellGitBranch => self.filter_git_branch_on_click_values(value),
+            ContextChipKind::ShellGitBranch | ContextChipKind::GitBranchStatus => {
+                self.filter_git_branch_on_click_values(value)
+            }
             _ => value,
         };
         if let Some(state) = self.states.get_mut(chip_kind) {
@@ -357,11 +387,11 @@ impl CurrentPrompt {
         chip_kind: &ContextChipKind,
         availability: ChipAvailability,
     ) {
-        if let Some(state) = self.states.get_mut(chip_kind) {
-            if state.availability != availability {
-                state.availability = availability;
-                let _ = self.update_tx.try_send(());
-            }
+        if let Some(state) = self.states.get_mut(chip_kind)
+            && state.availability != availability
+        {
+            state.availability = availability;
+            let _ = self.update_tx.try_send(());
         }
     }
 
@@ -635,7 +665,7 @@ impl CurrentPrompt {
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(chip) = chip_kind.to_chip() else {
-            log::error!("Undefined chip: {chip_kind:?}");
+            report_error!("Undefined chip", extra: { "chip_kind" => ?chip_kind });
             return;
         };
 
@@ -673,19 +703,6 @@ impl CurrentPrompt {
                     handle.abort();
                 }
             }
-            // If the GithubPullRequest chip is disabled because `gh` is missing,
-            // transition validation state to Suppressed so future default
-            // resolution excludes it.
-            if matches!(chip_kind, ContextChipKind::GithubPullRequest) {
-                if let ChipAvailability::Disabled(ChipDisabledReason::RequiresExecutable {
-                    ref command,
-                }) = availability
-                {
-                    if command == "gh" {
-                        Self::maybe_suppress_github_pr_default(ctx);
-                    }
-                }
-            }
             self.update_chip_value(chip_kind, None);
             self.update_on_click_value(chip_kind, None);
             self.set_chip_update_status(chip_kind, ChipUpdateStatus::Disabled);
@@ -699,19 +716,16 @@ impl CurrentPrompt {
             return;
         }
 
-        if chip.runtime_policy().suppress_on_failure() {
-            if let Some(state) = self.states.get(chip_kind) {
-                if let Some(current_fp) = &fingerprint {
-                    if state.last_failure_fingerprint.as_ref() == Some(current_fp) {
-                        self.update_chip_value(chip_kind, None);
-                        self.update_on_click_value(chip_kind, None);
-                        self.set_chip_update_status(chip_kind, ChipUpdateStatus::Cached);
-                        return;
-                    }
-                }
-            }
+        if chip.runtime_policy().suppress_on_failure()
+            && let Some(state) = self.states.get(chip_kind)
+            && let Some(current_fp) = &fingerprint
+            && state.last_failure_fingerprint.as_ref() == Some(current_fp)
+        {
+            self.update_chip_value(chip_kind, None);
+            self.update_on_click_value(chip_kind, None);
+            self.set_chip_update_status(chip_kind, ChipUpdateStatus::Cached);
+            return;
         }
-
         match generator {
             PromptGenerator::ShellCommand(cmd) => {
                 let Some(exec_ctx) = self.prepare_shell_command_context(cmd, ctx) else {
@@ -751,7 +765,7 @@ impl CurrentPrompt {
                         .await;
                         (value, timed_out, chip_kind, exec_ctx, chip_title)
                     },
-                    move |me, (value, timed_out, chip_kind, exec_ctx, chip_title), ctx| {
+                    move |me, (value, timed_out, chip_kind, exec_ctx, chip_title), _| {
                         logger.log_shell_command(&ChipCommandLogEntry {
                             chip_kind: &chip_kind,
                             chip_title: &chip_title,
@@ -775,21 +789,9 @@ impl CurrentPrompt {
 
                         if timed_out {
                             if suppress_on_failure
-                                && Self::should_cache_failure_fingerprint(
-                                    &chip_kind,
-                                    value.as_ref(),
-                                    timed_out,
-                                )
+                                && let Some(state) = me.states.get_mut(&chip_kind)
                             {
-                                if let Some(state) = me.states.get_mut(&chip_kind) {
-                                    state.last_failure_fingerprint = current_fingerprint;
-                                }
-                            } else if suppress_on_failure {
-                                if let Some(state) = me.states.get_mut(&chip_kind) {
-                                    if state.last_failure_fingerprint == current_fingerprint {
-                                        state.last_failure_fingerprint = None;
-                                    }
-                                }
+                                state.last_failure_fingerprint = current_fingerprint;
                             }
                             me.update_chip_value(&chip_kind, None);
                             me.set_chip_update_status(&chip_kind, ChipUpdateStatus::TimedOut);
@@ -813,40 +815,18 @@ impl CurrentPrompt {
                             _ => (None, ChipUpdateStatus::Error, true),
                         };
 
-                        if matches!(chip_kind, ContextChipKind::GithubPullRequest) {
-                            match Self::github_pr_prompt_chip_command_outcome(
-                                value.as_ref(),
-                                timed_out,
-                            ) {
-                                GithubPrPromptChipCommandOutcome::Validated => {
-                                    Self::maybe_validate_github_pr_default(ctx);
-                                }
-                                GithubPrPromptChipCommandOutcome::DeterministicAuthFailure => {
-                                    Self::maybe_suppress_github_pr_default(ctx);
-                                }
-                                GithubPrPromptChipCommandOutcome::RetryableFailure => {}
-                            }
-                        }
-
-                        if suppress_on_failure
-                            && failed
-                            && Self::should_cache_failure_fingerprint(
-                                &chip_kind,
-                                value.as_ref(),
-                                timed_out,
-                            )
-                        {
+                        if suppress_on_failure && failed {
                             if let Some(state) = me.states.get_mut(&chip_kind) {
                                 state.last_failure_fingerprint = current_fingerprint;
                             }
-                        } else if suppress_on_failure {
-                            if let Some(state) = me.states.get_mut(&chip_kind) {
-                                if state.last_failure_fingerprint == current_fingerprint {
-                                    state.last_failure_fingerprint = None;
-                                }
-                            }
+                        } else if suppress_on_failure
+                            && let Some(state) = me.states.get_mut(&chip_kind)
+                            && state.last_failure_fingerprint == current_fingerprint
+                        {
+                            state.last_failure_fingerprint = None;
                         }
-                        me.update_chip_value(&chip_kind, output.map(ChipValue::Text));
+                        let chip_value = output.map(ChipValue::Text);
+                        me.update_chip_value(&chip_kind, chip_value);
                         me.set_chip_update_status(&chip_kind, status);
                     },
                 );
@@ -863,6 +843,20 @@ impl CurrentPrompt {
 
         if let Some(on_click_gen) = on_click_generator {
             self.refresh_on_click_values(chip_kind, on_click_gen, ctx);
+        }
+    }
+
+    /// Re-run the branch-list (on-click) generator for a git branch chip so
+    /// its branch-switcher dropdown stays in sync with the repository.
+    fn refresh_git_branch_dropdown(
+        &mut self,
+        chip_kind: ContextChipKind,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(chip) = chip_kind.to_chip()
+            && let Some(on_click_gen) = chip.on_click_generator().cloned()
+        {
+            self.refresh_on_click_values(&chip_kind, on_click_gen, ctx);
         }
     }
 
@@ -972,7 +966,7 @@ impl CurrentPrompt {
         }
 
         let Some(chip) = chip_kind.to_chip() else {
-            log::error!("Undefined chip: {chip_kind:?}");
+            report_error!("Undefined chip", extra: { "chip_kind" => ?chip_kind });
             return;
         };
         if let RefreshConfig::Periodically { interval } = chip.refresh_config() {
@@ -1012,13 +1006,50 @@ impl CurrentPrompt {
 
         chips.iter().for_each(|chip_kind| {
             let Some(chip) = chip_kind.to_chip() else {
-                log::error!("Undefined chip: {chip_kind:?}");
+                report_error!("Undefined chip", extra: { "chip_kind" => ?chip_kind });
                 return;
             };
             // Add states of new chips
             if !self.states.contains_key(chip_kind) {
                 let state = ChipState::new(chip_kind);
                 self.states.insert(chip_kind.clone(), state);
+            }
+            if self.is_updated_externally(chip_kind) {
+                // For chips updated externally (e.g. by the per-repo git status
+                // filesystem watcher), avoid running the shell-based fallback
+                // generator. Doing so can briefly overwrite the structured
+                // watcher value with one that uses different semantics (for
+                // example, the `GitDiffStats` shell fallback runs `git diff
+                // --shortstat HEAD`, which excludes untracked files, whereas
+                // the watcher counts untracked files as changes), causing the
+                // chip to flicker between the tracked-only count and the
+                // all-files count when untracked files are present.
+                //
+                // If a chip provides an `initial_value_generator` that sources
+                // from the prompt context (rather than running a shell
+                // command), use it for a fast initial value until the watcher
+                // emits a metadata-changed event.
+                if let Some(initial_gen) = chip_kind.initial_value_generator() {
+                    self.fetch_chip_value_once(
+                        chip_kind,
+                        &initial_gen,
+                        chip.on_click_generator().cloned(),
+                        true,
+                        ctx,
+                    );
+                } else {
+                    // Externally-updated chips without an `initial_value_generator`
+                    // are left blank after a state rebuild (`states.clear()` in
+                    // `handle_prompt_changed`, or `clear_cache()` on a session
+                    // change) until their backing model emits a change event.
+                    // `GithubPullRequest` only emits when cached PR info actually
+                    // changes, so after a rebuild there may be no event to restore
+                    // the already-cached value until the next periodic refresh.
+                    if matches!(chip_kind, ContextChipKind::GithubPullRequest) {
+                        self.sync_pr_chip_from_model(ctx);
+                    }
+                }
+                return;
             }
 
             match chip.refresh_config() {
@@ -1032,41 +1063,13 @@ impl CurrentPrompt {
                     );
                 }
                 RefreshConfig::Periodically { .. } => {
-                    if self.is_updated_externally(chip_kind) {
-                        // For chips updated externally (e.g. by the per-repo
-                        // git status filesystem watcher), avoid running the
-                        // periodic shell-based generator. Doing so can briefly
-                        // overwrite the structured watcher value with one that
-                        // uses different semantics (for example, the
-                        // `GitDiffStats` shell fallback runs `git diff
-                        // --shortstat HEAD`, which excludes untracked files,
-                        // whereas the watcher counts untracked files as
-                        // changes), causing the chip to flicker between the
-                        // tracked-only count and the all-files count when
-                        // untracked files are present.
-                        //
-                        // If a chip provides an `initial_value_generator` that
-                        // sources from the prompt context (rather than running
-                        // a shell command), use it for a fast initial value
-                        // until the watcher emits a metadata-changed event.
-                        if let Some(initial_gen) = chip_kind.initial_value_generator() {
-                            self.fetch_chip_value_once(
-                                chip_kind,
-                                &initial_gen,
-                                chip.on_click_generator().cloned(),
-                                true,
-                                ctx,
-                            );
-                        }
-                    } else {
-                        self.fetch_chip_value_at_interval(
-                            chip_kind,
-                            chip_kind.initial_value_generator(),
-                            chip.on_click_generator().cloned(),
-                            true,
-                            ctx,
-                        );
-                    }
+                    self.fetch_chip_value_at_interval(
+                        chip_kind,
+                        chip_kind.initial_value_generator(),
+                        chip.on_click_generator().cloned(),
+                        true,
+                        ctx,
+                    );
                 }
                 RefreshConfig::OnFileChanges { filepath } => {
                     log::debug!("Unimplemented: would've watched changes to filepath: {filepath}");
@@ -1083,8 +1086,8 @@ impl CurrentPrompt {
         });
     }
 
-    /// Reads the currently-configured chips from the [`Prompt`] model and filters out any that
-    /// are missing their definition.
+    /// Reads the currently-configured chips from the [`Prompt`] model and filters out any that are
+    /// missing their definition.
     fn configured_chips(&self, ctx: &AppContext) -> Vec<ContextChipKind> {
         let prompt = Prompt::as_ref(ctx);
         prompt
@@ -1094,36 +1097,69 @@ impl CurrentPrompt {
             .collect()
     }
 
-    /// Chips whose values we should actively maintain in state.
-    ///
-    /// When Agent View is enabled, the footer chips should not depend on prompt chip
-    /// customization/ordering/visibility, so we keep their backing values up to date even if they
-    /// are not present in the prompt configuration.
-    fn chips_to_run(&self, ctx: &AppContext) -> Vec<ContextChipKind> {
-        let mut chips = self.configured_chips(ctx);
+    fn active_surfaces(&self, ctx: &AppContext) -> ActiveChipSurfaces {
+        let prompt = !*SessionSettings::as_ref(ctx).honor_ps1
+            || InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx);
+        let agent_footer = FeatureFlag::AgentView.is_enabled()
+            && self
+                .agent_view_controller
+                .as_ref()
+                .and_then(|controller| controller.upgrade(ctx))
+                .is_some_and(|controller| controller.as_ref(ctx).is_active());
+        let cli_agent_footer = self.terminal_view_id.is_some_and(|terminal_view_id| {
+            *AISettings::as_ref(ctx).should_render_cli_agent_footer
+                && CLIAgentSessionsModel::as_ref(ctx)
+                    .session(terminal_view_id)
+                    .is_some_and(|session| session.agent.supports_cli_agent_footer())
+        });
 
-        if FeatureFlag::AgentView.is_enabled() {
-            let footer_chips = SessionSettings::as_ref(ctx)
-                .agent_footer_chip_selection
-                .all_chips();
-            for chip_kind in footer_chips {
+        ActiveChipSurfaces {
+            prompt,
+            agent_footer,
+            cli_agent_footer,
+        }
+    }
+
+    fn chips_to_run_for_surfaces(
+        &self,
+        surfaces: ActiveChipSurfaces,
+        ctx: &AppContext,
+    ) -> Vec<ContextChipKind> {
+        let mut chips = if surfaces.prompt {
+            self.configured_chips(ctx)
+        } else {
+            Vec::new()
+        };
+
+        let mut extend_unique = |new_chips: Vec<ContextChipKind>| {
+            for chip_kind in new_chips {
                 if !chips.contains(&chip_kind) {
                     chips.push(chip_kind);
                 }
             }
+        };
 
-            // Also include chips configured for the CLI agent footer.
-            let cli_footer_chips = SessionSettings::as_ref(ctx)
-                .cli_agent_footer_chip_selection
-                .all_chips();
-            for chip_kind in cli_footer_chips {
-                if !chips.contains(&chip_kind) {
-                    chips.push(chip_kind);
-                }
-            }
+        if surfaces.agent_footer {
+            extend_unique(
+                SessionSettings::as_ref(ctx)
+                    .agent_footer_chip_selection
+                    .all_chips(),
+            );
+        }
+
+        if surfaces.cli_agent_footer {
+            extend_unique(
+                SessionSettings::as_ref(ctx)
+                    .cli_agent_footer_chip_selection
+                    .all_chips(),
+            );
         }
 
         chips
+    }
+    /// Chips whose values we should actively maintain in state.
+    fn chips_to_run(&self, ctx: &AppContext) -> Vec<ContextChipKind> {
+        self.chips_to_run_for_surfaces(self.active_surfaces(ctx), ctx)
     }
 
     /// Resets states (including terminating any in progress spawned operations), and updates the
@@ -1141,8 +1177,6 @@ impl CurrentPrompt {
     /// existing states map with new information.
     /// This is called when the context gets updated (ie. a new block metadata is received).
     fn update_states_with_new_context_and_session(&mut self, ctx: &mut ModelContext<Self>) {
-        self.maybe_unsuppress_github_pr_default(ctx);
-
         // 1. Terminating existing spawned operations.
         self.clear_chips_and_cache();
 
@@ -1156,6 +1190,7 @@ impl CurrentPrompt {
     /// spot, and changing Prompt configuration most likely doesn't mean updating the context.
     fn handle_prompt_changed(
         &mut self,
+        _: ModelHandle<Prompt>,
         _prompt_event: &<Prompt as Entity>::Event,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -1172,6 +1207,7 @@ impl CurrentPrompt {
 
     fn handle_session_settings_changed(
         &mut self,
+        _: ModelHandle<SessionSettings>,
         event: &SessionSettingsChangedEvent,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -1198,6 +1234,12 @@ impl CurrentPrompt {
 
         if let SessionSettingsChangedEvent::AgentToolbarChipSelectionSetting { .. } = event {
             // Recompute which chips to run when the agent footer config changes.
+            self.update_states_with_new_context(ctx);
+        }
+        if let SessionSettingsChangedEvent::GithubPrChipDefaultValidation { .. } = event {
+            // Re-resolve the default prompt's chip list (which gates the
+            // PR chip on `is_suppressed()`) and re-run chips with the new
+            // suppression state.
             self.update_states_with_new_context(ctx);
         }
 
@@ -1266,34 +1308,36 @@ impl CurrentPrompt {
             .any(|handle| !handle.abort_handle().is_aborted())
     }
 
-    fn handle_model_event(&mut self, event: &ModelEvent, ctx: &mut ModelContext<Self>) {
-        if let ModelEvent::AfterBlockCompleted(after_block_completed) = event {
-            if let BlockType::User(UserBlockCompleted { command, .. }) =
+    fn handle_model_event(
+        &mut self,
+        _: ModelHandle<ModelEventDispatcher>,
+        event: &ModelEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let ModelEvent::AfterBlockCompleted(after_block_completed) = event
+            && let BlockType::User(UserBlockCompleted { command, .. }) =
                 &after_block_completed.block_type
-            {
-                if let Some(cmd) = command.split_whitespace().next() {
-                    // Resolve aliases so that e.g. `alias g=git` followed by `g push`
-                    // still triggers invalidation for chips watching "git".
-                    let resolved = self
-                        .latest_context
-                        .as_ref()
-                        .and_then(|context| context.active_block_metadata.session_id())
-                        .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
-                        .and_then(|session| session.alias_value(cmd).map(String::from));
-                    let effective_cmd = resolved.as_deref().unwrap_or(cmd);
+            && let Some(cmd) = command.split_whitespace().next()
+        {
+            // Resolve aliases so that e.g. `alias g=git` followed by `g push`
+            // still triggers invalidation for chips watching "git".
+            let resolved = self
+                .latest_context
+                .as_ref()
+                .and_then(|context| context.active_block_metadata.session_id())
+                .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
+                .and_then(|session| session.alias_value(cmd).map(String::from));
+            let effective_cmd = resolved.as_deref().unwrap_or(cmd);
 
-                    for (chip_kind, state) in &mut self.states {
-                        if let Some(chip) = chip_kind.to_chip() {
-                            if chip
-                                .runtime_policy()
-                                .invalidate_on_commands()
-                                .iter()
-                                .any(|c| c == effective_cmd)
-                            {
-                                state.invalidating_command_count += 1;
-                            }
-                        }
-                    }
+            for (chip_kind, state) in &mut self.states {
+                if let Some(chip) = chip_kind.to_chip()
+                    && chip
+                        .runtime_policy()
+                        .invalidate_on_commands()
+                        .iter()
+                        .any(|c| c == effective_cmd)
+                {
+                    state.invalidating_command_count += 1;
                 }
             }
         }
@@ -1364,7 +1408,7 @@ impl CurrentPrompt {
                                 .into_item(),
                         )
                     } else {
-                        log::error!("Missing definition for chip: {chip_kind:?}");
+                        report_error!("Missing definition for chip", extra: { "chip_kind" => ?chip_kind });
                         None
                     }
                 } else {
@@ -1415,24 +1459,74 @@ impl CurrentPrompt {
     }
 
     /// Set the per-repo git status model handle. When `Some`, subscribes to
-    /// metadata-changed events so `ShellGitBranch` and `GitDiffStats` are updated
-    /// by filesystem events instead of the 30s periodic timer.
-    #[cfg(feature = "local_fs")]
+    /// metadata events so git-backed prompt chips are updated from the
+    /// per-repo status model. PR info is handled separately by
+    /// [`Self::set_github_repo_model`].
     pub fn set_git_repo_status(
         &mut self,
         handle: Option<WeakModelHandle<GitRepoStatusModel>>,
         ctx: &mut ModelContext<Self>,
     ) {
         // Unsubscribe from the previous model, if any.
-        if let Some(old_weak) = self.git_repo_status.take() {
-            if let Some(old_strong) = old_weak.upgrade(ctx) {
-                ctx.unsubscribe_from_model(&old_strong);
-            }
+        if let Some(old_weak) = self.git_repo_status.take()
+            && let Some(old_strong) = old_weak.upgrade(ctx)
+        {
+            ctx.unsubscribe_from_model(&old_strong);
         }
 
-        // Repo detached, clear GitDiffStats.
+        // Repo detached, clear git chips that require repository metadata.
         if handle.is_none() {
-            if let Some(state) = self.states.get_mut(&ContextChipKind::GitDiffStats) {
+            for chip_kind in [
+                ContextChipKind::GitDiffStats,
+                ContextChipKind::GitBranchStatus,
+            ] {
+                if let Some(state) = self.states.get_mut(&chip_kind) {
+                    state.clear_abort_handlers();
+                    state.clear_cache();
+                }
+            }
+            let _ = self.update_tx.try_send(());
+            return;
+        }
+
+        if let Some(weak) = handle
+            && let Some(strong) = weak.upgrade(ctx)
+        {
+            self.git_repo_status = Some(weak);
+            ctx.subscribe_to_model(&strong, |me, _, event, ctx| match event {
+                GitRepoStatusEvent::MetadataChanged => {
+                    me.apply_git_repo_metadata(ctx);
+                }
+            });
+
+            // Eagerly populate chips if metadata is already available (the
+            // initial `refresh_metadata` in `GitRepoStatusModel::new` may
+            // have completed before we subscribed). If it hasn't finished
+            // yet, the subscription above will catch the `MetadataChanged`
+            // event when it does.
+            if strong.as_ref(ctx).metadata(ctx).is_some() {
+                self.apply_git_repo_metadata(ctx);
+            }
+        }
+    }
+
+    /// Set the per-repo GitHub-info model handle. When `Some`, subscribes to
+    /// its events so the `GithubPullRequest` chip value is updated.
+    pub fn set_github_repo_model(
+        &mut self,
+        handle: Option<WeakModelHandle<GitHubRepoModel>>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        // Unsubscribe from the previous model, if any.
+        if let Some(old_weak) = self.github_repo_model.take()
+            && let Some(old_strong) = old_weak.upgrade(ctx)
+        {
+            ctx.unsubscribe_from_model(&old_strong);
+        }
+
+        if handle.is_none() {
+            // GitHub-info handle detached: clear any stale PR chip state.
+            if let Some(state) = self.states.get_mut(&ContextChipKind::GithubPullRequest) {
                 state.clear_abort_handlers();
                 state.clear_cache();
             }
@@ -1440,36 +1534,32 @@ impl CurrentPrompt {
             return;
         }
 
-        if let Some(weak) = handle {
-            if let Some(strong) = weak.upgrade(ctx) {
-                self.git_repo_status = Some(weak);
-                ctx.subscribe_to_model(&strong, |me, event, ctx| match event {
-                    GitRepoStatusEvent::MetadataChanged => {
-                        me.apply_git_repo_metadata(ctx);
-                    }
-                });
-
-                // Eagerly populate chips if metadata is already available (the
-                // initial `refresh_metadata` in `GitRepoStatusModel::new` may
-                // have completed before we subscribed). If it hasn't finished
-                // yet, the subscription above will catch the `MetadataChanged`
-                // event when it does.
-                if strong.as_ref(ctx).metadata().is_some() {
-                    self.apply_git_repo_metadata(ctx);
+        if let Some(weak) = handle
+            && let Some(strong) = weak.upgrade(ctx)
+        {
+            self.github_repo_model = Some(weak);
+            // Only PR info drives the chip value; repository name/owner
+            // changes don't affect it.
+            ctx.subscribe_to_model(&strong, |me, _, event, ctx| match event {
+                GitHubRepoEvent::PrInfoChanged => {
+                    me.sync_pr_chip_from_model(ctx);
                 }
-            }
+                GitHubRepoEvent::RepositoryInfoChanged => {}
+            });
+
+            // Eagerly populate the PR chip if PR info has already landed.
+            self.sync_pr_chip_from_model(ctx);
         }
     }
 
     /// Read the current `GitRepoStatusModel` metadata and push it into the
-    /// `ShellGitBranch` and `GitDiffStats` chip states.
-    #[cfg(feature = "local_fs")]
+    /// git-backed chip states.
     fn apply_git_repo_metadata(&mut self, ctx: &mut ModelContext<Self>) {
         let metadata = self
             .git_repo_status
             .as_ref()
             .and_then(|w| w.upgrade(ctx))
-            .and_then(|h| h.as_ref(ctx).metadata().cloned());
+            .and_then(|h| h.as_ref(ctx).metadata(ctx).cloned());
 
         let Some(metadata) = metadata else {
             return;
@@ -1483,11 +1573,24 @@ impl CurrentPrompt {
         if current_branch.as_ref() != Some(&new_branch) {
             self.update_chip_value(&ContextChipKind::ShellGitBranch, Some(new_branch));
             // Refresh the branch dropdown so it stays in sync.
-            let chip_kind = ContextChipKind::ShellGitBranch;
-            if let Some(chip) = chip_kind.to_chip() {
-                if let Some(on_click_gen) = chip.on_click_generator().cloned() {
-                    self.refresh_on_click_values(&chip_kind, on_click_gen, ctx);
-                }
+            self.refresh_git_branch_dropdown(ContextChipKind::ShellGitBranch, ctx);
+        }
+
+        let new_branch_status = ChipValue::GitBranchStatus(metadata.branch_tracking_status.clone());
+        let current_branch_status = self
+            .latest_chip_value(&ContextChipKind::GitBranchStatus)
+            .cloned();
+        if current_branch_status.as_ref() != Some(&new_branch_status) {
+            // Only a branch change affects the dropdown's branch list;
+            // ahead/behind count updates don't warrant re-running it.
+            let branch_changed = !matches!(
+                current_branch_status.as_ref(),
+                Some(ChipValue::GitBranchStatus(current))
+                    if current.branch == metadata.branch_tracking_status.branch
+            );
+            self.update_chip_value(&ContextChipKind::GitBranchStatus, Some(new_branch_status));
+            if branch_changed {
+                self.refresh_git_branch_dropdown(ContextChipKind::GitBranchStatus, ctx);
             }
         }
 
@@ -1503,128 +1606,41 @@ impl CurrentPrompt {
         }
     }
 
+    /// Reads PR info from the per-repo `GitHubRepoModel` and updates the
+    /// `GithubPullRequest` chip value if it differs from the current one.
+    fn sync_pr_chip_from_model(&mut self, ctx: &AppContext) {
+        let new_pr_value = self
+            .github_repo_model
+            .as_ref()
+            .and_then(|w| w.upgrade(ctx))
+            .and_then(|h| {
+                h.as_ref(ctx)
+                    .pr_info(ctx)
+                    .map(|info| ChipValue::Text(info.url.clone()))
+            });
+        let current_pr = self
+            .latest_chip_value(&ContextChipKind::GithubPullRequest)
+            .cloned();
+        if current_pr != new_pr_value {
+            self.update_chip_value(&ContextChipKind::GithubPullRequest, new_pr_value);
+        }
+    }
+
     /// Returns `true` when the given chip's value is updated externally
     /// (e.g. by a filesystem watcher) and the periodic timer should be skipped.
     fn is_updated_externally(&self, chip_kind: &ContextChipKind) -> bool {
-        #[cfg(feature = "local_fs")]
-        {
-            if matches!(
-                chip_kind,
-                ContextChipKind::ShellGitBranch | ContextChipKind::GitDiffStats
-            ) {
-                return self.git_repo_status.is_some();
-            }
-        }
-        let _ = chip_kind;
-        false
-    }
-
-    /// Heuristic check for `gh` CLI authentication errors in stderr output.
-    fn is_gh_auth_error(stderr: &str) -> bool {
-        let lower = stderr.to_lowercase();
-        lower.contains("not logged in")
-            || lower.contains("authentication required")
-            || lower.contains("gh auth login")
-    }
-
-    fn github_pr_prompt_chip_command_outcome(
-        output: Option<&CommandOutput>,
-        timed_out: bool,
-    ) -> GithubPrPromptChipCommandOutcome {
-        if timed_out {
-            return GithubPrPromptChipCommandOutcome::RetryableFailure;
-        }
-
-        match output {
-            Some(command_output) if command_output.status == CommandExitStatus::Success => {
-                GithubPrPromptChipCommandOutcome::Validated
-            }
-            Some(command_output) => {
-                let stderr = String::from_utf8(command_output.stderr.clone()).unwrap_or_default();
-                if Self::is_gh_auth_error(&stderr) {
-                    GithubPrPromptChipCommandOutcome::DeterministicAuthFailure
-                } else {
-                    GithubPrPromptChipCommandOutcome::RetryableFailure
-                }
-            }
-            None => GithubPrPromptChipCommandOutcome::RetryableFailure,
-        }
-    }
-
-    fn should_cache_failure_fingerprint(
-        chip_kind: &ContextChipKind,
-        output: Option<&CommandOutput>,
-        timed_out: bool,
-    ) -> bool {
-        if !matches!(chip_kind, ContextChipKind::GithubPullRequest) {
-            return true;
-        }
-
-        matches!(
-            Self::github_pr_prompt_chip_command_outcome(output, timed_out),
-            GithubPrPromptChipCommandOutcome::DeterministicAuthFailure
-        )
-    }
-
-    fn maybe_suppress_github_pr_default(ctx: &mut ModelContext<Self>) {
-        let current = *SessionSettings::as_ref(ctx).github_pr_chip_default_validation;
-        if current != GithubPrPromptChipDefaultValidation::Suppressed {
-            SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .github_pr_chip_default_validation
-                    .set_value(GithubPrPromptChipDefaultValidation::Suppressed, ctx));
-            });
-        }
-    }
-
-    /// On session changes (including app startup), re-check whether a previously
-    /// suppressed PR chip should get another chance. Suppression is sticky across
-    /// restarts, but if the user has since installed `gh`, resetting to Unvalidated
-    /// lets the normal chip execution path re-validate or re-suppress.
-    fn maybe_unsuppress_github_pr_default(&self, ctx: &mut ModelContext<Self>) {
-        if !SessionSettings::as_ref(ctx)
-            .github_pr_chip_default_validation
-            .is_suppressed()
-        {
-            return;
-        }
-        let gh_on_path = self
-            .with_current_generator_context(ctx, |generator_context| {
-                generator_context.active_session.is_some_and(|session| {
-                    session.has_loaded_external_commands()
-                        && session.executable_names().any(|name| name == "gh")
-                })
-            })
-            .unwrap_or(false);
-        if gh_on_path {
-            SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .github_pr_chip_default_validation
-                    .set_value(GithubPrPromptChipDefaultValidation::Unvalidated, ctx));
-            });
-        }
-    }
-
-    fn maybe_validate_github_pr_default(ctx: &mut ModelContext<Self>) {
-        let current = *SessionSettings::as_ref(ctx).github_pr_chip_default_validation;
-        if current == GithubPrPromptChipDefaultValidation::Unvalidated {
-            SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .github_pr_chip_default_validation
-                    .set_value(GithubPrPromptChipDefaultValidation::Validated, ctx));
-            });
+        match chip_kind {
+            ContextChipKind::ShellGitBranch
+            | ContextChipKind::GitBranchStatus
+            | ContextChipKind::GitDiffStats => self.git_repo_status.is_some(),
+            ContextChipKind::GithubPullRequest => self.github_repo_model.is_some(),
+            _ => false,
         }
     }
 
     /// Whether or not context chips are active. If this is false, we can skip running them.
     fn active(&self, ctx: &AppContext) -> bool {
-        // Context chips are active when:
-        // 1. PS1 is not honored (normal case), OR
-        // 2. Universal developer input is enabled (overrides PS1 behavior), OR
-        // 3. AgentView feature is enabled (agent view needs chips regardless of PS1)
-        !*SessionSettings::as_ref(ctx).honor_ps1
-            || InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx)
-            || FeatureFlag::AgentView.is_enabled()
+        self.active_surfaces(ctx).any()
     }
 }
 

@@ -8,13 +8,19 @@ use lazy_static::lazy_static;
 use parking_lot::FairMutex;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
-use warp_core::ui::appearance::Appearance;
+use uuid::Uuid;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
-    Align, Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Expanded, Flex, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement, Radius,
-    ScrollbarWidth, SelectableArea, SelectionHandle, Stack, Text,
+    Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, Dismiss, Empty, Expanded, Flex, MainAxisSize,
+    MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, ScrollbarWidth, SelectableArea, SelectionHandle, Stack,
+    Text,
 };
 use warpui::keymap::{Context, EditableBinding, FixedBinding, Keystroke};
 use warpui::ui_components::components::UiComponent as _;
@@ -26,8 +32,9 @@ use warpui::{
 use super::inline_action_icons::{self, icon_size};
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::{
-    icons, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType, AIAgentActionType,
+    AIAgentActionId, AIAgentActionResult, AIAgentActionResultType, AIAgentActionType,
     AIAgentCitation, AIAgentOutputMessageType, CallMCPToolResult, RequestCommandOutputResult,
+    icons,
 };
 use crate::ai::blocklist::action_model::AIActionStatus;
 use crate::ai::blocklist::block::cli_controller::{
@@ -35,33 +42,38 @@ use crate::ai::blocklist::block::cli_controller::{
 };
 use crate::ai::blocklist::block::view_impl::output::action_icon;
 use crate::ai::blocklist::block::view_impl::{
-    render_autonomy_checkbox_setting_speedbump_footer, render_citation, render_citation_chips,
     CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN,
+    render_autonomy_checkbox_setting_speedbump_footer, render_citation, render_citation_chips,
 };
 use crate::ai::blocklist::block::{AIBlockAction, AutonomySettingSpeedbump};
 use crate::ai::blocklist::inline_action::inline_action_header::{
-    ExpandedConfig, HeaderConfig, InteractionMode, RightClickConfig,
-    INLINE_ACTION_HORIZONTAL_PADDING,
+    ExpandedConfig, HeaderConfig, INLINE_ACTION_HORIZONTAL_PADDING, InteractionMode,
+    RightClickConfig,
 };
 use crate::ai::blocklist::model::{AIBlockModel, AIBlockModelHelper};
 use crate::ai::blocklist::{
     AIBlock, BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIHistoryModel,
     ClientIdentifiers,
 };
+use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::cmd_or_ctrl_shift;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
 use crate::editor::InteractionState;
-use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
 use crate::settings::InputModeSettings;
+use crate::terminal::TerminalModel;
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::model::block::Block;
-use crate::terminal::TerminalModel;
 use crate::ui_components::blended_colors;
+use crate::ui_components::json_tree::{
+    CopyJsonFn, JsonTreeColors, JsonTreeState, PathSegment, TREE_FONT_SIZE, ToggleFn,
+    ToggleStringFn, render_json_tree,
+};
 use crate::util::bindings::keybinding_name_to_keystroke;
 use crate::view_components::action_button::{ButtonSize, KeystrokeSource, NakedTheme};
 use crate::view_components::compactible_action_button::{
-    CompactibleActionButton, RenderCompactibleActionButton, LARGE_SIZE_SWITCH_THRESHOLD,
-    MEDIUM_SIZE_SWITCH_THRESHOLD, SMALL_SIZE_SWITCH_THRESHOLD,
+    CompactibleActionButton, LARGE_SIZE_SWITCH_THRESHOLD, MEDIUM_SIZE_SWITCH_THRESHOLD,
+    RenderCompactibleActionButton, SMALL_SIZE_SWITCH_THRESHOLD,
 };
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
 
@@ -89,6 +101,7 @@ const VIEWING_MCP_TOOL_DETAIL_MESSAGE: &str = "Viewing MCP tool call detail";
 const EDIT_COMMAND_ACTION_NAME: &str = "requested_command:edit";
 
 const EDIT_MODE_OPEN_KEYMAP_CONTEXT: &str = "RequestedCommandViewEditModeOpen";
+const REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT: &str = "RequestedActionBlocked";
 
 const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 const MAX_EDITOR_HEIGHT: f32 = 500.0;
@@ -119,32 +132,42 @@ pub fn init(app: &mut AppContext) {
         FixedBinding::new(
             "ctrl-c",
             RequestedCommandViewAction::Reject,
-            id!(RequestedCommandView::ui_name()),
+            id!(RequestedCommandView::ui_name()) & id!(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT),
         ),
         FixedBinding::new(
             "enter",
             RequestedCommandViewAction::Accept,
-            id!(RequestedCommandView::ui_name()) & !id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
+            id!(RequestedCommandView::ui_name())
+                & id!(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT)
+                & !id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
         ),
         FixedBinding::new(
             "numpadenter",
             RequestedCommandViewAction::Accept,
-            id!(RequestedCommandView::ui_name()) & !id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
+            id!(RequestedCommandView::ui_name())
+                & id!(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT)
+                & !id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
         ),
         FixedBinding::new(
             "cmdorctrl-enter",
             RequestedCommandViewAction::Accept,
-            id!(RequestedCommandView::ui_name()) & id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
+            id!(RequestedCommandView::ui_name())
+                & id!(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT)
+                & id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
         ),
         FixedBinding::new(
             "escape",
             RequestedCommandViewAction::CloseEditMode,
-            id!(RequestedCommandView::ui_name()) & id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
+            id!(RequestedCommandView::ui_name())
+                & id!(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT)
+                & id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
         ),
         FixedBinding::new(
             "tab",
             RequestedCommandViewAction::FocusEditor,
-            id!(RequestedCommandView::ui_name()) & id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
+            id!(RequestedCommandView::ui_name())
+                & id!(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT)
+                & id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
         ),
     ]);
 
@@ -155,8 +178,62 @@ pub fn init(app: &mut AppContext) {
     )
     .with_key_binding(cmd_or_ctrl_shift("e"))
     .with_context_predicate(
-        id!(RequestedCommandView::ui_name()) & !id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
+        id!(RequestedCommandView::ui_name())
+            & id!(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT)
+            & !id!(EDIT_MODE_OPEN_KEYMAP_CONTEXT),
     )]);
+}
+
+/// Structured representation of an MCP tool call request for JSON tree rendering.
+pub struct McpRequest {
+    pub args: serde_json::Value,
+}
+
+/// The normalized, renderable form of a `CallMCPToolResult`.
+pub(crate) enum McpRenderable {
+    Tree(serde_json::Value),
+    Error(String),
+    Cancelled,
+}
+
+/// Normalizes a `CallMCPToolResult` into a `McpRenderable` for display.
+///
+/// Prefers `structured_content` when present; otherwise tries to parse joined
+/// text content as JSON; falls back to wrapping the raw text as a JSON string value.
+pub(crate) fn mcp_result_to_renderable(result: &CallMCPToolResult) -> McpRenderable {
+    match result {
+        CallMCPToolResult::Success { result } => {
+            if let Some(v) = &result.structured_content {
+                return McpRenderable::Tree(v.clone());
+            }
+            let text = result
+                .content
+                .iter()
+                .filter_map(|c| {
+                    if let rmcp::model::RawContent::Text(t) = &c.raw {
+                        Some(t.text.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                McpRenderable::Tree(v)
+            } else {
+                McpRenderable::Tree(serde_json::Value::String(text))
+            }
+        }
+        CallMCPToolResult::Error(e) => McpRenderable::Error(e.clone()),
+        CallMCPToolResult::Cancelled => McpRenderable::Cancelled,
+    }
+}
+
+/// Identifies which of the two JSON trees (request or response) an action targets.
+#[derive(Debug, Clone)]
+pub enum McpTree {
+    Request,
+    Response,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,6 +276,33 @@ pub enum RequestedCommandViewAction {
     ToggleExpanded,
     OpenActiveAgentProfileEditor,
     SelectText,
+    /// Toggle the expanded/collapsed state of an object or array node in the
+    /// MCP request or response JSON tree.
+    ToggleJsonNode {
+        path: Vec<PathSegment>,
+        tree: McpTree,
+    },
+    /// Toggle the expanded/collapsed state of a long string value in the MCP
+    /// request or response JSON tree.
+    ToggleJsonString {
+        path: Vec<PathSegment>,
+        tree: McpTree,
+    },
+    /// Write the given JSON text to the system clipboard.
+    CopyJsonToClipboard {
+        text: String,
+    },
+    /// Opens the right-click context menu for an MCP JSON tree row, carrying
+    /// the serialized subtree JSON and the position anchor ID of the clicked
+    /// row so the menu can be positioned below it.
+    ShowMcpContextMenu {
+        json_text: String,
+        anchor_id: String,
+    },
+    /// Copy the currently selected MCP tree text to the clipboard.
+    CopyMcpSelection,
+    /// Dismiss the MCP JSON tree right-click context menu.
+    CloseMcpContextMenu,
 }
 
 pub struct RequestedCommandView {
@@ -244,6 +348,31 @@ pub struct RequestedCommandView {
     // Selection support for MCP tool call detail text
     mcp_content_selection_handle: SelectionHandle,
     mcp_content_selected_text: Arc<std::sync::RwLock<Option<String>>>,
+
+    // Structured request data and per-tree expansion state for JSON tree rendering.
+    // `mcp_request` is populated from the stream as soon as the tool name
+    // and arguments are known. Separate states ensure request-tree paths start
+    // at depth 0 and are not confused with response-tree paths.
+    mcp_request: Option<McpRequest>,
+    mcp_request_tree_state: JsonTreeState,
+    mcp_response_tree_state: JsonTreeState,
+    // Scroll state for the MCP JSON tree body, shared across renders to preserve scroll position.
+    mcp_scroll_state: ClippedScrollStateHandle,
+    // Right-click context menu for MCP JSON tree rows (Copy / Copy JSON items).
+    mcp_context_menu: ViewHandle<Menu<RequestedCommandViewAction>>,
+    mcp_context_menu_open: bool,
+    // The SavePosition anchor ID of the row that was last right-clicked, used
+    // to position the context menu below the correct row.
+    mcp_context_menu_anchor_id: Option<String>,
+    // The originating MCP server id for this tool call, captured when the
+    // action streams in so the header can surface the server name across
+    // every lifecycle state (blocked, queued, running, finished) — even after
+    // the action leaves the pending queue and is no longer retrievable. `None`
+    // for legacy/flat MCP calls with no server id.
+    mcp_server_id: Option<Uuid>,
+    // The MCP tool name is kept separately from the formatted command text so
+    // headers never need to parse a presentation label to recover identity.
+    mcp_tool_name: Option<String>,
 }
 
 impl RequestedCommandView {
@@ -426,11 +555,9 @@ impl RequestedCommandView {
                         conversation_id: event_conversation_id,
                         ..
                     } = event
-                    {
-                        if *event_conversation_id == conversation_id {
+                        && *event_conversation_id == conversation_id {
                             ctx.notify();
                         }
-                    }
                 },
             );
         }
@@ -445,6 +572,21 @@ impl RequestedCommandView {
         ctx.subscribe_to_view(&accept_menu, |me, _menu, event, ctx| match event {
             MenuEvent::Close { .. } => {
                 me.is_accept_split_button_menu_open = false;
+                ctx.notify();
+            }
+            MenuEvent::ItemSelected | MenuEvent::ItemHovered => {}
+        });
+
+        let mcp_context_menu = ctx.add_typed_action_view(|ctx| {
+            let theme = Appearance::as_ref(ctx).theme();
+            Menu::new()
+                .with_menu_variant(MenuVariant::Fixed)
+                .with_border(Border::all(1.).with_border_fill(theme.outline()))
+                .prevent_interaction_with_other_elements()
+        });
+        ctx.subscribe_to_view(&mcp_context_menu, |me, _menu, event, ctx| match event {
+            MenuEvent::Close { .. } => {
+                me.mcp_context_menu_open = false;
                 ctx.notify();
             }
             MenuEvent::ItemSelected | MenuEvent::ItemHovered => {}
@@ -478,6 +620,15 @@ impl RequestedCommandView {
             ai_block_view_id,
             mcp_content_selection_handle: SelectionHandle::default(),
             mcp_content_selected_text: Arc::new(std::sync::RwLock::new(None)),
+            mcp_request: None,
+            mcp_request_tree_state: Default::default(),
+            mcp_response_tree_state: Default::default(),
+            mcp_scroll_state: Default::default(),
+            mcp_context_menu,
+            mcp_context_menu_open: false,
+            mcp_context_menu_anchor_id: None,
+            mcp_server_id: None,
+            mcp_tool_name: None,
         }
     }
 
@@ -641,7 +792,9 @@ impl RequestedCommandView {
             let Some(mouse_state_handle) =
                 self.citation_state_handles.get(copied_citation).cloned()
             else {
-                log::warn!("Tried to retrieve mouse state handle for citation, but no mouse state handle exists.");
+                log::warn!(
+                    "Tried to retrieve mouse state handle for citation, but no mouse state handle exists."
+                );
                 return None;
             };
             render_citation(
@@ -685,7 +838,7 @@ impl RequestedCommandView {
             .with_horizontal_padding(INLINE_ACTION_HORIZONTAL_PADDING)
             .with_vertical_padding(4.)
             .with_background(theme.surface_1())
-            .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
+            .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(7.)))
             .finish()
         });
 
@@ -796,7 +949,7 @@ impl RequestedCommandView {
         .with_horizontal_padding(INLINE_ACTION_HORIZONTAL_PADDING)
         .with_vertical_padding(8.)
         .with_border(Border::top(1.).with_border_fill(theme.surface_1()))
-        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
+        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(7.)))
         .finish()
     }
 
@@ -881,10 +1034,10 @@ impl RequestedCommandView {
         if !is_view_only {
             return;
         }
-        if let Some(command) = action_result.result.command_str() {
-            if !command.is_empty() {
-                self.command_text = command.to_string();
-            }
+        if let Some(command) = action_result.result.command_str()
+            && !command.is_empty()
+        {
+            self.command_text = command.to_string();
         }
     }
 
@@ -950,10 +1103,10 @@ impl RequestedCommandView {
     /// Returns the currently selected text.
     pub fn selected_text(&self, ctx: &AppContext) -> Option<String> {
         // Check MCP content selection first, then fall back to editor selection.
-        if let Ok(mcp_selection) = self.mcp_content_selected_text.read() {
-            if mcp_selection.is_some() {
-                return mcp_selection.clone();
-            }
+        if let Ok(mcp_selection) = self.mcp_content_selected_text.read()
+            && mcp_selection.is_some()
+        {
+            return mcp_selection.clone();
         }
         self.editor
             .as_ref()
@@ -963,23 +1116,61 @@ impl RequestedCommandView {
     pub fn clear_selection(&mut self, ctx: &mut ViewContext<Self>) {
         // Clear MCP content selection if it exists, else fall back to editor selection.
         self.mcp_content_selection_handle.clear();
-        if let Ok(mut mcp_selection) = self.mcp_content_selected_text.write() {
-            *mcp_selection = None;
-        } else if let Some(editor) = &self.editor {
-            editor.update(ctx, |editor, ctx| {
-                editor.clear_selection(ctx);
-            });
+        match self.mcp_content_selected_text.write() {
+            Ok(mut mcp_selection) => {
+                *mcp_selection = None;
+            }
+            _ => {
+                if let Some(editor) = &self.editor {
+                    editor.update(ctx, |editor, ctx| {
+                        editor.clear_selection(ctx);
+                    });
+                }
+            }
         }
     }
 
-    /// Extracts the tool name from MCP tool command text, removing parameters.
-    /// For example, "tool_name(param1, param2)" becomes "tool_name".
-    fn extract_mcp_tool_name(&self, command_text: &str) -> String {
-        if let Some(paren_pos) = command_text.find('(') {
-            command_text[..paren_pos].trim().to_string()
-        } else {
-            command_text.trim().to_string()
-        }
+    /// Stores the structured MCP tool request data for JSON tree rendering.
+    pub(crate) fn update_mcp_request(&mut self, args: serde_json::Value) {
+        self.mcp_request = Some(McpRequest { args });
+    }
+
+    /// Stores the originating MCP server id for this tool call, so the header
+    /// can surface the server name across lifecycle states. Captured once when
+    /// the action streams in; `None` for legacy/flat MCP calls with no server.
+    pub(crate) fn update_mcp_server_id(&mut self, server_id: Option<Uuid>) {
+        self.mcp_server_id = server_id;
+    }
+    /// Stores the MCP tool name independently of the formatted command text.
+    pub(crate) fn update_mcp_tool_name(&mut self, tool_name: &str) {
+        self.mcp_tool_name = Some(tool_name.to_owned());
+    }
+
+    /// Returns the MCP tool name for sentence-form titles like the blocked
+    /// confirmation card and the expanded detail header.
+    fn mcp_clean_tool_name(&self) -> String {
+        self.mcp_tool_name.clone().unwrap_or_default()
+    }
+
+    /// Resolves the user-facing name of the MCP tool's originating server.
+    /// Returns `None` when the server id is absent (legacy/flat MCP call) or
+    /// the server can't be named (e.g. not installed). Non-panicking.
+    fn mcp_server_name(&self, app: &AppContext) -> Option<String> {
+        self.mcp_server_id
+            .as_ref()
+            .and_then(|id| TemplatableMCPServerManager::get_mcp_name(id, app))
+    }
+
+    /// Builds the blocked/confirmation title for an MCP tool call, surfacing
+    /// both the tool name and its originating server when known:
+    /// `OK if I call MCP tool {tool} on server {server}`. Falls back to the
+    /// tool name alone when the server can't be named, and to the generic
+    /// waiting message when the tool name is also unavailable.
+    fn mcp_blocked_title(&self, app: &AppContext) -> String {
+        mcp_blocked_title_text(
+            &self.mcp_clean_tool_name(),
+            self.mcp_server_name(app).as_deref(),
+        )
     }
 
     fn render_header(
@@ -1007,7 +1198,7 @@ impl RequestedCommandView {
 
         match action_status {
             Some(AIActionStatus::Preprocessing) => {
-                title = self.get_header_title_text().into();
+                title = self.get_header_title_text(app).into();
                 font_override = Some(appearance.monospace_font_family());
                 if !self
                     .block_model
@@ -1020,7 +1211,7 @@ impl RequestedCommandView {
                 }
             }
             Some(AIActionStatus::Queued) => {
-                title = self.get_header_title_text().into();
+                title = self.get_header_title_text(app).into();
                 font_override = Some(appearance.monospace_font_family());
                 font_color_override = Some(blended_colors::text_disabled(
                     appearance.theme(),
@@ -1030,7 +1221,7 @@ impl RequestedCommandView {
             Some(AIActionStatus::Blocked) => {
                 title = match &self.action_type {
                     RequestedActionViewType::Command => COMMAND_WAITING_FOR_USER_MESSAGE.into(),
-                    RequestedActionViewType::McpTool => MCP_TOOL_WAITING_FOR_USER_MESSAGE.into(),
+                    RequestedActionViewType::McpTool => self.mcp_blocked_title(app).into(),
                 };
             }
             Some(AIActionStatus::RunningAsync) | Some(AIActionStatus::Finished(..))
@@ -1065,7 +1256,11 @@ impl RequestedCommandView {
                             VIEWING_COMMAND_DETAIL_MESSAGE.into()
                         }
                     }
-                    RequestedActionViewType::McpTool => VIEWING_MCP_TOOL_DETAIL_MESSAGE.into(),
+                    RequestedActionViewType::McpTool => mcp_viewing_detail_title_text(
+                        &self.mcp_clean_tool_name(),
+                        self.mcp_server_name(app).as_deref(),
+                    )
+                    .into(),
                 };
             }
             None => {
@@ -1084,12 +1279,12 @@ impl RequestedCommandView {
                 } else if requested_command_block.is_some_and(|block| block.finished()) {
                     // If a finished command block exists but there's no action status,
                     // treat the same as a finished command (normal text styling).
-                    title = self.get_header_title_text().into();
+                    title = self.get_header_title_text(app).into();
                     font_override = Some(appearance.monospace_font_family());
                 } else {
                     // If there is no action status and response is not streaming, it was cancelled
                     // mid-flight.
-                    let title_str = self.get_header_title_text();
+                    let title_str = self.get_header_title_text(app);
                     title = if title_str.trim().is_empty() {
                         LOADING_MESSAGE.into()
                     } else {
@@ -1105,7 +1300,7 @@ impl RequestedCommandView {
                 }
             }
             _ => {
-                title = self.get_header_title_text().into();
+                title = self.get_header_title_text(app).into();
 
                 // Show cancelled command loading message when the command was cancelled during generation,
                 // and then restored with an empty title as a result.
@@ -1167,9 +1362,9 @@ impl RequestedCommandView {
             });
 
         if should_round_bottom_corners {
-            config = config.with_corner_radius_override(CornerRadius::with_all(Radius::Pixels(8.)));
+            config = config.with_corner_radius_override(CornerRadius::with_all(Radius::Pixels(7.)));
         } else {
-            config = config.with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(8.)));
+            config = config.with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(7.)));
         }
 
         if let Some(font_override) = font_override {
@@ -1275,10 +1470,16 @@ impl RequestedCommandView {
         config.render(app)
     }
 
-    fn get_header_title_text(&self) -> String {
+    fn get_header_title_text(&self, app: &AppContext) -> String {
         match &self.action_type {
             RequestedActionViewType::Command => format_command_text(self.command_text()),
-            RequestedActionViewType::McpTool => self.extract_mcp_tool_name(self.command_text()),
+            RequestedActionViewType::McpTool => {
+                let tool = self.mcp_clean_tool_name();
+                match self.mcp_server_name(app) {
+                    Some(server) if !tool.is_empty() => format!("{tool} on {server}"),
+                    _ => tool,
+                }
+            }
         }
     }
 
@@ -1311,6 +1512,13 @@ impl RequestedCommandView {
         }
         expansion_config
     }
+
+    fn is_waiting_for_user_confirmation(&self, app: &AppContext) -> bool {
+        self.action_model
+            .as_ref(app)
+            .get_action_status(&self.action_id)
+            .is_some_and(|status| status.is_blocked())
+    }
 }
 
 pub(crate) fn header_message_for_user_take_over_reason(
@@ -1318,10 +1526,39 @@ pub(crate) fn header_message_for_user_take_over_reason(
 ) -> &'static str {
     match reason {
         UserTakeOverReason::Manual => USER_TOOK_CONTROL_COMMAND_MESSAGE,
-        UserTakeOverReason::Stop => USER_STOPPED_CLI_SUBAGENT_COMMAND_MESSAGE,
+        UserTakeOverReason::Stop { .. } => USER_STOPPED_CLI_SUBAGENT_COMMAND_MESSAGE,
         UserTakeOverReason::TransferFromAgent { .. } => {
             AGENT_REQUESTED_USER_TAKE_CONTROL_COMMAND_MESSAGE
         }
+    }
+}
+
+/// Builds the blocked/confirmation title for an MCP tool call from the
+/// already-resolved tool and server names, so the formatting is unit-testable
+/// without a full app/view context. Surfaces both identities when the server
+/// is known: `OK if I call MCP tool {tool} on server {server}`; falls back to
+/// the tool name alone when the server can't be named, and to the generic
+/// waiting message when the tool name is also unavailable.
+fn mcp_blocked_title_text(tool_name: &str, server_name: Option<&str>) -> String {
+    if tool_name.is_empty() {
+        return MCP_TOOL_WAITING_FOR_USER_MESSAGE.to_owned();
+    }
+    match server_name {
+        Some(server) => format!("OK if I call MCP tool {tool_name} on server {server}"),
+        None => format!("OK if I call MCP tool {tool_name}"),
+    }
+}
+
+/// Builds the expanded-detail header title for an MCP tool call from the
+/// already-resolved tool and server names. Falls back to the generic
+/// "Viewing MCP tool call detail" message when the tool name is unavailable.
+fn mcp_viewing_detail_title_text(tool_name: &str, server_name: Option<&str>) -> String {
+    if tool_name.is_empty() {
+        return VIEWING_MCP_TOOL_DETAIL_MESSAGE.to_owned();
+    }
+    match server_name {
+        Some(server) => format!("Viewing MCP tool {tool_name} on {server}"),
+        None => format!("Viewing MCP tool {tool_name}"),
     }
 }
 
@@ -1419,7 +1656,7 @@ impl View for RequestedCommandView {
                             REQUESTED_COMMAND_BODY_VERTICAL_PADDING - SCROLLBAR_WIDTH.as_f32() - 2.,
                         )
                         .with_background_color(theme.background().into_solid())
-                        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
+                        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(7.)))
                         .finish(),
                 )
                 .with_max_height(MAX_EDITOR_HEIGHT)
@@ -1428,59 +1665,265 @@ impl View for RequestedCommandView {
         }
 
         if should_render_mcp_content {
-            let command_text = self.command_text();
-            let content_text = if let Some(AIAgentActionResultType::CallMCPTool(result)) =
-                action_status
-                    .as_ref()
-                    .and_then(|status| status.finished_result().map(|result| &result.result))
-            {
-                // If we have a result, show the JSON response.
-                let result_text = match result {
-                    CallMCPToolResult::Success { result } => serde_json::to_string_pretty(result)
-                        .unwrap_or_else(|_| "Error formatting JSON".to_string()),
-                    CallMCPToolResult::Error(error) => {
-                        format!("Error: {error}")
-                    }
-                    CallMCPToolResult::Cancelled => "Tool call was cancelled".to_string(),
+            if FeatureFlag::McpJsonTreeView.is_enabled() {
+                let colors = JsonTreeColors::from_theme(theme);
+                let font_family = appearance.monospace_font_family();
+
+                let mut tree_column =
+                    Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+
+                // Request section: show the tree if args are known, or a placeholder.
+                let request_section: Box<dyn Element> = if let Some(mcp_request) = &self.mcp_request
+                {
+                    let on_toggle_req: Arc<ToggleFn> = Arc::new(|ctx, path, _depth| {
+                        ctx.dispatch_typed_action(RequestedCommandViewAction::ToggleJsonNode {
+                            path,
+                            tree: McpTree::Request,
+                        });
+                    });
+                    let on_copy_req: Arc<CopyJsonFn> = Arc::new(|ctx, _path, value, anchor_id| {
+                        let json_text = serde_json::to_string_pretty(&value).unwrap_or_default();
+                        ctx.dispatch_typed_action(RequestedCommandViewAction::ShowMcpContextMenu {
+                            json_text,
+                            anchor_id,
+                        });
+                    });
+                    let on_toggle_string_req: Arc<ToggleStringFn> = Arc::new(|ctx, path| {
+                        ctx.dispatch_typed_action(RequestedCommandViewAction::ToggleJsonString {
+                            path,
+                            tree: McpTree::Request,
+                        });
+                    });
+                    render_json_tree(
+                        &mcp_request.args,
+                        Some("Request"),
+                        &self.mcp_request_tree_state,
+                        &colors,
+                        &format!("{}-req", self.position_id_prefix),
+                        on_toggle_req,
+                        on_toggle_string_req,
+                        on_copy_req,
+                        appearance,
+                    )
+                } else {
+                    let mut col =
+                        Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+                    col.add_child(
+                        Text::new_inline("Request".to_string(), font_family, TREE_FONT_SIZE)
+                            .with_color(colors.annotation)
+                            .soft_wrap(false)
+                            .finish(),
+                    );
+                    col.add_child(
+                        Text::new_inline("(no arguments)".to_string(), font_family, TREE_FONT_SIZE)
+                            .with_color(colors.annotation)
+                            .soft_wrap(false)
+                            .finish(),
+                    );
+                    col.finish()
                 };
-                format!("{command_text}\n\nResponse: {result_text}")
-            } else if self.is_header_expanded {
-                command_text.to_string()
+                tree_column.add_child(request_section);
+
+                // Response section: present only when a finished result exists.
+                if let Some(AIAgentActionResultType::CallMCPTool(result)) = action_status
+                    .as_ref()
+                    .and_then(|status| status.finished_result().map(|r| &r.result))
+                {
+                    tree_column.add_child(
+                        Container::new(Empty::new().finish())
+                            .with_padding_top(8.)
+                            .finish(),
+                    );
+
+                    let renderable = mcp_result_to_renderable(result);
+                    let response_element: Box<dyn Element> = match renderable {
+                        McpRenderable::Tree(value) => {
+                            let on_toggle_resp: Arc<ToggleFn> = Arc::new(|ctx, path, _depth| {
+                                ctx.dispatch_typed_action(
+                                    RequestedCommandViewAction::ToggleJsonNode {
+                                        path,
+                                        tree: McpTree::Response,
+                                    },
+                                );
+                            });
+                            let on_copy_resp: Arc<CopyJsonFn> =
+                                Arc::new(|ctx, _path, value, anchor_id| {
+                                    let json_text =
+                                        serde_json::to_string_pretty(&value).unwrap_or_default();
+                                    ctx.dispatch_typed_action(
+                                        RequestedCommandViewAction::ShowMcpContextMenu {
+                                            json_text,
+                                            anchor_id,
+                                        },
+                                    );
+                                });
+                            let on_toggle_string_resp: Arc<ToggleStringFn> =
+                                Arc::new(|ctx, path| {
+                                    ctx.dispatch_typed_action(
+                                        RequestedCommandViewAction::ToggleJsonString {
+                                            path,
+                                            tree: McpTree::Response,
+                                        },
+                                    );
+                                });
+                            render_json_tree(
+                                &value,
+                                Some("Response"),
+                                &self.mcp_response_tree_state,
+                                &colors,
+                                &format!("{}-resp", self.position_id_prefix),
+                                on_toggle_resp,
+                                on_toggle_string_resp,
+                                on_copy_resp,
+                                appearance,
+                            )
+                        }
+                        McpRenderable::Error(e) => {
+                            let mut col = Flex::column()
+                                .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+                            col.add_child(
+                                Text::new_inline(
+                                    "Response".to_string(),
+                                    font_family,
+                                    TREE_FONT_SIZE,
+                                )
+                                .with_color(colors.annotation)
+                                .soft_wrap(false)
+                                .finish(),
+                            );
+                            col.add_child(
+                                Text::new(format!("Error: {e}"), font_family, TREE_FONT_SIZE)
+                                    .with_color(theme.ui_error_color())
+                                    .with_selectable(true)
+                                    .finish(),
+                            );
+                            col.finish()
+                        }
+                        McpRenderable::Cancelled => {
+                            let mut col = Flex::column()
+                                .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+                            col.add_child(
+                                Text::new_inline(
+                                    "Response".to_string(),
+                                    font_family,
+                                    TREE_FONT_SIZE,
+                                )
+                                .with_color(colors.annotation)
+                                .soft_wrap(false)
+                                .finish(),
+                            );
+                            col.add_child(
+                                Text::new_inline(
+                                    "Cancelled".to_string(),
+                                    font_family,
+                                    TREE_FONT_SIZE,
+                                )
+                                .with_color(colors.annotation)
+                                .soft_wrap(false)
+                                .finish(),
+                            );
+                            col.finish()
+                        }
+                    };
+                    tree_column.add_child(response_element);
+                }
+
+                // Height cap prevents a large tree from pushing subsequent blocks off-screen.
+                // Padding is on the outer Container so it applies outside the scrollable viewport.
+                let scrollable = NewScrollable::vertical(
+                    SingleAxisConfig::Clipped {
+                        handle: self.mcp_scroll_state.clone(),
+                        child: tree_column.finish(),
+                    },
+                    theme.nonactive_ui_detail().into(),
+                    theme.active_ui_detail().into(),
+                    warpui::elements::Fill::None,
+                )
+                .with_vertical_scrollbar(ScrollableAppearance::new(ScrollbarWidth::Auto, false))
+                .with_propagate_mousewheel_if_not_handled(true)
+                .finish();
+
+                let constrained = ConstrainedBox::new(scrollable)
+                    .with_max_height(MAX_EDITOR_HEIGHT)
+                    .finish();
+
+                // SelectableArea enables text drag-selection across the tree rows.
+                // Per-row Hoverables receive LeftMouseDown before SelectableArea sees it
+                // (depth-first dispatch), so click handlers are unaffected.
+                let mcp_selected_text = self.mcp_content_selected_text.clone();
+                let selectable_content = SelectableArea::new(
+                    self.mcp_content_selection_handle.clone(),
+                    #[allow(clippy::unwrap_used)]
+                    move |selection_args, _, _| {
+                        *mcp_selected_text.write().unwrap() = selection_args.selection;
+                    },
+                    constrained,
+                )
+                .on_selection_updated(|ctx, _| {
+                    ctx.dispatch_typed_action(RequestedCommandViewAction::SelectText);
+                })
+                .finish();
+
+                content.add_child(
+                    Container::new(selectable_content)
+                        .with_horizontal_padding(INLINE_ACTION_HORIZONTAL_PADDING)
+                        .with_vertical_padding(REQUESTED_COMMAND_BODY_VERTICAL_PADDING)
+                        .with_background(theme.background())
+                        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(7.)))
+                        .finish(),
+                );
             } else {
-                self.extract_mcp_tool_name(command_text)
-            };
-
-            let text_element = Text::new(
-                content_text,
-                appearance.monospace_font_family(),
-                appearance.monospace_font_size(),
-            )
-            .with_color(blended_colors::text_main(theme, theme.background()))
-            .with_selectable(true)
-            .finish();
-
-            let mcp_selected_text = self.mcp_content_selected_text.clone();
-            let selectable_text = SelectableArea::new(
-                self.mcp_content_selection_handle.clone(),
-                #[allow(clippy::unwrap_used)]
-                move |selection_args, _, _| {
-                    *mcp_selected_text.write().unwrap() = selection_args.selection;
-                },
-                text_element,
-            )
-            .on_selection_updated(|ctx, _| {
-                ctx.dispatch_typed_action(RequestedCommandViewAction::SelectText);
-            })
-            .finish();
-
-            content.add_child(
-                Container::new(selectable_text)
-                    .with_horizontal_padding(INLINE_ACTION_HORIZONTAL_PADDING)
-                    .with_vertical_padding(REQUESTED_COMMAND_BODY_VERTICAL_PADDING)
-                    .with_background(theme.background())
-                    .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
-                    .finish(),
-            );
+                // Fallback: flat pretty-printed JSON.
+                let command_text = self.command_text();
+                let content_text = if let Some(AIAgentActionResultType::CallMCPTool(result)) =
+                    action_status
+                        .as_ref()
+                        .and_then(|status| status.finished_result().map(|result| &result.result))
+                {
+                    let result_text = match result {
+                        CallMCPToolResult::Success { result } => {
+                            serde_json::to_string_pretty(result)
+                                .unwrap_or_else(|_| "Error formatting JSON".to_string())
+                        }
+                        CallMCPToolResult::Error(error) => format!("Error: {error}"),
+                        CallMCPToolResult::Cancelled => "Tool call was cancelled".to_string(),
+                    };
+                    format!("{command_text}\n\nResponse: {result_text}")
+                } else if self.is_header_expanded {
+                    command_text.to_string()
+                } else {
+                    self.mcp_clean_tool_name()
+                };
+                let text_element = Text::new(
+                    content_text,
+                    appearance.monospace_font_family(),
+                    appearance.monospace_font_size(),
+                )
+                .with_color(blended_colors::text_main(theme, theme.background()))
+                .with_selectable(true)
+                .finish();
+                let mcp_selected_text = self.mcp_content_selected_text.clone();
+                let selectable_text = SelectableArea::new(
+                    self.mcp_content_selection_handle.clone(),
+                    #[allow(clippy::unwrap_used)]
+                    move |selection_args, _, _| {
+                        *mcp_selected_text.write().unwrap() = selection_args.selection;
+                    },
+                    text_element,
+                )
+                .on_selection_updated(|ctx, _| {
+                    ctx.dispatch_typed_action(RequestedCommandViewAction::SelectText);
+                })
+                .finish();
+                content.add_child(
+                    Container::new(selectable_text)
+                        .with_horizontal_padding(INLINE_ACTION_HORIZONTAL_PADDING)
+                        .with_vertical_padding(REQUESTED_COMMAND_BODY_VERTICAL_PADDING)
+                        .with_background(theme.background())
+                        .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(7.)))
+                        .finish(),
+                );
+            }
         }
 
         if let Some(footer) = self.maybe_render_footer(app) {
@@ -1522,7 +1965,7 @@ impl View for RequestedCommandView {
                                     !exchange
                                         .input
                                         .iter()
-                                        .any(|input| input.user_query().is_some())
+                                        .any(|input| input.display_query().is_some())
                                 })
                     }))
                 && !is_input_pinned_to_top);
@@ -1562,9 +2005,29 @@ impl View for RequestedCommandView {
                 OffsetPositioning::offset_from_save_position_element(
                     Self::get_position_id_for_accept_split_button(&self.position_id_prefix),
                     vec2f(0., 8.),
-                    warpui::elements::PositionedElementOffsetBounds::WindowByPosition,
-                    warpui::elements::PositionedElementAnchor::BottomRight,
-                    warpui::elements::ChildAnchor::TopRight,
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::BottomRight,
+                    ChildAnchor::TopRight,
+                ),
+            );
+        }
+
+        if self.mcp_context_menu_open
+            && let Some(anchor_id) = &self.mcp_context_menu_anchor_id
+        {
+            root_stack.add_positioned_child(
+                Dismiss::new(ChildView::new(&self.mcp_context_menu).finish())
+                    .on_dismiss(|ctx, _app| {
+                        ctx.dispatch_typed_action(RequestedCommandViewAction::CloseMcpContextMenu);
+                    })
+                    .prevent_interaction_with_other_elements()
+                    .finish(),
+                OffsetPositioning::offset_from_save_position_element(
+                    anchor_id.as_str(),
+                    vec2f(0., 0.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::BottomLeft,
+                    ChildAnchor::TopLeft,
                 ),
             );
         }
@@ -1572,8 +2035,11 @@ impl View for RequestedCommandView {
         root_stack.finish()
     }
 
-    fn keymap_context(&self, _app: &AppContext) -> Context {
+    fn keymap_context(&self, app: &AppContext) -> Context {
         let mut context = Self::default_keymap_context();
+        if self.is_waiting_for_user_confirmation(app) {
+            context.set.insert(REQUESTED_ACTION_BLOCKED_KEYMAP_CONTEXT);
+        }
 
         if self.is_editing {
             context.set.insert(EDIT_MODE_OPEN_KEYMAP_CONTEXT);
@@ -1615,6 +2081,77 @@ impl TypedActionView for RequestedCommandView {
             }
             RequestedCommandViewAction::SelectText => {
                 ctx.emit(RequestedCommandViewEvent::TextSelected);
+            }
+            RequestedCommandViewAction::ToggleJsonNode { path, tree } => {
+                // A node's depth in the tree always equals its path length: the root
+                // has an empty path (depth 0) and each level down adds one segment.
+                let depth = path.len();
+                match tree {
+                    McpTree::Request => self.mcp_request_tree_state.toggle(path, depth),
+                    McpTree::Response => self.mcp_response_tree_state.toggle(path, depth),
+                }
+                ctx.notify();
+            }
+            RequestedCommandViewAction::ToggleJsonString { path, tree } => {
+                match tree {
+                    McpTree::Request => self.mcp_request_tree_state.toggle_string(path),
+                    McpTree::Response => self.mcp_response_tree_state.toggle_string(path),
+                }
+                ctx.notify();
+            }
+            RequestedCommandViewAction::CopyJsonToClipboard { text } => {
+                ctx.clipboard()
+                    .write(ClipboardContent::plain_text(text.clone()));
+            }
+            RequestedCommandViewAction::ShowMcpContextMenu {
+                json_text,
+                anchor_id,
+            } => {
+                // Determine whether the Copy item should be enabled based on whether
+                // there is currently a non-empty text selection in the MCP section.
+                #[allow(clippy::unwrap_used)]
+                let has_selection = self
+                    .mcp_content_selected_text
+                    .read()
+                    .unwrap()
+                    .as_deref()
+                    .is_some_and(|t| !t.is_empty());
+
+                let copy_item: MenuItem<RequestedCommandViewAction> = MenuItemFields::new("Copy")
+                    .with_on_select_action(RequestedCommandViewAction::CopyMcpSelection)
+                    .with_disabled(!has_selection)
+                    .into_item();
+
+                let json_for_menu = json_text.clone();
+                let copy_json_item: MenuItem<RequestedCommandViewAction> =
+                    MenuItemFields::new("Copy JSON")
+                        .with_on_select_action(RequestedCommandViewAction::CopyJsonToClipboard {
+                            text: json_for_menu,
+                        })
+                        .into_item();
+
+                self.mcp_context_menu.update(ctx, move |menu, ctx| {
+                    menu.set_items(vec![copy_item, copy_json_item], ctx);
+                });
+                self.mcp_context_menu_anchor_id = Some(anchor_id.clone());
+                self.mcp_context_menu_open = true;
+                ctx.notify();
+            }
+            RequestedCommandViewAction::CopyMcpSelection => {
+                #[allow(clippy::unwrap_used)]
+                if let Some(text) = self
+                    .mcp_content_selected_text
+                    .read()
+                    .unwrap()
+                    .clone()
+                    .filter(|t| !t.is_empty())
+                {
+                    ctx.clipboard().write(ClipboardContent::plain_text(text));
+                }
+            }
+            RequestedCommandViewAction::CloseMcpContextMenu => {
+                self.mcp_context_menu_open = false;
+                ctx.notify();
             }
         }
     }

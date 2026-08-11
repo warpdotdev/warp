@@ -101,6 +101,11 @@ runs:
       with:
         ssh-private-key: ${{ inputs.ssh_key }}
 
+    - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+      if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
+      with:
+        xcode-version: '26'
+
     - name: Install dependencies
       shell: bash
       run: |
@@ -157,7 +162,8 @@ runs:
       id: install_protoc
       # Install protoc for generating rust bindings of protobuf APIs.
       uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
-      # Don't fail the job here so the winget fallback below has a chance to run on Windows.
+      # Don't fail the job here so the Windows (winget) and macOS (brew) fallbacks
+      # below have a chance to run.
       continue-on-error: true
       with:
         brew: protobuf
@@ -168,14 +174,22 @@ runs:
       shell: pwsh
       run: winget install Google.Protobuf
 
+    - name: Install protoc via brew without index update (fallback for macOS)
+      if: ${{ inputs.target_os == 'macos' && steps.install_protoc.outcome == 'failure' }}
+      shell: bash
+      # The install-package action runs `brew update` first, whose fetch of the
+      # formula index from the formulae.brew.sh CDN intermittently times out and
+      # fails the step before `brew install` ever runs. Retry the install
+      # directly, skipping the index refresh: the runner image ships with a
+      # cached index that is at most days old, which is fine for protoc. A real
+      # install failure still fails this step and the job.
+      run: HOMEBREW_NO_AUTO_UPDATE=1 brew install protobuf
+
     - name: Fail if protoc install did not succeed
-      if: ${{ inputs.target_os != 'windows' && steps.install_protoc.outcome == 'failure' }}
+      # Windows and macOS surface failures via their fallback steps above.
+      if: ${{ inputs.target_os != 'windows' && inputs.target_os != 'macos' && steps.install_protoc.outcome == 'failure' }}
       shell: bash
       run: |
         echo "::error::protoc install step failed on ${{ inputs.target_os }}"
         exit 1
 
-    - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
-      if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
-      with:
-        xcode-version: '26'

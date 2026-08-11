@@ -1,7 +1,13 @@
-use super::{aggregate_segments, filter_legacy_buckets, has_non_viewer_data, BarSegment};
+use super::{
+    BarSegment, aggregate_segments, filter_entries_by_attributed_team, filter_legacy_buckets,
+    has_non_viewer_data, legend_cost_types, members_for_team,
+};
+use crate::auth::UserUid;
+use crate::server::ids::ServerId;
+use crate::workspaces::team::{MembershipRole, Team, TeamMember};
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    AiCreditsUsageSource, BillingCycleUsageEntry,
+    AiCreditsUsageSource, BillingCycleUsageEntry, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 const VIEWER_UID: &str = "viewer-uid";
@@ -25,6 +31,7 @@ fn entry(
         usage_source,
         credits_used,
         cost_cents,
+        attributed_team_uid: None,
     }
 }
 
@@ -273,4 +280,191 @@ fn aggregate_segments_merges_dupes_drops_zeros_and_sorts() {
     // stray 42 cents on the Payg/Ai entry must not appear here.
     assert_eq!(total_credits, 20 + 17);
     assert_eq!(total_cost_cents, 8);
+}
+
+#[test]
+fn legend_cost_types_excludes_zero_credit_bucket() {
+    // Regression: a base-limit row with no usage must not surface "Base" in
+    // the legend while only Pay-as-you-go credits were actually spent.
+    let entries = vec![
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            0,
+            0,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::Payg,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            50,
+            120,
+        ),
+    ];
+
+    assert_eq!(
+        legend_cost_types(&entries),
+        vec![AiCreditsUsageAndCostType::Payg],
+        "zero-credit BaseLimit row must be dropped from the legend"
+    );
+}
+
+#[test]
+fn legend_cost_types_includes_used_buckets_in_display_order() {
+    // Buckets with real usage appear in the canonical legend order regardless
+    // of input order (Payg listed before BaseLimit here).
+    let entries = vec![
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::Payg,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            5,
+            10,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            8,
+            0,
+        ),
+    ];
+
+    assert_eq!(
+        legend_cost_types(&entries),
+        vec![
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageAndCostType::Payg,
+        ],
+        "used buckets should render in canonical order, not input order"
+    );
+}
+
+#[test]
+fn legend_cost_types_excludes_legacy_only_buckets() {
+    // Voice / SuggestedCodeDiffs usage is written as BaseLimit credits but is
+    // dropped from the bars; the legend must match and not show "Base".
+    let entries = vec![
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Voice,
+            AiCreditsUsageSource::Local,
+            12,
+            0,
+        ),
+        entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::SuggestedCodeDiffs,
+            AiCreditsUsageSource::Local,
+            4,
+            0,
+        ),
+    ];
+
+    assert!(
+        legend_cost_types(&entries).is_empty(),
+        "legacy-only base-limit usage must not surface any legend bucket"
+    );
+}
+
+fn entry_attributed_to(team_uid: Option<&str>) -> BillingCycleUsageEntry {
+    BillingCycleUsageEntry {
+        attributed_team_uid: team_uid.map(str::to_string),
+        ..viewer_user_entry()
+    }
+}
+
+fn workspace_member(uid: &str) -> WorkspaceMember {
+    WorkspaceMember {
+        uid: UserUid::new(uid),
+        email: format!("{uid}@warp.dev"),
+        role: MembershipRole::User,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: false,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    }
+}
+
+fn team_with_members(uids: &[&str]) -> Team {
+    let members = uids
+        .iter()
+        .map(|uid| TeamMember {
+            uid: UserUid::new(uid),
+            email: format!("{uid}@warp.dev"),
+            role: MembershipRole::User,
+        })
+        .collect();
+    Team::from_local_cache(
+        ServerId::from(1),
+        "Team A".to_string(),
+        None,
+        None,
+        Some(members),
+    )
+}
+
+#[test]
+fn filter_entries_by_attributed_team_keeps_only_the_selected_team() {
+    // The workspace-wide payload carries every team's usage; a viewer looking
+    // at team A must not see team B's numbers.
+    let entries = vec![
+        entry_attributed_to(Some("team-a")),
+        entry_attributed_to(Some("team-b")),
+        entry_attributed_to(Some("team-a")),
+    ];
+
+    let filtered = filter_entries_by_attributed_team(&entries, "team-a");
+
+    assert_eq!(filtered.len(), 2);
+    assert!(
+        filtered
+            .iter()
+            .all(|e| e.attributed_team_uid.as_deref() == Some("team-a"))
+    );
+}
+
+#[test]
+fn filter_entries_by_attributed_team_drops_unattributed_entries() {
+    // Rows the server couldn't attribute can't be proven to belong to the
+    // selected team, so they're dropped rather than counted here — same as
+    // the web.
+    let entries = vec![entry_attributed_to(None)];
+
+    assert!(filter_entries_by_attributed_team(&entries, "team-a").is_empty());
+}
+
+#[test]
+fn members_for_team_drops_workspace_members_from_other_teams() {
+    // Otherwise other teams' members would still show up as zero-usage rows.
+    let members = vec![workspace_member("in-team"), workspace_member("other-team")];
+
+    let scoped = members_for_team(&members, Some(&team_with_members(&["in-team"])));
+
+    assert_eq!(
+        scoped.iter().map(|m| m.uid).collect::<Vec<_>>(),
+        vec![UserUid::new("in-team")]
+    );
+}
+
+#[test]
+fn members_for_team_keeps_every_member_when_team_is_unknown() {
+    let members = vec![workspace_member("a"), workspace_member("b")];
+
+    assert_eq!(members_for_team(&members, None), members);
 }

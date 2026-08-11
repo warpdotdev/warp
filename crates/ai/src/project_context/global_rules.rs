@@ -3,12 +3,13 @@ use std::path::{Path, PathBuf};
 
 use async_channel::Sender;
 use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
-use repo_metadata::{DirectoryWatcher, Repository, RepositoryUpdate};
+use repo_metadata::{DirectoryWatcher, Repository, RepositoryUpdate, RepositoryWatchMode};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use warp_core::safe_warn;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::standardized_path::StandardizedPath;
-use warpui::{ModelContext, ModelHandle, SingletonEntity};
+use warpui_core::{ModelContext, ModelHandle, SingletonEntity};
 use watcher::{HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
 
 use super::model::{GlobalRulesDelta, ProjectContextModel, ProjectContextModelEvent, ProjectRule};
@@ -77,15 +78,8 @@ impl GlobalRules {
         self.rules.values().cloned()
     }
 
-    pub(crate) fn paths(&self) -> impl Iterator<Item = PathBuf> + '_ {
-        self.rules.keys().cloned()
-    }
-
-    pub(crate) fn first_rule_parent(&self) -> Option<PathBuf> {
-        self.rules
-            .values()
-            .next()
-            .and_then(|rule| rule.path.parent().map(|p| p.to_path_buf()))
+    pub(crate) fn paths(&self) -> impl Iterator<Item = LocalOrRemotePath> + '_ {
+        self.rules.keys().cloned().map(LocalOrRemotePath::Local)
     }
 
     /// Index all configured global rule sources (see [`GlobalRuleSource`]).
@@ -120,7 +114,7 @@ impl GlobalRules {
         );
 
         // React to creation/deletion of home subdirs at runtime.
-        ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, event, ctx| {
+        ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _, event, ctx| {
             me.global_rules
                 .handle_home_dir_event_for_global_rules(event, ctx);
         });
@@ -159,7 +153,8 @@ impl GlobalRules {
                     me.global_rules.rules.insert(
                         file_path.clone(),
                         ProjectRule {
-                            path: file_path.clone(),
+                            // Global rule sources are watched under the local home directory.
+                            path: LocalOrRemotePath::Local(file_path.clone()),
                             content,
                         },
                     );
@@ -241,7 +236,9 @@ impl GlobalRules {
 
         let subscriber = Box::new(GlobalRulesRepositorySubscriber { source, update_tx });
 
-        let start = repo_handle.update(ctx, |repo, ctx| repo.start_watching(subscriber, ctx));
+        let start = repo_handle.update(ctx, |repo, ctx| {
+            repo.start_watching(RepositoryWatchMode::FilesystemOnly, subscriber, ctx)
+        });
         let subscriber_id = start.subscriber_id;
         let subdir_path_owned = subdir_path.to_path_buf();
 
