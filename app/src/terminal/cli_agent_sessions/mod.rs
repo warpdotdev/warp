@@ -383,6 +383,18 @@ impl CLIAgentSessionsModel {
         self.sessions.get(&terminal_view_id)
     }
 
+    /// The agent running in this terminal and the newest session identifier it reported, or
+    /// `None` while no agent is running or none has reported an identifier yet.
+    ///
+    /// Deliberately narrower than [`Self::session`]. What Warp records for a restart must carry
+    /// nothing of the session context but the identifier, and a caller handed only these two
+    /// cannot reach the prompts, responses, summaries and tool previews stored beside it.
+    pub fn reported_agent_session(&self, terminal_view_id: EntityId) -> Option<(CLIAgent, &str)> {
+        let session = self.sessions.get(&terminal_view_id)?;
+        let session_id = session.session_context.session_id.as_deref()?;
+        Some((session.agent, session_id))
+    }
+
     /// Returns `true` if the rich input editor is currently open for this terminal.
     pub fn is_input_open(&self, terminal_view_id: EntityId) -> bool {
         self.sessions
