@@ -223,6 +223,7 @@ integration_tests! {
     test_tab_context_menu_copies_metadata,
     test_vertical_tab_context_menu_copies_metadata,
     test_vertical_pane_context_menu_copies_metadata,
+    test_vertical_tab_title_does_not_overlap_trailing_indicator,
 
     test_focus_panes_on_hover,
 

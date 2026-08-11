@@ -29,10 +29,13 @@ use warp::integration_testing::workspace::{
 };
 use warp::settings::PaneSettings;
 use warp::terminal::shell::ShellType;
-use warp::workspace::tab_settings::{TabSettings, VerticalTabsDisplayGranularity};
+use warp::workspace::tab_settings::{
+    TabSettings, VerticalTabsDisplayGranularity, VerticalTabsTabItemMode,
+};
 use warp::workspace::{NEW_TAB_BUTTON_POSITION_ID, WorkspaceAction};
 use warpui_core::event::{Event, ModifiersState};
 use warpui_core::integration::{AssertionCallback, AssertionOutcome, StepDataMap, TestStep};
+use warpui_core::scene::GlyphFade;
 use warpui_core::windowing::WindowManager;
 use warpui_core::{SingletonEntity, TypedActionView, WindowId, async_assert, async_assert_eq};
 
@@ -535,6 +538,207 @@ pub fn test_vertical_pane_context_menu_copies_metadata() -> Builder {
         builder,
         open_first_vertical_tab_pane_context_menu,
     )
+}
+
+/// Echoed so the summary row's primary label — which falls back to the last completed command —
+/// is far wider than the row and has to share its line with the trailing indicator. ASCII because
+/// the harness's synthetic keystrokes mangle non-ASCII input; the geometry under test is the
+/// label-vs-indicator layout, which does not depend on the script.
+const CROWDED_SUMMARY_LABEL: &str =
+    "a-very-long-summary-label-that-cannot-possibly-fit-inside-the-vertical-tabs-row-width";
+
+/// Vertical slack for deciding which glyphs share the indicator's line. Glyph positions are
+/// baselines, which sit below the vertically-centered indicator box, so the band has to reach past
+/// the icon's own bounds on both sides.
+const INDICATOR_LINE_BAND: f32 = 8.;
+
+/// Summary mode is not a display granularity of its own — it is the `Tabs` granularity plus the
+/// `Summary` tab-item mode, and `resolve_vertical_tabs_mode` silently falls back to
+/// `FocusedSession` unless the feature flag is on too.
+fn enable_vertical_tabs_summary_mode() -> TestStep {
+    FeatureFlag::VerticalTabs.set_enabled(true);
+    FeatureFlag::VerticalTabsSummaryMode.set_enabled(true);
+    new_step_with_default_assertions("Enable vertical tabs in summary mode").add_assertion(
+        |app, _window_id| {
+            TabSettings::handle(app).update(app, |settings, ctx| {
+                settings
+                    .use_vertical_tabs
+                    .set_value(true, ctx)
+                    .expect("vertical tabs setting should update");
+                settings
+                    .vertical_tabs_display_granularity
+                    .set_value(VerticalTabsDisplayGranularity::Tabs, ctx)
+                    .expect("vertical tabs display granularity should update");
+                settings
+                    .vertical_tabs_tab_item_mode
+                    .set_value(VerticalTabsTabItemMode::Summary, ctx)
+                    .expect("vertical tabs tab item mode should update");
+                async_assert!(
+                    *settings.use_vertical_tabs
+                        && *settings.vertical_tabs_display_granularity.value()
+                            == VerticalTabsDisplayGranularity::Tabs
+                        && *settings.vertical_tabs_tab_item_mode.value()
+                            == VerticalTabsTabItemMode::Summary
+                )
+            })
+        },
+    )
+}
+
+fn sync_terminal_inputs_in_tab() -> TestStep {
+    new_step_with_default_assertions("Turn on synchronized inputs so the row grows an indicator")
+        .with_action(|app, window_id, _| {
+            let workspace_view_id = workspace_view(app, window_id).id();
+            app.dispatch_typed_action(
+                window_id,
+                &[workspace_view_id],
+                &WorkspaceAction::ToggleSyncTerminalInputsInTab,
+            );
+        })
+}
+
+/// `render_row_title_line` pins the row's trailing indicators to the right edge of the title line
+/// and separates them from the title with a 4px margin, so no title glyph may be painted inside the
+/// indicator's box. This is the layout that put the unread-activity dot on top of the title text in
+/// the reported bug; the synchronized-inputs link icon shares that same trailing slot and, unlike
+/// the dot, can be driven from a test.
+fn assert_row_title_clears_trailing_indicator(
+    app: &mut warpui_core::App,
+    window_id: WindowId,
+) -> AssertionOutcome {
+    let position_id = vertical_tab_pane_row_position_id(app, window_id);
+    let row = {
+        let presenter = app.presenter(window_id).expect("presenter should exist");
+        let presenter = presenter.borrow();
+        presenter.position_cache().get_position(position_id)
+    };
+    let Some(row) = row else {
+        return async_assert!(false, "vertical-tabs pane row has no saved position yet");
+    };
+
+    let (icons, glyphs) = {
+        let presenter = app.presenter(window_id).expect("presenter should exist");
+        let presenter = presenter.borrow();
+        let Some(scene) = presenter.scene() else {
+            return async_assert!(false, "no scene has been built for {window_id:?} yet");
+        };
+        let icons: Vec<RectF> = scene
+            .layers()
+            .flat_map(|layer| layer.icons.iter())
+            .map(|icon| icon.bounds)
+            .filter(|bounds| row.contains_rect(*bounds))
+            .collect();
+        let glyphs: Vec<_> = scene
+            .layers()
+            .flat_map(|layer| layer.glyphs.iter())
+            .filter(|glyph| row.contains_point(glyph.position))
+            .map(|glyph| (glyph.position, glyph.glyph_key, glyph.fade))
+            .collect();
+        (icons, glyphs)
+    };
+
+    // The indicators are the last thing in the title line, so the trailing indicator is the
+    // rightmost icon in the row — the others are the pane's own leading icon and its badges.
+    let Some(indicator) = icons.iter().copied().reduce(|rightmost, icon| {
+        if icon.min_x() > rightmost.min_x() {
+            icon
+        } else {
+            rightmost
+        }
+    }) else {
+        return async_assert!(
+            false,
+            "expected a trailing indicator icon inside the vertical-tabs row {row:?}, found none"
+        );
+    };
+
+    let (title_glyph_count, overlapping, rightmost_title_edge) = app.read(|ctx| {
+        let font_cache = ctx.font_cache();
+        let on_indicator_line = glyphs.iter().filter(|(position, _, _)| {
+            position.y() >= indicator.min_y() - INDICATOR_LINE_BAND
+                && position.y() <= indicator.max_y() + INDICATOR_LINE_BAND
+        });
+
+        let mut count = 0_usize;
+        let mut overlapping = Vec::new();
+        let mut rightmost_edge = f32::NEG_INFINITY;
+        for (position, glyph_key, fade) in on_indicator_line {
+            count += 1;
+
+            // A glyph the clip fade has already driven to zero alpha is not painted even though
+            // its box still overlaps. `Line::paint` builds an end-direction fade as
+            // `start = right edge - fade_width`, `end = right edge`, and the glyph shader ramps
+            // alpha 1 -> 0 across that span, so anything at or past `end` is invisible.
+            if let Some(GlyphFade::Horizontal { start, end }) = fade {
+                if end >= start && position.x() >= *end {
+                    continue;
+                }
+            }
+
+            let advance = font_cache
+                .glyph_advance(glyph_key.font_id, *glyph_key.font_size, glyph_key.glyph_id)
+                .map(|advance| advance.x())
+                .unwrap_or_default();
+            let right = position.x() + advance;
+            rightmost_edge = rightmost_edge.max(right);
+            if right > indicator.min_x() {
+                overlapping.push(format!(
+                    "x={:.2}..{:.2} y={:.2}",
+                    position.x(),
+                    right,
+                    position.y()
+                ));
+            }
+        }
+        (count, overlapping, rightmost_edge)
+    });
+
+    // Without this the assertion would pass vacuously on a row whose title never rendered.
+    if title_glyph_count == 0 {
+        return async_assert!(
+            false,
+            "expected title glyphs on the indicator's line (indicator {indicator:?}, row \
+                 {row:?}), found none"
+        );
+    }
+
+    async_assert!(
+        overlapping.is_empty(),
+        "the vertical-tabs row title is painted into its trailing indicator. Indicator box \
+             {indicator:?}, row {row:?}, rightmost title edge {rightmost_title_edge:.2}, {} of \
+             {title_glyph_count} title glyphs on that line reach past the indicator's left edge: \
+             {overlapping:?}",
+        overlapping.len()
+    )
+}
+
+pub fn test_vertical_tab_title_does_not_overlap_trailing_indicator() -> Builder {
+    new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        // Runs before the split so it lands in the focused pane, and before summary mode is on so
+        // the row is already carrying a wide label the first time it renders.
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            format!("echo {CROWDED_SUMMARY_LABEL}"),
+            ExpectedExitStatus::Success,
+            CROWDED_SUMMARY_LABEL.to_string(),
+        ))
+        .with_step(
+            new_step_with_default_assertions(
+                "Create a second pane so inputs have somewhere to sync",
+            )
+            .with_keystrokes(&[cmd_or_ctrl_shift("d")]),
+        )
+        .with_step(wait_until_bootstrapped_pane(0, 1))
+        .with_step(enable_vertical_tabs_summary_mode())
+        .with_step(sync_terminal_inputs_in_tab())
+        .with_step(
+            new_step_with_default_assertions("Summary row label clears its trailing indicator")
+                .add_named_assertion(
+                    "no label glyph is painted into the trailing indicator's box",
+                    assert_row_title_clears_trailing_indicator,
+                ),
+        )
 }
 
 pub fn test_focus_panes_on_hover() -> Builder {
