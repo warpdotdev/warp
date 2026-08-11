@@ -1453,6 +1453,99 @@ fn agent_session_is_absent_for_pane_without_a_recorded_row() {
     assert!(restored.agent_sessions.is_empty());
 }
 
+// KTD13 safeguard: the pane-lifecycle hook is what removes a gone pane's row, but a row can still
+// outlive its pane — a crash between the two, or a database written before that hook existed. No
+// launch can ever claim a uuid the snapshot does not restore, so the load drops it rather than
+// carrying it forever.
+#[test]
+fn load_removes_recorded_state_for_a_pane_the_snapshot_does_not_restore() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = database_with_saved_session(&tempdir.path().join("warp.sqlite"));
+    let recorded = test_recorded_agent_session();
+
+    save_agent_session(&mut conn, AGENT_PANE_UUID.to_vec(), &recorded)
+        .expect("agent session should save");
+    save_agent_session(&mut conn, vec![9], &recorded)
+        .expect("the orphaned agent session should save");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(restored.agent_sessions.get(&PaneUuid(vec![9])), None);
+    assert_eq!(
+        restored
+            .agent_sessions
+            .get(&PaneUuid(AGENT_PANE_UUID.to_vec())),
+        Some(&recorded),
+        "the pane the snapshot restores keeps what it recorded"
+    );
+    assert_eq!(
+        get_all_recorded_agent_sessions(&mut conn)
+            .expect("agent sessions should load")
+            .into_keys()
+            .collect::<Vec<_>>(),
+        vec![PaneUuid(AGENT_PANE_UUID.to_vec())],
+        "the orphaned row must be gone from the table, not merely filtered out of the load"
+    );
+}
+
+// The sweep is only allowed to remove what no pane claims. A row whose pane the snapshot restores
+// is the entire point of the table, and a sweep that took it would break resume on every launch.
+#[test]
+fn load_keeps_recorded_state_for_every_pane_the_snapshot_restores() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = database_with_saved_session(&tempdir.path().join("warp.sqlite"));
+    let recorded = test_recorded_agent_session();
+
+    save_agent_session(&mut conn, AGENT_PANE_UUID.to_vec(), &recorded)
+        .expect("agent session should save");
+
+    read_sqlite_data(&mut conn, None, PersistedDataScope::Full).expect("app state should load");
+
+    assert_eq!(
+        get_all_recorded_agent_sessions(&mut conn)
+            .expect("agent sessions should load")
+            .get(&PaneUuid(AGENT_PANE_UUID.to_vec())),
+        Some(&recorded),
+        "a claimed row must survive the load untouched"
+    );
+}
+
+// A saved session with no terminal pane at all leaves the sweep with an empty set to compare
+// against. Every row is orphaned in that case, and the comparison itself has to stay valid SQL —
+// a load that errors here would cost the user every window, not just a stale row.
+#[test]
+fn load_removes_recorded_state_when_the_snapshot_restores_no_terminal_pane() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn =
+        setup_database(&tempdir.path().join("warp.sqlite")).expect("database should initialize");
+    let app_state = AppState {
+        windows: vec![],
+        active_window_index: None,
+        block_lists: Default::default(),
+        agent_sessions: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+    save_agent_session(
+        &mut conn,
+        AGENT_PANE_UUID.to_vec(),
+        &test_recorded_agent_session(),
+    )
+    .expect("agent session should save");
+
+    read_sqlite_data(&mut conn, None, PersistedDataScope::Full).expect("app state should load");
+
+    assert!(
+        get_all_recorded_agent_sessions(&mut conn)
+            .expect("agent sessions should load")
+            .is_empty(),
+        "no pane restored, so no row is claimed"
+    );
+}
+
 #[test]
 fn agent_session_with_malformed_stored_value_loads_as_absent() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");

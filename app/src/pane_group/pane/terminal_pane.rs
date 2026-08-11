@@ -243,6 +243,31 @@ impl TerminalPane {
         }
     }
 
+    /// Instructs the SQLite thread to drop whatever agent state was recorded for this session.
+    ///
+    /// Sent from the permanent-close branch of [`Self::detach`] only, and behind the same guard
+    /// [`Self::delete_blocks`] uses. A pane hidden for close comes back if the user undoes the
+    /// close, and what it recorded is exactly what resumes its agent then (R20) — only a pane
+    /// that will never return leaves a row that nothing can claim.
+    pub(in crate::pane_group) fn delete_recorded_agent_session(&self, ctx: &AppContext) {
+        if !AppExecutionMode::as_ref(ctx).can_save_session() {
+            return;
+        }
+
+        if let Some(sender) = &self.model_event_sender {
+            let model_event = ModelEvent::SetAgentSession {
+                pane_id: self.uuid.clone(),
+                session: None,
+            };
+            if let Err(err) = sender.send(model_event) {
+                report_error!(
+                    anyhow::Error::new(err).context("Error sending agent session deleted event"),
+                    extra: { "terminal_id" => ?self.terminal_view(ctx).id() }
+                );
+            }
+        }
+    }
+
     pub fn session_navigation_data(
         &self,
         pane_group_id: EntityId,
@@ -440,6 +465,9 @@ impl PaneContent for TerminalPane {
                     .clear_conversations_for_terminal_surface(self.terminal_view(ctx).id(), ctx);
             });
             self.delete_blocks(ctx);
+            // This detach is the one place that knows the pane will not return, so it is also
+            // where the row keyed to its uuid stops being state and starts being garbage.
+            self.delete_recorded_agent_session(ctx);
         }
 
         // Unsubscribe from all views in the pane stack.

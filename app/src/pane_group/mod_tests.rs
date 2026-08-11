@@ -4231,6 +4231,26 @@ fn only_terminal_pane_uuid(pane_group: &ViewHandle<PaneGroup>, app: &App) -> Vec
     })
 }
 
+/// The id of the group's first terminal pane, for tests that add a second one afterwards.
+fn first_terminal_pane_id(pane_group: &ViewHandle<PaneGroup>, app: &App) -> PaneId {
+    pane_group.read(app, |panes, _ctx| {
+        panes
+            .terminal_pane_ids()
+            .next()
+            .expect("the group should hold a terminal pane")
+    })
+}
+
+/// The uuid recorded state is keyed to for the terminal pane with `pane_id`.
+fn terminal_pane_uuid(pane_group: &ViewHandle<PaneGroup>, pane_id: PaneId, app: &App) -> Vec<u8> {
+    pane_group.read(app, |panes, _ctx| {
+        panes
+            .terminal_session_by_id(pane_id)
+            .expect("the group should hold a terminal pane with that id")
+            .session_uuid()
+    })
+}
+
 // AE1/R2: a pane whose agent reports a second identifier has to persist the second one, and the
 // writes have to reach the writer in the order they were observed — an older identifier landing
 // after a newer one would resume the wrong conversation.
@@ -4363,7 +4383,8 @@ fn pane_detached_for_close_or_teardown_keeps_its_recorded_state() {
             "precondition: the pane recorded a session"
         );
 
-        // Closing the tab hides its panes so an undo can bring them back.
+        // Closing the tab hides its panes so an undo can bring them back, and closing the window
+        // at teardown detaches every pane down the same path.
         pane_group.update(&mut app, |panes, ctx| panes.detach_panes(ctx));
         assert_eq!(
             captured_agent_session_writes(&model_events),
@@ -4371,13 +4392,118 @@ fn pane_detached_for_close_or_teardown_keeps_its_recorded_state() {
             "a pane hidden for close must keep its recorded state so an undo (and the next \
              launch) still finds the agent it was running"
         );
+    });
+}
 
-        // Teardown detaches every pane before the writer is drained.
-        pane_group.update(&mut app, |panes, ctx| panes.clean_up_panes(ctx));
+// AE15/R20: the undo that the hide-for-close exists for. The pane comes back under the uuid its
+// recorded state is keyed to, and nothing on the way out or the way back said that state was
+// stale, so the next launch still resumes it.
+#[test]
+fn undone_close_leaves_the_pane_still_owning_its_recorded_state() {
+    let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let recorded = captured_agent_sessions(&model_events);
+        assert_eq!(
+            recorded.len(),
+            1,
+            "precondition: the pane recorded a session"
+        );
+        let agent_pane_id = first_terminal_pane_id(&pane_group, &app);
+        let pane_uuid = terminal_pane_uuid(&pane_group, agent_pane_id, &app);
+
+        // A second pane, so closing the agent's pane hides it rather than emptying the group.
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+        });
+        pane_group.update(&mut app, |panes, ctx| panes.close_pane(agent_pane_id, ctx));
+        assert!(
+            pane_group.read(&app, |panes, _ctx| panes
+                .is_pane_hidden_for_close(agent_pane_id)),
+            "precondition: the close hid the pane instead of removing it"
+        );
+
+        assert!(
+            pane_group.update(&mut app, |panes, ctx| panes
+                .restore_closed_pane(agent_pane_id, ctx)),
+            "the hidden pane should restore"
+        );
+
         assert_eq!(
             captured_agent_session_writes(&model_events),
             vec![],
-            "app teardown must not clear what its panes recorded"
+            "an undone close must leave the recorded state exactly as the pane left it"
+        );
+        assert_eq!(
+            terminal_pane_uuid(&pane_group, agent_pane_id, &app),
+            pane_uuid,
+            "the restored pane is the same pane, so it still owns the row keyed to its uuid"
+        );
+    });
+}
+
+// R20/KTD13: once the undo window has passed, the stack discards the closed item and detaches its
+// panes as permanently closed. Nothing brings that pane back, so the row keyed to its uuid is
+// garbage whatever its agent was doing, and the same hook that drops its blocks drops it too.
+#[test]
+fn permanently_removed_pane_has_its_recorded_state_cleared() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let pane_uuid = only_terminal_pane_uuid(&pane_group, &app);
+        record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let recorded = captured_agent_sessions(&model_events);
+        assert_eq!(
+            recorded.len(),
+            1,
+            "precondition: the pane recorded a session"
+        );
+
+        // What the undo stack runs when it discards a closed tab for good.
+        pane_group.update(&mut app, |panes, ctx| panes.clean_up_panes(ctx));
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![(pane_uuid, None)],
+            "a pane that is gone for good must not leave a row behind for a launch to resume"
+        );
+    });
+}
+
+// A move detaches the pane from the group it is leaving, but the pane, its uuid and its running
+// agent all survive into the destination. Clearing there would lose the state mid-drag.
+#[test]
+fn pane_moved_out_of_its_group_keeps_its_recorded_state() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let recorded = captured_agent_sessions(&model_events);
+        assert_eq!(
+            recorded.len(),
+            1,
+            "precondition: the pane recorded a session"
+        );
+        let agent_pane_id = first_terminal_pane_id(&pane_group, &app);
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+        });
+        let moved = pane_group.update(&mut app, |panes, ctx| {
+            panes.remove_pane_for_move(&agent_pane_id, ctx)
+        });
+        assert!(
+            moved.is_some(),
+            "precondition: the pane was taken for a move"
+        );
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![],
+            "a pane that only moved is still running its agent and must keep what it recorded"
         );
     });
 }

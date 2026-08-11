@@ -1577,6 +1577,26 @@ fn clear_agent_session(conn: &mut SqliteConnection, pane_id: Vec<u8>) -> Result<
     Ok(())
 }
 
+/// Drops recorded agent state belonging to panes the saved session does not restore.
+///
+/// This is a safeguard, not the mechanism: the pane-lifecycle hook is what removes a pane's row
+/// when the pane is closed for good, because that is the only place that knows the pane will not
+/// return. A row can still outlive its pane anyway — a crash between the two writes, or a
+/// database written before that hook existed — and a uuid no restored pane claims can never be
+/// resumed, so carrying it forever only grows the table.
+fn purge_agent_sessions_without_a_restored_pane(conn: &mut SqliteConnection) -> Result<(), Error> {
+    use schema::agent_sessions::dsl::*;
+
+    let restored_pane_uuids: Vec<Vec<u8>> = schema::terminal_panes::dsl::terminal_panes
+        .select(schema::terminal_panes::columns::uuid)
+        .load(conn)?;
+
+    diesel::delete(agent_sessions.filter(pane_leaf_uuid.ne_all(restored_pane_uuids)))
+        .execute(conn)?;
+
+    Ok(())
+}
+
 /// Reads every recorded agent session, keyed by the pane it was recorded for.
 ///
 /// A row whose stored values no longer parse is dropped instead of failing the read: the pane
@@ -2812,6 +2832,13 @@ fn read_sqlite_data(
             .collect();
 
         let restored_blocks = get_all_restored_blocks(conn)?;
+        // Housekeeping must never cost the user their session: a database this connection cannot
+        // write to still restores every pane, it just keeps carrying rows nothing will claim.
+        if let Err(err) = purge_agent_sessions_without_a_restored_pane(conn) {
+            report_error!(
+                anyhow::Error::new(err).context("Error purging orphaned agent session rows")
+            );
+        }
         let recorded_agent_sessions = get_all_recorded_agent_sessions(conn)?;
 
         // Load active MCP servers from database
