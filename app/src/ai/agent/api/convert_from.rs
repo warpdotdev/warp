@@ -206,11 +206,15 @@ impl ConvertAPIMessageToClientOutputMessage for api::Message {
             return Ok(MaybeAIAgentOutputMessage::NoClientRepresentation);
         };
 
+        // A single citation with an unrecognized document type must not fail the whole
+        // message: skip it (see `AIAgentCitation::try_from`, which reports the drop) and keep
+        // converting the rest, mirroring the tool-call-level citation conversion in
+        // `ai::agent::action::convert` (`RunShellCommand`'s `citations` field).
         let citations = self
             .citations
             .iter()
-            .map(|citation| (*citation).clone().try_into())
-            .collect::<Result<Vec<AIAgentCitation>, UnknownCitationTypeError>>()?;
+            .filter_map(|citation| AIAgentCitation::try_from((*citation).clone()).ok())
+            .collect::<Vec<AIAgentCitation>>();
 
         match message {
             api::message::Message::AgentOutput(output) => Ok(MaybeAIAgentOutputMessage::Message(

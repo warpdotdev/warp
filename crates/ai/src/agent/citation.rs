@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use warp_errors::{ReportErrorLogMode, report_error};
 use warp_multi_agent_api as api;
 
 /// A citation listed in an AI response.
@@ -71,7 +72,23 @@ impl TryFrom<api::Citation> for AIAgentCitation {
             api::DocumentType::WebPage => Ok(AIAgentCitation::WebPage {
                 url: citation.document_id,
             }),
-            api::DocumentType::Unknown => Err(UnknownCitationTypeError),
+            api::DocumentType::Unknown => {
+                // The LLM produced a citation `document_type` string outside the set the
+                // server recognizes (see `ApiDocumentTypeFromDocumentType` server-side), so
+                // it fell back to `UNKNOWN`. This is uncertain external (LLM) behavior that
+                // may also mean we're missing a document type mapping here, so it's worth an
+                // engineer's attention -- but it can recur across many messages/citations in
+                // a single run, so throttle to once per run.
+                report_error!(
+                    "Citation has an unrecognized document type; dropping it",
+                    extra: {
+                        "document_type" => %citation.document_type,
+                        "document_id" => %citation.document_id,
+                    },
+                    ReportErrorLogMode::OncePerRun
+                );
+                Err(UnknownCitationTypeError)
+            }
         }
     }
 }
