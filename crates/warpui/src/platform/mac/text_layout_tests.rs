@@ -1,12 +1,17 @@
 use anyhow::Result;
+use pathfinder_color::ColorU;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::Vector2F;
 use rand::random;
 
 use super::*;
 use crate::fonts::{
-    FamilyId, Properties, collect_glyph_indices, collect_line_caret_position_starts, init_fonts,
+    Cache as FontCache, FamilyId, Properties, collect_glyph_indices,
+    collect_line_caret_position_starts, init_fonts,
 };
 use crate::platform::FontDB as _;
-use crate::text_layout::DEFAULT_TOP_BOTTOM_RATIO;
+use crate::text_layout::{DEFAULT_TOP_BOTTOM_RATIO, PaintStyleOverride};
+use crate::{Scene, rendering};
 
 pub(crate) fn collect_line_caret_position_pairs(line: &Line) -> Vec<(usize, usize)> {
     line.caret_positions
@@ -694,6 +699,110 @@ fn test_layout_text_last_line_clipped_ligatures() -> Result<()> {
     );
     let first_line = frame.lines().first().unwrap();
     assert!(first_line.width > max_width);
+
+    Ok(())
+}
+
+/// Read the bundled Hack font's bytes from the filesystem.
+fn load_hack_bytes() -> Vec<Vec<u8>> {
+    use std::fs::read;
+    use std::path::PathBuf;
+    let root = env!("CARGO_MANIFEST_DIR");
+    ["Hack-Italic.ttf", "Hack-Bold.ttf", "Hack-Regular.ttf"]
+        .iter()
+        .map(|font_file| {
+            let path = [
+                root, "..", "..", "app", "assets", "bundled", "fonts", "hack", font_file,
+            ]
+            .iter()
+            .collect::<PathBuf>();
+            Ok(read(path)?)
+        })
+        .collect::<Result<Vec<_>>>()
+        .expect("should be able to read hack font bytes from filesystem")
+}
+
+/// Core Text lays a leading `✳` out in its own fallback run because Hack has no U+2733, and the
+/// Zapf Dingbats font it picks carries no '…' either. Resolving the ellipsis from that run alone
+/// leaves the line with neither an ellipsis nor a fade, so it paints past its own bounds onto
+/// whatever the layout placed after it — the vertical-tabs unread dot, in the reported case.
+#[test]
+fn test_ellipsis_resolves_past_a_symbol_fallback_run() -> Result<()> {
+    let mut font_db = FontDB::new();
+    let hack = font_db.load_from_bytes("Hack", load_hack_bytes())?;
+    let font_cache = FontCache::new(Box::new(font_db));
+    let hack_font = font_cache.select_font(hack, Properties::default());
+
+    let text = "✳ Собрать версию с ПРа";
+    let line_style = LineStyle {
+        font_size: 12.,
+        line_height_ratio: 1.,
+        baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+        fixed_width_tab_size: None,
+    };
+    let line = font_cache.text_layout_system().layout_line(
+        text,
+        line_style,
+        &[(
+            0..text.chars().count(),
+            StyleAndFont::new(hack, Properties::default(), TextStyle::new()),
+        )],
+        f32::MAX,
+        ClipConfig::ellipsis(),
+    );
+
+    let leading_run = line.runs.first().expect("the line should have runs");
+    assert_ne!(
+        leading_run.font_id, hack_font,
+        "expected `✳` to fall back out of Hack into its own run"
+    );
+    assert!(
+        font_cache
+            .glyph_for_char(leading_run.font_id, '…', false)
+            .is_none(),
+        "expected the fallback run's font to have no ellipsis, which is what makes this a test"
+    );
+
+    let (ellipsis_glyph, ellipsis_font) = font_cache
+        .glyph_for_char(hack_font, '…', false)
+        .expect("Hack should have an ellipsis");
+    let bounds = RectF::new(Vector2F::zero(), Vector2F::new(line.width - 20., 20.));
+    let mut scene = Scene::new(1., rendering::Config::default());
+    line.paint(
+        bounds,
+        &PaintStyleOverride::default(),
+        ColorU::black(),
+        &font_cache,
+        &mut scene,
+    );
+
+    let painted = scene
+        .layers()
+        .flat_map(|layer| layer.glyphs.iter())
+        .collect_vec();
+    assert!(
+        painted.iter().any(|glyph| {
+            glyph.glyph_key.glyph_id == ellipsis_glyph && glyph.glyph_key.font_id == ellipsis_font
+        }),
+        "the truncated line painted no ellipsis"
+    );
+    assert!(
+        painted.iter().all(|glyph| glyph.fade.is_none()),
+        "a line that resolved an ellipsis must not also fade"
+    );
+
+    let ellipsis_advance = font_cache
+        .glyph_advance(ellipsis_font, line_style.font_size, ellipsis_glyph)?
+        .x();
+    let rightmost = painted
+        .iter()
+        .map(|glyph| glyph.position.x())
+        .fold(f32::MIN, f32::max);
+    assert!(
+        rightmost + ellipsis_advance <= bounds.upper_right().x(),
+        "the line painted past its bounds: rightmost glyph at {rightmost}, bounds end at {}",
+        bounds.upper_right().x()
+    );
 
     Ok(())
 }
