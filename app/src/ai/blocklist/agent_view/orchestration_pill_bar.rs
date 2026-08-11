@@ -1953,9 +1953,10 @@ fn render_pinned_divider(app: &AppContext) -> Box<dyn Element> {
 /// cannot shift by a pixel and the two cannot drift apart if the disc's
 /// geometry is ever retuned.
 ///
-/// The glyph is centered by equal padding rather than by a centering
+/// The glyph is placed by explicit padding rather than by a centering
 /// container, which keeps it exact regardless of how the surrounding box
-/// behaves.
+/// behaves, and lets [`PIN_GLYPH_OPTICAL_DROP`] bias it downward without
+/// moving the circle.
 fn render_pin_button(
     is_pinned: bool,
     icon_color: ColorU,
@@ -1980,8 +1981,13 @@ fn render_pin_button(
             .with_width(glyph_size)
             .with_height(glyph_size)
             .finish();
+        // Top and bottom padding still sum to twice `padding`, so the circle
+        // keeps the avatar disc's rect exactly; only the glyph inside it moves.
+        let padding = (PILL_AVATAR_DISC_SIZE - glyph_size) / 2.;
         let mut circle = Container::new(glyph)
-            .with_uniform_padding((PILL_AVATAR_DISC_SIZE - glyph_size) / 2.)
+            .with_horizontal_padding(padding)
+            .with_padding_top(padding + PIN_GLYPH_OPTICAL_DROP)
+            .with_padding_bottom(padding - PIN_GLYPH_OPTICAL_DROP)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
                 PILL_AVATAR_DISC_SIZE / 2.,
             )));
@@ -2371,6 +2377,17 @@ fn render_overflow_button(
 /// solid letterform, so design asked for roughly 4px more. This is the knob to
 /// nudge if it still reads wrong.
 const PIN_GLYPH_RATIO: f32 = 0.71;
+
+/// Downward nudge of the pin glyph inside its circle.
+///
+/// This is an *optical* correction, not a geometry one — do not "fix" it to
+/// zero because the arithmetic says centered. The pin's mass is concentrated
+/// in its head, so a geometrically centered glyph reads as sitting high.
+///
+/// Absolute pixels rather than a ratio because the pin is only ever drawn in
+/// the chip's [`PILL_AVATAR_DISC_SIZE`] circle. If it gains another size, this
+/// needs revisiting rather than silently scaling.
+const PIN_GLYPH_OPTICAL_DROP: f32 = 1.;
 
 /// Opacity of the pin button's hover tint, over the pill's contrasting colour.
 /// A little stronger than the 5% `fg_overlay_1` used to apply, because that
