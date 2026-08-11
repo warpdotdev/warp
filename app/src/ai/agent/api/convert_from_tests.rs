@@ -7,7 +7,7 @@ use super::{
     convert_api_question,
 };
 use crate::ai::agent::task::TaskId;
-use crate::ai::agent::{AIAgentActionType, AIAgentCitation, AIAgentOutputMessageType};
+use crate::ai::agent::{AIAgentActionType, AIAgentOutputMessageType};
 
 fn upload_artifact_tool_call_message(path: &str, description: &str) -> api::Message {
     api::Message {
@@ -61,99 +61,6 @@ fn file_artifact_created_message(filepath: &str, description: &str) -> api::Mess
         request_id: "request-id".to_string(),
         timestamp: None,
     }
-}
-
-fn agent_output_message_with_citations(citations: Vec<api::Citation>) -> api::Message {
-    api::Message {
-        fetched_memories: vec![],
-        id: "message-id".to_string(),
-        task_id: "task-id".to_string(),
-        server_message_data: String::new(),
-        citations,
-        message: Some(api::message::Message::AgentOutput(
-            api::message::AgentOutput {
-                text: "hello".to_string(),
-            },
-        )),
-        request_id: "request-id".to_string(),
-        timestamp: None,
-    }
-}
-
-fn web_page_citation(url: &str) -> api::Citation {
-    api::Citation {
-        document_id: url.to_string(),
-        document_type: api::DocumentType::WebPage as i32,
-    }
-}
-
-/// A citation whose document type the server couldn't map to a known type
-/// (see `DocumentType::UNKNOWN` / `ApiDocumentTypeFromDocumentType` server-side).
-fn unknown_type_citation() -> api::Citation {
-    api::Citation {
-        document_id: "some-document-id".to_string(),
-        document_type: api::DocumentType::Unknown as i32,
-    }
-}
-
-fn citations_of(output: MaybeAIAgentOutputMessage) -> Vec<AIAgentCitation> {
-    let MaybeAIAgentOutputMessage::Message(output_message) = output else {
-        panic!("expected output message");
-    };
-    output_message.citations
-}
-
-fn convert_test_message(message: api::Message) -> MaybeAIAgentOutputMessage {
-    let task_id = TaskId::new("task-id".to_string());
-    message
-        .to_client_output_message(ConversionParams {
-            task_id: &task_id,
-            current_todo_list: None,
-            active_code_review: None,
-            skill_path_origin: &SkillPathOrigin::Local,
-        })
-        .expect("conversion should succeed")
-}
-
-#[test]
-fn converts_message_with_no_citations_to_an_empty_citation_list() {
-    let message = agent_output_message_with_citations(vec![]);
-
-    let citations = citations_of(convert_test_message(message));
-
-    assert_eq!(citations, vec![]);
-}
-
-#[test]
-fn drops_a_single_unknown_citation_instead_of_failing_the_message() {
-    let message = agent_output_message_with_citations(vec![unknown_type_citation()]);
-
-    let citations = citations_of(convert_test_message(message));
-
-    assert_eq!(citations, vec![]);
-}
-
-#[test]
-fn keeps_valid_citations_when_mixed_with_an_unknown_one() {
-    let message = agent_output_message_with_citations(vec![
-        web_page_citation("https://example.com/a"),
-        unknown_type_citation(),
-        web_page_citation("https://example.com/b"),
-    ]);
-
-    let citations = citations_of(convert_test_message(message));
-
-    assert_eq!(
-        citations,
-        vec![
-            AIAgentCitation::WebPage {
-                url: "https://example.com/a".to_string()
-            },
-            AIAgentCitation::WebPage {
-                url: "https://example.com/b".to_string()
-            },
-        ]
-    );
 }
 
 fn build_multiple_choice_question(

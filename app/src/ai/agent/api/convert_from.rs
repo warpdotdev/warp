@@ -206,10 +206,6 @@ impl ConvertAPIMessageToClientOutputMessage for api::Message {
             return Ok(MaybeAIAgentOutputMessage::NoClientRepresentation);
         };
 
-        // A single citation with an unrecognized document type must not fail the whole
-        // message: skip it (see `AIAgentCitation::try_from`, which reports the drop) and keep
-        // converting the rest, mirroring the tool-call-level citation conversion in
-        // `ai::agent::action::convert` (`RunShellCommand`'s `citations` field).
         let citations = self
             .citations
             .iter()
