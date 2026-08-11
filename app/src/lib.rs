@@ -1719,6 +1719,9 @@ pub(crate) fn initialize_app(
 
     ctx.add_singleton_model(|ctx| AIRequestUsageModel::new(ai_client, ctx));
 
+    #[cfg(not(target_family = "wasm"))]
+    ctx.add_singleton_model(crate::ai::claude_code_usage::ClaudeCodeUsageModel::new);
+
     ctx.add_singleton_model(|ctx| {
         UserWorkspaces::new(
             server_api_provider.as_ref(ctx).get_team_client(),

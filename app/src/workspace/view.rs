@@ -86,6 +86,8 @@ use warp_util::path::{LineAndColumnArg, user_friendly_path};
 use warpui::accessibility::{
     AccessibilityContent, AccessibilityVerbosity, ActionAccessibilityContent, WarpA11yRole,
 };
+#[cfg(not(target_family = "wasm"))]
+use warpui::assets::asset_cache::AssetSource;
 use warpui::clipboard::ClipboardContent;
 #[cfg(target_family = "wasm")]
 use warpui::elements::Percentage;
@@ -208,6 +210,8 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, FORK_PREFIX, PendingAttachment, PendingQueryState, QueuedQueryOrigin,
     SerializedBlockListItem, SlashCommandRequest,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::claude_code_usage::{ClaudeCodeUsageModel, ClaudeUsageLevel};
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 #[cfg(target_family = "wasm")]
 use crate::ai::conversation_details_panel::ConversationDetailsPanel;
@@ -578,6 +582,22 @@ const PILL_FONT_SIZE: f32 = 12.;
 const UPDATE_READY_TEXT: &str = "Update Warp";
 
 const TAB_BAR_OVERFLOW_MENU_WIDTH: f32 = 300.;
+
+/// Size of the pirate Pac-Man in the Claude Code usage chip. Slightly smaller
+/// than the toolbar icons so the round artwork reads as the same visual weight.
+#[cfg(not(target_family = "wasm"))]
+const CLAUDE_USAGE_PACMAN_SIZE: f32 = 15.;
+/// Shown in place of a percentage until the first usage read lands.
+#[cfg(not(target_family = "wasm"))]
+const CLAUDE_USAGE_UNKNOWN_LABEL: &str = "–";
+#[cfg(not(target_family = "wasm"))]
+const CLAUDE_USAGE_PACMAN_CLOSED: &str = "bundled/svg/pirate-pacman-closed.svg";
+#[cfg(not(target_family = "wasm"))]
+const CLAUDE_USAGE_PACMAN_OPEN: &str = "bundled/svg/pirate-pacman-open.svg";
+#[cfg(not(target_family = "wasm"))]
+const CLAUDE_USAGE_PACMAN_WIDE: &str = "bundled/svg/pirate-pacman-wide.svg";
+#[cfg(not(target_family = "wasm"))]
+const CLAUDE_USAGE_POSITION_ID: &str = "workspace:claude_code_usage";
 
 #[cfg(not(target_family = "wasm"))]
 const RESOURCE_CENTER_WIDTH: f32 = 361.;
@@ -3160,6 +3180,13 @@ impl Workspace {
             &AgentNotificationsModel::handle(ctx),
             Self::handle_agent_management_event,
         );
+
+        // Usage updates and chomp animation frames both land as this event, and
+        // both are only visible after the tab bar re-renders.
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_model(&ClaudeCodeUsageModel::handle(ctx), |_me, _, _event, ctx| {
+            ctx.notify();
+        });
 
         ctx.subscribe_to_model(
             &SessionSettings::handle(ctx),
@@ -21126,6 +21153,9 @@ impl Workspace {
             HeaderToolbarItemKind::NotificationsMailbox => {
                 self.render_notifications_mailbox_button(appearance, ctx)
             }
+            HeaderToolbarItemKind::ClaudeCodeUsage => {
+                self.render_claude_code_usage_chip(appearance, ctx)
+            }
         };
         Some(
             Container::new(
@@ -21206,6 +21236,121 @@ impl Workspace {
             NOTIFICATIONS_MAILBOX_POSITION_ID,
         )
         .finish()
+    }
+
+    /// Renders the Claude Code usage chip: a pirate Pac-Man alongside the share
+    /// of the current Claude session window that has been used. Clicking it
+    /// refreshes usage, and the Pac-Man chomps while that runs.
+    #[cfg(not(target_family = "wasm"))]
+    fn render_claude_code_usage_chip(
+        &self,
+        appearance: &Appearance,
+        ctx: &AppContext,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let model = ClaudeCodeUsageModel::as_ref(ctx);
+        let snapshot = model.snapshot();
+
+        let label_color = match snapshot.map(|snapshot| snapshot.level()) {
+            None | Some(ClaudeUsageLevel::Normal) => {
+                theme.sub_text_color(theme.background()).into_solid()
+            }
+            // The amber steps escalate in brightness before turning red.
+            Some(ClaudeUsageLevel::Elevated) => theme.ui_warning_color(),
+            Some(ClaudeUsageLevel::High) => theme.ui_yellow_color(),
+            Some(ClaudeUsageLevel::Critical) => theme.ui_error_color(),
+        };
+        let label = snapshot
+            .map(|snapshot| format!("{}%", snapshot.session_percent_rounded()))
+            .unwrap_or_else(|| CLAUDE_USAGE_UNKNOWN_LABEL.to_string());
+
+        let pacman = ConstrainedBox::new(
+            Image::new(
+                AssetSource::Bundled {
+                    path: claude_usage_pacman_frame(model.chomp_frame()),
+                },
+                CacheOption::BySize,
+            )
+            .finish(),
+        )
+        .with_width(CLAUDE_USAGE_PACMAN_SIZE)
+        .with_height(CLAUDE_USAGE_PACMAN_SIZE)
+        .finish();
+
+        let content = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(pacman)
+            .with_child(
+                Container::new(
+                    Text::new_inline(label, appearance.ui_font_family(), PILL_FONT_SIZE)
+                        .with_color(label_color)
+                        .with_style(Properties::default().weight(Weight::Medium))
+                        .finish(),
+                )
+                .with_margin_left(4.)
+                .finish(),
+            )
+            .finish();
+
+        let default_styles = UiComponentStyles {
+            font_color: Some(label_color),
+            font_size: Some(PILL_FONT_SIZE),
+            font_family_id: Some(appearance.ui_font_family()),
+            height: Some(24.),
+            border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
+            border_width: Some(0.),
+            padding: Some(Coords {
+                top: 0.,
+                bottom: 0.,
+                left: 5.,
+                right: 6.,
+            }),
+            ..Default::default()
+        };
+        let hovered_styles = UiComponentStyles {
+            background: Some(theme.surface_2().into()),
+            ..default_styles
+        };
+        let clicked_styles = UiComponentStyles {
+            background: Some(theme.background().into()),
+            ..default_styles
+        };
+
+        let (tooltip_label, tooltip_sublabel) = claude_usage_tooltip_text(model);
+        let button = Button::new(
+            self.mouse_states.claude_code_usage.clone(),
+            default_styles,
+            Some(hovered_styles),
+            Some(clicked_styles),
+            None,
+        )
+        .with_custom_label(content)
+        .with_tooltip(self.render_tab_bar_icon_button_tooltip(
+            appearance,
+            tooltip_label,
+            tooltip_sublabel,
+        ))
+        .build()
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(WorkspaceAction::RefreshClaudeCodeUsage);
+        });
+
+        SavePosition::new(
+            Container::new(Align::new(button.finish()).finish()).finish(),
+            CLAUDE_USAGE_POSITION_ID,
+        )
+        .finish()
+    }
+
+    /// The web build has no local Claude Code session to read, so the chip is
+    /// never available there.
+    #[cfg(target_family = "wasm")]
+    fn render_claude_code_usage_chip(
+        &self,
+        _appearance: &Appearance,
+        _ctx: &AppContext,
+    ) -> Box<dyn Element> {
+        Empty::new().finish()
     }
 
     /// Adds the configurable right-side toolbar items plus the fixed controls
@@ -22844,7 +22989,8 @@ impl Workspace {
                 Some(ChildView::new(&self.right_panel_view).finish())
             }
             HeaderToolbarItemKind::AgentManagement
-            | HeaderToolbarItemKind::NotificationsMailbox => None,
+            | HeaderToolbarItemKind::NotificationsMailbox
+            | HeaderToolbarItemKind::ClaudeCodeUsage => None,
         }
     }
 
@@ -24639,6 +24785,11 @@ impl TypedActionView for Workspace {
             ToggleRightPanel => {
                 let pane_group_handle = self.active_tab_pane_group().clone();
                 self.toggle_right_panel(&pane_group_handle, ctx);
+            }
+            RefreshClaudeCodeUsage => {
+                #[cfg(not(target_family = "wasm"))]
+                ClaudeCodeUsageModel::handle(ctx)
+                    .update(ctx, |model, ctx| model.refresh_from_user(ctx));
             }
             #[cfg(feature = "local_fs")]
             OpenCodeReviewPanel(locator) => {
@@ -29228,6 +29379,61 @@ impl Workspace {
 
 fn should_reserve_traffic_light_space_in_tab_bar(side: TrafficLightSide) -> bool {
     side == TrafficLightSide::Right
+}
+
+/// The Pac-Man frame for the current point in the chomp cycle
+/// (closed → open → wide → open), resting closed while idle.
+#[cfg(not(target_family = "wasm"))]
+fn claude_usage_pacman_frame(chomp_frame: Option<usize>) -> &'static str {
+    const CHOMP_CYCLE: [&str; 4] = [
+        CLAUDE_USAGE_PACMAN_CLOSED,
+        CLAUDE_USAGE_PACMAN_OPEN,
+        CLAUDE_USAGE_PACMAN_WIDE,
+        CLAUDE_USAGE_PACMAN_OPEN,
+    ];
+    match chomp_frame {
+        Some(frame) => CHOMP_CYCLE[frame % CHOMP_CYCLE.len()],
+        None => CLAUDE_USAGE_PACMAN_CLOSED,
+    }
+}
+
+/// Tooltip for the usage chip: the headline usage (or why there is none) plus
+/// the reset countdown and the other limits worth knowing about.
+#[cfg(not(target_family = "wasm"))]
+fn claude_usage_tooltip_text(model: &ClaudeCodeUsageModel) -> (String, Option<String>) {
+    let Some(snapshot) = model.snapshot() else {
+        let label = model
+            .last_error()
+            .map(|error| error.user_facing_message())
+            .unwrap_or_else(|| "Reading Claude usage…".to_string());
+        return (label, None);
+    };
+
+    let label = format!(
+        "Claude session: {}% used",
+        snapshot.session_percent_rounded()
+    );
+
+    let mut details = Vec::new();
+    if let Some(countdown) = snapshot.time_until_session_reset(chrono::Utc::now()) {
+        details.push(format!("Resets in {countdown}"));
+    }
+    if let Some(weekly_percent) = snapshot.weekly_percent {
+        details.push(format!(
+            "Weekly {}%",
+            weekly_percent.clamp(0., 100.).round()
+        ));
+    }
+    if let Some(extra_usage) = snapshot.extra_usage {
+        details.push(format!(
+            "Extra ${:.0} of ${:.0}",
+            extra_usage.used_credits / 100.,
+            extra_usage.monthly_limit / 100.
+        ));
+    }
+
+    let sublabel = (!details.is_empty()).then(|| details.join(" · "));
+    (label, sublabel)
 }
 
 /// Total width/height of the collage area in the group header.

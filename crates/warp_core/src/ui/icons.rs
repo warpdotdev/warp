@@ -348,6 +348,8 @@ pub enum Icon {
     JsonLang,
     PhpLang,
     KotlinLang,
+    /// Monochrome pirate Pac-Man, used by the Claude Code usage indicator.
+    PiratePacman,
 }
 
 impl From<Icon> for &'static str {
@@ -686,6 +688,7 @@ impl From<Icon> for &'static str {
             Icon::JsonLang => "bundled/svg/file_type/json.svg",
             Icon::PhpLang => "bundled/svg/file_type/php.svg",
             Icon::KotlinLang => "bundled/svg/file_type/kotlin.svg",
+            Icon::PiratePacman => "bundled/svg/pirate-pacman.svg",
         }
     }
 }

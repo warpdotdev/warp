@@ -949,6 +949,11 @@ pub enum FeatureFlag {
     /// between credits and dollars. When disabled (prod/stable), the footer
     /// falls back to a static, non-interactive credits total.
     TuiCostTransparency,
+
+    /// Enables the Claude Code usage indicator in the header toolbar: a
+    /// Pac-Man chip showing how much of the current Claude session limit has
+    /// been used, read from the local Claude Code OAuth session.
+    ClaudeCodeUsageIndicator,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1025,6 +1030,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::WellKnownMcpIds,
     FeatureFlag::FactoryMcp,
     FeatureFlag::TuiCostTransparency,
+    FeatureFlag::ClaudeCodeUsageIndicator,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

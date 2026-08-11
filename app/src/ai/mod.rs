@@ -20,6 +20,8 @@ pub mod aws_credentials;
 pub(crate) mod bedrock_credentials;
 pub(crate) mod block_context;
 pub(crate) mod blocklist;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod claude_code_usage;
 #[cfg(any(feature = "local_fs", not(target_family = "wasm")))]
 pub(crate) mod codebase_auto_indexing;
 pub mod control_code_parser;
