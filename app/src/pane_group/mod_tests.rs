@@ -258,6 +258,7 @@ fn mock_pane_group(app: &mut App, options: MockOptions) -> ViewHandle<PaneGroup>
                 ServerApiProvider::as_ref(ctx).get(),
                 options.layout,
                 block_lists,
+                AgentSessionRestore::default(),
                 None,
                 ctx,
             )
@@ -3831,6 +3832,7 @@ fn test_focused_pane_is_synchronized_with_application_focus() {
                         ServerApiProvider::as_ref(ctx).get(),
                         panes_layout,
                         block_lists,
+                        AgentSessionRestore::default(),
                         None,
                         ctx,
                     )
@@ -3975,5 +3977,83 @@ fn test_undo_close_keeps_a_file_pane_watching_its_file() {
                 "a permanently discarded pane should release its file"
             );
         });
+    });
+}
+
+// A resume can only be offered if the recorded map and the restored pane agree on the key. The
+// map is keyed by pane uuid, so the pane the snapshot rebuilds has to report that same uuid.
+#[test]
+fn restored_terminal_pane_reports_the_uuid_its_recorded_session_is_keyed_by() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let pane_uuid = vec![7, 7, 7];
+        let recorded = crate::app_state::RecordedAgentSession {
+            agent: crate::terminal::CLIAgent::Claude,
+            session_id: "session-1".to_owned(),
+            flags: vec!["--model".to_owned(), "opus".to_owned()],
+            directory: PathBuf::from("/tmp/project"),
+            observed_at: chrono::NaiveDate::from_ymd_opt(2026, 8, 11)
+                .expect("date should be valid")
+                .and_hms_opt(9, 30, 0)
+                .expect("time should be valid"),
+        };
+        let agent_restore = AgentSessionRestore {
+            sessions: Arc::new(HashMap::from([(
+                PaneUuid(pane_uuid.clone()),
+                recorded.clone(),
+            )])),
+            is_startup_restore: true,
+        };
+
+        let layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: pane_uuid,
+                cwd: None,
+                shell_launch_data: None,
+                is_active: true,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        })));
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let restore_for_group = agent_restore.clone();
+        let (_, pane_group) = app.add_window_with_bounds(
+            WindowStyle::NotStealFocus,
+            WindowBounds::ExactPosition(RectF::new(Vector2F::zero(), Vector2F::new(1024., 768.))),
+            |ctx| {
+                let banner_model_handle = ctx.add_model(|_| BannerState::default());
+                PaneGroup::new_with_panes_layout(
+                    tips_model,
+                    banner_model_handle,
+                    ServerApiProvider::as_ref(ctx).get(),
+                    layout,
+                    Arc::new(HashMap::new()),
+                    restore_for_group,
+                    None,
+                    ctx,
+                )
+            },
+        );
+
+        let reported_uuid = pane_group.read(&app, |panes, _ctx| {
+            panes
+                .panes_of::<TerminalPane>()
+                .map(|pane| pane.session_uuid())
+                .next()
+                .expect("the snapshot should have restored a terminal pane")
+        });
+
+        assert_eq!(
+            agent_restore.recorded_on_startup(&PaneUuid(reported_uuid)),
+            Some(&recorded)
+        );
     });
 }

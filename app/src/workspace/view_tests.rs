@@ -464,6 +464,7 @@ fn restored_workspace(
             NewWorkspaceSource::Restored {
                 window_snapshot,
                 block_lists: Arc::new(HashMap::new()),
+                agent_restore: AgentSessionRestore::default(),
             },
             ctx,
         )
@@ -3272,6 +3273,7 @@ fn add_get_started_tab(workspace: &mut Workspace, ctx: &mut ViewContext<Workspac
             contents: LeafContents::GetStarted,
         }))),
         Arc::new(HashMap::<PaneUuid, Vec<SerializedBlockListItem>>::new()),
+        AgentSessionRestore::default(),
         None,
         ctx,
     );

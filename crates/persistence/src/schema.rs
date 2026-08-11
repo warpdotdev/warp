@@ -18,6 +18,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    agent_sessions (id) {
+        id -> Integer,
+        pane_leaf_uuid -> Binary,
+        agent_kind -> Nullable<Text>,
+        session_id -> Text,
+        flags -> Nullable<Text>,
+        directory -> Binary,
+        observed_at -> Timestamp,
+    }
+}
+
+diesel::table! {
     agent_tasks (id) {
         id -> Integer,
         conversation_id -> Text,

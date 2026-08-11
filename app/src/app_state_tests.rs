@@ -106,3 +106,44 @@ fn test_code_pane_snapshot_with_multiple_tabs() {
     assert_eq!(tabs[2].path, None);
     assert!(matches!(source, Some(CodeSource::Link { .. })));
 }
+
+fn recorded_session() -> RecordedAgentSession {
+    RecordedAgentSession {
+        agent: CLIAgent::Claude,
+        session_id: "session-1".to_owned(),
+        flags: vec!["--resume".to_owned()],
+        directory: PathBuf::from("/tmp/project"),
+        observed_at: chrono::NaiveDate::from_ymd_opt(2026, 8, 11)
+            .expect("date should be valid")
+            .and_hms_opt(9, 30, 0)
+            .expect("time should be valid"),
+    }
+}
+
+fn startup_restore(pane_uuid: Vec<u8>) -> AgentSessionRestore {
+    AgentSessionRestore {
+        sessions: Arc::new(HashMap::from([(PaneUuid(pane_uuid), recorded_session())])),
+        is_startup_restore: true,
+    }
+}
+
+#[test]
+fn recorded_session_is_found_by_the_uuid_the_pane_reports() {
+    let restore = startup_restore(vec![4, 2]);
+
+    assert_eq!(
+        restore.recorded_on_startup(&PaneUuid(vec![4, 2])),
+        Some(&recorded_session())
+    );
+    assert_eq!(restore.recorded_on_startup(&PaneUuid(vec![4, 3])), None);
+}
+
+// Adding a tab from a snapshot mid-session walks the same restore path as startup, and resuming
+// an agent there would relaunch something the user never had running in that tab.
+#[test]
+fn recorded_session_is_withheld_when_the_restore_is_not_the_startup_pass() {
+    let mut restore = startup_restore(vec![4, 2]);
+    restore.is_startup_restore = false;
+
+    assert_eq!(restore.recorded_on_startup(&PaneUuid(vec![4, 2])), None);
+}

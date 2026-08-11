@@ -3,9 +3,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ai::workspace::WorkspaceMetadata;
-use chrono::{Local, Utc};
+use chrono::{Local, NaiveDate, Utc};
 use cloud_object_persistence::to_cloud_object_permissions;
 use diesel::connection::SimpleConnection;
+use diesel::migration::MigrationSource;
+use diesel_migrations::MigrationHarness;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
@@ -14,11 +16,13 @@ use warp_graphql::scalars::time::ServerTimestamp;
 use super::{
     app_database_file_path, database_file_path_for_current_scope, database_file_path_for_scope,
     decode_path, deduplicate_events, encode_path, get_all_codebase_index_metadata,
-    read_sqlite_data, save_app_state, save_codebase_index_metadata, setup_database, start_writer,
+    get_all_recorded_agent_sessions, get_all_restored_blocks, read_sqlite_data, save_agent_session,
+    save_app_state, save_codebase_index_metadata, setup_database, start_writer,
 };
 use crate::app_state::{
     AppState, CodePaneSnapShot, CodePaneTabSnapshot, LeafContents, LeafSnapshot, PaneNodeSnapshot,
-    TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
+    PaneUuid, RecordedAgentSession, TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot,
+    WindowSnapshot,
 };
 use crate::auth::UserUid;
 use crate::cloud_object::{CloudObjectPermissions, Owner};
@@ -30,9 +34,9 @@ use crate::persistence::{
 };
 use crate::server::ids::{ClientId, ServerId};
 use crate::tab::SelectedTabColor;
-use crate::terminal::ShellLaunchData;
 use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::model::session::SessionId;
+use crate::terminal::{CLIAgent, ShellLaunchData};
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::tab_group::TabGroupId;
 use crate::workspaces::team::{MembershipRole, Team, TeamMember};
@@ -151,6 +155,7 @@ fn sqlite_read_restores_app_state_and_codebase_metadata() {
         windows: vec![test_terminal_window_snapshot(false)],
         active_window_index: Some(0),
         block_lists: Default::default(),
+        agent_sessions: Default::default(),
         running_mcp_servers: Default::default(),
     };
     save_app_state(&mut conn, &app_state).expect("app state should save");
@@ -309,18 +314,21 @@ fn test_deduplicate_snapshots() {
     let snapshot_1 = AppState {
         active_window_index: Some(1),
         block_lists: Default::default(),
+        agent_sessions: Default::default(),
         windows: Default::default(),
         running_mcp_servers: Default::default(),
     };
     let snapshot_2 = AppState {
         active_window_index: Some(2),
         block_lists: Default::default(),
+        agent_sessions: Default::default(),
         windows: Default::default(),
         running_mcp_servers: Default::default(),
     };
     let snapshot_3 = AppState {
         active_window_index: Some(3),
         block_lists: Default::default(),
+        agent_sessions: Default::default(),
         windows: Default::default(),
         running_mcp_servers: Default::default(),
     };
@@ -434,6 +442,7 @@ fn test_sqlite_round_trips_vertical_tabs_panel_open() {
         ],
         active_window_index: Some(1),
         block_lists: Default::default(),
+        agent_sessions: Default::default(),
         running_mcp_servers: Default::default(),
     };
 
@@ -468,6 +477,7 @@ fn test_sqlite_round_trips_window_team_uid() {
         windows: vec![assigned_window, test_terminal_window_snapshot(true)],
         active_window_index: Some(0),
         block_lists: Default::default(),
+        agent_sessions: Default::default(),
         running_mcp_servers: Default::default(),
     };
 
@@ -536,6 +546,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
+        agent_sessions: Default::default(),
         running_mcp_servers: Default::default(),
     };
 
@@ -615,6 +626,7 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
+        agent_sessions: Default::default(),
         running_mcp_servers: Default::default(),
     };
 
@@ -740,6 +752,7 @@ fn test_sqlite_round_trips_tab_groups() {
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
+        agent_sessions: Default::default(),
         running_mcp_servers: Default::default(),
     };
 
@@ -901,6 +914,7 @@ fn test_sqlite_round_trips_pinned_state() {
         }],
         active_window_index: Some(0),
         block_lists: Default::default(),
+        agent_sessions: Default::default(),
         running_mcp_servers: Default::default(),
     };
 
@@ -1034,6 +1048,7 @@ fn test_sqlite_drops_too_small_bounds_on_save() {
         windows: vec![snapshot],
         active_window_index: Some(0),
         block_lists: Default::default(),
+        agent_sessions: Default::default(),
         running_mcp_servers: Default::default(),
     };
 
@@ -1073,6 +1088,7 @@ fn test_sqlite_drops_too_small_bounds_on_read() {
         windows: vec![test_terminal_window_snapshot(false)],
         active_window_index: Some(0),
         block_lists: Default::default(),
+        agent_sessions: Default::default(),
         running_mcp_servers: Default::default(),
     };
     save_app_state(&mut conn, &app_state).expect("app state should save");
@@ -1158,4 +1174,211 @@ fn team_member_is_disabled_round_trips_through_sqlite_cache() {
         .expect("disabled member should be present");
     assert!(!active_member.is_disabled);
     assert!(disabled_member.is_disabled);
+}
+
+const AGENT_PANE_UUID: [u8; 1] = [1];
+
+fn test_recorded_agent_session() -> RecordedAgentSession {
+    RecordedAgentSession {
+        agent: CLIAgent::Claude,
+        session_id: "b7c2f1a0-5f3e-4c21-9b8d-0f2a1c3d4e5f".to_owned(),
+        flags: vec!["--model".to_owned(), "opus".to_owned()],
+        directory: PathBuf::from("/tmp/agent-project"),
+        observed_at: NaiveDate::from_ymd_opt(2026, 8, 11)
+            .expect("date should be valid")
+            .and_hms_opt(9, 30, 0)
+            .expect("time should be valid"),
+    }
+}
+
+/// A database holding one restorable window whose single terminal pane is [`AGENT_PANE_UUID`].
+fn database_with_saved_session(database_path: &std::path::Path) -> diesel::SqliteConnection {
+    let mut conn = setup_database(database_path).expect("database should initialize");
+    let app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        agent_sessions: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+    conn
+}
+
+#[test]
+fn agent_session_round_trips_through_save_and_load() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = database_with_saved_session(&tempdir.path().join("warp.sqlite"));
+    let recorded = test_recorded_agent_session();
+
+    save_agent_session(&mut conn, AGENT_PANE_UUID.to_vec(), &recorded)
+        .expect("agent session should save");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(
+        restored
+            .agent_sessions
+            .get(&PaneUuid(AGENT_PANE_UUID.to_vec())),
+        Some(&recorded)
+    );
+}
+
+#[test]
+fn agent_session_is_absent_for_pane_without_a_recorded_row() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = database_with_saved_session(&tempdir.path().join("warp.sqlite"));
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert!(restored.agent_sessions.is_empty());
+}
+
+#[test]
+fn agent_session_with_malformed_stored_value_loads_as_absent() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = database_with_saved_session(&tempdir.path().join("warp.sqlite"));
+    let recorded = test_recorded_agent_session();
+
+    save_agent_session(&mut conn, AGENT_PANE_UUID.to_vec(), &recorded)
+        .expect("agent session should save");
+    save_agent_session(&mut conn, vec![9], &recorded).expect("second agent session should save");
+    conn.batch_execute(
+        "UPDATE agent_sessions SET agent_kind = 'not json' WHERE pane_leaf_uuid = X'01'",
+    )
+    .expect("corrupting update should succeed");
+
+    let loaded = get_all_recorded_agent_sessions(&mut conn)
+        .expect("a malformed row must not fail the whole load");
+
+    assert_eq!(loaded.get(&PaneUuid(AGENT_PANE_UUID.to_vec())), None);
+    assert_eq!(loaded.get(&PaneUuid(vec![9])), Some(&recorded));
+}
+
+// The writer degrades a value it cannot serialize to NULL. That degraded row must still be
+// accepted by the schema, because a rejected insert would surface as a database write error.
+#[test]
+fn agent_session_write_that_lost_a_value_still_lands_and_leaves_snapshots_intact() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = database_with_saved_session(&tempdir.path().join("warp.sqlite"));
+
+    conn.batch_execute(
+        "INSERT INTO agent_sessions \
+         (pane_leaf_uuid, agent_kind, session_id, flags, directory, observed_at) \
+         VALUES (X'01', NULL, 'session-1', NULL, X'2F746D70', '2026-08-11 09:30:00')",
+    )
+    .expect("a row whose serialized values were dropped must still insert");
+
+    let loaded =
+        get_all_recorded_agent_sessions(&mut conn).expect("degraded row must not fail the load");
+    assert!(loaded.is_empty());
+
+    let app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        agent_sessions: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state).expect("snapshot transaction must still commit");
+}
+
+// The reason agent state lives in its own table: `save_app_state` deletes and rebuilds every pane
+// table, so a value stored on `terminal_panes` would be reverted by the next snapshot.
+#[test]
+fn full_session_save_leaves_recorded_agent_sessions_untouched() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = database_with_saved_session(&tempdir.path().join("warp.sqlite"));
+    let recorded = test_recorded_agent_session();
+
+    save_agent_session(&mut conn, AGENT_PANE_UUID.to_vec(), &recorded)
+        .expect("agent session should save");
+
+    let app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        agent_sessions: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    let loaded = get_all_recorded_agent_sessions(&mut conn).expect("agent sessions should load");
+    assert_eq!(
+        loaded.get(&PaneUuid(AGENT_PANE_UUID.to_vec())),
+        Some(&recorded)
+    );
+}
+
+// AE15: restore itself triggers a snapshot save per pane once its shell bootstraps, so the
+// recorded state has to survive saves that happen *during* the restore that wants to read it.
+#[test]
+fn recorded_agent_session_survives_snapshot_saves_triggered_during_restore() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = database_with_saved_session(&tempdir.path().join("warp.sqlite"));
+    let recorded = test_recorded_agent_session();
+
+    save_agent_session(&mut conn, AGENT_PANE_UUID.to_vec(), &recorded)
+        .expect("agent session should save");
+
+    let app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        agent_sessions: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    for _ in 0..3 {
+        save_app_state(&mut conn, &app_state).expect("bootstrap snapshot should save");
+    }
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(
+        restored
+            .agent_sessions
+            .get(&PaneUuid(AGENT_PANE_UUID.to_vec())),
+        Some(&recorded)
+    );
+}
+
+#[test]
+fn agent_sessions_migration_down_drops_only_its_own_table() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = database_with_saved_session(&tempdir.path().join("warp.sqlite"));
+
+    // Reverting by name rather than "whichever ran last": every migration merged after this one
+    // would otherwise make this test revert someone else's table.
+    let migrations = persistence::MIGRATIONS
+        .migrations()
+        .expect("embedded migrations should load");
+    let agent_sessions_migration = migrations
+        .iter()
+        .find(|migration| {
+            migration
+                .name()
+                .to_string()
+                .ends_with("create_agent_sessions")
+        })
+        .expect("the agent sessions migration should be embedded");
+    conn.revert_migration(agent_sessions_migration.as_ref())
+        .expect("the agent sessions migration should revert");
+
+    assert!(
+        get_all_recorded_agent_sessions(&mut conn).is_err(),
+        "down.sql should have dropped agent_sessions"
+    );
+    assert!(
+        get_all_restored_blocks(&mut conn).is_ok(),
+        "down.sql must leave the other tables alone"
+    );
 }

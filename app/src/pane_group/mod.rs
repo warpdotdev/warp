@@ -71,9 +71,9 @@ use crate::ai_assistant::AskAIType;
 #[cfg(feature = "local_fs")]
 use crate::app_state::CodePaneSnapShot;
 use crate::app_state::{
-    self, AIFactPaneSnapshot, BranchSnapshot, EnvVarCollectionPaneSnapshot, LeafContents,
-    LeafSnapshot, NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid, SettingsPaneSnapshot,
-    TerminalPaneSnapshot, WorkflowPaneSnapshot,
+    self, AIFactPaneSnapshot, AgentSessionRestore, BranchSnapshot, EnvVarCollectionPaneSnapshot,
+    LeafContents, LeafSnapshot, NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid,
+    SettingsPaneSnapshot, TerminalPaneSnapshot, WorkflowPaneSnapshot,
 };
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
@@ -1547,6 +1547,7 @@ impl PaneGroup {
     fn restore_pane_tree(
         root: PaneNodeSnapshot,
         block_lists: Arc<HashMap<PaneUuid, Vec<SerializedBlockListItem>>>,
+        agent_restore: AgentSessionRestore,
         resources: TerminalViewResources,
         ctx: &mut ViewContext<PaneGroup>,
         pane_contents: &mut HashMap<PaneId, Box<dyn AnyPaneContent>>,
@@ -1560,6 +1561,7 @@ impl PaneGroup {
             PaneNodeSnapshot::Leaf(leaf) => Self::restore_pane_leaf(
                 leaf,
                 block_lists,
+                agent_restore,
                 resources,
                 ctx,
                 pane_contents,
@@ -1591,6 +1593,7 @@ impl PaneGroup {
                     match PaneGroup::restore_pane_tree(
                         node,
                         block_lists.clone(),
+                        agent_restore.clone(),
                         resources.clone(),
                         ctx,
                         pane_contents,
@@ -1627,6 +1630,7 @@ impl PaneGroup {
     fn restore_pane_leaf(
         leaf: LeafSnapshot,
         block_lists: Arc<HashMap<PaneUuid, Vec<SerializedBlockListItem>>>,
+        agent_restore: AgentSessionRestore,
         resources: TerminalViewResources,
         ctx: &mut ViewContext<PaneGroup>,
         pane_contents: &mut HashMap<PaneId, Box<dyn AnyPaneContent>>,
@@ -1663,6 +1667,13 @@ impl PaneGroup {
             LeafContents::Terminal(terminal_snapshot) => {
                 let uuid = PaneUuid(terminal_snapshot.uuid.clone());
                 let block_list = block_lists.get(&uuid);
+
+                if let Some(recorded_agent) = agent_restore.recorded_on_startup(&uuid) {
+                    log::info!(
+                        "Restoring pane with a recorded {:?} agent session",
+                        recorded_agent.agent
+                    );
+                }
 
                 let chosen_shell = terminal_snapshot
                     .shell_launch_data
@@ -3457,6 +3468,7 @@ impl PaneGroup {
         server_api: Arc<ServerApi>,
         panes_layout: PanesLayout,
         block_lists: Arc<HashMap<PaneUuid, Vec<SerializedBlockListItem>>>,
+        agent_restore: AgentSessionRestore,
         model_event_sender: Option<SyncSender<ModelEvent>>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -3491,6 +3503,7 @@ impl PaneGroup {
                     let result = Self::restore_pane_tree(
                         *panes_snapshot,
                         block_lists,
+                        agent_restore,
                         resources.clone(),
                         ctx,
                         pane_contents,
