@@ -1,6 +1,7 @@
+use warp_core::ui::icons::Icon as WarpIcon;
 use warp_core::ui::theme::Fill;
 
-use super::{OZ_AMBIENT_BACKGROUND_COLOR, warp_agent_circle_colors};
+use super::{OZ_AMBIENT_BACKGROUND_COLOR, oz_agent_glyph, warp_agent_circle_colors};
 use crate::themes::default_themes::{dark_theme, light_theme};
 
 #[test]
@@ -25,4 +26,14 @@ fn ambient_warp_agent_circle_keeps_purple_background_in_all_themes() {
 
     assert_eq!(warp_agent_circle_colors(&dark_theme(), true), expected);
     assert_eq!(warp_agent_circle_colors(&light_theme(), true), expected);
+}
+
+#[test]
+fn oz_agent_glyph_distinguishes_local_from_ambient() {
+    // Local runs use the solid Warp brand mark; ambient/cloud runs keep the legacy
+    // `OzCloud` mark as a hold-over until a cloud variant of the Warp mark exists.
+    // Losing this distinction was flagged in PR #11022's merge-resolution discussion.
+    assert_eq!(oz_agent_glyph(false), WarpIcon::Agent);
+    assert_eq!(oz_agent_glyph(true), WarpIcon::OzCloud);
+    assert_ne!(oz_agent_glyph(false), oz_agent_glyph(true));
 }

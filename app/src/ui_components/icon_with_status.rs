@@ -128,9 +128,12 @@ pub(crate) enum IconWithStatusVariant {
     },
     /// A pre-built icon element on an overlay background.
     NeutralElement { icon_element: Box<dyn Element> },
-    /// A Warp agent conversation: monochrome Warp glyph and circle. Local conversations
-    /// use a foreground/background pair that flips for light and dark themes; ambient
-    /// (cloud) conversations retain the purple brand background and cloud status badge.
+    /// A Warp agent conversation. Local conversations render the solid Warp brand
+    /// glyph on a foreground/background pair that flips for light and dark themes;
+    /// ambient (cloud) conversations retain the purple brand background, the cloud
+    /// status badge, and (as a hold-over until a cloud variant of the Warp mark
+    /// exists) the legacy `OzCloud` glyph so cloud runs stay visually distinct from
+    /// local ones.
     OzAgent {
         status: Option<ConversationStatus>,
         is_ambient: bool,
@@ -205,7 +208,9 @@ pub(crate) fn render_icon_with_status_with_badge_style(
         IconWithStatusVariant::OzAgent { status, is_ambient } => {
             let (circle_background, glyph_color) = warp_agent_circle_colors(theme, is_ambient);
             let circle = render_circle(
-                WarpIcon::Agent.to_warpui_icon(glyph_color).finish(),
+                oz_agent_glyph(is_ambient)
+                    .to_warpui_icon(glyph_color)
+                    .finish(),
                 circle_background,
                 total_size,
             );
@@ -262,6 +267,19 @@ pub(crate) fn render_icon_with_status_with_badge_style(
             theme,
             status_container_background,
         ),
+    }
+}
+
+// Ambient/cloud runs keep the legacy `OzCloud` mark as a hold-over until a cloud
+// variant of the Warp brand mark (`Icon::Agent`) exists; without it, local and cloud
+// runs would render the identical glyph and lose the distinction reviewers rely on to
+// tell them apart at a glance (see PR #11022's merge-resolution discussion). Local runs
+// use the Warp mark.
+fn oz_agent_glyph(is_ambient: bool) -> WarpIcon {
+    if is_ambient {
+        WarpIcon::OzCloud
+    } else {
+        WarpIcon::Agent
     }
 }
 
