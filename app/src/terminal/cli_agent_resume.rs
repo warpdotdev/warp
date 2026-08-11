@@ -324,13 +324,11 @@ impl ResumeDeclarations {
         recorded
     }
 
-    /// The shell command that reattaches `agent` to `identifier`, carrying whichever of
-    /// `flags` still validate and `posture` still admits.
-    ///
-    /// Returns `None` when the agent is undeclared or the resume pointer itself fails
-    /// its declared shape: without a usable pointer there is no invocation to salvage. A
-    /// [`PermissionPosture::Drop`] never costs the resume, only the elevation.
     /// The allowlisted flags `agent` declares as choosing a permission posture.
+    ///
+    /// Read only by `declared_permission_posture_flags_are_exactly_the_acknowledged_ones`, which
+    /// is what it is for: a newly declared posture flag has to be acknowledged there before it
+    /// can ship.
     pub fn permission_posture_flags(&self, agent: CLIAgent) -> Vec<&str> {
         let Some(declaration) = self.agents.get(&agent) else {
             return Vec::new();
@@ -343,6 +341,12 @@ impl ResumeDeclarations {
             .collect()
     }
 
+    /// The shell command that reattaches `agent` to `identifier`, carrying whichever of
+    /// `flags` still validate and `posture` still admits.
+    ///
+    /// Returns `None` when the agent is undeclared or the resume pointer itself fails
+    /// its declared shape: without a usable pointer there is no invocation to salvage. A
+    /// [`PermissionPosture::Drop`] never costs the resume, only the elevation.
     pub fn build_resume_command(
         &self,
         agent: CLIAgent,

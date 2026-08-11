@@ -1275,7 +1275,9 @@ fn collect_terminal_leaves<'a>(
 /// `restored_directory` is the directory the pane actually came up in, which is not the same
 /// question as whether the recorded one still exists: a pane recorded in a worktree that was
 /// deleted before the restart comes up in the fallback directory, and so does a pane whose
-/// recorded directory survives but whose snapshot pointed elsewhere.
+/// recorded directory survives but whose snapshot pointed elsewhere. It is passed already
+/// verified — the caller only has a directory to come up in because it resolved one — so only the
+/// recorded side is checked for existence here.
 pub(crate) fn resume_eligibility<'a>(
     agent_restore: &'a AgentSessionRestore,
     pane_uuid: &PaneUuid,
@@ -1307,9 +1309,9 @@ pub(crate) fn resume_eligibility<'a>(
         return Err(ResumeIneligibility::SessionNotLocal);
     }
 
-    let recorded_directory = resolved_directory(&recorded.directory)
+    let recorded_directory = existing_directory(&recorded.directory)
         .ok_or(ResumeIneligibility::RecordedDirectoryMissing)?;
-    if restored_directory.and_then(resolved_directory) != Some(recorded_directory) {
+    if restored_directory.map(canonical_directory) != Some(recorded_directory) {
         return Err(ResumeIneligibility::RestoredElsewhere);
     }
 
@@ -1338,12 +1340,17 @@ fn resume_invocation_for(recorded: &RecordedAgentSession) -> Option<String> {
     )
 }
 
-/// `path` as it resolves on disk right now, or `None` when nothing is there. Both sides of a
-/// directory comparison go through this so that two spellings of one directory — a symlinked
-/// temporary directory, `/tmp` against `/private/tmp` — are not read as two directories.
-fn resolved_directory(path: &Path) -> Option<PathBuf> {
-    path.is_dir()
-        .then(|| dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
+/// `path` in the one spelling a directory comparison can use. Both sides go through this so that
+/// two spellings of one directory — a symlinked temporary directory, `/tmp` against
+/// `/private/tmp` — are not read as two directories.
+fn canonical_directory(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// [`canonical_directory`] for a path whose existence is still an open question, which is the
+/// recorded directory alone: it was written before the restart and may be gone by now.
+fn existing_directory(path: &Path) -> Option<PathBuf> {
+    path.is_dir().then(|| canonical_directory(path))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1892,16 +1899,20 @@ impl PaneGroup {
                     .filter(|path| path.is_dir());
 
                 // The verdict is decided here, where the directory the pane is about to come up
-                // in is known.
-                let resume_verdict = resume_eligibility(
-                    &agent_restore,
-                    &uuid,
-                    &terminal_snapshot,
-                    startup_directory.as_deref(),
-                );
+                // in is known. Not asking for it at all while the feature is off keeps its
+                // directory resolution — a stat and a canonicalize per restored pane — off every
+                // launch that cannot act on the answer or report it.
+                let resume_verdict = FeatureFlag::AgentSessionResume.is_enabled().then(|| {
+                    resume_eligibility(
+                        &agent_restore,
+                        &uuid,
+                        &terminal_snapshot,
+                        startup_directory.as_deref(),
+                    )
+                });
                 let resume_command = match &resume_verdict {
-                    Ok(_) if !FeatureFlag::AgentSessionResume.is_enabled() => None,
-                    Ok(recorded) => {
+                    None => None,
+                    Some(Ok(recorded)) => {
                         log::info!(
                             "Restored pane can resume its recorded {:?} agent session",
                             recorded.agent
@@ -1910,8 +1921,8 @@ impl PaneGroup {
                     }
                     // The ordinary outcome for every pane that was not running an agent, so
                     // reporting it would say nothing about this feature.
-                    Err(ResumeIneligibility::NoRecordedSession) => None,
-                    Err(reason) => {
+                    Some(Err(ResumeIneligibility::NoRecordedSession)) => None,
+                    Some(Err(reason)) => {
                         log::info!("Restored pane will not resume an agent session: {reason:?}");
                         None
                     }
@@ -1922,9 +1933,10 @@ impl PaneGroup {
                 // that is silent by design. A pane with nothing recorded reports nothing — it
                 // was not running an agent, which says nothing about this. While the feature is
                 // off nothing is armed and, on the same flag, nothing is sent.
-                if let Some(recorded) = agent_restore.sessions.get(&uuid)
+                if let Some(resume_verdict) = &resume_verdict
+                    && let Some(recorded) = agent_restore.sessions.get(&uuid)
                     && let Some(outcome) =
-                        ResumeOutcome::for_verdict(&resume_verdict, resume_command.is_some())
+                        ResumeOutcome::for_verdict(resume_verdict, resume_command.is_some())
                 {
                     send_telemetry_from_ctx!(
                         AgentSessionResumeTelemetryEvent::pane_restored(

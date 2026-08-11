@@ -747,12 +747,31 @@ fn capture_agent_session(
     let session = match event {
         CLIAgentSessionsModelEvent::SessionUpdated { .. }
         | CLIAgentSessionsModelEvent::StatusChanged { .. } => {
-            match observed_agent_session(group, terminal_pane_id, event.terminal_view_id(), ctx) {
-                // Nothing to record until the agent has reported an identifier: a recording
-                // without one claims no session and resumes nothing.
-                None => return,
-                session => session,
+            // Nothing to record until the agent has reported an identifier: a recording without
+            // one claims no session and resumes nothing.
+            let Some((terminal_view, agent, session_id)) =
+                reported_agent_identity(group, terminal_pane_id, event.terminal_view_id(), ctx)
+            else {
+                return;
+            };
+            // These events fire once per tool call while the pair naming the conversation holds
+            // for the whole task, so the burst is settled on a map lookup rather than on the
+            // grid walk, alias resolution and working-directory stat that reading the rest of
+            // the state costs.
+            let unchanged_identity = agent_capture
+                .last_sent
+                .lock()
+                .as_ref()
+                .is_some_and(|sent| sent.agent == agent && sent.session_id == session_id);
+            if unchanged_identity {
+                return;
             }
+            Some(observed_agent_session(
+                &terminal_view,
+                agent,
+                session_id,
+                ctx,
+            ))
         }
         CLIAgentSessionsModelEvent::Ended { .. } => {
             // An agent replaced rather than removed — a second agent started in the same pane —
@@ -815,14 +834,17 @@ fn records_same_agent_session(
     }
 }
 
-/// The agent state to record for `terminal_pane_id`, or `None` while its agent has reported no
-/// session identifier.
-fn observed_agent_session(
+/// The agent and identifier `terminal_pane_id` is running, with the view they were reported for,
+/// or `None` while its agent has reported no session identifier.
+///
+/// Kept apart from [`observed_agent_session`] so that the pair naming the conversation — all a
+/// repeat observation has to be compared on — can be read without paying for the rest.
+fn reported_agent_identity(
     group: &PaneGroup,
     terminal_pane_id: TerminalPaneId,
     terminal_view_id: EntityId,
     ctx: &AppContext,
-) -> Option<RecordedAgentSession> {
+) -> Option<(ViewHandle<TerminalView>, CLIAgent, String)> {
     let terminal_view = group.terminal_view_from_pane_id(terminal_pane_id, ctx)?;
     // A pane can push another terminal view over the one the agent is running in. The pushed
     // view's command line and working directory are not the agent's, so there is nothing to
@@ -833,7 +855,16 @@ fn observed_agent_session(
     let (agent, session_id) = CLIAgentSessionsModel::as_ref(ctx)
         .reported_agent_session(terminal_view_id)
         .map(|(agent, session_id)| (agent, session_id.to_owned()))?;
+    Some((terminal_view, agent, session_id))
+}
 
+/// The agent state to record for a pane whose agent reported `agent` and `session_id`.
+fn observed_agent_session(
+    terminal_view: &ViewHandle<TerminalView>,
+    agent: CLIAgent,
+    session_id: String,
+    ctx: &AppContext,
+) -> RecordedAgentSession {
     let view = terminal_view.as_ref(ctx);
     // The model lock is held only long enough to copy the command text out. Resolving an alias
     // reads the shell session model, and reaching for a second model with this one held is what
@@ -858,7 +889,7 @@ fn observed_agent_session(
         shell_session.as_ref().map(|session| session.aliases()),
     );
 
-    Some(RecordedAgentSession {
+    RecordedAgentSession {
         agent,
         session_id,
         flags,
@@ -870,7 +901,7 @@ fn observed_agent_session(
             .map(PathBuf::from)
             .unwrap_or_default(),
         observed_at: Utc::now().naive_utc(),
-    })
+    }
 }
 
 /// The resume-relevant flags `command` gave `agent`, with the first word resolved through the

@@ -4073,7 +4073,7 @@ fn restored_terminal_pane_reports_the_uuid_its_recorded_session_is_keyed_by() {
         });
 
         assert_eq!(
-            agent_restore.recorded_on_startup(&PaneUuid(reported_uuid)),
+            agent_restore.sessions.get(&PaneUuid(reported_uuid)),
             Some(&recorded)
         );
     });
