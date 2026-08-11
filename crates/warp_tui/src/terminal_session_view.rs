@@ -20,11 +20,11 @@ use warp::settings::{
 use warp::tui_export::slash_commands;
 use warp::tui_export::{
     AIAgentActionId, AIAgentContext, AIAgentExchangeId, AIAgentPtyWriteMode, AIConversation,
-    AIConversationAutoexecuteMode, AIConversationId, AcceptSlashCommandOrSavedPrompt,
-    ActiveSession, ActiveSessionEvent, AfterBlockCompletedEvent, AgentConversationEntryId,
-    AgentConversationListEntryState, AgentConversationsModel, AgentInteractionMetadata,
-    AgentViewEntryOrigin, Appearance, BlockId, BlockType, BlocklistAIActionEvent,
-    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    AIConversationAutoexecuteMode, AIConversationId, AIRequestUsageModel, AIRequestUsageModelEvent,
+    AcceptSlashCommandOrSavedPrompt, ActiveSession, ActiveSessionEvent, AfterBlockCompletedEvent,
+    AgentConversationEntryId, AgentConversationListEntryState, AgentConversationsModel,
+    AgentInteractionMetadata, AgentViewEntryOrigin, Appearance, BlockId, BlockType,
+    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel,
     BlocklistOrchestrationTelemetryEvent, CLISubagentController, CLISubagentEvent,
     CLISubagentTarget, COMMAND_REGISTRY, CancellationReason, ChangelogModel, ChangelogRequestType,
@@ -42,12 +42,13 @@ use warp::tui_export::{
     TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue, TuiOnboardingMarker,
     TuiOnboardingMarkers, TuiOnboardingMarkersEvent, TuiSlashCommandDataSource,
     TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind, TuiUserInfoManager,
-    TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, WAKEUP_THROTTLE_PERIOD,
-    WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
-    build_slash_command_mixer, detect_possible_git_repo, export_conversation_markdown,
-    loaded_subtree_rollup, log_out_tui, maybe_build_ai_query_upsert_event,
-    prepare_conversation_block_restoration, record_autodetection_toggle_from_slash_command,
-    record_saved_prompt_accepted, record_static_slash_command_accepted, saved_prompt_text_for_id,
+    TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason, UserWorkspaces,
+    WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent, block_context_from_terminal_model,
+    build_slash_command_mixer, compute_tui_usage_snapshot, detect_possible_git_repo,
+    export_conversation_markdown, loaded_subtree_rollup, log_out_tui,
+    maybe_build_ai_query_upsert_event, prepare_conversation_block_restoration,
+    record_autodetection_toggle_from_slash_command, record_saved_prompt_accepted,
+    record_static_slash_command_accepted, saved_prompt_text_for_id,
     slash_command_selection_behavior, throttle,
 };
 use warp_core::channel::{Channel, ChannelState};
@@ -121,7 +122,7 @@ use crate::platform::reveal_path_in_file_manager;
 use crate::prompt_and_command_history_menu::{
     TuiPromptAndCommandHistoryMenuEvent, TuiPromptAndCommandHistoryMenuModel,
 };
-use crate::read_only_menu::TuiReadOnlyMenuKind;
+use crate::read_only_menu::{TuiReadOnlyMenu, TuiReadOnlyMenuKind};
 use crate::resume::TuiExitSummaryHandle;
 use crate::session_registry::TuiSessions;
 use crate::skills_menu::{TuiSkillMenuEvent, TuiSkillMenuModel};
@@ -166,6 +167,7 @@ pub(crate) mod state;
 mod status_menu;
 mod statusline;
 mod todo_menu;
+mod usage_menu;
 use self::completions::CompletionRequestState;
 use self::input_detection::InputDetectionState;
 use self::state::{
@@ -177,6 +179,9 @@ use self::state::{
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const INLINE_MENU_TOP_PADDING_ROWS: u16 = 1;
 const MAX_READ_ONLY_MENU_ROWS: u16 = 10;
+/// Row cap for the `/usage` panel, which can grow taller than the other
+/// read-only menus when pay-as-you-go spend wraps across multiple circle rows.
+const MAX_USAGE_MENU_ROWS: u16 = 24;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
 /// Top and bottom border rows plus one padding row inside each border.
 const BORDERED_INPUT_CHROME_ROWS: u16 = 4;
@@ -214,6 +219,12 @@ fn status_menu_is_open(mode: TuiInputSuggestionsMode) -> bool {
     matches!(
         mode,
         TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Status)
+    )
+}
+fn usage_menu_is_open(mode: TuiInputSuggestionsMode) -> bool {
+    matches!(
+        mode,
+        TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Usage)
     )
 }
 fn todo_menu_is_open(mode: TuiInputSuggestionsMode) -> bool {
@@ -738,6 +749,12 @@ pub(crate) struct TuiTerminalSessionView {
     auto_approve_feedback_timer: Option<SpawnedFutureHandle>,
     footer_auto_approve_mouse: MouseStateHandle,
     warping_auto_approve_mouse: MouseStateHandle,
+    /// Hover and click state for the `/usage` panel's "Manage billing and
+    /// usage" link, owned here so it survives element-tree rebuilds.
+    usage_manage_billing_mouse: MouseStateHandle,
+    /// Hover and click state for the `/usage` panel's "Buy more credits or
+    /// upgrade plan" link.
+    usage_upgrade_mouse: MouseStateHandle,
     conversation_restore_state: ConversationRestoreState,
     next_restore_request_id: u64,
     exit_summary: TuiExitSummaryHandle,
@@ -1606,6 +1623,35 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         });
+        // The `/usage` panel recomputes its snapshot fresh on every render, but
+        // nothing else re-renders this view when usage/billing data changes in
+        // the background, so refresh explicitly while the panel is open.
+        // Guarded like `AppEditorSettings` elsewhere in this file: lightweight
+        // test fixtures don't always register these app-wide singletons.
+        if ctx.has_singleton_model::<AIRequestUsageModel>() {
+            let suggestions_mode_for_usage = suggestions_mode.clone();
+            ctx.subscribe_to_model(
+                &AIRequestUsageModel::handle(ctx),
+                move |_, _, event, ctx| {
+                    if matches!(
+                        event,
+                        AIRequestUsageModelEvent::RequestUsageUpdated
+                            | AIRequestUsageModelEvent::CreditAvailabilityUpdated
+                    ) && usage_menu_is_open(suggestions_mode_for_usage.as_ref(ctx).mode())
+                    {
+                        ctx.notify();
+                    }
+                },
+            );
+        }
+        if ctx.has_singleton_model::<UserWorkspaces>() {
+            let suggestions_mode_for_usage_workspaces = suggestions_mode.clone();
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, _, _, ctx| {
+                if usage_menu_is_open(suggestions_mode_for_usage_workspaces.as_ref(ctx).mode()) {
+                    ctx.notify();
+                }
+            });
+        }
         let read_only_menu_selection = TuiSelectionHandle::default();
         let read_only_menu_viewport = TuiViewportedListState::new_at_end();
         read_only_menu_viewport.scroll_to_rows_from_top(0);
@@ -1974,7 +2020,12 @@ impl TuiTerminalSessionView {
             view.read_only_menu_selection.clear();
             view.open_todo_menu_list_key = match event.mode.read_only_menu() {
                 Some(TuiReadOnlyMenuKind::Todos) => view.active_todo_menu_list_key(ctx),
-                Some(TuiReadOnlyMenuKind::Shortcuts | TuiReadOnlyMenuKind::Status) | None => None,
+                Some(
+                    TuiReadOnlyMenuKind::Shortcuts
+                    | TuiReadOnlyMenuKind::Status
+                    | TuiReadOnlyMenuKind::Usage,
+                )
+                | None => None,
             };
             let scroll_top = event
                 .mode
@@ -2266,6 +2317,8 @@ impl TuiTerminalSessionView {
             auto_approve_feedback_timer: None,
             footer_auto_approve_mouse: MouseStateHandle::default(),
             warping_auto_approve_mouse: MouseStateHandle::default(),
+            usage_manage_billing_mouse: MouseStateHandle::default(),
+            usage_upgrade_mouse: MouseStateHandle::default(),
             conversation_restore_state: ConversationRestoreState::Idle,
             next_restore_request_id: 0,
             exit_summary,
@@ -2662,6 +2715,29 @@ impl TuiTerminalSessionView {
         input_hints::long_running_command_hint(attach_key.as_deref())
     }
 
+    /// Renders a shared [`TuiReadOnlyMenu`] (status/shortcuts/todos) with this
+    /// session's persistent selection and viewport state wired up.
+    fn render_selectable_read_only_menu(
+        &self,
+        menu: TuiReadOnlyMenu,
+        builder: &TuiUiBuilder,
+    ) -> Box<dyn TuiElement> {
+        menu.render_with_viewport(
+            self.read_only_menu_selection.clone(),
+            self.read_only_menu_viewport.clone(),
+            builder,
+            |event_ctx, _| {
+                event_ctx
+                    .dispatch_typed_action(TuiTerminalSessionAction::ReadOnlyMenuSelectionStarted);
+            },
+            |text, event_ctx, _| {
+                event_ctx.dispatch_typed_action(
+                    TuiTerminalSessionAction::ReadOnlyMenuSelectionEnded(text),
+                );
+            },
+        )
+    }
+
     fn render_input_area(
         &self,
         state: &TuiTerminalSessionState,
@@ -2682,42 +2758,46 @@ impl TuiTerminalSessionView {
                 .finish(),
             );
         }
-        if let Some(menu) = state.read_only_menu().and_then(|kind| match kind {
+        let open_read_only_menu = state.read_only_menu();
+        let menu_element = open_read_only_menu.and_then(|kind| match kind {
             TuiReadOnlyMenuKind::Shortcuts => {
                 let keymap_context = self.keymap_context(ctx);
-                Some(shortcuts::menu(state, &keymap_context, builder, ctx))
+                Some(self.render_selectable_read_only_menu(
+                    shortcuts::menu(state, &keymap_context, builder, ctx),
+                    builder,
+                ))
             }
-            TuiReadOnlyMenuKind::Status => {
-                Some(status_menu::menu(self.compute_status_info(ctx), builder))
-            }
+            TuiReadOnlyMenuKind::Status => Some(self.render_selectable_read_only_menu(
+                status_menu::menu(self.compute_status_info(ctx), builder),
+                builder,
+            )),
             TuiReadOnlyMenuKind::Todos => self
                 .conversation_selection
                 .as_ref(ctx)
                 .selected_conversation(ctx)
-                .and_then(|conversation| todo_menu::active_todo_menu(conversation, builder)),
-        }) {
-            let menu = menu.render_with_viewport(
-                self.read_only_menu_selection.clone(),
-                self.read_only_menu_viewport.clone(),
+                .and_then(|conversation| todo_menu::active_todo_menu(conversation, builder))
+                .map(|menu| self.render_selectable_read_only_menu(menu, builder)),
+            TuiReadOnlyMenuKind::Usage => Some(usage_menu::render(
+                &compute_tui_usage_snapshot(ctx),
+                &self.usage_manage_billing_mouse,
+                &self.usage_upgrade_mouse,
+                &upgrade_url(ctx),
                 builder,
-                |event_ctx, _| {
-                    event_ctx.dispatch_typed_action(
-                        TuiTerminalSessionAction::ReadOnlyMenuSelectionStarted,
-                    );
-                },
-                |text, event_ctx, _| {
-                    event_ctx.dispatch_typed_action(
-                        TuiTerminalSessionAction::ReadOnlyMenuSelectionEnded(text),
-                    );
-                },
-            );
+            )),
+        });
+        if let Some(menu_element) = menu_element {
+            let max_rows = if matches!(open_read_only_menu, Some(TuiReadOnlyMenuKind::Usage)) {
+                MAX_USAGE_MENU_ROWS
+            } else {
+                MAX_READ_ONLY_MENU_ROWS
+            };
             content = content.child(
                 TuiConstrainedBox::new(
-                    TuiContainer::new(menu)
+                    TuiContainer::new(menu_element)
                         .with_padding_top(INLINE_MENU_TOP_PADDING_ROWS)
                         .finish(),
                 )
-                .with_max_rows(MAX_READ_ONLY_MENU_ROWS + INLINE_MENU_TOP_PADDING_ROWS)
+                .with_max_rows(max_rows + INLINE_MENU_TOP_PADDING_ROWS)
                 .finish(),
             );
         }
@@ -3701,7 +3781,9 @@ impl TuiTerminalSessionView {
         ctx: &AppContext,
     ) -> usize {
         match kind {
-            TuiReadOnlyMenuKind::Shortcuts | TuiReadOnlyMenuKind::Status => 0,
+            TuiReadOnlyMenuKind::Shortcuts
+            | TuiReadOnlyMenuKind::Status
+            | TuiReadOnlyMenuKind::Usage => 0,
             TuiReadOnlyMenuKind::Todos => self
                 .conversation_selection
                 .as_ref(ctx)
@@ -4573,6 +4655,16 @@ impl TuiTerminalSessionView {
                 });
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
+            SlashCommandKind::Usage => {
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                self.suggestions_mode.update(ctx, |mode, ctx| {
+                    mode.set_mode(
+                        TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Usage),
+                        ctx,
+                    );
+                });
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
             SlashCommandKind::Exit => {
                 record_static_slash_command_accepted(command.name, true, ctx);
                 ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -4783,7 +4875,6 @@ impl TuiTerminalSessionView {
             | SlashCommandKind::ForkAndCompact
             | SlashCommandKind::ForkFrom
             | SlashCommandKind::ContinueLocally
-            | SlashCommandKind::Usage
             | SlashCommandKind::RemoteControl
             | SlashCommandKind::Prompts
             | SlashCommandKind::Rewind => {

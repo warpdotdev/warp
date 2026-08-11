@@ -17,6 +17,7 @@ pub(crate) enum TuiReadOnlyMenuKind {
     Shortcuts,
     Status,
     Todos,
+    Usage,
 }
 /// One styled text cell in a read-only menu row.
 #[derive(Clone)]

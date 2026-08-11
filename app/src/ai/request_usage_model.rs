@@ -21,6 +21,8 @@ use crate::pricing::PricingInfoModel;
 use crate::server::server_api::ai::AIClient;
 use crate::settings::AISettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+#[cfg(feature = "tui")]
+use crate::workspaces::workspace::AiCreditsUsageAndCostType;
 use crate::workspaces::workspace::WorkspaceUid;
 
 /// Threshold of ambient-only credits at which we surface upgrade/CTA UI.
@@ -829,6 +831,155 @@ impl AIRequestUsageModel {
 }
 
 impl SingletonEntity for AIRequestUsageModel {}
+
+/// One credit balance shown by the TUI `/usage` panel: credits used against a
+/// fixed limit, plus a short secondary line (e.g. a reset or auto-reload note).
+#[cfg(feature = "tui")]
+pub struct TuiUsageCreditBar {
+    pub used: i64,
+    pub limit: i64,
+    pub note: String,
+}
+
+/// Pay-as-you-go spend for the current billing cycle, shown by the TUI
+/// `/usage` panel.
+#[cfg(feature = "tui")]
+pub struct TuiUsagePayAsYouGo {
+    pub credits_used: i64,
+    pub cost_cents: i64,
+    pub has_kicked_in: bool,
+}
+
+/// A snapshot of the data the TUI `/usage` panel renders. Each section is
+/// `None` when it doesn't apply to the current account, so the panel can
+/// render only what's relevant.
+#[cfg(feature = "tui")]
+pub struct TuiUsageSnapshot {
+    pub plan_name: String,
+    pub team_name: Option<String>,
+    pub base_credits: Option<TuiUsageCreditBar>,
+    pub addon_credits: Option<TuiUsageCreditBar>,
+    pub pay_as_you_go: Option<TuiUsagePayAsYouGo>,
+    pub manage_billing_url: Option<String>,
+}
+
+/// Computes the data the TUI `/usage` panel renders from state the client
+/// already has locally: [`AIRequestUsageModel`] for base credits, the current
+/// workspace's non-ambient bonus grants for add-on credits, and the current
+/// workspace's [`crate::workspaces::workspace::BillingCycleUsageData`] for
+/// pay-as-you-go spend this cycle.
+#[cfg(feature = "tui")]
+pub fn compute_tui_usage_snapshot(app: &AppContext) -> TuiUsageSnapshot {
+    let ai_model = AIRequestUsageModel::as_ref(app);
+    let workspaces = UserWorkspaces::as_ref(app);
+    let workspace = workspaces.current_workspace();
+
+    let plan_name = workspace
+        .map(|workspace| workspace.billing_metadata.tier.name.clone())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "Free".to_owned());
+    let team_name = workspace
+        .and_then(|workspace| workspace.teams.first())
+        .map(|team| team.name.clone());
+
+    let base_credits = (ai_model.request_limit() > 0).then(|| TuiUsageCreditBar {
+        used: ai_model.requests_used() as i64,
+        limit: ai_model.request_limit() as i64,
+        note: if ai_model.is_unlimited() {
+            "No limit".to_owned()
+        } else {
+            ai_model
+                .next_refresh_time_local()
+                .format("Resets %b %d at %-I:%M %p")
+                .to_string()
+        },
+    });
+
+    let addon_credits = {
+        let now = Utc::now();
+        let (granted, remaining) = ai_model
+            .bonus_grants()
+            .iter()
+            .filter(|grant| grant.grant_type != BonusGrantType::AmbientOnly)
+            .filter(|grant| grant.expiration.is_none_or(|expiration| now < expiration))
+            .fold((0i64, 0i64), |(granted, remaining), grant| {
+                (
+                    granted + i64::from(grant.request_credits_granted),
+                    remaining + i64::from(grant.request_credits_remaining.max(0)),
+                )
+            });
+        (granted > 0).then(|| {
+            let auto_reload_denomination = workspace
+                .filter(|workspace| {
+                    workspace
+                        .settings
+                        .addon_credits_settings
+                        .auto_reload_enabled
+                })
+                .and_then(|workspace| {
+                    workspace
+                        .settings
+                        .addon_credits_settings
+                        .selected_auto_reload_credit_denomination
+                });
+            TuiUsageCreditBar {
+                used: (granted - remaining).max(0),
+                limit: granted,
+                note: match auto_reload_denomination {
+                    Some(credits) => format!("Auto-reload {credits} credits when balance is low"),
+                    None => String::new(),
+                },
+            }
+        })
+    };
+
+    let pay_as_you_go = workspace.and_then(|workspace| {
+        let payg_available = workspace.are_overages_enabled()
+            || workspace
+                .billing_metadata
+                .is_enterprise_pay_as_you_go_enabled();
+        if !payg_available {
+            return None;
+        }
+        let (credits_used, cost_cents) = workspace
+            .billing_cycle_usage
+            .as_ref()
+            .and_then(|usage| {
+                usage.summaries.iter().find(|summary| {
+                    summary.period_start == usage.current_period_start
+                        && summary.period_end == usage.current_period_end
+                })
+            })
+            .into_iter()
+            .flat_map(|summary| &summary.entries)
+            .filter(|entry| entry.cost_type == AiCreditsUsageAndCostType::Payg)
+            .fold((0i64, 0i64), |(credits, cost), entry| {
+                (
+                    credits + i64::from(entry.credits_used),
+                    cost + i64::from(entry.cost_cents),
+                )
+            });
+        Some(TuiUsagePayAsYouGo {
+            credits_used,
+            cost_cents,
+            has_kicked_in: credits_used > 0,
+        })
+    });
+
+    let manage_billing_url = AuthStateProvider::as_ref(app)
+        .get()
+        .user_email()
+        .and_then(|email| workspaces.admin_billing_link_for_default_team(&email));
+
+    TuiUsageSnapshot {
+        plan_name,
+        team_name,
+        base_credits,
+        addon_credits,
+        pay_as_you_go,
+        manage_billing_url,
+    }
+}
 
 #[cfg(test)]
 #[path = "request_usage_model_tests.rs"]
