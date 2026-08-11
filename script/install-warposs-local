@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+#
+# Build WarpOss in release mode and install it to /Applications as a personal,
+# locally-built app. NOT part of Warp's distribution pipeline (see script/bundle
+# for that, which needs Developer-ID certs, GCP secrets and notarization) — this
+# just reuses the normal dev bundling path and copies the result.
+#
+# Usage:  ./script/install-warposs-local [--debug]
+#
+# Notes:
+#   * /Applications is group-writable by admins, so no sudo is required.
+#   * The installed app does not auto-update; re-run this after pulling or
+#     changing code.
+#   * The Projects x Tasks rail needs FeatureFlag::Projects, which OSS builds do
+#     not enable via DOGFOOD_FLAGS. If you want it, keep the local (uncommitted)
+#     enable in app/src/bin/oss.rs, then turn on the setting in
+#     Settings > Appearance.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+cd "${REPO_ROOT}"
+
+# Cargo is not always on the PATH of non-interactive shells; make the script
+# work regardless of how it is invoked.
+if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
+  PATH="$HOME/.cargo/bin:$PATH"
+  export PATH
+fi
+
+PROFILE="release"
+RUN_ARGS=(--release --dont-open)
+if [[ "${1:-}" == "--debug" ]]; then
+  PROFILE="debug"
+  RUN_ARGS=(--dont-open)
+fi
+
+APP_SRC="target/${PROFILE}/bundle/osx/WarpOss.app"
+APP_DST="/Applications/WarpOss.app"
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
+echo "==> Building WarpOss (${PROFILE})..."
+./script/run "${RUN_ARGS[@]}"
+
+if [[ ! -d "${APP_SRC}" ]]; then
+  echo "error: expected bundle at ${APP_SRC} but it does not exist" >&2
+  exit 1
+fi
+
+# Quit any running copy so we don't replace a bundle that's in use.
+# --no-quit: swap the bundle under the running app instead of asking it to
+# quit. macOS keeps the process alive on the deleted inode, so the running
+# session is untouched and the new build takes effect at the next natural
+# relaunch. Verified: the app runs fine for days on a deleted bundle.
+if [[ "${*}" == *"--no-quit"* ]]; then
+  echo "==> --no-quit: leaving the running app untouched; new build applies on next launch"
+else
+  osascript -e 'quit app "WarpOss"' >/dev/null 2>&1 || true
+fi
+sleep 1
+
+echo "==> Installing to ${APP_DST}..."
+rm -rf "${APP_DST}"
+cp -R "${APP_SRC}" "${APP_DST}"
+
+# Point the warposs:// URL scheme at the installed copy rather than any bundle
+# left behind under target/, which disappears on `cargo clean`.
+echo "==> Registering URL scheme..."
+"${LSREGISTER}" -u "${REPO_ROOT}/target/debug/bundle/osx/WarpOss.app" >/dev/null 2>&1 || true
+"${LSREGISTER}" -u "${REPO_ROOT}/target/release/bundle/osx/WarpOss.app" >/dev/null 2>&1 || true
+"${LSREGISTER}" -f "${APP_DST}"
+
+# Re-sign with a stable identity when one exists.
+#
+# This is not about trust -- it is about macOS privacy (TCC) grants surviving a
+# rebuild. TCC remembers permissions against an app's *designated requirement*.
+# Signed with a certificate, that requirement names the certificate, which does
+# not change when the code does. Signed ad-hoc -- which is what cargo-bundle
+# leaves behind here -- it is a cdhash, a hash of the binary, so every rebuild
+# looks like a brand-new app and macOS re-asks for Documents, Downloads,
+# Keychain and the rest. Every single time.
+#
+# Any code-signing certificate fixes this, including a self-signed one made in
+# Keychain Access (Certificate Assistant > Create a Certificate, type "Code
+# Signing", Self Signed Root). Name it "Warp Local Signing", or set
+# WARP_SIGNING_IDENTITY to whatever you called it. With no certificate we leave
+# the bundle exactly as it was, rather than making things worse.
+SIGNING_IDENTITY_NAME="${WARP_SIGNING_IDENTITY:-Warp Local Signing}"
+SIGNING_CERT="$(security find-identity -p codesigning -v 2>/dev/null | grep "${SIGNING_IDENTITY_NAME}" | awk '{print $2}' | head -1 || true)"
+if [[ -z "${SIGNING_CERT}" ]]; then
+  SIGNING_CERT="$(security find-identity -p codesigning -v 2>/dev/null | grep "Apple Development" | awk '{print $2}' | head -1 || true)"
+fi
+if [[ -n "${SIGNING_CERT}" ]]; then
+  echo "==> Re-signing with a stable identity (${SIGNING_IDENTITY_NAME})..."
+  # Entitlements must be passed explicitly: re-signing replaces them, and
+  # dropping them would cost the app camera, microphone and Apple-events access.
+  codesign --force --deep --options runtime --sign "${SIGNING_CERT}" "${APP_DST}" \
+    --entitlements script/Entitlements.plist
+else
+  cat <<'WARN'
+
+    !! Signed AD-HOC (no code-signing identity found in the keychain).
+
+    macOS will re-prompt for Documents, Downloads, Keychain access and so on
+    after EVERY rebuild, because an ad-hoc signature's designated requirement
+    is a hash of the binary -- so each build is a different app as far as
+    privacy permissions are concerned.
+
+    To fix permanently: Keychain Access > Certificate Assistant > Create a
+    Certificate, name it "Warp Local Signing", Identity Type "Self Signed
+    Root", Certificate Type "Code Signing". Then re-run this script once and
+    approve the prompts a final time.
+
+WARN
+fi
+
+codesign --verify "${APP_DST}" && echo "==> Signature OK"
+echo "==> Installed $(du -sh "${APP_DST}" | cut -f1) to ${APP_DST}"
+echo "    Launch with: open -a WarpOss"

@@ -17,7 +17,8 @@ use terminal::view::ActiveSessionState;
 use warp_editor::editor::NavigationKey;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
-use warpui::platform::WindowStyle;
+use warpui::keymap::Keystroke;
+use warpui::platform::{OperatingSystem, WindowStyle};
 use warpui::{AddSingletonModel, App, ViewHandle};
 use watcher::HomeDirectoryWatcher;
 
@@ -1380,6 +1381,129 @@ fn reopen_closed_session_menu_item(
         Some(MenuItem::Item(fields)) if fields.label() == "Reopen closed session" => fields,
         _ => panic!("expected Reopen closed session to be the last new-session menu item"),
     }
+}
+
+#[test]
+fn test_new_project_and_new_task_in_project_bindings_are_editable() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        app.update(|ctx| {
+            // Both bindings are registered under their own names, so Settings
+            // → Keyboard shortcuts and the command palette can surface and
+            // search for them independently of `workspace:new_tab`.
+            assert!(
+                ctx.editable_bindings()
+                    .any(|binding| binding.name == NEW_PROJECT_BINDING_NAME),
+                "{NEW_PROJECT_BINDING_NAME} should be registered as an editable binding"
+            );
+            assert!(
+                ctx.editable_bindings()
+                    .any(|binding| binding.name == "workspace:new_task_in_project"),
+                "workspace:new_task_in_project should be registered as an editable binding"
+            );
+
+            // `cmd-shift-N`/`alt-shift-N` are already `project_buttons:create_new_project`'s
+            // default, so `workspace:new_project` must default to a different chord.
+            let new_project = trigger_to_keystroke(
+                ctx.editable_bindings()
+                    .find(|binding| binding.name == NEW_PROJECT_BINDING_NAME)
+                    .expect("workspace:new_project should be registered")
+                    .trigger,
+            );
+            let expected = if OperatingSystem::get().is_mac() {
+                Keystroke::parse("cmd-ctrl-n").ok()
+            } else {
+                Keystroke::parse("ctrl-alt-n").ok()
+            };
+            assert_eq!(new_project, expected);
+
+            // `workspace:new_task_in_project` deliberately ships with no default
+            // chord (see the registration comment in `workspace::init`): `cmd-t`
+            // already does the same thing via `workspace:new_tab`.
+            let new_task_in_project = trigger_to_keystroke(
+                ctx.editable_bindings()
+                    .find(|binding| binding.name == "workspace:new_task_in_project")
+                    .expect("workspace:new_task_in_project should be registered")
+                    .trigger,
+            );
+            assert_eq!(new_task_in_project, None);
+        });
+    });
+}
+
+#[test]
+fn test_session_search_binding_is_editable() {
+    App::test((), |mut app| async move {
+        // The binding is registered behind the same flag
+        // `resume_dormant_agent_task` returns early on, and `editable_bindings`
+        // re-evaluates that predicate on every call — so the override has to be
+        // held while the list is read, not only while the app is built.
+        let _resume_tasks = FeatureFlag::ResumeProjectTasks.override_enabled(true);
+        initialize_app(&mut app);
+
+        app.update(|ctx| {
+            assert!(
+                ctx.editable_bindings()
+                    .any(|binding| binding.name == SESSION_SEARCH_BINDING_NAME),
+                "{SESSION_SEARCH_BINDING_NAME} should be registered as an editable binding"
+            );
+
+            // `cmd-shift-K` was freed from `editor_view:clear_lines` for this.
+            let session_search = trigger_to_keystroke(
+                ctx.editable_bindings()
+                    .find(|binding| binding.name == SESSION_SEARCH_BINDING_NAME)
+                    .expect("workspace:open_session_search should be registered")
+                    .trigger,
+            );
+            let expected = if OperatingSystem::get().is_mac() {
+                Keystroke::parse("cmd-shift-K").ok()
+            } else {
+                Keystroke::parse("ctrl-shift-K").ok()
+            };
+            assert_eq!(session_search, expected);
+        });
+    });
+}
+
+#[test]
+fn test_session_search_binding_is_gated_on_the_feature_flag() {
+    App::test((), |mut app| async move {
+        let _resume_tasks = FeatureFlag::ResumeProjectTasks.override_enabled(false);
+        initialize_app(&mut app);
+
+        app.update(|ctx| {
+            assert!(
+                !ctx.editable_bindings()
+                    .any(|binding| binding.name == SESSION_SEARCH_BINDING_NAME),
+                "with the feature off the chord must stay inert rather than \
+                 opening a popup whose every row does nothing"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_close_palette_clears_the_session_search_flag() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |view, ctx| {
+            view.current_workspace_state.is_session_search_palette_open = true;
+            assert!(
+                view.is_palette_open(),
+                "the popup counts as an open palette while it is up"
+            );
+
+            // A flag that outlives its close leaves an overlay on screen that
+            // nothing can dismiss.
+            view.close_palette(false /* focus_active_tab */, None, ctx);
+
+            assert!(!view.current_workspace_state.is_session_search_palette_open);
+            assert!(!view.is_palette_open());
+        });
+    });
 }
 
 #[test]
@@ -4844,4 +4968,38 @@ fn test_tools_panel_warp_drive_toggle_updates_available_views() {
             );
         });
     });
+}
+
+/// Closing the active tab used to fall to `index.min(len - 1)` over the flat,
+/// all-projects tab list. The rail groups by project and the strip is filtered
+/// to the selected one, so that neighbour was often another project's tab — and
+/// the active-belongs-to-selected invariant then faithfully swapped the rail
+/// and the whole strip to it. Closing the rightmost tab of a project was enough,
+/// with other tabs of that project still open.
+#[test]
+fn close_successor_stays_inside_the_project() {
+    // Flat [X0, X1, Y0, Y1], selected X, closing X1 (index 1).
+    // After removal the surviving X tab is index 0; the flat rule would have
+    // picked index 1, which is now Y0.
+    assert_eq!(super::nearest_remaining_tab(&[0], 1), Some(0));
+
+    // Interleaved [X0, Y0, X1], selected X, closing X0 (index 0): the flat
+    // rule picks index 0 — Y0 — so the bug fired on the leftmost tab too.
+    assert_eq!(super::nearest_remaining_tab(&[1], 0), Some(1));
+}
+
+/// After-then-before, so closing a tab moves right like the browser convention
+/// the flat rule documented, and only falls left at the end of the run.
+#[test]
+fn close_successor_prefers_the_tab_after_it() {
+    assert_eq!(super::nearest_remaining_tab(&[0, 2, 5], 2), Some(2));
+    assert_eq!(super::nearest_remaining_tab(&[0, 2, 5], 3), Some(5));
+    assert_eq!(super::nearest_remaining_tab(&[0, 2], 4), Some(2));
+}
+
+/// A project with nothing left yields `None`, and the caller keeps the old
+/// flat-neighbour behaviour rather than inventing a tab.
+#[test]
+fn close_successor_is_none_when_the_project_is_empty() {
+    assert_eq!(super::nearest_remaining_tab(&[], 3), None);
 }

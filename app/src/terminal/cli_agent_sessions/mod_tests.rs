@@ -274,6 +274,9 @@ fn apply_event_preserves_input_session() {
         draft_text: None,
         custom_command_prefix: None,
         received_rich_notification: false,
+        blocked_since: None,
+        success_seen: false,
+        marked_unread: false,
     };
 
     let event = CLIAgentEvent {
@@ -309,6 +312,9 @@ fn is_remote_returns_true_when_remote_host_is_set() {
         remote_host: Some("user@devbox".to_owned()),
         custom_command_prefix: None,
         received_rich_notification: false,
+        blocked_since: None,
+        success_seen: false,
+        marked_unread: false,
     };
     assert!(session.is_remote());
 }
@@ -327,6 +333,9 @@ fn is_remote_returns_false_when_remote_host_is_none() {
         draft_text: None,
         custom_command_prefix: None,
         received_rich_notification: false,
+        blocked_since: None,
+        success_seen: false,
+        marked_unread: false,
     };
     assert!(!session.is_remote());
 }
@@ -396,6 +405,9 @@ fn session_start_sets_plugin_version() {
         remote_host: None,
         custom_command_prefix: None,
         received_rich_notification: false,
+        blocked_since: None,
+        success_seen: false,
+        marked_unread: false,
     };
 
     let event = CLIAgentEvent {
@@ -430,6 +442,9 @@ fn session_start_without_plugin_version_leaves_none() {
         remote_host: None,
         custom_command_prefix: None,
         received_rich_notification: false,
+        blocked_since: None,
+        success_seen: false,
+        marked_unread: false,
     };
 
     let event = CLIAgentEvent {
@@ -463,6 +478,9 @@ fn codex_session_not_rich_until_rich_notification() {
         draft_text: None,
         custom_command_prefix: None,
         received_rich_notification: false,
+        blocked_since: None,
+        success_seen: false,
+        marked_unread: false,
     };
     assert!(!session.supports_rich_status());
 
@@ -485,6 +503,9 @@ fn non_codex_session_rich_after_rich_notification() {
         draft_text: None,
         custom_command_prefix: None,
         received_rich_notification: false,
+        blocked_since: None,
+        success_seen: false,
+        marked_unread: false,
     };
     // No listener and no rich notification yet.
     assert!(!session.supports_rich_status());
@@ -516,6 +537,9 @@ fn blocked_claude_session_with_permission_state() -> CLIAgentSession {
         remote_host: None,
         custom_command_prefix: None,
         received_rich_notification: false,
+        blocked_since: None,
+        success_seen: false,
+        marked_unread: false,
     }
 }
 
@@ -663,6 +687,9 @@ fn permission_request_still_populates_summary_and_tool_fields() {
         remote_host: None,
         custom_command_prefix: None,
         received_rich_notification: false,
+        blocked_since: None,
+        success_seen: false,
+        marked_unread: false,
     };
 
     let event = CLIAgentEvent {
@@ -696,4 +723,245 @@ fn permission_request_still_populates_summary_and_tool_fields() {
         session.status,
         CLIAgentSessionStatus::Blocked { .. },
     ));
+}
+
+/// A plugin-backed Claude session sitting at `InProgress`, the state every
+/// `blocked_since` transition below starts from.
+fn in_progress_claude_session() -> CLIAgentSession {
+    CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        received_rich_notification: true,
+        blocked_since: None,
+        success_seen: false,
+        marked_unread: false,
+    }
+}
+
+/// A rich plugin event of the given type, with a summary where the type carries one.
+fn rich_event(event: CLIAgentEventType) -> CLIAgentEvent {
+    CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event,
+        session_id: Some("abc".to_owned()),
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload {
+            summary: Some("Wants to run bash: ls".to_owned()),
+            ..Default::default()
+        },
+    }
+}
+
+#[test]
+fn cli_agent_blocked_since_is_stamped_when_entering_blocked() {
+    let mut session = in_progress_claude_session();
+    assert!(session.blocked_since.is_none());
+    assert!(session.blocked_duration().is_none());
+
+    session.apply_event(&rich_event(CLIAgentEventType::PermissionRequest));
+
+    assert!(session.blocked_since.is_some());
+    assert!(session.blocked_duration().is_some());
+}
+
+/// The wait is measured from the *first* prompt: a second permission request
+/// (or a question) arriving while the first is unanswered is the same wait, so
+/// re-stamping it would let a chatty agent dodge the escalation forever.
+#[test]
+fn cli_agent_blocked_since_survives_repeated_blocked_events() {
+    let mut session = in_progress_claude_session();
+    session.apply_event(&rich_event(CLIAgentEventType::PermissionRequest));
+    let first = session.blocked_since.expect("first block stamps the wait");
+
+    session.apply_event(&rich_event(CLIAgentEventType::PermissionRequest));
+    assert_eq!(session.blocked_since, Some(first), "repeat reset the stamp");
+
+    session.apply_event(&rich_event(CLIAgentEventType::QuestionAsked));
+    assert_eq!(
+        session.blocked_since,
+        Some(first),
+        "a question after a permission request reset the stamp"
+    );
+    assert!(matches!(
+        session.status,
+        CLIAgentSessionStatus::Blocked { .. }
+    ));
+}
+
+/// An agent parked at its prompt is waiting on the user, and for anyone who
+/// runs with permissions pre-accepted it is the *only* wait that ever
+/// happens — measured on a real profile, 15 idle prompts against zero
+/// permission requests and zero questions. Dropping the event meant the rail
+/// could never show a colour for that person.
+#[test]
+fn cli_agent_idle_prompt_is_a_wait() {
+    let mut session = in_progress_claude_session();
+    session.apply_event(&rich_event(CLIAgentEventType::IdlePrompt));
+
+    assert!(
+        matches!(session.status, CLIAgentSessionStatus::Blocked { .. }),
+        "an agent sitting at its prompt is waiting on the user, got {:?}",
+        session.status
+    );
+    assert!(
+        session.blocked_since.is_some(),
+        "the wait needs a clock, or the rail cannot escalate it"
+    );
+}
+
+/// The reason the event was originally dropped, kept: a finished agent is
+/// also, trivially, sitting at its prompt. Green must not flip to yellow.
+#[test]
+fn cli_agent_idle_prompt_never_overrides_a_finished_run() {
+    for terminal in [CLIAgentEventType::Stop, CLIAgentEventType::StopFailure] {
+        let mut session = in_progress_claude_session();
+        session.apply_event(&rich_event(terminal.clone()));
+        let finished = session.status.clone();
+
+        session.apply_event(&rich_event(CLIAgentEventType::IdlePrompt));
+
+        assert_eq!(
+            session.status, finished,
+            "{terminal:?} then IdlePrompt must keep the finished status"
+        );
+        assert!(
+            session.blocked_since.is_none(),
+            "a finished run is not waiting on anyone"
+        );
+    }
+}
+
+/// Events that leave the status untouched (and so return `None` from
+/// `apply_event`) must not disturb an in-flight wait either.
+#[test]
+fn cli_agent_blocked_since_survives_status_neutral_events() {
+    let mut session = in_progress_claude_session();
+    session.apply_event(&rich_event(CLIAgentEventType::QuestionAsked));
+    let first = session.blocked_since.expect("question stamps the wait");
+
+    session.apply_event(&rich_event(CLIAgentEventType::IdlePrompt));
+    session.apply_event(&rich_event(CLIAgentEventType::SessionStart));
+
+    assert_eq!(session.blocked_since, Some(first));
+}
+
+#[test]
+fn cli_agent_blocked_since_clears_on_every_exit_from_blocked() {
+    // Every event that takes a blocked session out of `Blocked`, one per case.
+    let exits = [
+        CLIAgentEventType::PermissionReplied,
+        CLIAgentEventType::ToolComplete,
+        CLIAgentEventType::PromptSubmit,
+        CLIAgentEventType::Stop,
+        CLIAgentEventType::StopFailure,
+    ];
+
+    for exit in exits {
+        let mut session = in_progress_claude_session();
+        session.apply_event(&rich_event(CLIAgentEventType::PermissionRequest));
+        assert!(session.blocked_since.is_some(), "setup failed for {exit:?}");
+
+        session.apply_event(&rich_event(exit.clone()));
+
+        assert!(
+            session.blocked_since.is_none(),
+            "leaving Blocked via {exit:?} left a stale blocked_since"
+        );
+        assert!(session.blocked_duration().is_none());
+        assert!(!matches!(
+            session.status,
+            CLIAgentSessionStatus::Blocked { .. }
+        ));
+    }
+}
+
+/// A finished result starts unseen — that is what turns the rail's row green.
+#[test]
+fn cli_agent_success_starts_unseen() {
+    let mut session = in_progress_claude_session();
+    assert!(!session.has_unseen_success(), "in-progress is not a result");
+
+    session.apply_event(&rich_event(CLIAgentEventType::Stop));
+
+    assert!(matches!(session.status, CLIAgentSessionStatus::Success));
+    assert!(!session.success_seen);
+    assert!(session.has_unseen_success());
+}
+
+/// A second `Stop` with no prompt in between is the same result being
+/// re-announced, so acknowledging it must stick — otherwise a chatty agent's
+/// row could never be cleared.
+#[test]
+fn cli_agent_repeated_success_keeps_the_acknowledgement() {
+    let mut session = in_progress_claude_session();
+    session.apply_event(&rich_event(CLIAgentEventType::Stop));
+    session.success_seen = true;
+
+    session.apply_event(&rich_event(CLIAgentEventType::Stop));
+
+    assert!(session.success_seen, "a repeat re-armed the green");
+    assert!(!session.has_unseen_success());
+}
+
+/// A *new* run's result is unseen again: the acknowledgement covers the result
+/// that was on screen, not the session forever.
+#[test]
+fn cli_agent_new_run_after_an_acknowledged_success_is_unseen_again() {
+    let mut session = in_progress_claude_session();
+    session.apply_event(&rich_event(CLIAgentEventType::Stop));
+    session.success_seen = true;
+
+    session.apply_event(&rich_event(CLIAgentEventType::PromptSubmit));
+    assert!(!session.success_seen, "the bit outlived its result");
+    assert!(!session.has_unseen_success(), "in-progress is not a result");
+
+    session.apply_event(&rich_event(CLIAgentEventType::Stop));
+    assert!(session.has_unseen_success());
+}
+
+/// The bit means nothing outside `Success`: every exit clears it, and
+/// `has_unseen_success` gates on the status as well, so a stale `true` can
+/// never paint a working or blocked row green.
+#[test]
+fn cli_agent_unseen_success_is_only_ever_reported_while_successful() {
+    let exits = [
+        CLIAgentEventType::PromptSubmit,
+        CLIAgentEventType::PermissionRequest,
+        CLIAgentEventType::QuestionAsked,
+        CLIAgentEventType::StopFailure,
+    ];
+
+    for exit in exits {
+        let mut session = in_progress_claude_session();
+        session.apply_event(&rich_event(CLIAgentEventType::Stop));
+        assert!(session.has_unseen_success(), "setup failed for {exit:?}");
+
+        session.apply_event(&rich_event(exit.clone()));
+
+        assert!(
+            !session.success_seen,
+            "leaving Success via {exit:?} left a stale success_seen"
+        );
+        assert!(
+            !session.has_unseen_success(),
+            "{exit:?} still reported an unseen result"
+        );
+    }
+
+    // Even a hand-set bit cannot manufacture a green outside Success.
+    let mut blocked = in_progress_claude_session();
+    blocked.apply_event(&rich_event(CLIAgentEventType::PermissionRequest));
+    blocked.success_seen = false;
+    assert!(!blocked.has_unseen_success());
 }

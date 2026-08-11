@@ -1,3 +1,4 @@
+pub mod agent_sessions;
 pub mod conversations;
 mod data_sources;
 mod files;
