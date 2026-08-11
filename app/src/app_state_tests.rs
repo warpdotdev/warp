@@ -111,7 +111,10 @@ fn recorded_session() -> RecordedAgentSession {
     RecordedAgentSession {
         agent: CLIAgent::Claude,
         session_id: "session-1".to_owned(),
-        flags: vec!["--resume".to_owned()],
+        flags: vec![RecordedFlag {
+            name: "--model".to_owned(),
+            value: Some("opus".to_owned()),
+        }],
         directory: PathBuf::from("/tmp/project"),
         observed_at: chrono::NaiveDate::from_ymd_opt(2026, 8, 11)
             .expect("date should be valid")

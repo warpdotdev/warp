@@ -1,5 +1,5 @@
-//! Tests for [`inherit_share_for_local_child`]. These verify the pure
-//! branching independent of the PaneGroup dispatch code.
+//! Tests for [`inherit_share_for_local_child`] and [`recorded_resume_flags`]. These verify the
+//! pure branching independent of the PaneGroup dispatch code.
 
 use uuid::Uuid;
 
@@ -15,6 +15,117 @@ fn user_source(task_id: Option<&str>) -> SharedSessionSource {
 
 fn ambient_source(task_id: Option<&str>) -> SharedSessionSource {
     SharedSessionSource::ambient_agent(task_id.map(str::to_owned))
+}
+
+/// The alias map a shell session reports, in the form detection reads it.
+fn shell_aliases(pairs: &[(&str, &str)]) -> HashMap<SmolStr, String> {
+    pairs
+        .iter()
+        .map(|(name, value)| (SmolStr::from(*name), (*value).to_owned()))
+        .collect()
+}
+
+fn flag(name: &str, value: Option<&str>) -> RecordedFlag {
+    RecordedFlag {
+        name: name.to_owned(),
+        value: value.map(str::to_owned),
+    }
+}
+
+#[test]
+fn recorded_flags_keep_the_allowlisted_flags_of_the_invocation() {
+    assert_eq!(
+        recorded_resume_flags(
+            CLIAgent::Claude,
+            "claude --model opus --dangerously-skip-permissions",
+            Some(EscapeChar::Backslash),
+            None,
+        ),
+        vec![
+            flag("--model", Some("opus")),
+            flag("--dangerously-skip-permissions", None),
+        ]
+    );
+}
+
+// KTD5: what gets recorded is the flag set the user actually ran, and an alias is part of that
+// invocation — resolvable only now, while the shell session that defines it is alive.
+#[test]
+fn recorded_flags_include_the_flags_an_alias_carries() {
+    let aliases = shell_aliases(&[("c", "claude --permission-mode plan")]);
+
+    assert_eq!(
+        recorded_resume_flags(
+            CLIAgent::Claude,
+            "c --model opus",
+            Some(EscapeChar::Backslash),
+            Some(&aliases),
+        ),
+        vec![
+            flag("--permission-mode", Some("plan")),
+            flag("--model", Some("opus")),
+        ],
+        "a flag the user only ever typed as an alias is still a flag their session was running \
+         with"
+    );
+}
+
+// The identifier can be reported by a plugin running inside something that is not the agent's own
+// command line — a wrapper, or a pane whose foreground command has already moved on. Those
+// arguments were never the agent's, so none of them are recorded.
+#[test]
+fn recorded_flags_are_empty_when_the_command_is_not_the_agent() {
+    assert_eq!(
+        recorded_resume_flags(
+            CLIAgent::Claude,
+            "git commit --model opus",
+            Some(EscapeChar::Backslash),
+            None,
+        ),
+        Vec::new()
+    );
+}
+
+// R19/KTD5: the capture reads the obfuscated command text, so a secret in the invocation is
+// recorded as its placeholder. That is the intended degradation — the placeholder fails the
+// declared value shape when the resume command is built, which drops the flag rather than
+// passing a wrong value to the agent.
+#[test]
+fn recorded_flags_carry_the_obfuscated_placeholder_rather_than_a_secret() {
+    let recorded = recorded_resume_flags(
+        CLIAgent::Claude,
+        "claude --settings ********",
+        Some(EscapeChar::Backslash),
+        None,
+    );
+
+    assert_eq!(recorded, vec![flag("--settings", Some("********"))]);
+    assert!(
+        ResumeDeclarations::embedded()
+            .build_resume_command(CLIAgent::Claude, "session-1", &recorded)
+            .is_some_and(|command| !command.contains('*')),
+        "an obfuscated value must be dropped when the invocation is built, not replayed"
+    );
+}
+
+// An agent Warp knows but has not declared resume support for records no flags: there is no
+// allowlist to read them against, and a flag carried into an invocation nobody validated is
+// exactly what KTD5 rules out.
+#[test]
+fn recorded_flags_are_empty_for_an_agent_without_resume_declarations() {
+    assert!(
+        !ResumeDeclarations::embedded().supports(CLIAgent::Gemini),
+        "precondition: Gemini declares no resume support"
+    );
+    assert_eq!(
+        recorded_resume_flags(
+            CLIAgent::Gemini,
+            "gemini --model pro",
+            Some(EscapeChar::Backslash),
+            None,
+        ),
+        Vec::new()
+    );
 }
 
 #[test]

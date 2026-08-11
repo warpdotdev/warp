@@ -19,6 +19,7 @@ use crate::server::ids::{ServerId, SyncId};
 use crate::settings_view::SettingsSection;
 use crate::settings_view::environments_page::EnvironmentsPage;
 use crate::tab::SelectedTabColor;
+use crate::terminal::cli_agent_resume::RecordedFlag;
 use crate::terminal::{CLIAgent, ShellLaunchData};
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::WorkspaceRegistry;
@@ -45,8 +46,10 @@ pub struct RecordedAgentSession {
     pub agent: CLIAgent,
     /// The session identifier the agent itself reported.
     pub session_id: String,
-    /// Flags from the invocation the user ran that matter when relaunching the agent.
-    pub flags: Vec<String>,
+    /// The allowlisted flags of the invocation the user ran that matter when relaunching the
+    /// agent. Never the command line itself: replaying what the user typed would replay secret
+    /// placeholders and unexpandable aliases along with it.
+    pub flags: Vec<RecordedFlag>,
     /// The directory the agent was running in. Recorded here rather than read back from the
     /// pane snapshot so that eligibility can compare it against the directory the pane
     /// actually restored into.

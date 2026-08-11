@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
@@ -85,12 +86,21 @@ use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::system::SystemStats;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::cli_agent_sessions::event::parse_event;
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
+    CLIAgentSessionsModel,
+};
+use crate::terminal::event::{BlockCompletedEvent, BlockType, UserBlockCompleted};
+use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::history::History;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_tty::TerminalManager;
 use crate::terminal::local_tty::spawner::PtySpawner;
+use crate::terminal::model::block::{BlockId, SerializedBlock};
+use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
+use crate::terminal::model_events::ModelEvent as TerminalModelEvent;
 use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::{
     IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
@@ -3991,7 +4001,10 @@ fn restored_terminal_pane_reports_the_uuid_its_recorded_session_is_keyed_by() {
         let recorded = crate::app_state::RecordedAgentSession {
             agent: crate::terminal::CLIAgent::Claude,
             session_id: "session-1".to_owned(),
-            flags: vec!["--model".to_owned(), "opus".to_owned()],
+            flags: vec![crate::terminal::cli_agent_resume::RecordedFlag {
+                name: "--model".to_owned(),
+                value: Some("opus".to_owned()),
+            }],
             directory: PathBuf::from("/tmp/project"),
             observed_at: chrono::NaiveDate::from_ymd_opt(2026, 8, 11)
                 .expect("date should be valid")
@@ -4056,6 +4069,510 @@ fn restored_terminal_pane_reports_the_uuid_its_recorded_session_is_keyed_by() {
             agent_restore.recorded_on_startup(&PaneUuid(reported_uuid)),
             Some(&recorded)
         );
+    });
+}
+
+/// A pane group whose panes report their persistence writes to the returned receiver, so a test
+/// can read exactly what a pane asked the writer thread to store.
+fn pane_group_reporting_model_events(
+    app: &mut App,
+) -> (ViewHandle<PaneGroup>, Receiver<ModelEvent>) {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(64);
+    let tips_model = app.add_model(|_| TipsCompleted::default());
+    let (_, pane_group) = app.add_window_with_bounds(
+        WindowStyle::NotStealFocus,
+        WindowBounds::ExactPosition(RectF::new(Vector2F::zero(), Vector2F::new(1024., 768.))),
+        |ctx| {
+            let banner_model_handle = ctx.add_model(|_| BannerState::default());
+            PaneGroup::new_with_panes_layout(
+                tips_model,
+                banner_model_handle,
+                ServerApiProvider::as_ref(ctx).get(),
+                Default::default(),
+                Arc::new(HashMap::new()),
+                AgentSessionRestore::default(),
+                Some(sender),
+                ctx,
+            )
+        },
+    );
+    (pane_group, receiver)
+}
+
+/// Starts a CLI agent session for `terminal_view_id`, as detection does once a recognized agent
+/// has been the pane's foreground command for long enough.
+fn start_cli_agent_session(
+    terminal_view_id: EntityId,
+    agent: crate::terminal::CLIAgent,
+    ctx: &mut ViewContext<PaneGroup>,
+) {
+    CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+        sessions.set_session(
+            terminal_view_id,
+            CLIAgentSession {
+                agent,
+                status: CLIAgentSessionStatus::InProgress,
+                session_context: CLIAgentSessionContext::default(),
+                input_state: CLIAgentInputState::Closed,
+                should_auto_toggle_input: false,
+                listener: None,
+                plugin_version: None,
+                remote_host: None,
+                draft_text: None,
+                custom_command_prefix: None,
+                received_rich_notification: false,
+            },
+            ctx,
+        );
+    });
+}
+
+/// Delivers the plugin event in which the agent reports `session_id`, the same shape the OSC 777
+/// listener parses out of the PTY.
+fn report_agent_session_id(
+    terminal_view_id: EntityId,
+    session_id: &str,
+    ctx: &mut ViewContext<PaneGroup>,
+) {
+    report_agent_event(terminal_view_id, "session_start", session_id, ctx);
+}
+
+/// Delivers one of the agent's own lifecycle events. `tool_complete` is the one that fires once
+/// per tool call, which is what makes an agent task a burst rather than a handful of events.
+fn report_agent_event(
+    terminal_view_id: EntityId,
+    event: &str,
+    session_id: &str,
+    ctx: &mut ViewContext<PaneGroup>,
+) {
+    let body =
+        format!(r#"{{"v":1,"agent":"claude","event":"{event}","session_id":"{session_id}"}}"#);
+    let event = parse_event(Some("warp://cli-agent"), &body).expect("the test event should parse");
+    CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+        sessions.update_from_event(terminal_view_id, &event, ctx);
+    });
+}
+
+/// The capture writes the panes sent, oldest first. A `None` session is a pane reporting that it
+/// has no agent left to resume.
+fn captured_agent_session_writes(
+    events: &Receiver<ModelEvent>,
+) -> Vec<(Vec<u8>, Option<RecordedAgentSession>)> {
+    events
+        .try_iter()
+        .filter_map(|event| match event {
+            ModelEvent::SetAgentSession { pane_id, session } => Some((pane_id, session)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The identifiers the panes recorded, oldest first.
+fn captured_agent_sessions(events: &Receiver<ModelEvent>) -> Vec<(Vec<u8>, String)> {
+    captured_agent_session_writes(events)
+        .into_iter()
+        .filter_map(|(pane_id, session)| Some((pane_id, session?.session_id)))
+        .collect()
+}
+
+/// Completes a block in the pane's terminal, which is how the agent process exiting (a `User`
+/// block) and the agent being suspended (a `Background` block) reach the sessions model.
+fn complete_block_in_pane(
+    terminal_view: &ViewHandle<TerminalView>,
+    block_type: BlockType,
+    ctx: &mut ViewContext<PaneGroup>,
+) {
+    let dispatcher = terminal_view
+        .as_ref(ctx)
+        .model_event_dispatcher()
+        .to_owned();
+    dispatcher.update(ctx, |_, ctx| {
+        ctx.emit(TerminalModelEvent::BlockCompleted(BlockCompletedEvent {
+            block_type,
+            num_secrets_obfuscated: 0,
+            block_index: BlockIndex::zero(),
+            block_id: BlockId::new(),
+            session_id: None,
+            restored_block_was_local: None,
+        }));
+    });
+}
+
+/// The block a finished agent command leaves behind.
+fn completed_user_block(command: &str) -> BlockType {
+    BlockType::User(UserBlockCompleted {
+        index: BlockIndex::zero(),
+        serialized_block: Arc::new(SerializedBlock::new_for_test(
+            command.as_bytes().to_vec(),
+            vec![],
+        )),
+        command: command.to_owned(),
+        command_with_obfuscated_secrets: command.to_owned(),
+        output_truncated: String::new(),
+        output_truncated_with_obfuscated_secrets: String::new(),
+        was_part_of_agent_interaction: false,
+        started_at: None,
+        num_output_lines: 0,
+        num_output_lines_truncated: 0,
+    })
+}
+
+/// The uuid of the group's only terminal pane, which is the key its recorded state is stored
+/// under.
+fn only_terminal_pane_uuid(pane_group: &ViewHandle<PaneGroup>, app: &App) -> Vec<u8> {
+    pane_group.read(app, |panes, _ctx| {
+        panes
+            .panes_of::<TerminalPane>()
+            .map(|pane| pane.session_uuid())
+            .next()
+            .expect("the group should hold one terminal pane")
+    })
+}
+
+// AE1/R2: a pane whose agent reports a second identifier has to persist the second one, and the
+// writes have to reach the writer in the order they were observed — an older identifier landing
+// after a newer one would resume the wrong conversation.
+#[test]
+fn pane_records_each_identifier_its_agent_reports_in_order() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let pane_uuid = only_terminal_pane_uuid(&pane_group, &app);
+
+        let terminal_view_id = pane_group.update(&mut app, |panes, ctx| {
+            let terminal_view_id = panes
+                .active_session_view(ctx)
+                .expect("the group should have an active terminal view")
+                .id();
+            start_cli_agent_session(terminal_view_id, crate::terminal::CLIAgent::Claude, ctx);
+            terminal_view_id
+        });
+
+        pane_group.update(&mut app, |_, ctx| {
+            report_agent_session_id(terminal_view_id, "first-identifier", ctx);
+        });
+        pane_group.update(&mut app, |_, ctx| {
+            report_agent_session_id(terminal_view_id, "second-identifier", ctx);
+        });
+
+        assert_eq!(
+            captured_agent_sessions(&model_events),
+            vec![
+                (pane_uuid.clone(), "first-identifier".to_owned()),
+                (pane_uuid, "second-identifier".to_owned()),
+            ],
+            "both identifiers must reach the writer in the order the agent reported them"
+        );
+    });
+}
+
+/// Starts an agent in the group's terminal pane and has it report `session_id`, leaving one
+/// recorded write behind. Returns the pane's terminal view.
+fn record_agent_session_in_pane(
+    pane_group: &ViewHandle<PaneGroup>,
+    session_id: &str,
+    app: &mut App,
+) -> ViewHandle<TerminalView> {
+    let terminal_view = pane_group.update(app, |panes, ctx| {
+        let terminal_view = panes
+            .active_session_view(ctx)
+            .expect("the group should have an active terminal view");
+        start_cli_agent_session(terminal_view.id(), crate::terminal::CLIAgent::Claude, ctx);
+        terminal_view
+    });
+    let terminal_view_id = terminal_view.id();
+    pane_group.update(app, |_, ctx| {
+        report_agent_session_id(terminal_view_id, session_id, ctx);
+    });
+    terminal_view
+}
+
+// AE2/R3: the agent process exiting completes the pane's user block, which ends the session while
+// the pane stays attached. That pane has nothing left to resume, and saying so is the only way
+// the next launch does not offer a dead session.
+#[test]
+fn pane_whose_agent_exited_records_that_it_has_nothing_to_resume() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let pane_uuid = only_terminal_pane_uuid(&pane_group, &app);
+        let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let _ = captured_agent_session_writes(&model_events);
+
+        pane_group.update(&mut app, |_, ctx| {
+            complete_block_in_pane(&terminal_view, completed_user_block("claude"), ctx);
+        });
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![(pane_uuid, None)],
+            "an agent that ended in a live pane must leave that pane recording no session"
+        );
+    });
+}
+
+// AE16/R21: suspending the agent completes a background block, which leaves the session — and the
+// process — alive. The pane must keep what it recorded; the agent is still there to resume.
+#[test]
+fn pane_whose_agent_is_suspended_keeps_its_recorded_state() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let recorded = captured_agent_sessions(&model_events);
+        assert_eq!(
+            recorded.len(),
+            1,
+            "precondition: the pane recorded a session"
+        );
+
+        pane_group.update(&mut app, |_, ctx| {
+            complete_block_in_pane(
+                &terminal_view,
+                BlockType::Background(Arc::new(SerializedBlock::new_for_test(
+                    b"claude".to_vec(),
+                    vec![],
+                ))),
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![],
+            "a suspended agent must not make the pane clear what it recorded"
+        );
+    });
+}
+
+// AE15/R20: a pane hidden for a close the user can undo, and a pane torn down at app teardown,
+// both end their CLI agent session on the way out. Neither says anything about the agent, which
+// is still running — clearing there would erase exactly the state a restart needs.
+#[test]
+fn pane_detached_for_close_or_teardown_keeps_its_recorded_state() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let recorded = captured_agent_sessions(&model_events);
+        assert_eq!(
+            recorded.len(),
+            1,
+            "precondition: the pane recorded a session"
+        );
+
+        // Closing the tab hides its panes so an undo can bring them back.
+        pane_group.update(&mut app, |panes, ctx| panes.detach_panes(ctx));
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![],
+            "a pane hidden for close must keep its recorded state so an undo (and the next \
+             launch) still finds the agent it was running"
+        );
+
+        // Teardown detaches every pane before the writer is drained.
+        pane_group.update(&mut app, |panes, ctx| panes.clean_up_panes(ctx));
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![],
+            "app teardown must not clear what its panes recorded"
+        );
+    });
+}
+
+// KTD14: the session event fires once per tool call, so an agent task is a burst of observations
+// of a row that has not changed. Only what changed is worth a write — the channel these go down
+// is bounded and shared with a sender that blocks the main thread when it fills.
+#[test]
+fn burst_of_tool_call_events_from_one_agent_collapses_to_one_write() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let terminal_view_id = terminal_view.id();
+
+        for _ in 0..20 {
+            pane_group.update(&mut app, |_, ctx| {
+                report_agent_event(terminal_view_id, "tool_complete", "conversation-a", ctx);
+            });
+        }
+
+        assert_eq!(
+            captured_agent_sessions(&model_events)
+                .into_iter()
+                .map(|(_, session_id)| session_id)
+                .collect::<Vec<_>>(),
+            vec!["conversation-a".to_owned()],
+            "an agent task's worth of tool calls must cost one write, not one per call"
+        );
+    });
+}
+
+// Starting a second agent in the same pane ends the first session with the second one already
+// registered. The pane is still running an agent, so it has something to resume and must not
+// record that it has nothing.
+#[test]
+fn pane_that_replaced_its_agent_does_not_record_an_absent_session() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let terminal_view_id = terminal_view.id();
+        let _ = captured_agent_session_writes(&model_events);
+
+        pane_group.update(&mut app, |_, ctx| {
+            start_cli_agent_session(terminal_view_id, crate::terminal::CLIAgent::Codex, ctx);
+        });
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![],
+            "a pane that swapped one agent for another still has an agent to resume"
+        );
+    });
+}
+
+// The eligibility gate reads a recorded directory that still resolves as the proof that the pane
+// ran its agent here. A pane whose session is not local has no directory to report, and giving
+// it one would let a session that never ran on this machine be relaunched on it.
+#[test]
+fn pane_without_a_local_directory_records_none_and_stays_ineligible() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let pane_uuid = only_terminal_pane_uuid(&pane_group, &app);
+        record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+
+        let writes = captured_agent_session_writes(&model_events);
+        let (_, session) = writes.first().expect("the pane should have recorded state");
+        let session = session
+            .as_ref()
+            .expect("the recording should hold the reported session")
+            .clone();
+        assert_eq!(
+            session.directory,
+            PathBuf::new(),
+            "a pane that reports no local working directory must record no directory"
+        );
+
+        let restore = startup_restore_for_test(
+            [(PaneUuid(pane_uuid.clone()), session)],
+            [PaneUuid(pane_uuid.clone())],
+        );
+        assert_eq!(
+            resume_eligibility(
+                &restore,
+                &PaneUuid(pane_uuid.clone()),
+                &local_pane_snapshot_for_test(&pane_uuid, Some(Path::new("/tmp"))),
+                Some(Path::new("/tmp")),
+            ),
+            Err(ResumeIneligibility::RecordedDirectoryMissing),
+            "a recording without a directory must not pass the gate that treats one as proof the \
+             agent ran here"
+        );
+    });
+}
+
+// The capture is part of session restore, so a user who turned session restore off has nothing
+// recorded about their agents at all.
+#[test]
+fn pane_records_nothing_when_session_restore_is_off() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        GeneralSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .restore_session
+                .set_value(false, ctx)
+                .expect("the setting should be writable in tests");
+        });
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+
+        pane_group.update(&mut app, |_, ctx| {
+            complete_block_in_pane(&terminal_view, completed_user_block("claude"), ctx);
+        });
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![],
+            "with session restore off, a pane records neither its agent nor its absence"
+        );
+    });
+}
+
+// R19: the persisted value is a purpose-built struct, and the session context it is derived from
+// carries the user's prompts, the agent's replies, its summaries and its tool previews. None of
+// that may reach the store, so this pins the recorded field set exhaustively and checks each
+// field against a context stuffed with every sensitive value the model can hold.
+#[test]
+fn recorded_agent_session_carries_no_prompt_response_summary_or_tool_preview() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+
+        let terminal_view_id = pane_group.update(&mut app, |panes, ctx| {
+            let terminal_view_id = panes
+                .active_session_view(ctx)
+                .expect("the group should have an active terminal view")
+                .id();
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.set_session(
+                    terminal_view_id,
+                    CLIAgentSession {
+                        agent: crate::terminal::CLIAgent::Claude,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: CLIAgentSessionContext {
+                            cwd: Some("SENSITIVE-cwd".to_owned()),
+                            project: Some("SENSITIVE-project".to_owned()),
+                            session_id: Some("conversation-a".to_owned()),
+                            tool_name: Some("SENSITIVE-tool-name".to_owned()),
+                            tool_input_preview: Some("SENSITIVE-tool-preview".to_owned()),
+                            summary: Some("SENSITIVE-summary".to_owned()),
+                            query: Some("SENSITIVE-prompt".to_owned()),
+                            response: Some("SENSITIVE-response".to_owned()),
+                        },
+                        input_state: CLIAgentInputState::Closed,
+                        should_auto_toggle_input: false,
+                        listener: None,
+                        plugin_version: None,
+                        remote_host: None,
+                        draft_text: Some("SENSITIVE-draft".to_owned()),
+                        custom_command_prefix: None,
+                        received_rich_notification: false,
+                    },
+                    ctx,
+                );
+            });
+            terminal_view_id
+        });
+        pane_group.update(&mut app, |_, ctx| {
+            report_agent_session_id(terminal_view_id, "conversation-a", ctx);
+        });
+
+        let writes = captured_agent_session_writes(&model_events);
+        let (_, session) = writes.first().expect("the pane should have recorded state");
+        let session = session
+            .as_ref()
+            .expect("the recording should hold the reported session");
+        // Destructured exhaustively on purpose: a field added to the recorded state has to be
+        // looked at here before it can be persisted.
+        let RecordedAgentSession {
+            agent,
+            session_id,
+            flags,
+            directory,
+            observed_at,
+        } = session;
+        let persisted = format!(
+            "{agent:?} {session_id} {flags:?} {} {observed_at}",
+            directory.display()
+        );
+        assert!(
+            !persisted.contains("SENSITIVE"),
+            "the recorded state must carry nothing of the session context but the identifier, \
+             got: {persisted}"
+        );
+        assert_eq!(session_id, "conversation-a");
     });
 }
 

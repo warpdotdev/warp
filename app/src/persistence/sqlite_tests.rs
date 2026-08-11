@@ -34,6 +34,7 @@ use crate::persistence::{
 };
 use crate::server::ids::{ClientId, ServerId};
 use crate::tab::SelectedTabColor;
+use crate::terminal::cli_agent_resume::RecordedFlag;
 use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::{CLIAgent, ShellLaunchData};
@@ -367,6 +368,102 @@ fn test_deduplicate_snapshots() {
         &filtered_events[4],
         &ModelEvent::UpsertNotebook { .. }
     ));
+}
+
+// KTD14: the CLI agent session event fires once per tool call, so an agent task's worth of
+// captures is hundreds of writes of the same row. Only the last one for a pane says anything.
+#[test]
+fn agent_session_writes_for_one_pane_collapse_to_the_last_one() {
+    let first = test_recorded_agent_session();
+    let mut second = test_recorded_agent_session();
+    second.session_id = "the-newer-identifier".to_owned();
+
+    let filtered = deduplicate_events(vec![
+        agent_session_event(AGENT_PANE_UUID.to_vec(), Some(first)),
+        agent_session_event(AGENT_PANE_UUID.to_vec(), Some(second.clone())),
+    ]);
+
+    assert_eq!(
+        recorded_sessions_in(&filtered),
+        vec![(AGENT_PANE_UUID.to_vec(), Some(second))],
+        "two writes for one pane must collapse to the later one, not to whichever the writer \
+         happened to reach first"
+    );
+}
+
+// Coalescing is per pane: a burst from one pane must not swallow another pane's state.
+#[test]
+fn agent_session_writes_for_different_panes_are_all_kept() {
+    let session = test_recorded_agent_session();
+
+    let filtered = deduplicate_events(vec![
+        agent_session_event(vec![1], Some(session.clone())),
+        agent_session_event(vec![2], Some(session.clone())),
+        agent_session_event(vec![1], Some(session.clone())),
+    ]);
+
+    assert_eq!(
+        recorded_sessions_in(&filtered),
+        vec![
+            (vec![2], Some(session.clone())),
+            (vec![1], Some(session.clone())),
+        ],
+        "each pane keeps its own latest write"
+    );
+}
+
+// A clear is a write like any other, so it has to supersede an earlier record for the same pane.
+// A record that outlived the clear would offer to resume an agent that has already exited (R3).
+#[test]
+fn agent_session_clear_supersedes_an_earlier_record_for_the_same_pane() {
+    let filtered = deduplicate_events(vec![
+        agent_session_event(
+            AGENT_PANE_UUID.to_vec(),
+            Some(test_recorded_agent_session()),
+        ),
+        agent_session_event(AGENT_PANE_UUID.to_vec(), None),
+    ]);
+
+    assert_eq!(
+        recorded_sessions_in(&filtered),
+        vec![(AGENT_PANE_UUID.to_vec(), None)],
+        "the clear is the pane's latest word about its agent"
+    );
+}
+
+// Coalescing may only drop superseded writes. Moving the surviving snapshot earlier would run a
+// pane-table rebuild after a capture that was recorded before it.
+#[test]
+fn coalescing_agent_session_writes_leaves_snapshot_ordering_alone() {
+    let snapshot = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        agent_sessions: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    let filtered = deduplicate_events(vec![
+        agent_session_event(
+            AGENT_PANE_UUID.to_vec(),
+            Some(test_recorded_agent_session()),
+        ),
+        ModelEvent::Snapshot(snapshot.clone()),
+        agent_session_event(AGENT_PANE_UUID.to_vec(), None),
+    ]);
+
+    let shapes = filtered
+        .iter()
+        .map(|event| match event {
+            ModelEvent::Snapshot(_) => "snapshot",
+            _ => "agent session",
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shapes,
+        vec!["snapshot", "agent session"],
+        "the surviving capture write must stay after the snapshot it followed"
+    );
 }
 
 #[test]
@@ -1178,11 +1275,33 @@ fn team_member_is_disabled_round_trips_through_sqlite_cache() {
 
 const AGENT_PANE_UUID: [u8; 1] = [1];
 
+/// A capture write for `pane_id`, as a pane sends it. `None` is the pane reporting that it has
+/// no agent session to resume.
+fn agent_session_event(pane_id: Vec<u8>, session: Option<RecordedAgentSession>) -> ModelEvent {
+    ModelEvent::SetAgentSession { pane_id, session }
+}
+
+/// The capture writes in `events`, in the order the writer would apply them.
+fn recorded_sessions_in(events: &[ModelEvent]) -> Vec<(Vec<u8>, Option<RecordedAgentSession>)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::SetAgentSession { pane_id, session } => {
+                Some((pane_id.clone(), session.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn test_recorded_agent_session() -> RecordedAgentSession {
     RecordedAgentSession {
         agent: CLIAgent::Claude,
         session_id: "b7c2f1a0-5f3e-4c21-9b8d-0f2a1c3d4e5f".to_owned(),
-        flags: vec!["--model".to_owned(), "opus".to_owned()],
+        flags: vec![RecordedFlag {
+            name: "--model".to_owned(),
+            value: Some("opus".to_owned()),
+        }],
         directory: PathBuf::from("/tmp/agent-project"),
         observed_at: NaiveDate::from_ymd_opt(2026, 8, 11)
             .expect("date should be valid")
@@ -1224,6 +1343,100 @@ fn agent_session_round_trips_through_save_and_load() {
             .agent_sessions
             .get(&PaneUuid(AGENT_PANE_UUID.to_vec())),
         Some(&recorded)
+    );
+}
+
+// AE3: a restart after a kill has only what already reached the disk, and the capture write
+// reaches it on its own — no snapshot is sent before or after it. Terminating the writer here
+// only joins the thread; nothing else is written.
+#[test]
+fn agent_session_observed_before_an_abrupt_exit_is_already_on_disk() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let conn = database_with_saved_session(&database_path);
+    let recorded = test_recorded_agent_session();
+
+    let writer = start_writer(conn, database_path.clone()).expect("writer should start");
+    writer
+        .sender
+        .send(agent_session_event(
+            AGENT_PANE_UUID.to_vec(),
+            Some(recorded.clone()),
+        ))
+        .expect("capture event should send");
+    writer
+        .sender
+        .send(ModelEvent::Terminate)
+        .expect("terminate event should send");
+    writer.handle.join().expect("writer should terminate");
+
+    let mut conn = setup_database(&database_path).expect("database should reopen");
+    assert_eq!(
+        get_all_recorded_agent_sessions(&mut conn)
+            .expect("agent sessions should load")
+            .get(&PaneUuid(AGENT_PANE_UUID.to_vec())),
+        Some(&recorded),
+        "the last observed state must be on disk without a snapshot to carry it"
+    );
+}
+
+// R3: a pane that reports no agent session has its row removed, so the next launch reads absence
+// rather than the session that pane used to be running.
+#[test]
+fn agent_session_clear_removes_the_panes_row() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = database_with_saved_session(&tempdir.path().join("warp.sqlite"));
+
+    super::handle_model_event(
+        agent_session_event(
+            AGENT_PANE_UUID.to_vec(),
+            Some(test_recorded_agent_session()),
+        ),
+        &mut conn,
+    )
+    .expect("capture event should apply");
+    super::handle_model_event(
+        agent_session_event(AGENT_PANE_UUID.to_vec(), None),
+        &mut conn,
+    )
+    .expect("clear event should apply");
+
+    assert!(
+        get_all_recorded_agent_sessions(&mut conn)
+            .expect("agent sessions should load")
+            .is_empty(),
+        "a cleared pane must be left with nothing to resume"
+    );
+}
+
+// A repeated capture for one pane replaces its row rather than adding another: the table is
+// keyed by pane, and a second row for the same pane would make the resume offer ambiguous.
+#[test]
+fn repeated_agent_session_captures_update_one_row_per_pane() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let mut conn = database_with_saved_session(&tempdir.path().join("warp.sqlite"));
+    let mut newer = test_recorded_agent_session();
+    newer.session_id = "the-newer-identifier".to_owned();
+
+    super::handle_model_event(
+        agent_session_event(
+            AGENT_PANE_UUID.to_vec(),
+            Some(test_recorded_agent_session()),
+        ),
+        &mut conn,
+    )
+    .expect("first capture event should apply");
+    super::handle_model_event(
+        agent_session_event(AGENT_PANE_UUID.to_vec(), Some(newer.clone())),
+        &mut conn,
+    )
+    .expect("second capture event should apply");
+
+    let loaded = get_all_recorded_agent_sessions(&mut conn).expect("agent sessions should load");
+    assert_eq!(loaded.len(), 1, "a pane owns exactly one recorded session");
+    assert_eq!(
+        loaded.get(&PaneUuid(AGENT_PANE_UUID.to_vec())),
+        Some(&newer)
     );
 }
 

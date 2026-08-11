@@ -346,12 +346,16 @@ pub struct FinishedCommandMetadata {
 pub enum ModelEvent {
     SaveBlock(BlockCompleted),
     DeleteBlocks(Vec<u8>),
-    /// Records the agent CLI a pane is running. Deliberately not folded into
-    /// [`ModelEvent::Snapshot`]: snapshots rebuild the pane tables wholesale, so this state needs
-    /// a write of its own to survive them.
-    SaveAgentSession {
+    /// Records the agent CLI a pane is running, or that it is running none. Deliberately not
+    /// folded into [`ModelEvent::Snapshot`]: snapshots rebuild the pane tables wholesale, so this
+    /// state needs a write of its own to survive them.
+    ///
+    /// Recording and clearing are one event rather than two so that everything a pane says about
+    /// its agent stays in one order: a clear that overtook the record it supersedes would leave a
+    /// finished agent looking resumable.
+    SetAgentSession {
         pane_id: Vec<u8>,
-        session: RecordedAgentSession,
+        session: Option<RecordedAgentSession>,
     },
     Snapshot(AppState),
     UpsertWorkflows(Vec<CloudWorkflow>),

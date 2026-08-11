@@ -643,9 +643,13 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
             // panes and have their data deleted locally.
             delete_blocks(connection, pane_id).context("error deleting blocks")
         }
-        ModelEvent::SaveAgentSession { pane_id, session } => {
-            save_agent_session(connection, pane_id, &session).context("error saving agent session")
-        }
+        ModelEvent::SetAgentSession { pane_id, session } => match session {
+            Some(session) => save_agent_session(connection, pane_id, &session)
+                .context("error saving agent session"),
+            None => {
+                clear_agent_session(connection, pane_id).context("error clearing agent session")
+            }
+        },
         ModelEvent::Snapshot(app_state) => {
             save_app_state(connection, &app_state).context("error saving app state")
         }
@@ -890,22 +894,42 @@ fn report_db_error(err_kind: &str, err: anyhow::Error, database_path: &Path) {
 
 /// Filter a collection of model events to remove skippable events:
 /// * [`ModelEvent::Snapshot`] includes the entire app state, so we only need the latest one.
+/// * [`ModelEvent::SetAgentSession`] replaces a pane's row wholesale, so only the last one a pane
+///   sent says anything. The CLI agent session event that drives it fires once per tool call, so
+///   an agent task's worth of captures is hundreds of writes of the same row.
+///
+/// Superseded events are dropped where they stand and nothing is reordered: hoisting the
+/// surviving snapshot would rebuild the pane tables after a capture that was recorded before it.
 fn deduplicate_events(events: Vec<ModelEvent>) -> Vec<ModelEvent> {
-    let last_snapshot = events
-        .iter()
-        .enumerate()
-        .rfind(|(_, event)| matches!(event, ModelEvent::Snapshot(_)));
-    match last_snapshot {
-        Some((last_snapshot_index, _)) => events
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, event)| match event {
-                ModelEvent::Snapshot(_) if index < last_snapshot_index => None,
-                event => Some(event),
-            })
-            .collect(),
-        None => events,
+    let mut superseded: HashSet<usize> = HashSet::new();
+    let mut last_snapshot: Option<usize> = None;
+    let mut last_agent_session: HashMap<&[u8], usize> = HashMap::new();
+
+    for (index, event) in events.iter().enumerate() {
+        match event {
+            ModelEvent::Snapshot(_) => {
+                if let Some(previous) = last_snapshot.replace(index) {
+                    superseded.insert(previous);
+                }
+            }
+            ModelEvent::SetAgentSession { pane_id, .. } => {
+                if let Some(previous) = last_agent_session.insert(pane_id.as_slice(), index) {
+                    superseded.insert(previous);
+                }
+            }
+            _ => {}
+        }
     }
+
+    if superseded.is_empty() {
+        return events;
+    }
+
+    events
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, event)| (!superseded.contains(&index)).then_some(event))
+        .collect()
 }
 
 // Used in the save_app_state function to help make the code more readable.
@@ -1540,6 +1564,15 @@ fn save_agent_session(
         .do_update()
         .set(&new_session)
         .execute(conn)?;
+
+    Ok(())
+}
+
+/// Drops whatever agent CLI state was recorded for a pane, leaving nothing to resume.
+fn clear_agent_session(conn: &mut SqliteConnection, pane_id: Vec<u8>) -> Result<()> {
+    use schema::agent_sessions::dsl::*;
+
+    diesel::delete(agent_sessions.filter(pane_leaf_uuid.eq(pane_id))).execute(conn)?;
 
     Ok(())
 }

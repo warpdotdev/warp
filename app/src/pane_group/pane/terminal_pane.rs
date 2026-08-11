@@ -1,15 +1,21 @@
 //! Implementation of terminal panes.
-#[cfg(not(target_family = "wasm"))]
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
 
+use chrono::Utc;
+use parking_lot::Mutex;
 #[cfg(not(target_family = "wasm"))]
 use session_sharing_protocol::sharer::SessionSourceType;
+use smol_str::SmolStr;
 use url::Url;
 #[cfg(not(target_family = "wasm"))]
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_errors::report_error;
+use warp_util::path::EscapeChar;
 use warpui::{
     AppContext, EntityId, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId,
 };
@@ -41,7 +47,9 @@ use crate::ai::blocklist::{
 use crate::ai::conversation_utils;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::orchestration::{RemoteChildLaunchConfig, prepare_remote_child_launch};
-use crate::app_state::{AmbientAgentPaneSnapshot, LeafContents, TerminalPaneSnapshot};
+use crate::app_state::{
+    AmbientAgentPaneSnapshot, LeafContents, RecordedAgentSession, TerminalPaneSnapshot,
+};
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
@@ -55,7 +63,8 @@ use crate::persistence::{BlockCompleted, ModelEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
 use crate::session_management::SessionNavigationData;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::cli_agent_resume::{RecordedFlag, ResumeDeclarations};
+use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
 use crate::terminal::general_settings::GeneralSettings;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::shared_session::SharedSessionSource;
@@ -63,7 +72,7 @@ use crate::terminal::shared_session::manager::{Manager, ManagerEvent};
 use crate::terminal::shared_session::role_change_modal::RoleChangeOpenSource;
 use crate::terminal::shared_session::{SharedSessionStatus, join_link};
 use crate::terminal::view::Event;
-use crate::terminal::{TerminalManager, TerminalView};
+use crate::terminal::{CLIAgent, TerminalManager, TerminalView};
 use crate::view_components::ToastFlavor;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
@@ -80,6 +89,26 @@ use crate::{
 
 pub type TerminalPaneView = PaneView<TerminalView>;
 
+/// What a pane needs to remember between agent-session observations. Held behind an `Arc` because
+/// the subscription that reads it outlives the detach it has to know about.
+#[derive(Default)]
+struct AgentCaptureState {
+    /// Whether the pane is currently attached to a live pane group.
+    ///
+    /// Detaching a pane ends its CLI agent session for every reason but a move, so the `Ended`
+    /// that follows a detach says nothing about the agent — which is still running, whether the
+    /// pane was hidden for a close the user can undo or the app is shutting down.
+    is_attached: AtomicBool,
+
+    /// What the pane last asked the writer to store.
+    ///
+    /// The session event that drives capture fires once per tool call, so an agent task's worth
+    /// of observations is hundreds of writes of a row that has not changed. Only a first
+    /// observation or a change is worth sending; the rest are dropped here, before they reach a
+    /// bounded channel that a blocking main-thread sender shares.
+    last_sent: Mutex<Option<RecordedAgentSession>>,
+}
+
 /// Data kept for terminal panes.
 pub struct TerminalPane {
     model_event_sender: Option<SyncSender<ModelEvent>>,
@@ -88,6 +117,9 @@ pub struct TerminalPane {
     uuid: Vec<u8>,
 
     pane_configuration: ModelHandle<PaneConfiguration>,
+
+    /// State of this pane's agent session capture, shared with the subscription that writes it.
+    agent_capture: Arc<AgentCaptureState>,
 
     /// Defining `terminal_manager` before `view` means that `terminal_manager`
     /// gets dropped first (guaranteed by the language), which halts the event
@@ -165,6 +197,7 @@ impl TerminalPane {
             model_event_sender,
             uuid,
             pane_configuration,
+            agent_capture: Arc::new(AgentCaptureState::default()),
             view,
         }
     }
@@ -253,6 +286,7 @@ impl PaneContent for TerminalPane {
         // TODO(ben): As much as possible, logic from PaneGroup::add_session should go here.
         //  This will simplify PaneGroup, especially when implementing pane management.
         let terminal_pane_id = self.terminal_pane_id();
+        self.agent_capture.is_attached.store(true, Ordering::SeqCst);
 
         self.view
             .update(ctx, |view, ctx| view.set_focus_handle(focus_handle, ctx));
@@ -281,6 +315,22 @@ impl PaneContent for TerminalPane {
         }
 
         let terminal_view_id = self.terminal_view(ctx).id();
+
+        // Recording the pane's agent session is scoped to this pane by filtering on the terminal
+        // view captured here, the same way the agent driver scopes its own session subscription:
+        // the sessions model is a singleton keyed by terminal view, and a group-wide identity map
+        // would have to be kept in step with every pane that moves between groups.
+        let agent_capture = self.agent_capture.clone();
+        ctx.subscribe_to_model(
+            &CLIAgentSessionsModel::handle(ctx),
+            move |group, _, event, ctx| {
+                if event.terminal_view_id() != terminal_view_id {
+                    return;
+                }
+                capture_agent_session(group, event, terminal_pane_id, &agent_capture, ctx);
+            },
+        );
+
         let manager_model = Manager::handle(ctx);
         ctx.subscribe_to_model(&manager_model, move |group, model_handle, event, ctx| {
             if let ManagerEvent::JoinedSession {
@@ -376,6 +426,12 @@ impl PaneContent for TerminalPane {
         detach_type: DetachType,
         ctx: &mut ViewContext<PaneGroup>,
     ) {
+        // Marked before anything below can end the CLI agent session, so the capture subscription
+        // reads a detach for what it is rather than as an agent that finished.
+        self.agent_capture
+            .is_attached
+            .store(false, Ordering::SeqCst);
+
         if matches!(detach_type, DetachType::Closed) {
             // Only immediately clear conversations and delete blocks if the session is being
             // permanently closed.
@@ -617,6 +673,202 @@ impl PaneContent for TerminalPane {
     fn is_pane_being_dragged(&self, ctx: &AppContext) -> bool {
         self.view.as_ref(ctx).is_being_dragged()
     }
+}
+
+/// Records what the CLI agent sessions model now reports about this pane, or that it reports
+/// nothing, so a restart can offer to resume the agent the pane was running.
+///
+/// The write is sent from here rather than from a spawned task on purpose: two independently
+/// scheduled sends have no order between them, and an older identifier landing after a newer one
+/// would offer to resume a conversation the user has already left behind. The payload is a
+/// handful of short strings and the writer coalesces per pane, so one ordered send is cheaper
+/// than the block writes that already go through this channel.
+fn capture_agent_session(
+    group: &PaneGroup,
+    event: &CLIAgentSessionsModelEvent,
+    terminal_pane_id: TerminalPaneId,
+    agent_capture: &AgentCaptureState,
+    ctx: &mut ViewContext<PaneGroup>,
+) {
+    // A detached pane records nothing further and clears nothing: its agent is still running,
+    // and what it last recorded is exactly what the next launch needs (R20). `remove_session`
+    // fires on every detach but a move — including the hide-for-close an undo reverses — and app
+    // teardown detaches every pane before draining the writer.
+    if !agent_capture.is_attached.load(Ordering::SeqCst) {
+        return;
+    }
+
+    // The same gate block saving uses: a user who turned session restore off, or a Warp that is
+    // not an interactive app, has nothing recorded about their panes.
+    if !*GeneralSettings::as_ref(ctx).restore_session
+        || !AppExecutionMode::as_ref(ctx).can_save_session()
+    {
+        return;
+    }
+
+    let Some(sender) = group.model_event_sender.clone() else {
+        return;
+    };
+    let Some(pane_id) = group
+        .terminal_session_by_id(terminal_pane_id)
+        .map(TerminalPane::session_uuid)
+    else {
+        return;
+    };
+
+    let session = match event {
+        CLIAgentSessionsModelEvent::SessionUpdated { .. }
+        | CLIAgentSessionsModelEvent::StatusChanged { .. } => {
+            match observed_agent_session(group, terminal_pane_id, event.terminal_view_id(), ctx) {
+                // Nothing to record until the agent has reported an identifier: a recording
+                // without one claims no session and resumes nothing.
+                None => return,
+                session => session,
+            }
+        }
+        CLIAgentSessionsModelEvent::Ended { .. } => {
+            // An agent replaced rather than removed — a second agent started in the same pane —
+            // ends the old session with the new one already registered, and the pane is still
+            // running an agent. Only a pane the model reports nothing for has nothing to resume.
+            if CLIAgentSessionsModel::as_ref(ctx)
+                .session(event.terminal_view_id())
+                .is_some()
+            {
+                return;
+            }
+            None
+        }
+        _ => return,
+    };
+
+    let mut last_sent = agent_capture.last_sent.lock();
+    if records_same_agent_session(last_sent.as_ref(), session.as_ref()) {
+        return;
+    }
+    *last_sent = session.clone();
+    drop(last_sent);
+
+    if let Err(err) = sender.send(ModelEvent::SetAgentSession { pane_id, session }) {
+        report_error!(
+            anyhow::Error::new(err).context("Error sending agent session event"),
+            extra: { "terminal_pane_id" => ?terminal_pane_id }
+        );
+    }
+}
+
+/// Whether two observations say the same thing about a pane's agent.
+///
+/// `observed_at` is deliberately left out: it moves with every tool call, and rewriting a row only
+/// to advance it is the write volume this comparison exists to remove. The cost is that the time
+/// recorded is when the state was first seen rather than last seen, which only ever loosens the
+/// last tie-break between two panes claiming one identifier.
+fn records_same_agent_session(
+    last_sent: Option<&RecordedAgentSession>,
+    observed: Option<&RecordedAgentSession>,
+) -> bool {
+    match (last_sent, observed) {
+        (None, None) => true,
+        (Some(last_sent), Some(observed)) => {
+            // Destructured so that a field added to the recorded state has to be considered here
+            // before a change to it can go unwritten.
+            let RecordedAgentSession {
+                agent,
+                session_id,
+                flags,
+                directory,
+                observed_at: _,
+            } = last_sent;
+            agent == &observed.agent
+                && session_id == &observed.session_id
+                && flags == &observed.flags
+                && directory == &observed.directory
+        }
+        _ => false,
+    }
+}
+
+/// The agent state to record for `terminal_pane_id`, or `None` while its agent has reported no
+/// session identifier.
+fn observed_agent_session(
+    group: &PaneGroup,
+    terminal_pane_id: TerminalPaneId,
+    terminal_view_id: EntityId,
+    ctx: &AppContext,
+) -> Option<RecordedAgentSession> {
+    let terminal_view = group.terminal_view_from_pane_id(terminal_pane_id, ctx)?;
+    // A pane can push another terminal view over the one the agent is running in. The pushed
+    // view's command line and working directory are not the agent's, so there is nothing to
+    // record from it.
+    if terminal_view.id() != terminal_view_id {
+        return None;
+    }
+    let (agent, session_id) = CLIAgentSessionsModel::as_ref(ctx)
+        .reported_agent_session(terminal_view_id)
+        .map(|(agent, session_id)| (agent, session_id.to_owned()))?;
+
+    let view = terminal_view.as_ref(ctx);
+    // The model lock is held only long enough to copy the command text out. Resolving an alias
+    // reads the shell session model, and reaching for a second model with this one held is what
+    // the locking rule in `AGENTS.md` forbids.
+    let command = {
+        let model = view.model.lock();
+        model
+            .block_list()
+            .active_block()
+            .command_with_secrets_obfuscated(false)
+    };
+
+    let shell_session = view
+        .active_block_session_id()
+        .and_then(|session_id| view.sessions_model().as_ref(ctx).get(session_id));
+    let flags = recorded_resume_flags(
+        agent,
+        &command,
+        shell_session
+            .as_ref()
+            .map(|session| session.shell_family().escape_char()),
+        shell_session.as_ref().map(|session| session.aliases()),
+    );
+
+    Some(RecordedAgentSession {
+        agent,
+        session_id,
+        flags,
+        // Only a local session has a directory to report here. A pane running its agent
+        // elsewhere records none rather than a remote path, which could resolve locally and make
+        // a session that was never local look like one that can be relaunched in place.
+        directory: view
+            .pwd_if_local(ctx)
+            .map(PathBuf::from)
+            .unwrap_or_default(),
+        observed_at: Utc::now().naive_utc(),
+    })
+}
+
+/// The resume-relevant flags `command` gave `agent`, with the first word resolved through the
+/// shell session's aliases so that a flag carried by an alias is recorded as one the user ran.
+///
+/// `command` is the obfuscated form of the invocation, so a secret passed to the agent is
+/// recorded as its placeholder. The placeholder fails the declared value shape when the resume
+/// invocation is built, which drops the flag instead of replaying a wrong value.
+///
+/// A command that does not resolve to `agent` contributes no flags at all: it is some other
+/// program running in the pane, and its arguments were never the agent's.
+fn recorded_resume_flags(
+    agent: CLIAgent,
+    command: &str,
+    escape_char: Option<EscapeChar>,
+    aliases: Option<&HashMap<SmolStr, String>>,
+) -> Vec<RecordedFlag> {
+    let resolved = CLIAgent::resolve_command_aliases(command, escape_char, aliases);
+    if !agent.matches_command(&resolved, escape_char) {
+        return Vec::new();
+    }
+
+    // Splitting on whitespace splits a quoted value too, but every shape the allowlist declares
+    // is a bare token, so a value that needed quoting was never one a resume could carry.
+    let args = resolved.split_whitespace().skip(1).collect::<Vec<_>>();
+    ResumeDeclarations::embedded().extract_resume_flags(agent, &args)
 }
 
 fn retrieve_shared_session_link(manager: &Manager, terminal_view_id: &EntityId) -> Option<Url> {
