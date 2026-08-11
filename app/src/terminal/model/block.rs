@@ -363,6 +363,9 @@ pub struct Block {
     /// Blocklist Env var metadata associated with this block, if any.
     env_var_metadata: Option<BlocklistEnvVarMetadata>,
 
+    /// `true` when Warp itself wrote this block's command.
+    is_warp_authored: bool,
+
     /// Represents the 'interaction mode' for a command block with respect to the agent.
     ///
     /// See doc comment on [`InteractionMode`] for detailed explanation of semantics.
@@ -595,6 +598,7 @@ impl From<&Block> for BlockType {
                             Block::compute_output_truncated_with_obfuscated_secrets
                         ),
                         block.agent_interaction_metadata().is_some(),
+                        block.is_warp_authored(),
                         block.command_start_time(),
                         block.output_grid().len() as u64,
                         block.output_grid().grid_handler().num_lines_truncated(),
@@ -1001,6 +1005,7 @@ impl Block {
             shell_host: None,
             is_for_in_band_command: false,
             env_var_metadata: None,
+            is_warp_authored: false,
             interaction_mode: InteractionMode::default(),
             block_banner: None,
             ignore_next_rprompt: false,
@@ -1199,6 +1204,19 @@ impl Block {
     /// Returns the `env_var_metadata` associated with this block, if any.
     pub fn env_var_metadata(&self) -> Option<&BlocklistEnvVarMetadata> {
         self.env_var_metadata.as_ref()
+    }
+
+    /// `true` when Warp itself wrote this block's command with nobody asking for it.
+    ///
+    /// Distinct from [`Self::agent_interaction_metadata`], which marks a command an agent ran on
+    /// the user's behalf: there the user still started the interaction, so the command counts as
+    /// theirs. A Warp-authored command has no person behind it at all.
+    pub fn is_warp_authored(&self) -> bool {
+        self.is_warp_authored
+    }
+
+    pub fn set_warp_authored(&mut self) {
+        self.is_warp_authored = true;
     }
 
     pub fn set_env_var_metadata(&mut self, env_var_metadata: BlocklistEnvVarMetadata) {

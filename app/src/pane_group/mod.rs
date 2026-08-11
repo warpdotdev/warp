@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, Utc};
 use instant::Instant;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -124,7 +124,7 @@ use crate::settings_view::SettingsSection;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
-use crate::terminal::cli_agent_resume::ResumeDeclarations;
+use crate::terminal::cli_agent_resume::{PermissionPosture, ResumeDeclarations};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
@@ -1321,6 +1321,21 @@ pub(crate) fn resume_eligibility<'a>(
     Ok(recorded)
 }
 
+/// The invocation that reattaches a pane to `recorded`, or `None` when the recording cannot
+/// produce one.
+///
+/// R22: the elevation the user chose rides along only while the observation behind it is recent.
+/// A recording older than the window still resumes the conversation, just without it.
+fn resume_invocation_for(recorded: &RecordedAgentSession) -> Option<String> {
+    let posture = PermissionPosture::for_observation(recorded.observed_at, Utc::now().naive_utc());
+    ResumeDeclarations::embedded().build_resume_command(
+        recorded.agent,
+        &recorded.session_id,
+        &recorded.flags,
+        posture,
+    )
+}
+
 /// `path` as it resolves on disk right now, or `None` when nothing is there. Both sides of a
 /// directory comparison go through this so that two spellings of one directory — a symlinked
 /// temporary directory, `/tmp` against `/private/tmp` — are not read as two directories.
@@ -1875,25 +1890,30 @@ impl PaneGroup {
                     .filter(|path| path.is_dir());
 
                 // The verdict is decided here, where the directory the pane is about to come up
-                // in is known; a later unit turns an eligible one into the resume invocation.
+                // in is known.
                 let resume_verdict = resume_eligibility(
                     &agent_restore,
                     &uuid,
                     &terminal_snapshot,
                     startup_directory.as_deref(),
                 );
-                match &resume_verdict {
-                    Ok(recorded) => log::info!(
-                        "Restored pane can resume its recorded {:?} agent session",
-                        recorded.agent
-                    ),
+                let resume_command = match &resume_verdict {
+                    Ok(_) if !FeatureFlag::AgentSessionResume.is_enabled() => None,
+                    Ok(recorded) => {
+                        log::info!(
+                            "Restored pane can resume its recorded {:?} agent session",
+                            recorded.agent
+                        );
+                        resume_invocation_for(recorded)
+                    }
                     // The ordinary outcome for every pane that was not running an agent, so
                     // reporting it would say nothing about this feature.
-                    Err(ResumeIneligibility::NoRecordedSession) => {}
+                    Err(ResumeIneligibility::NoRecordedSession) => None,
                     Err(reason) => {
-                        log::info!("Restored pane will not resume an agent session: {reason:?}")
+                        log::info!("Restored pane will not resume an agent session: {reason:?}");
+                        None
                     }
-                }
+                };
 
                 // Filter conversation IDs to only include those that have task messages
                 // and are not entirely passive (ignored suggestions).
@@ -1951,6 +1971,12 @@ impl PaneGroup {
                 );
 
                 let terminal_view_id = terminal_view.id();
+
+                if let Some(resume_command) = resume_command {
+                    terminal_view.update(ctx, |view, _| {
+                        view.arm_agent_session_resume(resume_command);
+                    });
+                }
 
                 let pane_data = TerminalPane::new(
                     uuid.0,

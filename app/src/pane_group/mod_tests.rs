@@ -86,6 +86,7 @@ use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::system::SystemStats;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
+use crate::terminal::cli_agent_resume::RESUME_HISTORY_MARKER;
 use crate::terminal::cli_agent_sessions::event::parse_event;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
@@ -4211,6 +4212,7 @@ fn completed_user_block(command: &str) -> BlockType {
         output_truncated: String::new(),
         output_truncated_with_obfuscated_secrets: String::new(),
         was_part_of_agent_interaction: false,
+        was_warp_authored: false,
         started_at: None,
         num_output_lines: 0,
         num_output_lines_truncated: 0,
@@ -5108,5 +5110,183 @@ fn an_ineligible_recorded_session_restores_the_pane_unchanged() {
 
         assert_eq!(with_ineligible_recording, vec![pane_uuid]);
         assert_eq!(with_ineligible_recording, without_recording);
+    });
+}
+
+/// Restores `panes` through the startup path with `restore` in force, and reports what each pane
+/// came back with: its session uuid and the resume invocation armed for it.
+fn restored_panes_with_armed_resume(
+    app: &mut App,
+    panes: Vec<TerminalPaneSnapshot>,
+    restore: AgentSessionRestore,
+) -> Vec<(Vec<u8>, Option<String>)> {
+    let children = panes
+        .into_iter()
+        .map(|pane| {
+            (
+                crate::app_state::PaneFlex(1.),
+                PaneNodeSnapshot::Leaf(LeafSnapshot {
+                    is_focused: false,
+                    custom_vertical_tabs_title: None,
+                    contents: LeafContents::Terminal(pane),
+                }),
+            )
+        })
+        .collect();
+    let layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Branch(BranchSnapshot {
+        direction: crate::app_state::SplitDirection::Horizontal,
+        children,
+    })));
+
+    let tips_model = app.add_model(|_| TipsCompleted::default());
+    let (_, pane_group) = app.add_window_with_bounds(
+        WindowStyle::NotStealFocus,
+        WindowBounds::ExactPosition(RectF::new(Vector2F::zero(), Vector2F::new(1024., 768.))),
+        |ctx| {
+            let banner_model_handle = ctx.add_model(|_| BannerState::default());
+            PaneGroup::new_with_panes_layout(
+                tips_model,
+                banner_model_handle,
+                ServerApiProvider::as_ref(ctx).get(),
+                layout,
+                Arc::new(HashMap::new()),
+                restore,
+                None,
+                ctx,
+            )
+        },
+    );
+
+    let mut restored: Vec<_> = pane_group.read(app, |panes, ctx| {
+        panes
+            .panes_of::<TerminalPane>()
+            .map(|pane| {
+                let armed = pane.terminal_view(ctx).read(ctx, |view, _| {
+                    view.armed_agent_session_resume().map(str::to_owned)
+                });
+                (pane.session_uuid(), armed)
+            })
+            .collect()
+    });
+    // Sorted by uuid: the restore walks the tree in whatever order it likes, and the question
+    // here is which pane got which invocation, not which pane was built first.
+    restored.sort_by(|(left, _), (right, _)| left.cmp(right));
+    restored
+}
+
+/// AE7/R6: every eligible pane comes back carrying its own invocation, in the ordinary startup
+/// restore, with no per-tab step and nothing for the user to do.
+#[test]
+fn every_eligible_restored_pane_carries_its_own_resume_invocation() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().to_path_buf();
+
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+
+        let first = PaneUuid(vec![1]);
+        let second = PaneUuid(vec![2]);
+        let restore = startup_restore_for_test(
+            [
+                (first.clone(), recorded_session_for_test("session-1", &path)),
+                (
+                    second.clone(),
+                    recorded_session_for_test("session-2", &path),
+                ),
+            ],
+            [first.clone(), second.clone()],
+        );
+
+        let restored = restored_panes_with_armed_resume(
+            &mut app,
+            vec![
+                local_pane_snapshot_for_test(&first.0, Some(&path)),
+                local_pane_snapshot_for_test(&second.0, Some(&path)),
+            ],
+            restore,
+        );
+
+        assert_eq!(
+            restored,
+            vec![
+                (
+                    first.0.clone(),
+                    Some(format!(
+                        "claude --resume 'session-1' # {RESUME_HISTORY_MARKER}"
+                    ))
+                ),
+                (
+                    second.0.clone(),
+                    Some(format!(
+                        "claude --resume 'session-2' # {RESUME_HISTORY_MARKER}"
+                    ))
+                ),
+            ]
+        );
+    });
+}
+
+/// With the feature off, an eligible pane restores exactly as it does today: a bare shell.
+#[test]
+fn no_resume_is_armed_while_the_feature_is_off() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().to_path_buf();
+
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(false);
+        initialize_app(&mut app);
+
+        let pane = PaneUuid(vec![7]);
+        let restore = startup_restore_for_test(
+            [(pane.clone(), recorded_session_for_test("session-1", &path))],
+            [pane.clone()],
+        );
+
+        let restored = restored_panes_with_armed_resume(
+            &mut app,
+            vec![local_pane_snapshot_for_test(&pane.0, Some(&path))],
+            restore,
+        );
+
+        assert_eq!(restored, vec![(pane.0.clone(), None)]);
+    });
+}
+
+/// R8: an eligible pane restores the same pane tree an unrecorded one does. The invocation is
+/// something the pane runs on top of what it restored, not a different restore.
+#[test]
+fn an_eligible_pane_restores_the_same_way_an_unrecorded_one_does() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().to_path_buf();
+
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+
+        let pane = PaneUuid(vec![9]);
+        let snapshot = || vec![local_pane_snapshot_for_test(&pane.0, Some(&path))];
+
+        let with_resume = restored_panes_with_armed_resume(
+            &mut app,
+            snapshot(),
+            startup_restore_for_test(
+                [(pane.clone(), recorded_session_for_test("session-1", &path))],
+                [pane.clone()],
+            ),
+        );
+        let without_recording =
+            restored_panes_with_armed_resume(&mut app, snapshot(), AgentSessionRestore::default());
+
+        assert_eq!(
+            with_resume.iter().map(|(uuid, _)| uuid).collect::<Vec<_>>(),
+            without_recording
+                .iter()
+                .map(|(uuid, _)| uuid)
+                .collect::<Vec<_>>(),
+            "the restored pane tree must not depend on whether a resume is armed"
+        );
+        assert!(with_resume[0].1.is_some());
+        assert!(without_recording[0].1.is_none());
     });
 }

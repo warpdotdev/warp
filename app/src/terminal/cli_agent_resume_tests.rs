@@ -1,3 +1,6 @@
+use std::time::Duration;
+
+use chrono::{NaiveDate, NaiveDateTime, TimeDelta};
 use enum_iterator::all;
 
 use super::*;
@@ -17,7 +20,12 @@ fn flag(name: &str, value: Option<&str>) -> RecordedFlag {
 
 fn claude_command(flags: &[RecordedFlag]) -> String {
     declarations()
-        .build_resume_command(CLIAgent::Claude, SESSION_ID, flags)
+        .build_resume_command(
+            CLIAgent::Claude,
+            SESSION_ID,
+            flags,
+            PermissionPosture::Carry,
+        )
         .expect("Claude is declared and the identifier is well formed")
 }
 
@@ -56,7 +64,7 @@ fn agents_without_a_verified_resume_are_undeclared() {
             "{agent:?} must stay undeclared"
         );
         assert_eq!(
-            declarations().build_resume_command(agent, SESSION_ID, &[]),
+            declarations().build_resume_command(agent, SESSION_ID, &[], PermissionPosture::Carry),
             None,
             "{agent:?} must not build any invocation"
         );
@@ -180,7 +188,12 @@ fn flag_form_agent_builds_a_resume_flag_invocation() {
 #[test]
 fn subcommand_form_agent_builds_a_resume_subcommand_invocation() {
     assert_eq!(
-        declarations().build_resume_command(CLIAgent::Codex, SESSION_ID, &[]),
+        declarations().build_resume_command(
+            CLIAgent::Codex,
+            SESSION_ID,
+            &[],
+            PermissionPosture::Carry
+        ),
         Some(format!(
             "codex resume '{SESSION_ID}' # {RESUME_HISTORY_MARKER}"
         ))
@@ -216,7 +229,7 @@ fn recorded_permission_bypass_flag_is_carried_verbatim() {
 fn builder_adds_no_flag_of_its_own() {
     let command = claude_command(&[]);
     let codex_command = declarations()
-        .build_resume_command(CLIAgent::Codex, SESSION_ID, &[])
+        .build_resume_command(CLIAgent::Codex, SESSION_ID, &[], PermissionPosture::Carry)
         .expect("Codex is declared");
 
     for unwanted in [
@@ -309,7 +322,12 @@ fn unusable_identifier_yields_no_command() {
 
     for identifier in unusable {
         assert_eq!(
-            declarations().build_resume_command(CLIAgent::Claude, identifier, &[]),
+            declarations().build_resume_command(
+                CLIAgent::Claude,
+                identifier,
+                &[],
+                PermissionPosture::Carry
+            ),
             None,
             "identifier {identifier:?} must yield no command at all"
         );
@@ -317,7 +335,8 @@ fn unusable_identifier_yields_no_command() {
             declarations().build_resume_command(
                 CLIAgent::Claude,
                 identifier,
-                &[flag("--dangerously-skip-permissions", None)]
+                &[flag("--dangerously-skip-permissions", None)],
+                PermissionPosture::Carry
             ),
             None,
             "identifier {identifier:?} must yield no command even with valid flags"
@@ -473,7 +492,8 @@ identifier = { shape = "bare_token", max_length = 128 }
         declarations.build_resume_command(
             CLIAgent::Claude,
             SESSION_ID,
-            &[flag("--permissionMode", Some("plan"))]
+            &[flag("--permissionMode", Some("plan"))],
+            PermissionPosture::Carry
         ),
         Some(format!(
             "claude --permission-mode 'plan' --resume '{SESSION_ID}' # {RESUME_HISTORY_MARKER}"
@@ -488,5 +508,149 @@ fn extractor_yields_nothing_for_an_undeclared_agent() {
         declarations()
             .extract_resume_flags(CLIAgent::Gemini, &["--model", "gemini-3-pro"])
             .is_empty()
+    );
+}
+
+/// The recording timestamps the window is measured against, expressed as an age.
+fn observed_hours_ago(hours: i64) -> (NaiveDateTime, NaiveDateTime) {
+    let now = NaiveDate::from_ymd_opt(2026, 8, 11)
+        .expect("date should be valid")
+        .and_hms_opt(21, 0, 0)
+        .expect("time should be valid");
+    (now - TimeDelta::hours(hours), now)
+}
+
+/// AE17: state carrying a permission-bypass flag, last observed outside the freshness window,
+/// resumes the same conversation without the bypass.
+#[test]
+fn stale_recording_resumes_the_same_session_without_its_permission_posture() {
+    let (observed_at, now) = observed_hours_ago(13);
+    let posture = PermissionPosture::for_observation(observed_at, now);
+
+    let command = declarations()
+        .build_resume_command(
+            CLIAgent::Claude,
+            SESSION_ID,
+            &[
+                flag("--dangerously-skip-permissions", None),
+                flag("--model", Some("sonnet")),
+            ],
+            posture,
+        )
+        .expect("a stale posture must still produce a resume");
+
+    assert_eq!(
+        command,
+        format!("claude --model 'sonnet' --resume '{SESSION_ID}' # {RESUME_HISTORY_MARKER}"),
+        "the pane still resumes its conversation, just without the elevation"
+    );
+}
+
+/// AE6: the same recording, observed inside the window, keeps the posture the user chose.
+#[test]
+fn fresh_recording_keeps_its_permission_posture() {
+    let (observed_at, now) = observed_hours_ago(11);
+    let posture = PermissionPosture::for_observation(observed_at, now);
+
+    assert_eq!(posture, PermissionPosture::Carry);
+    assert_eq!(
+        declarations().build_resume_command(
+            CLIAgent::Claude,
+            SESSION_ID,
+            &[flag("--dangerously-skip-permissions", None)],
+            posture,
+        ),
+        Some(format!(
+            "claude --dangerously-skip-permissions --resume '{SESSION_ID}' # {RESUME_HISTORY_MARKER}"
+        ))
+    );
+}
+
+/// Both sides of the boundary itself, so the window is a real bound rather than a rounding.
+#[test]
+fn freshness_window_is_bounded_at_twelve_hours() {
+    assert_eq!(
+        PERMISSION_POSTURE_FRESHNESS,
+        Duration::from_secs(12 * 60 * 60)
+    );
+
+    let (at_the_bound, now) = observed_hours_ago(12);
+    assert_eq!(
+        PermissionPosture::for_observation(at_the_bound, now),
+        PermissionPosture::Carry,
+        "state observed exactly at the bound is still inside the window"
+    );
+    assert_eq!(
+        PermissionPosture::for_observation(at_the_bound - TimeDelta::seconds(1), now),
+        PermissionPosture::Drop,
+        "one second past the bound is outside it"
+    );
+}
+
+/// A clock that moved backwards cannot vouch for an age, and an unverifiable age is not a fresh
+/// one. Otherwise a stale recording could be revived by moving the machine clock back.
+#[test]
+fn recording_from_the_future_is_not_treated_as_fresh() {
+    let (_, now) = observed_hours_ago(0);
+
+    assert_eq!(
+        PermissionPosture::for_observation(now + TimeDelta::hours(1), now),
+        PermissionPosture::Drop
+    );
+}
+
+/// Posture is a property of the flag, not of whether it carries a value: `--permission-mode`
+/// chooses a posture just as much as the bypass switch does.
+#[test]
+fn stale_recording_drops_a_valued_permission_posture_flag() {
+    let (observed_at, now) = observed_hours_ago(13);
+    let posture = PermissionPosture::for_observation(observed_at, now);
+
+    assert_eq!(
+        declarations().build_resume_command(
+            CLIAgent::Claude,
+            SESSION_ID,
+            &[flag("--permission-mode", Some("bypassPermissions"))],
+            posture,
+        ),
+        Some(format!(
+            "claude --resume '{SESSION_ID}' # {RESUME_HISTORY_MARKER}"
+        ))
+    );
+}
+
+#[test]
+fn stale_recording_drops_the_codex_bypass_flag() {
+    let (observed_at, now) = observed_hours_ago(24);
+    let posture = PermissionPosture::for_observation(observed_at, now);
+
+    assert_eq!(
+        declarations().build_resume_command(
+            CLIAgent::Codex,
+            SESSION_ID,
+            &[flag("--dangerously-bypass-approvals-and-sandbox", None)],
+            posture,
+        ),
+        Some(format!(
+            "codex resume '{SESSION_ID}' # {RESUME_HISTORY_MARKER}"
+        ))
+    );
+}
+
+/// The permission-posture set is spelled out here so that adding a flag to the declaration file
+/// has to be a deliberate R22 decision rather than a silent one: a new posture flag fails this
+/// test until it is acknowledged, and un-marking an existing one fails it too.
+#[test]
+fn declared_permission_posture_flags_are_exactly_the_acknowledged_ones() {
+    let mut claude = declarations().permission_posture_flags(CLIAgent::Claude);
+    claude.sort_unstable();
+    assert_eq!(
+        claude,
+        vec!["--dangerously-skip-permissions", "--permission-mode"]
+    );
+
+    assert_eq!(
+        declarations().permission_posture_flags(CLIAgent::Codex),
+        vec!["--dangerously-bypass-approvals-and-sandbox"]
     );
 }

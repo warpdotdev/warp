@@ -7214,7 +7214,7 @@ fn completed_user_controlled_lrc_resumes_when_not_suppressed() {
                     .has_active_stream_for_conversation(conversation_id, ctx)
             );
 
-            view.on_user_block_completed(&block_id, ctx);
+            view.on_user_block_completed(&block_id, /*was_user_authored=*/ true, ctx);
 
             // A Ctrl-C takeover (Stop) without an explicit teardown should resume the
             // conversation once the command completes, just like a manual takeover.
@@ -7263,7 +7263,7 @@ fn completed_user_controlled_lrc_skips_resume_when_suppressed() {
                 active_block.id().clone()
             };
 
-            view.on_user_block_completed(&block_id, ctx);
+            view.on_user_block_completed(&block_id, /*was_user_authored=*/ true, ctx);
 
             assert!(
                 !view
@@ -10097,6 +10097,7 @@ fn completed_user_block(command: &str) -> BlockType {
         output_truncated: String::new(),
         output_truncated_with_obfuscated_secrets: String::new(),
         was_part_of_agent_interaction: false,
+        was_warp_authored: false,
         started_at: None,
         num_output_lines: 0,
         num_output_lines_truncated: 0,
@@ -10397,5 +10398,144 @@ fn back_button_label_resolves_token_only_parent_linkage() {
                 "for Orchestrator",
             );
         });
+    });
+}
+
+/// The same completed block, but authored by Warp rather than by the person at the keyboard.
+fn completed_resume_block(command: &str) -> BlockType {
+    let BlockType::User(mut block) = completed_user_block(command) else {
+        unreachable!("completed_user_block builds a user block")
+    };
+    block.was_warp_authored = true;
+    BlockType::User(block)
+}
+
+/// AE14/R24: the AI-analytics consent banner is spent by the user's first completed block, and a
+/// resume is not that block. The contrast run proves the dismissal still happens for a real one.
+#[test]
+fn resume_block_does_not_dismiss_the_ai_analytics_banner() {
+    App::test((), |mut app| async move {
+        let _banner_flag = FeatureFlag::GlobalAIAnalyticsBanner.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            emit_block_completed(
+                completed_resume_block("claude --resume 'session-1'"),
+                view,
+                ctx,
+            );
+        });
+        terminal.read(&app, |_, ctx| {
+            assert!(
+                !GeneralSettings::as_ref(ctx)
+                    .telemetry_banner_dismissed
+                    .value(),
+                "a resume must not spend the user's one-time consent banner"
+            );
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            emit_block_completed(completed_user_block("ls"), view, ctx);
+        });
+        terminal.read(&app, |_, ctx| {
+            assert!(
+                GeneralSettings::as_ref(ctx)
+                    .telemetry_banner_dismissed
+                    .value(),
+                "the user's own first block still dismisses it"
+            );
+        });
+    });
+}
+
+/// R24: onboarding is interrupted by the user running something, so it must survive a line the
+/// user never ran.
+#[test]
+fn resume_execution_does_not_interrupt_onboarding() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let session_id = terminal
+            .read(&app, |view, _| {
+                view.model.lock().block_list().active_block().session_id()
+            })
+            .unwrap_or_else(|| 0.into());
+
+        let emit_execute = |app: &mut App, source: CommandExecutionSource| {
+            input.update(app, move |_, ctx| {
+                ctx.emit(crate::terminal::input::Event::ExecuteCommand(Box::new(
+                    ExecuteCommandEvent {
+                        command: "claude --resume 'session-1'".to_owned(),
+                        session_id,
+                        workflow_id: None,
+                        workflow_command: None,
+                        should_add_command_to_history: false,
+                        source,
+                    },
+                )));
+            });
+        };
+
+        terminal.update(&mut app, |view, _| {
+            view.block_onboarding_active = true;
+        });
+        emit_execute(&mut app, CommandExecutionSource::AgentSessionResume);
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.block_onboarding_active,
+                "a resume must not interrupt the onboarding blocks"
+            );
+        });
+
+        emit_execute(&mut app, CommandExecutionSource::User);
+        terminal.read(&app, |view, _| {
+            assert!(
+                !view.block_onboarding_active,
+                "the user running something still interrupts onboarding"
+            );
+        });
+    });
+}
+
+/// The input-buffer clear is one of the consumers that keys off a completed user block. A resume
+/// completing must leave a draft the user is composing exactly where it was.
+#[test]
+fn resume_block_completing_leaves_a_draft_alone() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("half-typed follow-up", ctx);
+        });
+        // The clear only runs once per block, so each case needs a block of its own to complete.
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_block("claude", "");
+            emit_block_completed(
+                completed_resume_block("claude --resume 'session-1'"),
+                view,
+                ctx,
+            );
+        });
+        assert_eq!(
+            input.read(&app, |input, ctx| input.buffer_text(ctx)),
+            "half-typed follow-up",
+            "a resume completing must not reinitialize the user's buffer"
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_block("ls", "");
+            emit_block_completed(completed_user_block("ls"), view, ctx);
+        });
+        assert_eq!(
+            input.read(&app, |input, ctx| input.buffer_text(ctx)),
+            "",
+            "a user command completing still clears the buffer"
+        );
     });
 }

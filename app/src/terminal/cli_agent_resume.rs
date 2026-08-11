@@ -14,7 +14,9 @@
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
+use std::time::Duration;
 
+use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use warp_errors::report_error;
 
@@ -29,6 +31,40 @@ use crate::terminal::CLIAgent;
 pub const RESUME_HISTORY_MARKER: &str = "warp_resume_agent_session";
 
 const EMBEDDED_DECLARATIONS: &str = include_str!("../../resources/cli_agent_resume/agents.toml");
+
+/// How recently the recorded state must have been observed for its permission-posture flags to
+/// ride along into the resume. Past this, the pane still resumes — just at the posture the agent
+/// defaults to.
+///
+/// Provisional: 12 hours is a placeholder pending field data on how long a pane realistically sits
+/// between the last observation and the restart. The shipped value is a rollout decision, not an
+/// implementation one.
+pub const PERMISSION_POSTURE_FRESHNESS: Duration = Duration::from_secs(12 * 60 * 60);
+
+/// Whether the permission posture recorded alongside a session is still the user's live choice.
+///
+/// The user's own invocation is the authority on the posture it ran at, but that authority
+/// expires: a pane whose recording is a week old is not a window the user is still standing in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionPosture {
+    /// Observed inside [`PERMISSION_POSTURE_FRESHNESS`]: carry the flags the user chose.
+    Carry,
+    /// Observed outside it, or at an age no clock can vouch for. Resume without them.
+    Drop,
+}
+
+impl PermissionPosture {
+    /// The posture for state last observed at `observed_at`, judged against `now`.
+    pub fn for_observation(observed_at: NaiveDateTime, now: NaiveDateTime) -> Self {
+        match (now - observed_at).to_std() {
+            Ok(age) if age <= PERMISSION_POSTURE_FRESHNESS => PermissionPosture::Carry,
+            // A negative age means the clock moved backwards between the recording and this
+            // restart, so nothing here can vouch for how old the recording is. An age that
+            // cannot be verified is not a fresh one.
+            _ => PermissionPosture::Drop,
+        }
+    }
+}
 
 /// Characters a [`ValueShape::BareToken`] may contain on top of ASCII alphanumerics.
 const BARE_TOKEN_PUNCTUATION: &[char] = &['.', '_', '-', '+', ':', '@'];
@@ -120,6 +156,10 @@ struct RawValue {
     max_length: Option<usize>,
     #[serde(default)]
     aliases: Vec<String>,
+    /// Whether this flag chooses the agent's permission posture rather than describing the
+    /// session. Declared per flag because only the allowlist knows which spelling elevates.
+    #[serde(default)]
+    permission_posture: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,6 +190,7 @@ enum ResumeInvocation {
 struct ValueDeclaration {
     shape: ValueShape,
     max_length: usize,
+    permission_posture: bool,
 }
 
 impl ValueDeclaration {
@@ -284,15 +325,30 @@ impl ResumeDeclarations {
     }
 
     /// The shell command that reattaches `agent` to `identifier`, carrying whichever of
-    /// `flags` still validate.
+    /// `flags` still validate and `posture` still admits.
     ///
     /// Returns `None` when the agent is undeclared or the resume pointer itself fails
-    /// its declared shape: without a usable pointer there is no invocation to salvage.
+    /// its declared shape: without a usable pointer there is no invocation to salvage. A
+    /// [`PermissionPosture::Drop`] never costs the resume, only the elevation.
+    /// The allowlisted flags `agent` declares as choosing a permission posture.
+    pub fn permission_posture_flags(&self, agent: CLIAgent) -> Vec<&str> {
+        let Some(declaration) = self.agents.get(&agent) else {
+            return Vec::new();
+        };
+        declaration
+            .flags
+            .iter()
+            .filter(|(_, declared)| declared.permission_posture)
+            .map(|(name, _)| name.as_str())
+            .collect()
+    }
+
     pub fn build_resume_command(
         &self,
         agent: CLIAgent,
         identifier: &str,
         flags: &[RecordedFlag],
+        posture: PermissionPosture,
     ) -> Option<String> {
         let declaration = self.agents.get(&agent)?;
         if !declaration.identifier.accepts(identifier) {
@@ -314,6 +370,11 @@ impl ResumeDeclarations {
             let Some(declared) = declaration.flags.get(name) else {
                 continue;
             };
+            // R22: an elevation the user chose is theirs to keep only while the observation
+            // behind it is recent. Past the window the flag goes and the resume stays.
+            if declared.permission_posture && posture == PermissionPosture::Drop {
+                continue;
+            }
             match (declared.shape, flag.value.as_deref()) {
                 (ValueShape::Boolean, None) => {
                     command.push(' ');
@@ -359,6 +420,11 @@ impl AgentDeclaration {
         };
         if !raw.identifier.aliases.is_empty() {
             return Err(invalid_identifier("an identifier is not spelled as a flag"));
+        }
+        if raw.identifier.permission_posture {
+            return Err(invalid_identifier(
+                "a session pointer chooses no permission posture",
+            ));
         }
         let identifier = ValueDeclaration::build(name, "identifier", raw.identifier)?;
         if identifier.shape == ValueShape::Boolean {
@@ -448,6 +514,7 @@ impl ValueDeclaration {
         Ok(ValueDeclaration {
             shape: raw.shape,
             max_length,
+            permission_posture: raw.permission_posture,
         })
     }
 }
