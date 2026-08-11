@@ -72,7 +72,7 @@ use crate::interval_timer::IntervalTimer;
 use crate::launch_configs::launch_config;
 use crate::linear::LinearIssueWork;
 use crate::notebooks::manager::NotebookSource;
-use crate::pane_group::{NewTerminalOptions, PanesLayout};
+use crate::pane_group::{NewTerminalOptions, PanesLayout, resolve_agent_session_claims};
 use crate::persistence::ModelEvent;
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -768,8 +768,17 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
             let mut normal_window_count = 0;
             // This is the one restore pass that may resume agents; tabs restored from a snapshot
             // later in the session go through the same code with this left unset.
+            //
+            // Claims are resolved here, ahead of the window loop, because this is the only point
+            // that sees every window: each window below is its own `add_window` call, and the
+            // window the user lands in is created last.
             let agent_restore = AgentSessionRestore {
                 sessions: app_state.agent_sessions.clone(),
+                claimed_panes: Arc::new(resolve_agent_session_claims(
+                    &app_state.windows,
+                    app_state.active_window_index,
+                    &app_state.agent_sessions,
+                )),
                 is_startup_restore: true,
             };
             for (idx, window) in app_state.windows.iter().enumerate() {

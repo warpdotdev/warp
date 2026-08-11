@@ -4003,6 +4003,7 @@ fn restored_terminal_pane_reports_the_uuid_its_recorded_session_is_keyed_by() {
                 PaneUuid(pane_uuid.clone()),
                 recorded.clone(),
             )])),
+            claimed_panes: Arc::new(HashSet::from([PaneUuid(pane_uuid.clone())])),
             is_startup_restore: true,
         };
 
@@ -4055,5 +4056,540 @@ fn restored_terminal_pane_reports_the_uuid_its_recorded_session_is_keyed_by() {
             agent_restore.recorded_on_startup(&PaneUuid(reported_uuid)),
             Some(&recorded)
         );
+    });
+}
+
+/// A recording for a pane that was running Claude in `directory` under `session_id`.
+fn recorded_session_for_test(session_id: &str, directory: &Path) -> RecordedAgentSession {
+    RecordedAgentSession {
+        agent: crate::terminal::CLIAgent::Claude,
+        session_id: session_id.to_owned(),
+        flags: vec![],
+        directory: directory.to_path_buf(),
+        observed_at: chrono::NaiveDate::from_ymd_opt(2026, 8, 11)
+            .expect("date should be valid")
+            .and_hms_opt(9, 30, 0)
+            .expect("time should be valid"),
+    }
+}
+
+/// A snapshot of a first-party local terminal pane that came up in `cwd`. A local pane always
+/// carries an input config and a cwd; the branches that null either belong to panes the gate has
+/// to reject.
+fn local_pane_snapshot_for_test(uuid: &[u8], cwd: Option<&Path>) -> TerminalPaneSnapshot {
+    TerminalPaneSnapshot {
+        uuid: uuid.to_vec(),
+        cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
+        shell_launch_data: None,
+        is_active: true,
+        is_read_only: false,
+        input_config: Some(InputConfig {
+            input_type: crate::ai::blocklist::InputType::Shell,
+            is_locked: false,
+        }),
+        llm_model_override: None,
+        active_profile_id: None,
+        conversation_ids_to_restore: vec![],
+        active_conversation_id: None,
+    }
+}
+
+fn startup_restore_for_test(
+    sessions: impl IntoIterator<Item = (PaneUuid, RecordedAgentSession)>,
+    claimed_panes: impl IntoIterator<Item = PaneUuid>,
+) -> AgentSessionRestore {
+    AgentSessionRestore {
+        sessions: Arc::new(sessions.into_iter().collect()),
+        claimed_panes: Arc::new(claimed_panes.into_iter().collect()),
+        is_startup_restore: true,
+    }
+}
+
+/// A window snapshot holding `panes` in one tab, so claim resolution has a window layout to
+/// reason about without a window existing.
+fn window_snapshot_for_test(panes: Vec<TerminalPaneSnapshot>) -> WindowSnapshot {
+    WindowSnapshot {
+        tabs: vec![crate::app_state::TabSnapshot {
+            custom_title: None,
+            root: PaneNodeSnapshot::Branch(BranchSnapshot {
+                direction: crate::app_state::SplitDirection::Horizontal,
+                children: panes
+                    .into_iter()
+                    .map(|pane| {
+                        (
+                            crate::app_state::PaneFlex(1.),
+                            PaneNodeSnapshot::Leaf(LeafSnapshot {
+                                is_focused: false,
+                                custom_vertical_tabs_title: None,
+                                contents: LeafContents::Terminal(pane),
+                            }),
+                        )
+                    })
+                    .collect(),
+            }),
+            default_directory_color: None,
+            selected_color: Default::default(),
+            left_panel: None,
+            right_panel: None,
+            group_id: None,
+            pinned: false,
+        }],
+        active_tab_index: 0,
+        team_uid: None,
+        bounds: None,
+        fullscreen_state: Default::default(),
+        quake_mode: false,
+        universal_search_width: None,
+        warp_ai_width: None,
+        voltron_width: None,
+        warp_drive_index_width: None,
+        left_panel_open: false,
+        vertical_tabs_panel_open: false,
+        left_panel_width: None,
+        right_panel_width: None,
+        agent_management_filters: None,
+        tab_groups: vec![],
+    }
+}
+
+// AE8: a pane recorded in a git worktree that was deleted before the restart restores as a plain
+// shell. Resuming would run the agent in the fallback directory, which is not where it was.
+#[test]
+fn resume_is_ineligible_when_the_recorded_directory_no_longer_exists() {
+    let worktree = tempfile::tempdir().expect("temp dir");
+    let recorded_directory = worktree.path().to_path_buf();
+    let pane_uuid = PaneUuid(vec![1]);
+    let agent_restore = startup_restore_for_test(
+        [(
+            pane_uuid.clone(),
+            recorded_session_for_test("session-1", &recorded_directory),
+        )],
+        [pane_uuid.clone()],
+    );
+    let snapshot = local_pane_snapshot_for_test(&pane_uuid.0, Some(&recorded_directory));
+    worktree.close().expect("the worktree should be removable");
+
+    assert_eq!(
+        resume_eligibility(&agent_restore, &pane_uuid, &snapshot, None),
+        Err(ResumeIneligibility::RecordedDirectoryMissing)
+    );
+}
+
+// AE12: the recorded directory still resolves, but the pane's shell came up somewhere else, so
+// the session belongs to a directory this pane is not in.
+#[test]
+fn resume_is_ineligible_when_the_pane_restored_into_another_directory() {
+    let recorded_directory = tempfile::tempdir().expect("temp dir");
+    let restored_directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let agent_restore = startup_restore_for_test(
+        [(
+            pane_uuid.clone(),
+            recorded_session_for_test("session-1", recorded_directory.path()),
+        )],
+        [pane_uuid.clone()],
+    );
+    let snapshot = local_pane_snapshot_for_test(&pane_uuid.0, Some(restored_directory.path()));
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &pane_uuid,
+            &snapshot,
+            Some(restored_directory.path())
+        ),
+        Err(ResumeIneligibility::RestoredElsewhere)
+    );
+}
+
+// A pane that came up in the directory its session was recorded in is the only shape that
+// resumes, so the gate has to say yes to it.
+#[test]
+fn resume_is_eligible_when_the_pane_restored_into_its_recorded_directory() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let recorded = recorded_session_for_test("session-1", directory.path());
+    let agent_restore =
+        startup_restore_for_test([(pane_uuid.clone(), recorded.clone())], [pane_uuid.clone()]);
+    let snapshot = local_pane_snapshot_for_test(&pane_uuid.0, Some(directory.path()));
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &pane_uuid,
+            &snapshot,
+            Some(directory.path())
+        ),
+        Ok(&recorded)
+    );
+}
+
+// AE9: two panes in different windows recorded one identifier. The claim is resolved over the
+// whole store before any window is created — this test creates none — and it goes to the pane in
+// the window the user lands in, which restore creates last.
+#[test]
+fn resume_claims_go_to_the_pane_in_the_window_the_user_lands_in() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let background_pane = PaneUuid(vec![1]);
+    let landing_pane = PaneUuid(vec![2]);
+    let undisputed_pane = PaneUuid(vec![3]);
+    let sessions = HashMap::from([
+        (
+            background_pane.clone(),
+            recorded_session_for_test("shared", directory.path()),
+        ),
+        (
+            landing_pane.clone(),
+            recorded_session_for_test("shared", directory.path()),
+        ),
+        (
+            undisputed_pane.clone(),
+            recorded_session_for_test("its-own", directory.path()),
+        ),
+    ]);
+    let windows = vec![
+        window_snapshot_for_test(vec![
+            local_pane_snapshot_for_test(&background_pane.0, Some(directory.path())),
+            local_pane_snapshot_for_test(&undisputed_pane.0, Some(directory.path())),
+        ]),
+        window_snapshot_for_test(vec![local_pane_snapshot_for_test(
+            &landing_pane.0,
+            Some(directory.path()),
+        )]),
+    ];
+
+    let claims = resolve_agent_session_claims(&windows, Some(1), &sessions);
+
+    assert_eq!(
+        claims,
+        HashSet::from([landing_pane.clone(), undisputed_pane.clone()]),
+        "the disputed identifier goes to the landing window, and an undisputed one is untouched"
+    );
+
+    // The landing window is not a position in the list: with the same layout landing elsewhere,
+    // the identifier follows the user rather than the restore order.
+    let claims = resolve_agent_session_claims(&windows, Some(0), &sessions);
+
+    assert_eq!(claims, HashSet::from([background_pane, undisputed_pane]));
+}
+
+// AE9: exactly one pane resumes per identifier, so the pane that lost the claim is ineligible
+// even though everything about the pane itself is fine.
+#[test]
+fn resume_is_ineligible_for_the_pane_that_lost_a_duplicated_identifier() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let losing_pane = PaneUuid(vec![1]);
+    let winning_pane = PaneUuid(vec![2]);
+    let agent_restore = startup_restore_for_test(
+        [
+            (
+                losing_pane.clone(),
+                recorded_session_for_test("shared", directory.path()),
+            ),
+            (
+                winning_pane.clone(),
+                recorded_session_for_test("shared", directory.path()),
+            ),
+        ],
+        [winning_pane.clone()],
+    );
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &losing_pane,
+            &local_pane_snapshot_for_test(&losing_pane.0, Some(directory.path())),
+            Some(directory.path())
+        ),
+        Err(ResumeIneligibility::IdentifierClaimedByAnotherPane)
+    );
+    assert!(
+        resume_eligibility(
+            &agent_restore,
+            &winning_pane,
+            &local_pane_snapshot_for_test(&winning_pane.0, Some(directory.path())),
+            Some(directory.path())
+        )
+        .is_ok(),
+        "the pane that won the identifier still resumes"
+    );
+}
+
+// AE4: a pane running a recognized agent that never reported an identifier has nothing to
+// reattach to, and Warp picks a session on no other basis.
+#[test]
+fn resume_is_ineligible_without_a_recorded_identifier() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let mut recorded = recorded_session_for_test("", directory.path());
+    recorded.session_id = String::new();
+    let agent_restore =
+        startup_restore_for_test([(pane_uuid.clone(), recorded)], [pane_uuid.clone()]);
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &pane_uuid,
+            &local_pane_snapshot_for_test(&pane_uuid.0, Some(directory.path())),
+            Some(directory.path())
+        ),
+        Err(ResumeIneligibility::NoSessionIdentifier)
+    );
+}
+
+// An agent with no resume declaration has no invocation that reattaches, so a recording for it
+// can only be dropped.
+#[test]
+fn resume_is_ineligible_for_an_agent_without_a_resume_declaration() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let mut recorded = recorded_session_for_test("session-1", directory.path());
+    recorded.agent = crate::terminal::CLIAgent::Gemini;
+    let agent_restore =
+        startup_restore_for_test([(pane_uuid.clone(), recorded)], [pane_uuid.clone()]);
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &pane_uuid,
+            &local_pane_snapshot_for_test(&pane_uuid.0, Some(directory.path())),
+            Some(directory.path())
+        ),
+        Err(ResumeIneligibility::AgentNotDeclared)
+    );
+}
+
+// R16: a pane whose session ran over SSH restores as a local shell, where the recorded
+// identifier means nothing. The save path proves locality by writing a cwd only for a local
+// session, so a snapshot without one is not a pane to resume in.
+#[test]
+fn resume_is_ineligible_for_a_pane_whose_session_was_not_local() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let agent_restore = startup_restore_for_test(
+        [(
+            pane_uuid.clone(),
+            recorded_session_for_test("session-1", directory.path()),
+        )],
+        [pane_uuid.clone()],
+    );
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &pane_uuid,
+            &local_pane_snapshot_for_test(&pane_uuid.0, None),
+            None
+        ),
+        Err(ResumeIneligibility::SessionNotLocal)
+    );
+}
+
+// A viewer of someone else's shared session never ran the agent locally. Its snapshot is written
+// by the viewer branch, which carries no input config.
+#[test]
+fn resume_is_ineligible_for_a_shared_session_viewer_pane() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let agent_restore = startup_restore_for_test(
+        [(
+            pane_uuid.clone(),
+            recorded_session_for_test("session-1", directory.path()),
+        )],
+        [pane_uuid.clone()],
+    );
+    let mut snapshot = local_pane_snapshot_for_test(&pane_uuid.0, Some(directory.path()));
+    snapshot.input_config = None;
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &pane_uuid,
+            &snapshot,
+            Some(directory.path())
+        ),
+        Err(ResumeIneligibility::SharedSessionViewer)
+    );
+}
+
+// A tab restored from a snapshot mid-session reaches the same restore path as startup. Resuming
+// there would relaunch an agent the user never lost.
+#[test]
+fn resume_is_ineligible_outside_the_startup_restore_pass() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let agent_restore = AgentSessionRestore {
+        is_startup_restore: false,
+        ..startup_restore_for_test(
+            [(
+                pane_uuid.clone(),
+                recorded_session_for_test("session-1", directory.path()),
+            )],
+            [pane_uuid.clone()],
+        )
+    };
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &pane_uuid,
+            &local_pane_snapshot_for_test(&pane_uuid.0, Some(directory.path())),
+            Some(directory.path())
+        ),
+        Err(ResumeIneligibility::NotStartupRestore)
+    );
+}
+
+// U8 reports why a resume did not happen, which is only worth reporting if each rejection is its
+// own reason: a gate that answered with one "not eligible" would make every cause look alike.
+#[test]
+fn every_resume_rejection_carries_its_own_reason() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let unrecorded_pane = PaneUuid(vec![9]);
+    let recorded = recorded_session_for_test("session-1", directory.path());
+    let local_snapshot = local_pane_snapshot_for_test(&pane_uuid.0, Some(directory.path()));
+
+    let mut viewer_snapshot = local_snapshot.clone();
+    viewer_snapshot.input_config = None;
+    let mut without_identifier = recorded.clone();
+    without_identifier.session_id = String::new();
+    let mut undeclared_agent = recorded.clone();
+    undeclared_agent.agent = crate::terminal::CLIAgent::Gemini;
+    let missing_directory = recorded_session_for_test("session-1", &directory.path().join("gone"));
+
+    let claimed =
+        startup_restore_for_test([(pane_uuid.clone(), recorded.clone())], [pane_uuid.clone()]);
+    let reject = |restore: &AgentSessionRestore,
+                  pane: &PaneUuid,
+                  snapshot: &TerminalPaneSnapshot,
+                  restored_directory: Option<&Path>| {
+        resume_eligibility(restore, pane, snapshot, restored_directory)
+            .expect_err("every case here should be rejected")
+    };
+
+    let reasons = vec![
+        reject(&claimed, &unrecorded_pane, &local_snapshot, None),
+        reject(
+            &AgentSessionRestore {
+                is_startup_restore: false,
+                ..claimed.clone()
+            },
+            &pane_uuid,
+            &local_snapshot,
+            Some(directory.path()),
+        ),
+        reject(
+            &startup_restore_for_test(
+                [(pane_uuid.clone(), without_identifier)],
+                [pane_uuid.clone()],
+            ),
+            &pane_uuid,
+            &local_snapshot,
+            Some(directory.path()),
+        ),
+        reject(
+            &startup_restore_for_test([(pane_uuid.clone(), undeclared_agent)], [pane_uuid.clone()]),
+            &pane_uuid,
+            &local_snapshot,
+            Some(directory.path()),
+        ),
+        reject(
+            &claimed,
+            &pane_uuid,
+            &viewer_snapshot,
+            Some(directory.path()),
+        ),
+        reject(
+            &claimed,
+            &pane_uuid,
+            &local_pane_snapshot_for_test(&pane_uuid.0, None),
+            None,
+        ),
+        reject(
+            &startup_restore_for_test(
+                [(pane_uuid.clone(), missing_directory)],
+                [pane_uuid.clone()],
+            ),
+            &pane_uuid,
+            &local_snapshot,
+            Some(directory.path()),
+        ),
+        reject(&claimed, &pane_uuid, &local_snapshot, None),
+        reject(
+            &startup_restore_for_test([(pane_uuid.clone(), recorded)], []),
+            &pane_uuid,
+            &local_snapshot,
+            Some(directory.path()),
+        ),
+    ];
+
+    let distinct: HashSet<ResumeIneligibility> = reasons.iter().copied().collect();
+    assert_eq!(
+        distinct.len(),
+        reasons.len(),
+        "each rejection should report a different reason, got {reasons:?}"
+    );
+}
+
+// R10: an ineligible pane restores exactly as it does today. Nothing about the restored pane may
+// hint that a session was skipped, so the pane tree has to come back the way it does with no
+// recording at all.
+#[test]
+fn an_ineligible_recorded_session_restores_the_pane_unchanged() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let pane_uuid = vec![4, 2];
+        let agent_restore = startup_restore_for_test(
+            [(
+                PaneUuid(pane_uuid.clone()),
+                // The pane snapshot carries no cwd and the recorded directory does not resolve,
+                // so this recording cannot produce a resume however it is read.
+                recorded_session_for_test("session-1", Path::new("/warp/no/such/directory")),
+            )],
+            [PaneUuid(pane_uuid.clone())],
+        );
+
+        let restored_panes = |app: &mut App, restore: AgentSessionRestore| {
+            let layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
+                is_focused: true,
+                custom_vertical_tabs_title: None,
+                contents: LeafContents::Terminal(local_pane_snapshot_for_test(&pane_uuid, None)),
+            })));
+            let tips_model = app.add_model(|_| TipsCompleted::default());
+            let (_, pane_group) = app.add_window_with_bounds(
+                WindowStyle::NotStealFocus,
+                WindowBounds::ExactPosition(RectF::new(
+                    Vector2F::zero(),
+                    Vector2F::new(1024., 768.),
+                )),
+                |ctx| {
+                    let banner_model_handle = ctx.add_model(|_| BannerState::default());
+                    PaneGroup::new_with_panes_layout(
+                        tips_model,
+                        banner_model_handle,
+                        ServerApiProvider::as_ref(ctx).get(),
+                        layout,
+                        Arc::new(HashMap::new()),
+                        restore,
+                        None,
+                        ctx,
+                    )
+                },
+            );
+            pane_group.read(app, |panes, _ctx| {
+                panes
+                    .panes_of::<TerminalPane>()
+                    .map(|pane| pane.session_uuid())
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        let with_ineligible_recording = restored_panes(&mut app, agent_restore);
+        let without_recording = restored_panes(&mut app, AgentSessionRestore::default());
+
+        assert_eq!(with_ineligible_recording, vec![pane_uuid]);
+        assert_eq!(with_ineligible_recording, without_recording);
     });
 }

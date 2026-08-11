@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -58,6 +58,9 @@ pub struct RecordedAgentSession {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AgentSessionRestore {
     pub sessions: Arc<HashMap<PaneUuid, RecordedAgentSession>>,
+    /// The panes that own the identifier they recorded, resolved across every window before the
+    /// first one is created. Panes left out of it recorded an identifier another pane won.
+    pub claimed_panes: Arc<HashSet<PaneUuid>>,
     /// Mid-session restores (a tab added from a snapshot) reach the same restore path as
     /// startup, and resuming an agent there would be wrong, so the startup pass says so
     /// explicitly instead of leaving it to be inferred.
@@ -70,6 +73,11 @@ impl AgentSessionRestore {
         self.is_startup_restore
             .then(|| self.sessions.get(pane_uuid))
             .flatten()
+    }
+
+    /// Whether `pane_uuid` is the pane that gets to resume the identifier it recorded.
+    pub fn owns_recorded_identifier(&self, pane_uuid: &PaneUuid) -> bool {
+        self.claimed_panes.contains(pane_uuid)
     }
 }
 

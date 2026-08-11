@@ -122,7 +122,11 @@ fn recorded_session() -> RecordedAgentSession {
 
 fn startup_restore(pane_uuid: Vec<u8>) -> AgentSessionRestore {
     AgentSessionRestore {
-        sessions: Arc::new(HashMap::from([(PaneUuid(pane_uuid), recorded_session())])),
+        sessions: Arc::new(HashMap::from([(
+            PaneUuid(pane_uuid.clone()),
+            recorded_session(),
+        )])),
+        claimed_panes: Arc::new(HashSet::from([PaneUuid(pane_uuid)])),
         is_startup_restore: true,
     }
 }

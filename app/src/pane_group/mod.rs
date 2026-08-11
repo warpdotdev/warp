@@ -1,12 +1,14 @@
 use std::any::Any;
 use std::cell::RefCell;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 
+use chrono::NaiveDateTime;
 use instant::Instant;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -73,7 +75,8 @@ use crate::app_state::CodePaneSnapShot;
 use crate::app_state::{
     self, AIFactPaneSnapshot, AgentSessionRestore, BranchSnapshot, EnvVarCollectionPaneSnapshot,
     LeafContents, LeafSnapshot, NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid,
-    SettingsPaneSnapshot, TerminalPaneSnapshot, WorkflowPaneSnapshot,
+    RecordedAgentSession, SettingsPaneSnapshot, TerminalPaneSnapshot, WindowSnapshot,
+    WorkflowPaneSnapshot,
 };
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
@@ -121,6 +124,7 @@ use crate::settings_view::SettingsSection;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
+use crate::terminal::cli_agent_resume::ResumeDeclarations;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
@@ -1140,6 +1144,191 @@ type InitialLayoutCallback = Box<
     ) -> (PaneData, InitialFocus),
 >;
 
+/// Why a restored pane will not resume the agent session recorded for it.
+///
+/// Every rejection is silent: no marker, badge, message, or toast. Explaining a skipped resume
+/// would put a Warp-specific artifact into a pane the user expects to look like their own
+/// terminal, so these variants exist to be counted, never shown — which is also why each
+/// rejection has its own variant rather than collapsing into one "not eligible".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ResumeIneligibility {
+    /// Nothing was recorded for this pane, which is the ordinary case for every pane that was
+    /// not running an agent.
+    NoRecordedSession,
+    /// The pane has recorded state, but this is not the startup restore pass: a tab added from
+    /// a snapshot mid-session must not relaunch an agent the user did not just lose.
+    NotStartupRestore,
+    /// The recording carries no identifier to reattach to. Warp never picks a session on any
+    /// other basis, so there is nothing to resume.
+    NoSessionIdentifier,
+    /// The agent has no resume declaration, so there is no invocation that reattaches.
+    AgentNotDeclared,
+    /// The pane was viewing someone else's shared session; the agent never ran here.
+    SharedSessionViewer,
+    /// The pane's session did not run on this machine, so a local relaunch would reattach to
+    /// nothing. The save path drops the cwd for a remote session and for a local one whose
+    /// directory was already gone, so this also stands for the second, equally unresumable case.
+    SessionNotLocal,
+    /// The recorded directory no longer resolves — a deleted worktree, say — and resuming in
+    /// the fallback directory would run the agent somewhere it never was.
+    RecordedDirectoryMissing,
+    /// The recorded directory still resolves, but the pane's shell came up somewhere else.
+    RestoredElsewhere,
+    /// Another pane claims the same identifier and won it.
+    IdentifierClaimedByAnotherPane,
+}
+
+/// The panes that own the session identifier they recorded, resolved over the loaded store
+/// before any window exists.
+///
+/// Several panes can record one identifier — a duplicated tab, a snapshot restored twice — and
+/// only one of them may resume it. Windows are separate `add_window` calls with no owner between
+/// them, so the decision cannot be made per window; and the window the user lands in is created
+/// last, so a first-wins rule over restore order would hand the session to a pane the user
+/// cannot see.
+pub(crate) fn resolve_agent_session_claims(
+    windows: &[WindowSnapshot],
+    active_window_index: Option<usize>,
+    sessions: &HashMap<PaneUuid, RecordedAgentSession>,
+) -> HashSet<PaneUuid> {
+    let mut winners: HashMap<&str, (ClaimRank, PaneUuid)> = HashMap::new();
+
+    for (window_index, window) in windows.iter().enumerate() {
+        for (tab_index, tab) in window.tabs.iter().enumerate() {
+            let mut leaves = Vec::new();
+            collect_terminal_leaves(&tab.root, &mut leaves);
+            for (leaf, terminal) in leaves {
+                let pane_uuid = PaneUuid(terminal.uuid.clone());
+                let Some(recorded) = sessions.get(&pane_uuid) else {
+                    continue;
+                };
+                // A recording without an identifier claims nothing: there is no session to win.
+                if recorded.session_id.is_empty() {
+                    continue;
+                }
+
+                let rank = ClaimRank {
+                    in_landing_window: Some(window_index) == active_window_index,
+                    // A quake window starts hidden, so a pane in it is not one the user is
+                    // about to look at.
+                    in_visible_window: !window.quake_mode,
+                    in_active_tab: tab_index == window.active_tab_index,
+                    is_focused: leaf.is_focused,
+                    observed_at: recorded.observed_at,
+                };
+
+                match winners.entry(recorded.session_id.as_str()) {
+                    Entry::Vacant(entry) => {
+                        entry.insert((rank, pane_uuid));
+                    }
+                    Entry::Occupied(mut entry) => {
+                        let (best_rank, best_uuid) = entry.get();
+                        // The uuid closes the ordering so that two panes the ranking cannot
+                        // separate still resolve the same way on every launch.
+                        if (rank, &pane_uuid.0) > (*best_rank, &best_uuid.0) {
+                            entry.insert((rank, pane_uuid));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    winners.into_values().map(|(_, uuid)| uuid).collect()
+}
+
+/// How strong a pane's claim to a recorded identifier is, ordered worst to best by field so that
+/// the derived comparison reads as the tie-break itself.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct ClaimRank {
+    in_landing_window: bool,
+    in_visible_window: bool,
+    in_active_tab: bool,
+    is_focused: bool,
+    observed_at: NaiveDateTime,
+}
+
+/// Collects the terminal leaves of a snapshot pane tree, paired with the leaf that holds them.
+fn collect_terminal_leaves<'a>(
+    node: &'a PaneNodeSnapshot,
+    leaves: &mut Vec<(&'a LeafSnapshot, &'a TerminalPaneSnapshot)>,
+) {
+    match node {
+        PaneNodeSnapshot::Leaf(leaf) => {
+            if let LeafContents::Terminal(terminal) = &leaf.contents {
+                leaves.push((leaf, terminal));
+            }
+        }
+        PaneNodeSnapshot::Branch(branch) => {
+            for (_, child) in &branch.children {
+                collect_terminal_leaves(child, leaves);
+            }
+        }
+    }
+}
+
+/// Whether the pane restoring from `snapshot` may resume the session recorded for it, or the
+/// reason it may not.
+///
+/// `restored_directory` is the directory the pane actually came up in, which is not the same
+/// question as whether the recorded one still exists: a pane recorded in a worktree that was
+/// deleted before the restart comes up in the fallback directory, and so does a pane whose
+/// recorded directory survives but whose snapshot pointed elsewhere.
+pub(crate) fn resume_eligibility<'a>(
+    agent_restore: &'a AgentSessionRestore,
+    pane_uuid: &PaneUuid,
+    snapshot: &TerminalPaneSnapshot,
+    restored_directory: Option<&Path>,
+) -> Result<&'a RecordedAgentSession, ResumeIneligibility> {
+    let recorded = agent_restore
+        .sessions
+        .get(pane_uuid)
+        .ok_or(ResumeIneligibility::NoRecordedSession)?;
+
+    if !agent_restore.is_startup_restore {
+        return Err(ResumeIneligibility::NotStartupRestore);
+    }
+    if recorded.session_id.is_empty() {
+        return Err(ResumeIneligibility::NoSessionIdentifier);
+    }
+    if !ResumeDeclarations::embedded().supports(recorded.agent) {
+        return Err(ResumeIneligibility::AgentNotDeclared);
+    }
+    // A pane Warp drives itself always snapshots an input config; the branches that save a pane
+    // viewing someone else's session leave it unset (`TerminalPane::snapshot`).
+    if snapshot.input_config.is_none() {
+        return Err(ResumeIneligibility::SharedSessionViewer);
+    }
+    // A cwd reaches the snapshot only for a local session (`pwd_if_local`), so a pane without
+    // one either ran elsewhere or never said where it ran; neither is a pane to relaunch in.
+    if snapshot.cwd.is_none() {
+        return Err(ResumeIneligibility::SessionNotLocal);
+    }
+
+    let recorded_directory = resolved_directory(&recorded.directory)
+        .ok_or(ResumeIneligibility::RecordedDirectoryMissing)?;
+    if restored_directory.and_then(resolved_directory) != Some(recorded_directory) {
+        return Err(ResumeIneligibility::RestoredElsewhere);
+    }
+
+    // Checked last so that a pane which could not have resumed anyway does not take the
+    // identifier away from a pane that could: the claim is resolved before any window exists,
+    // where none of the above is knowable yet.
+    if !agent_restore.owns_recorded_identifier(pane_uuid) {
+        return Err(ResumeIneligibility::IdentifierClaimedByAnotherPane);
+    }
+
+    Ok(recorded)
+}
+
+/// `path` as it resolves on disk right now, or `None` when nothing is there. Both sides of a
+/// directory comparison go through this so that two spellings of one directory — a symlinked
+/// temporary directory, `/tmp` against `/private/tmp` — are not read as two directories.
+fn resolved_directory(path: &Path) -> Option<PathBuf> {
+    path.is_dir()
+        .then(|| dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AIDocumentPaneVisibilityAction {
     /// Ensure the requested AI document pane is visible.
@@ -1668,13 +1857,6 @@ impl PaneGroup {
                 let uuid = PaneUuid(terminal_snapshot.uuid.clone());
                 let block_list = block_lists.get(&uuid);
 
-                if let Some(recorded_agent) = agent_restore.recorded_on_startup(&uuid) {
-                    log::info!(
-                        "Restoring pane with a recorded {:?} agent session",
-                        recorded_agent.agent
-                    );
-                }
-
                 let chosen_shell = terminal_snapshot
                     .shell_launch_data
                     .as_ref()
@@ -1688,8 +1870,30 @@ impl PaneGroup {
 
                 let startup_directory = terminal_snapshot
                     .cwd
+                    .as_ref()
                     .map(PathBuf::from)
                     .filter(|path| path.is_dir());
+
+                // The verdict is decided here, where the directory the pane is about to come up
+                // in is known; a later unit turns an eligible one into the resume invocation.
+                let resume_verdict = resume_eligibility(
+                    &agent_restore,
+                    &uuid,
+                    &terminal_snapshot,
+                    startup_directory.as_deref(),
+                );
+                match &resume_verdict {
+                    Ok(recorded) => log::info!(
+                        "Restored pane can resume its recorded {:?} agent session",
+                        recorded.agent
+                    ),
+                    // The ordinary outcome for every pane that was not running an agent, so
+                    // reporting it would say nothing about this feature.
+                    Err(ResumeIneligibility::NoRecordedSession) => {}
+                    Err(reason) => {
+                        log::info!("Restored pane will not resume an agent session: {reason:?}")
+                    }
+                }
 
                 // Filter conversation IDs to only include those that have task messages
                 // and are not entirely passive (ignored suggestions).
