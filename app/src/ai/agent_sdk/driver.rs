@@ -434,9 +434,7 @@ pub struct AgentDriverOptions {
     pub snapshot_upload_timeout: Option<Duration>,
     /// Declarations script timeout override.
     pub snapshot_script_timeout: Option<Duration>,
-    /// Periodic checkpoint cadence override. Only used when
-    /// `FeatureFlag::PeriodicHandoffCheckpoints` is enabled; deliberately separate
-    /// from `snapshot_upload_timeout`/`snapshot_script_timeout` per-attempt budgets.
+    /// Periodic checkpoint cadence override. Only used when `FeatureFlag::PeriodicHandoffCheckpoints` is enabled.
     pub checkpoint_interval: Option<Duration>,
     /// Skip the initial `StartFromAmbientRunPrompt` so the agent waits for a
     /// follow-up instead of hallucinating an empty turn. Sourced from the
@@ -516,11 +514,7 @@ pub struct AgentDriver {
     snapshot_upload_timeout: Duration,
     snapshot_script_timeout: Duration,
 
-    /// Periodic workspace-handoff checkpoint coordinator. `Some` only when
-    /// `FeatureFlag::OzHandoff` and `FeatureFlag::PeriodicHandoffCheckpoints` are both
-    /// enabled, the run has a cloud task id, and `--no-snapshot` was not set;
-    /// `None` otherwise, in which case `run_snapshot_upload` falls back to the legacy
-    /// one-shot upload path unchanged.
+    /// Periodic workspace-handoff checkpoint coordinator; `None` unless both handoff flags are enabled and the run has a cloud task id.
     checkpoint_coordinator: Option<checkpoint_coordinator::CheckpointCoordinatorHandle>,
 
     /// Conversation ID this driver is running. Set at construction for
@@ -4345,16 +4339,9 @@ impl AgentDriver {
             return;
         }
 
-        // When the periodic checkpoint coordinator is active, it owns the entire
-        // end-of-run path: `finalize` drains the declarations writer, regenerates
-        // declarations, runs one last best-effort attempt, and commits it as the
-        // selected checkpoint. This replaces the legacy one-shot upload below so
-        // there is exactly one end-of-run snapshot path, not two.
-        //
-        // The budget must come from `finalize_budget`, not from `upload_timeout` alone:
-        // the coordinator's floor is `script_timeout + upload_timeout`, so a smaller
-        // budget silently skips the final attempt — and since this path `return`s past
-        // the legacy upload below, that would mean no end-of-run snapshot at all.
+        // An active coordinator replaces the legacy upload below. Budget must come from
+        // `finalize_budget`: the coordinator's floor is `script_timeout + upload_timeout`,
+        // so a smaller budget silently skips the final attempt.
         if let Some(coordinator) = checkpoint_coordinator {
             coordinator
                 .finalize(checkpoint_coordinator::finalize_budget(
