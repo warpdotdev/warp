@@ -631,7 +631,9 @@ fn new_group_from_a_tab_already_in_its_projects_group_does_not_adopt_the_key() {
             workspace.tab_groups.insert(own_group_id, own_group);
             workspace.tabs[1].group_id = Some(own_group_id);
 
-            workspace.adopt_project_key_for_new_group(own_group_id, pulled_out, ctx);
+            // The group the tab left still holds its other member, so nothing
+            // is being replaced and there is no color to carry across.
+            workspace.adopt_project_key_for_new_group(own_group_id, pulled_out, None, ctx);
 
             assert_eq!(
                 workspace

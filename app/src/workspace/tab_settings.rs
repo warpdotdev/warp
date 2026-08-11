@@ -507,6 +507,16 @@ define_settings_group!(TabSettings, settings: [
         toml_path: "appearance.tabs.auto_group_tabs",
         description: "Whether to automatically keep every tab in a group named after the project it is in.",
     },
+    auto_group_tab_colors: AutoGroupTabColors {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.tabs.auto_group_tab_colors",
+        description: "Whether automatically created tab groups take a color derived from the project, so one project always reads the same.",
+    },
     use_vertical_tabs: UseVerticalTabs {
         type: bool,
         default: false,

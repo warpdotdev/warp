@@ -16,6 +16,7 @@ use warpui::{EntityId, SingletonEntity, ViewContext, ViewHandle};
 
 use super::{Workspace, group_has_single_member, group_member_indices};
 use crate::pane_group::{PaneGroup, PaneId};
+use crate::tab::SelectedTabColor;
 use crate::workspace::project_key::{self, GitResolution, ProjectKey, ProjectKeyInput};
 use crate::workspace::tab_group::{TabGroup, TabGroupId, auto_tab_grouping_available};
 use crate::workspace::tab_settings::TabSettings;
@@ -84,6 +85,61 @@ fn is_git_project_key(key: &ProjectKey) -> bool {
         .file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.ends_with(".git"))
+}
+
+/// The key a group is carrying, rebuilt from the string the group table
+/// persists it as.
+///
+/// `TabGroup::project_key` is a `String` because that is the column's type, so
+/// every reader has to go back through [`ProjectKey::from_path`]; this is that
+/// step, named once.
+fn group_project_key(group: &TabGroup) -> Option<ProjectKey> {
+    Some(ProjectKey::from_path(PathBuf::from(
+        group.project_key.as_ref()?,
+    )))
+}
+
+/// The colour of a group that is being replaced by another one for the same
+/// project, with the key that colour's provenance is judged against.
+///
+/// Captured before the old group is pruned, because pruning is what makes the
+/// colour unrecoverable.
+#[derive(Clone, Debug)]
+pub(crate) struct ReplacedGroupColor {
+    color: SelectedTabColor,
+    key: Option<ProjectKey>,
+}
+
+/// Whether the color a group carries is one automation put there rather than
+/// one the user chose.
+///
+/// Derived rather than stored, exactly as name provenance is: a color matching
+/// what `previous_key` derives was automation's and may be replaced, and
+/// anything else was the user's and may not. `Cleared` is the user deliberately
+/// removing a color, so it is protected too; `Unset` is a group with no color
+/// to protect.
+///
+/// The palette holds six colors, so a user who picks precisely the one their
+/// key derives reads as automation and is repainted by the next re-key. The
+/// name heuristic has the identical hole — a rename that happens to match the
+/// derived name is also indistinguishable — and the cost is one color the user
+/// can set again, which is cheaper than persisting a provenance flag that no
+/// other automation state needs.
+///
+/// Provenance is a property of the *group*, not of the project: clearing a
+/// group's color says "not this group", not "never color this project", so the
+/// project's next group starts derived again. The one place that would
+/// otherwise contradict is replacing a group with another for the same project,
+/// which carries the color across (see
+/// [`Workspace::adopt_project_key_for_new_group`]).
+fn group_color_is_derived(color: SelectedTabColor, previous_key: Option<&ProjectKey>) -> bool {
+    match color {
+        SelectedTabColor::Unset => true,
+        SelectedTabColor::Cleared => false,
+        SelectedTabColor::Color(color) => {
+            previous_key.is_some_and(|key| project_key::derived_color(key) == color)
+        }
+    }
 }
 
 impl Workspace {
@@ -195,7 +251,7 @@ impl Workspace {
             // Re-key the group in place instead of destroying and recreating
             // it, so a group holding a single tab does not flicker on every
             // `cd`. The tab does not move.
-            self.rekey_group_in_place(group_id, &key);
+            self.rekey_group_in_place(group_id, &key, ctx);
         } else {
             self.create_keyed_group_for_tab(tab_index, &key, ctx);
         }
@@ -249,10 +305,18 @@ impl Workspace {
     ///
     /// Only for single-tab creation: a group made from a multi-tab selection
     /// has no one project to adopt, and stays an ordinary manual group.
+    ///
+    /// `replaced` is the group the tab left, when creating this one emptied and
+    /// destroyed it. "New group from this tab" run on the sole member of an
+    /// automatic group takes that shape: the old group is pruned and this one
+    /// takes over the same project, so the colour has to come across with the
+    /// key or the user's own colour dies with the group and automation paints
+    /// its own over the replacement.
     pub(super) fn adopt_project_key_for_new_group(
         &mut self,
         group_id: TabGroupId,
         pane_group_id: EntityId,
+        replaced: Option<ReplacedGroupColor>,
         ctx: &mut ViewContext<Self>,
     ) {
         if !self.auto_grouping_enabled(ctx) {
@@ -288,6 +352,23 @@ impl Workspace {
         if let Some(group) = self.tab_groups.get_mut(&group_id) {
             group.name = Some(name);
         }
+        // Carry the destroyed group's colour over before deriving, so the same
+        // provenance rule decides: a colour the user set or cleared survives
+        // the replacement, and one automation had derived is re-derived for the
+        // key this group now holds.
+        // Gated on the colour setting so the manual path keeps its own
+        // behaviour — with colouring off a new group is uncoloured, exactly as
+        // it was before automation had any say over colour.
+        let previous_key = match replaced.filter(|_| self.auto_group_colors_enabled(ctx)) {
+            Some(replaced) => {
+                if let Some(group) = self.tab_groups.get_mut(&group_id) {
+                    group.color = replaced.color;
+                }
+                replaced.key
+            }
+            None => None,
+        };
+        self.apply_derived_group_color(group_id, &key, previous_key.as_ref(), ctx);
         self.requalify_derived_group_names();
 
         // Re-attaches through the ordinary derivation rather than by writing
@@ -295,6 +376,18 @@ impl Workspace {
         // to, which reconcile already reads as "already correct". It also
         // records the resolved key, which the next reconcile compares against.
         self.reconcile_tab_auto_group(pane_group_id, Some(key), ctx);
+    }
+
+    /// The colour and key of a group about to be destroyed, for
+    /// [`Workspace::adopt_project_key_for_new_group`] to carry across.
+    ///
+    /// Call before pruning; a group that no longer exists yields `None`.
+    pub(crate) fn replaced_group_color(&self, group_id: TabGroupId) -> Option<ReplacedGroupColor> {
+        let group = self.tab_groups.get(&group_id)?;
+        Some(ReplacedGroupColor {
+            color: group.color,
+            key: group_project_key(group),
+        })
     }
 
     /// Appends the tab to the end of `group_id`'s contiguous run.
@@ -314,19 +407,47 @@ impl Workspace {
         self.move_tab_to_index(tab_index, target, ctx);
     }
 
+    /// Gives `group_id` the color `key` derives, unless the color it carries
+    /// now is the user's.
+    ///
+    /// `previous_key` is the key the current color would have been derived
+    /// from: the group's key before a re-key, and `None` for a group that has
+    /// not carried one.
+    fn apply_derived_group_color(
+        &mut self,
+        group_id: TabGroupId,
+        key: &ProjectKey,
+        previous_key: Option<&ProjectKey>,
+        ctx: &warpui::AppContext,
+    ) {
+        if !self.auto_group_colors_enabled(ctx) {
+            return;
+        }
+        let color = project_key::derived_color(key);
+        if let Some(group) = self.tab_groups.get_mut(&group_id)
+            && group_color_is_derived(group.color, previous_key)
+        {
+            group.color = SelectedTabColor::Color(color);
+        }
+    }
+
     /// Points an existing group at `key`, keeping a name the user set.
     ///
     /// Name provenance is derived rather than stored: a name that differs from
     /// what the group's own key would have produced was typed by the user and
-    /// survives the re-key; one that matches was derived and is replaced.
-    fn rekey_group_in_place(&mut self, group_id: TabGroupId, key: &ProjectKey) {
+    /// survives the re-key; one that matches was derived and is replaced. The
+    /// group's color follows the same rule, in
+    /// [`Workspace::apply_derived_group_color`].
+    fn rekey_group_in_place(
+        &mut self,
+        group_id: TabGroupId,
+        key: &ProjectKey,
+        ctx: &warpui::AppContext,
+    ) {
         let Some(group) = self.tab_groups.get(&group_id) else {
             return;
         };
-        let previous_key = group
-            .project_key
-            .clone()
-            .map(|stored| ProjectKey::from_path(PathBuf::from(stored)));
+        let previous_key = group_project_key(group);
         let name_was_derived = match (&group.name, &previous_key) {
             // An unnamed group has nothing of the user's to protect.
             (None, _) => true,
@@ -346,6 +467,7 @@ impl Workspace {
                 group.name = Some(name);
             }
         }
+        self.apply_derived_group_color(group_id, key, previous_key.as_ref(), ctx);
         self.requalify_derived_group_names();
     }
 
@@ -381,6 +503,7 @@ impl Workspace {
         if let Some(group) = self.tab_groups.get_mut(&group_id) {
             group.name = Some(name);
         }
+        self.apply_derived_group_color(group_id, key, None, ctx);
         self.requalify_derived_group_names();
 
         self.assign_tab_to_group(tab_index, Some(group_id), ctx);
@@ -423,7 +546,7 @@ impl Workspace {
             .tab_groups
             .values()
             .filter_map(|group| {
-                let key = ProjectKey::from_path(PathBuf::from(group.project_key.as_ref()?));
+                let key = group_project_key(group)?;
                 let name = group.name.as_deref()?;
                 if !project_key::is_derived_name(&key, name) {
                     return None;
@@ -444,8 +567,7 @@ impl Workspace {
     fn project_keys_in_window(&self) -> Vec<ProjectKey> {
         self.tab_groups
             .values()
-            .filter_map(|group| group.project_key.as_ref())
-            .map(|stored| ProjectKey::from_path(PathBuf::from(stored)))
+            .filter_map(group_project_key)
             .collect()
     }
 
@@ -474,6 +596,15 @@ impl Workspace {
     /// file owns that half of the check.
     pub(super) fn auto_grouping_enabled(&self, ctx: &warpui::AppContext) -> bool {
         auto_tab_grouping_available() && *TabSettings::as_ref(ctx).auto_group_tabs.value()
+    }
+
+    /// Whether automatic grouping should also be coloring the groups it keys.
+    ///
+    /// Layered over [`Workspace::auto_grouping_enabled`] rather than read on
+    /// its own: a color derived from a project key is meaningless in a window
+    /// where nothing is keyed by project.
+    pub(super) fn auto_group_colors_enabled(&self, ctx: &warpui::AppContext) -> bool {
+        self.auto_grouping_enabled(ctx) && *TabSettings::as_ref(ctx).auto_group_tab_colors.value()
     }
 
     /// Re-derives the tab's anchor pane and the directory it reports, recording
@@ -788,6 +919,40 @@ impl Workspace {
         for pane_group_id in candidates {
             self.place_tab_by_auto_grouping(pane_group_id, ctx);
         }
+    }
+
+    /// The color equivalent of the enable sweep: paints the automatic groups
+    /// the window already has, which are otherwise only colored at the moment
+    /// they are keyed.
+    ///
+    /// Turning the setting back off runs nothing, exactly as turning the mode
+    /// itself off dissolves nothing (R3): what automation put there stays, and
+    /// the user can clear or change any of it by hand.
+    pub(crate) fn sweep_tab_group_colors(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.auto_group_colors_enabled(ctx) {
+            return;
+        }
+        let keyed: Vec<(TabGroupId, ProjectKey)> = self
+            .tab_groups
+            .values()
+            .filter_map(|group| Some((group.id, group_project_key(group)?)))
+            .collect();
+
+        for (group_id, key) in keyed {
+            // A group's current key is the only basis for provenance available
+            // here, and that is lossy in one direction. A group re-keyed while
+            // the setting was off still wears a color derived from the key it
+            // used to hold; nothing records that key, so the color reads as the
+            // user's and is left alone. The group then keeps another project's
+            // color permanently — no later pass revisits it, and the only way
+            // back under automation is to clear the color by hand. Erring this
+            // way is deliberate: the alternative mistakes a user's color for
+            // automation's, which R16 forbids outright.
+            self.apply_derived_group_color(group_id, &key, Some(&key), ctx);
+        }
+
+        ctx.dispatch_global_action("workspace:save_app", ());
+        ctx.notify();
     }
 }
 

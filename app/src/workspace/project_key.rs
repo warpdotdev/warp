@@ -3,10 +3,14 @@
 //! A tab's *project key* is the value its group is keyed by. This module is
 //! pure: it takes a directory, whatever git resolution the caller already has
 //! for that directory, and the non-git keys already in use in the window, and
-//! returns a key and a display name. It performs no I/O and touches no
+//! returns a key, a display name and a color. It performs no I/O and touches no
 //! workspace state, so every rule below is directly testable.
 
 use std::path::{Path, PathBuf};
+
+use warp_core::ui::theme::AnsiColorIdentifier;
+
+use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 
 /// What repository detection knows about a directory.
 ///
@@ -176,6 +180,51 @@ fn qualified_name(key: &ProjectKey) -> Option<String> {
 /// Callers use this to re-qualify their own names without overwriting a rename.
 pub fn is_derived_name(key: &ProjectKey, name: &str) -> bool {
     name == base_name(key) || qualified_name(key).as_deref() == Some(name)
+}
+
+/// The color a key derives: one project always reads the same, and two
+/// projects usually read differently.
+///
+/// Keyed off the *key* rather than the display name, which changes when a
+/// collision qualifies it (`api` becoming `vendor/api`) and would take the
+/// color with it. Two checkouts of one repository share a key, so they also
+/// share a color; two clones of the same upstream at different paths do not,
+/// exactly as they do not share a group.
+///
+/// Two projects can land on the same color — the palette has six entries and
+/// nothing spaces the hash out, so a second project collides with the first
+/// about one time in six. Colliding is the deliberate trade: de-colliding
+/// within a window would make a project's color depend on what else happens to
+/// be open, which is the one property this is for.
+pub fn derived_color(key: &ProjectKey) -> AnsiColorIdentifier {
+    // The palette's length is part of what every stored group color was derived
+    // from, so growing or shrinking it repaints all of them. Failing the build
+    // here is the point: the change is legitimate, but it must be deliberate,
+    // and the golden test beside this function will need new values.
+    const _: () = assert!(TAB_COLOR_OPTIONS.len() == 6);
+
+    let index = stable_hash(&key.to_storage_string()) % TAB_COLOR_OPTIONS.len() as u64;
+    TAB_COLOR_OPTIONS[index as usize]
+}
+
+/// FNV-1a, 64-bit.
+///
+/// Spelled out rather than taken from [`std::hash`], whose `DefaultHasher` is
+/// explicitly not guaranteed to be stable across releases, and whose `HashMap`
+/// hasher is seeded randomly per process — either would repaint every group on
+/// restart. `rustc-hash`, the workspace's other hasher, gives the same
+/// no-stability-guarantee. The property wanted here is a value that never
+/// changes, so the function is pinned here and by the golden test beside it.
+fn stable_hash(value: &str) -> u64 {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 #[cfg(test)]
