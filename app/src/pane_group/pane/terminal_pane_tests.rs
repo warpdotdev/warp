@@ -96,3 +96,36 @@ fn inherit_share_cascades_ambient_source_for_cloud_orchestrator() {
         ),
     }
 }
+
+/// A restored pane must not persist a hole for a field whose live answer is
+/// not available yet.
+///
+/// `snapshot()` reads `cwd` and `shell_launch_data` from the live view, and
+/// those only exist once the shell has started and reported in. Quitting during
+/// that window — seconds long when many tabs restore at once — would otherwise
+/// save `None` and permanently lose the pane's directory and shell: the next
+/// restore opens somewhere else, and saves that as the new truth.
+#[test]
+fn a_field_the_shell_has_not_answered_yet_keeps_its_restored_value() {
+    // Shell has not reported: fall back to what we were restored with.
+    assert_eq!(
+        preserved_on_save(None, Some("/dev/tools/warp".to_owned())),
+        Some("/dev/tools/warp".to_owned())
+    );
+    // Shell has reported: the live answer always wins, including after the
+    // user has `cd`-ed somewhere new.
+    assert_eq!(
+        preserved_on_save(
+            Some("/dev/tools/orbit".to_owned()),
+            Some("/dev/tools/warp".to_owned())
+        ),
+        Some("/dev/tools/orbit".to_owned())
+    );
+    // Nothing known from either source stays unknown rather than inventing one.
+    assert_eq!(preserved_on_save::<String>(None, None), None);
+    // A pane that was never restored (a brand-new tab) has no fallback.
+    assert_eq!(
+        preserved_on_save(Some("/dev/new".to_owned()), None),
+        Some("/dev/new".to_owned())
+    );
+}

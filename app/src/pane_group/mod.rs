@@ -1369,7 +1369,7 @@ impl PaneGroup {
                     PaneMode::Terminal | PaneMode::Agent => PaneGroup::create_session(
                         // Use cwd from the template iff such path exists, otherwise None
                         // TODO(CORE-3187): On Windows, support WSL directory restoration.
-                        Some(cwd).filter(|p| p.exists()),
+                        Some(cwd.clone()).filter(|p| p.exists()),
                         HashMap::new(),
                         uuid.as_bytes(),
                         IsSharedSessionCreator::No,
@@ -1418,6 +1418,8 @@ impl PaneGroup {
 
                 let pane_data = TerminalPane::new(
                     uuid.as_bytes().to_vec(),
+                    Some(cwd.clone()).filter(|path| path.exists()),
+                    None,
                     terminal_manager,
                     view,
                     model_event_sender,
@@ -1611,6 +1613,9 @@ impl PaneGroup {
                 Ok((PaneData::new(pane_id), focus))
             }
             LeafContents::Terminal(terminal_snapshot) => {
+                // Kept so `snapshot()` can fall back per field while the shell
+                // has yet to report its cwd and launch data.
+                let restored_snapshot = Some(Box::new(terminal_snapshot.clone()));
                 let uuid = PaneUuid(terminal_snapshot.uuid.clone());
                 let block_list = block_lists.get(&uuid);
 
@@ -1670,7 +1675,7 @@ impl PaneGroup {
                         )
                 };
                 let (terminal_view, terminal_manager) = PaneGroup::create_session(
-                    startup_directory,
+                    startup_directory.clone(),
                     HashMap::new(),
                     uuid.0.as_slice(),
                     IsSharedSessionCreator::No,
@@ -1689,6 +1694,8 @@ impl PaneGroup {
 
                 let pane_data = TerminalPane::new(
                     uuid.0,
+                    startup_directory,
+                    restored_snapshot,
                     terminal_manager,
                     terminal_view,
                     model_event_sender,
@@ -1930,6 +1937,8 @@ impl PaneGroup {
 
                 let pane_data = TerminalPane::new(
                     snapshot.uuid,
+                    None,
+                    None,
                     terminal_manager,
                     terminal_view,
                     model_event_sender,
@@ -3216,8 +3225,10 @@ impl PaneGroup {
 
     /// Helper that creates the initial [`PaneData`] and [`InitialFocus`] given a terminal view.
     /// This is a common case in creating a new pane group with a single terminal session.
+    #[allow(clippy::too_many_arguments)]
     fn terminal_pane_data(
         uuid: Vec<u8>,
+        startup_directory: Option<PathBuf>,
         view: ViewHandle<TerminalView>,
         terminal_manager: ModelHandle<Box<dyn TerminalManager>>,
         model_event_sender: Option<SyncSender<ModelEvent>>,
@@ -3225,7 +3236,15 @@ impl PaneGroup {
         pane_history: &mut Vec<PaneId>,
         ctx: &mut ViewContext<Self>,
     ) -> (PaneData, InitialFocus) {
-        let pane_data = TerminalPane::new(uuid, terminal_manager, view, model_event_sender, ctx);
+        let pane_data = TerminalPane::new(
+            uuid,
+            startup_directory,
+            None,
+            terminal_manager,
+            view,
+            model_event_sender,
+            ctx,
+        );
         let terminal_pane_id = pane_data.terminal_pane_id();
         let pane_id = terminal_pane_id.into();
         pane_contents.insert(pane_id, Box::new(pane_data));
@@ -3325,6 +3344,7 @@ impl PaneGroup {
 
         Self::terminal_pane_data(
             uuid.into_bytes().to_vec(),
+            None,
             terminal_view,
             terminal_manager,
             model_event_sender,
@@ -3347,6 +3367,8 @@ impl PaneGroup {
         ctx: &mut ViewContext<Self>,
     ) -> (PaneData, InitialFocus) {
         let uuid = Uuid::new_v4();
+        // Kept so the pane can report its project before its shell has started.
+        let startup_directory = options.initial_directory.clone();
         let (view, terminal_manager) = PaneGroup::create_session(
             options.initial_directory,
             options.env_vars,
@@ -3365,6 +3387,8 @@ impl PaneGroup {
 
         let pane_data = TerminalPane::new(
             uuid.as_bytes().to_vec(),
+            startup_directory,
+            None,
             terminal_manager,
             view,
             model_event_sender,
@@ -3554,6 +3578,7 @@ impl PaneGroup {
 
             Self::terminal_pane_data(
                 Uuid::new_v4().as_bytes().to_vec(),
+                None,
                 view,
                 terminal_manager,
                 model_event_sender_clone,
@@ -3598,6 +3623,7 @@ impl PaneGroup {
 
             Self::terminal_pane_data(
                 Uuid::new_v4().as_bytes().to_vec(),
+                None,
                 view,
                 terminal_manager,
                 model_event_sender_clone,
@@ -3645,6 +3671,7 @@ impl PaneGroup {
 
             Self::terminal_pane_data(
                 Uuid::new_v4().as_bytes().to_vec(),
+                None,
                 terminal_view,
                 terminal_manager,
                 model_event_sender_clone,
@@ -4135,6 +4162,8 @@ impl PaneGroup {
         });
         let pane_data = TerminalPane::new(
             uuid.as_bytes().to_vec(),
+            None,
+            None,
             terminal_manager,
             view,
             self.model_event_sender.clone(),
@@ -4287,9 +4316,57 @@ impl PaneGroup {
     }
 
     fn session_path(&self, pane_id: &TerminalPaneId, ctx: &AppContext) -> Option<PathBuf> {
-        self.terminal_view_from_pane_id(*pane_id, ctx)?
-            .as_ref(ctx)
-            .active_session_path_if_local(ctx)
+        self.terminal_view_from_pane_id(*pane_id, ctx)
+            .and_then(|view| view.as_ref(ctx).active_session_path_if_local(ctx))
+            // The live answer only exists once the shell has emitted its first
+            // block. Restoring a window full of tabs therefore leaves every
+            // pane directionless for as long as its shell takes to start, so
+            // the project rail files them all under "Other" and then visibly
+            // re-sorts them one by one. Fall back to the directory the shell
+            // was launched in — already known at restore time — so a pane is
+            // attributed to the right project on the first frame.
+            .or_else(|| {
+                self.terminal_session_by_id(*pane_id)
+                    .and_then(TerminalPane::startup_directory)
+                    .cloned()
+            })
+    }
+
+    /// The directory a terminal pane in this group was restored into, without
+    /// going through focus state.
+    ///
+    /// `active_session_path` resolves through `active_session_id`, which comes
+    /// from the pane group's focus state — but a background tab restored under
+    /// `FeatureFlag::LazyShellStartup` may never have been focused, so that
+    /// state has nothing useful to resolve and the caller gets `None`. This
+    /// instead looks at the group's terminal pane(s) directly, so it answers
+    /// the same regardless of focus history. A group with multiple terminal
+    /// panes (a split) just takes the first one — good enough for a label.
+    pub(crate) fn restored_terminal_startup_directory(&self) -> Option<PathBuf> {
+        self.panes_of::<TerminalPane>()
+            .find_map(TerminalPane::startup_directory)
+            .cloned()
+    }
+
+    /// The directory this group holds a terminal session in, as the string an
+    /// `AgentSessionHandle`'s `cwd` is compared against.
+    ///
+    /// Every site that asks "does this tab still host that stored session"
+    /// must ask it the same way, or they disagree about the same tab: the rail
+    /// offers a row as resumable in place while the resume path decides no pane
+    /// owns the session and opens a second tab for it, and the dormant-row
+    /// suppression lets the same session appear twice.
+    ///
+    /// `active_session_path` answers for most groups — the active session id
+    /// defaults to the lowest terminal pane at construction, so it is set even
+    /// for a tab that has never been focused. It still goes `None` when *that*
+    /// pane has neither a local path nor a startup directory (a remote session,
+    /// say) while another terminal pane in the group does hold the restored
+    /// directory, which is what the fallback covers.
+    pub(crate) fn held_session_directory(&self, ctx: &AppContext) -> Option<String> {
+        self.active_session_path(ctx)
+            .or_else(|| self.restored_terminal_startup_directory())
+            .and_then(|path| path.to_str().map(str::to_owned))
     }
 
     fn content_by_pane_index(&self, index: usize) -> Option<&dyn AnyPaneContent> {
@@ -5329,6 +5406,8 @@ impl PaneGroup {
 
         let pane_data = TerminalPane::new(
             Uuid::new_v4().as_bytes().to_vec(),
+            None,
+            None,
             terminal_manager,
             terminal_view,
             self.model_event_sender.clone(),
@@ -6321,6 +6400,8 @@ impl PaneGroup {
 
         let pane_data = TerminalPane::new(
             uuid.as_bytes().to_vec(),
+            None,
+            None,
             terminal_manager,
             terminal_view,
             self.model_event_sender.clone(),
@@ -6404,6 +6485,8 @@ impl PaneGroup {
 
         let pane_data = TerminalPane::new(
             uuid.as_bytes().to_vec(),
+            None,
+            None,
             terminal_manager,
             view,
             self.model_event_sender.clone(),
@@ -6523,6 +6606,8 @@ impl PaneGroup {
 
         let pane_data = TerminalPane::new(
             uuid.as_bytes().to_vec(),
+            None,
+            None,
             terminal_manager,
             view.clone(),
             self.model_event_sender.clone(),
@@ -7937,6 +8022,8 @@ impl PaneGroup {
 
         TerminalPane::new(
             uuid.into_bytes().to_vec(),
+            None,
+            None,
             terminal_manager,
             terminal_view,
             self.model_event_sender.clone(),

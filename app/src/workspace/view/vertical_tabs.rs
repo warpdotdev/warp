@@ -76,6 +76,9 @@ use crate::workspace::tab_settings::{
     TabSettings, VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity,
     VerticalTabsPrimaryInfo, VerticalTabsTabItemMode, VerticalTabsViewMode,
 };
+use crate::workspace::tab_title::{
+    TerminalAgentText, agent_tab_text_preference, preferred_agent_tab_titles, terminal_agent_text,
+};
 use crate::workspace::view::vertical_tabs::telemetry::{
     VerticalTabsChipEntrypoint, VerticalTabsTelemetryEvent,
 };
@@ -4163,84 +4166,6 @@ fn terminal_kind_badge_label(is_oz_agent: bool, cli_agent: Option<CLIAgent>) -> 
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AgentTabTextPreference {
-    ConversationTitle,
-    LatestUserPrompt,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct TerminalAgentText {
-    conversation_display_title: Option<String>,
-    conversation_latest_user_prompt: Option<String>,
-    cli_agent_title: Option<String>,
-    cli_agent_latest_user_prompt: Option<String>,
-    is_oz_agent: bool,
-    cli_agent: Option<CLIAgent>,
-}
-
-fn agent_tab_text_preference(app: &AppContext) -> AgentTabTextPreference {
-    if *TabSettings::as_ref(app).use_latest_user_prompt_as_conversation_title_in_tab_names {
-        AgentTabTextPreference::LatestUserPrompt
-    } else {
-        AgentTabTextPreference::ConversationTitle
-    }
-}
-
-fn preferred_agent_tab_titles(
-    agent_text: &TerminalAgentText,
-    preference: AgentTabTextPreference,
-) -> (Option<String>, Option<String>) {
-    let conversation_title = match preference {
-        AgentTabTextPreference::ConversationTitle => agent_text
-            .conversation_display_title
-            .clone()
-            .or_else(|| agent_text.conversation_latest_user_prompt.clone()),
-        AgentTabTextPreference::LatestUserPrompt => agent_text
-            .conversation_latest_user_prompt
-            .clone()
-            .or_else(|| agent_text.conversation_display_title.clone()),
-    };
-    let cli_agent_title = match preference {
-        AgentTabTextPreference::ConversationTitle => agent_text.cli_agent_title.clone(),
-        AgentTabTextPreference::LatestUserPrompt => agent_text
-            .cli_agent_latest_user_prompt
-            .clone()
-            .or_else(|| agent_text.cli_agent_title.clone()),
-    };
-
-    (conversation_title, cli_agent_title)
-}
-
-fn terminal_agent_text(terminal_view: &TerminalView, app: &AppContext) -> TerminalAgentText {
-    let cli_agent_session = CLIAgentSessionsModel::as_ref(app).session(terminal_view.id());
-    let is_plugin_backed = cli_agent_session.is_some_and(|session| session.listener.is_some());
-    let is_ambient_agent = terminal_view.is_ambient_agent_session(app);
-
-    let mut agent_text = TerminalAgentText {
-        is_oz_agent: is_ambient_agent,
-        cli_agent: cli_agent_session.map(|session| session.agent),
-        ..Default::default()
-    };
-
-    if cli_agent_session.is_some() && !is_plugin_backed {
-        return agent_text;
-    }
-
-    agent_text.conversation_display_title = terminal_view.selected_conversation_display_title(app);
-    agent_text.conversation_latest_user_prompt =
-        terminal_view.selected_conversation_latest_user_prompt_for_tab_name(app);
-    agent_text.is_oz_agent =
-        agent_text.conversation_display_title.is_some() || agent_text.is_oz_agent;
-
-    if let Some(session) = cli_agent_session {
-        agent_text.cli_agent_title = session.session_context.title_like_text();
-        agent_text.cli_agent_latest_user_prompt = session.session_context.latest_user_prompt();
-    }
-
-    agent_text
-}
-
 fn terminal_pull_request_badge_label(pull_request_url: &str) -> String {
     github_pr_display_text_from_url(pull_request_url)
         .map(|label| label.strip_prefix("PR ").unwrap_or(&label).to_string())
@@ -4539,7 +4464,7 @@ fn compact_branch_subtitle_display(
         })
 }
 
-fn render_git_branch_text(
+pub(crate) fn render_git_branch_text(
     branch: &str,
     text_color: WarpThemeFill,
     font_size: f32,
