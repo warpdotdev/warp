@@ -188,23 +188,6 @@ impl ShellCommandExecutor {
         }
     }
 
-    /// Decorate the command so that we can turn off pager.
-    fn turn_off_pager_for_command(&self, command: &String, ctx: &mut ModelContext<Self>) -> String {
-        match self.active_session.as_ref(ctx).shell_type(ctx) {
-            // If it's a posix shell, we can use parentheses as the grouping character. Add command to
-            // avoid cases with aliases.
-            Some(ShellType::Zsh) | Some(ShellType::Bash) => format!("({command}) | command cat"),
-            // Fish doesn't have grouping characters. We need to use begin; and end; to ensure the command
-            // gets evaluated first.
-            Some(ShellType::Fish) => format!("begin; {command} ;end | command cat"),
-            // For powershell, we use Out-Host to send paged output to the
-            // console. Add a backslash to avoid executing an alias.
-            Some(ShellType::PowerShell) => format!("({command}) | \\Out-Host"),
-            // If we can't determine a shell type, run command as it is.
-            None => command.clone(),
-        }
-    }
-
     pub(super) fn execute(
         &mut self,
         input: ExecuteActionInput,
@@ -250,15 +233,13 @@ impl ShellCommandExecutor {
                         RequestCommandOutputResult::CancelledBeforeExecution,
                     ));
                 }
-                // If the command might use pager and can't be interacted with,
-                // we pipe its output to cat so we can prevent activating the altscreen.
-                // The parentheses here ensures the command always gets evaluated first.
-                let decorated_command =
-                    if uses_pager.is_some_and(|uses_pager| uses_pager) && *wait_until_completion {
-                        self.turn_off_pager_for_command(command, ctx)
-                    } else {
-                        command.clone()
-                    };
+                let shell_type = self.active_session.as_ref(ctx).shell_type(ctx);
+                let decorated_command = decorate_requested_command_for_shell(
+                    shell_type,
+                    command,
+                    uses_pager.is_some_and(|uses_pager| uses_pager),
+                    *wait_until_completion,
+                );
                 // Let the recording controller decide whether this command's
                 // on-screen work should be kept in an active computer-use
                 // recording, opening an action group before it starts if so.
@@ -975,6 +956,54 @@ enum ActionResult {
     },
     Cancelled,
     BlockNotFound,
+}
+
+fn decorate_requested_command_for_shell(
+    shell_type: Option<ShellType>,
+    command: &str,
+    uses_pager: bool,
+    wait_until_completion: bool,
+) -> String {
+    let disables_pager = uses_pager && wait_until_completion;
+    let command = if disables_pager {
+        turn_off_pager_for_command(shell_type, command)
+    } else {
+        command.to_owned()
+    };
+
+    if matches!(shell_type, Some(ShellType::Zsh)) {
+        // Zsh spelling correction prompts (for example, `correct 'zef' to 'zed' [nyae]?`)
+        // can block agent-driven commands. Prefixing the full command line with `nocorrect`
+        // suppresses correction for this execution while preserving the user's shell state.
+        //
+        // `nocorrect` cannot directly precede a parenthesized subshell, so for the pager-wrapped
+        // form we first run a no-op `:` command to flip the parser's nocorrect state and then run
+        // the real pipeline unchanged.
+        if disables_pager {
+            format!("nocorrect :; {command}")
+        } else {
+            format!("nocorrect {command}")
+        }
+    } else {
+        command
+    }
+}
+
+/// Decorate the command so that we can turn off pager.
+fn turn_off_pager_for_command(shell_type: Option<ShellType>, command: &str) -> String {
+    match shell_type {
+        // If it's a posix shell, we can use parentheses as the grouping character. Add command to
+        // avoid cases with aliases.
+        Some(ShellType::Zsh) | Some(ShellType::Bash) => format!("({command}) | command cat"),
+        // Fish doesn't have grouping characters. We need to use begin; and end; to ensure the command
+        // gets evaluated first.
+        Some(ShellType::Fish) => format!("begin; {command} ;end | command cat"),
+        // For powershell, we use Out-Host to send paged output to the
+        // console. Add a backslash to avoid executing an alias.
+        Some(ShellType::PowerShell) => format!("({command}) | \\Out-Host"),
+        // If we can't determine a shell type, run command as it is.
+        None => command.to_owned(),
+    }
 }
 
 #[cfg(test)]
