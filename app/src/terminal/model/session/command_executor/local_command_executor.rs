@@ -14,26 +14,6 @@ use crate::safe_warn;
 use crate::terminal::shell::{Shell, ShellType};
 
 #[cfg(unix)]
-fn is_owned_process_group_leader(pid: u32) -> bool {
-    use nix::unistd::{Pid, getpgid};
-
-    // A pid of 0 means "the caller's own process group", and `-(1u32 as i32)`
-    // is -1, which broadcasts to every process the caller is allowed to
-    // signal. Neither is ever a legitimate process group we track, so refuse
-    // them before they can reach `kill(2)`.
-    if pid < 2 {
-        return false;
-    }
-
-    // We only ever create process groups whose id equals their leader's own
-    // pid (see `Command::new_with_process_group`), so a pid that is no
-    // longer its own group leader can't be the group we registered: either
-    // it has exited and the pid was recycled by an unrelated process, or it
-    // was never a group leader at all.
-    matches!(getpgid(Some(Pid::from_raw(pid as i32))), Ok(pgid) if pgid.as_raw() == pid as i32)
-}
-
-#[cfg(unix)]
 fn kill_all_processes_in_process_group(pid: u32) -> Result<(), nix::Error> {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
@@ -42,10 +22,14 @@ fn kill_all_processes_in_process_group(pid: u32) -> Result<(), nix::Error> {
 }
 #[cfg(unix)]
 fn terminate_process_group(process_group_id: u32) {
-    if !is_owned_process_group_leader(process_group_id) {
-        log::warn!(
-            "Skipping SIGKILL of process group {process_group_id}: it is no longer a process group we own"
-        );
+    // `child.id()` after a successful spawn is always a real, positive pid,
+    // so this is unreachable today. It's a cheap assertion against a future
+    // refactor feeding this path a pid that didn't come from a spawn: a pid
+    // of 0 means "the caller's own process group", and `-(1u32 as i32)` is
+    // -1, which broadcasts to every process the caller is allowed to
+    // signal.
+    if process_group_id < 2 {
+        log::warn!("Refusing to signal process group {process_group_id}: pid is below 2");
         return;
     }
 
