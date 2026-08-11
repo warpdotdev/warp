@@ -69,6 +69,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
+use crate::terminal::event::BlockCompletedEvent;
 use crate::terminal::model::ansi::{self, BootstrappedValue, InitShellValue, PreexecValue};
 use crate::terminal::model::block::AgentViewVisibility;
 use crate::terminal::model::blocks::{TotalIndex, insert_block};
@@ -9997,6 +9998,187 @@ fn warp_tui_listener_does_not_auto_open_rich_input() {
         });
     });
 }
+
+/// Delivers an OSC 777 CLI agent notification the way a live PTY would, so both
+/// the terminal view and any registered listener observe it.
+fn emit_cli_agent_notification(
+    body: &str,
+    view: &TerminalView,
+    ctx: &mut ViewContext<TerminalView>,
+) {
+    let dispatcher = view.model_event_dispatcher().clone();
+    let body = body.to_owned();
+    dispatcher.update(ctx, |_, ctx| {
+        ctx.emit(ModelEvent::PluggableNotification {
+            title: Some(CLI_AGENT_NOTIFICATION_SENTINEL.to_owned()),
+            body,
+        });
+    });
+}
+
+fn recorded_cli_agent_session_id(view: &TerminalView, ctx: &AppContext) -> Option<String> {
+    CLIAgentSessionsModel::as_ref(ctx)
+        .session(view.view_id)
+        .expect("CLI agent session should exist")
+        .session_context
+        .session_id
+        .clone()
+}
+
+/// A pane whose agent starts a second conversation must record the newest
+/// session id, not the one captured when the listener was registered.
+#[test]
+fn cli_agent_second_session_start_replaces_recorded_session_id() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            emit_cli_agent_notification(
+                r#"{"v":1,"agent":"claude","event":"session_start","session_id":"conversation-a"}"#,
+                view,
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                recorded_cli_agent_session_id(view, ctx).as_deref(),
+                Some("conversation-a")
+            );
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            emit_cli_agent_notification(
+                r#"{"v":1,"agent":"claude","event":"session_start","session_id":"conversation-b"}"#,
+                view,
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                recorded_cli_agent_session_id(view, ctx).as_deref(),
+                Some("conversation-b")
+            );
+        });
+    });
+}
+
+/// Delivers a block-completed event the way a foreground process ending or
+/// being suspended into the background would.
+fn emit_block_completed(
+    block_type: BlockType,
+    view: &TerminalView,
+    ctx: &mut ViewContext<TerminalView>,
+) {
+    let dispatcher = view.model_event_dispatcher().clone();
+    dispatcher.update(ctx, |_, ctx| {
+        ctx.emit(ModelEvent::BlockCompleted(BlockCompletedEvent {
+            block_type,
+            num_secrets_obfuscated: 0,
+            block_index: BlockIndex::zero(),
+            block_id: BlockId::new(),
+            session_id: None,
+            restored_block_was_local: None,
+        }));
+    });
+}
+
+fn completed_user_block(command: &str) -> BlockType {
+    BlockType::User(UserBlockCompleted {
+        index: BlockIndex::zero(),
+        serialized_block: Arc::new(SerializedBlock::new_for_test(
+            command.as_bytes().to_vec(),
+            vec![],
+        )),
+        command: command.to_owned(),
+        command_with_obfuscated_secrets: command.to_owned(),
+        output_truncated: String::new(),
+        output_truncated_with_obfuscated_secrets: String::new(),
+        was_part_of_agent_interaction: false,
+        started_at: None,
+        num_output_lines: 0,
+        num_output_lines_truncated: 0,
+    })
+}
+
+/// The agent exits and the user launches it again in the same pane; the pane
+/// must record the conversation of the second run.
+#[test]
+fn cli_agent_relaunched_in_pane_records_new_session_id() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            emit_cli_agent_notification(
+                r#"{"v":1,"agent":"claude","event":"session_start","session_id":"conversation-a"}"#,
+                view,
+                ctx,
+            );
+            emit_block_completed(completed_user_block("claude"), view, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert!(
+                CLIAgentSessionsModel::as_ref(ctx)
+                    .session(view.view_id)
+                    .is_none(),
+                "the exiting agent should end its session"
+            );
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            emit_cli_agent_notification(
+                r#"{"v":1,"agent":"claude","event":"session_start","session_id":"conversation-b"}"#,
+                view,
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                recorded_cli_agent_session_id(view, ctx).as_deref(),
+                Some("conversation-b")
+            );
+        });
+    });
+}
+
+/// Suspending the agent completes a background block rather than the user
+/// block, so the session and its recorded conversation survive.
+#[test]
+fn cli_agent_suspended_into_background_block_keeps_session_id() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            emit_cli_agent_notification(
+                r#"{"v":1,"agent":"claude","event":"session_start","session_id":"conversation-a"}"#,
+                view,
+                ctx,
+            );
+            emit_block_completed(
+                BlockType::Background(Arc::new(SerializedBlock::new_for_test(
+                    b"claude".to_vec(),
+                    vec![],
+                ))),
+                view,
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                recorded_cli_agent_session_id(view, ctx).as_deref(),
+                Some("conversation-a")
+            );
+        });
+    });
+}
+
 #[test]
 fn active_cli_agent_recognizes_detected_warp_tui_session() {
     App::test((), |mut app| async move {

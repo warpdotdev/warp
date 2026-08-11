@@ -300,6 +300,83 @@ fn apply_event_preserves_input_session() {
     assert_eq!(session.input_state, input_state);
 }
 
+/// Builds an in-progress Claude session that has already recorded `session_id`.
+fn claude_session_with_recorded_id(session_id: &str) -> CLIAgentSession {
+    CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext {
+            session_id: Some(session_id.to_owned()),
+            ..Default::default()
+        },
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        draft_text: None,
+        remote_host: None,
+        custom_command_prefix: None,
+        received_rich_notification: false,
+    }
+}
+
+fn claude_event(event: CLIAgentEventType, session_id: Option<&str>) -> CLIAgentEvent {
+    CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event,
+        session_id: session_id.map(str::to_owned),
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    }
+}
+
+#[test]
+fn session_start_with_new_id_replaces_recorded_session_id() {
+    let mut session = claude_session_with_recorded_id("conversation-a");
+
+    session.apply_event(&claude_event(
+        CLIAgentEventType::SessionStart,
+        Some("conversation-b"),
+    ));
+
+    assert_eq!(
+        session.session_context.session_id.as_deref(),
+        Some("conversation-b")
+    );
+}
+
+#[test]
+fn event_without_session_id_keeps_recorded_session_id() {
+    let mut session = claude_session_with_recorded_id("conversation-a");
+
+    session.apply_event(&claude_event(CLIAgentEventType::Stop, None));
+
+    assert_eq!(
+        session.session_context.session_id.as_deref(),
+        Some("conversation-a")
+    );
+}
+
+#[test]
+fn tool_complete_with_new_id_replaces_recorded_session_id() {
+    // ToolComplete is discarded for status purposes while the session is not
+    // blocked, but the identifier it carries must still be recorded.
+    let mut session = claude_session_with_recorded_id("conversation-a");
+
+    session.apply_event(&claude_event(
+        CLIAgentEventType::ToolComplete,
+        Some("conversation-b"),
+    ));
+
+    assert_eq!(
+        session.session_context.session_id.as_deref(),
+        Some("conversation-b")
+    );
+}
+
 #[test]
 fn is_remote_returns_true_when_remote_host_is_set() {
     let session = CLIAgentSession {

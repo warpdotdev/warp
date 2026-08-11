@@ -32,7 +32,14 @@ trait CLIAgentSessionHandler {
 
     /// Decide whether a parsed event should be forwarded to the sessions model.
     /// Returns the event (possibly transformed) if it should be processed.
-    fn handle_event(&mut self, event: CLIAgentEvent) -> Option<CLIAgentEvent>;
+    ///
+    /// `recorded_session_id` is the identifier the session currently holds, so
+    /// handlers can tell a redundant event from one that reports a change.
+    fn handle_event(
+        &mut self,
+        event: CLIAgentEvent,
+        recorded_session_id: Option<&str>,
+    ) -> Option<CLIAgentEvent>;
 }
 
 /// Returns `true` if the given CLI agent has a supported session handler.
@@ -82,13 +89,21 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
 }
 
 /// Default handler shared by agents whose events need no special filtering
-/// beyond skipping the initial `SessionStart`.
+/// beyond skipping a `SessionStart` that reports nothing new.
 struct DefaultSessionListener;
 
 impl CLIAgentSessionHandler for DefaultSessionListener {
-    fn handle_event(&mut self, event: CLIAgentEvent) -> Option<CLIAgentEvent> {
-        // Skip session_start events (handled during listener construction)
-        if event.event == CLIAgentEventType::SessionStart {
+    fn handle_event(
+        &mut self,
+        event: CLIAgentEvent,
+        recorded_session_id: Option<&str>,
+    ) -> Option<CLIAgentEvent> {
+        // The session_start that created this listener was already applied, but
+        // a later one carrying a different id means the user started a new
+        // conversation in this pane and the session must follow it.
+        if event.event == CLIAgentEventType::SessionStart
+            && (event.session_id.is_none() || event.session_id.as_deref() == recorded_session_id)
+        {
             return None;
         }
 
@@ -156,7 +171,11 @@ impl CLIAgentSessionHandler for CodexSessionHandler {
         Self::parse_osc9_text(body)
     }
 
-    fn handle_event(&mut self, event: CLIAgentEvent) -> Option<CLIAgentEvent> {
+    fn handle_event(
+        &mut self,
+        event: CLIAgentEvent,
+        _recorded_session_id: Option<&str>,
+    ) -> Option<CLIAgentEvent> {
         Some(event)
     }
 }
@@ -189,16 +208,21 @@ impl CLIAgentSessionListener {
         ctx.subscribe_to_model(model_event_dispatcher, move |me, _, event, ctx| {
             if let ModelEvent::PluggableNotification { title, body } = event {
                 let view_id = me.terminal_view_id;
-                let plugin_already_active = CLIAgentSessionsModel::as_ref(ctx)
-                    .session(view_id)
-                    .is_some_and(|session| session.received_rich_notification);
+                let session = CLIAgentSessionsModel::as_ref(ctx).session(view_id);
+                let plugin_already_active =
+                    session.is_some_and(|session| session.received_rich_notification);
+                let recorded_session_id =
+                    session.and_then(|session| session.session_context.session_id.clone());
                 let Some(parsed) =
                     me.inner
                         .try_parse(title.as_deref(), body, plugin_already_active)
                 else {
                     return;
                 };
-                if let Some(event) = me.inner.handle_event(parsed) {
+                if let Some(event) = me
+                    .inner
+                    .handle_event(parsed, recorded_session_id.as_deref())
+                {
                     CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions_model, ctx| {
                         sessions_model.update_from_event(view_id, &event, ctx);
                     });
