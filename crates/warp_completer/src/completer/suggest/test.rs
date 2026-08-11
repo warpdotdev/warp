@@ -2387,3 +2387,67 @@ fn test_generator_suggestion_replacement_is_shell_escaped() {
          as three separate tokens."
     );
 }
+
+/// V2 counterpart of `test_generator_suggestion_replacement_is_shell_escaped` above, covering
+/// the same boundary in `engine/argument/v2.rs`. The V2 generator path builds its suggestions
+/// from the generator command's output lines, so a filename containing spaces arrives raw and
+/// must be escaped before it reaches the buffer-insertion path.
+#[cfg(feature = "v2")]
+#[test]
+fn test_generator_suggestion_replacement_is_shell_escaped() {
+    use crate::signatures::testing::create_test_command_registry;
+    use crate::signatures::{
+        Argument, ArgumentValue, Command, CommandSignature, GeneratorFn, GeneratorScript,
+    };
+
+    const FILE_NAME: &str = "new file test.csv";
+    const SHELL_CMD: &str = "echo file_with_spaces";
+
+    let signature = CommandSignature {
+        command: Command {
+            name: "stage".to_owned(),
+            arguments: vec![Argument {
+                name: "file".to_owned(),
+                values: vec![ArgumentValue::Generator(GeneratorFn::ShellCommand {
+                    script: GeneratorScript::Static(SHELL_CMD.to_owned()),
+                    // No post-processing, so the command's output lines become the
+                    // suggestions verbatim — mirroring a generator that emits raw filenames.
+                    post_process: None,
+                })],
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    };
+
+    let registry = create_test_command_registry([signature]);
+    let generator_ctx = MockGeneratorContext::new().with_expected_command(SHELL_CMD, FILE_NAME);
+    let ctx = FakeCompletionContext::new(registry).with_generator_context(generator_ctx);
+
+    let results = suggestions_for_test(
+        "stage ",
+        "stage ".len(),
+        CompleterOptions {
+            match_strategy: MatchStrategy::CaseInsensitive,
+            fallback_strategy: CompletionsFallbackStrategy::FilePaths,
+            suggest_file_path_completions_only: false,
+            parse_quotes_as_literals: false,
+        },
+        &ctx,
+    )
+    .expect("expected suggestion results from generator");
+
+    let matched = results
+        .suggestions
+        .iter()
+        .find(|s| s.display() == FILE_NAME)
+        .expect("expected the generator's suggestion to surface");
+
+    assert_eq!(
+        matched.replacement(),
+        r"new\ file\ test.csv",
+        "Generator-produced replacement must be shell-escaped before insertion. \
+         Today it equals the unescaped `{FILE_NAME}`, which the shell would parse \
+         as three separate tokens."
+    );
+}
