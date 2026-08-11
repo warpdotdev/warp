@@ -1,7 +1,7 @@
 //! CLI agent detection and configuration.
 //!
 //! This module provides types for detecting and working with CLI-based AI agents
-//! like Claude Code, Gemini CLI, Codex, Amp, and Droid.
+//! like Claude Code, Gemini CLI, Codex, Kiro, Amp, and Droid.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -44,6 +44,14 @@ pub(crate) const OPENAI_COLOR: ColorU = ColorU {
     r: 0,
     g: 0,
     b: 0,
+    a: 255,
+};
+
+/// Kiro brand purple (from the official Kiro app icon gradient)
+const KIRO_PURPLE: ColorU = ColorU {
+    r: 192,
+    g: 156,
+    b: 255,
     a: 255,
 };
 
@@ -135,12 +143,13 @@ const MISTRAL_ORANGE: ColorU = ColorU {
     a: 255,
 };
 
-/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe)
+/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Kiro, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
 pub enum CLIAgent {
     Claude,
     Gemini,
     Codex,
+    Kiro,
     Amp,
     Droid,
     OpenCode,
@@ -166,6 +175,7 @@ impl CLIAgent {
             CLIAgent::Claude => &["claude"],
             CLIAgent::Gemini => &["gemini"],
             CLIAgent::Codex => &["codex"],
+            CLIAgent::Kiro => &["kiro-cli", "kiro", "kiro-cli-chat", "kiro-cli-term"],
             CLIAgent::Amp => &["amp"],
             CLIAgent::Droid => &["droid"],
             CLIAgent::OpenCode => &["opencode"],
@@ -229,6 +239,7 @@ impl CLIAgent {
             CLIAgent::Claude => "Claude Code",
             CLIAgent::Gemini => "Gemini",
             CLIAgent::Codex => "Codex",
+            CLIAgent::Kiro => "Kiro",
             CLIAgent::Amp => "Amp",
             CLIAgent::Droid => "Droid",
             CLIAgent::OpenCode => "OpenCode",
@@ -252,6 +263,7 @@ impl CLIAgent {
             CLIAgent::Claude => Some(Icon::ClaudeLogo),
             CLIAgent::Gemini => Some(Icon::GeminiLogo),
             CLIAgent::Codex => Some(Icon::OpenAILogo),
+            CLIAgent::Kiro => Some(Icon::KiroLogo),
             CLIAgent::Amp => Some(Icon::AmpLogo),
             CLIAgent::Droid => Some(Icon::DroidLogo),
             CLIAgent::OpenCode => Some(Icon::OpenCodeLogo),
@@ -283,6 +295,7 @@ impl CLIAgent {
                 SkillProvider::Claude,
                 SkillProvider::Codex,
             ],
+            CLIAgent::Kiro => &[SkillProvider::Kiro],
             CLIAgent::OpenCode => &[
                 SkillProvider::OpenCode,
                 SkillProvider::Agents,
@@ -338,6 +351,7 @@ impl CLIAgent {
             CLIAgent::Claude => Some(CLAUDE_ORANGE),
             CLIAgent::Gemini => Some(GEMINI_BLUE),
             CLIAgent::Codex => Some(OPENAI_COLOR),
+            CLIAgent::Kiro => Some(KIRO_PURPLE),
             CLIAgent::Amp => Some(AMP_COLOR),
             CLIAgent::Droid => Some(DROID_COLOR),
             CLIAgent::OpenCode => Some(OPENCODE_COLOR),
@@ -362,6 +376,7 @@ impl CLIAgent {
             CLIAgent::Pi
             | CLIAgent::OhMyPi
             | CLIAgent::Auggie
+            | CLIAgent::Kiro
             | CLIAgent::Droid
             | CLIAgent::Antigravity => ColorU::new(0, 0, 0, 255),
             _ => ColorU::white(),
@@ -614,6 +629,7 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::Claude => CLIAgentType::Claude,
             CLIAgent::Gemini => CLIAgentType::Gemini,
             CLIAgent::Codex => CLIAgentType::Codex,
+            CLIAgent::Kiro => CLIAgentType::Kiro,
             CLIAgent::Amp => CLIAgentType::Amp,
             CLIAgent::Droid => CLIAgentType::Droid,
             CLIAgent::OpenCode => CLIAgentType::OpenCode,
