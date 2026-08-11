@@ -1,6 +1,7 @@
 //! Implementation of terminal panes.
 #[cfg(not(target_family = "wasm"))]
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::mpsc::SyncSender;
 
 #[cfg(not(target_family = "wasm"))]
@@ -40,6 +41,7 @@ use crate::ai::llms::LLMPreferences;
 use crate::ai::orchestration::{RemoteChildLaunchConfig, prepare_remote_child_launch};
 use crate::app_state::{AmbientAgentPaneSnapshot, LeafContents, TerminalPaneSnapshot};
 use crate::code::buffer_location::LocalOrRemotePath;
+use crate::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
 use crate::pane_group::CodeSource;
 use crate::pane_group::Event::OpenConversationHistory;
@@ -80,6 +82,28 @@ pub struct TerminalPane {
 
     /// Used to uniquely identify the pane, even across separate runs of the app.
     uuid: Vec<u8>,
+
+    /// The directory this pane's shell was launched in, when known.
+    ///
+    /// A pane's project is normally read from its live shell, but that answer
+    /// only exists once the shell has emitted its first block. On a restore
+    /// with many tabs every pane is directionless until its shell answers, so
+    /// the rail files them all under "Other" and then visibly re-sorts them as
+    /// each one starts. This is the same directory the shell was told to open
+    /// in, kept so the rail can bucket the pane correctly on the first frame.
+    startup_directory: Option<PathBuf>,
+
+    /// The snapshot this pane was restored from, if it was restored.
+    ///
+    /// `snapshot()` reads everything from the live [`TerminalView`], but some
+    /// of those answers only exist once the shell has started and reported in.
+    /// Saving during that window — a quit shortly after launch, which with
+    /// many tabs is seconds long — would persist `None` for `cwd` and
+    /// `shell_launch_data` and permanently lose them: the next restore opens
+    /// in the default directory with the default shell, and re-saves that
+    /// loss. Keeping what we were restored with lets `snapshot()` fall back
+    /// per field rather than writing a hole.
+    restored_snapshot: Option<Box<TerminalPaneSnapshot>>,
 
     pane_configuration: ModelHandle<PaneConfiguration>,
 
@@ -135,15 +159,31 @@ pub(in crate::pane_group) fn inherit_share_for_local_child(
     IsSharedSessionCreator::Yes { source }
 }
 
+/// Chooses what to persist for a snapshot field that the live [`TerminalView`]
+/// can only answer once its shell has started.
+///
+/// The live answer always wins when there is one. Otherwise we re-persist what
+/// the pane was restored with, because writing `None` here is not "unknown" —
+/// it is destructive. `cwd` and `shell_launch_data` are what the *next* restore
+/// uses to place the pane, so a hole means the pane silently reopens in the
+/// default directory with the default shell, and that loss is then saved as the
+/// new truth on the following quit.
+fn preserved_on_save<T>(live: Option<T>, restored: Option<T>) -> Option<T> {
+    live.or(restored)
+}
+
 impl TerminalPane {
     pub(in crate::pane_group) fn new(
         uuid: Vec<u8>,
+        startup_directory: Option<PathBuf>,
+        restored_snapshot: Option<Box<TerminalPaneSnapshot>>,
         terminal_manager: ModelHandle<Box<dyn TerminalManager>>,
         terminal_view: ViewHandle<TerminalView>,
         model_event_sender: Option<SyncSender<ModelEvent>>,
         ctx: &mut ViewContext<PaneGroup>,
     ) -> Self {
         let pane_configuration = terminal_view.as_ref(ctx).pane_configuration().to_owned();
+        let terminal_view_id = terminal_view.id();
         let view = ctx.add_typed_action_view(|ctx| {
             let pane_id = PaneId::from_terminal_pane_ctx(ctx);
             PaneView::new(
@@ -155,12 +195,29 @@ impl TerminalPane {
             )
         });
 
+        // The durable session-handle store keys in-flight CLI agent launches
+        // on this pane's restart-stable uuid; the sessions model only knows
+        // the terminal view id, so hand it the mapping.
+        if FeatureFlag::ResumeProjectTasks.is_enabled() {
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, _| {
+                sessions.register_pane_uuid(terminal_view_id, uuid.clone());
+            });
+        }
+
         Self {
             model_event_sender,
             uuid,
+            startup_directory,
+            restored_snapshot,
             pane_configuration,
             view,
         }
+    }
+
+    /// The directory this pane's shell was launched in, if known. Used as the
+    /// project fallback while the shell has yet to report a working directory.
+    pub(in crate::pane_group) fn startup_directory(&self) -> Option<&PathBuf> {
+        self.startup_directory.as_ref()
     }
 
     /// The [`PaneView<TerminalView>`] for this pane.
@@ -413,6 +470,10 @@ impl PaneContent for TerminalPane {
         if !matches!(detach_type, DetachType::Moved) {
             CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
                 sessions.remove_session(terminal_view_id, ctx);
+                // Pane is closing for good: drop the uuid mapping too. This
+                // clears in-memory state only — the durable handle survives,
+                // that is the dormant row the rail resumes from.
+                sessions.unregister_pane(terminal_view_id);
             });
         }
 
@@ -526,12 +587,23 @@ impl PaneContent for TerminalPane {
                         .active_conversation_id()
                 });
 
+            // Fall back to what we were restored with for the two fields that
+            // only become answerable once the shell has started. Losing either
+            // is permanent: the next restore would open in the wrong directory
+            // with the wrong shell, then save that as the new truth.
+            let restored = self.restored_snapshot.as_deref();
             LeafContents::Terminal(TerminalPaneSnapshot {
                 uuid: self.uuid.clone(),
-                cwd: view.pwd_if_local(app),
+                cwd: preserved_on_save(
+                    view.pwd_if_local(app),
+                    restored.and_then(|snapshot| snapshot.cwd.clone()),
+                ),
                 is_active,
                 is_read_only: view.model.lock().is_read_only(),
-                shell_launch_data: view.shell_launch_data_if_local(app),
+                shell_launch_data: preserved_on_save(
+                    view.shell_launch_data_if_local(app),
+                    restored.and_then(|snapshot| snapshot.shell_launch_data.clone()),
+                ),
                 input_config: Some(current_input_config),
                 llm_model_override,
                 active_profile_id,
@@ -546,6 +618,12 @@ impl PaneContent for TerminalPane {
     }
 
     fn focus(&self, ctx: &mut ViewContext<PaneGroup>) {
+        // Deliberately does NOT start a deferred shell. `PaneGroup::new_internal`
+        // focuses every pane group as it is constructed (behind
+        // `DragTabsToWindows`, a release flag), so a start here fires once per
+        // restored tab and defeats deferral entirely -- measured: 46 of 48 tabs
+        // spawned. The start belongs on the paths that mean a *user* opened
+        // something: `Workspace::focus_active_tab` and `PaneGroup::focus_pane`.
         self.terminal_view(ctx)
             .update(ctx, |view, ctx| view.redetermine_global_focus(ctx));
     }

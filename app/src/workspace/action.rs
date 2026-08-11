@@ -12,6 +12,7 @@ use warpui::platform::Cursor;
 use warpui::{EntityId, WeakViewHandle, WindowId};
 
 use super::global_actions::{ForkFromExchange, ForkedConversationDestination};
+use super::project_layout::ProjectId;
 use super::tab_settings::{
     VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo,
     VerticalTabsTabItemMode, VerticalTabsViewMode,
@@ -146,6 +147,21 @@ pub enum WorkspaceAction {
     /// (see #9351). The context-menu path keeps using `RenamePane(locator)`.
     RenameActivePane,
     SetActiveTabName(String),
+    /// Selects a project in the project rail (Herdr-style Projects × Tasks
+    /// layout). Activates that project's most-recently-used visible tab.
+    SelectProject(ProjectId),
+    /// Activates the task clicked in the project rail, identified by its pane
+    /// group so it cannot go stale if tabs close between paint and click.
+    ActivateTaskByPaneGroupId(EntityId),
+    /// Resumes a dormant agent task from the project rail: opens a tab at the
+    /// handle's stored cwd with the agent's resume command prefilled — never
+    /// executed. Identified by task identity (agent + session id), so the
+    /// action cannot go stale if the handle list reorders between paint and
+    /// click.
+    ResumeDormantAgentTask {
+        agent: crate::terminal::CLIAgent,
+        session_id: String,
+    },
     /// Sets the manual color override for the active tab.
     ///
     /// - `Color(_)` — apply that color.
@@ -930,8 +946,12 @@ impl WorkspaceAction {
             ContinueConversationLocally { .. } => true,
             #[cfg(not(target_family = "wasm"))]
             ContinueThirdPartyConversationLocally { .. } => true,
+            // Opens a new tab, which changes the restorable window layout.
+            ResumeDormantAgentTask { .. } => true,
             ActivateTab(_)
             | ActivateTabByNumber(_)
+            | SelectProject(_)
+            | ActivateTaskByPaneGroupId(_)
             | ActivatePrevTab
             | ActivateNextTab
             | ActivateLastTab

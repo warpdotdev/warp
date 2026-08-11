@@ -5,7 +5,7 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use pathfinder_geometry::vector::Vector2F;
 use settings::Setting as _;
-use warpui::{AppContext, SingletonEntity};
+use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::event_listener::ChannelEventListener;
 use super::model::block::BlockSize;
@@ -32,6 +32,17 @@ pub trait TerminalManager: Any {
     /// Implementations should preserve state on [`DetachType::HiddenForClose`] or
     /// [`DetachType::Moved`] and clean up only on [`DetachType::Closed`].
     fn on_view_detached(&self, _detach_type: DetachType, _app: &mut AppContext) {}
+
+    /// Starts this session's shell if it was created with startup deferred.
+    ///
+    /// Restored tabs may be created without spawning a shell, so that opening
+    /// a window full of them does not fork a process per tab. Callers invoke
+    /// this on any path that genuinely needs a live session; implementations
+    /// that never defer (remote, mock) do nothing.
+    ///
+    /// Must be idempotent — several independent paths call it and any of them
+    /// may be the first.
+    fn ensure_shell_started(&mut self, _ctx: &mut ModelContext<Box<dyn TerminalManager>>) {}
 
     /// Returns this [`TerminalManager`] as an [`Any`], to support downcasting.
     fn as_any(&self) -> &dyn Any;
