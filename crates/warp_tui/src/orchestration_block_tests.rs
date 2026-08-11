@@ -757,6 +757,29 @@ fn confirming_a_search_result_returns_focus_to_the_acceptance_card() {
         assert_eq!(app.focused_view_id(window_id), Some(block.id()));
     });
 }
+
+#[test]
+fn background_page_invalidation_does_not_take_focus() {
+    App::test((), |mut app| async move {
+        let (block, _) = test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+        block.update(&mut app, |block, ctx| {
+            block.open_page(ConfigPage::Model, ctx);
+        });
+        let window_id = block.read(&app, |_, ctx| block.window_id(ctx));
+        let focus_target = app.update(|ctx| ctx.add_tui_view(window_id, |_| TestHostView));
+        focus_target.update(&mut app, |_, ctx| ctx.focus_self());
+
+        block.update(&mut app, |block, ctx| {
+            block.return_to_acceptance(ctx);
+        });
+
+        assert!(app.read(|ctx| focus_target.is_focused(ctx)));
+        assert_eq!(
+            block.read(&app, |block, _| block.mode),
+            CardMode::Acceptance
+        );
+    });
+}
 #[test]
 fn accepting_dispatches_once_and_releases_focus() {
     App::test((), |mut app| async move {

@@ -7,6 +7,7 @@ use ai::LLMProvider;
 use ai::api_keys::ApiKeyManager;
 use chrono::NaiveDate;
 use instant::Instant;
+use string_offset::CharOffset;
 use tempfile::TempDir;
 use warp::appearance::Appearance;
 #[cfg(feature = "voice_input")]
@@ -84,7 +85,9 @@ use super::{
 };
 use crate::agent_block::{TuiAIBlock, upgrade_url};
 use crate::autoupdate::TuiAutoupdater;
+use crate::editor_element::TuiEditorAction;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
+use crate::input::view::TuiInputAction;
 use crate::input_mode_policy::{AI_LOCKED_CONFIG, AI_UNLOCKED_CONFIG};
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 use crate::keybindings::{
@@ -5684,6 +5687,81 @@ fn background_focus_reconciliation_does_not_steal_foreground_focus() {
     });
 }
 
+#[test]
+fn empty_background_attachment_update_does_not_steal_foreground_focus() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (foreground, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (background, _) = add_focus_test_session(&mut app, &fixture, false);
+        let foreground_input_id = foreground.read(&app, |view, _| view.input_view.id());
+
+        background.update(&mut app, |view, ctx| {
+            assert!(!view.attachment_bar.as_ref(ctx).should_render(ctx));
+            view.attachment_bar
+                .update(ctx, |bar, ctx| bar.emit_model_updated_for_test(ctx));
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.focused_view_id(fixture.window_id),
+                Some(foreground_input_id),
+                "an empty background context update must not focus its hidden input"
+            );
+        });
+    });
+}
+
+#[test]
+fn foreground_input_pointer_action_recovers_focus_from_background_session() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (foreground, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (background, _) = add_focus_test_session(&mut app, &fixture, false);
+        let foreground_input = foreground.read(&app, |view, _| view.input_view.clone());
+        let background_input = background.read(&app, |view, _| view.input_view.clone());
+
+        background_input.update(&mut app, |_, ctx| ctx.focus_self());
+        foreground_input.update(&mut app, |input, ctx| {
+            input.handle_action(
+                &TuiInputAction::Editor(TuiEditorAction::SelectionStartAt {
+                    offset: CharOffset::from(1),
+                }),
+                ctx,
+            );
+        });
+
+        assert!(app.read(|ctx| foreground_input.is_focused(ctx)));
+    });
+}
+
+#[test]
+fn stale_foreground_input_pointer_action_preserves_new_pty_owner() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (foreground, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (background, _) = add_focus_test_session(&mut app, &fixture, false);
+        let foreground_input = foreground.read(&app, |view, _| view.input_view.clone());
+        let background_input = background.read(&app, |view, _| view.input_view.clone());
+
+        foreground.update(&mut app, |view, _| {
+            view.terminal_model
+                .lock()
+                .simulate_long_running_block("cat", "");
+            assert!(view.input_target().pty_owns_input());
+        });
+        background_input.update(&mut app, |_, ctx| ctx.focus_self());
+        foreground_input.update(&mut app, |input, ctx| {
+            input.handle_action(
+                &TuiInputAction::Editor(TuiEditorAction::SelectionStartAt {
+                    offset: CharOffset::from(1),
+                }),
+                ctx,
+            );
+        });
+
+        assert!(app.read(|ctx| foreground.is_focused(ctx)));
+    });
+}
 struct LateMaterializationBlockModel {
     conversation_id: AIConversationId,
     status: AIBlockOutputStatus,

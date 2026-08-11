@@ -139,6 +139,7 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
             self.presenter
                 .invalidate(&invalidation, ctx, self.window_id);
             frame = Some(self.presenter.present(ctx, &self.root_view, area));
+            self.repair_focus_outside_presented_tree(ctx);
             self.replay_mouse_position(ctx);
         }
         let frame = frame.expect("loop always presents at least once");
@@ -147,6 +148,14 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         self.renderer
             .draw(&mut writer, &frame.buffer, frame.cursor)?;
         Ok(frame.repaint_at)
+    }
+    fn repair_focus_outside_presented_tree(&mut self, ctx: &mut AppContext) {
+        let Some(focused_view_id) = ctx.focused_view_id(self.window_id) else {
+            return;
+        };
+        if !self.presenter.presented_views.contains(&focused_view_id) {
+            self.root_view.update(ctx, |_, ctx| ctx.focus_self());
+        }
     }
 
     /// Redispatches the last known pointer position as a synthetic

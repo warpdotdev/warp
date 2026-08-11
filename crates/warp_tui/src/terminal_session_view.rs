@@ -1900,6 +1900,7 @@ impl TuiTerminalSessionView {
         });
 
         ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
+            TuiInputViewEvent::FocusRequested => view.reconcile_focus(ctx),
             TuiInputViewEvent::Submitted(text) => view.handle_submitted(text.clone(), None, ctx),
             TuiInputViewEvent::Pasted(text) => view.handle_pasted(text.clone(), ctx),
             TuiInputViewEvent::BackspaceAtEmptyInput => {
@@ -3400,7 +3401,7 @@ impl TuiTerminalSessionView {
             TuiAttachmentBarEvent::ShowHint(text) => {
                 self.show_transient_hint(text.clone(), ctx);
             }
-            TuiAttachmentBarEvent::ReturnFocus => ctx.focus(&self.input_view),
+            TuiAttachmentBarEvent::ReturnFocus => self.reconcile_focus(ctx),
         }
         ctx.notify();
     }
