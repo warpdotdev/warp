@@ -13022,9 +13022,13 @@ impl Workspace {
         // Automatic grouping places a genuinely new tab. A restoration is
         // excluded: the window snapshot carries each tab's own group and its
         // placed-by-automation marker, and overwriting them here would undo a
-        // placement the user made before the restart.
+        // placement the user made before the restart. A tab that inherited a
+        // group takes the path that respects a manual one.
         if !is_restoration {
-            self.place_tab_by_auto_grouping(new_pane_group_id, ctx);
+            match inherited_group_id {
+                Some(group_id) => self.place_tab_born_into_group(new_pane_group_id, group_id, ctx),
+                None => self.place_tab_by_auto_grouping(new_pane_group_id, ctx),
+            }
         }
     }
 
@@ -13071,7 +13075,10 @@ impl Workspace {
             self.expand_tab_group(group_id, ctx);
         }
 
-        self.place_tab_by_auto_grouping(new_pane_group_id, ctx);
+        match group_id {
+            Some(group_id) => self.place_tab_born_into_group(new_pane_group_id, group_id, ctx),
+            None => self.place_tab_by_auto_grouping(new_pane_group_id, ctx),
+        }
     }
 
     pub fn add_tab_for_cloud_notebook(

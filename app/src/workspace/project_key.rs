@@ -148,9 +148,14 @@ pub fn display_name<'a>(
     if !collides {
         return name;
     }
+    qualified_name(key).unwrap_or(name)
+}
 
-    // Qualify with the segment above the name, so two repositories called
-    // `api` read as `services/api` and `vendor/api`.
+/// The name qualified with the segment above it, so two repositories called
+/// `api` read as `services/api` and `vendor/api`. `None` when the key has no
+/// such segment to qualify with.
+fn qualified_name(key: &ProjectKey) -> Option<String> {
+    let name = base_name(key);
     let qualifier_source = if key.path().file_name().and_then(|n| n.to_str()) == Some(".git") {
         key.path().parent()
     } else {
@@ -161,7 +166,16 @@ pub fn display_name<'a>(
         .and_then(|path| path.parent())
         .and_then(|parent| parent.file_name())
         .and_then(|segment| segment.to_str())
-        .map_or(name.clone(), |segment| format!("{segment}/{name}"))
+        .map(|segment| format!("{segment}/{name}"))
+}
+
+/// Whether `name` is one automatic grouping could have derived for `key`.
+///
+/// Derivation has exactly two outcomes — the bare project name and that name
+/// qualified by one parent segment — so anything else was typed by the user.
+/// Callers use this to re-qualify their own names without overwriting a rename.
+pub fn is_derived_name(key: &ProjectKey, name: &str) -> bool {
+    name == base_name(key) || qualified_name(key).as_deref() == Some(name)
 }
 
 #[cfg(test)]

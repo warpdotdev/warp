@@ -5,7 +5,7 @@ use warpui::elements::DraggableState;
 use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::platform::TerminationMode;
 use warpui::windowing::WindowManager;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
+use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, WindowId};
 
 /// Singleton model that owns all cross-window tab drag state.
 ///
@@ -244,9 +244,16 @@ enum DragPhase {
     /// subsequent `finalize` call — rather than as a long-lived drag-hover
     /// state. `on_drag_while_inserted` and `reverse_handoff` provide an escape
     /// hatch if a drag event arrives before `finalize` completes.
+    ///
+    /// The tab is addressed by the stable identity of its pane group rather
+    /// than by the index it was inserted at: the target window can reorder the
+    /// tab list on its own (automatic grouping moves an arriving tab next to
+    /// its project's group), which would leave a stored index pointing at a
+    /// bystander tab. Every consumer resolves the index from this id at the
+    /// point of use via [`Workspace::tab_index_for_pane_group`].
     InsertedInTarget {
         target_window_id: WindowId,
-        target_insertion_index: usize,
+        target_pane_group_id: EntityId,
     },
     /// A reverse-handoff is in progress: the tab is being moved back out of a
     /// target window and into the preview window. Set by `on_drag_while_inserted`
@@ -472,12 +479,15 @@ impl CrossWindowTabDrag {
             .is_some_and(|d| d.has_dedicated_preview_window())
     }
 
-    pub fn handed_off_target(&self) -> Option<(WindowId, usize)> {
+    /// The window a tab has already been handed off to, if the drag is in
+    /// `InsertedInTarget`. The tab's index in that window is deliberately not
+    /// returned: it is only valid until the target reorders its tab list, so
+    /// consumers that need it resolve it from the live tab list instead.
+    pub fn handed_off_target(&self) -> Option<WindowId> {
         self.active_drag.as_ref().and_then(|d| match &d.phase {
             DragPhase::InsertedInTarget {
-                target_window_id,
-                target_insertion_index,
-            } => Some((*target_window_id, *target_insertion_index)),
+                target_window_id, ..
+            } => Some(*target_window_id),
             DragPhase::GhostInTarget { .. } | DragPhase::Floating | DragPhase::Transitioning => {
                 None
             }
@@ -658,16 +668,16 @@ impl CrossWindowTabDrag {
             }
             DragPhase::InsertedInTarget {
                 target_window_id,
-                target_insertion_index,
+                target_pane_group_id,
             } => {
                 let target_wid = *target_window_id;
-                let target_idx = *target_insertion_index;
+                let pane_group_id = *target_pane_group_id;
                 self.on_drag_while_inserted(
                     caller_window_id,
                     drag_origin_on_screen,
                     drag_center_on_screen,
                     target_wid,
-                    target_idx,
+                    pane_group_id,
                     ctx,
                 )
             }
@@ -827,7 +837,7 @@ impl CrossWindowTabDrag {
         drag_origin_on_screen: Vector2F,
         drag_center_on_screen: Vector2F,
         target_window_id: WindowId,
-        target_insertion_index: usize,
+        target_pane_group_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> DragResult {
         let Some(drag) = self.active_drag.as_mut() else {
@@ -857,52 +867,50 @@ impl CrossWindowTabDrag {
             .unwrap_or(false);
 
         if still_over_target_tab_bar {
-            let new_insertion_index = WorkspaceRegistry::as_ref(ctx)
+            // Where the tab sits right now, and where the cursor says it should
+            // go. The current index is re-read every frame rather than carried
+            // in the phase: the target window reorders its own tab list when
+            // automatic grouping pulls the arriving tab next to its project's
+            // group, which would strand a remembered index on a bystander tab.
+            let indices = WorkspaceRegistry::as_ref(ctx)
                 .get(target_window_id, ctx)
-                .map(|ws| {
+                .and_then(|ws| {
                     ws.read(ctx, |workspace, ctx| {
-                        workspace.tab_insertion_index_for_cursor(
-                            target_window_id,
-                            drag_center_on_screen,
-                            ctx,
-                        )
+                        Some((
+                            workspace.tab_index_for_pane_group(target_pane_group_id)?,
+                            workspace.tab_insertion_index_for_cursor(
+                                target_window_id,
+                                drag_center_on_screen,
+                                ctx,
+                            ),
+                        ))
                     })
                 });
 
-            if let Some(new_insertion_index) = new_insertion_index {
-                let target_index = if new_insertion_index > target_insertion_index {
+            let current_target_index = indices.map(|(current_index, new_insertion_index)| {
+                let target_index = if new_insertion_index > current_index {
                     new_insertion_index - 1
                 } else {
                     new_insertion_index
                 };
 
-                if target_index != target_insertion_index {
-                    if let Some(target_ws) =
+                if target_index != current_index
+                    && let Some(target_ws) =
                         WorkspaceRegistry::as_ref(ctx).get(target_window_id, ctx)
-                    {
-                        target_ws.update(ctx, |workspace, ctx| {
-                            let tab = workspace.tabs.remove(target_insertion_index);
-                            workspace.tabs.insert(target_index, tab);
-                            workspace.set_active_tab_index(target_index, ctx);
-                            ctx.notify();
-                        });
-                    }
-                    drag.phase = DragPhase::InsertedInTarget {
-                        target_window_id,
-                        target_insertion_index: target_index,
-                    };
+                {
+                    target_ws.update(ctx, |workspace, ctx| {
+                        let tab = workspace.tabs.remove(current_index);
+                        workspace.tabs.insert(target_index, tab);
+                        workspace.set_active_tab_index(target_index, ctx);
+                        ctx.notify();
+                    });
                 }
-            }
+                target_index
+            });
 
-            let current_target_index = match &drag.phase {
-                DragPhase::InsertedInTarget {
-                    target_insertion_index,
-                    ..
-                } => *target_insertion_index,
-                _ => target_insertion_index,
-            };
-
-            if let Some(target_window_bounds) = ctx.window_bounds(&target_window_id) {
+            if let Some(current_target_index) = current_target_index
+                && let Some(target_window_bounds) = ctx.window_bounds(&target_window_id)
+            {
                 let mouse_pos_in_target = drag_center_on_screen - target_window_bounds.origin();
                 let mouse_offset = -drag.initial_drag_center_offset;
                 if let Some(target_ws) = WorkspaceRegistry::as_ref(ctx).get(target_window_id, ctx) {
@@ -938,7 +946,7 @@ impl CrossWindowTabDrag {
         self.reverse_handoff(
             caller_window_id,
             target_window_id,
-            target_insertion_index,
+            target_pane_group_id,
             ctx,
         );
         DragResult::Handled
@@ -1308,13 +1316,13 @@ impl CrossWindowTabDrag {
             }
             DragPhase::InsertedInTarget {
                 target_window_id,
-                target_insertion_index,
+                target_pane_group_id,
             } => {
                 log::info!(
-                    "tab_drag: finalize branch=InsertedInTarget target_wid={target_window_id} insertion_index={target_insertion_index} source_wid={}",
+                    "tab_drag: finalize branch=InsertedInTarget target_wid={target_window_id} source_wid={}",
                     drag.source_window_id
                 );
-                self.finalize_handoff(&drag, *target_window_id, *target_insertion_index, ctx)
+                self.finalize_handoff(&drag, *target_window_id, *target_pane_group_id, ctx)
             }
             DragPhase::Transitioning => {
                 log::warn!(
@@ -1445,13 +1453,16 @@ impl CrossWindowTabDrag {
         &self,
         drag: &ActiveDrag,
         target_window_id: WindowId,
-        target_tab_index: usize,
+        target_pane_group_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> DropResult {
         if let Some(ws) = WorkspaceRegistry::as_ref(ctx).get(target_window_id, ctx) {
             ws.update(ctx, |ws, _ctx| {
                 ws.current_workspace_state.is_tab_being_dragged = false;
-                if let Some(tab) = ws.tabs.get(target_tab_index) {
+                if let Some(tab) = ws
+                    .tab_index_for_pane_group(target_pane_group_id)
+                    .and_then(|index| ws.tabs.get(index))
+                {
                     tab.draggable_state.set_suppress_overlay_paint(false);
                     tab.draggable_state.cancel_drag();
                 }
@@ -1564,7 +1575,7 @@ impl CrossWindowTabDrag {
 
         drag.phase = DragPhase::InsertedInTarget {
             target_window_id: target.window_id,
-            target_insertion_index: target.insertion_index,
+            target_pane_group_id: pane_group_id,
         };
     }
 
@@ -1633,7 +1644,7 @@ impl CrossWindowTabDrag {
 
         drag.phase = DragPhase::InsertedInTarget {
             target_window_id: caller_window_id,
-            target_insertion_index: insertion_index,
+            target_pane_group_id: pane_group_id,
         };
         log::info!(
             "tab_drag: execute_handoff_back_to_caller -> InsertedInTarget target_wid={caller_window_id} insertion_index={insertion_index}"
@@ -1717,7 +1728,7 @@ impl CrossWindowTabDrag {
 
         drag.phase = DragPhase::InsertedInTarget {
             target_window_id: target.window_id,
-            target_insertion_index: target.insertion_index,
+            target_pane_group_id: pane_group_id,
         };
         log::info!(
             "tab_drag: execute_handoff_multi_tab_to_other -> InsertedInTarget target_wid={} insertion_index={}",
@@ -1735,11 +1746,11 @@ impl CrossWindowTabDrag {
         &mut self,
         caller_window_id: WindowId,
         target_window_id: WindowId,
-        target_insertion_index: usize,
+        target_pane_group_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
         log::info!(
-            "tab_drag: reverse_handoff caller_wid={caller_window_id} target_wid={target_window_id} target_insertion_index={target_insertion_index} (phase Transitioning->Floating)"
+            "tab_drag: reverse_handoff caller_wid={caller_window_id} target_wid={target_window_id} (phase Transitioning->Floating)"
         );
         let Some(drag) = self.active_drag.as_mut() else {
             log::warn!("tab_drag: reverse_handoff no active drag");
@@ -1763,8 +1774,11 @@ impl CrossWindowTabDrag {
             return;
         }
 
+        // Resolved from identity rather than from the index the tab was
+        // inserted at, which the target may have since reordered.
         let Some(transferred_tab) = target_workspace.read(ctx, |workspace, ctx| {
-            workspace.get_tab_transfer_info_for_attach(target_insertion_index, ctx)
+            let index = workspace.tab_index_for_pane_group(target_pane_group_id)?;
+            workspace.get_tab_transfer_info_for_attach(index, ctx)
         }) else {
             drag.phase = DragPhase::Floating;
             return;
@@ -1781,7 +1795,9 @@ impl CrossWindowTabDrag {
 
         target_workspace.update(ctx, |workspace, ctx| {
             workspace.current_workspace_state.is_tab_being_dragged = false;
-            workspace.remove_tab_without_undo(target_insertion_index, ctx);
+            if let Some(index) = workspace.tab_index_for_pane_group(target_pane_group_id) {
+                workspace.remove_tab_without_undo(index, ctx);
+            }
         });
 
         if !preview_is_self {

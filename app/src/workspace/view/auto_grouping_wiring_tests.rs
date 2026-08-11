@@ -525,6 +525,194 @@ fn tab_inserted_from_another_window_is_auto_grouped() {
     });
 }
 
+// The arriving tab's project already has a group in the target window, so
+// insertion is immediately followed by a move: the tab does not stay at the
+// index it was inserted at. Anything that remembers that index across the call
+// — the cross-window drag phase used to — would go on addressing whichever tab
+// slid into the vacated slot.
+#[test]
+fn tab_inserted_into_a_window_that_already_groups_its_project_moves_off_its_insertion_index() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_grouping(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let donor = mock_workspace(&mut app);
+        let donor_pane_group = donor.update(&mut app, |donor, _| donor.tabs[0].pane_group.clone());
+        let donor_anchor = donor.update(&mut app, |donor, ctx| anchor_pane(donor, 0, ctx));
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 3, ctx);
+            set_git_resolution(workspace, API_DIR, GitResolution::Resolved(path(API_KEY)));
+
+            // Two of the target's own tabs form the project's group, leaving a
+            // bystander tab after it.
+            for tab_index in [0, 1] {
+                let anchor = anchor_pane(workspace, tab_index, ctx);
+                set_pane_directory(workspace, anchor, API_DIR);
+                directory_changed(workspace, tab_index, ctx);
+            }
+            let bystander = workspace.tabs[2].pane_group.id();
+            assert_eq!(group_key_of_tab(workspace, 0).as_deref(), Some(API_KEY));
+            assert_eq!(group_key_of_tab(workspace, 1).as_deref(), Some(API_KEY));
+
+            // The arriving tab reports the same project before it lands.
+            set_pane_directory(workspace, donor_anchor, API_DIR);
+
+            let insertion_index = workspace.tabs.len();
+            workspace.insert_transferred_tab_at_index(
+                TransferredTab {
+                    pane_group: donor_pane_group.clone(),
+                    color: None,
+                    custom_title: None,
+                    left_panel_open: false,
+                    vertical_tabs_panel_open: false,
+                    right_panel_open: false,
+                    is_right_panel_maximized: false,
+                    draggable_state: Default::default(),
+                },
+                insertion_index,
+                ctx,
+            );
+
+            let arrived = tab_index_of(workspace, donor_pane_group.id());
+            assert_eq!(
+                group_key_of_tab(workspace, arrived).as_deref(),
+                Some(API_KEY),
+                "the arriving tab should join the group its project already has"
+            );
+            assert_ne!(
+                arrived, insertion_index,
+                "joining the group has to move the tab off the index it was inserted at"
+            );
+            assert_eq!(
+                workspace.tabs[insertion_index].pane_group.id(),
+                bystander,
+                "the insertion index now names a bystander tab, not the arriving one"
+            );
+            assert_groups_contiguous(workspace);
+        });
+    });
+}
+
+// R14 adopts a project key for a group the user made from a *detached* tab.
+// Pulling one tab out of a group that already carries that key is not that
+// case: adopting again would leave two groups claiming one project under one
+// name, and the tab would be pulled straight back into whichever one wins.
+#[test]
+fn new_group_from_a_tab_already_in_its_projects_group_does_not_adopt_the_key() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_grouping(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 2, ctx);
+            set_git_resolution(workspace, API_DIR, GitResolution::Resolved(path(API_KEY)));
+            for tab_index in [0, 1] {
+                let anchor = anchor_pane(workspace, tab_index, ctx);
+                set_pane_directory(workspace, anchor, API_DIR);
+                directory_changed(workspace, tab_index, ctx);
+            }
+            let api_group = workspace.tabs[0]
+                .group_id
+                .expect("both tabs should share the project's group");
+            assert_eq!(workspace.tabs[1].group_id, Some(api_group));
+
+            // The user pulls the second tab out into a group of its own.
+            let pulled_out = workspace.tabs[1].pane_group.id();
+            let own_group = TabGroup::new();
+            let own_group_id = own_group.id;
+            workspace.tab_groups.insert(own_group_id, own_group);
+            workspace.tabs[1].group_id = Some(own_group_id);
+
+            workspace.adopt_project_key_for_new_group(own_group_id, pulled_out, ctx);
+
+            assert_eq!(
+                workspace
+                    .tab_groups
+                    .get(&own_group_id)
+                    .and_then(|group| group.project_key.clone()),
+                None,
+                "the new group must stay an ordinary manual group"
+            );
+            assert_eq!(
+                workspace
+                    .tab_groups
+                    .get(&api_group)
+                    .and_then(|group| group.project_key.clone())
+                    .as_deref(),
+                Some(API_KEY),
+                "the project's original group keeps its key"
+            );
+            let pulled_out_index = tab_index_of(workspace, pulled_out);
+            assert_eq!(
+                workspace.tabs[pulled_out_index].group_id,
+                Some(own_group_id),
+                "and the tab stays in the group the user just made for it"
+            );
+        });
+    });
+}
+
+// A tab born into a group has been placed — by the user's own new-tab
+// placement setting — so automation must not treat it as awaiting placement
+// and pull it out into its project's group.
+#[test]
+fn tab_born_into_a_manual_group_stays_there() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_grouping(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 2, ctx);
+            set_git_resolution(workspace, API_DIR, GitResolution::Resolved(path(API_KEY)));
+
+            // Tab 0 establishes the project's group, so there is somewhere for
+            // the newborn tab to be wrongly pulled into.
+            let anchor = anchor_pane(workspace, 0, ctx);
+            set_pane_directory(workspace, anchor, API_DIR);
+            directory_changed(workspace, 0, ctx);
+            assert_eq!(group_key_of_tab(workspace, 0).as_deref(), Some(API_KEY));
+
+            // Tab 1 stands in for a tab created inside a manual group: it is
+            // born a member, and reports the same project. A tab born into a
+            // group is never queued for placement, so the marker `grow_to`
+            // left on it is cleared to match.
+            let manual = TabGroup::new();
+            let manual_group_id = manual.id;
+            workspace.tab_groups.insert(manual_group_id, manual);
+            workspace.tabs[1].group_id = Some(manual_group_id);
+            workspace.tabs[1].placed_by_automation = false;
+            let newborn = workspace.tabs[1].pane_group.id();
+            let newborn_anchor = anchor_pane(workspace, 1, ctx);
+            set_pane_directory(workspace, newborn_anchor, API_DIR);
+
+            workspace.place_tab_born_into_group(newborn, manual_group_id, ctx);
+
+            let newborn_index = tab_index_of(workspace, newborn);
+            assert_eq!(
+                workspace.tabs[newborn_index].group_id,
+                Some(manual_group_id),
+                "the group it was born into is a placement, not a gap to fill"
+            );
+            assert!(
+                !workspace.tabs[newborn_index].placed_by_automation,
+                "and it must not be left queued for placement"
+            );
+        });
+    });
+}
+
 #[test]
 fn pinning_removes_a_tab_from_its_group_and_unpinning_regroups_it() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);

@@ -267,16 +267,28 @@ impl Workspace {
         if !self.tab_groups.contains_key(&group_id) {
             return;
         }
+        // The project already has a group here — the tab was pulled out of it,
+        // not out of nowhere. Adopting the key would leave the window with two
+        // groups claiming one project under the same name, and the tab would be
+        // pulled straight back into whichever one `group_for_project_key`
+        // picks. "Give this tab its own group" is honoured as an ordinary
+        // manual group instead, which R14 re-attaches from just the same.
+        let existing = self.group_for_project_key(&key.to_storage_string());
+        if existing.is_some_and(|existing| existing != group_id) {
+            return;
+        }
 
         if let Some(group) = self.tab_groups.get_mut(&group_id) {
             group.project_key = Some(key.to_storage_string());
         }
         // Named after the key is stored so the name is qualified against every
-        // key in the window, this one included.
+        // key in the window, this one included; then the window's other
+        // automatic names are re-derived against the key just added.
         let name = self.derived_group_name(&key);
         if let Some(group) = self.tab_groups.get_mut(&group_id) {
             group.name = Some(name);
         }
+        self.requalify_derived_group_names();
 
         // Re-attaches through the ordinary derivation rather than by writing
         // tracked-ness: the group now carries exactly the key the tab resolves
@@ -311,16 +323,15 @@ impl Workspace {
         let Some(group) = self.tab_groups.get(&group_id) else {
             return;
         };
-        let previous_name = group.name.clone();
-        let previously_derived_name = group
+        let previous_key = group
             .project_key
             .clone()
-            .map(|stored| ProjectKey::from_path(PathBuf::from(stored)))
-            .map(|previous_key| self.derived_group_name(&previous_key));
-        let name_was_derived = match (&previous_name, &previously_derived_name) {
+            .map(|stored| ProjectKey::from_path(PathBuf::from(stored)));
+        let name_was_derived = match (&group.name, &previous_key) {
             // An unnamed group has nothing of the user's to protect.
             (None, _) => true,
-            (Some(name), Some(derived)) => name == derived,
+            (Some(name), Some(previous_key)) => project_key::is_derived_name(previous_key, name),
+            // A name with no key behind it cannot be shown to be derived.
             (Some(_), None) => false,
         };
 
@@ -335,6 +346,7 @@ impl Workspace {
                 group.name = Some(name);
             }
         }
+        self.requalify_derived_group_names();
     }
 
     /// Creates a group carrying `key` and moves the tab into it.
@@ -363,11 +375,13 @@ impl Workspace {
         group.project_key = Some(key.to_storage_string());
         self.tab_groups.insert(group_id, group);
         // Named after insertion so the name is qualified against every key in
-        // the window, this one included.
+        // the window, this one included; then the window's other automatic
+        // names are re-derived against the key this group just added.
         let name = self.derived_group_name(key);
         if let Some(group) = self.tab_groups.get_mut(&group_id) {
             group.name = Some(name);
         }
+        self.requalify_derived_group_names();
 
         self.assign_tab_to_group(tab_index, Some(group_id), ctx);
         self.move_tab_to_index(tab_index, target, ctx);
@@ -395,6 +409,37 @@ impl Workspace {
         project_key::display_name(key, others.iter())
     }
 
+    /// Re-derives every automatic group name against the window's keys as they
+    /// now stand.
+    ///
+    /// R8 qualifies *both* sides of a collision, and a name is stored once at
+    /// keying time: without this, adding `/work/vendor/api` to a window that
+    /// already groups `/work/services/api` would read as `api` + `vendor/api`.
+    /// A name the user typed falls outside the two forms derivation can
+    /// produce, so it is recognised and left alone.
+    fn requalify_derived_group_names(&mut self) {
+        let keys = self.project_keys_in_window();
+        let renames: Vec<(TabGroupId, String)> = self
+            .tab_groups
+            .values()
+            .filter_map(|group| {
+                let key = ProjectKey::from_path(PathBuf::from(group.project_key.as_ref()?));
+                let name = group.name.as_deref()?;
+                if !project_key::is_derived_name(&key, name) {
+                    return None;
+                }
+                let requalified = project_key::display_name(&key, keys.iter());
+                (requalified != name).then_some((group.id, requalified))
+            })
+            .collect();
+
+        for (group_id, name) in renames {
+            if let Some(group) = self.tab_groups.get_mut(&group_id) {
+                group.name = Some(name);
+            }
+        }
+    }
+
     /// Every project key in use by a group in this window.
     fn project_keys_in_window(&self) -> Vec<ProjectKey> {
         self.tab_groups
@@ -404,7 +449,12 @@ impl Workspace {
             .collect()
     }
 
-    fn tab_index_for_pane_group(&self, pane_group_id: EntityId) -> Option<usize> {
+    /// Resolves a tab's stable pane-group identity to its current index.
+    ///
+    /// Automatic grouping moves tabs between reconcile calls, so any index held
+    /// across a call boundary can be stale. Callers that must survive such a
+    /// move hold the [`EntityId`] and resolve it here at the point of use.
+    pub(crate) fn tab_index_for_pane_group(&self, pane_group_id: EntityId) -> Option<usize> {
         self.tabs
             .iter()
             .position(|tab| tab.pane_group.id() == pane_group_id)
@@ -680,6 +730,39 @@ impl Workspace {
         };
         self.tabs[tab_index].placed_by_automation = true;
 
+        let key = self.resolve_project_key_for_tab(pane_group_id, ctx);
+        self.reconcile_tab_auto_group(pane_group_id, key, ctx);
+    }
+
+    /// Places a new tab that inherited the active tab's group.
+    ///
+    /// Inheriting a *keyed* group is positional rather than a placement: the
+    /// tab is still brand new, and is queued for placement like any other so it
+    /// follows its own project as soon as its key resolves.
+    ///
+    /// Inheriting a group the user made by hand is a placement, and the
+    /// queued-for-placement marker outranks placement (see
+    /// [`Workspace::note_manual_tab_placement`]) — setting it would have the
+    /// first reconcile pull the tab straight back out of the group it was
+    /// deliberately born into. Such a tab is only reconciled, which records the
+    /// key it resolves to without claiming it for automation.
+    pub(crate) fn place_tab_born_into_group(
+        &mut self,
+        pane_group_id: EntityId,
+        group_id: TabGroupId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.auto_grouping_enabled(ctx) {
+            return;
+        }
+        let born_into_manual_group = self
+            .tab_groups
+            .get(&group_id)
+            .is_some_and(|group| group.project_key.is_none());
+        if !born_into_manual_group {
+            self.place_tab_by_auto_grouping(pane_group_id, ctx);
+            return;
+        }
         let key = self.resolve_project_key_for_tab(pane_group_id, ctx);
         self.reconcile_tab_auto_group(pane_group_id, key, ctx);
     }
