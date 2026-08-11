@@ -4,8 +4,8 @@ use warp_core::ui::icons::Icon as WarpIcon;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{ColorScheme, Fill as WarpThemeFill, WarpTheme};
 use warpui::elements::{
-    ChildAnchor, ConstrainedBox, Container, CornerRadius, Element, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Radius, Stack,
+    Align, ChildAnchor, ConstrainedBox, Container, CornerRadius, Element, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack,
 };
 
 use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
@@ -308,6 +308,18 @@ fn render_circle(
         .finish()
 }
 
+/// Reserves the caller's full `total_size` square for `circle` and centers it inside.
+/// `Stack` and `ConstrainedBox` paint children at the origin rather than centering, so
+/// without the `Align` the circle — only `circle_size(total)` wide — sits flush against
+/// the box's top-left, and the corner overlay (anchored to the box's bottom-right by
+/// `corner_overlay_offset`) lands clear of the circle instead of tucked into its edge.
+fn circle_centered_in_box(circle: Box<dyn Element>, total_size: f32) -> Box<dyn Element> {
+    ConstrainedBox::new(Align::new(circle).finish())
+        .with_width(total_size)
+        .with_height(total_size)
+        .finish()
+}
+
 /// Builds the neutral circle: a full-`total_size` container with the glyph at
 /// `NEUTRAL_GLYPH_RATIO * total_size`. Used for non-agent surfaces (plain terminal,
 /// code, file tabs, etc.) which have no status overlay and therefore should fill the
@@ -412,12 +424,7 @@ fn render_with_cloud_status_badge(
     };
 
     let cloud_offset = corner_overlay_offset(total_size, overlay_extra_overhang_ratio);
-    let mut stack = Stack::new().with_child(
-        ConstrainedBox::new(circle)
-            .with_width(total_size)
-            .with_height(total_size)
-            .finish(),
-    );
+    let mut stack = Stack::new().with_child(circle_centered_in_box(circle, total_size));
     stack.add_positioned_child(
         cloud_with_status,
         OffsetPositioning::offset_from_parent(
@@ -444,15 +451,9 @@ fn render_with_optional_status_badge(
     status_container_background: WarpThemeFill,
 ) -> Box<dyn Element> {
     let Some(status) = status else {
-        // No status badge: still reserve the full `total_size` footprint the caller
-        // asked for, so badged and un-badged variants occupy identical space.
-        // `ConstrainedBox` only tightens constraints — it does not center — so the
-        // circle (which is only `circle_size(total)` wide) is painted at the box's
-        // top-left. Callers that need it centered must wrap it in `Align`.
-        return ConstrainedBox::new(circle)
-            .with_width(total_size)
-            .with_height(total_size)
-            .finish();
+        // No status badge: still occupy the full `total_size` footprint so badged and
+        // un-badged variants take identical space in their caller's layout.
+        return circle_centered_in_box(circle, total_size);
     };
     let (icon, color) = status.status_icon_and_color(theme, StatusColorStyle::Standard);
     let badge_icon_diameter = badge_icon_size(total_size, badge_style);
@@ -477,12 +478,7 @@ fn render_with_optional_status_badge(
         .finish();
 
     let badge_corner_offset = corner_overlay_offset(total_size, overlay_extra_overhang_ratio);
-    let mut stack = Stack::new().with_child(
-        ConstrainedBox::new(circle)
-            .with_width(total_size)
-            .with_height(total_size)
-            .finish(),
-    );
+    let mut stack = Stack::new().with_child(circle_centered_in_box(circle, total_size));
     stack.add_positioned_child(
         badge_with_ring,
         OffsetPositioning::offset_from_parent(
