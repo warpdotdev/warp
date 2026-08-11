@@ -25,6 +25,7 @@ use oneshot::{Canceled, Receiver};
 use repo_metadata::local_model::IndexedRepoState;
 use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
 use session_sharing_protocol::sharer::SessionRetentionReason;
+use tracing::Instrument as _;
 use uuid::Uuid;
 use warp_cli::agent::{Harness, OutputFormat};
 use warp_cli::mcp::MCPSpec;
@@ -2379,7 +2380,15 @@ impl AgentDriver {
             safe: ("Running agent driver"),
             full: ("Running agent driver for query `{:?}`", task.prompt)
         );
-        let setup_events = foreground
+
+        let setup_span = tracing::info_span!("agent_run_setup", tags.cloud_agent = true);
+        let (
+            setup_events,
+            task_id_for_refresh,
+            ai_client_for_refresh,
+            oidc_strategy_for_refresh,
+        ) = async {
+            let setup_events = foreground
             .spawn(|me, ctx| {
                 let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
                 match me.task_id {
@@ -2766,6 +2775,16 @@ impl AgentDriver {
                 (task_id, ai_client, oidc_strategy)
             })
             .await?;
+
+            Ok::<_, AgentDriverError>((
+                setup_events,
+                task_id_for_refresh,
+                ai_client_for_refresh,
+                oidc_strategy_for_refresh,
+            ))
+        }
+        .instrument(setup_span)
+        .await?;
 
         // Run the harness with a prompt, racing it against optional background refresh
         // loops for git credentials and Bedrock OIDC credentials via
@@ -3947,6 +3966,8 @@ impl AgentDriver {
 
         // Submit the AI query.
         if !self.skip_initial_turn {
+            tracing::info!("Submitting initial AI query");
+
             self.terminal_driver.update(ctx, |td, ctx| {
                 td.with_terminal_view(ctx, |terminal, ctx| match task_prompt {
                     AgentRunPrompt::Local(prompt_str) => {
