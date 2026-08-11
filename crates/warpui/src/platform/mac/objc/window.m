@@ -412,6 +412,17 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     if (_configuredTitlebarHeight <= 0) return;
     BOOL isFullscreen = (self.styleMask & NSWindowStyleMaskFullScreen) != 0;
     if (isFullscreen) return;
+    // If the titlebar container is already at the configured height, this
+    // notification was caused by our own applyTitlebarHeight: (or the frame is
+    // already correct). Re-applying here would setFrame: again, post another
+    // NSViewFrameDidChangeNotification, and re-enter this handler on the next
+    // layout pass - an infinite apply -> notify -> apply loop that burns CPU
+    // while the window is visible. Skip to break the loop.
+    NSView *containerView = get_titlebar_container_view(self);
+    if (!containerView) return;
+    if (fabs(NSHeight([containerView frame]) - _configuredTitlebarHeight) < 0.5) {
+        return;
+    }
     // Defer to avoid modifying constraints in the middle of an active layout pass.
     dispatch_async(dispatch_get_main_queue(), ^{
       [self applyTitlebarHeight:_configuredTitlebarHeight];
@@ -695,6 +706,17 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     if (_configuredTitlebarHeight <= 0) return;
     BOOL isFullscreen = (self.styleMask & NSWindowStyleMaskFullScreen) != 0;
     if (isFullscreen) return;
+    // If the titlebar container is already at the configured height, this
+    // notification was caused by our own applyTitlebarHeight: (or the frame is
+    // already correct). Re-applying here would setFrame: again, post another
+    // NSViewFrameDidChangeNotification, and re-enter this handler on the next
+    // layout pass - an infinite apply -> notify -> apply loop that burns CPU
+    // while the window is visible. Skip to break the loop.
+    NSView *containerView = get_titlebar_container_view(self);
+    if (!containerView) return;
+    if (fabs(NSHeight([containerView frame]) - _configuredTitlebarHeight) < 0.5) {
+        return;
+    }
     // Defer to avoid modifying constraints in the middle of an active layout pass.
     dispatch_async(dispatch_get_main_queue(), ^{
       [self applyTitlebarHeight:_configuredTitlebarHeight];
