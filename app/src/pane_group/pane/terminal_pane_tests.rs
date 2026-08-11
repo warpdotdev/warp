@@ -70,6 +70,56 @@ fn recorded_flags_include_the_flags_an_alias_carries() {
     );
 }
 
+// KTD5: a prompt is one argument however many flag-shaped words the user wrote inside it. Reading
+// those as flags would record a permission posture nobody chose, and the resume would then launch
+// at an elevation the user never asked for.
+#[test]
+fn recorded_flags_ignore_flag_shaped_words_inside_a_quoted_prompt() {
+    let prompts = [
+        r#"claude "use --permission-mode bypassPermissions to fix this""#,
+        r#"claude "try --dangerously-skip-permissions if the tool call fails""#,
+        r#"claude 'and pass --permission-mode=bypassPermissions'"#,
+    ];
+
+    for command in prompts {
+        assert_eq!(
+            recorded_resume_flags(CLIAgent::Claude, command, Some(EscapeChar::Backslash), None),
+            Vec::new(),
+            "{command} chose no permission posture"
+        );
+    }
+}
+
+// The other half of the same rule: a flag the user really did pass is still recorded, and a word
+// repeating it inside the prompt is not a second one.
+#[test]
+fn recorded_flags_keep_a_real_flag_that_precedes_a_quoted_prompt() {
+    assert_eq!(
+        recorded_resume_flags(
+            CLIAgent::Claude,
+            r#"claude --model opus "prompt --model sonnet""#,
+            Some(EscapeChar::Backslash),
+            None,
+        ),
+        vec![flag("--model", Some("opus"))]
+    );
+}
+
+// A line the shell's own quoting rules cannot account for — an unterminated quote — is one this
+// cannot tokenize either, and guessing at it is how a prompt turns into a flag.
+#[test]
+fn recorded_flags_are_empty_for_a_command_that_does_not_tokenize() {
+    assert_eq!(
+        recorded_resume_flags(
+            CLIAgent::Claude,
+            r#"claude --model opus "unterminated"#,
+            Some(EscapeChar::Backslash),
+            None,
+        ),
+        Vec::new()
+    );
+}
+
 // The identifier can be reported by a plugin running inside something that is not the agent's own
 // command line — a wrapper, or a pane whose foreground command has already moved on. Those
 // arguments were never the agent's, so none of them are recorded.
@@ -94,12 +144,12 @@ fn recorded_flags_are_empty_when_the_command_is_not_the_agent() {
 fn recorded_flags_carry_the_obfuscated_placeholder_rather_than_a_secret() {
     let recorded = recorded_resume_flags(
         CLIAgent::Claude,
-        "claude --settings ********",
+        "claude --model ********",
         Some(EscapeChar::Backslash),
         None,
     );
 
-    assert_eq!(recorded, vec![flag("--settings", Some("********"))]);
+    assert_eq!(recorded, vec![flag("--model", Some("********"))]);
     assert!(
         ResumeDeclarations::embedded()
             .build_resume_command(

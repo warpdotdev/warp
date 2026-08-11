@@ -297,7 +297,7 @@ fn dropping_every_flag_still_builds_a_bare_resume() {
     let command = claude_command(&[
         flag("--model", Some("sonnet;pwn")),
         flag("--permission-mode", Some("plan pwn")),
-        flag("--settings", Some("$(pwn)")),
+        flag("--agent", Some("$(pwn)")),
     ]);
 
     assert_eq!(
@@ -421,6 +421,69 @@ fn built_invocation_carries_the_history_marker() {
     );
 }
 
+/// R18: the marker suppresses nothing on its own — it suppresses where a bootstrap script matches
+/// it. Pinning the constant without reading the scripts is what let a shell ship with the resume
+/// landing in the user's history file, so this asks the scripts themselves.
+///
+/// The question is per shell, not per script: a script that can be told to omit Warp's own in-band
+/// generator from history can be told to omit the resume too, and one that cannot needs the other
+/// mechanism instead.
+#[test]
+fn every_shell_that_suppresses_warps_own_commands_suppresses_the_resume() {
+    const BASH: &str = include_str!("../../assets/bundled/bootstrap/bash_body.sh");
+    const ZSH: &str = include_str!("../../assets/bundled/bootstrap/zsh_body.sh");
+    const PWSH: &str = include_str!("../../assets/bundled/bootstrap/pwsh.ps1");
+    const FISH: &str = include_str!("../../assets/bundled/bootstrap/fish.sh");
+
+    // Each script paired with how it spells the in-band generator command it already keeps out of
+    // history, which is the evidence that this shell takes history patterns at all.
+    for (script, contents, in_band_command) in [
+        ("bash_body.sh", BASH, "warp_run_generator_command"),
+        ("zsh_body.sh", ZSH, "warp_run_generator_command"),
+        ("pwsh.ps1", PWSH, "Warp-Run-GeneratorCommand"),
+    ] {
+        assert!(
+            contents.contains(in_band_command),
+            "precondition: {script} filters {in_band_command} out of history"
+        );
+        assert!(
+            contents.contains(RESUME_HISTORY_MARKER),
+            "{script} filters {in_band_command} but not the resume marker, so a resume run under \
+             this shell lands in the user's history file"
+        );
+    }
+
+    // Fish takes no history patterns at all, which is why it matches no marker. Its mechanism is
+    // stated here rather than left as an exemption, so removing it fails this test.
+    assert!(
+        FISH.contains("warp_run_generator_command"),
+        "precondition: fish runs the same in-band generator command"
+    );
+    assert!(
+        !FISH.contains(RESUME_HISTORY_MARKER),
+        "fish gained a marker filter; the leading space this asserts below may now be redundant"
+    );
+    let command = claude_command(&[]);
+    assert!(
+        history_suppressed_resume_command(Some(ShellType::Fish), command.clone()).starts_with(' '),
+        "fish omits leading-space commands from history, and that is all it offers"
+    );
+    for shell in [ShellType::Bash, ShellType::Zsh, ShellType::PowerShell] {
+        assert_eq!(
+            history_suppressed_resume_command(Some(shell), command.clone()),
+            command,
+            "{shell:?} matches the marker and needs nothing added to the line"
+        );
+    }
+    assert_eq!(
+        history_suppressed_resume_command(None, command.clone()),
+        command,
+        "a shell Warp cannot identify keeps the line it built"
+    );
+}
+
+// The undeclared flag that carries a value sits last on purpose: its value is indistinguishable
+// from a positional, and scanning stops at the first of those.
 #[test]
 fn extractor_keeps_only_allowlisted_flags() {
     let recorded = declarations().extract_resume_flags(
@@ -429,9 +492,9 @@ fn extractor_keeps_only_allowlisted_flags() {
             "--model",
             "sonnet",
             "--fork-session",
+            "--dangerously-skip-permissions",
             "--session-id",
             "11111111-2222-3333-4444-555555555555",
-            "--dangerously-skip-permissions",
             "write me a test",
         ],
     );
@@ -442,6 +505,38 @@ fn extractor_keeps_only_allowlisted_flags() {
             flag("--model", Some("sonnet")),
             flag("--dangerously-skip-permissions", None),
         ]
+    );
+}
+
+/// A prompt positional ends the flags, so the words after it are the user's text rather than
+/// choices they made. Both barriers are needed: the caller tokenizes so the prompt arrives as one
+/// word, and this stops at it so an agent that took a bare positional cannot leak flags either.
+#[test]
+fn extractor_stops_at_the_first_positional() {
+    assert_eq!(
+        declarations().extract_resume_flags(
+            CLIAgent::Claude,
+            &[
+                "--model",
+                "opus",
+                "fix the build",
+                "--dangerously-skip-permissions",
+            ],
+        ),
+        vec![flag("--model", Some("opus"))]
+    );
+}
+
+/// `--` is the same statement made explicitly, and an agent that honors it would read what
+/// follows as text however flag-shaped it is.
+#[test]
+fn extractor_stops_at_an_end_of_flags_marker() {
+    assert_eq!(
+        declarations().extract_resume_flags(
+            CLIAgent::Claude,
+            &["--model", "opus", "--", "--dangerously-skip-permissions"],
+        ),
+        vec![flag("--model", Some("opus"))]
     );
 }
 

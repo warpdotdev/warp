@@ -9789,3 +9789,55 @@ fn resume_block_completing_leaves_a_draft_alone() {
         );
     });
 }
+
+/// R24: the agent context a user has staged is reset by their own completed block, on the reading
+/// that they have moved on to something else. A resume is Warp filling the pane in, so whatever
+/// they had selected for their next query is still what they selected.
+#[test]
+fn resume_block_leaves_the_staged_agent_context_alone() {
+    App::test((), |mut app| async move {
+        let _block_context = FeatureFlag::AgentViewBlockContext.override_enabled(false);
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let context_model = terminal.read(&app, |view, _| view.ai_context_model().clone());
+        let stage_context = |app: &mut App| {
+            context_model.update(app, |context, ctx| {
+                context.set_pending_context_selected_text(
+                    Some("staged selection".to_owned()),
+                    true,
+                    ctx,
+                );
+            });
+        };
+
+        stage_context(&mut app);
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_block("claude", "");
+            emit_block_completed(
+                completed_resume_block("claude --resume 'session-1'"),
+                view,
+                ctx,
+            );
+        });
+        context_model.read(&app, |context, _| {
+            assert_eq!(
+                context.pending_context_selected_text().map(String::as_str),
+                Some("staged selection"),
+                "a resume must not discard the context the user staged for their next query"
+            );
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_block("ls", "");
+            emit_block_completed(completed_user_block("ls"), view, ctx);
+        });
+        context_model.read(&app, |context, _| {
+            assert_eq!(
+                context.pending_context_selected_text(),
+                None,
+                "the user's own block still resets the staged context"
+            );
+        });
+    });
+}
