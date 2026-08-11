@@ -79,11 +79,15 @@ impl TryFrom<api::Citation> for AIAgentCitation {
                 // may also mean we're missing a document type mapping here, so it's worth an
                 // engineer's attention -- but it can recur across many messages/citations in
                 // a single run, so throttle to once per run.
+                //
+                // `document_id` is opaque, LLM-derived content (it can carry a URL with query
+                // params, a filesystem path, etc.), so it must not be logged/reported -- only
+                // the bounded `document_type` enum value and non-content metadata go in `extra:`.
                 report_error!(
                     "Citation has an unrecognized document type; dropping it",
                     extra: {
                         "document_type" => %citation.document_type,
-                        "document_id" => %citation.document_id,
+                        "document_id_len" => %citation.document_id.len(),
                     },
                     ReportErrorLogMode::OncePerRun
                 );
