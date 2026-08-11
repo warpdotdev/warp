@@ -27,10 +27,11 @@ use warp::integration_testing::window::{
 use warp::integration_testing::workspace::{
     assert_focused_tab_index, assert_tab_count, press_native_modal_button,
 };
+use warp::integration_testing::{self};
 use warp::settings::PaneSettings;
 use warp::terminal::shell::ShellType;
 use warp::workspace::tab_settings::{TabSettings, VerticalTabsDisplayGranularity};
-use warp::workspace::{NEW_TAB_BUTTON_POSITION_ID, WorkspaceAction};
+use warp::workspace::{NEW_TAB_BUTTON_POSITION_ID, PaneViewLocator, WorkspaceAction};
 use warpui_core::event::{Event, ModifiersState};
 use warpui_core::integration::{AssertionCallback, AssertionOutcome, StepDataMap, TestStep};
 use warpui_core::windowing::WindowManager;
@@ -515,6 +516,102 @@ pub fn test_active_session_follows_focus() -> Builder {
         )
 }
 
+pub fn test_tab_group_navigation_keybindings() -> Builder {
+    FeatureFlag::GroupedTabs.set_enabled(true);
+
+    new_builder()
+        .with_setup(|_utils| {
+            integration_testing::create_file_with_contents(
+                br#""workspace:activate_second_tab_group": ctrl-alt-g
+"workspace:activate_last_tab_group": ctrl-alt-l
+"workspace:activate_second_tab_in_current_group": ctrl-alt-i
+"workspace:activate_last_tab_in_current_group": ctrl-alt-k"#,
+                &integration_testing::keybindings::keybinding_file_path(),
+            );
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            new_step_with_default_assertions("Create grouped tabs for shortcut navigation")
+                .with_action(|app, window_id, _| {
+                    let workspace = workspace_view(app, window_id);
+                    workspace.update(app, |workspace, ctx| {
+                        for _ in 0..4 {
+                            workspace.handle_action(&WorkspaceAction::AddDefaultTab, ctx);
+                        }
+
+                        workspace.activate_tab(0, ctx);
+                        let tab_1 = workspace
+                            .get_pane_group_view(1)
+                            .expect("tab 1 should exist")
+                            .clone();
+                        let locator = PaneViewLocator {
+                            pane_group_id: tab_1.id(),
+                            pane_id: tab_1.as_ref(ctx).focused_pane_id(ctx),
+                        };
+                        workspace.handle_action(
+                            &WorkspaceAction::ToggleTabMultiSelection { locator },
+                            ctx,
+                        );
+                        workspace.handle_action(&WorkspaceAction::NewTabGroupFromSelectedTabs, ctx);
+
+                        workspace.activate_tab(2, ctx);
+                        let tab_3 = workspace
+                            .get_pane_group_view(3)
+                            .expect("tab 3 should exist")
+                            .clone();
+                        let locator = PaneViewLocator {
+                            pane_group_id: tab_3.id(),
+                            pane_id: tab_3.as_ref(ctx).focused_pane_id(ctx),
+                        };
+                        workspace.handle_action(
+                            &WorkspaceAction::ToggleTabMultiSelection { locator },
+                            ctx,
+                        );
+                        workspace.handle_action(&WorkspaceAction::NewTabGroupFromSelectedTabs, ctx);
+
+                        workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(4), ctx);
+                        workspace.activate_tab(0, ctx);
+                    });
+                })
+                .add_assertion(assert_tab_count(5))
+                .add_assertion(assert_focused_tab_index(0)),
+        )
+        .with_step(
+            new_step_with_default_assertions("Dismiss tab group rename")
+                .with_keystrokes(&["escape"]),
+        )
+        .with_step(
+            new_step_with_default_assertions("Switch to second tab group using custom shortcut")
+                .with_keystrokes(&["ctrl-alt-g"])
+                .add_assertion(assert_focused_tab_index(2)),
+        )
+        .with_step(
+            new_step_with_default_assertions(
+                "Switch to second tab in current group using custom shortcut",
+            )
+            .with_keystrokes(&["ctrl-alt-i"])
+            .add_assertion(assert_focused_tab_index(3)),
+        )
+        .with_step(
+            new_step_with_default_assertions(
+                "Switch back to second tab group using custom shortcut",
+            )
+            .with_keystrokes(&["ctrl-alt-g"])
+            .add_assertion(assert_focused_tab_index(2)),
+        )
+        .with_step(
+            new_step_with_default_assertions(
+                "Switch to last tab in current group using custom shortcut",
+            )
+            .with_keystrokes(&["ctrl-alt-k"])
+            .add_assertion(assert_focused_tab_index(3)),
+        )
+        .with_step(
+            new_step_with_default_assertions("Switch to last tab group using custom shortcut")
+                .with_keystrokes(&["ctrl-alt-l"])
+                .add_assertion(assert_focused_tab_index(4)),
+        )
+}
 pub fn test_tab_context_menu_copies_metadata() -> Builder {
     let builder = add_tab_context_metadata_setup_steps(new_builder());
     add_horizontal_tab_context_metadata_copy_steps(builder, open_horizontal_tab_context_menu)

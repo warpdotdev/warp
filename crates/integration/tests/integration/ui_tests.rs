@@ -220,6 +220,7 @@ integration_tests! {
     test_osc8_no_regression_on_url_autodetect,
 
     test_active_session_follows_focus,
+    test_tab_group_navigation_keybindings,
     test_tab_context_menu_copies_metadata,
     test_vertical_tab_context_menu_copies_metadata,
     test_vertical_pane_context_menu_copies_metadata,

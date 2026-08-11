@@ -359,6 +359,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_context_chips_prompt_at_bootstrap);
 
     register_test!(test_active_session_follows_focus);
+    register_test!(test_tab_group_navigation_keybindings);
     register_test!(test_tab_context_menu_copies_metadata);
     register_test!(test_vertical_tab_context_menu_copies_metadata);
     register_test!(test_vertical_pane_context_menu_copies_metadata);
