@@ -230,14 +230,25 @@ pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
 
 /// Labels for the per-tab menu's automatic-tab-grouping toggle.
 ///
+/// The verb says what activating the entry will do, which is why the label is
+/// state-aware rather than a static noun.
+///
+/// Menu rows are laid out against [`crate::menu::DEFAULT_WIDTH`] and clip
+/// rather than wrap, so a label has to stay inside the width the menu's
+/// existing entries already fit in — hence `auto-grouping` over the settings
+/// page's fuller "Automatically group tabs by project". What does not fit in a
+/// row lives in [`AUTO_GROUP_TABS_MENU_TOOLTIP`] instead.
+pub const TURN_ON_AUTO_GROUP_TABS_LABEL: &str = "Turn on auto-grouping";
+pub const TURN_OFF_AUTO_GROUP_TABS_LABEL: &str = "Turn off auto-grouping";
+
+/// Hover text for the automatic-tab-grouping toggle.
+///
 /// Everything else in the group section acts on the single tab that was
 /// right-clicked; this entry flips `appearance.tabs.auto_group_tabs`, a
 /// cloud-synced setting that governs every window. Nothing about a menu row's
-/// shape conveys that, so the text has to: the verb says what activating it
-/// will do (which is why the label is state-aware rather than a static noun),
-/// and the trailing scope says how far the effect reaches.
-pub const TURN_ON_AUTO_GROUP_TABS_LABEL: &str = "Turn on automatic tab grouping (all windows)";
-pub const TURN_OFF_AUTO_GROUP_TABS_LABEL: &str = "Turn off automatic tab grouping (all windows)";
+/// shape conveys that and the label has no room to, so the tooltip carries it.
+pub const AUTO_GROUP_TABS_MENU_TOOLTIP: &str =
+    "Groups tabs by project automatically. Applies to every window, not just this tab.";
 
 /// The automatic-grouping toggle's label for the setting's current value.
 pub fn auto_group_tabs_menu_label(enabled: bool) -> &'static str {
@@ -318,6 +329,7 @@ fn tab_group_menu_items_for(
                 .with_on_select_action(WorkspaceAction::DispatchToSettingsTab(
                     auto_group_tabs_toggle_action(),
                 ))
+                .with_tooltip(AUTO_GROUP_TABS_MENU_TOOLTIP)
                 .into_item(),
         );
     }

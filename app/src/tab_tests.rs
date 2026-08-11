@@ -3,10 +3,11 @@ use std::collections::HashMap;
 use warpui::platform::keyboard::KeyCode;
 
 use super::{
-    MOVE_TO_GROUP_LABEL, SelectedTabColor, ShortcutModifierKind, TAB_ACTIVATE_BINDING_NAMES,
-    TAB_ACTIVATE_LAST_BINDING_NAME, TURN_OFF_AUTO_GROUP_TABS_LABEL, TURN_ON_AUTO_GROUP_TABS_LABEL,
-    TabShortcutModifierState, auto_group_tabs_menu_label, next_tab_color,
-    tab_activate_binding_name, tab_group_menu_entry_flags, tab_group_menu_items_for,
+    AUTO_GROUP_TABS_MENU_TOOLTIP, MOVE_TO_GROUP_LABEL, SelectedTabColor, ShortcutModifierKind,
+    TAB_ACTIVATE_BINDING_NAMES, TAB_ACTIVATE_LAST_BINDING_NAME, TURN_OFF_AUTO_GROUP_TABS_LABEL,
+    TURN_ON_AUTO_GROUP_TABS_LABEL, TabShortcutModifierState, auto_group_tabs_menu_label,
+    next_tab_color, tab_activate_binding_name, tab_group_menu_entry_flags,
+    tab_group_menu_items_for,
 };
 use crate::menu::MenuItem;
 use crate::settings_view::auto_group_tabs_toggle_action;
@@ -288,10 +289,19 @@ fn auto_group_tabs_toggle_is_absent_when_the_mode_is_unavailable() {
     );
 }
 
-// The label has to carry the entry's whole meaning: which way activating it
-// flips the mode, and that the flip is not scoped to this tab or this window.
+/// A menu row is laid out against `menu::DEFAULT_WIDTH` and clips instead of
+/// wrapping, and nothing measures a label's advance width at build time — so
+/// the stand-in for "fits a row" is the longest entry this same menu already
+/// ships. A label that outgrows it renders cut off, as the first version of the
+/// automatic-grouping toggle did.
+const LONGEST_EXISTING_MENU_LABEL: &str = "Close Tabs to the Right";
+
+// The entry's meaning is split across two surfaces because a row cannot hold
+// all of it: the label says which way activating it flips the mode and has to
+// fit, the tooltip carries the window-wide scope its tab-scoped neighbours
+// don't have.
 #[test]
-fn auto_group_tabs_toggle_label_reflects_state_and_window_wide_scope() {
+fn auto_group_tabs_toggle_label_reflects_state_and_fits_a_menu_row() {
     assert_eq!(
         auto_group_tabs_menu_label(false),
         TURN_ON_AUTO_GROUP_TABS_LABEL
@@ -313,10 +323,15 @@ fn auto_group_tabs_toggle_label_reflects_state_and_window_wide_scope() {
             "{label:?} should say what activating it does"
         );
         assert!(
-            label.contains("all windows"),
-            "{label:?} should name the window-wide scope, unlike its tab-scoped neighbours"
+            label.chars().count() <= LONGEST_EXISTING_MENU_LABEL.chars().count(),
+            "{label:?} is longer than {LONGEST_EXISTING_MENU_LABEL:?} and will clip in the menu"
         );
     }
+
+    assert!(
+        AUTO_GROUP_TABS_MENU_TOOLTIP.contains("every window"),
+        "the scope that no longer fits the label has to survive in the tooltip"
+    );
 }
 
 // The label the menu actually renders tracks the setting, so the entry never
