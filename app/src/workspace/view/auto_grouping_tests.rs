@@ -142,6 +142,98 @@ fn tracked_tab_follows_its_key_into_an_existing_group() {
     });
 }
 
+// R8 qualifies both sides of a name collision. The second project's group is
+// created long after the first one was named, so the fix has to reach back and
+// re-qualify the name already stored on the older group.
+#[test]
+fn a_new_group_whose_name_collides_qualifies_the_group_it_collides_with() {
+    const SERVICES_API: &str = "/work/services/api/.git";
+    const VENDOR_API: &str = "/work/vendor/api/.git";
+
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 2, ctx);
+            // Both tabs are new and awaiting placement, which is what makes
+            // reconcile create a group for each of them.
+            workspace.tabs[0].placed_by_automation = true;
+            workspace.tabs[1].placed_by_automation = true;
+
+            reconcile(workspace, 0, Some(SERVICES_API), ctx);
+            let services_group = workspace.tabs[0]
+                .group_id
+                .expect("the first tab should be grouped");
+            assert_eq!(
+                group_name(workspace, services_group).as_deref(),
+                Some("api"),
+                "with nothing to collide with, the name is unqualified"
+            );
+
+            reconcile(workspace, 1, Some(VENDOR_API), ctx);
+            let vendor_group = workspace
+                .tabs
+                .iter()
+                .find_map(|tab| tab.group_id.filter(|id| *id != services_group))
+                .expect("the second tab should be in its own group");
+
+            assert_eq!(
+                group_name(workspace, vendor_group).as_deref(),
+                Some("vendor/api")
+            );
+            assert_eq!(
+                group_name(workspace, services_group).as_deref(),
+                Some("services/api"),
+                "the older group has to be re-qualified too, or the two read as `api` and `vendor/api`"
+            );
+            assert_groups_contiguous(workspace);
+        });
+    });
+}
+
+// A name the user typed is outside the two forms derivation can produce, so
+// re-qualification must leave it alone even when a collision appears.
+#[test]
+fn requalification_leaves_a_user_named_group_alone() {
+    const SERVICES_API: &str = "/work/services/api/.git";
+    const VENDOR_API: &str = "/work/vendor/api/.git";
+
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 2, ctx);
+            // Both tabs are new and awaiting placement, which is what makes
+            // reconcile create a group for each of them.
+            workspace.tabs[0].placed_by_automation = true;
+            workspace.tabs[1].placed_by_automation = true;
+
+            reconcile(workspace, 0, Some(SERVICES_API), ctx);
+            let services_group = workspace.tabs[0]
+                .group_id
+                .expect("the first tab should be grouped");
+            if let Some(group) = workspace.tab_groups.get_mut(&services_group) {
+                group.name = Some("Backend".to_string());
+            }
+
+            reconcile(workspace, 1, Some(VENDOR_API), ctx);
+
+            assert_eq!(
+                group_name(workspace, services_group).as_deref(),
+                Some("Backend")
+            );
+        });
+    });
+}
+
 #[test]
 fn tab_in_a_group_carrying_neither_key_is_left_alone() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
