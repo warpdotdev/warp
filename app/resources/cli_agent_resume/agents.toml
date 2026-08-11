@@ -25,6 +25,13 @@
 #   bare_token - ASCII letters, digits and `._-+:@`, not starting with `-`.
 #   path_like  - `bare_token` plus `/`.
 #
+# A flag that chooses the agent's permission posture rather than describing the
+# session is marked `permission_posture = true`. Those flags are the only ones
+# bounded by a freshness window (`PERMISSION_POSTURE_FRESHNESS`): a recording
+# older than the window resumes the same conversation without them, so a
+# long-abandoned elevation is not revived by a restart. Mark every spelling that
+# can elevate, including one that carries its posture as a value.
+#
 # Only flags that take at most one value belong here. A variadic flag cannot be
 # told apart from a trailing prompt positional once the command line is
 # tokenized, so carrying one risks turning the user's prompt into an argument.
@@ -48,10 +55,10 @@ identifier = { shape = "bare_token", max_length = 128 }
 # outright, so either one would defeat the resume it rode in on.
 [agents.Claude.flags]
 "--model" = { shape = "path_like", max_length = 128 }
-"--permission-mode" = { shape = "bare_token", max_length = 32 }
+"--permission-mode" = { shape = "bare_token", max_length = 32, permission_posture = true }
 # The permission posture the user chose. Carried because a pane that comes back
 # re-prompting is not the session it replaced; never added when it was absent.
-"--dangerously-skip-permissions" = { shape = "boolean" }
+"--dangerously-skip-permissions" = { shape = "boolean", permission_posture = true }
 "--strict-mcp-config" = { shape = "boolean" }
 "--agent" = { shape = "bare_token", max_length = 64 }
 "--settings" = { shape = "path_like", max_length = 512 }
@@ -64,4 +71,4 @@ resume = { form = "subcommand", subcommand = "resume" }
 identifier = { shape = "bare_token", max_length = 128 }
 
 [agents.Codex.flags]
-"--dangerously-bypass-approvals-and-sandbox" = { shape = "boolean" }
+"--dangerously-bypass-approvals-and-sandbox" = { shape = "boolean", permission_posture = true }

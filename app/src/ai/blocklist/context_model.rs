@@ -171,7 +171,7 @@ impl BlocklistAIContextModel {
                             .conversation_selection
                             .as_ref(ctx)
                             .is_conversation_fullscreen(ctx)
-                        && !user_block_completed.was_part_of_agent_interaction
+                        && user_block_completed.was_user_authored()
                     {
                         me.auto_attached_agent_view_user_block_ids
                             .push(block_id.clone());
@@ -180,7 +180,7 @@ impl BlocklistAIContextModel {
                     // If the block that finished was part of an agent interaction (i.e. LRC finishing),
                     // we should preserve input context.
                     if !FeatureFlag::AgentViewBlockContext.is_enabled()
-                        && !user_block_completed.was_part_of_agent_interaction
+                        && user_block_completed.was_user_authored()
                     {
                         me.reset_context_to_default(ctx);
                     }

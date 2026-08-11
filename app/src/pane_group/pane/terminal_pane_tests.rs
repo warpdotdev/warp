@@ -102,7 +102,12 @@ fn recorded_flags_carry_the_obfuscated_placeholder_rather_than_a_secret() {
     assert_eq!(recorded, vec![flag("--settings", Some("********"))]);
     assert!(
         ResumeDeclarations::embedded()
-            .build_resume_command(CLIAgent::Claude, "session-1", &recorded)
+            .build_resume_command(
+                CLIAgent::Claude,
+                "session-1",
+                &recorded,
+                crate::terminal::cli_agent_resume::PermissionPosture::Carry,
+            )
             .is_some_and(|command| !command.contains('*')),
         "an obfuscated value must be dropped when the invocation is built, not replayed"
     );
