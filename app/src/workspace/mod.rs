@@ -13,13 +13,20 @@ pub mod header_toolbar_item;
 pub mod hoa_onboarding;
 mod home;
 mod lightbox_view;
+mod nag_engine;
 mod native_modal;
 mod one_time_modal_model;
+pub mod project_key;
+pub mod project_layout;
+pub mod project_priorities;
+pub mod rail_shells;
+pub mod rail_triage;
 mod registry;
 pub mod rewind_confirmation_dialog;
 pub mod sync_inputs;
 pub mod tab_group;
 pub mod tab_settings;
+pub mod tab_title;
 mod toast_stack;
 pub mod util;
 pub mod view;
@@ -52,6 +59,7 @@ use crate::server::telemetry::{AgentModeEntrypoint, PaletteSource};
 use crate::settings_view::{self, SettingsSection, flags};
 use crate::tab::{NewSessionMenuItem, uses_vertical_tabs};
 use crate::util::bindings::{self, CustomAction, cmd_or_ctrl_shift, is_binding_pty_compliant};
+use crate::workspace::nag_engine::NagPolicy;
 use crate::{code, modal, notebooks, tab_configs};
 
 // Helper function to access panel header corner radius from other modules
@@ -67,11 +75,11 @@ use crate::workspace::view::{
     LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME, LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME,
     LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME, LEFT_PANEL_WARP_DRIVE_BINDING_NAME,
     NEW_AGENT_TAB_BINDING_NAME, NEW_AMBIENT_AGENT_TAB_BINDING_NAME, NEW_FILE_BINDING_NAME,
-    NEW_TAB_BINDING_NAME, NEW_TERMINAL_TAB_BINDING_NAME, OPEN_GLOBAL_SEARCH_BINDING_NAME,
-    TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME, TOGGLE_NOTIFICATION_MAILBOX_BINDING_NAME,
-    TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_RIGHT_PANEL_BINDING_NAME,
-    TOGGLE_TAB_CONFIGS_MENU_BINDING_NAME, TOGGLE_VERTICAL_TABS_PANEL_BINDING_NAME,
-    TOGGLE_WARP_DRIVE_BINDING_NAME,
+    NEW_PROJECT_BINDING_NAME, NEW_TAB_BINDING_NAME, NEW_TERMINAL_TAB_BINDING_NAME,
+    OPEN_GLOBAL_SEARCH_BINDING_NAME, TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME,
+    TOGGLE_NOTIFICATION_MAILBOX_BINDING_NAME, TOGGLE_PROJECT_EXPLORER_BINDING_NAME,
+    TOGGLE_RIGHT_PANEL_BINDING_NAME, TOGGLE_TAB_CONFIGS_MENU_BINDING_NAME,
+    TOGGLE_VERTICAL_TABS_PANEL_BINDING_NAME, TOGGLE_WARP_DRIVE_BINDING_NAME,
 };
 
 pub fn init(app: &mut AppContext) {
@@ -725,6 +733,35 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging"))
         .with_custom_action(CustomAction::NewTab)
         .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
+        // Reuses `OpenRepository` rather than a new action: it already does
+        // everything starting a project needs (folder picker, project-model
+        // upsert, and opening a tab there), which is also what the rail
+        // header's "+" button dispatches. `cmd-shift-N`/`alt-shift-N` are
+        // taken by `project_buttons:create_new_project`, so this defaults to
+        // an unused chord instead.
+        EditableBinding::new(
+            NEW_PROJECT_BINDING_NAME,
+            BindingDescription::new("New project (open folder)"),
+            WorkspaceAction::OpenRepository { path: None },
+        )
+        .with_context_predicate(id!("Workspace"))
+        .with_group(bindings::BindingGroup::Folders.as_str())
+        .with_mac_key_binding("cmd-ctrl-n")
+        .with_linux_or_windows_key_binding("ctrl-alt-n"),
+        // No default chord: cmd-t already triggers `workspace:new_tab`,
+        // which has the identical effect inside the selected project
+        // (`AddDefaultTab` is project-aware via
+        // `selected_project_startup_directory`). This binding exists only so
+        // that behavior is independently discoverable and searchable — in
+        // Settings and the command palette — under its own name, not to add
+        // a second default shortcut for the same keystroke.
+        EditableBinding::new(
+            "workspace:new_task_in_project",
+            BindingDescription::new("New task in selected project"),
+            WorkspaceAction::AddDefaultTab,
+        )
+        .with_context_predicate(id!("Workspace"))
+        .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
         EditableBinding::new(
             NEW_TERMINAL_TAB_BINDING_NAME,
             BindingDescription::new("New Terminal Tab"),
@@ -1023,6 +1060,99 @@ pub fn init(app: &mut AppContext) {
     // Tab/group pinning bindings (keyless by default; gated on `PinnedTabs`).
     // Pin/unpin are split into separate entries so the palette label tracks
     // the active tab/group's current state.
+    // Project priority bindings (keyless by default; gated on `Projects`).
+    // These carry no target, so they act on the rail's selected project — the
+    // Command Palette re-dispatches a stored action verbatim and cannot supply
+    // a row's identity, unlike the rail's own right-click menu. Add/remove are
+    // split so the palette label tracks the project's current rank state.
+    app.register_editable_bindings([
+        EditableBinding::new(
+            "workspace:add_project_to_priorities",
+            "Add project to priorities",
+            WorkspaceAction::AddProjectToPriorities(None),
+        )
+        .with_enabled(|| FeatureFlag::Projects.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace")
+                & id!(flags::PROJECT_LAYOUT_CONTEXT_FLAG)
+                & id!("Workspace_SelectedProjectRankable")
+                & !id!("Workspace_SelectedProjectRanked"),
+        ),
+        EditableBinding::new(
+            "workspace:remove_project_from_priorities",
+            "Remove project from priorities",
+            WorkspaceAction::RemoveProjectFromPriorities(None),
+        )
+        .with_enabled(|| FeatureFlag::Projects.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace")
+                & id!(flags::PROJECT_LAYOUT_CONTEXT_FLAG)
+                & id!("Workspace_SelectedProjectRanked"),
+        ),
+        EditableBinding::new(
+            "workspace:move_project_up_in_priorities",
+            "Move project up in priorities",
+            WorkspaceAction::MoveProjectUpInPriorities(None),
+        )
+        .with_enabled(|| FeatureFlag::Projects.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace")
+                & id!(flags::PROJECT_LAYOUT_CONTEXT_FLAG)
+                & id!("Workspace_SelectedProjectRanked"),
+        ),
+        EditableBinding::new(
+            "workspace:move_project_down_in_priorities",
+            "Move project down in priorities",
+            WorkspaceAction::MoveProjectDownInPriorities(None),
+        )
+        .with_enabled(|| FeatureFlag::Projects.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace")
+                & id!(flags::PROJECT_LAYOUT_CONTEXT_FLAG)
+                & id!("Workspace_SelectedProjectRanked"),
+        ),
+        EditableBinding::new(
+            "workspace:mute_project_notifications",
+            "Mute project notifications",
+            WorkspaceAction::SetProjectNagPolicy(None, Some(NagPolicy::Muted)),
+        )
+        .with_enabled(|| FeatureFlag::Projects.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace")
+                & id!(flags::PROJECT_LAYOUT_CONTEXT_FLAG)
+                & id!("Workspace_SelectedProjectRankable"),
+        ),
+        EditableBinding::new(
+            "workspace:unmute_project_notifications",
+            "Unmute project notifications",
+            WorkspaceAction::SetProjectNagPolicy(None, Some(NagPolicy::Normal)),
+        )
+        .with_enabled(|| FeatureFlag::Projects.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace")
+                & id!(flags::PROJECT_LAYOUT_CONTEXT_FLAG)
+                & id!("Workspace_SelectedProjectRankable"),
+        ),
+        EditableBinding::new(
+            "workspace:clear_project_color",
+            "Clear project color",
+            WorkspaceAction::SetProjectColor(None, None),
+        )
+        .with_enabled(|| FeatureFlag::Projects.is_enabled())
+        .with_group(bindings::BindingGroup::Navigation.as_str())
+        .with_context_predicate(
+            id!("Workspace")
+                & id!(flags::PROJECT_LAYOUT_CONTEXT_FLAG)
+                & id!("Workspace_SelectedProjectRankable"),
+        ),
+    ]);
+
     app.register_editable_bindings([
         EditableBinding::new(
             "workspace:pin_active_tab",

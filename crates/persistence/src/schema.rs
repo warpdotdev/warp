@@ -18,6 +18,21 @@ diesel::table! {
 }
 
 diesel::table! {
+    agent_session_handles (id) {
+        id -> Integer,
+        agent -> Text,
+        session_id -> Nullable<Text>,
+        cwd -> Text,
+        pane_uuid -> Binary,
+        title -> Nullable<Text>,
+        created_at -> Timestamp,
+        last_seen_at -> Timestamp,
+        success_seen -> Bool,
+        marked_unread -> Bool,
+    }
+}
+
+diesel::table! {
     agent_tasks (id) {
         id -> Integer,
         conversation_id -> Text,

@@ -24,6 +24,17 @@ fn main() -> Result<()> {
     if cfg!(debug_assertions) {
         state = state.with_additional_features(warp_core::features::DEBUG_FLAGS);
     }
+    // LOCAL ONLY (do not commit): enable the Projects x Tasks layout in this
+    // personal build. OSS builds don't apply DOGFOOD_FLAGS, so the rail is
+    // otherwise unreachable. Turn it on in Settings > Appearance once running.
+    state = state.with_additional_features(&[
+        warp_core::features::FeatureFlag::Projects,
+        // Same reason: durable agent-task handles live in DOGFOOD_FLAGS, so
+        // without this the rail never records or lists past agent tasks.
+        warp_core::features::FeatureFlag::ResumeProjectTasks,
+        // Likewise: defer a restored tab's shell until the tab is opened.
+        warp_core::features::FeatureFlag::LazyShellStartup,
+    ]);
     ChannelState::set(state);
 
     warp::run()

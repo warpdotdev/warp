@@ -12,6 +12,8 @@ use warpui::platform::Cursor;
 use warpui::{EntityId, WeakViewHandle, WindowId};
 
 use super::global_actions::{ForkFromExchange, ForkedConversationDestination};
+use super::nag_engine::NagPolicy;
+use super::project_layout::ProjectId;
 use super::tab_settings::{
     VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo,
     VerticalTabsTabItemMode, VerticalTabsViewMode,
@@ -124,6 +126,18 @@ pub enum AutoCloudHandoffTrigger {
     Uri,
 }
 
+/// Identity of a project-rail task row for its context menu. Live rows key on
+/// the terminal view (the session model's key); dormant rows have no live
+/// session, so they key on task identity like `ResumeDormantAgentTask`.
+#[derive(Debug, Clone)]
+pub enum RailTaskMenuTarget {
+    Live(EntityId),
+    Dormant {
+        agent: crate::terminal::CLIAgent,
+        session_id: String,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum WorkspaceAction {
     ActivateTab(usize),
@@ -146,6 +160,61 @@ pub enum WorkspaceAction {
     /// (see #9351). The context-menu path keeps using `RenamePane(locator)`.
     RenameActivePane,
     SetActiveTabName(String),
+    /// Selects a project in the project rail (Herdr-style Projects × Tasks
+    /// layout). Activates that project's most-recently-used visible tab.
+    SelectProject(ProjectId),
+    /// Activates the task clicked in the project rail, identified by its pane
+    /// group so it cannot go stale if tabs close between paint and click.
+    ActivateTaskByPaneGroupId(EntityId),
+    /// Opens the project rail's right-click menu for one project row.
+    ShowProjectRailContextMenu {
+        project: ProjectId,
+        position: Vector2F,
+    },
+    /// Puts a project at the top of the priority list (rank 1), promoting it
+    /// if it is already ranked.
+    ///
+    /// `None` targets the rail's selected project. That is how the Command
+    /// Palette reaches these: it re-dispatches a stored action verbatim and so
+    /// cannot supply a row's identity, while the context menu always can.
+    AddProjectToPriorities(Option<ProjectId>),
+    /// Removes a project from the priority list, dropping it into the
+    /// unranked band. `None` targets the selected project.
+    RemoveProjectFromPriorities(Option<ProjectId>),
+    /// Moves a project one rank towards the top. `None` targets the selected
+    /// project. A no-op for an unranked or already-top project.
+    MoveProjectUpInPriorities(Option<ProjectId>),
+    /// Moves a project one rank towards the bottom. `None` targets the
+    /// selected project. A no-op for an unranked or already-last project.
+    MoveProjectDownInPriorities(Option<ProjectId>),
+    /// Sets (or with `None` policy, clears) a project's blocked-agent
+    /// notification override. `None` project targets the selected one.
+    SetProjectNagPolicy(Option<ProjectId>, Option<NagPolicy>),
+    /// Sets (or with `None` color, clears) a project's rail identity colour.
+    /// `None` project targets the selected one.
+    SetProjectColor(
+        Option<ProjectId>,
+        Option<warp_core::ui::theme::AnsiColorIdentifier>,
+    ),
+    /// Resumes a dormant agent task from the project rail: opens a tab at the
+    /// handle's stored cwd with the agent's resume command prefilled — never
+    /// executed. Identified by task identity (agent + session id), so the
+    /// action cannot go stale if the handle list reorders between paint and
+    /// click.
+    ResumeDormantAgentTask {
+        agent: crate::terminal::CLIAgent,
+        session_id: String,
+    },
+    /// Opens the right-click menu for one task row in the project rail.
+    ShowTaskRailContextMenu {
+        task: RailTaskMenuTarget,
+        position: Vector2F,
+    },
+    /// Clears a task row's green state: acknowledges an unseen result and
+    /// wipes a manual unread mark.
+    MarkRailTaskRead(RailTaskMenuTarget),
+    /// Manually pins a task row green until its pane is focused.
+    MarkRailTaskUnread(RailTaskMenuTarget),
     /// Sets the manual color override for the active tab.
     ///
     /// - `Color(_)` — apply that color.
@@ -930,8 +999,12 @@ impl WorkspaceAction {
             ContinueConversationLocally { .. } => true,
             #[cfg(not(target_family = "wasm"))]
             ContinueThirdPartyConversationLocally { .. } => true,
+            // Opens a new tab, which changes the restorable window layout.
+            ResumeDormantAgentTask { .. } => true,
             ActivateTab(_)
             | ActivateTabByNumber(_)
+            | SelectProject(_)
+            | ActivateTaskByPaneGroupId(_)
             | ActivatePrevTab
             | ActivateNextTab
             | ActivateLastTab
@@ -1047,6 +1120,20 @@ impl WorkspaceAction {
             | ToggleTabSelectionRightClickMenu { .. }
             | ToggleTabGroupRightClickMenu { .. }
             | ToggleVerticalTabsPaneContextMenu { .. }
+            | ShowProjectRailContextMenu { .. }
+            | ShowTaskRailContextMenu { .. }
+            // Read state persists via the handle store; no window layout
+            // changes, so there is no app state to save.
+            | MarkRailTaskRead(_)
+            | MarkRailTaskUnread(_)
+            // Priorities live in settings, which persist themselves; no
+            // window layout changes, so there is no app state to save.
+            | AddProjectToPriorities(_)
+            | RemoveProjectFromPriorities(_)
+            | MoveProjectUpInPriorities(_)
+            | MoveProjectDownInPriorities(_)
+            | SetProjectNagPolicy(..)
+            | SetProjectColor(..)
             | OpenNewSessionMenu { .. }
             | ToggleTabConfigsMenu
             | ToggleNewSessionMenu { .. }

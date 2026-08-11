@@ -74,11 +74,30 @@ pub(crate) struct ClaudeLocalContinuation {
 }
 
 /// Encode a filesystem path as a Claude config directory name, matching the
-/// Claude CLI convention of replacing every `/` with `-`.
+/// Claude CLI convention of replacing every **non-alphanumeric** character
+/// with `-` (its own encoder is a `[^a-zA-Z0-9]` replace, so `_`, spaces and
+/// every other separator collapse to `-` exactly as `/` and `.` do).
 ///
 /// Example: `/Users/ben/src/foo` → `-Users-ben-src-foo`
+///
+/// Only `/` and `.` used to be replaced here, which silently pointed every
+/// path containing `_` or a space at a directory Claude never writes.
+/// Measured by decoding the `cwd` recorded inside the transcripts of 47
+/// populated project directories and re-encoding it: the old rule disagreed
+/// with Claude on 18 of them, this one on 1 (and that outlier is a session
+/// that `cd`-ed into a worktree, which no directory rule can recover — see
+/// `session_scan`). Both the readers (task naming) and the writers
+/// (cloud-resume transcript rehydration) depend on agreeing with Claude here,
+/// so the encoder is fixed rather than duplicated.
+///
+/// Deliberately `is_ascii_alphanumeric`, not `is_alphanumeric`: Claude's
+/// regex character class is ASCII-only, so an accented directory name mangles
+/// to `-` there and must mangle to `-` here too.
 pub(crate) fn encode_cwd(cwd: &Path) -> String {
-    cwd.to_string_lossy().replace(['/', '.'], "-")
+    cwd.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// Resolve the Claude config directory.

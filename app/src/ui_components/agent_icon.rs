@@ -25,7 +25,8 @@ use crate::ui_components::icon_with_status::IconWithStatusVariant;
 ///
 /// Resolution order:
 /// 1. A [`CLIAgentSessionsModel`] session with a known agent wins. Plugin-backed sessions
-///    surface rich status; command-detected sessions don't.
+///    surface rich status; command-detected sessions don't — they render a neutral
+///    running badge instead, since the live session still proves an agent is running.
 /// 2. A task-backed run uses task status and harness so the terminal chrome and the
 ///    matching conversation list card stay in lockstep.
 /// 3. Live ambient pre-dispatch or a selected local conversation falls through to the
@@ -128,6 +129,8 @@ struct CLISessionInputs {
     /// Whether the session is backed by a plugin listener. Plugin-backed sessions report
     /// rich status; command-detected sessions only know that an agent is running.
     has_listener: bool,
+    /// Only read when `has_listener && supports_rich_status`; otherwise the waterfall
+    /// substitutes a neutral `InProgress`.
     status: ConversationStatus,
     /// Whether the agent's session handler exposes rich status (plugin-backed handlers report
     /// rich status; Codex's OSC 9 handler does not).
@@ -146,8 +149,21 @@ fn agent_icon_variant_from_terminal_inputs(
         .as_ref()
         .filter(|s| !matches!(s.agent, CLIAgent::Unknown))
     {
-        let status =
-            (session.has_listener && session.supports_rich_status).then(|| session.status.clone());
+        let status = if session.has_listener && session.supports_rich_status {
+            Some(session.status.clone())
+        } else {
+            // No rich status (command detection only, or Codex's OSC 9
+            // fallback). The one thing such a session is still authoritative
+            // about is that an agent process is running in this pane — the
+            // session is created when the command starts and removed when the
+            // block completes — so it earns the neutral running badge that
+            // tells a plugin-less agent apart from a plain shell.
+            //
+            // It must never borrow the session's own `status` here: without a
+            // rich notification that field is guesswork, and a row that cannot
+            // really know it is blocked must not claim to be.
+            Some(ConversationStatus::InProgress)
+        };
         return Some(IconWithStatusVariant::CLIAgent {
             agent: session.agent,
             status,
