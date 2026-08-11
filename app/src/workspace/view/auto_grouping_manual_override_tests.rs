@@ -112,23 +112,6 @@ fn group_keyed(workspace: &Workspace, key_storage: &str) -> Option<TabGroupId> {
         .map(|group| group.id)
 }
 
-/// Group members occupying a contiguous run is a convention nothing enforces at
-/// runtime, so every case that moves a tab asserts it.
-fn assert_groups_contiguous(workspace: &Workspace) {
-    for group_id in workspace.tab_groups.keys() {
-        let indices: Vec<usize> = group_member_indices(&workspace.tabs, *group_id).collect();
-        let Some(&first) = indices.first() else {
-            continue;
-        };
-        let last = indices[indices.len() - 1];
-        assert_eq!(
-            last - first + 1,
-            indices.len(),
-            "group {group_id:?} members are not a contiguous run: {indices:?}"
-        );
-    }
-}
-
 /// Grows the workspace to two tabs sitting in their own automation groups, one
 /// per directory, and hands back their identities.
 fn two_grouped_tabs(

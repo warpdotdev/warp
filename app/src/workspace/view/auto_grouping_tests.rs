@@ -79,24 +79,6 @@ fn tab_order(workspace: &Workspace) -> Vec<EntityId> {
         .collect()
 }
 
-/// Group members occupying a contiguous run of the tab list is a convention the
-/// workspace maintains and its helpers assume; nothing enforces it at runtime,
-/// so every case below asserts it explicitly.
-fn assert_groups_contiguous(workspace: &Workspace) {
-    for group_id in workspace.tab_groups.keys() {
-        let indices: Vec<usize> = group_member_indices(&workspace.tabs, *group_id).collect();
-        let Some(&first) = indices.first() else {
-            continue;
-        };
-        let last = indices[indices.len() - 1];
-        assert_eq!(
-            last - first + 1,
-            indices.len(),
-            "group {group_id:?} members are not a contiguous run: {indices:?}"
-        );
-    }
-}
-
 fn reconcile(
     workspace: &mut Workspace,
     tab_index: usize,

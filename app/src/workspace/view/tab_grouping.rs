@@ -247,11 +247,11 @@ impl Workspace {
         // project key: a selection spans no single project, so it is an
         // ordinary manual group and every member of it is detached.
         for &index in &selected_indices {
+            self.note_manual_tab_placement(index);
             let tab = &mut self.tabs[index];
             tab.group_id = Some(group_id);
             tab.pinned = false;
             tab.in_multi_selection = false;
-            tab.placed_by_automation = false;
         }
 
         // Split tabs into the new group's members and all other tabs.
@@ -356,11 +356,11 @@ impl Workspace {
         // back out of the group the user chose for it. See
         // `Workspace::note_manual_tab_placement`.
         for &index in &selected_indices {
+            self.note_manual_tab_placement(index);
             let tab = &mut self.tabs[index];
             tab.group_id = Some(group_id);
             tab.pinned = false;
             tab.in_multi_selection = false;
-            tab.placed_by_automation = false;
         }
 
         // Anchor the group block at its original first-member position, shifted
@@ -426,7 +426,7 @@ impl Workspace {
         // `Workspace::note_manual_tab_placement`.
         for &index in &selected_indices {
             self.tabs[index].group_id = None;
-            self.tabs[index].placed_by_automation = false;
+            self.note_manual_tab_placement(index);
         }
 
         // Non-selected tabs originally before the group's first member; if the

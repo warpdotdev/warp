@@ -576,6 +576,18 @@ impl Workspace {
         self.project_key_for_recorded_anchor(pane_group_id, ctx)
     }
 
+    /// Whether automation will refuse to touch this tab whatever its project
+    /// turns out to be.
+    ///
+    /// A pinned tab is never grouped, so resolving its key — a walk of the
+    /// repository cache plus a freshly built list of every group's key — only
+    /// produces a value [`Self::reconcile_tab_auto_group`] discards. Its anchor
+    /// is still tracked, so unpinning resolves against current state.
+    fn tab_is_never_auto_grouped(&self, pane_group_id: EntityId) -> bool {
+        self.tab_index_for_pane_group(pane_group_id)
+            .is_none_or(|tab_index| self.tabs[tab_index].pinned)
+    }
+
     fn project_key_for_recorded_anchor(
         &self,
         pane_group_id: EntityId,
@@ -619,6 +631,9 @@ impl Workspace {
         if !self.refresh_tab_anchor(pane_group_id, ctx) {
             return;
         }
+        if self.tab_is_never_auto_grouped(pane_group_id) {
+            return;
+        }
         let key = self.project_key_for_recorded_anchor(pane_group_id, ctx);
         self.reconcile_tab_auto_group(pane_group_id, key, ctx);
     }
@@ -636,7 +651,11 @@ impl Workspace {
         if !self.auto_grouping_enabled(ctx) {
             return;
         }
-        let key = self.resolve_project_key_for_tab(pane_group_id, ctx);
+        self.refresh_tab_anchor(pane_group_id, ctx);
+        if self.tab_is_never_auto_grouped(pane_group_id) {
+            return;
+        }
+        let key = self.project_key_for_recorded_anchor(pane_group_id, ctx);
         self.reconcile_tab_auto_group(pane_group_id, key, ctx);
     }
 
@@ -686,6 +705,29 @@ impl Workspace {
         for pane_group_id in candidates {
             self.place_tab_by_auto_grouping(pane_group_id, ctx);
         }
+    }
+}
+
+/// Asserts that every group's members occupy a contiguous run of the tab list.
+///
+/// The workspace maintains that convention and its grouping helpers assume it,
+/// but nothing enforces it at runtime, so each reconcile case re-checks it.
+/// All three `auto_grouping` test modules share this one copy: three separate
+/// ones would let a weakened assertion silently disable the check in a single
+/// file.
+#[cfg(test)]
+fn assert_groups_contiguous(workspace: &Workspace) {
+    for group_id in workspace.tab_groups.keys() {
+        let indices: Vec<usize> = group_member_indices(&workspace.tabs, *group_id).collect();
+        let Some(&first) = indices.first() else {
+            continue;
+        };
+        let last = indices[indices.len() - 1];
+        assert_eq!(
+            last - first + 1,
+            indices.len(),
+            "group {group_id:?} members are not a contiguous run: {indices:?}"
+        );
     }
 }
 

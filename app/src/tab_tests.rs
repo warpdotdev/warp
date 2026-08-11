@@ -9,7 +9,7 @@ use super::{
     tab_activate_binding_name, tab_group_menu_entry_flags, tab_group_menu_items_for,
 };
 use crate::menu::MenuItem;
-use crate::settings_view::{AppearancePageAction, SettingsAction};
+use crate::settings_view::auto_group_tabs_toggle_action;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 use crate::workspace::WorkspaceAction;
@@ -357,12 +357,11 @@ fn auto_group_tabs_toggle_routes_through_the_settings_page_toggle() {
         .item_on_select_action()
         .expect("the toggle should dispatch an action");
 
-    assert!(
-        matches!(
-            action,
-            WorkspaceAction::DispatchToSettingsTab(SettingsAction::AppearancePageToggle(
-                AppearancePageAction::ToggleAutoGroupTabs
-            ))
+    assert_eq!(
+        format!("{action:?}"),
+        format!(
+            "{:?}",
+            WorkspaceAction::DispatchToSettingsTab(auto_group_tabs_toggle_action())
         ),
         "expected the existing settings toggle, got {action:?}"
     );

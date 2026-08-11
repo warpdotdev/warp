@@ -38,7 +38,7 @@ use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::menu::{MenuAction, MenuItem, MenuItemFields};
 use crate::pane_group::{PaneGroup, PaneId};
-use crate::settings_view::{AppearancePageAction, SettingsAction};
+use crate::settings_view::auto_group_tabs_toggle_action;
 use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::shared_session::manager::Manager;
@@ -316,7 +316,7 @@ fn tab_group_menu_items_for(
                 // the Settings switch and the keybinding stay one writer with
                 // one telemetry event between them.
                 .with_on_select_action(WorkspaceAction::DispatchToSettingsTab(
-                    SettingsAction::AppearancePageToggle(AppearancePageAction::ToggleAutoGroupTabs),
+                    auto_group_tabs_toggle_action(),
                 ))
                 .into_item(),
         );

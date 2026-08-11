@@ -2,12 +2,7 @@ use std::path::PathBuf;
 
 use about_page::AboutPageView;
 use agent_profiles_page::{AgentProfilesPageAction, AgentProfilesPageEvent, AgentProfilesPageView};
-// Re-exported crate-wide so surfaces outside Settings (e.g. the tab bar's
-// context menu) can dispatch an existing appearance toggle through
-// `SettingsAction::AppearancePageToggle` instead of writing the setting
-// themselves.
-pub(crate) use appearance_page::AppearancePageAction;
-use appearance_page::AppearanceSettingsPageView;
+use appearance_page::{AppearancePageAction, AppearanceSettingsPageView};
 use billing_and_usage_dispatch::BillingAndUsageDispatchView;
 use billing_and_usage_page::BillingAndUsagePageEvent;
 use cli_agents_page::{CLIAgentsPageAction, CLIAgentsPageEvent, CLIAgentsPageView};
@@ -1015,6 +1010,17 @@ pub enum SettingsAction {
     Down,
     /// For internal, debug-related settings which don't appear in the UI.
     Debug(DebugSettingsAction),
+}
+
+/// The action that flips the automatic tab grouping setting.
+///
+/// Surfaces outside Settings — the tab bar's context menu — dispatch this
+/// rather than writing `appearance.tabs.auto_group_tabs` themselves, so the
+/// menu, the Settings switch and the keybinding stay one writer with one
+/// telemetry event between them. Exposed as a constructor so the Appearance
+/// page's own action enum stays private to this module.
+pub(crate) fn auto_group_tabs_toggle_action() -> SettingsAction {
+    SettingsAction::AppearancePageToggle(AppearancePageAction::ToggleAutoGroupTabs)
 }
 
 #[derive(Copy, Clone, Debug)]
