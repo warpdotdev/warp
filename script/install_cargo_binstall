@@ -6,8 +6,8 @@
 
 set -eo pipefail
 
-# Keep in sync with the cargo-bins/cargo-binstall action pin in .github/workflows/ci.yml
-# so local bootstraps and CI resolve binaries with the same binstall version.
+# Local bootstraps and CI both install binstall through this script, so this is
+# the single pinned version everywhere.
 BINSTALL_VERSION="1.18.1"
 
 # Every archive this script may run, keyed by asset name, with the SHA-256 that
@@ -96,7 +96,10 @@ if [ "$INSTALLED_VERSION" != "$BINSTALL_VERSION" ]; then
     # shellcheck disable=SC2064 # Expand WORKDIR now so the trap still resolves it later.
     trap "rm -rf \"$WORKDIR\"" EXIT
 
+    # GitHub's release-asset CDN intermittently drops connections mid-transfer,
+    # so retry on all errors rather than only the ones curl considers transient.
     curl -L --proto '=https' --tlsv1.2 -sSf \
+        --retry 10 --retry-all-errors --retry-delay 2 \
         "https://github.com/cargo-bins/cargo-binstall/releases/download/v${BINSTALL_VERSION}/${ARCHIVE}" \
         --output "$WORKDIR/$ARCHIVE"
 
