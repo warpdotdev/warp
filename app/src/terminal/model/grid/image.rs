@@ -1,7 +1,7 @@
 use warp_terminal::model::Point;
 
 use super::{AbsolutePoint, AbsoluteRectangle, GridHandler};
-use crate::terminal::model::image_map::ImagePlacementData;
+use crate::terminal::model::image_map::{ImagePlacementData, VirtualPlacement};
 
 impl GridHandler {
     pub fn get_image_ids_in_range(
@@ -56,6 +56,11 @@ impl GridHandler {
         placement_id: u32,
     ) -> Option<&ImagePlacementData> {
         self.images.get_image_placement_data(image_id, placement_id)
+    }
+
+    /// The virtual (Unicode placeholder) placement for an image, if one exists.
+    pub fn virtual_placement(&self, image_id: u32) -> Option<&VirtualPlacement> {
+        self.images.virtual_placement(image_id)
     }
 }
 
