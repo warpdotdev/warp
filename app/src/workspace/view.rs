@@ -7509,6 +7509,9 @@ impl Workspace {
         let previous_group_id = tab.group_id;
 
         let target_index = self.index_after_group(group_id).unwrap_or(self.tabs.len());
+        // Read before the membership changes: it is the key the colour the tab
+        // carries now would have been derived from.
+        let previous_key = self.project_key_of_tabs_group(tab_index);
         self.tabs[tab_index].group_id = Some(group_id);
 
         // Moving a tab to a group, clear its pinned state — and its
@@ -7516,6 +7519,11 @@ impl Workspace {
         // it keeps. See `Workspace::note_manual_tab_placement`.
         self.tabs[tab_index].pinned = false;
         self.note_manual_tab_placement(tab_index);
+        // The colour follows the membership, as it does on the drag path and on
+        // automation's own paths. Applied before the move, while `tab_index`
+        // still addresses this tab.
+        let key = self.project_key_of_tabs_group(tab_index);
+        self.apply_derived_tab_color(tab_index, key.as_ref(), previous_key.as_ref(), ctx);
         self.expand_tab_group(group_id, ctx);
         self.move_tab_to_index(tab_index, target_index, ctx);
 
@@ -12246,6 +12254,11 @@ impl Workspace {
 
         let removed_pane_group_id = tab_data.pane_group.id();
         self.tab_mru_order.retain(|id| *id != removed_pane_group_id);
+        // The single funnel for every way a tab leaves for good — plain close,
+        // `remove_tab_by_pane_group_id`, and the cross-window drag's
+        // `remove_tab_without_undo` — so the resolver's per-tab maps are pruned
+        // here rather than at each caller.
+        self.auto_grouping_state.forget(removed_pane_group_id);
 
         // If the closed tab was a group member, prune the group when it now
         // has no remaining members.

@@ -140,13 +140,17 @@ Behind a second setting, off by default, that does nothing unless the mode itsel
     project key, so one repository always reads the same color everywhere and across
     restarts. The group container is never colored by automation — its color stays the
     user's to set.
-29. A tab takes its new project's color when it moves into another project's group, and a
-    re-key under invariant 12 recolors every member of the re-keyed group.
+29. A tab takes its new project's color when it moves into another project's group, whether
+    automation moved it or the user did by drag or by "Move to group". A re-key under
+    invariant 12 recolors every member of the re-keyed group. Detaching a tab under invariant
+    13 does not freeze its color on the project it left: a tab wearing one project's color
+    inside another project's group is the state this rules out.
 30. A tab taken out of its group loses the color automation derived for it — by being removed
-    from the group, by the group being ungrouped, or by being pinned under invariant 23 —
-    and none of the three removes a color the user set or cleared. Handing the color back on
-    pin is what makes the pin round trip honest: a tab unpinned into a different project
-    takes that project's color rather than keeping the one it was pinned with.
+    from the group, by the group being ungrouped, by being dragged out of every group, or by
+    being pinned under invariant 23 — and none of the four removes a color the user set or
+    cleared. Handing the color back on pin is what makes the pin round trip honest: a tab
+    unpinned into a different project takes that project's color rather than keeping the one
+    it was pinned with.
 31. Turning the coloring off repaints nothing, exactly as turning the mode itself off
     dissolves nothing under invariant 3.
 
