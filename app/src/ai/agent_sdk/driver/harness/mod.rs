@@ -40,6 +40,7 @@ pub(crate) mod claude_code;
 pub(crate) mod claude_transcript;
 mod codex;
 pub(crate) mod codex_transcript;
+mod factory_skills;
 mod gemini;
 mod json_utils;
 mod telemetry;

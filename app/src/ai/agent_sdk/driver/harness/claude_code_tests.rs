@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+use ai::skills::WARP_SKILL_DIRS_ENV;
 use mockall::predicate::eq;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -761,6 +762,65 @@ fn prepare_claude_environment_config_with_config_dir_uses_dir_global_config() {
         None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
     }
 }
+
+#[test]
+#[serial_test::serial]
+fn prepare_claude_environment_config_publishes_factory_skills() {
+    let home_dir = TempDir::new().unwrap();
+    let skills_source = TempDir::new().unwrap();
+    fs::create_dir_all(skills_source.path().join("github")).unwrap();
+    fs::write(
+        skills_source.path().join("github").join("SKILL.md"),
+        "---\nname: github\ndescription: test\n---\nBody",
+    )
+    .unwrap();
+
+    let old_home = std::env::var_os("HOME");
+    let old_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+    let old_skill_dirs = std::env::var_os(WARP_SKILL_DIRS_ENV);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", home_dir.path()) };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(WARP_SKILL_DIRS_ENV, skills_source.path()) };
+
+    let working_dir = home_dir.path().join("workspace/project");
+    let result = prepare_claude_environment_config(&working_dir, &HashMap::new());
+
+    match old_home {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(home) => unsafe { std::env::set_var("HOME", home) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    match old_config_dir {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(dir) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
+    }
+    match old_skill_dirs {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(dirs) => unsafe { std::env::set_var(WARP_SKILL_DIRS_ENV, dirs) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var(WARP_SKILL_DIRS_ENV) },
+    }
+
+    result.unwrap();
+    let published = home_dir.path().join(".claude/skills/factory-github");
+    assert!(
+        fs::symlink_metadata(&published)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read_link(&published).unwrap(),
+        skills_source.path().join("github")
+    );
+}
+
 #[test]
 #[serial_test::serial]
 fn resolve_suffix_from_resolved_env_vars() {

@@ -3,6 +3,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::sync::Arc;
 
+use ai::skills::WARP_SKILL_DIRS_ENV;
 use serde_json::Value;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -230,6 +231,77 @@ fn prepare_codex_environment_config_honors_codex_home() {
     assert_eq!(cfg["model"].as_str(), Some("gpt-5.5"));
     assert!(!cfg.contains_key("openai_base_url"));
     assert!(!tmp.path().join(CODEX_CONFIG_DIR).exists());
+}
+
+#[test]
+#[serial_test::serial]
+fn prepare_codex_environment_config_publishes_factory_skills() {
+    let tmp = TempDir::new().unwrap();
+    let home_dir = tmp.path().join("home");
+    let working_dir = tmp.path().join("workspace");
+    let skills_source = tmp.path().join("factory-skills");
+    fs::create_dir_all(&home_dir).unwrap();
+    fs::create_dir_all(&working_dir).unwrap();
+    fs::create_dir_all(skills_source.join("linear")).unwrap();
+    fs::write(
+        skills_source.join("linear").join("SKILL.md"),
+        "---\nname: linear\ndescription: test\n---\nBody",
+    )
+    .unwrap();
+
+    let prev_home = std::env::var_os("HOME");
+    let prev_openai_api_key = std::env::var_os(OPENAI_API_KEY_ENV);
+    let prev_skill_dirs = std::env::var_os(WARP_SKILL_DIRS_ENV);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", &home_dir) };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var(OPENAI_API_KEY_ENV) };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(WARP_SKILL_DIRS_ENV, &skills_source) };
+
+    let result = prepare_codex_environment_config(
+        &working_dir,
+        None,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+    );
+
+    match prev_home {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(v) => unsafe { std::env::set_var("HOME", v) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    match prev_openai_api_key {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(v) => unsafe { std::env::set_var(OPENAI_API_KEY_ENV, v) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var(OPENAI_API_KEY_ENV) },
+    }
+    match prev_skill_dirs {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(v) => unsafe { std::env::set_var(WARP_SKILL_DIRS_ENV, v) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var(WARP_SKILL_DIRS_ENV) },
+    }
+
+    result.unwrap();
+    let published = home_dir
+        .join(".agents")
+        .join("skills")
+        .join("factory-linear");
+    assert!(
+        fs::symlink_metadata(&published)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read_link(&published).unwrap(),
+        skills_source.join("linear")
+    );
 }
 
 fn read_codex_config(path: &std::path::Path) -> toml::Table {

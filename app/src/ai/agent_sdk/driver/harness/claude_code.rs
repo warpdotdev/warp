@@ -613,11 +613,33 @@ pub(crate) fn prepare_claude_environment_config(
     resolved_env_vars: &HashMap<OsString, OsString>,
 ) -> Result<()> {
     let claude_json_path = claude_global_config_path()?;
-    let claude_settings_path = claude_config_dir()?.join(CLAUDE_SETTINGS_FILE_NAME);
+    let claude_dir = claude_config_dir()?;
+    let claude_settings_path = claude_dir.join(CLAUDE_SETTINGS_FILE_NAME);
     let api_key_suffix = resolve_anthropic_api_key_suffix(resolved_env_vars);
     prepare_claude_config(&claude_json_path, working_dir, api_key_suffix.as_deref())?;
     prepare_claude_settings(&claude_settings_path)?;
+    publish_factory_skills_for_claude(working_dir, &claude_dir);
     Ok(())
+}
+
+/// Publish factory playbook skills as `factory-<name>` symlinks under the
+/// Claude Code skill root (`<claude_dir>/skills`), so a factory agent running
+/// on Claude Code sees the same skills the Oz harness loads from
+/// `WARP_SKILL_DIRS`. A no-op when no factory skill directories are
+/// configured for this run.
+fn publish_factory_skills_for_claude(working_dir: &Path, claude_dir: &Path) {
+    let source_dirs = super::factory_skills::factory_skill_source_dirs(working_dir);
+    if source_dirs.is_empty() {
+        return;
+    }
+    let skill_root = claude_dir.join("skills");
+    let published = super::factory_skills::publish_factory_skills(&skill_root, &source_dirs);
+    if published > 0 {
+        log::info!(
+            "Published {published} factory skill(s) to Claude Code skill root {}",
+            skill_root.display()
+        );
+    }
 }
 
 // This function is used specifically for determining where to land `.claude.json`.
