@@ -4,7 +4,7 @@ use warpui::SingletonEntity;
 use super::editor::AgentToolbarEditorMode;
 use crate::context_chips::{ContextChipKind, agent_footer_available_chips, available_chips};
 use crate::features::FeatureFlag;
-use crate::settings::AISettings;
+use crate::settings::{AISettings, CodeSettings};
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::ui_components::icons::Icon;
 
@@ -176,6 +176,13 @@ impl AgentToolbarItemKind {
     pub fn is_available(&self, app: &warpui::AppContext) -> bool {
         match self {
             Self::HandoffToCloud => AISettings::as_ref(app).is_cloud_handoff_enabled(app),
+            // Matches the gating on every other project explorer entry point, so the chip
+            // cannot open a tool view the rest of the app hides. See
+            // `Workspace::compute_left_panel_views` and the `SHOW_PROJECT_EXPLORER`
+            // keybinding predicate.
+            Self::FileExplorer => {
+                cfg!(feature = "local_fs") && *CodeSettings::as_ref(app).show_project_explorer
+            }
             _ => true,
         }
     }
@@ -332,3 +339,7 @@ impl From<ContextChipKind> for AgentToolbarItemKind {
         Self::ContextChip(kind)
     }
 }
+
+#[cfg(test)]
+#[path = "toolbar_item_tests.rs"]
+mod tests;

@@ -26287,15 +26287,16 @@ impl TerminalView {
 
     pub(super) fn toggle_file_tree(
         &mut self,
+        source: crate::server::telemetry::FileTreeSource,
         cli_agent: Option<crate::server::telemetry::CLIAgentType>,
         ctx: &mut ViewContext<Self>,
     ) {
-        use crate::server::telemetry::{FileTreeSource, TelemetryEvent};
+        use crate::server::telemetry::TelemetryEvent;
 
         self.toggle_left_panel_file_tree(false, ctx);
         send_telemetry_from_ctx!(
             TelemetryEvent::FileTreeToggled {
-                source: FileTreeSource::LeftPanelToolbelt,
+                source,
                 is_code_mode_v2: true,
                 cli_agent,
             },
