@@ -18,7 +18,7 @@ lazy_static! {
     static ref LANGUAGE_REGISTRY: LanguageRegistry = LanguageRegistry::new();
 }
 
-pub const SUPPORTED_LANGUAGES: [&str; 35] = [
+pub const SUPPORTED_LANGUAGES: [&str; 36] = [
     "rust",
     "golang",
     "yaml",
@@ -46,6 +46,7 @@ pub const SUPPORTED_LANGUAGES: [&str; 35] = [
     "scala",
     "powershell",
     "elixir",
+    "r",
     "sql",
     "starlark",
     "objective-c",
@@ -116,6 +117,7 @@ fn normalize_language_name(name: &str) -> &str {
         "objc" | "objective_c" => "objective-c",
         "terraform" | "tf" => "hcl",
         "kt" => "kotlin",
+        "R" => "r",
         "docker" | "containerfile" => "dockerfile",
         "md" => "markdown",
         other => other,
@@ -189,6 +191,7 @@ fn language_by_filename_parts(
         "scala" | "sbt" | "sc" => language_by_name("scala"),
         "ps1" | "pwsh" => language_by_name("powershell"),
         "ex" | "exs" => language_by_name("elixir"),
+        "r" | "R" => language_by_name("r"),
         "sql" => language_by_name("sql"),
         "bzl" | "bazel" => language_by_name("starlark"),
         "m" | "mm" => language_by_name("objective-c"),
@@ -287,6 +290,7 @@ fn get_arborium_highlight_query(lang: &str) -> Option<&str> {
         "scala" => Some(arborium::lang_scala::HIGHLIGHTS_QUERY),
         "powershell" => Some(arborium::lang_powershell::HIGHLIGHTS_QUERY),
         "elixir" => Some(arborium::lang_elixir::HIGHLIGHTS_QUERY),
+        "r" => Some(arborium::lang_r::HIGHLIGHTS_QUERY),
         "sql" => Some(arborium::lang_sql::HIGHLIGHTS_QUERY),
         "starlark" => Some(arborium::lang_starlark::HIGHLIGHTS_QUERY),
         "objective-c" => Some(&arborium::lang_objc::HIGHLIGHTS_QUERY),

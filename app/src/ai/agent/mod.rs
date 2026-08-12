@@ -981,6 +981,7 @@ impl ProgrammingLanguage {
                 "kotlin" | "kt" => Some("kt"),
                 "powershell" => Some("ps1"),
                 "elixir" => Some("exs"),
+                "r" => Some("r"),
                 "scala" => Some("scala"),
                 "sql" => Some("sql"),
                 "objective-c" | "objc" => Some("m"),

@@ -669,6 +669,7 @@ dependencies = [
  "arborium-php",
  "arborium-powershell",
  "arborium-python",
+ "arborium-r",
  "arborium-ruby",
  "arborium-rust",
  "arborium-scala",
@@ -940,6 +941,17 @@ name = "arborium-python"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "70ec2b0cbb06b6c4901c8b60a91b9ed8b9009c20c3c4a2b4ffefcfae98d92d50"
+dependencies = [
+ "arborium-sysroot",
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "arborium-r"
+version = "2.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8aedf681a5e698e93fdd879bc7f07b1c2db90d643259f28463cfea7d9eede82e"
 dependencies = [
  "arborium-sysroot",
  "cc",

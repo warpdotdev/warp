@@ -327,6 +327,7 @@ arborium = { version = "2", default-features = false, features = [
   "lang-scala",
   "lang-powershell",
   "lang-elixir",
+  "lang-r",
   "lang-sql",
   "lang-starlark",
   "lang-objc",

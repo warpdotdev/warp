@@ -259,6 +259,8 @@ fn test_programming_language_to_extension() {
         ("kotlin", "kt"),
         ("powershell", "ps1"),
         ("elixir", "exs"),
+        ("r", "r"),
+        ("R", "r"),
         ("scala", "scala"),
         ("sql", "sql"),
         // Languages newly covered by this fix — previously fell through to None and rendered
