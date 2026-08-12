@@ -611,6 +611,7 @@ fn convert_billing_cycle_usage(history: GqlBillingCycleUsageHistory) -> BillingC
                         subject_type: entry.subject_type,
                         subject_uid: entry.subject_uid,
                         subject_display_name: entry.subject_display_name,
+                        attributed_team_uid: entry.attributed_team_uid,
                         cost_type: entry.cost_type,
                         usage_bucket: entry.usage_bucket,
                         usage_source: entry.usage_source,

@@ -384,6 +384,7 @@ pub struct UsageEntry {
     pub subject_type: AiCreditsUsageAndCostSubjectType,
     pub subject_uid: Option<String>,
     pub subject_display_name: Option<String>,
+    pub attributed_team_uid: Option<String>,
     pub cost_type: AiCreditsUsageAndCostType,
     pub usage_bucket: AiCreditsUsageBucket,
     pub usage_source: AiCreditsUsageSource,

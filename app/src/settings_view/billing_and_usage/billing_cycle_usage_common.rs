@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
@@ -13,14 +13,16 @@ use warpui::elements::{
 };
 use warpui::fonts::{Properties, Weight};
 
+use crate::auth::UserUid;
 use crate::settings_view::billing_and_usage_page_v2::{
     AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
 use crate::ui_components::blended_colors;
+use crate::workspaces::team::TeamMember;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    BillingCycleUsageEntry,
+    BillingCycleUsageEntry, WorkspaceMember,
 };
 
 // for a bunch of this (min fill ratio, cost type order, ... )
@@ -193,6 +195,40 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
             e.usage_bucket != AiCreditsUsageBucket::Voice
                 && e.usage_bucket != AiCreditsUsageBucket::SuggestedCodeDiffs
         })
+        .cloned()
+        .collect()
+}
+
+/// Restricts `entries` to the usage billed against `team_uid`.
+///
+/// A workspace's `billing_cycle_usage` history spans every team the viewer can
+/// see, so an admin of team A would otherwise find team B's members listed on
+/// this page. Entries the server couldn't attribute to a team are dropped too,
+/// matching `filterEntriesByAttributedTeam` in the web billing settings.
+pub fn filter_entries_for_team(
+    entries: &[BillingCycleUsageEntry],
+    team_uid: &str,
+) -> Vec<BillingCycleUsageEntry> {
+    entries
+        .iter()
+        .filter(|entry| entry.attributed_team_uid.as_deref() == Some(team_uid))
+        .cloned()
+        .collect()
+}
+
+/// Restricts `workspace_members` to the people on the team in view.
+///
+/// The per-member rows are seeded from the roster so that members with no
+/// usage still appear; seeding them from the whole workspace would list
+/// sibling teams' members on a team's page.
+pub fn filter_members_for_team(
+    workspace_members: &[WorkspaceMember],
+    team_members: &[TeamMember],
+) -> Vec<WorkspaceMember> {
+    let team_member_uids: HashSet<UserUid> = team_members.iter().map(|member| member.uid).collect();
+    workspace_members
+        .iter()
+        .filter(|member| team_member_uids.contains(&member.uid))
         .cloned()
         .collect()
 }

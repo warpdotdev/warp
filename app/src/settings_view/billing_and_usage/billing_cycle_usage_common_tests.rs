@@ -1,13 +1,18 @@
 use super::{
-    BarSegment, aggregate_segments, filter_legacy_buckets, has_non_viewer_data, legend_cost_types,
+    BarSegment, aggregate_segments, filter_entries_for_team, filter_legacy_buckets,
+    filter_members_for_team, has_non_viewer_data, legend_cost_types,
 };
+use crate::auth::UserUid;
+use crate::workspaces::team::{MembershipRole, TeamMember};
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    AiCreditsUsageSource, BillingCycleUsageEntry,
+    AiCreditsUsageSource, BillingCycleUsageEntry, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 const VIEWER_UID: &str = "viewer-uid";
 const OTHER_UID: &str = "other-uid";
+const TEAM_A_UID: &str = "team-a-uid";
+const TEAM_B_UID: &str = "team-b-uid";
 
 fn entry(
     subject_type: AiCreditsUsageAndCostSubjectType,
@@ -22,12 +27,114 @@ fn entry(
         subject_type,
         subject_uid: subject_uid.map(|s| s.to_string()),
         subject_display_name: None,
+        attributed_team_uid: None,
         cost_type,
         usage_bucket,
         usage_source,
         credits_used,
         cost_cents,
     }
+}
+
+/// User row billed against `attributed_team_uid`.
+fn team_attributed_entry(
+    subject_uid: &str,
+    attributed_team_uid: Option<&str>,
+) -> BillingCycleUsageEntry {
+    BillingCycleUsageEntry {
+        attributed_team_uid: attributed_team_uid.map(|uid| uid.to_string()),
+        ..entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(subject_uid),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            10,
+            0,
+        )
+    }
+}
+
+#[test]
+fn filter_entries_for_team_drops_sibling_teams_usage() {
+    // The workspace-wide history an admin receives carries every team they
+    // administer; the page only ever shows one of them.
+    let entries = vec![
+        team_attributed_entry(VIEWER_UID, Some(TEAM_A_UID)),
+        team_attributed_entry(OTHER_UID, Some(TEAM_B_UID)),
+    ];
+
+    let filtered = filter_entries_for_team(&entries, TEAM_A_UID);
+
+    let subject_uids: Vec<_> = filtered
+        .iter()
+        .map(|e| e.subject_uid.clone().unwrap_or_default())
+        .collect();
+    assert_eq!(subject_uids, vec![VIEWER_UID.to_string()]);
+}
+
+#[test]
+fn filter_entries_for_team_drops_unattributed_usage() {
+    // Matches the web UI: usage the server couldn't attribute to a live or
+    // archived team belongs to no team view.
+    let entries = vec![team_attributed_entry(VIEWER_UID, None)];
+    assert!(filter_entries_for_team(&entries, TEAM_A_UID).is_empty());
+}
+
+#[test]
+fn filter_entries_for_team_keeps_team_subject_rows_for_that_team() {
+    // Redacted TeamAggregate rows carry the originating team's UID, so they
+    // must survive the scoping that drops sibling teams.
+    let team_row = BillingCycleUsageEntry {
+        attributed_team_uid: Some(TEAM_A_UID.to_string()),
+        ..entry(
+            AiCreditsUsageAndCostSubjectType::Team,
+            None,
+            AiCreditsUsageAndCostType::Aggregate,
+            AiCreditsUsageBucket::Aggregate,
+            AiCreditsUsageSource::Aggregate,
+            500,
+            300,
+        )
+    };
+    let entries = vec![team_row];
+
+    assert_eq!(filter_entries_for_team(&entries, TEAM_A_UID).len(), 1);
+    assert!(filter_entries_for_team(&entries, TEAM_B_UID).is_empty());
+}
+
+fn workspace_member(uid: &str) -> WorkspaceMember {
+    WorkspaceMember {
+        uid: UserUid::new(uid),
+        email: format!("{uid}@warp.dev"),
+        role: MembershipRole::User,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: false,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    }
+}
+
+fn team_member(uid: &str) -> TeamMember {
+    TeamMember {
+        uid: UserUid::new(uid),
+        email: format!("{uid}@warp.dev"),
+        role: MembershipRole::User,
+    }
+}
+
+#[test]
+fn filter_members_for_team_keeps_only_that_teams_roster() {
+    // Per-member rows are seeded from the roster, so a sibling team's member
+    // would otherwise get a row on this team's page even with zero usage.
+    let workspace_members = vec![workspace_member(VIEWER_UID), workspace_member(OTHER_UID)];
+
+    let scoped = filter_members_for_team(&workspace_members, &[team_member(VIEWER_UID)]);
+
+    let uids: Vec<_> = scoped.iter().map(|m| m.uid.as_string()).collect();
+    assert_eq!(uids, vec![VIEWER_UID.to_string()]);
 }
 
 /// Boilerplate viewer-owned User row for predicate tests.

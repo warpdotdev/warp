@@ -18,6 +18,7 @@ fn entry(
         subject_type,
         subject_uid: subject_uid.map(|s| s.to_string()),
         subject_display_name: None,
+        attributed_team_uid: None,
         cost_type: AiCreditsUsageAndCostType::BaseLimit,
         usage_bucket: AiCreditsUsageBucket::Ai,
         usage_source,

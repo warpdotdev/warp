@@ -21,7 +21,8 @@ use crate::auth::{AuthManager, AuthStateProvider};
 use crate::menu::{self, Menu, MenuItem, MenuItemFields};
 use crate::settings_view::admin_actions::AdminActions;
 use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
-    BillingUsageMouseStates, filter_legacy_buckets, has_non_viewer_data, legend_cost_types,
+    BillingUsageMouseStates, filter_entries_for_team, filter_legacy_buckets,
+    filter_members_for_team, has_non_viewer_data, legend_cost_types,
 };
 use crate::settings_view::billing_and_usage::billing_cycle_usage_rows::{
     SourceFilter, has_cloud_usage, render_own_usage_solo_row, render_own_usage_with_workspace_row,
@@ -36,8 +37,8 @@ use crate::ui_components::icons::Icon;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AiCreditsUsageAndCostType, BillingCycleUsageSummary, MaxPriorCycles, UsageVisibility,
-    UsageVisibilityGranularity, Workspace,
+    AiCreditsUsageAndCostType, BillingCycleUsageEntry, BillingCycleUsageSummary, MaxPriorCycles,
+    UsageVisibility, UsageVisibilityGranularity, Workspace, WorkspaceMember,
 };
 
 const HEADER_FONT_SIZE: f32 = 16.;
@@ -130,6 +131,41 @@ impl BillingCycleUsageSectionView {
             .is_some_and(|email| team.has_admin_permissions(email))
     }
 
+    fn team_uid_in_view(&self, app: &AppContext) -> Option<String> {
+        UserWorkspaces::as_ref(app)
+            .team_for_view_handle(&self.self_handle, app)
+            .map(|team| team.uid.to_string())
+    }
+
+    /// The selected cycle's entries, narrowed to the team this window is
+    /// looking at. Without the narrowing, an admin of one team sees every
+    /// sibling team's usage in the workspace-wide history the server returns.
+    fn scoped_entries(
+        &self,
+        workspace: &Workspace,
+        app: &AppContext,
+    ) -> Vec<BillingCycleUsageEntry> {
+        let entries = filter_legacy_buckets(
+            self.current_summary(workspace)
+                .map(|summary| summary.entries.as_slice())
+                .unwrap_or_default(),
+        );
+        match self.team_uid_in_view(app) {
+            Some(team_uid) => filter_entries_for_team(&entries, &team_uid),
+            None => entries,
+        }
+    }
+
+    /// Workspace members that belong to the team in view, so the per-member
+    /// rows list only that team's roster. Falls back to the full workspace
+    /// roster when no team is resolvable for this window.
+    fn scoped_members(&self, workspace: &Workspace, app: &AppContext) -> Vec<WorkspaceMember> {
+        match UserWorkspaces::as_ref(app).team_for_view_handle(&self.self_handle, app) {
+            Some(team) => filter_members_for_team(&workspace.members, &team.members),
+            None => workspace.members.clone(),
+        }
+    }
+
     fn current_summary<'a>(
         &self,
         workspace: &'a Workspace,
@@ -170,16 +206,13 @@ impl BillingCycleUsageSectionView {
         if visibility.granularity == UsageVisibilityGranularity::OwnOnly {
             return false;
         }
-        let entries = filter_legacy_buckets(
-            self.current_summary(workspace)
-                .map(|s| s.entries.as_slice())
-                .unwrap_or_default(),
-        );
+        let entries = self.scoped_entries(workspace, app);
         let viewer_uid = AuthStateProvider::as_ref(app)
             .get()
             .user_id()
             .map(|uid| uid.as_string());
-        workspace.members.len() > 1 || has_non_viewer_data(&entries, viewer_uid.as_deref())
+        self.scoped_members(workspace, app).len() > 1
+            || has_non_viewer_data(&entries, viewer_uid.as_deref())
     }
 }
 
@@ -277,11 +310,7 @@ impl BillingCycleUsageSectionView {
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
         column.add_child(self.render_header(Some(workspace), &visibility, appearance, app));
 
-        let entries = filter_legacy_buckets(
-            self.current_summary(workspace)
-                .map(|summary| summary.entries.as_slice())
-                .unwrap_or_default(),
-        );
+        let entries = self.scoped_entries(workspace, app);
 
         let is_source_filter_shown = visibility.granularity
             == UsageVisibilityGranularity::FullBreakdown
@@ -309,7 +338,7 @@ impl BillingCycleUsageSectionView {
 
         column.add_child(
             Container::new(render_rows(
-                workspace,
+                &self.scoped_members(workspace, app),
                 &entries,
                 &visibility,
                 source_filter,
@@ -334,11 +363,7 @@ impl BillingCycleUsageSectionView {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let visibility = workspace.resolve_usage_visibility(self.viewer_is_team_admin(app));
-        let entries = filter_legacy_buckets(
-            self.current_summary(workspace)
-                .map(|s| s.entries.as_slice())
-                .unwrap_or_default(),
-        );
+        let entries = self.scoped_entries(workspace, app);
 
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
         column.add_child(self.render_header(Some(workspace), &visibility, appearance, app));
@@ -428,7 +453,7 @@ impl BillingCycleUsageSectionView {
         column.add_child(row.finish());
 
         let resets_text = self.render_resets_label(appearance, app);
-        let legend = workspace.and_then(|workspace| self.render_legend(workspace, appearance));
+        let legend = workspace.and_then(|workspace| self.render_legend(workspace, appearance, app));
         if resets_text.is_some() || legend.is_some() {
             let mut secondary_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -560,12 +585,12 @@ impl BillingCycleUsageSectionView {
         &self,
         workspace: &Workspace,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
-        let summary = self.current_summary(workspace)?;
         // Only list buckets that actually contribute to the stacked bars: drop
         // legacy buckets and cost types with no usage, so the legend never
         // shows a bucket (e.g. "Base") that has zero credits in the data.
-        let present_buckets = legend_cost_types(&summary.entries);
+        let present_buckets = legend_cost_types(&self.scoped_entries(workspace, app));
         if present_buckets.is_empty() {
             return None;
         }

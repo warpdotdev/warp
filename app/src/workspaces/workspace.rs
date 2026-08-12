@@ -602,6 +602,13 @@ pub struct BillingCycleUsageEntry {
     pub subject_type: AiCreditsUsageAndCostSubjectType,
     pub subject_uid: Option<String>,
     pub subject_display_name: Option<String>,
+    /// The team this usage is billed against. A workspace's history covers
+    /// every team the viewer administers, so surfaces that show a single team
+    /// must scope by this — see
+    /// [`crate::settings_view::billing_and_usage::billing_cycle_usage_common::filter_entries_for_team`].
+    /// `None` when the server couldn't attribute the usage to a live or
+    /// archived team.
+    pub attributed_team_uid: Option<String>,
     pub cost_type: AiCreditsUsageAndCostType,
     pub usage_bucket: AiCreditsUsageBucket,
     pub usage_source: AiCreditsUsageSource,

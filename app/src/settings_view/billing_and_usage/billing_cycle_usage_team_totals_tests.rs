@@ -13,6 +13,7 @@ fn entry(
         subject_type: AiCreditsUsageAndCostSubjectType::User,
         subject_uid: Some("u".to_string()),
         subject_display_name: None,
+        attributed_team_uid: None,
         cost_type: AiCreditsUsageAndCostType::BaseLimit,
         usage_bucket: AiCreditsUsageBucket::Ai,
         usage_source,
