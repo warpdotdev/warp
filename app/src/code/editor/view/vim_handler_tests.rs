@@ -1,6 +1,8 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
-use pathfinder_geometry::vector::Vector2F;
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use unindent::Unindent;
 use vim::vim::{MotionType, VimMode};
 use warp_core::features::FeatureFlag;
@@ -15,10 +17,14 @@ use warpui::keymap::Keystroke;
 use warpui::platform::WindowStyle;
 use warpui::text::point::Point;
 use warpui::units::IntoPixels;
-use warpui::{App, SingletonEntity, TypedActionView, UpdateModel, ViewHandle};
+use warpui::{
+    App, EntityIdSet, Event, Presenter, SingletonEntity, TypedActionView, UpdateModel, ViewHandle,
+    WindowInvalidation,
+};
 
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::code::editor::find::view::{FIND_QUERY_FIELD_POSITION_ID, FindAction};
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction};
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::server::server_api::team::MockTeamClient;
@@ -2123,5 +2129,182 @@ fn test_vim_indent_dot_repeat_repeats_last_indent() {
         vim_user_insert(&editor, ".", &mut app);
         assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2\n    line 3");
         assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+// Regression tests for the find-in-file query field becoming permanently unclickable once Vim
+// Enter (or the `*`/`#` word-search) disables it. See `CodeEditorFind::activate_find_input` and
+// its `FindAction::ActivateFindInput` dispatch (from a mouse-down on the query field) in
+// `code/editor/find/view.rs`.
+
+#[test]
+fn test_vim_enter_in_find_bar_disables_input_then_mouse_down_reactivates() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        let editor = add_code_editor("hello world\nhello there", &mut app);
+        let find_bar = editor.read(&app, |view, _ctx| {
+            view.find_bar.clone().expect("find bar should exist")
+        });
+
+        // Open the find bar (mirrors Cmd/Ctrl-F): this focuses the bar, which activates the
+        // query field (editable + focused).
+        editor.update(&mut app, |view, ctx| {
+            view.show_find_bar(ctx);
+        });
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.set_find_query(ctx, "hello");
+        });
+
+        app.read(|ctx| {
+            assert!(find_bar.as_ref(ctx).is_find_input_editable(ctx));
+            assert!(find_bar.as_ref(ctx).find_editor_for_test().is_focused(ctx));
+        });
+
+        // Pressing Enter while Vim mode is enabled commits the query, disables the field, and
+        // shifts focus back to the code editor -- but the find bar stays open.
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.simulate_query_enter_for_test(ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(find_bar.as_ref(ctx).is_open());
+            assert!(!find_bar.as_ref(ctx).is_find_input_editable(ctx));
+            assert!(!find_bar.as_ref(ctx).find_editor_for_test().is_focused(ctx));
+            assert!(editor.is_focused(ctx));
+        });
+
+        // A mouse-down on the (disabled) query field should reactivate it: editable again, and
+        // focused. Before the fix, `EditorElement::mouse_down` bailed out on a disabled editor,
+        // so the field was visible but permanently unclickable.
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.handle_action(&FindAction::ActivateFindInput, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(find_bar.as_ref(ctx).is_find_input_editable(ctx));
+            assert!(find_bar.as_ref(ctx).find_editor_for_test().is_focused(ctx));
+        });
+    });
+}
+
+#[test]
+fn test_vim_word_search_disables_input_then_mouse_down_reactivates() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        // Cursor starts at the buffer start (on "hello"), so `*` searches for that word.
+        let editor = add_code_editor("hello world\nhello there", &mut app);
+        let find_bar = editor.read(&app, |view, _ctx| {
+            view.find_bar.clone().expect("find bar should exist")
+        });
+
+        // `*` opens the find bar pre-populated with the word under the cursor, and disables the
+        // query field immediately since the search is already fully specified.
+        vim_user_insert(&editor, "*", &mut app);
+
+        app.read(|ctx| {
+            assert!(find_bar.as_ref(ctx).is_open());
+            assert!(!find_bar.as_ref(ctx).is_find_input_editable(ctx));
+        });
+
+        // A mouse-down on the (disabled) query field should reactivate it.
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.handle_action(&FindAction::ActivateFindInput, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(find_bar.as_ref(ctx).is_find_input_editable(ctx));
+            assert!(find_bar.as_ref(ctx).find_editor_for_test().is_focused(ctx));
+        });
+    });
+}
+
+// The two tests above dispatch `FindAction::ActivateFindInput` directly, which exercises the
+// resulting state transition but not the `Hoverable::on_mouse_down` wiring in
+// `code/editor/find/view.rs` that actually dispatches that action from a real pointer event
+// (its child-first dispatch, its bounds/coverage, and the disabled-editor return path). The test
+// below renders a real scene and dispatches a genuine `Event::LeftMouseDown` at the find query
+// field's actual on-screen position, so it fails if the `Hoverable`/`SavePosition` wrapper is
+// removed, mis-positioned, covered, or wired to the wrong view.
+#[test]
+fn test_vim_enter_find_bar_mouse_down_reactivates_through_real_pointer_event() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        let editor = add_code_editor("hello world\nhello there", &mut app);
+        let window_id = editor.read(&app, |view, _ctx| view.window_id());
+        let find_bar = editor.read(&app, |view, _ctx| {
+            view.find_bar.clone().expect("find bar should exist")
+        });
+
+        // Reproduce the reported bug's starting state: open the find bar, commit a query via
+        // Vim Enter, which disables the query field and shifts focus to the code editor while
+        // leaving the find bar open.
+        editor.update(&mut app, |view, ctx| {
+            view.show_find_bar(ctx);
+        });
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.set_find_query(ctx, "hello");
+        });
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.simulate_query_enter_for_test(ctx);
+        });
+        app.read(|ctx| {
+            assert!(!find_bar.as_ref(ctx).is_find_input_editable(ctx));
+            assert!(!find_bar.as_ref(ctx).find_editor_for_test().is_focused(ctx));
+        });
+
+        // Render a real scene (large enough to fit the top-right-anchored find bar) and locate
+        // the query field's actual on-screen bounds via the `SavePosition` wrapper.
+        let mut presenter = Presenter::new(window_id);
+        let click_position = app.update(|ctx| {
+            // `CodeEditorView` embeds the find bar (and the find bar embeds its query editor)
+            // as separate `View`s via `ChildView`. `ChildView::layout`/`paint` only descend into
+            // a view if it is present in the presenter's `rendered_views` map, so every view in
+            // the window -- not just the root -- must be included in the invalidation set for
+            // this test's standalone `Presenter` to render the nested find bar content at all.
+            let updated: EntityIdSet = ctx.view_ids_for_window(window_id).into_iter().collect();
+            presenter.invalidate(
+                WindowInvalidation {
+                    updated,
+                    ..Default::default()
+                },
+                ctx,
+            );
+            presenter.build_scene(vec2f(900., 600.), 1., None, ctx);
+
+            presenter
+                .position_cache()
+                .get_position(FIND_QUERY_FIELD_POSITION_ID)
+                .expect("find query field position should be cached after painting")
+                .center()
+        });
+
+        // Dispatch a genuine pointer-down at that position through the real event pipeline.
+        let presenter = Rc::new(RefCell::new(presenter));
+        app.update(move |ctx| {
+            ctx.simulate_window_event(
+                Event::LeftMouseDown {
+                    position: click_position,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                window_id,
+                presenter,
+            );
+        });
+
+        app.read(|ctx| {
+            assert!(find_bar.as_ref(ctx).is_find_input_editable(ctx));
+            assert!(find_bar.as_ref(ctx).find_editor_for_test().is_focused(ctx));
+        });
     });
 }
