@@ -182,6 +182,39 @@ fn text_styles_follow_light_theme_foreground() {
 }
 
 #[test]
+fn read_only_menu_header_background_is_a_further_blend_step_than_the_body() {
+    // The `/usage` panel's header row needs to read as visually distinct
+    // from (a touch brighter than) the rest of a read-only menu's body.
+    for theme in [dark_theme(), light_theme()] {
+        let builder = TuiUiBuilder {
+            warp_theme: theme.clone(),
+        };
+        assert_ne!(
+            builder.read_only_menu_header_background(),
+            builder.read_only_menu_background(),
+            "the header background must be visually distinct from the body"
+        );
+    }
+}
+
+#[test]
+fn usage_bar_empty_style_is_not_plain_dim_text() {
+    // The empty bar segment used to rely on `Modifier::DIM`, which some
+    // terminal renderers don't implement; it must use an explicit color
+    // that reads as a subtle texture without depending on that attribute.
+    for theme in [dark_theme(), light_theme()] {
+        let builder = TuiUiBuilder {
+            warp_theme: theme.clone(),
+        };
+        assert_ne!(
+            builder.usage_bar_empty_style().fg,
+            builder.dim_text_style().fg,
+            "the empty bar style should be its own explicit blend, not dim text"
+        );
+    }
+}
+
+#[test]
 fn selected_state_suffix_midpoint_matches_figma_dark_palette() {
     assert_eq!(
         rounded_midpoint_color(

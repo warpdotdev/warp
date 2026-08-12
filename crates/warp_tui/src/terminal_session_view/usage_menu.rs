@@ -23,8 +23,6 @@ use crate::tui_builder::TuiUiBuilder;
 /// reference layout: 80 - 4 (the session's outer `with_padding_x(2)`) - 2
 /// (this panel's own `with_padding_x(1)`) = 74.
 const BAR_WIDTH: usize = 74;
-/// Width of the leading label column in a `label   value` row.
-const LABEL_WIDTH: usize = 40;
 /// Credits represented by a single pay-as-you-go circle.
 const CREDITS_PER_CIRCLE: i64 = 500;
 
@@ -38,10 +36,25 @@ fn plain_row(text: impl Into<String>, style: TuiStyle) -> Box<dyn TuiElement> {
         .finish()
 }
 
-fn label_value_row(label: &str, value: &str, style: TuiStyle) -> Box<dyn TuiElement> {
-    TuiText::from_spans([(format!("{label:<LABEL_WIDTH$}{value}"), style)])
-        .truncate()
+/// A row with `left` flush to the card's left edge and `right` flush to its
+/// right edge, via a flex spacer — the same pattern the header row uses.
+/// Plain string concatenation with fixed padding can't do this: a `TuiText`
+/// reports its own natural (fixed) width, so padding alone leaves the value
+/// stranded mid-card instead of at the edge once the row is stretched to the
+/// panel's full width.
+fn flex_row(left: Vec<(String, TuiStyle)>, right: Vec<(String, TuiStyle)>) -> Box<dyn TuiElement> {
+    TuiFlex::row()
+        .child(spans_row(left))
+        .flex_child(TuiText::new(String::new()).finish())
+        .child(spans_row(right))
         .finish()
+}
+
+fn label_value_row(label: &str, value: &str, style: TuiStyle) -> Box<dyn TuiElement> {
+    flex_row(
+        vec![(label.to_owned(), style)],
+        vec![(value.to_owned(), style)],
+    )
 }
 
 fn spans_row(spans: Vec<(String, TuiStyle)>) -> Box<dyn TuiElement> {
@@ -132,28 +145,30 @@ fn credit_section(
     let primary = builder.primary_text_style();
     let primary_bold = primary.add_modifier(Modifier::BOLD);
     let muted = builder.muted_text_style();
-    let empty = builder.dim_text_style();
+    let empty = builder.usage_bar_empty_style();
     let remaining = (bar.limit - bar.used).max(0);
 
     // Only the numeric value is bold; the label and "remaining" stay regular
     // weight, per the designer's screenshot ("Base credits **400** remaining").
-    let title_row = spans_row(vec![
-        (format!("{title:<LABEL_WIDTH$}"), primary),
-        (remaining.to_string(), primary_bold),
-        (" remaining".to_owned(), primary),
-    ]);
+    // Right-aligned to the card's edge, per the designer's screenshot.
+    let title_row = flex_row(
+        vec![(title.to_owned(), primary)],
+        vec![
+            (remaining.to_string(), primary_bold),
+            (" remaining".to_owned(), primary),
+        ],
+    );
 
     // The "Credits used:" label is muted; only the used/limit figure is
-    // brightened to match "Base credits", per the designer's screenshot.
-    let used_value = format!("{}/{}", bar.used, bar.limit);
-    let prefix = "Credits used: ".to_owned();
-    let padding = " ".repeat(LABEL_WIDTH.saturating_sub(prefix.len() + used_value.len()));
-    let credits_used_row = spans_row(vec![
-        (prefix, muted),
-        (used_value, primary),
-        (padding, muted),
-        (bar.note.clone(), muted),
-    ]);
+    // brightened to match "Base credits", per the designer's screenshot. The
+    // note (right side) is right-aligned to the card's edge.
+    let credits_used_row = flex_row(
+        vec![
+            ("Credits used: ".to_owned(), muted),
+            (format!("{}/{}", bar.used, bar.limit), primary),
+        ],
+        vec![(bar.note.clone(), muted)],
+    );
 
     vec![
         title_row,
@@ -178,20 +193,22 @@ fn pay_as_you_go_section(
     } else {
         NOT_KICKED_IN_NOTE
     };
-    // Same dim-label/bright-value split as "Credits used:", for consistency.
-    let spend_value = format!(
-        "{} credits / {}",
-        payg.credits_used,
-        dollars(payg.cost_cents)
-    );
-    let spend_prefix = "Spend: ".to_owned();
-    let padding = " ".repeat(LABEL_WIDTH.saturating_sub(spend_prefix.len() + spend_value.len()));
-    rows.push(spans_row(vec![
-        (spend_prefix, muted),
-        (spend_value, primary),
-        (padding, muted),
-        (kicks_in_note.to_owned(), muted),
-    ]));
+    // Same dim-label/bright-value split as "Credits used:", for consistency,
+    // and right-aligned to the card's edge the same way.
+    rows.push(flex_row(
+        vec![
+            ("Spend: ".to_owned(), muted),
+            (
+                format!(
+                    "{} credits / {}",
+                    payg.credits_used,
+                    dollars(payg.cost_cents)
+                ),
+                primary,
+            ),
+        ],
+        vec![(kicks_in_note.to_owned(), muted)],
+    ));
     rows
 }
 
@@ -210,14 +227,15 @@ pub(super) fn render(
     let dim = builder.dim_text_style();
     let accent = builder.accent_text_style();
 
-    let mut column = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-
     // Title on the left, metadata (and the admin-only manage-billing link)
     // flush right on the same row, matching the design's single header line.
     // The leading glyph and the " | " separators between the trailing items
-    // match the design's header row exactly; there is no distinct header
-    // background — the whole card shares one background with the title
-    // distinguished only by bold weight, matching the `?` shortcuts menu.
+    // match the design's header row exactly. The header row gets its own
+    // background — one step lighter than the rest of the card, per the
+    // Figma file's own header frame — and its own left/right padding, rather
+    // than sharing the outer panel's padding: that keeps its background
+    // spanning the card's full width edge to edge, matching the body below,
+    // instead of stopping short at the body's shared padding inset.
     let mut metadata = format!("Plan: {}", info.plan_name);
     if let Some(team_name) = &info.team_name {
         metadata.push_str(&format!(" | Team: {team_name}"));
@@ -233,48 +251,53 @@ pub(super) fn render(
                 manage_billing_url,
             ));
     }
-    column = column.child(
+    let header = TuiContainer::new(
         TuiFlex::row()
             .child(plain_row("\u{25D4} Usage", primary_bold))
             .flex_child(TuiText::new(String::new()).finish())
             .child(trailing.finish())
             .finish(),
-    );
+    )
+    .with_padding_x(1)
+    .with_background(builder.read_only_menu_header_background())
+    .finish();
+
+    let mut body = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
     if let Some(base) = &info.base_credits {
-        column = column.child(plain_row(" ", muted));
+        body = body.child(plain_row(" ", muted));
         for row in credit_section("Base credits", base, builder.success_glyph_style(), builder) {
-            column = column.child(row);
+            body = body.child(row);
         }
     }
 
     if let Some(addon) = &info.addon_credits {
-        column = column.child(plain_row(" ", muted));
+        body = body.child(plain_row(" ", muted));
         for row in credit_section(
             "Add-on credits",
             addon,
             builder.credential_entry_accent_style(),
             builder,
         ) {
-            column = column.child(row);
+            body = body.child(row);
         }
     }
 
     if let Some(payg) = &info.pay_as_you_go {
-        column = column.child(plain_row(" ", muted));
+        body = body.child(plain_row(" ", muted));
         for row in pay_as_you_go_section(payg, builder) {
-            column = column.child(row);
+            body = body.child(row);
         }
     }
 
-    column = column.child(plain_row(" ", muted));
+    body = body.child(plain_row(" ", muted));
     let upgrade_link = hoverable_link(
         "Buy more credits or upgrade plan",
         upgrade_mouse,
         builder,
         upgrade_url.to_owned(),
     );
-    column = column.child(
+    body = body.child(
         TuiFlex::row()
             .child(upgrade_link)
             .child(plain_row(" ", muted))
@@ -282,10 +305,17 @@ pub(super) fn render(
             .finish(),
     );
 
-    let panel = TuiContainer::new(column.finish())
-        .with_padding_x(1)
-        .with_background(builder.read_only_menu_background())
-        .finish();
+    let body = TuiContainer::new(body.finish()).with_padding_x(1).finish();
+
+    let panel = TuiContainer::new(
+        TuiFlex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .child(header)
+            .child(body)
+            .finish(),
+    )
+    .with_background(builder.read_only_menu_background())
+    .finish();
 
     // "Esc to exit" sits outside the panel's background, on the plain
     // terminal background below it, per the design.

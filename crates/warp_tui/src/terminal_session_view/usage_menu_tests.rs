@@ -310,10 +310,10 @@ fn header_places_title_and_metadata_on_one_row_without_the_manage_billing_link()
 }
 
 #[test]
-fn header_row_shares_the_same_background_as_the_panel_body() {
-    // There is no separate header-row shade in the design (per the designer's
-    // `?` shortcuts-menu screenshot): verify by construction, not just
-    // visually, that the header can't drift from the body's background.
+fn header_background_spans_the_full_panel_width_not_just_its_own_padding() {
+    // The header has its own padding (separate from the body's), so its
+    // background must span the whole stretched row — including that
+    // padding — rather than stopping short of the panel's right edge.
     let mut snapshot = base_snapshot();
     snapshot.base_credits = Some(credit_bar(1500, 1500));
 
@@ -331,26 +331,23 @@ fn header_row_shares_the_same_background_as_the_panel_body() {
         });
         render_buffer(&app, element.as_mut(), TuiSize::new(110, 30))
     });
-    let lines: Vec<String> = buffer
-        .to_lines()
-        .into_iter()
-        .map(|line| line.trim_end().to_owned())
-        .collect();
-    let body_row = lines
-        .iter()
-        .position(|line| line.contains("Base credits"))
-        .expect("base credits row should render") as u16;
-    assert_eq!(
-        buffer[(0, 0)].bg,
-        buffer[(0, body_row)].bg,
-        "the header row and panel body must share one background"
-    );
+    let header_bg = buffer[(0, 0)].bg;
+    for column in 0..110u16 {
+        assert_eq!(
+            buffer[(column, 0)].bg,
+            header_bg,
+            "column {column} of the header row should share its background"
+        );
+    }
 }
 
 #[test]
-fn title_row_bolds_only_the_numeric_value() {
+fn title_row_bolds_only_the_numeric_value_and_right_aligns_it() {
     // "Base credits" and "remaining" stay regular weight; only the number
     // (which may be multiple digits) is bold, per the designer's screenshot.
+    // The value is flush with the row's right edge, not padded to a fixed
+    // label column.
+    const WIDTH: u16 = 110;
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         let mut rows = app.read(|ctx| {
@@ -363,27 +360,28 @@ fn title_row_bolds_only_the_numeric_value() {
             )
         });
         let mut title_row = rows.remove(0);
-        let buffer = render_buffer(&app, title_row.as_mut(), TuiSize::new(110, 1));
+        let buffer = render_buffer(&app, title_row.as_mut(), TuiSize::new(WIDTH, 1));
+        let value = "100 remaining";
+        let value_start = WIDTH - value.len() as u16;
+        let line = buffer.to_lines()[0].clone();
+        assert_eq!(&line[..12], "Base credits");
         assert_eq!(
-            buffer.to_lines()[0].trim_end(),
-            format!(
-                "{:<width$}100 remaining",
-                "Base credits",
-                width = LABEL_WIDTH
-            )
+            line[value_start as usize..].trim_end(),
+            value,
+            "the value must be flush with the row's right edge"
         );
         assert!(
             !buffer[(0, 0)].modifier.contains(Modifier::BOLD),
             "the label must not be bold"
         );
-        for column in LABEL_WIDTH as u16..LABEL_WIDTH as u16 + 3 {
+        for column in value_start..value_start + 3 {
             assert!(
                 buffer[(column, 0)].modifier.contains(Modifier::BOLD),
                 "digit at column {column} should be bold"
             );
         }
         assert!(
-            !buffer[(LABEL_WIDTH as u16 + 3, 0)]
+            !buffer[(value_start + 3, 0)]
                 .modifier
                 .contains(Modifier::BOLD),
             "\" remaining\" must not be bold"
@@ -393,6 +391,7 @@ fn title_row_bolds_only_the_numeric_value() {
 
 #[test]
 fn credits_used_row_dims_the_label_and_brightens_only_the_value() {
+    const WIDTH: u16 = 110;
     App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         let (mut credits_used_row, muted_fg, primary_fg) = app.read(|ctx| {
@@ -415,13 +414,18 @@ fn credits_used_row_dims_the_label_and_brightens_only_the_value() {
                     .expect("primary style has a foreground"),
             )
         });
-        let buffer = render_buffer(&app, credits_used_row.as_mut(), TuiSize::new(110, 1));
+        let buffer = render_buffer(&app, credits_used_row.as_mut(), TuiSize::new(WIDTH, 1));
+        let note = "Resets Jul 31 at 5:00 PM";
+        let note_start = WIDTH - note.len() as u16;
+        let line = buffer.to_lines()[0].clone();
         assert_eq!(
-            buffer.to_lines()[0].trim_end(),
-            format!(
-                "Credits used: 100/150{}Resets Jul 31 at 5:00 PM",
-                " ".repeat(LABEL_WIDTH - "Credits used: 100/150".len())
-            )
+            &line[.."Credits used: 100/150".len()],
+            "Credits used: 100/150"
+        );
+        assert_eq!(
+            line[note_start as usize..].trim_end(),
+            note,
+            "the note must be flush with the row's right edge"
         );
         // "Credits used: " is muted.
         for column in 0.."Credits used: ".len() as u16 {
@@ -440,6 +444,41 @@ fn credits_used_row_dims_the_label_and_brightens_only_the_value() {
                 "column {column} should be bright"
             );
         }
+        // The note on the right stays muted.
+        for column in note_start..note_start + note.len() as u16 {
+            assert_eq!(
+                buffer[(column, 0)].fg,
+                muted_fg,
+                "column {column} (note) should be muted"
+            );
+        }
+    });
+}
+
+#[test]
+fn pay_as_you_go_label_row_right_aligns_its_value() {
+    const WIDTH: u16 = 110;
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let mut rows = app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            pay_as_you_go_section(
+                &TuiUsagePayAsYouGo {
+                    credits_used: 3500,
+                    cost_cents: 3000,
+                    has_kicked_in: true,
+                },
+                &builder,
+            )
+        });
+        let mut header_row = rows.remove(0);
+        let buffer = render_buffer(&app, header_row.as_mut(), TuiSize::new(WIDTH, 1));
+        let line = buffer.to_lines()[0].clone();
+        assert!(line.starts_with("Pay-as-you-go"));
+        assert_eq!(
+            line[(WIDTH as usize - "No limit".len())..].trim_end(),
+            "No limit"
+        );
     });
 }
 

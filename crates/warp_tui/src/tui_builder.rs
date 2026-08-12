@@ -282,13 +282,42 @@ impl TuiUiBuilder {
         )
     }
 
-    /// Theme-accent overlay for shared read-only menus. Every read-only menu
-    /// (including the `/usage` panel) uses this single function for its
-    /// entire card — there is no distinct header-row shade in the design;
-    /// the title is set apart by bold weight alone.
-    pub(crate) fn read_only_menu_background(&self) -> Color {
+    /// Theme-accent overlay shared by every read-only menu's card background
+    /// (`?` shortcuts, `/status`, `/usage`, etc).
+    fn read_only_menu_background_fill(&self) -> ThemeFill {
         let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
-        cell_color(self.base_background().blend(&accent.with_opacity(10)))
+        self.base_background().blend(&accent.with_opacity(10))
+    }
+
+    /// Theme-accent overlay for shared read-only menus.
+    pub(crate) fn read_only_menu_background(&self) -> Color {
+        cell_color(self.read_only_menu_background_fill())
+    }
+
+    /// A second accent-blend step over [`Self::read_only_menu_background`],
+    /// for the `/usage` panel's "Usage" title row, which the design's own
+    /// header frame renders one step lighter than the rest of the card.
+    pub(crate) fn read_only_menu_header_background(&self) -> Color {
+        let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
+        cell_color(
+            self.read_only_menu_background_fill()
+                .blend(&accent.with_opacity(10)),
+        )
+    }
+
+    /// Subtle texture color for the empty segment of the `/usage` panel's
+    /// credit bars: the card's own background lightly tinted with the
+    /// foreground, so the empty portion reads as a soft texture against the
+    /// card rather than competing in brightness with the bright, solid
+    /// filled segment. Deliberately an explicit blended color rather than
+    /// `Modifier::DIM`, since terminal "faint" rendering support is
+    /// inconsistent and can't be relied on for this contrast.
+    pub(crate) fn usage_bar_empty_style(&self) -> TuiStyle {
+        let foreground = self.warp_theme.foreground();
+        TuiStyle::default().fg(cell_color(
+            self.read_only_menu_background_fill()
+                .blend(&foreground.with_opacity(18)),
+        ))
     }
 
     /// Pale-green overlay behind shell command rows in the transcript.
