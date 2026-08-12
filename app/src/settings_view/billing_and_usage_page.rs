@@ -61,7 +61,7 @@ use crate::view_components::action_button::{ActionButton, PrimaryTheme, Secondar
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::workspaces::workspace::{BillingMetadata, CustomerType, Workspace};
+use crate::workspaces::workspace::{BillingMetadata, CustomerType, Workspace, WorkspaceMember};
 use crate::{WorkspaceAction, send_telemetry_from_ctx};
 
 const HEADER_FONT_SIZE: f32 = 16.;
@@ -722,9 +722,11 @@ impl BillingAndUsagePageView {
     }
 
     fn update_prorated_mouse_states(&mut self, ctx: &mut ViewContext<Self>) {
-        let workspace_members_count = UserWorkspaces::as_ref(ctx)
+        let workspaces = UserWorkspaces::as_ref(ctx);
+        let team = workspaces.team_for_view(ctx);
+        let workspace_members_count = workspaces
             .current_workspace()
-            .map(|workspace| workspace.members.len())
+            .map(|workspace| workspace.members_for_team(team).len())
             .unwrap_or(0);
         self.prorated_request_limits_info_mouse_states = (0..workspace_members_count)
             .map(|_| MouseStateHandle::default())
@@ -2852,10 +2854,6 @@ impl BillingAndUsagePageView {
         let mut usage = Flex::column();
 
         let workspace = UserWorkspaces::as_ref(app).current_workspace();
-        // Check if we should show the sort button (admin with team size > 1)
-        let workspace_team_members = workspace
-            .map(|workspace| workspace.members.clone())
-            .unwrap_or_default();
         let current_user_email = AuthStateProvider::as_ref(app)
             .get()
             .user_email()
@@ -2865,6 +2863,16 @@ impl BillingAndUsagePageView {
         let billing_metadata = workspaces.current_workspace_billing_metadata();
         let has_admin_permissions =
             team.is_some_and(|team| team.has_admin_permissions(&current_user_email));
+        // Check if we should show the sort button (admin with team size > 1)
+        let workspace_team_members: Vec<WorkspaceMember> = workspace
+            .map(|workspace| {
+                workspace
+                    .members_for_team(team)
+                    .into_iter()
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let mut usage_header_right_side = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)

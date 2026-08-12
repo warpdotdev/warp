@@ -384,6 +384,9 @@ pub struct UsageEntry {
     pub subject_type: AiCreditsUsageAndCostSubjectType,
     pub subject_uid: Option<String>,
     pub subject_display_name: Option<String>,
+    /// The team this usage event is attributed to, or `None` when the
+    /// server has no attribution for it (e.g. legacy pre-attribution data).
+    pub attributed_team_uid: Option<String>,
     pub cost_type: AiCreditsUsageAndCostType,
     pub usage_bucket: AiCreditsUsageBucket,
     pub usage_source: AiCreditsUsageSource,

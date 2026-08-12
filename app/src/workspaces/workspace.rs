@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use chrono::Utc;
@@ -88,6 +89,22 @@ impl Workspace {
 
     fn get_member_by_email(&self, email: &str) -> Option<&WorkspaceMember> {
         self.members.iter().find(|member| member.email == email)
+    }
+
+    /// Scopes this workspace's members to `team`'s roster, so a workspace
+    /// admin viewing team A's billing/usage doesn't see team B's members'
+    /// usage data. Falls back to every workspace member when there is no
+    /// team context (e.g. a solo user without a team), preserving existing
+    /// behavior for that case.
+    pub fn members_for_team(&self, team: Option<&Team>) -> Vec<&WorkspaceMember> {
+        let Some(team) = team else {
+            return self.members.iter().collect();
+        };
+        let team_member_uids: HashSet<UserUid> = team.members.iter().map(|m| m.uid).collect();
+        self.members
+            .iter()
+            .filter(|member| team_member_uids.contains(&member.uid))
+            .collect()
     }
 
     pub fn is_workspace_admin(&self, user_email: &str) -> bool {
@@ -597,11 +614,18 @@ pub struct AiOverages {
 ///   `(subject, cost_type, bucket, source)` tuple. Categorical fields always
 ///   carry real values — the server does **not** synthesize an aggregate team
 ///   total at this granularity. Compute team-wide sums client-side if needed.
+///
+/// `attributed_team_uid` identifies which team the entry belongs to (the
+/// server-authoritative signal for scoping a workspace-wide usage history
+/// down to one team, independent of the viewer's current team roster — see
+/// `billing_cycle_usage_common::filter_entries_by_attributed_team`). It is
+/// `None` for entries the server has no attribution for.
 #[derive(Clone, Debug)]
 pub struct BillingCycleUsageEntry {
     pub subject_type: AiCreditsUsageAndCostSubjectType,
     pub subject_uid: Option<String>,
     pub subject_display_name: Option<String>,
+    pub attributed_team_uid: Option<String>,
     pub cost_type: AiCreditsUsageAndCostType,
     pub usage_bucket: AiCreditsUsageBucket,
     pub usage_source: AiCreditsUsageSource,

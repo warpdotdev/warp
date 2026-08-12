@@ -18,6 +18,7 @@ use crate::settings_view::billing_and_usage_page_v2::{
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
 use crate::ui_components::blended_colors;
+use crate::workspaces::team::Team;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     BillingCycleUsageEntry,
@@ -221,6 +222,47 @@ pub fn legend_cost_types(entries: &[BillingCycleUsageEntry]) -> Vec<AiCreditsUsa
             .any(|e| e.cost_type == *cost_type && e.credits_used > 0)
     })
     .collect()
+}
+
+/// Filters usage entries down to those attributed to the given team.
+///
+/// Each entry carries a server-computed `attributed_team_uid` (see
+/// `UsageEntry.attributedTeamUid` in the GraphQL schema) identifying which
+/// team the underlying usage event actually belongs to. This is the
+/// authoritative, per-entry signal for scoping a workspace-wide usage
+/// history down to one team's slice, and it is the reason this filter is
+/// correct where a roster-membership check is not: a member on more than
+/// one team has their usage split by which team it was actually attributed
+/// to (not duplicated into every team they belong to), a member who has
+/// since left the team keeps their historical entries that were attributed
+/// to it while they were still a member, and a service account's entries
+/// are attributed directly, independent of `Team.members` (which never
+/// lists service accounts). Entries with no attribution at all
+/// (`attributed_team_uid: None`) are dropped once a team is selected,
+/// mirroring the web client's `filterEntriesByAttributedTeam`
+/// (`warp-server/client/src/components/admin/team/billing/utils.ts`).
+///
+/// When `team` is `None` (no team context, e.g. a solo user) entries pass
+/// through unfiltered, preserving existing behavior for that case.
+///
+/// This is the entry-level counterpart to `Workspace::members_for_team`,
+/// which scopes the *roster* used to decide which identities/zero-usage
+/// rows exist; the two are complementary and both are required, mirroring
+/// the web client's `filterEntriesByAttributedTeam` (entry filter) and
+/// `selectedTeamMemberUids` (roster filter).
+pub fn filter_entries_by_attributed_team(
+    entries: &[BillingCycleUsageEntry],
+    team: Option<&Team>,
+) -> Vec<BillingCycleUsageEntry> {
+    let Some(team) = team else {
+        return entries.to_vec();
+    };
+    let team_uid = team.uid.to_string();
+    entries
+        .iter()
+        .filter(|entry| entry.attributed_team_uid.as_deref() == Some(team_uid.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// "Is there any data in `entries` that's not my own?"

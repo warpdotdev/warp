@@ -1,5 +1,6 @@
 use super::*;
 use crate::server::ids::ServerId;
+use crate::workspaces::team::TeamMember;
 
 // `ServerId::from_string_lossy` requires exactly 22 characters.
 const TEST_WORKSPACE_UID: &str = "workspace_uid123456789";
@@ -18,6 +19,116 @@ fn make_workspace(policy: Option<UsageVisibilityPolicy>) -> Workspace {
     );
     workspace.billing_metadata.tier.usage_visibility_policy = policy;
     workspace
+}
+
+fn workspace_member(uid: &str, email: &str) -> WorkspaceMember {
+    WorkspaceMember {
+        uid: UserUid::new(uid),
+        email: email.to_string(),
+        role: MembershipRole::User,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: false,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    }
+}
+
+fn team_member(uid: &str, email: &str) -> TeamMember {
+    TeamMember {
+        uid: UserUid::new(uid),
+        email: email.to_string(),
+        role: MembershipRole::User,
+    }
+}
+
+fn team_with_members(members: Vec<TeamMember>) -> Team {
+    Team::from_local_cache(
+        ServerId::from_string_lossy(TEST_WORKSPACE_UID),
+        "Test Team".to_string(),
+        None,
+        None,
+        Some(members),
+    )
+}
+
+#[test]
+fn members_for_team_falls_back_to_all_workspace_members_when_no_team_context() {
+    let mut workspace = make_workspace(None);
+    workspace.members = vec![
+        workspace_member("admin-uid", "admin@example.com"),
+        workspace_member("a-only-uid", "a-only@example.com"),
+    ];
+
+    let scoped = workspace.members_for_team(None);
+
+    assert_eq!(scoped.len(), 2);
+}
+
+#[test]
+fn members_for_team_excludes_members_of_other_teams() {
+    let mut workspace = make_workspace(None);
+    workspace.members = vec![
+        workspace_member("admin-uid", "admin@example.com"),
+        workspace_member("a-only-uid", "a-only@example.com"),
+        workspace_member("b-only-uid", "b-only@example.com"),
+    ];
+    let team_a = team_with_members(vec![
+        team_member("admin-uid", "admin@example.com"),
+        team_member("a-only-uid", "a-only@example.com"),
+    ]);
+
+    let scoped = workspace.members_for_team(Some(&team_a));
+
+    let scoped_emails: Vec<&str> = scoped.iter().map(|m| m.email.as_str()).collect();
+    assert_eq!(
+        scoped_emails,
+        vec!["admin@example.com", "a-only@example.com"]
+    );
+}
+
+#[test]
+fn members_for_team_changes_when_the_selected_team_changes() {
+    let mut workspace = make_workspace(None);
+    workspace.members = vec![
+        workspace_member("admin-uid", "admin@example.com"),
+        workspace_member("a-only-uid", "a-only@example.com"),
+        workspace_member("b-only-uid", "b-only@example.com"),
+    ];
+    let team_a = team_with_members(vec![
+        team_member("admin-uid", "admin@example.com"),
+        team_member("a-only-uid", "a-only@example.com"),
+    ]);
+    let team_b = team_with_members(vec![
+        team_member("admin-uid", "admin@example.com"),
+        team_member("b-only-uid", "b-only@example.com"),
+    ]);
+
+    let scoped_a: Vec<&str> = workspace
+        .members_for_team(Some(&team_a))
+        .iter()
+        .map(|m| m.email.as_str())
+        .collect();
+    let scoped_b: Vec<&str> = workspace
+        .members_for_team(Some(&team_b))
+        .iter()
+        .map(|m| m.email.as_str())
+        .collect();
+
+    assert_eq!(scoped_a, vec!["admin@example.com", "a-only@example.com"]);
+    assert_eq!(scoped_b, vec!["admin@example.com", "b-only@example.com"]);
+}
+
+#[test]
+fn members_for_team_keeps_a_member_shared_across_two_teams() {
+    let mut workspace = make_workspace(None);
+    workspace.members = vec![workspace_member("admin-uid", "admin@example.com")];
+    let team_a = team_with_members(vec![team_member("admin-uid", "admin@example.com")]);
+    let team_b = team_with_members(vec![team_member("admin-uid", "admin@example.com")]);
+
+    assert_eq!(workspace.members_for_team(Some(&team_a)).len(), 1);
+    assert_eq!(workspace.members_for_team(Some(&team_b)).len(), 1);
 }
 
 fn policy(

@@ -21,7 +21,8 @@ use crate::auth::{AuthManager, AuthStateProvider};
 use crate::menu::{self, Menu, MenuItem, MenuItemFields};
 use crate::settings_view::admin_actions::AdminActions;
 use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
-    BillingUsageMouseStates, filter_legacy_buckets, has_non_viewer_data, legend_cost_types,
+    BillingUsageMouseStates, filter_entries_by_attributed_team, filter_legacy_buckets,
+    has_non_viewer_data, legend_cost_types,
 };
 use crate::settings_view::billing_and_usage::billing_cycle_usage_rows::{
     SourceFilter, has_cloud_usage, render_own_usage_solo_row, render_own_usage_with_workspace_row,
@@ -33,11 +34,12 @@ use crate::settings_view::billing_and_usage_page_v2::{
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
 use crate::ui_components::icons::Icon;
+use crate::workspaces::team::Team;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostType, BillingCycleUsageSummary, MaxPriorCycles, UsageVisibility,
-    UsageVisibilityGranularity, Workspace,
+    UsageVisibilityGranularity, Workspace, WorkspaceMember,
 };
 
 const HEADER_FONT_SIZE: f32 = 16.;
@@ -170,16 +172,18 @@ impl BillingCycleUsageSectionView {
         if visibility.granularity == UsageVisibilityGranularity::OwnOnly {
             return false;
         }
-        let entries = filter_legacy_buckets(
-            self.current_summary(workspace)
-                .map(|s| s.entries.as_slice())
-                .unwrap_or_default(),
-        );
+        let team = UserWorkspaces::as_ref(app).team_for_view_handle(&self.self_handle, app);
+        let scoped_member_count = workspace.members_for_team(team).len();
+        let raw_entries = self
+            .current_summary(workspace)
+            .map(|s| s.entries.as_slice())
+            .unwrap_or_default();
+        let entries = filter_legacy_buckets(&filter_entries_by_attributed_team(raw_entries, team));
         let viewer_uid = AuthStateProvider::as_ref(app)
             .get()
             .user_id()
             .map(|uid| uid.as_string());
-        workspace.members.len() > 1 || has_non_viewer_data(&entries, viewer_uid.as_deref())
+        scoped_member_count > 1 || has_non_viewer_data(&entries, viewer_uid.as_deref())
     }
 }
 
@@ -273,15 +277,21 @@ impl BillingCycleUsageSectionView {
     ) -> Box<dyn Element> {
         let is_admin = self.viewer_is_team_admin(app);
         let visibility = workspace.resolve_usage_visibility(is_admin);
+        let team = UserWorkspaces::as_ref(app).team_for_view_handle(&self.self_handle, app);
+        let scoped_members: Vec<WorkspaceMember> = workspace
+            .members_for_team(team)
+            .into_iter()
+            .cloned()
+            .collect();
 
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
         column.add_child(self.render_header(Some(workspace), &visibility, appearance, app));
 
-        let entries = filter_legacy_buckets(
-            self.current_summary(workspace)
-                .map(|summary| summary.entries.as_slice())
-                .unwrap_or_default(),
-        );
+        let raw_entries = self
+            .current_summary(workspace)
+            .map(|summary| summary.entries.as_slice())
+            .unwrap_or_default();
+        let entries = filter_legacy_buckets(&filter_entries_by_attributed_team(raw_entries, team));
 
         let is_source_filter_shown = visibility.granularity
             == UsageVisibilityGranularity::FullBreakdown
@@ -303,13 +313,13 @@ impl BillingCycleUsageSectionView {
             .finish(),
         );
 
-        if is_admin && let Some(banner) = self.render_visibility_cta_banner(workspace, app) {
+        if is_admin && let Some(banner) = self.render_visibility_cta_banner(workspace, team, app) {
             column.add_child(Container::new(banner).with_margin_top(16.).finish());
         }
 
         column.add_child(
             Container::new(render_rows(
-                workspace,
+                &scoped_members,
                 &entries,
                 &visibility,
                 source_filter,
@@ -353,7 +363,11 @@ impl BillingCycleUsageSectionView {
             .finish(),
         );
         if self.viewer_is_native_workspaces_admin(workspace, app)
-            && let Some(banner) = self.render_visibility_cta_banner(workspace, app)
+            && let Some(banner) = self.render_visibility_cta_banner(
+                workspace,
+                UserWorkspaces::as_ref(app).team_for_view_handle(&self.self_handle, app),
+                app,
+            )
         {
             column.add_child(Container::new(banner).with_margin_top(16.).finish());
         }
@@ -428,7 +442,7 @@ impl BillingCycleUsageSectionView {
         column.add_child(row.finish());
 
         let resets_text = self.render_resets_label(appearance, app);
-        let legend = workspace.and_then(|workspace| self.render_legend(workspace, appearance));
+        let legend = workspace.and_then(|workspace| self.render_legend(workspace, appearance, app));
         if resets_text.is_some() || legend.is_some() {
             let mut secondary_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -560,12 +574,15 @@ impl BillingCycleUsageSectionView {
         &self,
         workspace: &Workspace,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let summary = self.current_summary(workspace)?;
+        let team = UserWorkspaces::as_ref(app).team_for_view_handle(&self.self_handle, app);
+        let scoped_entries = filter_entries_by_attributed_team(&summary.entries, team);
         // Only list buckets that actually contribute to the stacked bars: drop
         // legacy buckets and cost types with no usage, so the legend never
         // shows a bucket (e.g. "Base") that has zero credits in the data.
-        let present_buckets = legend_cost_types(&summary.entries);
+        let present_buckets = legend_cost_types(&scoped_entries);
         if present_buckets.is_empty() {
             return None;
         }
@@ -668,6 +685,7 @@ impl BillingCycleUsageSectionView {
     fn render_visibility_cta_banner(
         &self,
         workspace: &Workspace,
+        team: Option<&Team>,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let appearance = Appearance::as_ref(app);
@@ -675,9 +693,9 @@ impl BillingCycleUsageSectionView {
             if self.viewer_is_native_workspaces_admin(workspace, app) {
                 NATIVE_WORKSPACES_CTA
             } else {
-                // Only show when there are teammates -- a single-member workspace
+                // Only show when there are teammates -- a single-member team
                 // doesn't benefit from any of the team-level visibility CTAs.
-                if workspace.members.len() <= 1 {
+                if workspace.members_for_team(team).len() <= 1 {
                     return None;
                 }
                 let admin_granularity = workspace
