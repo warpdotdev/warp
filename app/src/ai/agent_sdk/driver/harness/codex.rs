@@ -552,12 +552,14 @@ fn prepare_codex_environment_config(
     Ok(())
 }
 
-/// Publish factory playbook skills as `factory-<name>` symlinks under
+/// Publish factory playbook skills, under their own names, as symlinks under
 /// `$HOME/.agents/skills`, so a factory agent running on Codex sees the same
-/// skills the Oz harness loads from `WARP_SKILL_DIRS`. Uses the real home
-/// directory rather than `CODEX_HOME`, matching the root Codex's own docs
-/// describe for user skills. A no-op when no factory skill directories are
-/// configured for this run.
+/// skills the Oz harness loads from `WARP_SKILL_DIRS`. A factory skill
+/// overrides any existing entry with the same name (see
+/// `factory_skills::publish_factory_skill`). Uses the real home directory
+/// rather than `CODEX_HOME`, matching what Codex's own docs describe for
+/// user skills. A no-op when no factory skill directories are configured for
+/// this run.
 fn publish_factory_skills_for_codex(working_dir: &Path) {
     let source_dirs = super::factory_skills::factory_skill_source_dirs(working_dir);
     if source_dirs.is_empty() {

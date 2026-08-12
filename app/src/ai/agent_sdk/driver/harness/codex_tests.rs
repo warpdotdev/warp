@@ -288,10 +288,7 @@ fn prepare_codex_environment_config_publishes_factory_skills() {
     }
 
     result.unwrap();
-    let published = home_dir
-        .join(".agents")
-        .join("skills")
-        .join("factory-linear");
+    let published = home_dir.join(".agents").join("skills").join("linear");
     assert!(
         fs::symlink_metadata(&published)
             .unwrap()

@@ -808,7 +808,7 @@ fn prepare_claude_environment_config_publishes_factory_skills() {
     }
 
     result.unwrap();
-    let published = home_dir.path().join(".claude/skills/factory-github");
+    let published = home_dir.path().join(".claude/skills/github");
     assert!(
         fs::symlink_metadata(&published)
             .unwrap()

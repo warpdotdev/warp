@@ -623,11 +623,12 @@ pub(crate) fn prepare_claude_environment_config(
     Ok(())
 }
 
-/// Publish factory playbook skills as `factory-<name>` symlinks under the
-/// Claude Code skill root (`<claude_dir>/skills`), so a factory agent running
-/// on Claude Code sees the same skills the Oz harness loads from
-/// `WARP_SKILL_DIRS`. A no-op when no factory skill directories are
-/// configured for this run.
+/// Publish factory playbook skills, under their own names, as symlinks under
+/// the Claude Code skill root (`<claude_dir>/skills`), so a factory agent
+/// running on Claude Code sees the same skills the Oz harness loads from
+/// `WARP_SKILL_DIRS`. A factory skill overrides any existing entry with the
+/// same name (see `factory_skills::publish_factory_skill`). A no-op when no
+/// factory skill directories are configured for this run.
 fn publish_factory_skills_for_claude(working_dir: &Path, claude_dir: &Path) {
     let source_dirs = super::factory_skills::factory_skill_source_dirs(working_dir);
     if source_dirs.is_empty() {

@@ -25,7 +25,7 @@ fn publish_factory_skill_creates_symlink() {
 
     let target = publish_factory_skill(skill_root.path(), "github", &skill_dir).unwrap();
 
-    assert_eq!(target, skill_root.path().join("factory-github"));
+    assert_eq!(target, skill_root.path().join("github"));
     let metadata = fs::symlink_metadata(&target).unwrap();
     assert!(metadata.file_type().is_symlink());
     assert_eq!(fs::read_link(&target).unwrap(), skill_dir);
@@ -34,26 +34,26 @@ fn publish_factory_skill_creates_symlink() {
 }
 
 #[test]
-fn publish_factory_skill_applies_factory_prefix() {
+fn publish_factory_skill_publishes_under_the_real_skill_name() {
     let source_root = TempDir::new().unwrap();
     let skill_root = TempDir::new().unwrap();
     let skill_dir = write_skill(source_root.path(), "linear");
 
     publish_factory_skill(skill_root.path(), "linear", &skill_dir).unwrap();
 
-    // Published under the `factory-` prefix...
-    assert!(skill_root.path().join("factory-linear").exists());
-    // ...not under the bare frontmatter name.
-    assert!(!skill_root.path().join("linear").exists());
+    // Published under the skill's own name, not some namespaced alias, so an
+    // agent prompt or another skill can still reference it by name.
+    assert!(skill_root.path().join("linear").exists());
+    assert!(!skill_root.path().join("factory-linear").exists());
 }
 
 #[test]
-fn publish_factory_skill_replaces_stale_symlink() {
+fn publish_factory_skill_overrides_an_existing_symlink() {
     let source_root = TempDir::new().unwrap();
     let skill_root = TempDir::new().unwrap();
     let old_skill_dir = write_skill(source_root.path(), "old-github");
     let new_skill_dir = write_skill(source_root.path(), "github");
-    let target = skill_root.path().join("factory-github");
+    let target = skill_root.path().join("github");
     create_symlink(&old_skill_dir, &target).unwrap();
 
     let published = publish_factory_skill(skill_root.path(), "github", &new_skill_dir).unwrap();
@@ -63,20 +63,53 @@ fn publish_factory_skill_replaces_stale_symlink() {
 }
 
 #[test]
-fn publish_factory_skill_does_not_touch_non_symlink_target() {
+fn publish_factory_skill_moves_a_conflicting_real_directory_aside_instead_of_deleting_it() {
     let source_root = TempDir::new().unwrap();
     let skill_root = TempDir::new().unwrap();
     let skill_dir = write_skill(source_root.path(), "github");
-    let target = skill_root.path().join("factory-github");
+    let target = skill_root.path().join("github");
     fs::create_dir_all(&target).unwrap();
     fs::write(target.join("real-file.txt"), "do not delete me").unwrap();
 
-    let result = publish_factory_skill(skill_root.path(), "github", &skill_dir);
+    let published = publish_factory_skill(skill_root.path(), "github", &skill_dir).unwrap();
 
-    assert!(result.is_err());
-    assert!(target.is_dir());
-    assert!(!target.is_symlink());
-    assert!(target.join("real-file.txt").is_file());
+    // The factory skill now owns the name...
+    assert_eq!(published, target);
+    assert!(
+        fs::symlink_metadata(&target)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(&target).unwrap(), skill_dir);
+    // ...but the real, pre-existing directory was preserved, not deleted.
+    let backup = skill_root.path().join("github.pre-factory-backup");
+    assert!(backup.is_dir());
+    assert_eq!(
+        fs::read_to_string(backup.join("real-file.txt")).unwrap(),
+        "do not delete me"
+    );
+}
+
+#[test]
+fn publish_factory_skill_numbers_the_backup_when_one_already_exists() {
+    let source_root = TempDir::new().unwrap();
+    let skill_root = TempDir::new().unwrap();
+    let skill_dir = write_skill(source_root.path(), "github");
+    let target = skill_root.path().join("github");
+    fs::create_dir_all(&target).unwrap();
+    // A backup from an earlier override already occupies the first-choice name.
+    fs::create_dir_all(skill_root.path().join("github.pre-factory-backup")).unwrap();
+
+    publish_factory_skill(skill_root.path(), "github", &skill_dir).unwrap();
+
+    assert!(skill_root.path().join("github.pre-factory-backup").is_dir());
+    assert!(
+        skill_root
+            .path()
+            .join("github.pre-factory-backup-2")
+            .is_dir()
+    );
 }
 
 #[test]
@@ -87,7 +120,7 @@ fn publish_factory_skill_errors_on_missing_source() {
     let result = publish_factory_skill(skill_root.path(), "github", &missing_source);
 
     assert!(result.is_err());
-    assert!(!skill_root.path().join("factory-github").exists());
+    assert!(!skill_root.path().join("github").exists());
 }
 
 #[test]
@@ -106,12 +139,41 @@ fn publish_factory_skills_prefers_most_specific_directory_on_name_collision() {
 
     assert_eq!(published, 2);
     assert_eq!(
-        fs::read_link(skill_root.path().join("factory-github")).unwrap(),
+        fs::read_link(skill_root.path().join("github")).unwrap(),
         specific_github
     );
     assert_eq!(
-        fs::read_link(skill_root.path().join("factory-linear")).unwrap(),
+        fs::read_link(skill_root.path().join("linear")).unwrap(),
         general_linear
+    );
+}
+
+#[test]
+fn publish_factory_skills_overrides_an_existing_environment_skill_and_preserves_it() {
+    let root = TempDir::new().unwrap();
+    let source_dir = root.path().join("skills");
+    fs::create_dir_all(&source_dir).unwrap();
+    let factory_github = write_skill(&source_dir, "github");
+    let skill_root = TempDir::new().unwrap();
+    // Simulate a real, pre-existing "github" skill already installed in the
+    // harness's environment before the factory publish runs.
+    let existing_target = skill_root.path().join("github");
+    fs::create_dir_all(&existing_target).unwrap();
+    fs::write(existing_target.join("SKILL.md"), "pre-existing skill").unwrap();
+
+    let published = publish_factory_skills(skill_root.path(), &[source_dir]);
+
+    assert_eq!(published, 1);
+    // The factory skill wins under the real name...
+    assert_eq!(
+        fs::read_link(skill_root.path().join("github")).unwrap(),
+        factory_github
+    );
+    // ...and the pre-existing skill was moved aside, not deleted.
+    let backup = skill_root.path().join("github.pre-factory-backup");
+    assert_eq!(
+        fs::read_to_string(backup.join("SKILL.md")).unwrap(),
+        "pre-existing skill"
     );
 }
 
@@ -126,8 +188,8 @@ fn publish_factory_skills_skips_entries_without_skill_md() {
     let published = publish_factory_skills(skill_root.path(), &[source_dir]);
 
     assert_eq!(published, 1);
-    assert!(skill_root.path().join("factory-github").exists());
-    assert!(!skill_root.path().join("factory-not-a-skill").exists());
+    assert!(skill_root.path().join("github").exists());
+    assert!(!skill_root.path().join("not-a-skill").exists());
 }
 
 #[test]
@@ -152,5 +214,5 @@ fn publish_factory_skills_recovers_from_missing_source_directory() {
     let published = publish_factory_skills(skill_root.path(), &[missing_dir, present_dir]);
 
     assert_eq!(published, 1);
-    assert!(skill_root.path().join("factory-github").exists());
+    assert!(skill_root.path().join("github").exists());
 }
