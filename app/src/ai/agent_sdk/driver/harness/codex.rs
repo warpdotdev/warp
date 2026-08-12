@@ -13,6 +13,7 @@ use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
+use warp_core::safe_info;
 use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
@@ -569,9 +570,12 @@ fn publish_factory_skills_for_codex(working_dir: &Path) {
     let skill_root = home_dir.join(".agents").join("skills");
     let published = super::factory_skills::publish_factory_skills(&skill_root, &source_dirs);
     if published > 0 {
-        log::info!(
-            "Published {published} factory skill(s) to Codex skill root {}",
-            skill_root.display()
+        safe_info!(
+            safe: ("Published {published} factory skill(s) to the Codex skill root"),
+            full: (
+                "Published {published} factory skill(s) to Codex skill root {}",
+                skill_root.display()
+            )
         );
     }
 }

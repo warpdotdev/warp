@@ -12,6 +12,7 @@ use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
+use warp_core::safe_info;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner};
 
@@ -635,9 +636,12 @@ fn publish_factory_skills_for_claude(working_dir: &Path, claude_dir: &Path) {
     let skill_root = claude_dir.join("skills");
     let published = super::factory_skills::publish_factory_skills(&skill_root, &source_dirs);
     if published > 0 {
-        log::info!(
-            "Published {published} factory skill(s) to Claude Code skill root {}",
-            skill_root.display()
+        safe_info!(
+            safe: ("Published {published} factory skill(s) to the Claude Code skill root"),
+            full: (
+                "Published {published} factory skill(s) to Claude Code skill root {}",
+                skill_root.display()
+            )
         );
     }
 }

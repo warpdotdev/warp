@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 use ai::skills::{parse_skills_dirs_env, resolve_skills_dirs};
 use anyhow::{Context, Result};
+use warp_core::safe_warn;
 
 /// Prefix applied to every published factory skill's folder/symlink name, so
 /// a factory skill can never collide with a real skill folder of the same
@@ -57,9 +58,9 @@ pub(super) fn publish_factory_skills(skill_root: &Path, source_dirs: &[PathBuf])
         let entries = match fs::read_dir(source_dir) {
             Ok(entries) => entries,
             Err(err) => {
-                log::warn!(
-                    "Factory skill publish: skipping '{}' — {err}",
-                    source_dir.display()
+                safe_warn!(
+                    safe: ("Factory skill publish: skipping an unreadable source directory"),
+                    full: ("Factory skill publish: skipping '{}' — {err}", source_dir.display())
                 );
                 continue;
             }
@@ -68,9 +69,12 @@ pub(super) fn publish_factory_skills(skill_root: &Path, source_dirs: &[PathBuf])
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(err) => {
-                    log::warn!(
-                        "Factory skill publish: failed to read an entry in '{}': {err}",
-                        source_dir.display()
+                    safe_warn!(
+                        safe: ("Factory skill publish: failed to read a directory entry"),
+                        full: (
+                            "Factory skill publish: failed to read an entry in '{}': {err}",
+                            source_dir.display()
+                        )
                     );
                     continue;
                 }
@@ -88,7 +92,10 @@ pub(super) fn publish_factory_skills(skill_root: &Path, source_dirs: &[PathBuf])
                 continue;
             }
             if let Err(err) = publish_factory_skill(skill_root, name, &source_path) {
-                log::warn!("Factory skill publish: failed to publish '{name}': {err:#}");
+                safe_warn!(
+                    safe: ("Factory skill publish: failed to publish a factory skill"),
+                    full: ("Factory skill publish: failed to publish '{name}': {err:#}")
+                );
                 continue;
             }
             published += 1;
