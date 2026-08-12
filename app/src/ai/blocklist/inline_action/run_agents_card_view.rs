@@ -31,7 +31,7 @@ use crate::ai::blocklist::action_model::{
 };
 use crate::ai::blocklist::agent_view::orchestration_pill_bar::render_static_agent_pill;
 use crate::ai::blocklist::block::AIBlock;
-use crate::ai::blocklist::block::model::AIBlockModel;
+use crate::ai::blocklist::block::model::{AIBlockModel, AIBlockOutputStatus};
 use crate::ai::blocklist::block::view_impl::WithContentItemSpacing;
 use crate::ai::blocklist::inline_action::create_environment_modal::{
     CreateEnvironmentModal, CreateEnvironmentModalEvent,
@@ -1251,16 +1251,24 @@ impl View for RunAgentsCardView {
             return render_spawning_card(&snapshot, appearance, app);
         }
 
+        // The exchange that carried this tool call finished without ever
+        // dispatching it, so no result will arrive: cancelling a
+        // conversation (or failing its stream) skips `queue_actions`
+        // entirely, leaving the action status-less forever. Render the
+        // terminal cancelled state rather than an in-progress placeholder
+        // that never resolves, matching the cancelled icon every other
+        // tool call falls back to.
+        if is_abandoned_before_dispatch(status.as_ref(), &self.block_model.status(app)) {
+            let (label, kind) = format_terminal_state(&RunAgentsResult::Cancelled);
+            return render_status_only_card(label, appearance, kind, app);
+        }
+
         // Restored-from-history: dispatch state is lost, render as
         // Cancelled. Must be checked before the streaming gate below,
         // because restored blocks have no pending action status.
         if self.block_model.is_restored() {
-            return render_status_only_card(
-                "Spawn agents cancelled".to_string(),
-                appearance,
-                StatusKind::Cancelled,
-                app,
-            );
+            let (label, kind) = format_terminal_state(&RunAgentsResult::Cancelled);
+            return render_status_only_card(label, appearance, kind, app);
         }
 
         // Still streaming: show "Configuring agents..." placeholder until
@@ -1590,6 +1598,23 @@ fn render_agents_section(card: &RunAgentsCardFields, app: &AppContext) -> Box<dy
         .with_child(Container::new(label).with_margin_bottom(6.).finish())
         .with_child(pills_row)
         .finish()
+}
+
+/// Whether a `RunAgents` tool call can no longer reach a result of its own:
+/// it never acquired an action status, and the exchange that streamed it in
+/// has already finished in a terminal non-success state. Both terminal
+/// states skip the queueing step that would otherwise give the action a
+/// status (and eventually a result), so such a call stays status-less for
+/// the rest of the session.
+pub(crate) fn is_abandoned_before_dispatch(
+    action_status: Option<&AIActionStatus>,
+    block_status: &AIBlockOutputStatus,
+) -> bool {
+    action_status.is_none()
+        && matches!(
+            block_status,
+            AIBlockOutputStatus::Cancelled { .. } | AIBlockOutputStatus::Failed { .. }
+        )
 }
 
 fn render_terminal_state(

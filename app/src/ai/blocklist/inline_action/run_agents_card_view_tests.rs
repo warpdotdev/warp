@@ -456,6 +456,61 @@ mod format_terminal_state_tests {
     }
 }
 
+mod is_abandoned_before_dispatch_tests {
+    use super::super::is_abandoned_before_dispatch;
+    use crate::ai::agent::{CancellationReason, RenderableAIError};
+    use crate::ai::blocklist::action_model::AIActionStatus;
+    use crate::ai::blocklist::block::model::AIBlockOutputStatus;
+
+    fn cancelled_exchange() -> AIBlockOutputStatus {
+        AIBlockOutputStatus::Cancelled {
+            partial_output: None,
+            reason: CancellationReason::ManuallyCancelled,
+        }
+    }
+
+    fn failed_exchange() -> AIBlockOutputStatus {
+        AIBlockOutputStatus::Failed {
+            partial_output: None,
+            error: RenderableAIError::other("boom", false),
+        }
+    }
+
+    #[test]
+    fn status_less_call_in_cancelled_exchange_is_abandoned() {
+        assert!(is_abandoned_before_dispatch(None, &cancelled_exchange()));
+    }
+
+    #[test]
+    fn status_less_call_in_failed_exchange_is_abandoned() {
+        assert!(is_abandoned_before_dispatch(None, &failed_exchange()));
+    }
+
+    #[test]
+    fn status_less_call_in_streaming_exchange_is_not_abandoned() {
+        // Streaming tool calls have no status yet; they are still being
+        // constructed and must keep the in-progress placeholder.
+        assert!(!is_abandoned_before_dispatch(
+            None,
+            &AIBlockOutputStatus::Pending
+        ));
+    }
+
+    #[test]
+    fn call_that_reached_a_status_is_never_abandoned() {
+        // A cancelled exchange whose action was queued resolves through the
+        // action's own result instead.
+        assert!(!is_abandoned_before_dispatch(
+            Some(&AIActionStatus::Blocked),
+            &cancelled_exchange()
+        ));
+        assert!(!is_abandoned_before_dispatch(
+            Some(&AIActionStatus::RunningAsync),
+            &failed_exchange()
+        ));
+    }
+}
+
 mod override_from_approved_config_tests {
     use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationExecutionMode};
 
