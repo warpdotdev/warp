@@ -373,6 +373,25 @@ pub struct AgentRunEvent {
     pub execution_id: Option<String>,
     pub occurred_at: String,
     pub sequence: i64,
+    /// Optional structured lifecycle detail. Servers that predate the field
+    /// omit it, so deserialization must default to `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<AgentRunEventDetail>,
+}
+
+/// Structured detail attached to lifecycle events by the server:
+/// `reason` (stable error code for run_failed/run_errored, cancellation
+/// reason for run_cancelled), `error_message` (user-facing description for
+/// run_failed/run_errored), and `blocked_action` (what a run_blocked run is
+/// waiting on).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct AgentRunEventDetail {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_action: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

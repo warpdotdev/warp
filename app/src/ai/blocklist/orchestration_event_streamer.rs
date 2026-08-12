@@ -2324,12 +2324,25 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
         .filter_map(|event| {
             let lifecycle_type = lifecycle_event_type_from_wire(event.event_type.as_str())?;
             let timestamp = parse_occurred_at(&event.occurred_at);
-            // TODO: Parse richer detail payloads (reason, error_message) from
-            // the server event log once the schema supports them.
+            let wire_detail = event.detail.as_ref();
             let detail = match lifecycle_type {
+                api::LifecycleEventType::Failed => LifecycleEventDetailPayload {
+                    reason: wire_detail.and_then(|d| d.reason.clone()),
+                    error_message: wire_detail.and_then(|d| d.error_message.clone()),
+                    ..Default::default()
+                },
                 api::LifecycleEventType::Errored => LifecycleEventDetailPayload {
                     stage: Some(LifecycleEventDetailStage::Runtime),
-                    reason: event.ref_id.clone(),
+                    // Fall back to ref_id for servers that predate structured
+                    // detail, matching the previous wire behavior.
+                    reason: wire_detail
+                        .and_then(|d| d.reason.clone())
+                        .or_else(|| event.ref_id.clone()),
+                    error_message: wire_detail.and_then(|d| d.error_message.clone()),
+                    ..Default::default()
+                },
+                api::LifecycleEventType::Blocked => LifecycleEventDetailPayload {
+                    blocked_action: wire_detail.and_then(|d| d.blocked_action.clone()),
                     ..Default::default()
                 },
                 _ => LifecycleEventDetailPayload::default(),

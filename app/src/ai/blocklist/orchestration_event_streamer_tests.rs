@@ -76,7 +76,18 @@ fn make_run_event(event_type: &str, run_id: &str, ref_id: Option<&str>) -> Agent
         execution_id: None,
         occurred_at: "2026-01-01T00:00:00Z".to_string(),
         sequence: 1,
+        detail: None,
     }
+}
+
+fn make_run_event_with_detail(
+    event_type: &str,
+    run_id: &str,
+    detail: crate::server::server_api::ai::AgentRunEventDetail,
+) -> AgentRunEvent {
+    let mut event = make_run_event(event_type, run_id, None);
+    event.detail = Some(detail);
+    event
 }
 
 #[test]
@@ -93,6 +104,115 @@ fn convert_lifecycle_events_includes_run_blocked() {
         panic!("expected blocked detail");
     };
     assert!(blocked.blocked_action.is_empty());
+}
+
+#[test]
+fn convert_lifecycle_events_maps_failed_detail() {
+    let events = vec![make_run_event_with_detail(
+        "run_failed",
+        "child-run",
+        crate::server::server_api::ai::AgentRunEventDetail {
+            reason: Some("environment_setup_failed".to_string()),
+            error_message: Some("Environment setup failed (git clone failed)".to_string()),
+            blocked_action: None,
+        },
+    )];
+    let result = convert_lifecycle_events(&events, "self-run");
+    assert_eq!(result.len(), 1);
+    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &result[0].event else {
+        panic!("expected lifecycle event");
+    };
+    let Some(api::agent_event::lifecycle_event::Detail::Failed(failed)) = &lifecycle.detail else {
+        panic!("expected failed detail");
+    };
+    assert_eq!(failed.reason, "environment_setup_failed");
+    assert_eq!(
+        failed.error_message,
+        "Environment setup failed (git clone failed)"
+    );
+}
+
+#[test]
+fn convert_lifecycle_events_maps_errored_detail() {
+    let events = vec![make_run_event_with_detail(
+        "run_errored",
+        "child-run",
+        crate::server::server_api::ai::AgentRunEventDetail {
+            reason: Some("internal_error".to_string()),
+            error_message: Some("An unexpected error has occurred".to_string()),
+            blocked_action: None,
+        },
+    )];
+    let result = convert_lifecycle_events(&events, "self-run");
+    assert_eq!(result.len(), 1);
+    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &result[0].event else {
+        panic!("expected lifecycle event");
+    };
+    let Some(api::agent_event::lifecycle_event::Detail::Errored(errored)) = &lifecycle.detail
+    else {
+        panic!("expected errored detail");
+    };
+    assert_eq!(errored.stage, "runtime");
+    assert_eq!(errored.reason, "internal_error");
+    assert_eq!(errored.error_message, "An unexpected error has occurred");
+}
+
+#[test]
+fn convert_lifecycle_events_errored_without_detail_falls_back_to_ref_id() {
+    let events = vec![make_run_event(
+        "run_errored",
+        "child-run",
+        Some("legacy-ref"),
+    )];
+    let result = convert_lifecycle_events(&events, "self-run");
+    assert_eq!(result.len(), 1);
+    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &result[0].event else {
+        panic!("expected lifecycle event");
+    };
+    let Some(api::agent_event::lifecycle_event::Detail::Errored(errored)) = &lifecycle.detail
+    else {
+        panic!("expected errored detail");
+    };
+    assert_eq!(errored.reason, "legacy-ref");
+    assert!(errored.error_message.is_empty());
+}
+
+#[test]
+fn convert_lifecycle_events_maps_blocked_action_detail() {
+    let events = vec![make_run_event_with_detail(
+        "run_blocked",
+        "child-run",
+        crate::server::server_api::ai::AgentRunEventDetail {
+            reason: None,
+            error_message: None,
+            blocked_action: Some("waiting for command approval".to_string()),
+        },
+    )];
+    let result = convert_lifecycle_events(&events, "self-run");
+    assert_eq!(result.len(), 1);
+    let Some(api::agent_event::Event::LifecycleEvent(lifecycle)) = &result[0].event else {
+        panic!("expected lifecycle event");
+    };
+    let Some(api::agent_event::lifecycle_event::Detail::Blocked(blocked)) = &lifecycle.detail
+    else {
+        panic!("expected blocked detail");
+    };
+    assert_eq!(blocked.blocked_action, "waiting for command approval");
+}
+
+#[test]
+fn agent_run_event_deserializes_without_detail() {
+    // Backward compat: servers that predate structured detail omit the field.
+    let json = r#"{"id":"evt-1","run_id":"run-1","event_type":"run_failed","sequence":3,"occurred_at":"2026-01-01T00:00:00Z"}"#;
+    let event: AgentRunEvent = serde_json::from_str(json).expect("should deserialize");
+    assert!(event.detail.is_none());
+
+    let json_with_detail = r#"{"id":"evt-2","run_id":"run-1","event_type":"run_failed","sequence":4,"occurred_at":"2026-01-01T00:00:00Z","detail":{"reason":"internal_error","error_message":"boom"}}"#;
+    let event: AgentRunEvent = serde_json::from_str(json_with_detail).expect("should deserialize");
+    let detail = event.detail.expect("detail should parse");
+    assert_eq!(detail.reason.as_deref(), Some("internal_error"));
+    assert_eq!(detail.error_message.as_deref(), Some("boom"));
+    assert!(detail.blocked_action.is_none());
 }
 
 #[test]
@@ -545,6 +665,7 @@ async fn dormant_claude_wake_consumer_stops_on_first_target_event() {
         execution_id: None,
         occurred_at: "2026-01-01T00:00:00Z".to_string(),
         sequence: 7,
+        detail: None,
     };
     assert_eq!(
         consumer.on_event(ignored_event).await.unwrap(),
@@ -559,6 +680,7 @@ async fn dormant_claude_wake_consumer_stops_on_first_target_event() {
         execution_id: None,
         occurred_at: "2026-01-01T00:00:00Z".to_string(),
         sequence: 7,
+        detail: None,
     };
     assert_eq!(
         consumer.on_event(ignored_same_run_lifecycle).await.unwrap(),
@@ -577,6 +699,7 @@ async fn dormant_claude_wake_consumer_stops_on_first_target_event() {
         execution_id: None,
         occurred_at: "2026-01-01T00:00:01Z".to_string(),
         sequence: 8,
+        detail: None,
     };
     assert_eq!(
         consumer.on_event(target_event).await.unwrap(),
@@ -792,6 +915,7 @@ fn handle_event_batch_persists_max_seq_to_history_model() {
                 execution_id: None,
                 occurred_at: "2026-01-01T00:00:00Z".to_string(),
                 sequence: 17,
+                detail: None,
             },
             AgentRunEvent {
                 event_type: "unrecognized_event_type".to_string(),
@@ -800,6 +924,7 @@ fn handle_event_batch_persists_max_seq_to_history_model() {
                 execution_id: None,
                 occurred_at: "2026-01-01T00:00:00Z".to_string(),
                 sequence: 42,
+                detail: None,
             },
         ];
 
@@ -880,6 +1005,7 @@ fn handle_event_batch_drops_events_for_killed_run_ids_after_persisting_cursor() 
                         execution_id: None,
                         occurred_at: "2026-01-01T00:00:00Z".to_string(),
                         sequence: 17,
+                        detail: None,
                     },
                     AgentRunEvent {
                         event_type: "run_cancelled".to_string(),
@@ -888,6 +1014,7 @@ fn handle_event_batch_drops_events_for_killed_run_ids_after_persisting_cursor() 
                         execution_id: None,
                         occurred_at: "2026-01-01T00:00:01Z".to_string(),
                         sequence: 18,
+                        detail: None,
                     },
                     AgentRunEvent {
                         event_type: "new_message".to_string(),
@@ -896,6 +1023,7 @@ fn handle_event_batch_drops_events_for_killed_run_ids_after_persisting_cursor() 
                         execution_id: None,
                         occurred_at: "2026-01-01T00:00:02Z".to_string(),
                         sequence: 19,
+                        detail: None,
                     },
                 ],
                 vec![
