@@ -11,18 +11,23 @@
 //! namespaced alias) because an agent prompt, or another skill, may
 //! reference a skill by that name. Skill frontmatter is never rewritten.
 //!
-//! An existing symlink at a skill's target (most commonly ours, from an
-//! earlier publish) is always replaced outright — that is not a conflict
-//! with anything that predates us. A real, non-symlink entry is a genuine
-//! conflict, and how it is resolved depends on [`is_sandbox`]:
+//! A publish target already counts as ours only when it is a symlink whose
+//! canonical destination is this exact source directory — publishing is then
+//! a no-op. A publish target's working directory is not guaranteed to be
+//! fresh: a dormant harness session can wake for a follow-up and re-publish
+//! into the same working directory it used before, so "is a symlink" alone
+//! does not imply "is ours" (a foreign symlink can exist too, and repeated
+//! runs need a real identity check, not an assumption). Anything else at the
+//! target — a real file or directory, or a symlink pointing elsewhere or
+//! nowhere — is a genuine conflict, resolved according to [`is_sandbox`]:
 //! - In a sandbox, we own the whole filesystem, so the published skill wins:
 //!   the conflicting entry is renamed aside with a `.backup` suffix rather
 //!   than deleted, so nothing is lost.
 //! - Outside a sandbox (for example the self-hosted direct backend, which
 //!   runs on a host we do not own) we never modify an entry that predates
-//!   us. The skill is instead published under a `warp-<name>` alias, unless
-//!   that alias also conflicts with a real entry, in which case the skill is
-//!   not published at all.
+//!   us. The skill is instead published under a `warp-<name>` alias (subject
+//!   to the same ownership check), unless that alias also conflicts, in
+//!   which case the skill is not published at all.
 //!
 //! Every conflict is logged (see `logging-and-error-reporting`) with enough
 //! detail to debug later — there is no user-facing surface for this today,
@@ -153,26 +158,57 @@ pub(super) fn publish_skill_dirs(
     published
 }
 
-/// State of the filesystem entry, if any, at a publish target.
-enum TargetState {
+/// Whether a publish target is already ours, missing, or occupied by
+/// something foreign to us.
+enum TargetOutcome {
     Missing,
-    /// An existing symlink, and what it pointed to (if readable).
-    Symlink(Option<PathBuf>),
-    /// A real, non-symlink file or directory.
-    RealEntry,
+    /// A symlink whose canonical destination is exactly `source_dir` — this
+    /// target is already correctly published; nothing to do.
+    Ours,
+    /// A real file or directory, or a symlink pointing somewhere else (or
+    /// nowhere, if broken) — a genuine conflict with something that
+    /// predates this publish pass.
+    Foreign,
 }
 
-fn inspect_target(target: &Path) -> Result<TargetState> {
+/// Classify the filesystem entry, if any, at `target` relative to `source_dir`.
+///
+/// A working directory is not guaranteed to be fresh for every publish pass —
+/// a dormant harness session can wake for a follow-up and re-publish into a
+/// working directory it already used — so a repeat publish must recognize its
+/// own earlier symlink by where it actually points, not merely by the fact
+/// that *something* is a symlink there. Canonicalizing both sides makes the
+/// comparison robust to a relative link, a `..` segment, or a symlinked
+/// parent directory. A symlink whose destination no longer resolves (broken)
+/// is treated as foreign, not ours.
+fn inspect_target(target: &Path, source_dir: &Path) -> Result<TargetOutcome> {
     match fs::symlink_metadata(target) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            Ok(TargetState::Symlink(fs::read_link(target).ok()))
+            if points_at_our_source(target, source_dir) {
+                Ok(TargetOutcome::Ours)
+            } else {
+                Ok(TargetOutcome::Foreign)
+            }
         }
-        Ok(_) => Ok(TargetState::RealEntry),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(TargetState::Missing),
+        Ok(_) => Ok(TargetOutcome::Foreign),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(TargetOutcome::Missing),
         Err(err) => {
             Err(anyhow::Error::from(err).context(format!("failed to inspect {}", target.display())))
         }
     }
+}
+
+/// Whether the symlink at `existing_symlink` resolves to the exact same real
+/// path as `source_dir`. Returns `false` (not ours) for a broken symlink, or
+/// if either path fails to canonicalize.
+fn points_at_our_source(existing_symlink: &Path, source_dir: &Path) -> bool {
+    let Ok(canonical_existing) = existing_symlink.canonicalize() else {
+        return false;
+    };
+    let Ok(canonical_source) = source_dir.canonicalize() else {
+        return false;
+    };
+    canonical_existing == canonical_source
 }
 
 fn create_symlink_at(source_dir: &Path, target: &Path) -> Result<Option<PathBuf>> {
@@ -191,19 +227,19 @@ fn create_symlink_at(source_dir: &Path, target: &Path) -> Result<Option<PathBuf>
 /// was deliberately not published (see the non-sandbox double-conflict case
 /// below) — that is not an error.
 ///
-/// An existing symlink at the target (most commonly our own, from an earlier
-/// run) is always replaced outright; that is not a conflict with anything
-/// that predates this pass.
-///
-/// A real, non-symlink entry at the target is a genuine conflict, resolved
+/// A target that is already a symlink resolving to `source_dir` is left
+/// exactly as it is — a harmless no-op, correct whether this is the first
+/// publish or a repeat pass into a reused working directory (see the module
+/// docs). Anything else at the target is a genuine conflict, resolved
 /// according to `is_sandbox`:
 /// - In a sandbox, the published skill wins: the conflicting entry is moved
 ///   aside to `<skill_root>/<skill_name>.backup` (or a numbered variant if
 ///   that's already taken) rather than deleted, so nothing is lost.
 /// - Outside a sandbox, the conflicting entry is left untouched, and the
-///   skill is instead published as `<skill_root>/warp-<skill_name>`. If that
-///   alternate name is itself occupied by a real, non-symlink entry, the
-///   skill is not published under either name.
+///   skill is instead published as `<skill_root>/warp-<skill_name>` (subject
+///   to the same ownership check). If that alternate name is itself
+///   occupied by something foreign, the skill is not published under either
+///   name.
 ///
 /// Every conflict is logged via `safe_warn!` for later debugging — there is
 /// no user-facing channel for this today.
@@ -223,26 +259,14 @@ pub(super) fn publish_skill(
         .with_context(|| format!("failed to create skill root {}", skill_root.display()))?;
     let target = skill_root.join(skill_name);
 
-    match inspect_target(&target)? {
-        TargetState::Missing => return create_symlink_at(source_dir, &target),
-        TargetState::Symlink(previous_target) => {
-            fs::remove_file(&target).with_context(|| {
-                format!("failed to remove existing symlink {}", target.display())
-            })?;
-            safe_warn!(
-                safe: ("WARP_SKILL_DIRS publish: overriding an existing skill entry with the published version"),
-                full: (
-                    "WARP_SKILL_DIRS publish: overriding skill '{skill_name}' at {} (was a symlink to {:?}) with {}",
-                    target.display(), previous_target, source_dir.display()
-                )
-            );
-            return create_symlink_at(source_dir, &target);
-        }
-        TargetState::RealEntry => {}
+    match inspect_target(&target, source_dir)? {
+        TargetOutcome::Missing => return create_symlink_at(source_dir, &target),
+        TargetOutcome::Ours => return Ok(Some(target)),
+        TargetOutcome::Foreign => {}
     }
 
-    // A real, non-symlink entry occupies `skill_name` — a genuine conflict
-    // with something that predates this publish pass.
+    // A foreign entry occupies `skill_name` — something that predates this
+    // publish pass and isn't already our own symlink to this source.
     if is_sandbox {
         let backup = reserve_conflict_backup_path(&target)?;
         fs::rename(&target, &backup).with_context(|| {
@@ -266,32 +290,23 @@ pub(super) fn publish_skill(
     // `warp-<name>` alternate name instead.
     let alt_name = format!("{NON_SANDBOX_ALTERNATE_NAME_PREFIX}{skill_name}");
     let alt_target = skill_root.join(&alt_name);
-    match inspect_target(&alt_target)? {
-        TargetState::RealEntry => {
+    match inspect_target(&alt_target, source_dir)? {
+        TargetOutcome::Foreign => {
             safe_warn!(
                 safe: ("WARP_SKILL_DIRS publish: a skill conflict outside a sandbox also collided under its alternate name; the skill was not published"),
                 full: (
-                    "WARP_SKILL_DIRS publish: skill '{skill_name}' conflicts with an existing entry at {} (left untouched); the alternate name {} is also occupied by a real entry, so the skill from {} was not published under either name",
+                    "WARP_SKILL_DIRS publish: skill '{skill_name}' conflicts with an existing entry at {} (left untouched); the alternate name {} is also occupied, so the skill from {} was not published under either name",
                     target.display(), alt_target.display(), source_dir.display()
                 )
             );
             Ok(None)
         }
-        TargetState::Symlink(previous_alt_target) => {
-            // Assume this is our own alias from an earlier, non-sandboxed run.
-            fs::remove_file(&alt_target).with_context(|| {
-                format!("failed to remove existing symlink {}", alt_target.display())
-            })?;
-            safe_warn!(
-                safe: ("WARP_SKILL_DIRS publish: a skill conflicted outside a sandbox; the original was left as-is and the skill was published under an alternate name"),
-                full: (
-                    "WARP_SKILL_DIRS publish: skill '{skill_name}' conflicts with an existing entry at {} (left untouched); published {} as {} instead (was a symlink to {:?})",
-                    target.display(), source_dir.display(), alt_target.display(), previous_alt_target
-                )
-            );
-            create_symlink_at(source_dir, &alt_target)
+        TargetOutcome::Ours => {
+            // Already correctly published as the alternate name from an
+            // earlier pass into this same working directory — a no-op.
+            Ok(Some(alt_target))
         }
-        TargetState::Missing => {
+        TargetOutcome::Missing => {
             safe_warn!(
                 safe: ("WARP_SKILL_DIRS publish: a skill conflicted outside a sandbox; the original was left as-is and the skill was published under an alternate name"),
                 full: (
@@ -304,22 +319,27 @@ pub(super) fn publish_skill(
     }
 }
 
-/// Find an unused path to move an overridden, real (non-symlink) skill entry aside to,
-/// by appending [`SANDBOX_BACKUP_SUFFIX`] to `target`'s file name, then a numeric
-/// suffix if that's already taken. Bails rather than risk silently colliding with (and
-/// losing) an earlier backup.
+/// Find an unused path to move an overridden skill entry aside to, by
+/// appending [`SANDBOX_BACKUP_SUFFIX`] to `target`'s file name, then a
+/// numeric suffix if that's already taken. Bails rather than risk silently
+/// colliding with (and losing) an earlier backup.
+///
+/// Uses [`fs::symlink_metadata`] rather than [`Path::exists`] to detect an
+/// occupied candidate, so a dangling symlink (which `exists` reports as
+/// absent) still counts as taken.
 fn reserve_conflict_backup_path(target: &Path) -> Result<PathBuf> {
     let name = target.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
         anyhow::anyhow!("skill target path {} has no file name", target.display())
     })?;
+    let is_occupied = |path: &Path| fs::symlink_metadata(path).is_ok();
     let first_choice = target.with_file_name(format!("{name}{SANDBOX_BACKUP_SUFFIX}"));
-    if !first_choice.exists() {
+    if !is_occupied(&first_choice) {
         return Ok(first_choice);
     }
     const MAX_BACKUP_ATTEMPTS: u32 = 20;
     for suffix in 2..=MAX_BACKUP_ATTEMPTS {
         let candidate = target.with_file_name(format!("{name}{SANDBOX_BACKUP_SUFFIX}-{suffix}"));
-        if !candidate.exists() {
+        if !is_occupied(&candidate) {
             return Ok(candidate);
         }
     }
