@@ -619,7 +619,7 @@ pub(crate) fn prepare_claude_environment_config(
     let api_key_suffix = resolve_anthropic_api_key_suffix(resolved_env_vars);
     prepare_claude_config(&claude_json_path, working_dir, api_key_suffix.as_deref())?;
     prepare_claude_settings(&claude_settings_path)?;
-    publish_warp_skill_dirs_for_claude(working_dir);
+    publish_warp_skill_dirs_for_claude(working_dir, resolved_env_vars);
     Ok(())
 }
 
@@ -636,15 +636,21 @@ pub(crate) fn prepare_claude_environment_config(
 /// concurrent tasks (e.g. on a self-hosted direct-backend worker sharing one
 /// host) from publishing into the same shared home directory. A published
 /// skill overrides any existing entry with the same name (see
-/// `skill_dirs_publish::publish_skill`). A no-op when `WARP_SKILL_DIRS` is
-/// not configured for this run.
-fn publish_warp_skill_dirs_for_claude(working_dir: &Path) {
+/// `skill_dirs_publish::publish_skill`), with the conflict-resolution
+/// behavior depending on whether this run is sandboxed. A no-op when
+/// `WARP_SKILL_DIRS` is not configured for this run.
+fn publish_warp_skill_dirs_for_claude(
+    working_dir: &Path,
+    resolved_env_vars: &HashMap<OsString, OsString>,
+) {
     let source_dirs = super::skill_dirs_publish::warp_skill_source_dirs(working_dir);
     if source_dirs.is_empty() {
         return;
     }
     let skill_root = working_dir.join(".claude").join("skills");
-    let published = super::skill_dirs_publish::publish_skill_dirs(&skill_root, &source_dirs);
+    let is_sandbox = super::skill_dirs_publish::is_sandbox(resolved_env_vars);
+    let published =
+        super::skill_dirs_publish::publish_skill_dirs(&skill_root, &source_dirs, is_sandbox);
     if published > 0 {
         safe_info!(
             safe: ("Published {published} WARP_SKILL_DIRS skill(s) to the Claude Code skill root"),
