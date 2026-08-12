@@ -44,6 +44,7 @@ use crate::themes::theme::{AnsiColorIdentifier, Fill as ThemeFill, VerticalGradi
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::color_dot::{TAB_COLOR_OPTIONS, render_color_dot};
 use crate::ui_components::icons::{ICON_DIMENSIONS, Icon};
+use crate::util::bindings::keybinding_name_to_display_string;
 use crate::util::color::{Opacity, coloru_with_opacity};
 use crate::util::truncation::truncate_from_end;
 use crate::window_settings::WindowSettings;
@@ -58,6 +59,19 @@ use crate::workspace::{
 
 pub const TAB_BAR_BORDER_HEIGHT: f32 = 1.0;
 pub(crate) const TAB_INDICATOR_HEIGHT: f32 = 14.0;
+
+/// Binding names for switching to tabs 1–8 (tab index 0–7), used to surface the
+/// effective keystroke (including user overrides) on each tab.
+pub(crate) const TAB_ACTIVATE_BINDING_NAMES: [&str; 8] = [
+    "workspace:activate_first_tab",
+    "workspace:activate_second_tab",
+    "workspace:activate_third_tab",
+    "workspace:activate_fourth_tab",
+    "workspace:activate_fifth_tab",
+    "workspace:activate_sixth_tab",
+    "workspace:activate_seventh_tab",
+    "workspace:activate_eighth_tab",
+];
 
 /// Label for the tab right-click menu's "Move to group" submenu parent.
 pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
@@ -918,6 +932,7 @@ pub struct TabComponent<'a> {
     /// both the in-selection highlight and the right-click menu dispatch
     /// (multi-tab menu vs single-tab menu).
     is_in_multi_tab_selection: bool,
+    shortcut_hint_label: Option<String>,
 }
 
 /// Structure that holds TabComponent styles.
@@ -1005,6 +1020,13 @@ impl<'a> TabComponent<'a> {
             .as_ref(ctx)
             .is_terminal_pane_being_shared(ctx);
         let should_show_indicators = *TabSettings::as_ref(ctx).show_indicators.value();
+        let shortcut_hint_label = if *TabSettings::as_ref(ctx).show_shortcut_hint.value()
+            && tab_index < TAB_ACTIVATE_BINDING_NAMES.len()
+        {
+            keybinding_name_to_display_string(TAB_ACTIVATE_BINDING_NAMES[tab_index], ctx)
+        } else {
+            None
+        };
         let are_inputs_synced = SyncedInputState::as_ref(ctx)
             .should_sync_this_pane_group(tab.pane_group.id(), tab.pane_group.window_id(ctx));
 
@@ -1080,6 +1102,7 @@ impl<'a> TabComponent<'a> {
             sole_grouped_member: false,
             locator,
             is_in_multi_tab_selection: false,
+            shortcut_hint_label,
         }
     }
 
@@ -1566,6 +1589,26 @@ impl<'a> TabComponent<'a> {
         })
     }
 
+    fn render_shortcut_hint(&self) -> Option<Box<dyn Element>> {
+        if self.for_drag_ghost {
+            return None;
+        }
+        let label = self.shortcut_hint_label.as_ref()?;
+        let theme = self.appearance.theme();
+        let font_size = self.styles.default.font_size.unwrap_or(12.);
+        let text = Text::new_inline(
+            label.clone(),
+            self.styles
+                .default
+                .font_family_id
+                .expect("Font family defined"),
+            font_size,
+        )
+        .with_color(theme.sub_text_color(theme.background()).into())
+        .finish();
+        Some(Container::new(text).with_margin_right(4.).finish())
+    }
+
     fn render_tab_container(&self, is_hovered: bool) -> Box<dyn Element> {
         let is_tab_dragging = self.is_tab_dragging();
         let is_hovered = is_hovered && !self.tab_bar.is_any_tab_dragging;
@@ -1666,6 +1709,9 @@ impl<'a> TabComponent<'a> {
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_main_axis_alignment(MainAxisAlignment::Center)
                 .with_cross_axis_alignment(warpui::elements::CrossAxisAlignment::Center);
+            if let Some(hint) = self.render_shortcut_hint() {
+                flex_row.add_child(hint);
+            }
             if let Some(indicator) = self.render_indicator() {
                 flex_row.add_child(indicator);
             }

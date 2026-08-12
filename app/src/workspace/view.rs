@@ -3769,6 +3769,7 @@ impl Workspace {
                 ctx.notify();
             }
             TabSettingsChangedEvent::ShowIndicatorsButton { .. }
+            | TabSettingsChangedEvent::ShowTabShortcutHint { .. }
             | TabSettingsChangedEvent::NewTabPlacement { .. }
             | TabSettingsChangedEvent::TabCloseButtonPosition { .. }
             | TabSettingsChangedEvent::PreserveActiveTabColor { .. } => {
@@ -23182,6 +23183,9 @@ impl Workspace {
 
         if *tab_settings.show_indicators.value() {
             context.set.insert(flags::TAB_INDICATORS_FLAG);
+        }
+        if *tab_settings.show_shortcut_hint.value() {
+            context.set.insert(flags::SHOW_TAB_SHORTCUT_HINT_FLAG);
         }
         if *tab_settings.show_code_review_button.value() {
             context.set.insert(flags::SHOW_CODE_REVIEW_BUTTON_FLAG);

@@ -94,9 +94,9 @@ use crate::workspace::WorkspaceAction;
 use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
 use crate::workspace::tab_settings::{
     DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs, PreserveActiveTabColor,
-    ShowCodeReviewButton, ShowIndicatorsButton, ShowVerticalTabPanelInRestoredWindows,
-    TabCloseButtonPosition, TabSettings, TabSettingsChangedEvent,
-    UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
+    ShowCodeReviewButton, ShowIndicatorsButton, ShowTabShortcutHint,
+    ShowVerticalTabPanelInRestoredWindows, TabCloseButtonPosition, TabSettings,
+    TabSettingsChangedEvent, UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
     WorkspaceDecorationVisibility, canonical_directory_key,
 };
 use crate::{send_telemetry_from_ctx, themes};
@@ -319,6 +319,22 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         ),
     );
 
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
+            "tab shortcut hint",
+            builder(SettingsAction::AppearancePageToggle(
+                AppearancePageAction::ToggleTabShortcutHint,
+            )),
+            context,
+            flags::SHOW_TAB_SHORTCUT_HINT_FLAG,
+        )
+        .is_supported_on_current_platform(
+            TabSettings::as_ref(app)
+                .show_shortcut_hint
+                .is_supported_on_current_platform(),
+        ),
+    );
+
     if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
         toggle_binding_pairs.push(
             ToggleSettingActionPair::custom(
@@ -524,6 +540,7 @@ pub enum AppearancePageAction {
     ToggleMatchNotebookToMonospaceFontSize,
     ToggleMatchAIToTerminalFontFamily,
     ToggleTabIndicators,
+    ToggleTabShortcutHint,
     ToggleShowCodeReviewButton,
     TogglePreserveActiveTabColor,
     ToggleVerticalTabs,
@@ -706,6 +723,7 @@ impl TypedActionView for AppearanceSettingsPageView {
                 ctx.open_url(url);
             }
             ToggleTabIndicators => self.toggle_tab_indicators(ctx),
+            ToggleTabShortcutHint => self.toggle_tab_shortcut_hint(ctx),
             ToggleShowCodeReviewButton => self.toggle_show_code_review_button(ctx),
             TogglePreserveActiveTabColor => self.toggle_preserve_active_tab_color(ctx),
             ToggleVerticalTabs => self.toggle_vertical_tabs(ctx),
@@ -1524,8 +1542,10 @@ impl AppearanceSettingsPageView {
         ));
 
         let tab_settings = TabSettings::as_ref(ctx);
-        let mut tab_settings_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
-            vec![Box::new(TabIndicatorWidget::default())];
+        let mut tab_settings_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![
+            Box::new(TabIndicatorWidget::default()),
+            Box::new(TabShortcutHintWidget::default()),
+        ];
         if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
             tab_settings_widgets.push(Box::new(CodeReviewButtonWidget::default()));
         }
@@ -2486,6 +2506,15 @@ impl AppearanceSettingsPageView {
             TelemetryEvent::ToggleTabIndicators { enabled: new_value },
             ctx
         );
+    }
+
+    fn toggle_tab_shortcut_hint(&mut self, ctx: &mut ViewContext<Self>) {
+        let tab_settings = TabSettings::handle(ctx);
+        let new_value = { !*tab_settings.as_ref(ctx).show_shortcut_hint.value() };
+
+        ctx.update_model(&tab_settings, move |tab_settings, ctx| {
+            report_if_error!(tab_settings.show_shortcut_hint.set_value(new_value, ctx));
+        });
     }
 
     fn toggle_show_code_review_button(&mut self, ctx: &mut ViewContext<Self>) {
@@ -4888,6 +4917,51 @@ impl SettingsWidget for TabIndicatorWidget {
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(AppearancePageAction::ToggleTabIndicators);
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct TabShortcutHintWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for TabShortcutHintWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "tab shortcut"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let tab_settings = TabSettings::as_ref(app);
+
+        render_body_item::<AppearancePageAction>(
+            "Show tab shortcuts".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                ShowTabShortcutHint::storage_key(),
+                ShowTabShortcutHint::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*tab_settings.show_shortcut_hint)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AppearancePageAction::ToggleTabShortcutHint);
                 })
                 .finish(),
             None,

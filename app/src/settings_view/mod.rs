@@ -541,6 +541,7 @@ pub mod flags {
     pub const SMART_SELECT_FLAG: &str = "Smart_Select_Enabled";
     pub const ACTIVATION_HOTKEY_FLAG: &str = "Activation_Hotkey_Enabled";
     pub const TAB_INDICATORS_FLAG: &str = "Tab_Indicators_Enabled";
+    pub const SHOW_TAB_SHORTCUT_HINT_FLAG: &str = "Show_Tab_Shortcut_Hint";
     pub const SHOW_CODE_REVIEW_BUTTON_FLAG: &str = "Show_Code_Review_Button_Enabled";
     pub const SHOW_CODE_REVIEW_DIFF_STATS_FLAG: &str = "Show_Code_Review_Diff_Stats_Enabled";
     pub const AUTO_OPEN_CODE_REVIEW_PANE_FLAG: &str = "Auto_Open_Code_Review_Pane_Enabled";
