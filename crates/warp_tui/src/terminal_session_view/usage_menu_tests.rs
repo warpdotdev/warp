@@ -220,6 +220,76 @@ fn render_shows_all_sections_when_all_apply() {
 }
 
 #[test]
+fn header_places_title_metadata_and_manage_billing_link_on_one_row() {
+    let mut snapshot = base_snapshot();
+    snapshot.manage_billing_url = Some("https://example.com/billing".to_owned());
+
+    let lines = render_snapshot_lines(snapshot);
+    let header = &lines[0];
+    assert!(header.contains("Usage"), "{header}");
+    assert!(header.contains("Plan: Build"), "{header}");
+    assert!(header.contains("Team: Product Eng"), "{header}");
+    assert!(header.contains("Manage billing and usage"), "{header}");
+}
+
+#[test]
+fn header_places_title_and_metadata_on_one_row_without_the_manage_billing_link() {
+    // Non-admins (or teams without a manage-billing link) still get a single
+    // header row, just without the trailing link segment.
+    let snapshot = base_snapshot();
+
+    let lines = render_snapshot_lines(snapshot);
+    let header = &lines[0];
+    assert!(header.contains("Usage"), "{header}");
+    assert!(header.contains("Plan: Build"), "{header}");
+    assert!(!header.contains("Manage billing and usage"), "{header}");
+}
+
+#[test]
+fn render_grows_past_the_shared_read_only_menu_row_cap_when_pay_as_you_go_wraps() {
+    // A spend large enough to wrap across many circle rows. The panel's own
+    // `render` must not self-truncate: the design requires it to grow
+    // vertically rather than clip, and the row cap that used to enforce a
+    // ceiling lived in the caller (`terminal_session_view::render_input_area`),
+    // not here — this pins down that `render` itself imposes none.
+    let mut snapshot = base_snapshot();
+    snapshot.base_credits = Some(credit_bar(1500, 1500));
+    snapshot.pay_as_you_go = Some(TuiUsagePayAsYouGo {
+        credits_used: 5_000_000,
+        cost_cents: 5_000_000,
+        has_kicked_in: true,
+    });
+
+    let lines = App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let element = app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            render(
+                &snapshot,
+                &MouseStateHandle::default(),
+                &MouseStateHandle::default(),
+                "https://example.com/upgrade",
+                &builder,
+            )
+        });
+        // Generous height so the constraint itself isn't what limits the
+        // output — proving the content genuinely needs more than the old
+        // 24-row cap when nothing artificially truncates it.
+        lines_of(&app, element, TuiSize::new(110, 400))
+    });
+    assert!(
+        lines.len() > 24,
+        "expected the wrapped panel to need more than 24 rows, got {} rows",
+        lines.len()
+    );
+    assert_eq!(
+        lines.last().map(|line| line.trim()),
+        Some("Esc to exit"),
+        "the footer hint must still be the last row, not clipped off"
+    );
+}
+
+#[test]
 fn render_shows_not_kicked_in_copy_before_any_pay_as_you_go_spend() {
     let mut snapshot = base_snapshot();
     snapshot.base_credits = Some(credit_bar(1500, 1500));

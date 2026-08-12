@@ -251,6 +251,61 @@ fn out_of_credits_ctrl_o_binding_opens_upgrade() {
 }
 
 #[test]
+fn ctrl_o_opens_upgrade_url_while_the_usage_panel_is_open() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let expected_upgrade_url = app.read(upgrade_url);
+
+        app.read(|ctx| {
+            let ctrl_o = Trigger::Keystrokes(vec![Keystroke::parse("ctrl-o").unwrap()]);
+            let input_view_id = view.as_ref(ctx).input_view.id();
+            assert!(
+                !ctx.key_bindings_for_view(fixture.window_id, input_view_id)
+                    .iter()
+                    .any(|binding| *binding.trigger == ctrl_o),
+                "ctrl-o should not be active before the /usage panel is opened"
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::USAGE, None, ctx);
+        });
+        view.read(&app, |view, ctx| {
+            assert_eq!(
+                view.suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Usage)
+            );
+        });
+
+        app.read(|ctx| {
+            let ctrl_o = Trigger::Keystrokes(vec![Keystroke::parse("ctrl-o").unwrap()]);
+            let input_view_id = view.as_ref(ctx).input_view.id();
+            assert!(
+                ctx.key_bindings_for_view(fixture.window_id, input_view_id)
+                    .iter()
+                    .any(|binding| *binding.trigger == ctrl_o),
+                "ctrl-o should open the upgrade page while the /usage panel is open"
+            );
+        });
+
+        let opened_urls = Rc::new(RefCell::new(Vec::new()));
+        let opened_urls_for_callback = opened_urls.clone();
+        app.update(|ctx| {
+            ctx.set_before_open_url(move |url, _| {
+                opened_urls_for_callback.borrow_mut().push(url.to_owned());
+                url.to_owned()
+            });
+        });
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&TuiTerminalSessionAction::OpenOutOfCreditsUrl, ctx);
+        });
+        assert_eq!(opened_urls.borrow().as_slice(), &[expected_upgrade_url]);
+    });
+}
+
+#[test]
 fn upgrade_slash_command_is_always_available_and_opens_the_upgrade_page() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);

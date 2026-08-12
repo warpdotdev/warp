@@ -179,9 +179,6 @@ use self::state::{
 const INITIAL_INPUT_WIDTH: u16 = 80;
 const INLINE_MENU_TOP_PADDING_ROWS: u16 = 1;
 const MAX_READ_ONLY_MENU_ROWS: u16 = 10;
-/// Row cap for the `/usage` panel, which can grow taller than the other
-/// read-only menus when pay-as-you-go spend wraps across multiple circle rows.
-const MAX_USAGE_MENU_ROWS: u16 = 24;
 const MAX_INPUT_TEXT_ROWS: u16 = 6;
 /// Top and bottom border rows plus one padding row inside each border.
 const BORDERED_INPUT_CHROME_ROWS: u16 = 4;
@@ -2786,20 +2783,20 @@ impl TuiTerminalSessionView {
             )),
         });
         if let Some(menu_element) = menu_element {
-            let max_rows = if matches!(open_read_only_menu, Some(TuiReadOnlyMenuKind::Usage)) {
-                MAX_USAGE_MENU_ROWS
+            let padded_menu = TuiContainer::new(menu_element)
+                .with_padding_top(INLINE_MENU_TOP_PADDING_ROWS)
+                .finish();
+            // The `/usage` panel's spec requires it to grow vertically to fit
+            // wrapped pay-as-you-go circles rather than clip them, so it gets
+            // no row cap; every other read-only menu keeps the shared cap.
+            let wrapped_menu = if matches!(open_read_only_menu, Some(TuiReadOnlyMenuKind::Usage)) {
+                padded_menu
             } else {
-                MAX_READ_ONLY_MENU_ROWS
+                TuiConstrainedBox::new(padded_menu)
+                    .with_max_rows(MAX_READ_ONLY_MENU_ROWS + INLINE_MENU_TOP_PADDING_ROWS)
+                    .finish()
             };
-            content = content.child(
-                TuiConstrainedBox::new(
-                    TuiContainer::new(menu_element)
-                        .with_padding_top(INLINE_MENU_TOP_PADDING_ROWS)
-                        .finish(),
-                )
-                .with_max_rows(max_rows + INLINE_MENU_TOP_PADDING_ROWS)
-                .finish(),
-            );
+            content = content.child(wrapped_menu);
         }
         #[cfg(feature = "voice_input")]
         let input = if self.input_view.as_ref(ctx).voice_state(ctx) == TuiVoiceInputState::Listening
@@ -5200,10 +5197,15 @@ impl TuiView for TuiTerminalSessionView {
                 .set
                 .insert(SESSION_CAN_ACCEPT_BLOCKED_TERMINAL_USE_ACTION_FLAG);
         }
+        // Also enable ctrl-o's upgrade-URL binding while the `/usage` panel is
+        // open, so the same shortcut the panel advertises (`(ctrl+o)` next to
+        // "Buy more credits or upgrade plan") actually opens the upgrade page,
+        // not just the out-of-credits path.
         if self
             .transcript
             .as_ref(ctx)
             .latest_agent_block_is_out_of_credits(ctx)
+            || usage_menu_is_open(self.suggestions_mode.as_ref(ctx).mode())
         {
             context.set.insert(SESSION_CAN_OPEN_OUT_OF_CREDITS_URL_FLAG);
         }

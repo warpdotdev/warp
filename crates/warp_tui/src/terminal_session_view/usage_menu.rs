@@ -183,22 +183,31 @@ pub(super) fn render(
     let accent = builder.accent_text_style();
 
     let mut column = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-    column = column.child(plain_row("Usage", primary_bold));
 
-    let mut header = format!("Plan: {}", info.plan_name);
+    // Title on the left, metadata (and the admin-only manage-billing link)
+    // flush right on the same row, matching the design's single header line.
+    let mut metadata = format!("Plan: {}", info.plan_name);
     if let Some(team_name) = &info.team_name {
-        header.push_str(&format!("   Team: {team_name}"));
+        metadata.push_str(&format!("   Team: {team_name}"));
     }
-    column = column.child(plain_row(header, muted));
-
+    let mut trailing = TuiFlex::row().child(plain_row(metadata, muted));
     if let Some(manage_billing_url) = info.manage_billing_url.clone() {
-        column = column.child(hoverable_link(
-            "Manage billing and usage",
-            manage_billing_mouse,
-            builder,
-            manage_billing_url,
-        ));
+        trailing = trailing
+            .child(plain_row("   ", muted))
+            .child(hoverable_link(
+                "Manage billing and usage",
+                manage_billing_mouse,
+                builder,
+                manage_billing_url,
+            ));
     }
+    column = column.child(
+        TuiFlex::row()
+            .child(plain_row("Usage", primary_bold))
+            .flex_child(TuiText::new(String::new()).finish())
+            .child(trailing.finish())
+            .finish(),
+    );
 
     if let Some(base) = &info.base_credits {
         column = column.child(plain_row(" ", muted));

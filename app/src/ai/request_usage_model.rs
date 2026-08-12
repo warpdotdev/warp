@@ -21,9 +21,9 @@ use crate::pricing::PricingInfoModel;
 use crate::server::server_api::ai::AIClient;
 use crate::settings::AISettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-#[cfg(feature = "tui")]
-use crate::workspaces::workspace::AiCreditsUsageAndCostType;
 use crate::workspaces::workspace::WorkspaceUid;
+#[cfg(feature = "tui")]
+use crate::workspaces::workspace::{AiCreditsUsageAndCostType, UsageVisibilityGranularity};
 
 /// Threshold of ambient-only credits at which we surface upgrade/CTA UI.
 pub const AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD: i32 = 20;
@@ -640,6 +640,16 @@ impl AIRequestUsageModel {
         &self.bonus_grants
     }
 
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn set_bonus_grants_for_test(
+        &mut self,
+        bonus_grants: Vec<BonusGrant>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.bonus_grants = bonus_grants;
+        ctx.emit(AIRequestUsageModelEvent::RequestUsageUpdated);
+    }
+
     /// Returns the total remaining ambient-only credits for the user.
     /// Returns None if the user has never received any ambient-only grants.
     pub fn ambient_only_credits_remaining(&self) -> Option<i32> {
@@ -873,14 +883,20 @@ pub fn compute_tui_usage_snapshot(app: &AppContext) -> TuiUsageSnapshot {
     let ai_model = AIRequestUsageModel::as_ref(app);
     let workspaces = UserWorkspaces::as_ref(app);
     let workspace = workspaces.current_workspace();
+    // The TUI has no per-window team switcher like the GUI, so the workspace's
+    // first team stands in for "the current team" everywhere below (plan/team
+    // labels, admin status, and pay-as-you-go attribution).
+    let team = workspace.and_then(|workspace| workspace.teams.first());
+    let user_email = AuthStateProvider::as_ref(app).get().user_email();
+    let is_admin = team
+        .zip(user_email.as_deref())
+        .is_some_and(|(team, email)| team.has_admin_permissions(email));
 
     let plan_name = workspace
         .map(|workspace| workspace.billing_metadata.tier.name.clone())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "Free".to_owned());
-    let team_name = workspace
-        .and_then(|workspace| workspace.teams.first())
-        .map(|team| team.name.clone());
+    let team_name = team.map(|team| team.name.clone());
 
     let base_credits = (ai_model.request_limit() > 0).then(|| TuiUsageCreditBar {
         used: ai_model.requests_used() as i64,
@@ -897,11 +913,20 @@ pub fn compute_tui_usage_snapshot(app: &AppContext) -> TuiUsageSnapshot {
 
     let addon_credits = {
         let now = Utc::now();
+        // Only count grants scoped to the user personally or to the *current*
+        // workspace: an unscoped sum across every workspace the user belongs
+        // to would leak another team's balance into this account's total (and
+        // could show the section for a team that has none of its own).
+        let current_workspace_uid = workspace.map(|workspace| workspace.uid);
         let (granted, remaining) = ai_model
             .bonus_grants()
             .iter()
             .filter(|grant| grant.grant_type != BonusGrantType::AmbientOnly)
             .filter(|grant| grant.expiration.is_none_or(|expiration| now < expiration))
+            .filter(|grant| {
+                grant.scope == BonusGrantScope::User
+                    || grant.scope.workspace_uid() == current_workspace_uid
+            })
             .fold((0i64, 0i64), |(granted, remaining), grant| {
                 (
                     granted + i64::from(grant.request_credits_granted),
@@ -941,6 +966,24 @@ pub fn compute_tui_usage_snapshot(app: &AppContext) -> TuiUsageSnapshot {
         if !payg_available {
             return None;
         }
+        // Below `FullBreakdown`/`OwnOnly` visibility the server collapses
+        // every cost type (base, add-on, pay-as-you-go) into a single
+        // synthetic `Aggregate` row per cycle, so a pay-as-you-go-only figure
+        // can't be recovered from it. Rendering a derived number in that case
+        // would silently misreport real spend (e.g. showing `Spend: 0` for an
+        // account that has spent real money), so omit the section instead of
+        // guessing.
+        let type_breakdown_available = matches!(
+            workspace.resolve_usage_visibility(is_admin).granularity,
+            UsageVisibilityGranularity::OwnOnly | UsageVisibilityGranularity::FullBreakdown
+        );
+        if !type_breakdown_available {
+            return None;
+        }
+        // `BillingCycleUsageData` is workspace-wide and each entry carries the
+        // team it's attributed to, so scope to the current team to avoid
+        // mixing another team's spend into this figure.
+        let team_uid = team.map(|team| team.uid.to_string());
         let (credits_used, cost_cents) = workspace
             .billing_cycle_usage
             .as_ref()
@@ -953,6 +996,11 @@ pub fn compute_tui_usage_snapshot(app: &AppContext) -> TuiUsageSnapshot {
             .into_iter()
             .flat_map(|summary| &summary.entries)
             .filter(|entry| entry.cost_type == AiCreditsUsageAndCostType::Payg)
+            .filter(|entry| {
+                team_uid
+                    .as_deref()
+                    .is_none_or(|team_uid| entry.attributed_team_uid.as_deref() == Some(team_uid))
+            })
             .fold((0i64, 0i64), |(credits, cost), entry| {
                 (
                     credits + i64::from(entry.credits_used),
@@ -966,10 +1014,9 @@ pub fn compute_tui_usage_snapshot(app: &AppContext) -> TuiUsageSnapshot {
         })
     });
 
-    let manage_billing_url = AuthStateProvider::as_ref(app)
-        .get()
-        .user_email()
-        .and_then(|email| workspaces.admin_billing_link_for_default_team(&email));
+    let manage_billing_url = user_email
+        .as_deref()
+        .and_then(|email| workspaces.admin_billing_link_for_default_team(email));
 
     TuiUsageSnapshot {
         plan_name,
