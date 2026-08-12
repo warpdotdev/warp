@@ -81,6 +81,9 @@ use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode, FontSettings}
 use crate::view_components::find::FindDirection;
 
 mod actions;
+#[cfg(feature = "integration_tests")]
+pub use actions::CodeEditorViewAction;
+#[cfg(not(feature = "integration_tests"))]
 pub(super) use actions::CodeEditorViewAction;
 pub use actions::init;
 
@@ -129,6 +132,9 @@ pub enum CodeEditorEvent {
         comment: EditorReviewComment,
     },
     RequestOpenComment(CommentId),
+    UserScrolled {
+        pre_scroll_snapshot: warp_editor::render::model::viewport::ScrollPositionSnapshot,
+    },
     /// Emitted when the viewport is updated after layout
     ViewportUpdated,
     DelayedRenderingFlushed,
@@ -282,6 +288,7 @@ pub struct CodeEditorView {
     show_find_references_provider: Box<dyn ShowFindReferencesCardProvider>,
     /// The offset where find references card is anchored (if showing).
     find_references_anchor_offset: Option<CharOffset>,
+    has_focus_within: bool,
     window_id: WindowId,
 }
 
@@ -429,6 +436,7 @@ impl CodeEditorView {
             ),
             show_find_references_provider: render_options.show_find_references_provider,
             find_references_anchor_offset: None,
+            has_focus_within: false,
             window_id: ctx.window_id(),
         }
     }
@@ -867,6 +875,47 @@ impl CodeEditorView {
         } else {
             None
         }
+    }
+
+    pub fn scroll_snapshot(
+        &self,
+        app: &AppContext,
+    ) -> warp_editor::render::model::viewport::ScrollPositionSnapshot {
+        self.model
+            .as_ref(app)
+            .render_state()
+            .as_ref(app)
+            .snapshot_scroll_position()
+    }
+
+    pub fn restore_scroll_position(
+        &self,
+        snapshot: warp_editor::render::model::viewport::ScrollPositionSnapshot,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.model.update(ctx, |model, ctx| {
+            model.render_state().update(ctx, |render_state, _| {
+                render_state.scroll_to(snapshot);
+            });
+        });
+    }
+
+    /// Restores a scroll position and co-locates the selection caret with the
+    /// restored viewport, so the first caret-relative keystroke after a
+    /// navigation restore does not autoscroll away from the restored position.
+    pub fn restore_scroll_position_with_caret(
+        &self,
+        snapshot: warp_editor::render::model::viewport::ScrollPositionSnapshot,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.model.update(ctx, |model, ctx| {
+            model.selection().update(ctx, |selection_model, ctx| {
+                selection_model.set_cursor(snapshot.first_character_offset(), ctx);
+            });
+            model.render_state().update(ctx, |render_state, _| {
+                render_state.scroll_to(snapshot);
+            });
+        });
     }
 
     #[allow(clippy::single_range_in_vec_init)]
@@ -1384,21 +1433,12 @@ impl CodeEditorView {
     }
 
     pub fn is_focused(&self, app: &AppContext) -> bool {
-        let Some(handle) = self.self_handle.upgrade(app) else {
-            return false;
-        };
+        let window_id = self.self_handle.window_id(app).unwrap_or(self.window_id);
 
-        // If our window is not active, we don't have user focus, even if we're focused within the app.
-        if app.windows().state().active_window != Some(handle.window_id(app)) {
+        if app.windows().state().active_window != Some(window_id) {
             return false;
         }
-
-        //  Check if the editor is focused directly.
-        if handle.is_focused(app) {
-            return true;
-        }
-
-        false
+        self.has_focus_within
     }
 
     pub fn focus(&self, ctx: &mut ViewContext<Self>) {
@@ -2388,8 +2428,13 @@ impl View for CodeEditorView {
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
-        if focus_ctx.is_self_focused() && self.goto_line_dialog.as_ref(ctx).is_open() {
-            ctx.focus(&self.goto_line_dialog);
+        self.has_focus_within = true;
+        if focus_ctx.is_self_focused() {
+            self.display_states.display_state.reset_cursor_blink_timer();
+            if self.goto_line_dialog.as_ref(ctx).is_open() {
+                ctx.focus(&self.goto_line_dialog);
+            }
+            ctx.notify();
         }
     }
 
@@ -2406,6 +2451,7 @@ impl View for CodeEditorView {
     }
 
     fn on_blur(&mut self, blur_ctx: &BlurContext, ctx: &mut ViewContext<Self>) {
+        self.has_focus_within = false;
         if blur_ctx.is_self_blurred() {
             ctx.notify();
         }

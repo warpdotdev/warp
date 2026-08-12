@@ -9,6 +9,7 @@ use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::ICON_DIMENSIONS;
+use warp_editor::model::CoreEditorModel;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::path::LineAndColumnArg;
 #[cfg(feature = "local_fs")]
@@ -192,6 +193,12 @@ pub enum CodeViewEvent {
     },
     OpenLspLogs {
         log_path: PathBuf,
+    },
+    UserScrolled {
+        pre_scroll_snapshot: warp_editor::render::model::viewport::ScrollPositionSnapshot,
+    },
+    LspNavigated {
+        pre_scroll_snapshot: warp_editor::render::model::viewport::ScrollPositionSnapshot,
     },
 }
 
@@ -480,6 +487,13 @@ impl CodeView {
             CodeEditorEvent::ContentChanged { .. } => {
                 me.set_title_after_content_update(ctx);
             }
+            CodeEditorEvent::UserScrolled {
+                pre_scroll_snapshot,
+            } => {
+                ctx.emit(CodeViewEvent::UserScrolled {
+                    pre_scroll_snapshot: *pre_scroll_snapshot,
+                });
+            }
             _ => {}
         });
 
@@ -572,14 +586,18 @@ impl CodeView {
                 column,
                 source_server_id,
             } => {
-                // Register the external file so it can use LSP features.
-                // The manager will skip registration if the path is under an existing workspace.
+                if let Some(snapshot) = me.active_editor_render_state(ctx) {
+                    let pre_scroll_snapshot = snapshot.as_ref(ctx).snapshot_scroll_position();
+                    ctx.emit(CodeViewEvent::LspNavigated {
+                        pre_scroll_snapshot,
+                    });
+                }
+
                 let lsp_manager = LspManagerModel::handle(ctx);
                 lsp_manager.update(ctx, |mgr, _| {
                     mgr.maybe_register_external_file(path, *source_server_id);
                 });
 
-                // LSP uses 0-based line numbers, convert to 1-based for LineAndColumnArg
                 let line_1based = *line + 1;
                 let line_col = LineAndColumnArg {
                     line_num: line_1based,
@@ -660,9 +678,35 @@ impl CodeView {
         self.pane_configuration.clone()
     }
 
+    pub fn active_editor_render_state(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<ModelHandle<warp_editor::render::model::RenderState>> {
+        let tab = self.tab_at(self.active_tab_index)?;
+        Some(
+            tab.editor_view
+                .as_ref(ctx)
+                .editor()
+                .as_ref(ctx)
+                .model
+                .as_ref(ctx)
+                .render_state()
+                .clone(),
+        )
+    }
+
+    pub fn active_code_editor_view(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<super::editor::view::CodeEditorView>> {
+        let tab = self.tab_at(self.active_tab_index)?;
+        Some(tab.editor_view.as_ref(ctx).editor().clone())
+    }
+
     pub fn focus(&self, ctx: &mut ViewContext<Self>) {
         if let Some(tab) = self.tab_at(self.active_tab_index) {
-            ctx.focus(&tab.editor_view);
+            let editor_view = tab.editor_view.as_ref(ctx).editor().clone();
+            ctx.focus(&editor_view);
         }
     }
 

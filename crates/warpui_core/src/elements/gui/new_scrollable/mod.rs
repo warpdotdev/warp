@@ -1476,12 +1476,6 @@ impl Element for NewScrollable {
         };
 
         if self.always_handle_events_first {
-            // Different from other elements, scrollable always tries to handle the event first. It only
-            // dispatches event to its child if the event is not handled by scrollable. This ensures we
-            // never have additional events firing together with scrolling. Because of this requirement,
-            // scrollable should strictly only handle events if either:
-            // 1. There is an active scrolling session.
-            // 2. The mouse event happens exactly on the scrollbar track and is not covered.
             let handled_by_scrollbar = self.handle_event(z_index, event, ctx, app);
 
             if !handled_by_scrollbar {

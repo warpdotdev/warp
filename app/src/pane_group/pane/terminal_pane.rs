@@ -610,6 +610,29 @@ impl PaneContent for TerminalPane {
     fn is_pane_being_dragged(&self, ctx: &AppContext) -> bool {
         self.view.as_ref(ctx).is_being_dragged()
     }
+
+    fn scroll_snapshot(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<crate::workspace::nav_stack::ScrollSnapshot> {
+        let position = self.terminal_view(ctx).as_ref(ctx).scroll_position();
+        Some(crate::workspace::nav_stack::ScrollSnapshot::Terminal(
+            position,
+        ))
+    }
+
+    fn restore_scroll(
+        &self,
+        snapshot: &crate::workspace::nav_stack::ScrollSnapshot,
+        ctx: &mut ViewContext<PaneGroup>,
+    ) {
+        if let crate::workspace::nav_stack::ScrollSnapshot::Terminal(position) = snapshot {
+            let position = *position;
+            self.terminal_view(ctx).update(ctx, |view, _ctx| {
+                view.set_pending_nav_scroll_restore(position);
+            });
+        }
+    }
 }
 
 fn retrieve_shared_session_link(manager: &Manager, terminal_view_id: &EntityId) -> Option<Url> {
@@ -1474,6 +1497,16 @@ fn handle_terminal_view_event(
                     request.clone(),
                     ctx,
                 );
+            }
+            Event::UserScrolled {
+                pre_scroll_position,
+            } => {
+                ctx.emit(pane_group::Event::PaneUserScrolled {
+                    pane_id,
+                    pre_scroll_snapshot: crate::workspace::nav_stack::ScrollSnapshot::Terminal(
+                        *pre_scroll_position,
+                    ),
+                });
             }
             _ => {}
         }

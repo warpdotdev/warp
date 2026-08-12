@@ -161,4 +161,35 @@ impl PaneContent for CodeDiffPane {
     fn is_pane_being_dragged(&self, ctx: &AppContext) -> bool {
         self.view.as_ref(ctx).is_being_dragged()
     }
+
+    fn scroll_snapshot(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<crate::workspace::nav_stack::ScrollSnapshot> {
+        let diff_view = self.diff_view(ctx);
+        let (selected_tab, editor_scroll_snapshot) =
+            diff_view.as_ref(ctx).selected_editor_scroll_snapshot(ctx)?;
+        Some(crate::workspace::nav_stack::ScrollSnapshot::CodeDiff {
+            view_id: diff_view.id(),
+            selected_tab,
+            editor_scroll_snapshot,
+        })
+    }
+
+    fn restore_scroll(
+        &self,
+        snapshot: &crate::workspace::nav_stack::ScrollSnapshot,
+        ctx: &mut ViewContext<PaneGroup>,
+    ) {
+        if let crate::workspace::nav_stack::ScrollSnapshot::CodeDiff {
+            selected_tab,
+            editor_scroll_snapshot,
+            ..
+        } = snapshot
+        {
+            self.diff_view(ctx).update(ctx, |view, ctx| {
+                view.restore_selected_editor_scroll(*selected_tab, *editor_scroll_snapshot, ctx);
+            });
+        }
+    }
 }

@@ -25,6 +25,7 @@ use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors::{fg_overlay_6, neutral_1, neutral_4};
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_editor::render::model::viewport::ScrollPositionSnapshot;
 use warp_errors::report_error;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
@@ -2130,6 +2131,52 @@ impl CodeDiffView {
 
     pub fn action_id(&self) -> &AIAgentActionId {
         &self.action_id
+    }
+
+    pub fn selected_editor_scroll_snapshot(
+        &self,
+        app: &AppContext,
+    ) -> Option<(usize, ScrollPositionSnapshot)> {
+        let diff = self.pending_diffs.get(self.selected_tab)?;
+        let snapshot = diff
+            .diff_view
+            .as_ref(app)
+            .editor()
+            .as_ref(app)
+            .scroll_snapshot(app);
+        Some((self.selected_tab, snapshot))
+    }
+
+    pub fn restore_selected_editor_scroll(
+        &mut self,
+        selected_tab: usize,
+        snapshot: ScrollPositionSnapshot,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.pending_diffs.is_empty() {
+            return;
+        }
+
+        self.selected_tab = selected_tab.min(self.pending_diffs.len().saturating_sub(1));
+        self.scrollable_state.scroll_to_position(ScrollTarget {
+            position_id: self.position_id_for_file(self.selected_tab),
+            mode: ScrollToPositionMode::FullyIntoView,
+        });
+
+        if let Some(diff_view) = self
+            .pending_diffs
+            .get(self.selected_tab)
+            .map(|diff| diff.diff_view.clone())
+        {
+            diff_view.update(ctx, |view, ctx| {
+                view.editor().update(ctx, |editor, ctx| {
+                    editor.restore_scroll_position_with_caret(snapshot, ctx);
+                    editor.focus(ctx);
+                });
+            });
+        }
+
+        ctx.notify();
     }
 
     /// Returns the currently selected text within the entire `CodeDiffView` view sub-hierarchy.

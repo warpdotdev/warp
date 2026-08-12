@@ -37,3 +37,17 @@ path = "junit.xml"
 filter = 'test(update_manager)'
 platform = { host = 'cfg(target_os = "windows")' }
 retries = 2
+
+[test-groups]
+# The navigation-stack integration tests assert on real window and pane focus
+# (including focus moving between two Warp windows). On macOS the window server
+# is shared across concurrently running test processes, so one test's window
+# activation steals focus from another and the focus assertions time out. Which
+# test loses the race varies run to run, and the losers pass once nextest retries
+# them serially. Run them one at a time instead of relying on retries.
+nav-stack-focus = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(integration) and test(nav_stack)'
+platform = { host = 'cfg(target_os = "macos")' }
+test-group = 'nav-stack-focus'
