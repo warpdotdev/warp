@@ -346,6 +346,9 @@ integration_tests! {
     test_code_editor_line_numbers_default_to_absolute,
     test_code_editor_relative_line_numbers_follow_cursor,
 
+    // Code editor find bar tests
+    test_code_editor_find_click_refocuses_query_after_vim_enter,
+
     // AI document tests
     test_copy_ai_document_as_markdown_from_overflow_menu,
 

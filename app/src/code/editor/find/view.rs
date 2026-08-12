@@ -8,9 +8,9 @@ pub use warpui::AppContext;
 pub use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::elements::{
     Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, DropShadow, Element, Flex, Hoverable, MainAxisAlignment, MouseStateHandle,
-    OffsetPositioning, ParentAnchor, ParentOffsetBounds, Radius, Rect, SavePosition, Shrinkable,
-    Text,
+    CrossAxisAlignment, DispatchEventResult, DropShadow, Element, EventHandler, Flex, Hoverable,
+    MainAxisAlignment, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentOffsetBounds,
+    Radius, Rect, SavePosition, Shrinkable, Text,
 };
 pub use warpui::elements::{ParentElement as _, Stack};
 pub use warpui::geometry::vector::vec2f;
@@ -53,6 +53,9 @@ pub const CASE_SENSITIVE_TOOLTIP: &str = "Case sensitive search";
 pub const PRESERVE_CASE_TOOLTIP: &str = "Preserve case";
 pub const FIND_PLACEHOLDER_TEXT: &str = "Find";
 pub const REPLACE_PLACEHOLDER_TEXT: &str = "Replace";
+/// Stable position id for the find query field, so a click can re-focus it regardless of how it
+/// became non-editable (e.g. after Vim mode commits the query on Enter).
+pub const FIND_QUERY_SAVE_POSITION_ID: &str = "code_editor_find_query_input";
 
 #[derive(Default)]
 struct ButtonMouseStates {
@@ -101,6 +104,10 @@ pub enum FindAction {
     ToggleReplaceOpen,
     ReplaceAll,
     TogglePreserveCase,
+    /// Re-enables editing and focuses the find query field. Dispatched when the user clicks on
+    /// the query field, regardless of why it was non-editable (e.g. Vim mode disabled it after
+    /// Enter was pressed).
+    FocusFindEditor,
 }
 
 pub fn init(app: &mut AppContext) {
@@ -266,6 +273,28 @@ impl CodeEditorFind {
     /// Returns true if the find input is currently editable.
     pub fn is_find_input_editable(&self, app: &AppContext) -> bool {
         self.find_editor.as_ref(app).can_edit(app)
+    }
+
+    /// Returns true if the find query editor currently has focus.
+    #[cfg(feature = "integration_tests")]
+    pub fn is_find_input_focused(&self, app: &AppContext) -> bool {
+        self.find_editor.is_focused(app)
+    }
+
+    /// Returns the current text of the find query editor.
+    #[cfg(feature = "integration_tests")]
+    pub fn find_query_text(&self, ctx: &AppContext) -> String {
+        self.find_editor.as_ref(ctx).buffer_text(ctx)
+    }
+
+    /// Re-enables editing and focuses the find query field. Used when the user clicks on the
+    /// query field while it is non-editable (e.g. after Vim mode disabled it on Enter).
+    fn focus_find_editor(&mut self, ctx: &mut ViewContext<Self>) {
+        self.find_editor.update(ctx, |editor, ctx| {
+            editor.set_interaction_state(InteractionState::Editable, ctx);
+        });
+        ctx.focus(&self.find_editor);
+        ctx.notify();
     }
 
     /// Enable or disable the find input editor's interactivity.
@@ -811,25 +840,35 @@ impl CodeEditorFind {
                 .with_margin_right(HORIZONTAL_ICON_SPACING)
                 .finish(),
             );
-        find_row.add_child(
-            Shrinkable::new(
-                1.,
-                Container::new(query_editor_row.finish())
-                    .with_padding_right(4.)
-                    .with_padding_left(8.)
-                    .with_background(appearance.theme().surface_1())
-                    .with_border(
-                        Border::all(FIND_EDITOR_BORDER_WIDTH)
-                            .with_border_fill(appearance.theme().surface_3()),
-                    )
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
-                        FIND_EDITOR_BORDER_RADIUS,
-                    )))
-                    .with_margin_right(2. * HORIZONTAL_ICON_SPACING)
-                    .finish(),
+        let query_field_container = Container::new(query_editor_row.finish())
+            .with_padding_right(4.)
+            .with_padding_left(8.)
+            .with_background(appearance.theme().surface_1())
+            .with_border(
+                Border::all(FIND_EDITOR_BORDER_WIDTH)
+                    .with_border_fill(appearance.theme().surface_3()),
             )
-            .finish(),
-        );
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                FIND_EDITOR_BORDER_RADIUS,
+            )))
+            .with_margin_right(2. * HORIZONTAL_ICON_SPACING)
+            .finish();
+
+        // Wrap the query field so that a click always re-focuses and re-enables the query
+        // editor, regardless of why it became non-editable. The find editor's own mouse
+        // handling declines mouse-down events while it's disabled/non-selectable, so without
+        // this wrapper a click on the field would have no effect once it's no longer editable
+        // (e.g. after Vim mode disables it on Enter).
+        let query_field = EventHandler::new(query_field_container)
+            .on_left_mouse_down(|ctx, _, _| {
+                ctx.dispatch_typed_action(FindAction::FocusFindEditor);
+                DispatchEventResult::StopPropagation
+            })
+            .finish();
+
+        let query_field = SavePosition::new(query_field, FIND_QUERY_SAVE_POSITION_ID).finish();
+
+        find_row.add_child(Shrinkable::new(1., query_field).finish());
         find_row
             .add_child(Container::new(ChildView::new(&self.select_all_button).finish()).finish());
         find_row.finish()
@@ -914,6 +953,7 @@ impl TypedActionView for CodeEditorFind {
                 self.preserve_case_enabled = !self.preserve_case_enabled;
                 ctx.notify();
             }
+            FindAction::FocusFindEditor => self.focus_find_editor(ctx),
         }
     }
 }

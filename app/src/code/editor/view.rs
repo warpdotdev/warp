@@ -2470,6 +2470,14 @@ impl CodeEditorView {
         self.show_goto_line(ctx);
     }
 
+    pub fn open_find_bar_for_test(&mut self, ctx: &mut ViewContext<Self>) {
+        self.show_find_bar(ctx);
+    }
+
+    pub fn find_bar_for_test(&self) -> Option<ViewHandle<Find>> {
+        self.find_bar.clone()
+    }
+
     pub fn goto_line_confirm_for_test(&mut self, input: &str, ctx: &mut ViewContext<Self>) {
         self.show_goto_line(ctx);
         let event = GoToLineEvent::Confirm {
