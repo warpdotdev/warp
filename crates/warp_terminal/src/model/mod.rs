@@ -21,6 +21,7 @@ pub mod index {
 }
 pub mod iterm_image;
 pub mod kitty;
+pub mod kitty_placeholder;
 mod mode;
 pub mod mouse;
 pub mod secrets;

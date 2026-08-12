@@ -7,7 +7,9 @@ use crate::model::blockgrid::{BlockGrid, CursorDisplayPoint};
 use crate::model::grid::Dimensions;
 use crate::model::grid::grid_handler::PerformResetGridChecks;
 use crate::model::index::{Point, VisibleRow};
-use crate::model::kitty::{CursorMovementPolicy, KittyAction};
+use crate::model::kitty::{
+    CursorMovementPolicy, DisplayStoredImage, KittyAction, KittyPlacementData,
+};
 use crate::model::secrets::ObfuscateSecrets;
 use crate::test_util::{
     mock_blockgrid, test_kitty_image_metadata_map, test_kitty_store_and_display_action,
@@ -207,6 +209,114 @@ pub fn test_non_moving_kitty_image_keeps_finished_grid_visible() {
     assert_eq!(block_grid.grid_handler().cursor_point(), Point::new(0, 0));
     assert!(block_grid.grid_handler().has_visible_images());
     assert!(!block_grid.should_show_as_empty_when_finished());
+}
+
+#[test]
+pub fn test_virtual_kitty_placement_is_stored_without_anchor_or_cursor_movement() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let size = SizeInfo::new_without_font_metrics(10, 10);
+    let mut block_grid = BlockGrid::new(
+        size,
+        1000,
+        ChannelEventListener::new_for_test(),
+        ObfuscateSecrets::No,
+        PerformResetGridChecks::default(),
+    );
+    let mut metadata = test_kitty_image_metadata_map(1);
+    let mut action = test_kitty_store_and_display_action(1, 1);
+    let KittyAction::StoreAndDisplay(store_and_display) = &mut action else {
+        panic!("expected StoreAndDisplay action");
+    };
+    store_and_display.placement_data.virtual_placement = true;
+    store_and_display.placement_data.cols = Some(4);
+    store_and_display.placement_data.rows = Some(2);
+
+    block_grid
+        .handle_completed_kitty_action(action, &mut metadata)
+        .expect("kitty action should be handled")
+        .expect("virtual placement should be accepted");
+
+    assert_eq!(block_grid.grid_handler().cursor_point(), Point::new(0, 0));
+    assert!(!block_grid.grid_handler().has_visible_images());
+    let placement = block_grid
+        .grid_handler()
+        .virtual_placement(1)
+        .expect("virtual placement should be stored");
+    assert_eq!(placement.cols, 4);
+    assert_eq!(placement.rows, 2);
+}
+
+#[test]
+pub fn test_virtual_kitty_placement_derives_grid_size_when_cols_rows_omitted() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let size = SizeInfo::new_without_font_metrics(10, 10);
+    let mut block_grid = BlockGrid::new(
+        size,
+        1000,
+        ChannelEventListener::new_for_test(),
+        ObfuscateSecrets::No,
+        PerformResetGridChecks::default(),
+    );
+    let mut metadata = test_kitty_image_metadata_map(1);
+    let mut action = test_kitty_store_and_display_action(1, 1);
+    let KittyAction::StoreAndDisplay(store_and_display) = &mut action else {
+        panic!("expected StoreAndDisplay action");
+    };
+    store_and_display.placement_data.virtual_placement = true;
+    store_and_display.placement_data.cols = None;
+    store_and_display.placement_data.rows = None;
+
+    block_grid
+        .handle_completed_kitty_action(action, &mut metadata)
+        .expect("kitty action should be handled")
+        .expect("virtual placement should be accepted");
+
+    // The test image is 10x10 px and test cells are 1x1 px, so the derived
+    // rectangle is 10x10 cells.
+    let placement = block_grid
+        .grid_handler()
+        .virtual_placement(1)
+        .expect("virtual placement should be stored");
+    assert_eq!(placement.cols, 10);
+    assert_eq!(placement.rows, 10);
+}
+
+#[test]
+pub fn test_display_stored_image_with_virtual_placement_is_stored_without_anchor() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let size = SizeInfo::new_without_font_metrics(10, 10);
+    let mut block_grid = BlockGrid::new(
+        size,
+        1000,
+        ChannelEventListener::new_for_test(),
+        ObfuscateSecrets::No,
+        PerformResetGridChecks::default(),
+    );
+    let mut metadata = test_kitty_image_metadata_map(1);
+    let action = KittyAction::DisplayStoredImage(DisplayStoredImage {
+        image_id: 1,
+        placement_id: 1,
+        placement_data: KittyPlacementData {
+            cols: Some(16),
+            rows: Some(4),
+            virtual_placement: true,
+            ..Default::default()
+        },
+    });
+
+    block_grid
+        .handle_completed_kitty_action(action, &mut metadata)
+        .expect("kitty action should be handled")
+        .expect("virtual placement should be accepted");
+
+    assert_eq!(block_grid.grid_handler().cursor_point(), Point::new(0, 0));
+    assert!(!block_grid.grid_handler().has_visible_images());
+    let placement = block_grid
+        .grid_handler()
+        .virtual_placement(1)
+        .expect("virtual placement should be stored");
+    assert_eq!(placement.cols, 16);
+    assert_eq!(placement.rows, 4);
 }
 
 #[test]

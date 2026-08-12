@@ -173,7 +173,6 @@ impl From<InvalidKittyAction> for KittyError {
 #[derive(Debug, Clone)]
 pub enum InvalidControlData {
     IdMissing,
-    UnicodePlaceholderUnsupported,
 }
 
 impl From<InvalidControlData> for KittyError {
@@ -319,10 +318,6 @@ impl TryFrom<KittyMessage> for KittyAction {
                 Ok(KittyAction::StoreOnly(action))
             }
             KittyPlacementAction::StoreAndDisplay => {
-                if message.control_data.unicode_placeholder {
-                    return Err(InvalidControlData::UnicodePlaceholderUnsupported.into());
-                }
-
                 let mut action = StoreAndDisplay {
                     image_id: message
                         .control_data
@@ -337,6 +332,7 @@ impl TryFrom<KittyMessage> for KittyAction {
                         cols: message.control_data.cols,
                         rows: message.control_data.rows,
                         cursor_movement_policy: message.control_data.cursor_movement_policy,
+                        virtual_placement: message.control_data.unicode_placeholder,
                     },
                     image: KittyImage::try_from(message)?,
                 };
@@ -350,10 +346,6 @@ impl TryFrom<KittyMessage> for KittyAction {
                 Ok(KittyAction::StoreAndDisplay(action))
             }
             KittyPlacementAction::DisplayStoredImage => {
-                if message.control_data.unicode_placeholder {
-                    return Err(InvalidControlData::UnicodePlaceholderUnsupported.into());
-                }
-
                 let id = match message.control_data.image_id {
                     Some(id) => id,
                     None => return Err(InvalidControlData::IdMissing.into()),
@@ -370,6 +362,7 @@ impl TryFrom<KittyMessage> for KittyAction {
                         cols: message.control_data.cols,
                         rows: message.control_data.rows,
                         cursor_movement_policy: message.control_data.cursor_movement_policy,
+                        virtual_placement: message.control_data.unicode_placeholder,
                     },
                 }))
             }
@@ -429,6 +422,9 @@ pub struct KittyPlacementData {
     pub cols: Option<u32>,
     pub rows: Option<u32>,
     pub cursor_movement_policy: CursorMovementPolicy,
+    /// True when the command carried `U=1`: the placement is virtual and is
+    /// only shown through Unicode placeholder cells (U+10EEEE).
+    pub virtual_placement: bool,
 }
 
 impl KittyPlacementData {
@@ -971,3 +967,7 @@ pub fn create_kitty_ok_reply(image_id: u32) -> Vec<u8> {
 pub fn create_kitty_error_reply(image_id: u32, err: KittyError) -> Vec<u8> {
     create_kitty_reply(image_id, format!("{err:?}"))
 }
+
+#[cfg(test)]
+#[path = "kitty_tests.rs"]
+mod tests;

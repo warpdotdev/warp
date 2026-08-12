@@ -25,6 +25,11 @@ pub struct ImageMap {
     image_placement_data: HashMap<(u32, u32), ImagePlacementData>,
     num_lines_truncated_at_last_update: u64,
     image_type_by_image_id: HashMap<u32, ImageType>,
+    /// Virtual (Unicode placeholder, `U=1`) placements keyed by image id. Virtual placements
+    /// have no anchor point; they only appear where U+10EEEE placeholder cells reference them.
+    /// Keyed by image id alone: placement-id selection via underline color is unsupported, so
+    /// the most recently created virtual placement per image wins.
+    virtual_placements: HashMap<u32, VirtualPlacement>,
 }
 
 impl ImageMap {
@@ -49,6 +54,14 @@ impl ImageMap {
         self.largest_height = self.largest_height.max(image_data.height_cells);
         self.image_placement_data
             .insert((image_id, placement_id), image_data);
+    }
+
+    pub fn virtual_placement(&self, image_id: u32) -> Option<&VirtualPlacement> {
+        self.virtual_placements.get(&image_id)
+    }
+
+    pub fn add_virtual_placement(&mut self, image_id: u32, placement: VirtualPlacement) {
+        self.virtual_placements.insert(image_id, placement);
     }
 
     pub fn place(
@@ -255,10 +268,13 @@ impl ImageMap {
         self.image_placement_data.clear();
         self.image_ids_by_point.clear();
         self.point_by_image_id.clear();
+        self.virtual_placements.clear();
         self.largest_height = 0;
     }
 
     pub fn evict_image(&mut self, image_id_to_evict: u32) {
+        self.virtual_placements.remove(&image_id_to_evict);
+
         let mut images_to_evict = vec![];
         for &(image_id, placement_id) in self.point_by_image_id.keys() {
             if image_id == image_id_to_evict {
@@ -284,6 +300,16 @@ impl ImageMap {
             self.point_by_image_id.remove(&(image_id, placement_id));
         }
     }
+}
+
+/// A virtual (Unicode placeholder) placement: the image is scaled to fill a `cols x rows`
+/// cell rectangle, and placeholder cells each show one tile of that rectangle.
+#[derive(Debug, Clone)]
+pub struct VirtualPlacement {
+    pub cols: usize,
+    pub rows: usize,
+    /// Scaled pixel size of the full placement.
+    pub image_size: Vector2F,
 }
 
 pub struct AbsoluteImagePlacement {
@@ -327,3 +353,7 @@ pub struct ImagePlacementData {
     pub height_cells: usize,
     pub image_size: Vector2F,
 }
+
+#[cfg(test)]
+#[path = "image_map_tests.rs"]
+mod tests;
