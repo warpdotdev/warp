@@ -474,7 +474,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         // runtime. Flipping this early is harmless — nothing is keyed to colour
         // yet — and the sweep applies it the moment grouping is turned on.
         toggle_binding_pairs.push(ToggleSettingActionPair::new(
-            "coloring automatic tab groups by project",
+            "coloring automatically grouped tabs by project",
             builder(SettingsAction::AppearancePageToggle(
                 AppearancePageAction::ToggleAutoGroupTabColors,
             )),
@@ -5140,7 +5140,7 @@ impl SettingsWidget for AutoGroupTabColorsWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<AppearancePageAction>(
-            "Color automatic tab groups by project".into(),
+            "Color automatically grouped tabs by project".into(),
             None,
             LocalOnlyIconState::for_setting(
                 AutoGroupTabColors::storage_key(),
@@ -5160,8 +5160,10 @@ impl SettingsWidget for AutoGroupTabColorsWidget {
                 })
                 .finish(),
             Some(
-                "Gives each automatic group a color derived from its project, so a repository \
-                 always reads the same color. Colors come from a palette of six, so two \
+                "Gives the tabs in each automatic group a color derived from their project, so a \
+                 repository always reads the same color and the group itself stays uncolored. A \
+                 tab takes its new project's color when it moves, and gives the color up when \
+                 you take it out of the group. Colors come from a palette of six, so two \
                  projects can land on the same one. Colors you set by hand are left alone."
                     .into(),
             ),

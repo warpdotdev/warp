@@ -611,6 +611,16 @@ impl Workspace {
         // Identify where this newly pinned tab should land (after the last pinned item).
         let target = self.pinned_boundary_index(&self.tabs);
 
+        // Pinning takes the tab out of its group (R23), so automation's colour
+        // goes back with the membership it belongs to. Handing it back here is
+        // also what keeps unpinning correct: outside a group there is no key to
+        // judge provenance against, so a colour kept across the pin would read
+        // as the user's for ever and the tab would never take the colour of
+        // whatever project it is unpinned into.
+        if let Some(previous_group_id) = previous_group_id {
+            self.clear_derived_tab_color_on_leaving(tab_index, previous_group_id, ctx);
+        }
+
         self.tabs[tab_index].group_id = None;
         self.tabs[tab_index].pinned = true;
         self.move_tab_to_index(tab_index, target, ctx);

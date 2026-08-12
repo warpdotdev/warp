@@ -99,40 +99,33 @@ fn group_project_key(group: &TabGroup) -> Option<ProjectKey> {
     )))
 }
 
-/// The colour of a group that is being replaced by another one for the same
-/// project, with the key that colour's provenance is judged against.
+/// Whether the color a tab carries is one automation put there rather than one
+/// the user chose.
 ///
-/// Captured before the old group is pruned, because pruning is what makes the
-/// colour unrecoverable.
-#[derive(Clone, Debug)]
-pub(crate) struct ReplacedGroupColor {
-    color: SelectedTabColor,
-    key: Option<ProjectKey>,
-}
-
-/// Whether the color a group carries is one automation put there rather than
-/// one the user chose.
-///
-/// Derived rather than stored, exactly as name provenance is: a color matching
-/// what `previous_key` derives was automation's and may be replaced, and
-/// anything else was the user's and may not. `Cleared` is the user deliberately
-/// removing a color, so it is protected too; `Unset` is a group with no color
-/// to protect.
+/// Derived rather than stored, exactly as a group's name provenance is: a color
+/// matching what `previous_key` derives was automation's and may be replaced,
+/// and anything else was the user's and may not. `Cleared` is the user
+/// deliberately removing a color, so it is protected too; `Unset` is a tab with
+/// no color to protect.
 ///
 /// The palette holds six colors, so a user who picks precisely the one their
-/// key derives reads as automation and is repainted by the next re-key. The
-/// name heuristic has the identical hole — a rename that happens to match the
-/// derived name is also indistinguishable — and the cost is one color the user
-/// can set again, which is cheaper than persisting a provenance flag that no
-/// other automation state needs.
+/// key derives reads as automation and is repainted by the next move. The name
+/// heuristic has the identical hole — a rename that happens to match the derived
+/// name is also indistinguishable — and the cost is one color the user can set
+/// again, which is cheaper than persisting a provenance flag that no other
+/// automation state needs.
 ///
-/// Provenance is a property of the *group*, not of the project: clearing a
-/// group's color says "not this group", not "never color this project", so the
-/// project's next group starts derived again. The one place that would
-/// otherwise contradict is replacing a group with another for the same project,
-/// which carries the color across (see
-/// [`Workspace::adopt_project_key_for_new_group`]).
-fn group_color_is_derived(color: SelectedTabColor, previous_key: Option<&ProjectKey>) -> bool {
+/// `previous_key` is the key of the group the tab sits in *before* the
+/// transition being applied. Reading it off the group rather than off a per-tab
+/// record of the last resolved key is what makes provenance survive a restart:
+/// the group table persists the key, while the resolver's `last_resolved_keys`
+/// is in-memory only, so after a restart every colored tab would otherwise read
+/// as the user's and never follow its directory again.
+///
+/// Provenance is a property of the *tab*, not of the project: clearing a tab's
+/// color says "not this tab", not "never color this project", so another tab in
+/// the same project is still colored.
+fn tab_color_is_derived(color: SelectedTabColor, previous_key: Option<&ProjectKey>) -> bool {
     match color {
         SelectedTabColor::Unset => true,
         SelectedTabColor::Cleared => false,
@@ -198,9 +191,15 @@ impl Workspace {
         if current_group_key.as_deref() == Some(key_storage.as_str()) {
             let was_awaiting_placement =
                 std::mem::replace(&mut self.tabs[tab_index].placed_by_automation, false);
+            // Colored here too, not only on the paths that move the tab: a tab
+            // born straight into its own project's group — inherited from the
+            // active tab, or reopened into it — is already where it belongs and
+            // reaches no other colouring path. Judged against the group's own
+            // key, so a colour the user set on this tab still survives.
+            let recolored = self.apply_derived_tab_color(tab_index, Some(&key), Some(&key), ctx);
             self.auto_grouping_state
                 .record_resolved_key(pane_group_id, key);
-            if was_awaiting_placement {
+            if was_awaiting_placement || recolored {
                 ctx.dispatch_global_action("workspace:save_app", ());
                 ctx.notify();
             }
@@ -306,17 +305,17 @@ impl Workspace {
     /// Only for single-tab creation: a group made from a multi-tab selection
     /// has no one project to adopt, and stays an ordinary manual group.
     ///
-    /// `replaced` is the group the tab left, when creating this one emptied and
-    /// destroyed it. "New group from this tab" run on the sole member of an
-    /// automatic group takes that shape: the old group is pruned and this one
-    /// takes over the same project, so the colour has to come across with the
-    /// key or the user's own colour dies with the group and automation paints
-    /// its own over the replacement.
+    /// `previous_key` is the key of the group the tab left, captured before
+    /// creating this one possibly emptied and pruned it. It is what judges the
+    /// colour the tab still carries: run on the sole member of its own
+    /// project's group, "new group from this tab" replaces one group with
+    /// another for the same project, and the tab must keep a colour the user
+    /// chose there rather than have automation launder it into its own.
     pub(super) fn adopt_project_key_for_new_group(
         &mut self,
         group_id: TabGroupId,
         pane_group_id: EntityId,
-        replaced: Option<ReplacedGroupColor>,
+        previous_key: Option<ProjectKey>,
         ctx: &mut ViewContext<Self>,
     ) {
         if !self.auto_grouping_enabled(ctx) {
@@ -352,23 +351,13 @@ impl Workspace {
         if let Some(group) = self.tab_groups.get_mut(&group_id) {
             group.name = Some(name);
         }
-        // Carry the destroyed group's colour over before deriving, so the same
-        // provenance rule decides: a colour the user set or cleared survives
-        // the replacement, and one automation had derived is re-derived for the
-        // key this group now holds.
-        // Gated on the colour setting so the manual path keeps its own
-        // behaviour — with colouring off a new group is uncoloured, exactly as
-        // it was before automation had any say over colour.
-        let previous_key = match replaced.filter(|_| self.auto_group_colors_enabled(ctx)) {
-            Some(replaced) => {
-                if let Some(group) = self.tab_groups.get_mut(&group_id) {
-                    group.color = replaced.color;
-                }
-                replaced.key
-            }
-            None => None,
-        };
-        self.apply_derived_group_color(group_id, &key, previous_key.as_ref(), ctx);
+        // The tab keeps the colour it walked in with; only its provenance is
+        // re-judged, against the key of the group it left. A colour the user set
+        // or cleared there survives the replacement, and one automation derived
+        // is re-derived for the key this group now holds.
+        if let Some(tab_index) = self.tab_index_for_pane_group(pane_group_id) {
+            self.apply_derived_tab_color(tab_index, Some(&key), previous_key.as_ref(), ctx);
+        }
         self.requalify_derived_group_names();
 
         // Re-attaches through the ordinary derivation rather than by writing
@@ -378,16 +367,14 @@ impl Workspace {
         self.reconcile_tab_auto_group(pane_group_id, Some(key), ctx);
     }
 
-    /// The colour and key of a group about to be destroyed, for
-    /// [`Workspace::adopt_project_key_for_new_group`] to carry across.
+    /// The project key of a group a tab is about to leave, for
+    /// [`Workspace::adopt_project_key_for_new_group`] to judge that tab's colour
+    /// against.
     ///
-    /// Call before pruning; a group that no longer exists yields `None`.
-    pub(crate) fn replaced_group_color(&self, group_id: TabGroupId) -> Option<ReplacedGroupColor> {
-        let group = self.tab_groups.get(&group_id)?;
-        Some(ReplacedGroupColor {
-            color: group.color,
-            key: group_project_key(group),
-        })
+    /// Call before the move; leaving may prune the group, and a group that no
+    /// longer exists yields `None`.
+    pub(crate) fn project_key_of_group(&self, group_id: TabGroupId) -> Option<ProjectKey> {
+        group_project_key(self.tab_groups.get(&group_id)?)
     }
 
     /// Appends the tab to the end of `group_id`'s contiguous run.
@@ -403,17 +390,69 @@ impl Workspace {
         // Computed before membership changes, so the slot is past the group's
         // existing members rather than past the tab we are about to add.
         let target = self.index_after_group(group_id).unwrap_or(self.tabs.len());
+        // Recolored before the move, while `tab_index` still addresses this tab:
+        // the color depends on which group the tab joins, never on where it
+        // lands in the strip.
+        let previous_key = self.project_key_of_tabs_group(tab_index);
+        let key = self.tab_groups.get(&group_id).and_then(group_project_key);
+        self.apply_derived_tab_color(tab_index, key.as_ref(), previous_key.as_ref(), ctx);
         self.assign_tab_to_group(tab_index, Some(group_id), ctx);
         self.move_tab_to_index(tab_index, target, ctx);
     }
 
-    /// Gives `group_id` the color `key` derives, unless the color it carries
-    /// now is the user's.
+    /// The project key of the group the tab at `tab_index` sits in, which is
+    /// what any color already on that tab would have been derived from.
+    pub(super) fn project_key_of_tabs_group(&self, tab_index: usize) -> Option<ProjectKey> {
+        let group_id = self.tabs.get(tab_index)?.group_id?;
+        group_project_key(self.tab_groups.get(&group_id)?)
+    }
+
+    /// Gives the tab at `tab_index` the color `key` derives, unless the color it
+    /// carries now is the user's.
     ///
-    /// `previous_key` is the key the current color would have been derived
-    /// from: the group's key before a re-key, and `None` for a group that has
-    /// not carried one.
-    fn apply_derived_group_color(
+    /// `key` is `None` when the tab is leaving automation's reach — ungrouped by
+    /// hand, or moved into a group carrying no project. Automation then takes
+    /// its color back off rather than replacing it, so a detached tab stops
+    /// wearing the project it left instead of advertising one it is no longer
+    /// in. `Unset` rather than `Cleared`, so the tab falls back through to its
+    /// directory color exactly as an untouched tab does.
+    ///
+    /// `previous_key` is the key the color it carries now would have been
+    /// derived from: the key of the group it is leaving, and `None` for a tab
+    /// that was in no keyed group.
+    /// Returns whether the tab's colour actually changed, so the callers that
+    /// are not already saving and notifying for a move can do so only when
+    /// there is something to save.
+    fn apply_derived_tab_color(
+        &mut self,
+        tab_index: usize,
+        key: Option<&ProjectKey>,
+        previous_key: Option<&ProjectKey>,
+        ctx: &warpui::AppContext,
+    ) -> bool {
+        if !self.auto_group_colors_enabled(ctx) {
+            return false;
+        }
+        let color = match key {
+            Some(key) => SelectedTabColor::Color(project_key::derived_color(key)),
+            None => SelectedTabColor::Unset,
+        };
+        let Some(tab) = self.tabs.get_mut(tab_index) else {
+            return false;
+        };
+        if !tab_color_is_derived(tab.selected_color, previous_key) || tab.selected_color == color {
+            return false;
+        }
+        tab.selected_color = color;
+        true
+    }
+
+    /// Repaints every member of `group_id` for `key`.
+    ///
+    /// For the transitions that change what a whole group stands for — a re-key,
+    /// or the sweep — rather than the ones that move a single tab between
+    /// groups.
+    fn apply_derived_color_to_group_members(
         &mut self,
         group_id: TabGroupId,
         key: &ProjectKey,
@@ -423,12 +462,26 @@ impl Workspace {
         if !self.auto_group_colors_enabled(ctx) {
             return;
         }
-        let color = project_key::derived_color(key);
-        if let Some(group) = self.tab_groups.get_mut(&group_id)
-            && group_color_is_derived(group.color, previous_key)
-        {
-            group.color = SelectedTabColor::Color(color);
+        let members: Vec<usize> = group_member_indices(&self.tabs, group_id).collect();
+        for tab_index in members {
+            self.apply_derived_tab_color(tab_index, Some(key), previous_key, ctx);
         }
+    }
+
+    /// Takes automation's color back off a tab that is leaving `group_id`,
+    /// leaving a color the user set or cleared alone.
+    ///
+    /// The manual ungroup paths call this: automation itself never strands a
+    /// tab outside a group, so without it the only way to lose a derived color
+    /// would be to clear it by hand.
+    pub(super) fn clear_derived_tab_color_on_leaving(
+        &mut self,
+        tab_index: usize,
+        group_id: TabGroupId,
+        ctx: &warpui::AppContext,
+    ) {
+        let previous_key = self.tab_groups.get(&group_id).and_then(group_project_key);
+        self.apply_derived_tab_color(tab_index, None, previous_key.as_ref(), ctx);
     }
 
     /// Points an existing group at `key`, keeping a name the user set.
@@ -467,7 +520,9 @@ impl Workspace {
                 group.name = Some(name);
             }
         }
-        self.apply_derived_group_color(group_id, key, previous_key.as_ref(), ctx);
+        // Every member follows the key the group now carries: a re-key changes
+        // what the whole group stands for, not where any one tab sits.
+        self.apply_derived_color_to_group_members(group_id, key, previous_key.as_ref(), ctx);
         self.requalify_derived_group_names();
     }
 
@@ -503,9 +558,14 @@ impl Workspace {
         if let Some(group) = self.tab_groups.get_mut(&group_id) {
             group.name = Some(name);
         }
-        self.apply_derived_group_color(group_id, key, None, ctx);
         self.requalify_derived_group_names();
 
+        // Recolored before the move, while `tab_index` still addresses this tab.
+        // The key it is leaving is what judges the color it carries now: a tab
+        // walking from one project's group into a group built for another must
+        // give up the first project's color.
+        let previous_key = self.project_key_of_tabs_group(tab_index);
+        self.apply_derived_tab_color(tab_index, Some(key), previous_key.as_ref(), ctx);
         self.assign_tab_to_group(tab_index, Some(group_id), ctx);
         self.move_tab_to_index(tab_index, target, ctx);
     }
@@ -921,14 +981,14 @@ impl Workspace {
         }
     }
 
-    /// The color equivalent of the enable sweep: paints the automatic groups
-    /// the window already has, which are otherwise only colored at the moment
-    /// they are keyed.
+    /// The color equivalent of the enable sweep: paints the members of the
+    /// automatic groups the window already has, which are otherwise only
+    /// colored at the moment their tab joins or their group is keyed.
     ///
     /// Turning the setting back off runs nothing, exactly as turning the mode
     /// itself off dissolves nothing (R3): what automation put there stays, and
     /// the user can clear or change any of it by hand.
-    pub(crate) fn sweep_tab_group_colors(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn sweep_auto_tab_colors(&mut self, ctx: &mut ViewContext<Self>) {
         if !self.auto_group_colors_enabled(ctx) {
             return;
         }
@@ -939,16 +999,16 @@ impl Workspace {
             .collect();
 
         for (group_id, key) in keyed {
-            // A group's current key is the only basis for provenance available
-            // here, and that is lossy in one direction. A group re-keyed while
-            // the setting was off still wears a color derived from the key it
-            // used to hold; nothing records that key, so the color reads as the
-            // user's and is left alone. The group then keeps another project's
-            // color permanently — no later pass revisits it, and the only way
-            // back under automation is to clear the color by hand. Erring this
-            // way is deliberate: the alternative mistakes a user's color for
-            // automation's, which R16 forbids outright.
-            self.apply_derived_group_color(group_id, &key, Some(&key), ctx);
+            // The group's current key is the only basis for provenance available
+            // here, and that is lossy in one direction. A tab that moved between
+            // projects while the setting was off still wears a color derived
+            // from the key it used to sit under; nothing records that key, so
+            // the color reads as the user's and is left alone. The tab then
+            // keeps another project's color permanently — no later pass revisits
+            // it, and the only way back under automation is to clear the color
+            // by hand. Erring this way is deliberate: the alternative mistakes a
+            // user's color for automation's, which R16 forbids outright.
+            self.apply_derived_color_to_group_members(group_id, &key, Some(&key), ctx);
         }
 
         ctx.dispatch_global_action("workspace:save_app", ());
