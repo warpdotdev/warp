@@ -19,7 +19,10 @@ use crate::tui_builder::TuiUiBuilder;
 /// circle row. Fixed rather than reactive to the live terminal width,
 /// matching the rest of this read-only-menu family (see
 /// `status_menu`/`shortcuts`, which format rows to a fixed label width too).
-const BAR_WIDTH: usize = 60;
+/// Sized to reach the panel's own right edge in the design's 80-column
+/// reference layout: 80 - 4 (the session's outer `with_padding_x(2)`) - 2
+/// (this panel's own `with_padding_x(1)`) = 74.
+const BAR_WIDTH: usize = 74;
 /// Width of the leading label column in a `label   value` row.
 const LABEL_WIDTH: usize = 40;
 /// Credits represented by a single pay-as-you-go circle.
@@ -60,9 +63,11 @@ fn credit_bar_row(
         (used as f64 / limit as f64).clamp(0.0, 1.0)
     };
     let filled = ((ratio * BAR_WIDTH as f64).round() as usize).min(BAR_WIDTH);
+    // Both the filled and empty segments are solid blocks in the design
+    // (distinguished by color, not by a lighter/dithered glyph).
     let mut spans = vec![("█".repeat(filled), filled_style)];
     if filled < BAR_WIDTH {
-        spans.push(("░".repeat(BAR_WIDTH - filled), empty_style));
+        spans.push(("█".repeat(BAR_WIDTH - filled), empty_style));
     }
     spans_row(spans)
 }
@@ -124,17 +129,17 @@ fn credit_section(
     filled_style: TuiStyle,
     builder: &TuiUiBuilder,
 ) -> Vec<Box<dyn TuiElement>> {
+    let primary_bold = builder.primary_text_style().add_modifier(Modifier::BOLD);
     let primary = builder.primary_text_style();
-    let muted = builder.muted_text_style();
     let empty = builder.dim_text_style();
     let remaining = (bar.limit - bar.used).max(0);
     vec![
-        label_value_row(title, &format!("{remaining} remaining"), primary),
+        label_value_row(title, &format!("{remaining} remaining"), primary_bold),
         credit_bar_row(bar.used, bar.limit, filled_style, empty),
         label_value_row(
             &format!("Credits used: {}/{}", bar.used, bar.limit),
             &bar.note,
-            muted,
+            primary,
         ),
     ]
 }
@@ -186,6 +191,7 @@ pub(super) fn render(
 
     // Title on the left, metadata (and the admin-only manage-billing link)
     // flush right on the same row, matching the design's single header line.
+    // The leading glyph is a pie-chart icon, per the design.
     let mut metadata = format!("Plan: {}", info.plan_name);
     if let Some(team_name) = &info.team_name {
         metadata.push_str(&format!("   Team: {team_name}"));
@@ -201,12 +207,18 @@ pub(super) fn render(
                 manage_billing_url,
             ));
     }
+    // The header row gets its own, slightly brighter background than the rest
+    // of the panel body, matching the design's distinct title-bar treatment.
     column = column.child(
-        TuiFlex::row()
-            .child(plain_row("Usage", primary_bold))
-            .flex_child(TuiText::new(String::new()).finish())
-            .child(trailing.finish())
-            .finish(),
+        TuiContainer::new(
+            TuiFlex::row()
+                .child(plain_row("\u{25D1} Usage", primary_bold))
+                .flex_child(TuiText::new(String::new()).finish())
+                .child(trailing.finish())
+                .finish(),
+        )
+        .with_background(builder.read_only_menu_header_background())
+        .finish(),
     );
 
     if let Some(base) = &info.base_credits {
@@ -249,11 +261,17 @@ pub(super) fn render(
             .child(plain_row("(ctrl+o)", accent))
             .finish(),
     );
-    column = column.child(plain_row("Esc to exit", dim));
 
-    TuiContainer::new(column.finish())
+    let panel = TuiContainer::new(column.finish())
         .with_padding_x(1)
         .with_background(builder.read_only_menu_background())
+        .finish();
+
+    // "Esc to exit" sits outside the panel's background, on the plain
+    // terminal background below it, per the design.
+    TuiFlex::column()
+        .child(panel)
+        .child(plain_row("Esc to exit", dim))
         .finish()
 }
 

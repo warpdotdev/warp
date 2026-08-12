@@ -2,7 +2,7 @@ use warp::tui_export::{Appearance, TuiUsageCreditBar, TuiUsagePayAsYouGo, TuiUsa
 use warpui::{App, EntityIdMap};
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
-    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
+    Color, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
     TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
 };
 
@@ -78,43 +78,86 @@ fn render_snapshot_lines(snapshot: TuiUsageSnapshot) -> Vec<String> {
     })
 }
 
+/// Counts cells in `buffer`'s row 0 whose foreground matches `style`'s.
+/// The filled and empty bar segments both render as solid blocks now (per
+/// the design), so tests distinguish them by color instead of by glyph.
+fn count_cells_with_fg(buffer: &TuiBuffer, width: usize, style: TuiStyle) -> usize {
+    let fg = style.fg.expect("test styles always set a foreground");
+    (0..width as u16)
+        .filter(|&x| buffer[(x, 0)].fg == fg)
+        .count()
+}
+
 #[test]
 fn credit_bar_row_is_empty_at_zero_percent() {
-    let row = credit_bar_row(0, 1500, TuiStyle::default(), TuiStyle::default());
-    let lines = App::test((), |app| async move {
+    let filled_style = TuiStyle::default().fg(Color::Red);
+    let empty_style = TuiStyle::default().fg(Color::Blue);
+    let mut row = credit_bar_row(0, 1500, filled_style, empty_style);
+    let buffer = App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        lines_of(&app, row, TuiSize::new(BAR_WIDTH as u16, 1))
+        render_buffer(&app, row.as_mut(), TuiSize::new(BAR_WIDTH as u16, 1))
     });
-    let line = &lines[0];
-    assert_eq!(count(line, '█'), 0);
-    assert_eq!(count(line, '░'), BAR_WIDTH);
+    let line = buffer.to_lines()[0].trim_end().to_owned();
+    assert_eq!(
+        count(&line, '█'),
+        BAR_WIDTH,
+        "the bar is solid blocks throughout"
+    );
+    assert_eq!(count_cells_with_fg(&buffer, BAR_WIDTH, filled_style), 0);
+    assert_eq!(
+        count_cells_with_fg(&buffer, BAR_WIDTH, empty_style),
+        BAR_WIDTH
+    );
 }
 
 #[test]
 fn credit_bar_row_reflects_partial_percentage() {
     // 100/500 = 20% used, matching the designer-confirmed rule that the bar
     // fill is a strict function of credits used / limit.
-    let row = credit_bar_row(100, 500, TuiStyle::default(), TuiStyle::default());
-    let lines = App::test((), |app| async move {
+    let filled_style = TuiStyle::default().fg(Color::Red);
+    let empty_style = TuiStyle::default().fg(Color::Blue);
+    let mut row = credit_bar_row(100, 500, filled_style, empty_style);
+    let buffer = App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        lines_of(&app, row, TuiSize::new(BAR_WIDTH as u16, 1))
+        render_buffer(&app, row.as_mut(), TuiSize::new(BAR_WIDTH as u16, 1))
     });
-    let line = &lines[0];
+    let line = buffer.to_lines()[0].trim_end().to_owned();
     let expected_filled = (BAR_WIDTH as f64 * 0.2).round() as usize;
-    assert_eq!(count(line, '█'), expected_filled);
-    assert_eq!(count(line, '░'), BAR_WIDTH - expected_filled);
+    assert_eq!(
+        count(&line, '█'),
+        BAR_WIDTH,
+        "the bar is solid blocks throughout"
+    );
+    assert_eq!(
+        count_cells_with_fg(&buffer, BAR_WIDTH, filled_style),
+        expected_filled
+    );
+    assert_eq!(
+        count_cells_with_fg(&buffer, BAR_WIDTH, empty_style),
+        BAR_WIDTH - expected_filled
+    );
 }
 
 #[test]
 fn credit_bar_row_is_full_at_limit() {
-    let row = credit_bar_row(1500, 1500, TuiStyle::default(), TuiStyle::default());
-    let lines = App::test((), |app| async move {
+    let filled_style = TuiStyle::default().fg(Color::Red);
+    let empty_style = TuiStyle::default().fg(Color::Blue);
+    let mut row = credit_bar_row(1500, 1500, filled_style, empty_style);
+    let buffer = App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        lines_of(&app, row, TuiSize::new(BAR_WIDTH as u16, 1))
+        render_buffer(&app, row.as_mut(), TuiSize::new(BAR_WIDTH as u16, 1))
     });
-    let line = &lines[0];
-    assert_eq!(count(line, '█'), BAR_WIDTH);
-    assert_eq!(count(line, '░'), 0);
+    let line = buffer.to_lines()[0].trim_end().to_owned();
+    assert_eq!(
+        count(&line, '█'),
+        BAR_WIDTH,
+        "the bar is solid blocks throughout"
+    );
+    assert_eq!(
+        count_cells_with_fg(&buffer, BAR_WIDTH, filled_style),
+        BAR_WIDTH
+    );
+    assert_eq!(count_cells_with_fg(&buffer, BAR_WIDTH, empty_style), 0);
 }
 
 #[test]
@@ -226,10 +269,57 @@ fn header_places_title_metadata_and_manage_billing_link_on_one_row() {
 
     let lines = render_snapshot_lines(snapshot);
     let header = &lines[0];
-    assert!(header.contains("Usage"), "{header}");
+    assert!(header.contains("\u{25D1} Usage"), "{header}");
     assert!(header.contains("Plan: Build"), "{header}");
     assert!(header.contains("Team: Product Eng"), "{header}");
     assert!(header.contains("Manage billing and usage"), "{header}");
+}
+
+#[test]
+fn esc_to_exit_row_has_no_panel_background() {
+    // "Esc to exit" must render outside the panel's background container, on
+    // the plain terminal background — unlike every row inside the panel.
+    let mut snapshot = base_snapshot();
+    snapshot.base_credits = Some(credit_bar(1500, 1500));
+
+    let buffer = App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let mut element = app.read(|ctx| {
+            let builder = TuiUiBuilder::from_app(ctx);
+            render(
+                &snapshot,
+                &MouseStateHandle::default(),
+                &MouseStateHandle::default(),
+                "https://example.com/upgrade",
+                &builder,
+            )
+        });
+        render_buffer(&app, element.as_mut(), TuiSize::new(110, 30))
+    });
+    let lines: Vec<String> = buffer
+        .to_lines()
+        .into_iter()
+        .map(|line| line.trim_end().to_owned())
+        .collect();
+    let body_row = lines
+        .iter()
+        .position(|line| line.contains("Base credits"))
+        .expect("base credits row should render") as u16;
+    let esc_row = lines
+        .iter()
+        .position(|line| line.trim() == "Esc to exit")
+        .expect("Esc to exit row should render") as u16;
+
+    assert_ne!(
+        buffer[(0, body_row)].bg,
+        Color::Reset,
+        "sanity check: rows inside the panel do have a background"
+    );
+    assert_eq!(
+        buffer[(0, esc_row)].bg,
+        Color::Reset,
+        "Esc to exit should render outside the panel's background"
+    );
 }
 
 #[test]

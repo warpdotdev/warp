@@ -288,6 +288,20 @@ impl TuiUiBuilder {
         cell_color(self.base_background().blend(&accent.with_opacity(10)))
     }
 
+    /// A second accent-blend step over [`Self::read_only_menu_background`],
+    /// for a title-bar row that should read as visually distinct from (and,
+    /// per the design, a touch brighter than) the rest of a read-only menu's
+    /// body — e.g. the `/usage` panel's "Usage" header row. Mirrors the
+    /// double-blend used by [`Self::input_background`].
+    pub(crate) fn read_only_menu_header_background(&self) -> Color {
+        let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
+        cell_color(
+            self.base_background()
+                .blend(&accent.with_opacity(10))
+                .blend(&accent.with_opacity(10)),
+        )
+    }
+
     /// Pale-green overlay behind shell command rows in the transcript.
     /// Pre-blended because terminal cells cannot preserve alpha.
     pub(crate) fn shell_command_background(&self) -> Color {

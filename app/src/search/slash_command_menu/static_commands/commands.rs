@@ -756,7 +756,7 @@ pub static CONTINUE_LOCALLY: LazyLock<StaticCommand> = LazyLock::new(|| {
 
 pub const USAGE: StaticCommand = StaticCommand {
     name: "/usage",
-    description: "Show base credit, add-on credit, and pay-as-you-go usage",
+    description: "View account and credit usage",
     kind: SlashCommandKind::Usage,
     supported_surfaces: SlashCommandSurfaces::GuiAndTui {
         icon_path: "bundled/svg/bar-chart-04.svg",
