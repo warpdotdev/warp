@@ -241,7 +241,7 @@ impl TerminalView {
                 );
             }
             UseAgentToolbarEvent::ToggleFileExplorer(cli_agent) => {
-                self.toggle_file_tree(Some((*cli_agent).into()), ctx);
+                self.toggle_file_tree(cli_agent.map(Into::into), ctx);
             }
             UseAgentToolbarEvent::StartRemoteControl { scrollback_type } => {
                 self.auto_stop_sharing_on_cli_end =
@@ -1345,8 +1345,9 @@ pub enum UseAgentToolbarEvent {
     InsertIntoRichInput(String),
     /// Toggle the code review pane (from CLI agent view).
     ToggleCodeReviewPane(CLIAgent),
-    /// Toggle the file explorer (from CLI agent view).
-    ToggleFileExplorer(CLIAgent),
+    /// Toggle the file explorer. `None` when triggered from the native agent
+    /// footer rather than a CLI agent session.
+    ToggleFileExplorer(Option<CLIAgent>),
     /// Start remote control (one-click share without modal).
     StartRemoteControl {
         scrollback_type: SharedSessionScrollbackType,
