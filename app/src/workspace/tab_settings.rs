@@ -515,7 +515,7 @@ define_settings_group!(TabSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "appearance.tabs.auto_group_tab_colors",
-        description: "Whether automatically created tab groups take a color derived from the project, so one project always reads the same.",
+        description: "Whether the tabs in an automatically created group take a color derived from the project, so one project always reads the same.",
     },
     use_vertical_tabs: UseVerticalTabs {
         type: bool,

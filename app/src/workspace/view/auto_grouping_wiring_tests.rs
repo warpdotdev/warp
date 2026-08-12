@@ -41,6 +41,15 @@ fn enable_auto_grouping(app: &mut App) {
     });
 }
 
+/// Turns the mode on together with its colouring, for the cases that follow a
+/// colour across a transition the wiring owns.
+fn enable_auto_grouping_and_colors(app: &mut App) {
+    TabSettings::handle(&*app).update(app, |settings, ctx| {
+        settings.auto_group_tabs.set_value(true, ctx).unwrap();
+        settings.auto_group_tab_colors.set_value(true, ctx).unwrap();
+    });
+}
+
 fn disable_auto_grouping(app: &mut App) {
     TabSettings::handle(&*app).update(app, |settings, ctx| {
         settings.auto_group_tabs.set_value(false, ctx).unwrap();
@@ -710,6 +719,65 @@ fn tab_born_into_a_manual_group_stays_there() {
             assert!(
                 !workspace.tabs[newborn_index].placed_by_automation,
                 "and it must not be left queued for placement"
+            );
+        });
+    });
+}
+
+// Pinning hands automation's colour back along with the group membership it
+// belongs to. That is what keeps the round trip honest: outside a group there is
+// no key to judge the colour's provenance against, so a colour carried across
+// the pin would read as the user's for ever and the tab would stay the colour of
+// wherever it was pinned from.
+#[test]
+fn a_tab_unpinned_into_another_project_takes_that_projects_color() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+    let _pinned_tabs_guard = FeatureFlag::PinnedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_grouping_and_colors(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 2, ctx);
+            let anchor = anchor_pane(workspace, 0, ctx);
+            let pane_group_id = workspace.tabs[0].pane_group.id();
+            set_pane_directory(workspace, anchor, SCRATCH);
+            directory_changed(workspace, 0, ctx);
+
+            let grouped = tab_index_of(workspace, pane_group_id);
+            assert_eq!(
+                workspace.tabs[grouped].selected_color,
+                SelectedTabColor::Color(project_key::derived_color(&key(SCRATCH))),
+                "a grouped tab wears its project's colour"
+            );
+
+            workspace.pin_tab(grouped, ctx);
+
+            let pinned = tab_index_of(workspace, pane_group_id);
+            assert_eq!(
+                workspace.tabs[pinned].selected_color,
+                SelectedTabColor::Unset,
+                "the colour goes back with the group membership"
+            );
+
+            // Moved while pinned, so unpinning has to land it in the new
+            // project's group wearing the new project's colour.
+            set_pane_directory(workspace, anchor, NOTES);
+            workspace.unpin_tab(pinned, ctx);
+
+            let unpinned = tab_index_of(workspace, pane_group_id);
+            assert_eq!(
+                group_key_of_tab(workspace, unpinned).as_deref(),
+                Some(NOTES),
+                "unpinning reconciles the tab into the project it is in now"
+            );
+            assert_eq!(
+                workspace.tabs[unpinned].selected_color,
+                SelectedTabColor::Color(project_key::derived_color(&key(NOTES))),
+                "and it takes that project's colour, not the one it was pinned with"
             );
         });
     });

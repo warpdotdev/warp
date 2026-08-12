@@ -99,15 +99,16 @@ the implementation plan.
     adopts that tab's project key.
 15. Ungrouping a group leaves its former members ungrouped and detached; while the mode is
     on they stay ungrouped until the user places them somewhere.
-16. Automation never overwrites a manual edit to a group; a group the user renamed or
-    recolored keeps those values, including through a re-key under invariant 12.
+16. Automation never overwrites a manual edit; a group the user renamed or recolored keeps
+    those values, including through a re-key under invariant 12, and a tab the user
+    recolored keeps that color through every transition in invariants 28 to 30.
 
 ### Surfaces and persistence
 
 17. The mode applies wherever tab groups render — both the vertical tabs panel and the
     horizontal tab bar.
-18. A group created by automation survives a restart carrying its project key, name, color,
-    collapse state and pin state.
+18. A group created by automation survives a restart carrying its project key, name,
+    collapse state and pin state, and its members survive carrying their derived color.
 19. The mode is toggled from the tabs settings and from the tab bar's context menu.
 
 ### Coexistence and edge cases
@@ -130,6 +131,24 @@ the implementation plan.
     exists; otherwise its restored placement stands and the ordinary manual-override rule
     applies.
 27. Automation never opens the group rename editor.
+
+### Color
+
+Behind a second setting, off by default, that does nothing unless the mode itself is on.
+
+28. With coloring on, each tab in an automatic group takes a color derived from that group's
+    project key, so one repository always reads the same color everywhere and across
+    restarts. The group container is never colored by automation — its color stays the
+    user's to set.
+29. A tab takes its new project's color when it moves into another project's group, and a
+    re-key under invariant 12 recolors every member of the re-keyed group.
+30. A tab taken out of its group loses the color automation derived for it — by being removed
+    from the group, by the group being ungrouped, or by being pinned under invariant 23 —
+    and none of the three removes a color the user set or cleared. Handing the color back on
+    pin is what makes the pin round trip honest: a tab unpinned into a different project
+    takes that project's color rather than keeping the one it was pinned with.
+31. Turning the coloring off repaints nothing, exactly as turning the mode itself off
+    dissolves nothing under invariant 3.
 
 ## Key flows
 

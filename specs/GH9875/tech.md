@@ -198,6 +198,42 @@ ungrouped, unpinned tabs; disabling does nothing.
   and labeled so its window-wide scope reads from the text (its neighbors all act on one tab).
   Both bars use this menu, so one entry serves invariant 17.
 
+### 7. Derived color (invariants 28–31)
+
+- **What is painted** — the group's *member tabs* (`TabData::selected_color`), never the
+  group container. Both bars already render a member's own color independently of its
+  group's: `compute_tab_group_color_mode` treats a tab's `selected_color` as an override for
+  the whole tab "whether or not it's in a group", and the horizontal bar passes `tab.color()`
+  per member. So no rendering change is needed, and a group's color stays entirely the
+  user's.
+- **The color itself** — FNV-1a over the project key, written out rather than taken from
+  `std::hash`, whose `DefaultHasher` is not stability-guaranteed and whose `HashMap` hasher
+  is seeded per process; either would repaint everything on restart. The key alone feeds the
+  hash, never the display name or the window's contents, so two checkouts of one repository
+  agree and a name qualified against a collision does not shift color. Six palette entries,
+  nothing spacing the hash out, so two projects collide about one time in six; de-colliding
+  within a window was rejected because it makes a project's color depend on what else is
+  open, which is the one property this is for.
+- **Stored, not derived at render time** — deriving on each render would make invariant 30
+  free and invariant 31 impossible, and would have to thread group identity into
+  `TabData::color()` and every one of its call sites. Storing keeps the change inside
+  automation and reuses the provenance model the name rules already use.
+- **Provenance** — `tab_color_is_derived`: a color equal to what the tab's *previous* key
+  derives was automation's and may be replaced; `Cleared` and anything else is the user's.
+  The previous key is read off the group the tab is leaving rather than from the resolver's
+  `last_resolved_keys`, which is in-memory only — after a restart every colored tab would
+  otherwise read as the user's and freeze.
+- **Where it fires** — the paths that change which project a tab belongs to: joining a keyed
+  group, being put in a newly created one, a sole-member re-key (all members), adopting a key
+  for a replacement group, the already-in-the-right-group branch of reconcile (a tab born
+  into its project's group reaches no other path), and the enable sweep. Plus the three
+  paths that take a tab out of a group — `remove_tab_from_group`, `ungroup_tabs` and
+  `pin_tab` — which hand the color back. `pin_tab` is easy to miss because it clears
+  `group_id` inline rather than going through `remove_tab_from_group`, and missing it is not
+  merely cosmetic: a pinned tab has no group, so nothing can judge its color's provenance,
+  and a color kept across the pin would be frozen as the user's for the rest of the tab's
+  life.
+
 ## Testing and validation
 
 | Invariants | How they are verified |

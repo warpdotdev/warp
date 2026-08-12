@@ -5919,7 +5919,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ToggleTabIndicators => "Toggle Tab Indicators",
             Self::TogglePreserveActiveTabColor => "Toggle Preserve Active Tab Color",
             Self::ToggleAutoGroupTabs => "Toggle Automatic Tab Grouping",
-            Self::ToggleAutoGroupTabColors => "Toggle Automatic Tab Group Colors",
+            Self::ToggleAutoGroupTabColors => "Toggle Automatic Grouped Tab Colors",
             Self::ShowSubshellBanner => "Show Subshell Banner",
             Self::DeclineSubshellBootstrap => "Decline Subshell Bootstrap",
             Self::TriggerSubshellBootstrap => "Trigger Subshell Bootstrap",
@@ -6578,7 +6578,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Enabled or disabled automatically grouping tabs by the project they are in"
             }
             Self::ToggleAutoGroupTabColors => {
-                "Enabled or disabled giving automatically created tab groups a color derived from their project"
+                "Enabled or disabled giving the tabs in an automatically created group a color derived from their project"
             }
             Self::ShowSubshellBanner => {
                 "Displayed the banner asking whether Warp should Warpify the current session via Warp's subshell wrapper"

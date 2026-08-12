@@ -3900,14 +3900,14 @@ impl Workspace {
                 // every group stays exactly as it is, as an ordinary manual
                 // group.
                 self.sweep_tabs_for_auto_grouping(ctx);
-                // Groups the sweep did not have to create — ones an earlier run
-                // of the mode left behind — are keyed already and so are never
-                // reached by the coloring at keying time.
-                self.sweep_tab_group_colors(ctx);
+                // Tabs the sweep did not have to move — ones an earlier run of
+                // the mode left in their project's group — are placed already
+                // and so are never reached by the coloring at join time.
+                self.sweep_auto_tab_colors(ctx);
                 ctx.notify();
             }
             TabSettingsChangedEvent::AutoGroupTabColors { .. } => {
-                self.sweep_tab_group_colors(ctx);
+                self.sweep_auto_tab_colors(ctx);
                 ctx.notify();
             }
         }
@@ -7467,27 +7467,19 @@ impl Workspace {
             .unwrap_or(tab_index);
         self.set_active_tab_index(new_active, ctx);
 
-        // Read before the prune below destroys it: when the tab was the sole
-        // member, this group is about to disappear and the new one takes over
-        // its project, so its colour has to come across with the key.
-        let replaced = previous_group_id.and_then(|gid| self.replaced_group_color(gid));
+        // Read before the prune below can destroy it: it is the key the colour
+        // the tab still carries would have been derived from, and so what
+        // decides whether that colour was automation's or the user's.
+        let previous_key = previous_group_id.and_then(|gid| self.project_key_of_group(gid));
 
         if let Some(prev_group_id) = previous_group_id {
             self.prune_empty_tab_group(prev_group_id, ctx);
         }
 
-        // Only a group the prune actually destroyed is being replaced. One that
-        // still holds other members keeps its own colour, and the new group has
-        // nothing of the user's to inherit.
-        let replaced = match previous_group_id {
-            Some(previous) if !self.tab_groups.contains_key(&previous) => replaced,
-            _ => None,
-        };
-
         // A group made from one tab is that tab's project's group, so the tab
         // is back under automation from here on (R14). No-op while the mode is
         // off or the tab's project is unknown.
-        self.adopt_project_key_for_new_group(group_id, pane_group_id, replaced, ctx);
+        self.adopt_project_key_for_new_group(group_id, pane_group_id, previous_key, ctx);
 
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
@@ -7557,6 +7549,11 @@ impl Workspace {
             .index_after_group(previous_group_id)
             .map(|t| self.clamp_to_unpinned_region(&self.tabs, t));
 
+        // Before the membership is dropped, while the group it is leaving can
+        // still be read: a tab automation coloured for that project must not
+        // keep advertising it from outside the group.
+        self.clear_derived_tab_color_on_leaving(tab_index, previous_group_id, ctx);
+
         self.tabs[tab_index].group_id = None;
         // Leaving a group is a placement: the tab is now ungrouped *and*
         // detached, and stays that way until the user puts it somewhere.
@@ -7582,6 +7579,14 @@ impl Workspace {
         // pinned region when the group was pinned.
         let was_pinned = self.tab_groups.get(&group_id).is_some_and(|g| g.pinned);
         let member_range = group_member_index_range(&self.tabs, group_id);
+
+        // Every member gives up a colour automation derived for this group's
+        // project, for the same reason one leaving on its own does. Done first,
+        // while the group is still there to judge provenance against.
+        let members: Vec<usize> = group_member_indices(&self.tabs, group_id).collect();
+        for tab_index in members {
+            self.clear_derived_tab_color_on_leaving(tab_index, group_id, ctx);
+        }
 
         for tab in &mut self.tabs {
             if tab.group_id == Some(group_id) {

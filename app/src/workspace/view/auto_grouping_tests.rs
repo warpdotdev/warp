@@ -675,9 +675,10 @@ fn reconciling_an_identity_that_no_longer_exists_is_a_no_op() {
     });
 }
 
-// Derived group colors. The decision table is the same one the name rules use —
+// Derived tab colors. The decision table is the same one the name rules use —
 // automation may replace what it put there and nothing else — so the cases live
-// beside them rather than in a module of their own.
+// beside them rather than in a module of their own. What automation colors is
+// the group's *members*; the group container itself is left to the user.
 
 /// Turns the mode and its coloring on through the settings the workspace reads.
 fn enable_auto_group_colors(app: &mut App) {
@@ -694,6 +695,19 @@ fn enable_auto_grouping_only(app: &mut App) {
     });
 }
 
+fn tab_color(workspace: &Workspace, tab_index: usize) -> SelectedTabColor {
+    workspace.tabs[tab_index].selected_color
+}
+
+/// The color of a tab a move has re-indexed, read back by the identity the tab
+/// keeps across the move.
+fn tab_color_by_identity(workspace: &Workspace, pane_group_id: EntityId) -> SelectedTabColor {
+    let tab_index = workspace
+        .tab_index_for_pane_group(pane_group_id)
+        .expect("the tab still exists");
+    tab_color(workspace, tab_index)
+}
+
 fn group_color(workspace: &Workspace, group_id: TabGroupId) -> SelectedTabColor {
     workspace
         .tab_groups
@@ -706,12 +720,14 @@ fn derived(path: &str) -> SelectedTabColor {
     SelectedTabColor::Color(project_key::derived_color(&key(path)))
 }
 
-/// Paints a group exactly as automation would have, so a later case can show
-/// what happens to a color automation owns.
-fn paint_as_automation(workspace: &mut Workspace, group_id: TabGroupId, path: &str) {
-    if let Some(group) = workspace.tab_groups.get_mut(&group_id) {
-        group.color = derived(path);
-    }
+/// Paints a tab exactly as automation would have, so a later case can show what
+/// happens to a color automation owns.
+fn paint_as_automation(workspace: &mut Workspace, tab_index: usize, path: &str) {
+    workspace.tabs[tab_index].selected_color = derived(path);
+}
+
+fn set_tab_color(workspace: &mut Workspace, tab_index: usize, color: SelectedTabColor) {
+    workspace.tabs[tab_index].selected_color = color;
 }
 
 /// A color automation would never have derived for `path`, for the cases that
@@ -725,7 +741,29 @@ fn color_the_user_would_have_picked(path: &str) -> AnsiColorIdentifier {
 }
 
 #[test]
-fn a_group_automation_creates_takes_its_projects_color() {
+fn a_tab_automation_groups_takes_its_projects_color() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_group_colors(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.tabs[0].placed_by_automation = true;
+
+            reconcile(workspace, 0, Some(API), ctx);
+
+            assert_eq!(tab_color(workspace, 0), derived(API));
+        });
+    });
+}
+
+// The point of the whole arrangement: the colour lands on the tabs, and the
+// group container it sits in is left for the user to colour or not.
+#[test]
+fn automation_never_colors_the_group_itself() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
     let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
 
@@ -740,13 +778,74 @@ fn a_group_automation_creates_takes_its_projects_color() {
             reconcile(workspace, 0, Some(API), ctx);
 
             let group_id = workspace.tabs[0].group_id.expect("the tab was grouped");
-            assert_eq!(group_color(workspace, group_id), derived(API));
+            assert_eq!(group_color(workspace, group_id), SelectedTabColor::Unset);
+        });
+    });
+}
+
+// The case this arrangement exists for: a tab that changes project takes the new
+// project's colour with it into the group it moves to.
+#[test]
+fn a_tab_moving_between_projects_takes_the_new_projects_color() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_group_colors(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 2, ctx);
+            keyed_group(workspace, API, &[0]);
+            let web_group = keyed_group(workspace, WEB, &[1]);
+            paint_as_automation(workspace, 0, API);
+            set_last_resolved_key(workspace, 0, API);
+            let moved = workspace.tabs[0].pane_group.id();
+
+            reconcile(workspace, 0, Some(WEB), ctx);
+
+            let moved_index = workspace
+                .tab_index_for_pane_group(moved)
+                .expect("the tab still exists");
+            assert_eq!(workspace.tabs[moved_index].group_id, Some(web_group));
+            assert_eq!(tab_color_by_identity(workspace, moved), derived(WEB));
         });
     });
 }
 
 #[test]
-fn a_rekeyed_group_takes_the_new_projects_color() {
+fn a_color_the_user_chose_survives_a_move_between_projects() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_group_colors(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 2, ctx);
+            keyed_group(workspace, API, &[0]);
+            keyed_group(workspace, WEB, &[1]);
+            let user_color = color_the_user_would_have_picked(API);
+            set_tab_color(workspace, 0, SelectedTabColor::Color(user_color));
+            set_last_resolved_key(workspace, 0, API);
+            let moved = workspace.tabs[0].pane_group.id();
+
+            reconcile(workspace, 0, Some(WEB), ctx);
+
+            assert_eq!(
+                tab_color_by_identity(workspace, moved),
+                SelectedTabColor::Color(user_color),
+                "a colour the user put on this tab must survive it changing project"
+            );
+        });
+    });
+}
+
+#[test]
+fn a_rekeyed_groups_members_take_the_new_projects_color() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
     let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
 
@@ -758,14 +857,14 @@ fn a_rekeyed_group_takes_the_new_projects_color() {
         workspace.update(&mut app, |workspace, ctx| {
             grow_to(workspace, 2, ctx);
             let api_group = keyed_group(workspace, API, &[0]);
-            paint_as_automation(workspace, api_group, API);
+            paint_as_automation(workspace, 0, API);
             set_last_resolved_key(workspace, 0, API);
 
             reconcile(workspace, 0, Some(WEB), ctx);
 
             // Re-keyed in place, so the same group now reads as the new project.
             assert_eq!(group_key(workspace, api_group).as_deref(), Some(WEB));
-            assert_eq!(group_color(workspace, api_group), derived(WEB));
+            assert_eq!(tab_color(workspace, 0), derived(WEB));
         });
     });
 }
@@ -784,18 +883,13 @@ fn a_color_the_user_chose_survives_a_rekey() {
             grow_to(workspace, 2, ctx);
             let api_group = keyed_group(workspace, API, &[0]);
             let user_color = color_the_user_would_have_picked(API);
-            if let Some(group) = workspace.tab_groups.get_mut(&api_group) {
-                group.color = SelectedTabColor::Color(user_color);
-            }
+            set_tab_color(workspace, 0, SelectedTabColor::Color(user_color));
             set_last_resolved_key(workspace, 0, API);
 
             reconcile(workspace, 0, Some(WEB), ctx);
 
             assert_eq!(group_key(workspace, api_group).as_deref(), Some(WEB));
-            assert_eq!(
-                group_color(workspace, api_group),
-                SelectedTabColor::Color(user_color)
-            );
+            assert_eq!(tab_color(workspace, 0), SelectedTabColor::Color(user_color));
         });
     });
 }
@@ -812,21 +906,19 @@ fn a_color_the_user_cleared_stays_cleared() {
 
         workspace.update(&mut app, |workspace, ctx| {
             grow_to(workspace, 2, ctx);
-            let api_group = keyed_group(workspace, API, &[0]);
-            if let Some(group) = workspace.tab_groups.get_mut(&api_group) {
-                group.color = SelectedTabColor::Cleared;
-            }
+            keyed_group(workspace, API, &[0]);
+            set_tab_color(workspace, 0, SelectedTabColor::Cleared);
             set_last_resolved_key(workspace, 0, API);
 
             reconcile(workspace, 0, Some(WEB), ctx);
 
-            assert_eq!(group_color(workspace, api_group), SelectedTabColor::Cleared);
+            assert_eq!(tab_color(workspace, 0), SelectedTabColor::Cleared);
         });
     });
 }
 
 #[test]
-fn groups_stay_uncolored_while_the_setting_is_off() {
+fn tabs_stay_uncolored_while_the_setting_is_off() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
     let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
 
@@ -840,14 +932,17 @@ fn groups_stay_uncolored_while_the_setting_is_off() {
 
             reconcile(workspace, 0, Some(API), ctx);
 
-            let group_id = workspace.tabs[0].group_id.expect("the tab was grouped");
-            assert_eq!(group_color(workspace, group_id), SelectedTabColor::Unset);
+            assert!(workspace.tabs[0].group_id.is_some(), "the tab was grouped");
+            assert_eq!(tab_color(workspace, 0), SelectedTabColor::Unset);
         });
     });
 }
 
+// Leaving a group by hand: automation takes back the colour it derived, so a
+// detached tab stops advertising a project it is no longer grouped under.
+
 #[test]
-fn the_sweep_colors_the_groups_the_mode_already_made() {
+fn leaving_a_group_takes_automations_color_off_the_tab() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
     let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
 
@@ -858,13 +953,130 @@ fn the_sweep_colors_the_groups_the_mode_already_made() {
 
         workspace.update(&mut app, |workspace, ctx| {
             grow_to(workspace, 2, ctx);
-            let api_group = keyed_group(workspace, API, &[0]);
-            let web_group = keyed_group(workspace, WEB, &[1]);
+            keyed_group(workspace, API, &[0, 1]);
+            paint_as_automation(workspace, 0, API);
+            paint_as_automation(workspace, 1, API);
+            let left = workspace.tabs[0].pane_group.id();
 
-            workspace.sweep_tab_group_colors(ctx);
+            workspace.remove_tab_from_group(0, ctx);
 
-            assert_eq!(group_color(workspace, api_group), derived(API));
-            assert_eq!(group_color(workspace, web_group), derived(WEB));
+            assert_eq!(
+                tab_color_by_identity(workspace, left),
+                SelectedTabColor::Unset,
+                "the tab that left keeps no colour of the project it left"
+            );
+            let stayed = workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.group_id.is_some())
+                .expect("the other member is still grouped");
+            assert_eq!(
+                tab_color(workspace, stayed),
+                derived(API),
+                "the member that stayed keeps its project's colour"
+            );
+        });
+    });
+}
+
+#[test]
+fn leaving_a_group_keeps_a_color_the_user_chose() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_group_colors(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 2, ctx);
+            keyed_group(workspace, API, &[0, 1]);
+            let user_color = color_the_user_would_have_picked(API);
+            set_tab_color(workspace, 0, SelectedTabColor::Color(user_color));
+            let left = workspace.tabs[0].pane_group.id();
+
+            workspace.remove_tab_from_group(0, ctx);
+
+            assert_eq!(
+                tab_color_by_identity(workspace, left),
+                SelectedTabColor::Color(user_color)
+            );
+        });
+    });
+}
+
+#[test]
+fn ungrouping_takes_automations_color_off_every_member() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_group_colors(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 2, ctx);
+            let api_group = keyed_group(workspace, API, &[0, 1]);
+            paint_as_automation(workspace, 0, API);
+            let user_color = color_the_user_would_have_picked(API);
+            set_tab_color(workspace, 1, SelectedTabColor::Color(user_color));
+
+            workspace.ungroup_tabs(api_group, ctx);
+
+            assert_eq!(tab_color(workspace, 0), SelectedTabColor::Unset);
+            assert_eq!(
+                tab_color(workspace, 1),
+                SelectedTabColor::Color(user_color),
+                "ungrouping is not licence to drop a colour the user chose"
+            );
+        });
+    });
+}
+
+#[test]
+fn the_sweep_colors_the_tabs_the_mode_already_grouped() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_group_colors(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 2, ctx);
+            keyed_group(workspace, API, &[0]);
+            keyed_group(workspace, WEB, &[1]);
+
+            workspace.sweep_auto_tab_colors(ctx);
+
+            assert_eq!(tab_color(workspace, 0), derived(API));
+            assert_eq!(tab_color(workspace, 1), derived(WEB));
+        });
+    });
+}
+
+#[test]
+fn the_sweep_colors_every_member_of_a_shared_project() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_group_colors(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 3, ctx);
+            keyed_group(workspace, API, &[0, 1, 2]);
+
+            workspace.sweep_auto_tab_colors(ctx);
+
+            assert_eq!(tab_color(workspace, 0), derived(API));
+            assert_eq!(tab_color(workspace, 1), derived(API));
+            assert_eq!(tab_color(workspace, 2), derived(API));
         });
     });
 }
@@ -880,24 +1092,19 @@ fn the_sweep_leaves_a_color_the_user_chose() {
         let workspace = mock_workspace(&mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            let api_group = keyed_group(workspace, API, &[0]);
+            keyed_group(workspace, API, &[0]);
             let user_color = color_the_user_would_have_picked(API);
-            if let Some(group) = workspace.tab_groups.get_mut(&api_group) {
-                group.color = SelectedTabColor::Color(user_color);
-            }
+            set_tab_color(workspace, 0, SelectedTabColor::Color(user_color));
 
-            workspace.sweep_tab_group_colors(ctx);
+            workspace.sweep_auto_tab_colors(ctx);
 
-            assert_eq!(
-                group_color(workspace, api_group),
-                SelectedTabColor::Color(user_color)
-            );
+            assert_eq!(tab_color(workspace, 0), SelectedTabColor::Color(user_color));
         });
     });
 }
 
 #[test]
-fn the_sweep_never_colors_a_group_the_user_made() {
+fn the_sweep_never_colors_a_tab_in_a_group_the_user_made() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
     let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
 
@@ -907,16 +1114,16 @@ fn the_sweep_never_colors_a_group_the_user_made() {
         let workspace = mock_workspace(&mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            // No project key: an ordinary manual group, which has no project to
-            // take a color from.
+            // No project key: an ordinary manual group, whose members have no
+            // project to take a color from.
             let group = TabGroup::new();
             let group_id = group.id;
             workspace.tab_groups.insert(group_id, group);
             workspace.tabs[0].group_id = Some(group_id);
 
-            workspace.sweep_tab_group_colors(ctx);
+            workspace.sweep_auto_tab_colors(ctx);
 
-            assert_eq!(group_color(workspace, group_id), SelectedTabColor::Unset);
+            assert_eq!(tab_color(workspace, 0), SelectedTabColor::Unset);
         });
     });
 }
@@ -932,11 +1139,11 @@ fn the_sweep_does_nothing_while_the_setting_is_off() {
         let workspace = mock_workspace(&mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            let api_group = keyed_group(workspace, API, &[0]);
+            keyed_group(workspace, API, &[0]);
 
-            workspace.sweep_tab_group_colors(ctx);
+            workspace.sweep_auto_tab_colors(ctx);
 
-            assert_eq!(group_color(workspace, api_group), SelectedTabColor::Unset);
+            assert_eq!(tab_color(workspace, 0), SelectedTabColor::Unset);
         });
     });
 }
@@ -953,11 +1160,10 @@ fn colors_automation_set_outlive_the_setting_being_turned_off() {
         enable_auto_group_colors(&mut app);
         let workspace = mock_workspace(&mut app);
 
-        let api_group = workspace.update(&mut app, |workspace, ctx| {
-            let api_group = keyed_group(workspace, API, &[0]);
-            workspace.sweep_tab_group_colors(ctx);
-            assert_eq!(group_color(workspace, api_group), derived(API));
-            api_group
+        workspace.update(&mut app, |workspace, ctx| {
+            keyed_group(workspace, API, &[0]);
+            workspace.sweep_auto_tab_colors(ctx);
+            assert_eq!(tab_color(workspace, 0), derived(API));
         });
 
         TabSettings::handle(&app).update(&mut app, |settings, ctx| {
@@ -968,15 +1174,15 @@ fn colors_automation_set_outlive_the_setting_being_turned_off() {
         });
 
         workspace.update(&mut app, |workspace, _ctx| {
-            assert_eq!(group_color(workspace, api_group), derived(API));
+            assert_eq!(tab_color(workspace, 0), derived(API));
         });
     });
 }
 
 // The wiring, not the sweep: turning the setting on has to reach
-// `sweep_tab_group_colors` through the subscription the workspace really uses.
-// Every case above calls the sweep directly, so a broken dispatch would not
-// show up in any of them.
+// `sweep_auto_tab_colors` through the subscription the workspace really uses.
+// Every case above calls the sweep directly, so a broken dispatch would not show
+// up in any of them.
 #[test]
 fn turning_the_setting_on_paints_through_the_settings_subscription() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
@@ -987,10 +1193,9 @@ fn turning_the_setting_on_paints_through_the_settings_subscription() {
         enable_auto_grouping_only(&mut app);
         let workspace = mock_workspace(&mut app);
 
-        let api_group = workspace.update(&mut app, |workspace, _ctx| {
-            let api_group = keyed_group(workspace, API, &[0]);
-            assert_eq!(group_color(workspace, api_group), SelectedTabColor::Unset);
-            api_group
+        workspace.update(&mut app, |workspace, _ctx| {
+            keyed_group(workspace, API, &[0]);
+            assert_eq!(tab_color(workspace, 0), SelectedTabColor::Unset);
         });
 
         TabSettings::handle(&app).update(&mut app, |settings, ctx| {
@@ -998,7 +1203,7 @@ fn turning_the_setting_on_paints_through_the_settings_subscription() {
         });
 
         workspace.update(&mut app, |workspace, _ctx| {
-            assert_eq!(group_color(workspace, api_group), derived(API));
+            assert_eq!(tab_color(workspace, 0), derived(API));
         });
     });
 }
@@ -1019,11 +1224,11 @@ fn colors_stay_unpainted_while_the_mode_itself_is_off() {
         let workspace = mock_workspace(&mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            let api_group = keyed_group(workspace, API, &[0]);
+            keyed_group(workspace, API, &[0]);
 
-            workspace.sweep_tab_group_colors(ctx);
+            workspace.sweep_auto_tab_colors(ctx);
 
-            assert_eq!(group_color(workspace, api_group), SelectedTabColor::Unset);
+            assert_eq!(tab_color(workspace, 0), SelectedTabColor::Unset);
         });
     });
 }
@@ -1032,7 +1237,9 @@ fn colors_stay_unpainted_while_the_mode_itself_is_off() {
 // tab" on a sole member — must not launder the user's colour into automation's.
 
 /// Stands in for `new_tab_group_from_tab`'s core: a fresh group takes the tab,
-/// the emptied one is captured and pruned, and the new group adopts the key.
+/// the emptied one is pruned, and the new group adopts the key. The key of the
+/// group being left is read first, because pruning is what makes it
+/// unrecoverable.
 fn replace_group_from_sole_member(
     workspace: &mut Workspace,
     tab_index: usize,
@@ -1046,21 +1253,17 @@ fn replace_group_from_sole_member(
     workspace.tab_groups.insert(group_id, group);
     workspace.tabs[tab_index].group_id = Some(group_id);
 
-    let replaced = previous_group_id.and_then(|gid| workspace.replaced_group_color(gid));
+    let previous_key = previous_group_id.and_then(|gid| workspace.project_key_of_group(gid));
     if let Some(previous_group_id) = previous_group_id {
         workspace.prune_empty_tab_group(previous_group_id, ctx);
     }
-    let replaced = match previous_group_id {
-        Some(previous) if !workspace.tab_groups.contains_key(&previous) => replaced,
-        _ => None,
-    };
 
-    workspace.adopt_project_key_for_new_group(group_id, pane_group_id, replaced, ctx);
+    workspace.adopt_project_key_for_new_group(group_id, pane_group_id, previous_key, ctx);
     group_id
 }
 
 #[test]
-fn a_group_replacing_another_for_the_same_project_takes_the_project_color() {
+fn a_group_replacing_another_for_the_same_project_keeps_the_project_color() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
     let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
 
@@ -1071,14 +1274,14 @@ fn a_group_replacing_another_for_the_same_project_takes_the_project_color() {
 
         workspace.update(&mut app, |workspace, ctx| {
             let api_group = keyed_group(workspace, API, &[0]);
-            paint_as_automation(workspace, api_group, API);
+            paint_as_automation(workspace, 0, API);
             set_test_key(workspace, 0, API, ctx);
 
             let replacement = replace_group_from_sole_member(workspace, 0, ctx);
 
             assert!(!workspace.tab_groups.contains_key(&api_group));
             assert_eq!(group_key(workspace, replacement).as_deref(), Some(API));
-            assert_eq!(group_color(workspace, replacement), derived(API));
+            assert_eq!(tab_color(workspace, 0), derived(API));
         });
     });
 }
@@ -1094,19 +1297,17 @@ fn a_group_replacing_another_keeps_the_color_the_user_chose() {
         let workspace = mock_workspace(&mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            let api_group = keyed_group(workspace, API, &[0]);
+            keyed_group(workspace, API, &[0]);
             let user_color = color_the_user_would_have_picked(API);
-            if let Some(group) = workspace.tab_groups.get_mut(&api_group) {
-                group.color = SelectedTabColor::Color(user_color);
-            }
+            set_tab_color(workspace, 0, SelectedTabColor::Color(user_color));
             set_test_key(workspace, 0, API, ctx);
 
-            let replacement = replace_group_from_sole_member(workspace, 0, ctx);
+            replace_group_from_sole_member(workspace, 0, ctx);
 
             assert_eq!(
-                group_color(workspace, replacement),
+                tab_color(workspace, 0),
                 SelectedTabColor::Color(user_color),
-                "the colour the user gave this project's group must survive the replacement"
+                "the colour the user gave this tab must survive the replacement"
             );
         });
     });
@@ -1123,18 +1324,16 @@ fn a_group_replacing_another_keeps_a_color_the_user_cleared() {
         let workspace = mock_workspace(&mut app);
 
         workspace.update(&mut app, |workspace, ctx| {
-            let api_group = keyed_group(workspace, API, &[0]);
-            if let Some(group) = workspace.tab_groups.get_mut(&api_group) {
-                group.color = SelectedTabColor::Cleared;
-            }
+            keyed_group(workspace, API, &[0]);
+            set_tab_color(workspace, 0, SelectedTabColor::Cleared);
             set_test_key(workspace, 0, API, ctx);
 
-            let replacement = replace_group_from_sole_member(workspace, 0, ctx);
+            replace_group_from_sole_member(workspace, 0, ctx);
 
             assert_eq!(
-                group_color(workspace, replacement),
+                tab_color(workspace, 0),
                 SelectedTabColor::Cleared,
-                "clearing this project's group colour must not be undone by replacing the group"
+                "clearing this tab's colour must not be undone by replacing its group"
             );
         });
     });
