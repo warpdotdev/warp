@@ -324,6 +324,291 @@ fn to_request_round_trips_request_fields() {
     assert_eq!(round_tripped.plan_id, req.plan_id);
 }
 
+mod resolve_pending_card_state_tests {
+    use super::super::{PendingCardState, resolve_pending_card_state};
+
+    #[test]
+    fn blocked_status_renders_confirmation_regardless_of_owner_cancellation() {
+        assert_eq!(
+            resolve_pending_card_state(true, false, false),
+            PendingCardState::Confirmation
+        );
+        assert_eq!(
+            resolve_pending_card_state(true, false, true),
+            PendingCardState::Confirmation
+        );
+    }
+
+    #[test]
+    fn no_status_while_owner_not_cancelled_renders_configuring() {
+        // The action hasn't reached the action model yet, and the owner
+        // block has not been explicitly cancelled: show the transient
+        // "Configuring agents..." placeholder, not a cancelled card.
+        assert_eq!(
+            resolve_pending_card_state(false, true, false),
+            PendingCardState::Configuring
+        );
+    }
+
+    #[test]
+    fn no_status_and_owner_cancelled_renders_cancelled_mid_stream() {
+        // Mid-tool-call cancellation: the action never made it into
+        // BlocklistAIActionModel, so status stays None forever, and the
+        // owner block reached the explicit `Cancelled` status. This must
+        // resolve to the cancelled presentation instead of getting stuck
+        // Configuring.
+        assert_eq!(
+            resolve_pending_card_state(false, true, true),
+            PendingCardState::CancelledMidStream
+        );
+    }
+
+    #[test]
+    fn no_status_and_owner_merely_complete_renders_configuring_not_cancelled() {
+        // Regression guard: on the happy path, `mark_response_stream_completed_successfully`
+        // flips the owner block to `Complete` (not `Cancelled`) before the
+        // action is queued and preprocessed. `get_action_status` is `None`
+        // in that legitimate pre-queue/pre-preprocessing window, but the
+        // owner was never cancelled, so this must NOT resolve to
+        // `CancelledMidStream` (a real bug would flash a false-cancelled
+        // card on every successful run_agents call).
+        assert_eq!(
+            resolve_pending_card_state(false, true, false),
+            PendingCardState::Configuring
+        );
+    }
+
+    #[test]
+    fn non_blocked_status_while_owner_not_cancelled_renders_configuring() {
+        // e.g. Preprocessing/Queued with the owner not cancelled.
+        assert_eq!(
+            resolve_pending_card_state(false, false, false),
+            PendingCardState::Configuring
+        );
+    }
+
+    #[test]
+    fn non_blocked_status_takes_precedence_over_owner_cancellation() {
+        // A concrete (non-`Blocked`) action status takes precedence over
+        // the mid-stream-cancellation heuristic, which only applies when
+        // there is no action status at all.
+        assert_eq!(
+            resolve_pending_card_state(false, false, true),
+            PendingCardState::Configuring
+        );
+    }
+}
+
+/// End-to-end tests that construct a real `RunAgentsCardView` backed by a
+/// real `BlocklistAIActionModel` and a mutable `FakeAIBlockModel`, so the
+/// invalidation latch (`owner_was_cancelled`) and the live `render()` /
+/// `update_request()` wiring are exercised, not just the pure
+/// `resolve_pending_card_state` helper.
+mod live_cancellation_tests {
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
+    use async_channel::unbounded;
+    use parking_lot::FairMutex;
+    use warpui::platform::WindowStyle;
+    use warpui::{App, EntityId, ModelHandle, ViewHandle};
+
+    use super::super::{PendingCardState, RunAgentsCardView};
+    use crate::ai::agent::AIAgentActionId;
+    use crate::ai::blocklist::FakeAIBlockModel;
+    use crate::ai::blocklist::action_model::BlocklistAIActionModel;
+    use crate::ai::blocklist::block::AIBlock;
+    use crate::ai::blocklist::block::model::AIBlockModel;
+    use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
+    use crate::server::experiments::ServerExperiments;
+    use crate::terminal::model::session::Sessions;
+    use crate::terminal::model::session::active_session::ActiveSession;
+    use crate::terminal::model::terminal_model::TerminalModel;
+    use crate::terminal::model_events::ModelEventDispatcher;
+    use crate::test_util::terminal::initialize_app_for_terminal_view;
+
+    fn make_request() -> RunAgentsRequest {
+        RunAgentsRequest {
+            summary: "summary".to_string(),
+            base_prompt: "base".to_string(),
+            skills: Vec::new(),
+            model_id: "auto".to_string(),
+            harness_type: "oz".to_string(),
+            execution_mode: RunAgentsExecutionMode::Local,
+            agent_run_configs: vec![RunAgentsAgentRunConfig {
+                name: "child".to_string(),
+                prompt: "do work".to_string(),
+                title: "Child agent".to_string(),
+                agent_identity_uid: String::new(),
+                model_id: String::new(),
+            }],
+            plan_id: String::new(),
+            harness_auth_secret_name: None,
+        }
+    }
+
+    /// Registers every singleton `initialize_app_for_terminal_view` sets up
+    /// (covering the pickers, harness/model catalogs, and self-hosted
+    /// workers that `RunAgentsCardView::new` touches) plus `ServerExperiments`
+    /// (which that helper does not register), then builds a real
+    /// `BlocklistAIActionModel` so `get_action_status` behaves exactly as it
+    /// does live.
+    fn initialize(app: &mut App) -> ModelHandle<BlocklistAIActionModel> {
+        initialize_app_for_terminal_view(app);
+        app.add_singleton_model(|ctx| ServerExperiments::new_from_cache(vec![], ctx));
+
+        let terminal_view_id = EntityId::new();
+        let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let (_model_events_tx, model_events_rx) = unbounded();
+        let model_event_dispatcher =
+            app.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx));
+        let active_session = app.add_model(|ctx| {
+            ActiveSession::new(sessions.clone(), model_event_dispatcher.clone(), ctx)
+        });
+        let get_relevant_files_controller = app.add_model(GetRelevantFilesController::new);
+
+        app.add_model(|ctx| {
+            BlocklistAIActionModel::new(
+                terminal_model,
+                active_session,
+                &model_event_dispatcher,
+                get_relevant_files_controller,
+                terminal_view_id,
+                ctx,
+            )
+        })
+    }
+
+    /// Builds a `RunAgentsCardView` as a standalone window-rooted view, wired
+    /// to `action_model` and `block_model`, with no action ever queued (so
+    /// `get_action_status` is `None` for the lifetime of the test unless the
+    /// test explicitly queues one).
+    fn build_card(
+        app: &mut App,
+        action_model: ModelHandle<BlocklistAIActionModel>,
+        block_model: Rc<dyn AIBlockModel<View = AIBlock>>,
+    ) -> ViewHandle<RunAgentsCardView> {
+        let action_id = AIAgentActionId::from("run-agents-test-action".to_string());
+        let request = make_request();
+        let run_agents_executor =
+            app.read(|ctx| action_model.as_ref(ctx).run_agents_executor(ctx).clone());
+        let (_window_id, view) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            RunAgentsCardView::new(
+                action_id,
+                &request,
+                None,
+                action_model,
+                run_agents_executor,
+                block_model,
+                ctx,
+            )
+        });
+        view
+    }
+
+    #[test]
+    fn cancelled_mid_stream_after_owner_cancels_without_request_change() {
+        App::test((), |mut app| async move {
+            let action_model = initialize(&mut app);
+            let fake_model = Rc::new(FakeAIBlockModel::new_streaming(vec![]));
+            let block_model: Rc<dyn AIBlockModel<View = AIBlock>> = fake_model.clone();
+            let view = build_card(&mut app, action_model, block_model);
+
+            // While streaming with no action status yet, the card must show
+            // the transient placeholder, not a cancelled card.
+            view.read(&app, |view, ctx| {
+                assert_eq!(
+                    view.pending_card_state_for_test(ctx),
+                    PendingCardState::Configuring
+                );
+                assert!(!view.owner_was_cancelled_for_test());
+            });
+
+            // Cancel the owner block WITHOUT changing the streamed
+            // RunAgentsRequest, then drive the exact update path
+            // `AIBlock::ensure_run_agents_card_view` uses on every chunk
+            // (including the last one delivered at cancellation).
+            fake_model.cancel(None);
+            let unchanged_request = make_request();
+            view.update(&mut app, |view, ctx| {
+                view.update_request(&unchanged_request, ctx);
+            });
+
+            view.read(&app, |view, ctx| {
+                assert!(
+                    view.owner_was_cancelled_for_test(),
+                    "the invalidation latch must flip once the owner is cancelled, \
+                     even though the request content did not change"
+                );
+                assert_eq!(
+                    view.pending_card_state_for_test(ctx),
+                    PendingCardState::CancelledMidStream,
+                    "the card must reflect the cancellation live, without needing a \
+                     changed request or a Finished/Blocked action status"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn successful_completion_pre_queue_gap_does_not_render_cancelled() {
+        App::test((), |mut app| async move {
+            let action_model = initialize(&mut app);
+            let fake_model = Rc::new(FakeAIBlockModel::new_streaming(vec![]));
+            let block_model: Rc<dyn AIBlockModel<View = AIBlock>> = fake_model.clone();
+            let view = build_card(&mut app, action_model, block_model);
+
+            // Simulate `mark_response_stream_completed_successfully`: the
+            // owner flips to `Complete` (not `Cancelled`) before
+            // `AfterStreamFinished` queues the action and preprocessing runs.
+            fake_model.complete(crate::ai::agent::AIAgentOutput::default());
+            let unchanged_request = make_request();
+            view.update(&mut app, |view, ctx| {
+                view.update_request(&unchanged_request, ctx);
+            });
+
+            view.read(&app, |view, ctx| {
+                assert!(
+                    !view.owner_was_cancelled_for_test(),
+                    "a successful Complete transition must not trip the cancellation latch"
+                );
+                assert_eq!(
+                    view.pending_card_state_for_test(ctx),
+                    PendingCardState::Configuring,
+                    "must not flash a false-cancelled card during the happy path's \
+                     pre-queue/pre-preprocessing gap"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn constructed_after_owner_already_cancelled_is_not_stuck() {
+        App::test((), |mut app| async move {
+            let action_model = initialize(&mut app);
+            let fake_model = Rc::new(FakeAIBlockModel::new_streaming(vec![]));
+            // Cancel before the card is ever constructed.
+            fake_model.cancel(None);
+            let block_model: Rc<dyn AIBlockModel<View = AIBlock>> = fake_model.clone();
+            let view = build_card(&mut app, action_model, block_model);
+
+            view.read(&app, |view, ctx| {
+                assert!(
+                    view.owner_was_cancelled_for_test(),
+                    "the latch must be seeded true at construction time, not stuck false, \
+                     when the owner is already cancelled before the card exists"
+                );
+                assert_eq!(
+                    view.pending_card_state_for_test(ctx),
+                    PendingCardState::CancelledMidStream
+                );
+            });
+        });
+    }
+}
+
 mod format_terminal_state_tests {
     use super::super::{StatusKind, format_terminal_state};
     use super::*;

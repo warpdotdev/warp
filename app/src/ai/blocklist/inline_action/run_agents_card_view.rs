@@ -253,6 +253,15 @@ pub struct RunAgentsCardView {
     action_model: ModelHandle<BlocklistAIActionModel>,
     block_model: Rc<dyn AIBlockModel<View = AIBlock>>,
     create_environment_modal: ViewHandle<CreateEnvironmentModal>,
+    /// Whether the owner block had already reached
+    /// `AIBlockOutputStatus::Cancelled` as of the last `update_request`
+    /// call. A mid-tool-call cancellation can leave the streamed request
+    /// unchanged, so this lets `update_request` detect the
+    /// not-cancelled -> cancelled transition and notify even when the
+    /// diff against `config_state()` finds nothing new. Deliberately not
+    /// keyed on "streaming" — `Complete` and `Failed` also leave
+    /// streaming, but are not cancellations.
+    owner_was_cancelled: bool,
     /// Snapshot of the latest raw `RunAgentsRequest` from the LLM
     /// stream. Used at decision time to diff the run-wide config
     /// fields the user changed before accepting.
@@ -546,6 +555,7 @@ impl RunAgentsCardView {
                 }
             },
         );
+        let owner_was_cancelled = block_model.status(ctx).is_cancelled();
         // When auto_launched is true, execution is deferred to the
         // ActionBlockedOnUserConfirmation subscription above — the action
         // hasn't been queued in pending_actions yet at construction time.
@@ -566,6 +576,7 @@ impl RunAgentsCardView {
             action_model,
             block_model,
             create_environment_modal,
+            owner_was_cancelled,
             original_tool_call_request,
             entered_event_emitted: false,
             decision_event_emitted: false,
@@ -599,6 +610,21 @@ impl RunAgentsCardView {
     pub fn update_request(&mut self, request: &RunAgentsRequest, ctx: &mut ViewContext<Self>) {
         if self.spawning.is_some() {
             return;
+        }
+        // The owner block can be cancelled mid-tool-call without any
+        // action-model event, and the final streamed request is often
+        // byte-identical to the last one seen here, so the config-diff
+        // notify below would never fire. Notify once on the
+        // not-cancelled -> cancelled transition so the next render picks
+        // up the owner's terminal status and swaps the "Configuring
+        // agents…" placeholder for the cancelled card. Gated on the
+        // explicit `Cancelled` status (not merely "no longer streaming")
+        // so a normal `Complete` transition — which also happens before
+        // the action is queued — does not trip this notify.
+        let owner_is_cancelled = self.block_model.status(ctx).is_cancelled();
+        if !self.owner_was_cancelled && owner_is_cancelled {
+            self.owner_was_cancelled = true;
+            ctx.notify();
         }
         // Keep the raw-tool-call snapshot in sync with the latest
         // streamed chunk.
@@ -1212,6 +1238,33 @@ impl RunAgentsCardView {
     }
 }
 
+#[cfg(test)]
+impl RunAgentsCardView {
+    /// Test-only mirror of the pending-state decision made inline in
+    /// `render()`, so tests can assert on the live decision (after
+    /// constructing a real view and driving `update_request`) without
+    /// inspecting the rendered `Element` tree.
+    fn pending_card_state_for_test(&self, app: &AppContext) -> PendingCardState {
+        let status = self
+            .action_model
+            .as_ref(app)
+            .get_action_status(&self.action_id);
+        let is_blocked = matches!(status, Some(AIActionStatus::Blocked));
+        resolve_pending_card_state(
+            is_blocked,
+            status.is_none(),
+            self.block_model.status(app).is_cancelled(),
+        )
+    }
+
+    /// Test-only accessor for the invalidation latch, so tests can verify
+    /// it flips (and isn't stuck) independently of asserting the derived
+    /// render state.
+    fn owner_was_cancelled_for_test(&self) -> bool {
+        self.owner_was_cancelled
+    }
+}
+
 impl Entity for RunAgentsCardView {
     type Event = RunAgentsCardViewEvent;
 }
@@ -1263,19 +1316,46 @@ impl View for RunAgentsCardView {
             );
         }
 
-        // Still streaming: show "Configuring agents..." placeholder until
-        // the action reaches Blocked status (i.e., streaming is complete
-        // and the action is queued for user confirmation).
-        if !matches!(status, Some(AIActionStatus::Blocked)) {
-            return render_status_only_card(
-                "Configuring agents\u{2026}".to_string(),
-                appearance,
-                StatusKind::Spawning,
-                app,
-            );
+        let is_blocked = matches!(status, Some(AIActionStatus::Blocked));
+        match resolve_pending_card_state(
+            is_blocked,
+            status.is_none(),
+            self.block_model.status(app).is_cancelled(),
+        ) {
+            // The owner block was explicitly cancelled before this action
+            // was ever queued into `BlocklistAIActionModel` (e.g. the user
+            // cancelled the conversation while the tool call was still
+            // being configured), so `get_action_status` will return `None`
+            // forever for this action. Render the same cancelled
+            // presentation used for restored history rather than getting
+            // stuck on the "Configuring agents..." placeholder. A normal
+            // `Complete` (or a `Failed`) owner transition with no action
+            // status yet is a legitimate pre-queue/pre-preprocessing gap,
+            // not a cancellation, so it deliberately stays `Configuring`
+            // below.
+            PendingCardState::CancelledMidStream => {
+                return render_status_only_card(
+                    "Spawn agents cancelled".to_string(),
+                    appearance,
+                    StatusKind::Cancelled,
+                    app,
+                );
+            }
+            // Still streaming, or the action has a status other than
+            // `Blocked`: show the "Configuring agents..." placeholder
+            // until streaming completes and the action is queued for
+            // user confirmation.
+            PendingCardState::Configuring => {
+                return render_status_only_card(
+                    "Configuring agents\u{2026}".to_string(),
+                    appearance,
+                    StatusKind::Spawning,
+                    app,
+                );
+            }
+            PendingCardState::Confirmation => {}
         }
 
-        let is_blocked = matches!(status, Some(AIActionStatus::Blocked));
         let card = render_confirmation_card(
             &self.orchestration_edit_state.orchestration_config_state,
             &self.card,
@@ -1590,6 +1670,49 @@ fn render_agents_section(card: &RunAgentsCardFields, app: &AppContext) -> Box<dy
         .with_child(Container::new(label).with_margin_bottom(6.).finish())
         .with_child(pills_row)
         .finish()
+}
+
+/// Which body to render for a `RunAgentsCardView` action that hasn't
+/// reached a `Finished` result, a spawning snapshot, or `RunningAsync`.
+/// Kept separate from `render` as a pure function so the decision logic
+/// is unit-testable without constructing a view or an `AIActionStatus`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingCardState {
+    /// The action was queued and is waiting on user confirmation.
+    Confirmation,
+    /// Still streaming, or the action has some non-`Blocked` status, or
+    /// the owner reached a non-cancelled terminal state (`Complete` /
+    /// `Failed`) before the action was queued or preprocessed.
+    Configuring,
+    /// No action status was ever recorded (the tool call never made it
+    /// into `BlocklistAIActionModel`) and the owner block was explicitly
+    /// cancelled, i.e. the conversation was cancelled mid-tool-call.
+    CancelledMidStream,
+}
+
+/// Resolves the [`PendingCardState`] from the three inputs `render` has
+/// already checked don't apply (`Finished`, spawning snapshot,
+/// `RunningAsync`, and restored-from-history).
+///
+/// `is_owner_cancelled` must reflect the owner block's *explicit*
+/// `AIBlockOutputStatus::Cancelled` status, not merely "not streaming" —
+/// a successful stream also stops streaming (`Complete`) before the
+/// action is queued and preprocessed, and a stream error (`Failed`)
+/// likewise has no action status. Neither of those is a cancellation, so
+/// gating on "not streaming" alone would flash a false cancelled card on
+/// the happy path and mislabel stream errors.
+pub(crate) fn resolve_pending_card_state(
+    has_blocked_status: bool,
+    has_no_action_status: bool,
+    is_owner_cancelled: bool,
+) -> PendingCardState {
+    if has_blocked_status {
+        PendingCardState::Confirmation
+    } else if has_no_action_status && is_owner_cancelled {
+        PendingCardState::CancelledMidStream
+    } else {
+        PendingCardState::Configuring
+    }
 }
 
 fn render_terminal_state(

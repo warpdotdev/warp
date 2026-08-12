@@ -218,11 +218,15 @@ pub trait AIBlockModel {
 
 #[cfg(any(test, feature = "integration_tests"))]
 pub mod testing {
+    use std::cell::RefCell;
+
     use warpui::{AppContext, ViewContext};
 
     use super::{AIBlockModel, AIBlockOutputStatus, OutputStatusUpdateCallback};
     use crate::ai::agent::conversation::AIConversationId;
-    use crate::ai::agent::{AIAgentInput, AIAgentOutput, ServerOutputId, Shared};
+    use crate::ai::agent::{
+        AIAgentInput, AIAgentOutput, CancellationReason, ServerOutputId, Shared,
+    };
     use crate::ai::blocklist::AIBlock;
     use crate::ai::blocklist::model::{
         AIRequestType, PassiveRequestType, PassiveSuggestionTriggerType,
@@ -231,9 +235,11 @@ pub mod testing {
 
     pub struct FakeAIBlockModel {
         input: Vec<AIAgentInput>,
-        /// `None` models a block that is still streaming output, so its status
-        /// stays [`AIBlockOutputStatus::Pending`].
-        output: Option<Shared<AIAgentOutput>>,
+        /// Interior-mutable so tests can drive a status transition (e.g.
+        /// streaming -> cancelled) on an already-constructed model, the
+        /// same way a live `AIBlockModel`'s underlying data changes out
+        /// from under views holding an `Rc<dyn AIBlockModel>`.
+        status: RefCell<AIBlockOutputStatus>,
         model_id: LLMId,
     }
 
@@ -241,7 +247,9 @@ pub mod testing {
         pub fn new(input: Vec<AIAgentInput>, output: AIAgentOutput) -> Self {
             Self {
                 input,
-                output: Some(Shared::new(output)),
+                status: RefCell::new(AIBlockOutputStatus::Complete {
+                    output: Shared::new(output),
+                }),
                 model_id: "fake-llm".to_owned().into(),
             }
         }
@@ -251,9 +259,29 @@ pub mod testing {
         pub fn new_streaming(input: Vec<AIAgentInput>) -> Self {
             Self {
                 input,
-                output: None,
+                status: RefCell::new(AIBlockOutputStatus::Pending),
                 model_id: "fake-llm".to_owned().into(),
             }
+        }
+
+        /// Test-only mutator: flips this model to `Cancelled`, modeling a
+        /// conversation cancelled mid-tool-call. `partial_output` lets a
+        /// caller preserve whatever content had already streamed in,
+        /// mirroring how a real cancellation carries forward the last
+        /// partial output.
+        pub fn cancel(&self, partial_output: Option<AIAgentOutput>) {
+            *self.status.borrow_mut() = AIBlockOutputStatus::Cancelled {
+                partial_output: partial_output.map(Shared::new),
+                reason: CancellationReason::ManuallyCancelled,
+            };
+        }
+
+        /// Test-only mutator: flips this model to `Complete`, modeling the
+        /// normal successful end of a stream.
+        pub fn complete(&self, output: AIAgentOutput) {
+            *self.status.borrow_mut() = AIBlockOutputStatus::Complete {
+                output: Shared::new(output),
+            };
         }
     }
 
@@ -261,12 +289,7 @@ pub mod testing {
         type View = AIBlock;
 
         fn status(&self, _app: &AppContext) -> AIBlockOutputStatus {
-            match &self.output {
-                Some(output) => AIBlockOutputStatus::Complete {
-                    output: output.clone(),
-                },
-                None => AIBlockOutputStatus::Pending,
-            }
+            self.status.borrow().clone()
         }
 
         fn server_output_id(&self, _app: &AppContext) -> Option<ServerOutputId> {
