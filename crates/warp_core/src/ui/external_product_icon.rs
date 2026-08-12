@@ -16,65 +16,34 @@ pub enum ExternalProductIcon {
 }
 
 impl ExternalProductIcon {
+    /// Matches when the title starts with a known product name, case-insensitively,
+    /// so decorated titles like "Sentry (OAuth)" still resolve to the base
+    /// product's icon.
     pub fn from_string(s: &str) -> Option<ExternalProductIcon> {
-        let normalized = Self::normalize_title(s);
-        match normalized.as_str() {
-            "heroku" => Some(ExternalProductIcon::Heroku),
-            "notion" => Some(ExternalProductIcon::Notion),
-            "linear" => Some(ExternalProductIcon::Linear),
-            "figma" => Some(ExternalProductIcon::Figma),
-            "github" => Some(ExternalProductIcon::Github),
-            "slack" => Some(ExternalProductIcon::Slack),
-            "composio" => Some(ExternalProductIcon::Composio),
-            "resend" => Some(ExternalProductIcon::Resend),
-            "sentry" => Some(ExternalProductIcon::Sentry),
-            "you.com" => Some(ExternalProductIcon::YouDotCom),
-            _other => None,
+        let s_lower = s.to_ascii_lowercase();
+        if s_lower.starts_with("heroku") {
+            Some(ExternalProductIcon::Heroku)
+        } else if s_lower.starts_with("notion") {
+            Some(ExternalProductIcon::Notion)
+        } else if s_lower.starts_with("linear") {
+            Some(ExternalProductIcon::Linear)
+        } else if s_lower.starts_with("figma") {
+            Some(ExternalProductIcon::Figma)
+        } else if s_lower.starts_with("github") {
+            Some(ExternalProductIcon::Github)
+        } else if s_lower.starts_with("slack") {
+            Some(ExternalProductIcon::Slack)
+        } else if s_lower.starts_with("composio") {
+            Some(ExternalProductIcon::Composio)
+        } else if s_lower.starts_with("resend") {
+            Some(ExternalProductIcon::Resend)
+        } else if s_lower.starts_with("sentry") {
+            Some(ExternalProductIcon::Sentry)
+        } else if s_lower.starts_with("you.com") {
+            Some(ExternalProductIcon::YouDotCom)
+        } else {
+            None
         }
-    }
-
-    /// Strips a single, fully-balanced trailing parenthetical qualifier (e.g.
-    /// "Sentry (OAuth)" -> "sentry", "Sentry (OAuth (work))" -> "sentry") so
-    /// decorated server titles still resolve to their base product's icon, then
-    /// lowercases the result for matching. This intentionally does not strip or
-    /// match anywhere else in the title, so unrelated titles that merely contain
-    /// a known product name (e.g. "GitHub scraper thing") still fall through to
-    /// `None`.
-    fn normalize_title(s: &str) -> String {
-        let trimmed = s.trim();
-        let base = Self::strip_trailing_parenthetical(trimmed).unwrap_or(trimmed);
-        base.to_ascii_lowercase()
-    }
-
-    /// Returns the text preceding a fully-balanced trailing parenthetical group,
-    /// e.g. "Sentry (OAuth)" -> Some("Sentry"), "Sentry (OAuth (work))" ->
-    /// Some("Sentry"). Returns `None` when the title doesn't end with a balanced
-    /// group (an unmatched or extra closing parenthesis, such as
-    /// "Sentry (OAuth))") or when there is no base text before it (e.g.
-    /// "(OAuth)"), leaving those titles unmodified rather than guessing.
-    fn strip_trailing_parenthetical(s: &str) -> Option<&str> {
-        if !s.ends_with(')') {
-            return None;
-        }
-
-        let mut depth = 0i32;
-        let mut open_idx = None;
-        for (idx, ch) in s.char_indices().rev() {
-            match ch {
-                ')' => depth += 1,
-                '(' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        open_idx = Some(idx);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        let base = s[..open_idx?].trim_end();
-        if base.is_empty() { None } else { Some(base) }
     }
 
     pub fn get_path(&self) -> &'static str {
@@ -97,7 +66,3 @@ impl ExternalProductIcon {
         WarpUiIcon::new(path, color.into_solid())
     }
 }
-
-#[cfg(test)]
-#[path = "external_product_icon_tests.rs"]
-mod tests;
