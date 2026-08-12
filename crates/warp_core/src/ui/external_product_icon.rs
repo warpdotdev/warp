@@ -2,6 +2,7 @@ use warpui_core::elements::Icon as WarpUiIcon;
 
 use crate::ui::theme::Fill;
 
+#[derive(Clone, Copy)]
 pub enum ExternalProductIcon {
     Heroku,
     Notion,
@@ -16,34 +17,30 @@ pub enum ExternalProductIcon {
 }
 
 impl ExternalProductIcon {
+    /// Product name prefixes, matched case-insensitively against the start of a
+    /// server title. Add a new product by adding a row here.
+    const PREFIXES: &'static [(&'static str, ExternalProductIcon)] = &[
+        ("heroku", ExternalProductIcon::Heroku),
+        ("notion", ExternalProductIcon::Notion),
+        ("linear", ExternalProductIcon::Linear),
+        ("figma", ExternalProductIcon::Figma),
+        ("github", ExternalProductIcon::Github),
+        ("slack", ExternalProductIcon::Slack),
+        ("composio", ExternalProductIcon::Composio),
+        ("resend", ExternalProductIcon::Resend),
+        ("sentry", ExternalProductIcon::Sentry),
+        ("you.com", ExternalProductIcon::YouDotCom),
+    ];
+
     /// Matches when the title starts with a known product name, case-insensitively,
     /// so decorated titles like "Sentry (OAuth)" still resolve to the base
     /// product's icon.
     pub fn from_string(s: &str) -> Option<ExternalProductIcon> {
         let s_lower = s.to_ascii_lowercase();
-        if s_lower.starts_with("heroku") {
-            Some(ExternalProductIcon::Heroku)
-        } else if s_lower.starts_with("notion") {
-            Some(ExternalProductIcon::Notion)
-        } else if s_lower.starts_with("linear") {
-            Some(ExternalProductIcon::Linear)
-        } else if s_lower.starts_with("figma") {
-            Some(ExternalProductIcon::Figma)
-        } else if s_lower.starts_with("github") {
-            Some(ExternalProductIcon::Github)
-        } else if s_lower.starts_with("slack") {
-            Some(ExternalProductIcon::Slack)
-        } else if s_lower.starts_with("composio") {
-            Some(ExternalProductIcon::Composio)
-        } else if s_lower.starts_with("resend") {
-            Some(ExternalProductIcon::Resend)
-        } else if s_lower.starts_with("sentry") {
-            Some(ExternalProductIcon::Sentry)
-        } else if s_lower.starts_with("you.com") {
-            Some(ExternalProductIcon::YouDotCom)
-        } else {
-            None
-        }
+        Self::PREFIXES
+            .iter()
+            .find(|(prefix, _)| s_lower.starts_with(prefix))
+            .map(|(_, icon)| *icon)
     }
 
     pub fn get_path(&self) -> &'static str {
