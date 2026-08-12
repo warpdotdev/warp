@@ -736,7 +736,6 @@ fn animated_image_get_current_frame_advances_with_elapsed_time() {
     assert!(animated.frames.len() >= 2, "Expected at least 2 frames for testing");
     assert!(animated.duration > 0, "Expected positive total duration");
 
-    // Get frames at different elapsed times
     let (_frame_0, remaining_0) = animated
         .get_current_frame(0)
         .expect("Should get frame at elapsed 0ms");
@@ -747,8 +746,6 @@ fn animated_image_get_current_frame_advances_with_elapsed_time() {
         .get_current_frame(500)
         .expect("Should get frame at elapsed 500ms");
 
-    // Frames at different times should be different (for a proper animated GIF)
-    // or at least the remaining delays should be different
     assert_ne!(
         remaining_0, remaining_100,
         "Remaining delay should differ at different elapsed times"
@@ -779,7 +776,6 @@ fn animated_image_get_current_frame_wraps_at_duration() {
 
     let duration = animated.duration;
 
-    // Get frames at start, middle, and end of cycle
     let (frame_start, _) = animated
         .get_current_frame(0)
         .expect("Should get frame at start");
@@ -795,15 +791,12 @@ fn animated_image_get_current_frame_wraps_at_duration() {
         .get_current_frame(duration * 2 - 1)
         .expect("Should get frame in second cycle");
 
-    // The frame at the wrapped start should be the same as the original start
-    // (both should be the first frame)
     assert_eq!(
         Arc::ptr_eq(&frame_start, &frame_wrapped_start),
         true,
         "Frame at start should equal frame at wrapped start"
     );
 
-    // The frame near end of first cycle should equal frame near end of second cycle
     assert_eq!(
         Arc::ptr_eq(&frame_end, &frame_wrapped_end),
         true,
@@ -903,8 +896,7 @@ fn animated_image_remaining_delay_decreases_within_frame() {
         panic!("Expected animated image");
     };
 
-    // Query the remaining delay at the start of a frame and later in the same frame
-    // (e.g., at 0ms and 50ms, if the first frame is 100ms)
+    // Assumes the gif's first frame lasts at least 50ms.
     let (_, remaining_at_start) = animated
         .get_current_frame(0)
         .expect("Should get frame at 0ms");
@@ -912,7 +904,6 @@ fn animated_image_remaining_delay_decreases_within_frame() {
         .get_current_frame(50)
         .expect("Should get frame at 50ms");
 
-    // Within the same frame, remaining delay should decrease as time advances
     assert!(
         remaining_at_50 < remaining_at_start,
         "Remaining delay should decrease as we progress through a frame"
@@ -939,8 +930,6 @@ fn animated_webp_also_advances_frames() {
 
     assert!(animated.frames.len() > 1, "WebP should have multiple frames");
 
-    // Verify we can retrieve frames at different times throughout the animation
-    // Get frame at start and at the end to ensure we've traversed the full timeline
     let (frame_0, _) = animated
         .get_current_frame(0)
         .expect("Should get frame at 0ms");
@@ -948,14 +937,11 @@ fn animated_webp_also_advances_frames() {
         .get_current_frame(animated.duration - 1)
         .expect("Should get frame near end");
 
-    // At start and near end, we should get different frames
-    // (unless the WebP only has one frame, which shouldn't happen for animated images)
     assert!(
         !Arc::ptr_eq(&frame_0, &frame_near_end) || animated.frames.len() == 1,
         "WebP animation should traverse different frames or only have one frame"
     );
 
-    // Verify wrapping: after one full duration, we're back at the start
     let (frame_wrapped, _) = animated
         .get_current_frame(animated.duration)
         .expect("Should get frame after one cycle");
