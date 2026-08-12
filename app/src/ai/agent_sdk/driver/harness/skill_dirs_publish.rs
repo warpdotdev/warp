@@ -1,19 +1,18 @@
-//! Publishes factory playbook skills into the skill roots that third-party
-//! harnesses (Claude Code, Codex) search on their own, so a factory agent on
-//! either harness receives the same factory skill set as the Oz harness.
+//! Makes the skills listed in `WARP_SKILL_DIRS` available to third-party
+//! harnesses (Claude Code, Codex), by symlinking them into a skill root each
+//! harness already searches on its own.
 //!
-//! Oz reads factory skills directly from the directories the server lists in
-//! `WARP_SKILL_DIRS` (see `crate::ai::agent_sdk::driver::AgentDriver::load_skills_dirs`).
-//! Third-party harnesses discover skills from their own home-directory skill
-//! roots instead, so this module reads the same `WARP_SKILL_DIRS` directories
-//! and symlinks each skill folder into the harness's skill root, under the
-//! skill's own name. The published name must match the real skill name
-//! (rather than some namespaced alias) because an agent prompt, or another
-//! skill, may reference a skill by that name. Skill frontmatter is never
-//! rewritten.
+//! Oz reads `WARP_SKILL_DIRS` directly (see
+//! `crate::ai::agent_sdk::driver::AgentDriver::load_skills_dirs`). Third-party
+//! harnesses discover skills from their own skill roots instead, so this
+//! module reads the same `WARP_SKILL_DIRS` directories and symlinks each
+//! skill folder into the harness's skill root, under the skill's own name.
+//! The published name must match the real skill name (rather than some
+//! namespaced alias) because an agent prompt, or another skill, may
+//! reference a skill by that name. Skill frontmatter is never rewritten.
 //!
-//! A factory skill wins over any existing entry with the same name already in
-//! the harness's skill root. Every such override is logged (see
+//! A published skill wins over any existing entry with the same name already
+//! in the harness's skill root. Every such override is logged (see
 //! `logging-and-error-reporting`) with enough detail to debug later — there is
 //! no user-facing surface for this today, so the log is for us, not the user.
 //! An existing *real* (non-symlink) entry is moved aside rather than deleted,
@@ -33,19 +32,19 @@ use anyhow::{Context, Result};
 use warp_core::safe_warn;
 
 /// Suffix appended to a real (non-symlink) file or directory this module
-/// moves aside so a factory skill can take over its name. The original
+/// moves aside so a published skill can take over its name. The original
 /// content is preserved under this name rather than deleted.
-const PRE_FACTORY_BACKUP_SUFFIX: &str = ".pre-factory-backup";
+const PRE_PUBLISH_BACKUP_SUFFIX: &str = ".pre-publish-backup";
 
-/// Resolve the factory skill source directories from `WARP_SKILL_DIRS`, most
-/// specific first — the same directories and precedence order Oz uses (see
+/// Resolve the `WARP_SKILL_DIRS` source directories, most specific first —
+/// the same directories and precedence order Oz uses (see
 /// `ai::skills::read_skills_for_skills_dirs`).
-pub(super) fn factory_skill_source_dirs(working_dir: &Path) -> Vec<PathBuf> {
+pub(super) fn warp_skill_source_dirs(working_dir: &Path) -> Vec<PathBuf> {
     resolve_skills_dirs(working_dir, parse_skills_dirs_env())
 }
 
-/// Publish every factory skill found under `source_dirs` into `skill_root` as
-/// a symlink under the skill's own name, pointing at the real skill folder.
+/// Publish every skill found under `source_dirs` into `skill_root` as a
+/// symlink under the skill's own name, pointing at the real skill folder.
 /// Returns the number of skills published.
 ///
 /// `source_dirs` is most-specific-first: when two directories contain a skill
@@ -53,13 +52,13 @@ pub(super) fn factory_skill_source_dirs(working_dir: &Path) -> Vec<PathBuf> {
 /// directory is published under that name — the same precedence Oz applies
 /// when it reads these directories directly. This precedence choice among our
 /// own source directories is not logged as a conflict; only an override of an
-/// entry that did not come from this pass is (see [`publish_factory_skill`]).
+/// entry that did not come from this pass is (see [`publish_skill`]).
 ///
 /// A failure to publish one skill (an unreadable directory, a missing
 /// `SKILL.md`, a filesystem error) is logged and does not stop the rest of
 /// the skills from publishing. Does nothing (not even creating `skill_root`)
 /// when `source_dirs` is empty.
-pub(super) fn publish_factory_skills(skill_root: &Path, source_dirs: &[PathBuf]) -> usize {
+pub(super) fn publish_skill_dirs(skill_root: &Path, source_dirs: &[PathBuf]) -> usize {
     if source_dirs.is_empty() {
         return 0;
     }
@@ -71,8 +70,8 @@ pub(super) fn publish_factory_skills(skill_root: &Path, source_dirs: &[PathBuf])
             Ok(entries) => entries,
             Err(err) => {
                 safe_warn!(
-                    safe: ("Factory skill publish: skipping an unreadable source directory"),
-                    full: ("Factory skill publish: skipping '{}' — {err}", source_dir.display())
+                    safe: ("WARP_SKILL_DIRS publish: skipping an unreadable source directory"),
+                    full: ("WARP_SKILL_DIRS publish: skipping '{}' — {err}", source_dir.display())
                 );
                 continue;
             }
@@ -82,9 +81,9 @@ pub(super) fn publish_factory_skills(skill_root: &Path, source_dirs: &[PathBuf])
                 Ok(entry) => entry,
                 Err(err) => {
                     safe_warn!(
-                        safe: ("Factory skill publish: failed to read a directory entry"),
+                        safe: ("WARP_SKILL_DIRS publish: failed to read a directory entry"),
                         full: (
-                            "Factory skill publish: failed to read an entry in '{}': {err}",
+                            "WARP_SKILL_DIRS publish: failed to read an entry in '{}': {err}",
                             source_dir.display()
                         )
                     );
@@ -103,10 +102,10 @@ pub(super) fn publish_factory_skills(skill_root: &Path, source_dirs: &[PathBuf])
                 // A more specific directory already published a skill with this name.
                 continue;
             }
-            if let Err(err) = publish_factory_skill(skill_root, name, &source_path) {
+            if let Err(err) = publish_skill(skill_root, name, &source_path) {
                 safe_warn!(
-                    safe: ("Factory skill publish: failed to publish a factory skill"),
-                    full: ("Factory skill publish: failed to publish '{name}': {err:#}")
+                    safe: ("WARP_SKILL_DIRS publish: failed to publish a skill"),
+                    full: ("WARP_SKILL_DIRS publish: failed to publish '{name}': {err:#}")
                 );
                 continue;
             }
@@ -116,18 +115,18 @@ pub(super) fn publish_factory_skills(skill_root: &Path, source_dirs: &[PathBuf])
     published
 }
 
-/// Publish a single factory skill folder as `<skill_root>/<skill_name>`,
-/// symlinked to `source_dir`. Returns the published symlink path.
+/// Publish a single skill folder as `<skill_root>/<skill_name>`, symlinked to
+/// `source_dir`. Returns the published symlink path.
 ///
-/// A factory skill wins over whatever already occupies `<skill_root>/<skill_name>`:
+/// A published skill wins over whatever already occupies `<skill_root>/<skill_name>`:
 /// - An existing symlink (most commonly our own from an earlier run) is replaced outright.
 /// - An existing real file or directory is moved aside to
-///   `<skill_root>/<skill_name>.pre-factory-backup` (or a numbered variant if that's
+///   `<skill_root>/<skill_name>.pre-publish-backup` (or a numbered variant if that's
 ///   already taken) rather than deleted, so nothing is lost.
 ///
 /// Every override is logged via `safe_warn!` for later debugging — there is no
 /// user-facing channel for this today.
-pub(super) fn publish_factory_skill(
+pub(super) fn publish_skill(
     skill_root: &Path,
     skill_name: &str,
     source_dir: &Path,
@@ -149,9 +148,9 @@ pub(super) fn publish_factory_skill(
                 format!("failed to remove existing symlink {}", target.display())
             })?;
             safe_warn!(
-                safe: ("Factory skill publish: overriding an existing skill entry with the factory version"),
+                safe: ("WARP_SKILL_DIRS publish: overriding an existing skill entry with the published version"),
                 full: (
-                    "Factory skill publish: overriding skill '{skill_name}' at {} (was a symlink to {:?}) with {}",
+                    "WARP_SKILL_DIRS publish: overriding skill '{skill_name}' at {} (was a symlink to {:?}) with {}",
                     target.display(), previous_target, source_dir.display()
                 )
             );
@@ -166,9 +165,9 @@ pub(super) fn publish_factory_skill(
                 )
             })?;
             safe_warn!(
-                safe: ("Factory skill publish: moved a real, non-symlink skill entry aside so the factory version could take over its name"),
+                safe: ("WARP_SKILL_DIRS publish: moved a real, non-symlink skill entry aside so the published version could take over its name"),
                 full: (
-                    "Factory skill publish: moved existing skill '{skill_name}' from {} to {} before publishing factory skill from {}",
+                    "WARP_SKILL_DIRS publish: moved existing skill '{skill_name}' from {} to {} before publishing skill from {}",
                     target.display(), backup.display(), source_dir.display()
                 )
             );
@@ -192,21 +191,21 @@ pub(super) fn publish_factory_skill(
 }
 
 /// Find an unused path to move an overridden, real (non-symlink) skill entry aside to,
-/// by appending [`PRE_FACTORY_BACKUP_SUFFIX`] to `target`'s file name, then a numeric
+/// by appending [`PRE_PUBLISH_BACKUP_SUFFIX`] to `target`'s file name, then a numeric
 /// suffix if that's already taken. Bails rather than risk silently colliding with (and
 /// losing) an earlier backup.
 fn reserve_conflict_backup_path(target: &Path) -> Result<PathBuf> {
     let name = target.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
         anyhow::anyhow!("skill target path {} has no file name", target.display())
     })?;
-    let first_choice = target.with_file_name(format!("{name}{PRE_FACTORY_BACKUP_SUFFIX}"));
+    let first_choice = target.with_file_name(format!("{name}{PRE_PUBLISH_BACKUP_SUFFIX}"));
     if !first_choice.exists() {
         return Ok(first_choice);
     }
     const MAX_BACKUP_ATTEMPTS: u32 = 20;
     for suffix in 2..=MAX_BACKUP_ATTEMPTS {
         let candidate =
-            target.with_file_name(format!("{name}{PRE_FACTORY_BACKUP_SUFFIX}-{suffix}"));
+            target.with_file_name(format!("{name}{PRE_PUBLISH_BACKUP_SUFFIX}-{suffix}"));
         if !candidate.exists() {
             return Ok(candidate);
         }
@@ -228,5 +227,5 @@ fn create_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-#[path = "factory_skills_tests.rs"]
+#[path = "skill_dirs_publish_tests.rs"]
 mod tests;
