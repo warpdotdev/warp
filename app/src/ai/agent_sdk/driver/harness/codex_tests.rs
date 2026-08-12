@@ -177,6 +177,61 @@ fn resolve_openai_api_key_uses_resolved_map_when_env_empty() {
     assert_eq!(result.as_deref(), Some("sk-from-secret"));
 }
 
+#[test]
+#[serial_test::serial]
+fn prepare_codex_environment_config_honors_codex_home() {
+    let tmp = TempDir::new().unwrap();
+    let codex_home = tmp.path().join("codex-home");
+    let working_dir = tmp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    let prev_codex_home = std::env::var(CODEX_HOME_ENV).ok();
+    let prev_openai_api_key = std::env::var(OPENAI_API_KEY_ENV).ok();
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(CODEX_HOME_ENV, &codex_home) };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var(OPENAI_API_KEY_ENV) };
+    let resolved = HashMap::from([(
+        OsString::from(OPENAI_API_KEY_ENV),
+        OsString::from("sk-from-secret"),
+    )]);
+
+    let model_config = harness_model_config("gpt-5.5", None);
+    let result = prepare_codex_environment_config(
+        &working_dir,
+        Some("system prompt"),
+        &resolved,
+        &HashMap::new(),
+        &HashMap::new(),
+        Some(&model_config),
+    );
+
+    match prev_codex_home {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(v) => unsafe { std::env::set_var(CODEX_HOME_ENV, v) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var(CODEX_HOME_ENV) },
+    }
+    match prev_openai_api_key {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(v) => unsafe { std::env::set_var(OPENAI_API_KEY_ENV, v) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var(OPENAI_API_KEY_ENV) },
+    }
+
+    result.unwrap();
+    assert_eq!(
+        fs::read_to_string(codex_home.join(CODEX_AGENTS_OVERRIDE_FILE_NAME)).unwrap(),
+        "system prompt"
+    );
+    let auth: Value =
+        serde_json::from_slice(&fs::read(codex_home.join(CODEX_AUTH_FILE_NAME)).unwrap()).unwrap();
+    assert_eq!(auth["OPENAI_API_KEY"], "sk-from-secret");
+    let cfg = read_codex_config(&codex_home.join(CODEX_CONFIG_TOML_FILE_NAME));
+    assert_eq!(cfg["model"].as_str(), Some("gpt-5.5"));
+    assert!(!cfg.contains_key("openai_base_url"));
+    assert!(!tmp.path().join(CODEX_CONFIG_DIR).exists());
+}
+
 fn read_codex_config(path: &std::path::Path) -> toml::Table {
     let content = fs::read_to_string(path).unwrap();
     toml::from_str(&content).unwrap()
