@@ -74,7 +74,8 @@ use crate::server::server_api::TranscribeError;
 use crate::server::telemetry::PluginChipTelemetryAction;
 use crate::server::telemetry::{PluginChipTelemetryKind, TelemetryEvent};
 use crate::settings::{
-    AISettings, AISettingsChangedEvent, PrivacySettings, PrivacySettingsChangedEvent,
+    AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, PrivacySettings,
+    PrivacySettingsChangedEvent,
 };
 use crate::settings_view::SettingsSection;
 #[cfg(not(target_family = "wasm"))]
@@ -786,6 +787,13 @@ impl AgentInputFooter {
                 event,
                 PrivacySettingsChangedEvent::UpdateIsCloudConversationStorageEnabled { .. }
             ) {
+                ctx.notify()
+            }
+        });
+        // The File explorer item's availability follows this setting, so the footer has to
+        // repaint when it is toggled rather than waiting for an unrelated re-render.
+        ctx.subscribe_to_model(&CodeSettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, CodeSettingsChangedEvent::ShowProjectExplorer { .. }) {
                 ctx.notify()
             }
         });
