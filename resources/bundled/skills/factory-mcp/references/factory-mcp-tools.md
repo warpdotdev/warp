@@ -87,7 +87,10 @@ you run the returned commands yourself. When the task has no branch in its
 outputs yet, `next_actions` starts a fresh worktree from `origin/HEAD`; in a
 multi-repo factory it warns to point `workspace_dir` at the repo the task
 targets. Once work is underway, use `message_foreman` rather than re-calling
-this tool to say something.
+this tool to say something. This is the call for a user who wants to
+continue, pick up, or resume a task locally — not `send_task` — unless they
+name a factory agent as the one who should continue (e.g. "have Wilson
+continue"), which is a `send_task` hand-off instead.
 
 Inputs:
 - `factory_task_uid` (required) — authoritative task UID from `list_tasks`.
@@ -115,6 +118,15 @@ when you omit one) but **not** a `factory_task_uid` — discover that with
 `list_tasks` once the task record appears. A hand-back returns `mode: handback`,
 resumes the existing foreman run, and reports how many eligible artifacts it
 transferred (idempotent).
+
+Only call this when the user actually wants the factory (the cloud) to act.
+A request to continue, pick up, or iterate on a task locally is `get_task`
+with `start_working = true`, not this tool — except when the user names a
+factory agent as the one who should continue (e.g. "have Wilson continue",
+"ask `<agent>` to continue"), which is a `send_task` hand-off, not a local
+pull-down. See the skill's "Choosing a workflow" section. If the caller
+cancels or denies this call (or any other factory write), that is a
+rejection of the requested action: do not retry the same call automatically.
 
 Inputs:
 - `note` (required) — what the factory should act on: the task description for
