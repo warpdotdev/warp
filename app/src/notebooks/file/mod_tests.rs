@@ -1,4 +1,6 @@
+use std::cell::Cell;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
@@ -21,7 +23,9 @@ use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::notebooks::context_menu::MenuSource;
 use crate::notebooks::editor::keys::NotebookKeybindings;
+use crate::notebooks::editor::view::EditorViewEvent;
 use crate::notebooks::file::is_markdown_file;
+use crate::pane_group::BackingView;
 use crate::search::files::model::FileSearchModel;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
@@ -312,6 +316,46 @@ fn test_load_static() {
             // Rendering should not panic.
             file_notebook.render(ctx);
         });
+    });
+}
+
+#[test]
+fn test_pane_header_find_action_opens_editor_find_bar() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+        handle.update(&mut app, |file_notebook, ctx| {
+            file_notebook.open_static("Test Title", "Searchable content", ctx);
+        });
+
+        let editor = handle.read(&app, |file_notebook, _| file_notebook.editor.clone());
+        let find_bar_opened = Rc::new(Cell::new(false));
+        app.update(|ctx| {
+            let find_bar_opened = find_bar_opened.clone();
+            ctx.subscribe_to_view(&editor, move |_, event, _| {
+                if matches!(event, EditorViewEvent::OpenedFindBar) {
+                    find_bar_opened.set(true);
+                }
+            });
+        });
+
+        let find_action = handle.read(&app, |file_notebook, ctx| {
+            file_notebook
+                .pane_header_overflow_menu_items(ctx)
+                .into_iter()
+                .find(|item| item.fields().is_some_and(|fields| fields.label() == "Find"))
+                .and_then(|item| item.item_on_select_action().cloned())
+                .expect("file viewer overflow menu should expose the Find action")
+        });
+
+        handle.update(&mut app, |file_notebook, ctx| {
+            file_notebook.handle_pane_header_overflow_menu_action(&find_action, ctx);
+        });
+
+        assert!(
+            find_bar_opened.get(),
+            "the overflow action should open the existing editor find bar"
+        );
     });
 }
 
