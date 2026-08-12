@@ -1,6 +1,6 @@
 ---
 name: factory-mcp
-description: Use the Warp Factory MCP to hand work to a software factory and collaborate with it — bundle local work and send it to the cloud, find factory tasks from a Slack thread / Linear ticket / description, and pull a task down to test or iterate locally and hand it back
+description: Use the Warp Factory MCP to hand work to a software factory and collaborate with it — bundle local work and send it to the cloud, resolve factory tasks from a PR / Slack thread / ticket / branch / description, and pull a task down to test, continue locally, or iterate and hand it back
 ---
 
 # factory-mcp
@@ -14,8 +14,10 @@ cloud and your local machine.
 
 This skill covers four everyday workflows:
 1. Start work locally, then **send it to the factory** (bundling it well first).
-2. **List and find** factory work — from a Slack thread, a Linear ticket, or a description.
-3. **Pull a task down** from the factory to test locally.
+2. **Find or continue** factory work — from a PR, a Slack thread, a ticket, a
+   branch, or a description — and decide between read-only status/coordination
+   and continuing it locally.
+3. **Pull a task down** to test or continue locally, in one combined call.
 4. **Pull a task down to iterate**, then **hand it back** to the factory.
 
 ## Prerequisites
@@ -32,6 +34,12 @@ returned fields can evolve. The per-tool reference in
 current surface in more depth; treat it as a starting point, and follow the live
 tool schema when the two differ.
 
+`get_task` is gaining an optional `reference` argument — an alternative to
+`factory_task_uid` that resolves a task directly from a PR/Slack/ticket/branch
+pointer (see Workflow 2). Not every connected server exposes it yet, so check
+the live `get_task` input schema for `reference` each session before relying on
+it, and fall back to the `list_tasks`-based path in Workflow 2 when it's absent.
+
 ## The tools at a glance
 
 - `list_factories` — list the factories visible to you (each with its agent
@@ -41,8 +49,10 @@ tool schema when the two differ.
 - `list_tasks` — list a factory's tasks for discovery (each carries a
   `factory_task_uid`, ticket metadata, stage, linked outputs, `run_url`, and a
   `trigger_url` back to its origin).
-- `get_task` — read one task's full status and history; with `start_working=true`
-  it also returns the exact local git commands to work on it.
+- `get_task` — read one task's full status and history, by `factory_task_uid`
+  or (when the live schema advertises it) an exact `reference` — a PR/Slack/
+  ticket/branch pointer; with `start_working=true` it also returns the exact
+  local git commands to work on it.
 - `send_task` — the **one write path for handing off work**: hand the factory
   new work, or hand an existing task back after working on it locally.
 - `message_foreman` — send an ongoing coordination message (status, question,
@@ -113,17 +123,67 @@ up (see Workflow 2) — retry briefly if it isn't there yet. The context you pas
 (`note`, `branch`, `pr_url`) is delivered into the foreman's intake conversation,
 not surfaced as structured task fields.
 
-## Workflow 2 — List and find factory work
+## Workflow 2 — Find or continue existing factory work
 
-Use this to locate a task from a Slack thread, a Linear ticket, or a plain
-description.
+Use this whenever you have a pointer to existing work — a GitHub PR, a Slack
+thread, a Linear or Jira ticket, a branch — or need to search from a plain
+description. Settle two things before any tool call: what identifies the task,
+and whether you need it locally or only need its status.
+
+### Inspect the reference before you search
+
+When you're handed something concrete — a PR URL, a Slack link, a ticket, a
+branch name — read *that* first (the PR/ticket/thread metadata: title, URL,
+repository) instead of calling `list_tasks` and scanning for a match. The exact
+URL/ID/ref you extract from it is what you hand to `get_task` next.
+
+### Prefer resolving by reference
+
+Check whether the connected `get_task`'s live input schema advertises a
+`reference` argument (see [Prerequisites](#prerequisites)).
+
+**If `reference` is available**, call `get_task` once with the exact identifier
+from above:
+- a GitHub PR URL, e.g. `https://github.com/acme/app/pull/42`
+- a Slack message permalink, e.g. `https://acme.slack.com/archives/C0123/p1234567890123456`
+  (a reply permalink's `thread_ts` is canonicalized to the thread root)
+- a ticket ref or URL — Linear or Jira, e.g. `linear:APP-1234`, `jira:PROJ-123`,
+  a Linear/Jira issue URL, or the generic `ticket:<source>:<id>` form
+- an Oz run URL, a bare run or task UUID, or an explicit `run:<uuid>` /
+  `task:<uuid>` reference — **there is no separate task-URL form**
+- a bare branch name plus `repository` (`owner/repo`), or a self-contained
+  `branch:<owner>/<repo>:<branch>` reference; `get_task` cannot resolve a bare
+  branch without repository scope
+
+Pass `factory_uid` and/or `repository` too whenever you already know them —
+they narrow the match instead of searching across every factory you can see,
+and can resolve an otherwise-ambiguous reference.
+
+```text
+get_task(reference = "https://github.com/acme/app/pull/42")
+```
+
+- A resolved call returns the same task result you'd get by `factory_task_uid`.
+- `resolution_status: "ambiguous"` means several tasks matched: you get a
+  bounded `candidates` list and **no side effect has fired** — no `next_actions`
+  are computed and no foreman notification is sent. Narrow with `factory_uid` /
+  `repository`, or ask which one is right, then re-call using the
+  `factory_task_uid` from the chosen candidate. Don't guess a winner.
+- A reference that matches nothing returns the same not-found result whether no
+  such task exists or you simply can't see it — don't conclude either way from
+  this alone.
+
+**If `reference` is not available yet**, fall back to the list-and-match path
+below.
+
+### Compatibility fallback: list_tasks and match client-side
 
 1. `list_factories` → choose the factory → take its `uid`.
 2. `list_tasks(factory_uid = ...)`. Narrow the set:
-   - `created_by_me = true` for the caller's own tasks (never guess an email).
-     This requires a **user-issued** API key; an agent/automation key has no user
-     identity and this errors, so use `created_by` (or just scan the list)
-     instead.
+   - `created_by_me = true` for the caller's own tasks (never guess an email) —
+     try this first when the task is likely yours. This requires a
+     **user-issued** API key; an agent/automation key has no user identity and
+     this errors, so use `created_by` (or just scan the list) instead.
    - `created_by = "<teammate email>"` for someone else's.
    - Page through results with the returned cursor while `has_next_page` is true;
      one page holds however many whole tasks fit the response size limit.
@@ -140,43 +200,61 @@ description.
 When reporting a task to a human, prefer its `trigger_url` and `run_url` (named
 links) over bare IDs.
 
-## Workflow 3 — Pull a task down to test locally
+Once you've resolved a task by either path, decide what you actually need: for
+plain status or coordination, stay with a read-only `get_task` (as above) or
+`message_foreman`; to work on it locally, continue to Workflow 3.
 
-Use this to check out a factory task's work on your machine and test it.
+## Workflow 3 — Pull a task down to test or continue locally
 
-1. Find the task (Workflow 2) and note its `factory_task_uid`.
-2. Call `get_task` with `start_working = true`. Pass `workspace_dir` (the
-   absolute path of your local clone of the task's repo) so the result renders
-   exact worktree/checkout commands, and optionally `branch` to select which
-   PR's branch to work from (it defaults to the newest pull-request branch in the
-   task's outputs). The result adds an **active-run report** (`active_runs`) and
-   the exact local git `next_actions`. When the task has no branch in its outputs
-   yet, `next_actions` instead starts a fresh worktree from `origin/HEAD`. In a
-   multi-repo factory, make sure `workspace_dir` is a clone of the repo this task
-   targets — `get_task` returns the factory's `factory_repositories` and warns
-   when the target can't be inferred.
-3. Run those `next_actions` yourself — **the server never touches your disk.**
-   They set up the worktree / check out the branch so you can build and test.
+Use this when you need a factory task's code on your machine — to test it or
+keep iterating on it. If you only need status or want to leave a note, use a
+read-only `get_task` or `message_foreman` (Workflow 2) instead — don't pull a
+task down just to check on it.
+
+Make **one combined call** — don't resolve the task and then work it up with a
+separate call:
 
 ```text
 get_task(
-  factory_task_uid = "<uid>",
+  reference        = "<PR/Slack/ticket/branch reference, from Workflow 2>",
+  # or factory_task_uid = "<uid>" if that's what the fallback path gave you
   start_working    = true,
+  notify_foreman   = true,               # optional: one-shot pickup heads-up
   workspace_dir    = "/abs/path/to/local/clone",
   branch           = "<optional: a specific PR branch>"
 )
 ```
 
+This resolves the reference to a single task and, only when resolution is
+unambiguous, hydrates it, returns `next_actions`, and sends the pickup
+notification — all in the same round trip. An ambiguous reference instead
+returns `candidates` and fires none of those side effects (see Workflow 2);
+narrow it and re-call before setting `start_working`.
+
+Pass `workspace_dir` (the absolute path of your local clone of the task's repo)
+so the result renders exact worktree/checkout commands, and optionally `branch`
+to select which PR's branch to work from (it defaults to the newest
+pull-request branch in the task's outputs). The result adds an **active-run
+report** (`active_runs`) and the exact local git `next_actions`. When the task
+has no branch in its outputs yet, `next_actions` instead starts a fresh
+worktree from `origin/HEAD`. In a multi-repo factory, make sure `workspace_dir`
+is a clone of the repo this task targets — `get_task` returns the factory's
+`factory_repositories` and warns when the target can't be inferred.
+
+Run those `next_actions` yourself in an **isolated worktree** of your own —
+**the server never touches your disk**, and a dedicated worktree keeps this
+task's checkout separate from any unrelated local changes.
+
 ## Workflow 4 — Pull a task down to iterate, then send it back
 
 Use this to make local changes to a factory task and return it to the factory.
 
-1. Pull the task down exactly as in Workflow 3 (`get_task` with
-   `start_working = true` and run the `next_actions`). Optionally set
-   `notify_foreman = true` with a short `note` to give the task's foreman a
-   one-shot pickup heads-up that you are taking it locally — it also tells the
-   foreman which branch you are starting from (`notify_foreman` requires
-   `start_working = true`).
+1. Pull the task down exactly as in Workflow 3 — one combined `get_task` call
+   with `start_working = true`, and run the `next_actions`. Optionally include
+   `notify_foreman = true` with a short `note` in that same call to give the
+   task's foreman a one-shot pickup heads-up that you are taking it locally —
+   it also tells the foreman which branch you are starting from
+   (`notify_foreman` requires `start_working = true`).
 2. Iterate locally: make your changes, commit them, and **push the branch.** You
    must push before handing the work back — the factory acts on the pushed
    branch, not your local state.
@@ -236,6 +314,12 @@ successful no-op. Do not use it to move a task to any other stage.
 
 ## Inspecting the foreman conversation
 
+Reach for `get_conversation` only when you have a named context gap that the
+task's fields, its `note`, or your own context can't fill — it is not a default
+step in any workflow above. When you do call it, start small: pass `limit`
+around 10–15 turns (e.g. `limit = 12`) instead of the default 50-turn window,
+and page further back only if that's still not enough.
+
 To analyze or drive a task, read its foreman transcript with `get_conversation`
 (by `factory_task_uid`). It returns a bounded, most-recent-first window of turns
 (each with the decoded message, type, id, and timestamp). When older turns
@@ -247,6 +331,16 @@ complete raw transcript when the window is not enough.
 
 - **Resolve the factory first.** Every task-level tool needs a `factory_uid` (or
   a `factory_task_uid` that came from `list_tasks`); start with `list_factories`.
+- **A concrete reference beats listing.** When you're given a PR, Slack thread,
+  ticket, or branch, resolve it directly with `get_task(reference = ...)` when
+  your session's schema advertises it, instead of listing tasks and matching
+  client-side; pass `factory_uid` / `repository` to narrow or disambiguate it.
+- **One combined call to work locally.** Resolve and pick up a task in a single
+  `get_task(..., start_working = true, workspace_dir = ...)` call rather than
+  resolving first and calling again to start working.
+- **Ambiguous never notifies.** A `reference` matching more than one task
+  returns bounded `candidates` and skips `next_actions` / foreman notification
+  until you narrow it to one — don't guess a winner.
 - **`send_task` is the only write path for handing off work.** New work needs
   `factory_uid` + `title`; a hand-back needs `factory_task_uid`. Never open a
   second task for the same unit of work — hand it back to the same

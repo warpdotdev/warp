@@ -8,6 +8,9 @@ follow the live schema.
 
 Every task-level tool is keyed off IDs that come from the discovery tools: a
 `factory_uid` from `list_factories`, and a `factory_task_uid` from `list_tasks`.
+`get_task` additionally accepts an exact `reference` (a PR/Slack/ticket/branch
+pointer) as an alternative to `factory_task_uid`, when the connected server's
+live schema advertises it.
 
 ## list_factories
 
@@ -72,7 +75,16 @@ tasks fit the tool response size limit.
 
 ## get_task
 
-Get one factory task by its authoritative `factory_task_uid`.
+Get one factory task, either by its authoritative `factory_task_uid` or — when
+the connected server's live schema advertises it — by an exact `reference`: a
+GitHub PR URL, a Slack message permalink, a ticket ref/URL (Linear, Jira, or
+generic `ticket:<source>:<id>`), an Oz run URL, a bare run/task UUID, an
+explicit `run:<uuid>` / `task:<uuid>` reference, or a repository-scoped branch
+(there is no separate task-URL form). Exactly one of `factory_task_uid` /
+`reference` identifies the task. **`reference` is a newer addition and may not
+be present on every server** — check your session's live input schema before
+relying on it, and fall back to `list_tasks` + client-side matching (see the
+skill's Workflow 2) when it's absent.
 
 Default (read-only): status and context (runs, stage, outputs) — safe to call
 anytime. The task and every run in its history carry a `run_url` opening them in
@@ -80,17 +92,43 @@ Oz; runs an integration triggered also carry `trigger_source` and a `trigger_url
 back to that origin (runs the factory dispatched itself have no trigger). Prefer
 these links over bare IDs when reporting a task to a human.
 
+Ambiguous reference: when `reference` matches more than one task, the call
+returns `resolution_status = "ambiguous"` with a bounded `candidates` list
+instead of the normal task result. No hydration, `next_actions`, or foreman
+notification happens for an ambiguous (or not-found) reference. Narrow with
+`factory_uid` / `repository`, or resolve by an explicit `factory_task_uid` from
+a chosen candidate.
+
+Not found: a `reference` that resolves to nothing returns the same result
+whether no such task exists or the caller can't see it — never assume
+non-existence from this alone.
+
 Working locally: set `start_working = true` and the result additionally returns
 an active-run report (`active_runs`), the factory's `factory_repositories`, and
 exact local git `next_actions`. **The server never touches the caller's disk** —
-you run the returned commands yourself. When the task has no branch in its
-outputs yet, `next_actions` starts a fresh worktree from `origin/HEAD`; in a
-multi-repo factory it warns to point `workspace_dir` at the repo the task
-targets. Once work is underway, use `message_foreman` rather than re-calling
-this tool to say something.
+you run the returned commands yourself, in your own isolated worktree. When the
+task has no branch in its outputs yet, `next_actions` starts a fresh worktree
+from `origin/HEAD`; in a multi-repo factory it warns to point `workspace_dir` at
+the repo the task targets. `start_working` and `notify_foreman` apply only once
+a `reference` resolves to exactly one task — an ambiguous match fires neither.
+Once work is underway, use `message_foreman` rather than re-calling this tool to
+say something.
 
 Inputs:
-- `factory_task_uid` (required) — authoritative task UID from `list_tasks`.
+- `factory_task_uid` — authoritative task UID from `list_tasks`. Required unless
+  `reference` is given.
+- `reference` — alternative to `factory_task_uid`: an exact pointer to the task —
+  a GitHub PR URL, a Slack message permalink, a ticket ref/URL (`linear:<id>`,
+  `jira:<id>`, a Linear/Jira issue URL, or generic `ticket:<source>:<id>`), an
+  Oz run URL, a bare run/task UUID, an explicit `run:<uuid>` / `task:<uuid>`
+  reference, or a bare branch name (requires `repository`) / self-contained
+  `branch:<owner>/<repo>:<branch>` reference — **there is no task-URL form**.
+  Required unless `factory_task_uid` is given. Only present when the connected
+  server's live schema advertises it.
+- `factory_uid` — optional scope to narrow a `reference` lookup to one factory;
+  also helps disambiguate multiple candidates.
+- `repository` — optional `owner/repo` scope to narrow a `reference` lookup;
+  required when `reference` is a bare branch name.
 - `start_working` — set when the caller wants to work on this task locally; adds
   the active-run report and local git `next_actions`.
 - `workspace_dir` — absolute path of a local clone of the task's repo, used only
@@ -192,10 +230,14 @@ result is a bounded window: it returns the most recent turns by default, sets
 `next_before_index` to page toward the start. A `download_url` is a short-lived
 link to the complete raw transcript when the window is not enough.
 
+Call this only for a named context gap, not as a routine step, and pass a small
+`limit` (around 10–15, e.g. `12`) rather than the default — you rarely need the
+full 50-turn window.
+
 Inputs:
 - `factory_task_uid` (required) — authoritative task UID from `list_tasks`.
 - `limit` — max turns to return in the recent-first window; defaults to 50,
-  capped at 200.
+  capped at 200. Prefer a small value (around 10–15) for a targeted context gap.
 - `before_index` — page toward the start: return the turns immediately before
   this 0-based turn index (pass `next_before_index` from a prior call); omit to
   read the most recent turns.
