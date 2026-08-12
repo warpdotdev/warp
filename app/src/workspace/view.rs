@@ -1065,6 +1065,9 @@ pub struct Workspace {
     import_modal: ViewHandle<ImportModal>,
     theme_chooser_view: ViewHandle<ThemeChooser>,
     previous_theme: Option<ThemeKind>,
+    /// Fixed at construction so the background gif's elapsed time grows
+    /// across `render()` calls instead of resetting on every repaint.
+    background_image_animation_start_time: std::time::Instant,
     reward_modal: ViewHandle<Modal<RewardView>>,
     reward_modal_pending: Option<RewardKind>,
     pub(crate) current_workspace_state: WorkspaceState,
@@ -3425,6 +3428,7 @@ impl Workspace {
             ctrl_tab_palette,
             mouse_states: Default::default(),
             previous_theme: None,
+            background_image_animation_start_time: std::time::Instant::now(),
             settings_pane,
             theme_chooser_view,
             reward_modal,
@@ -27708,7 +27712,9 @@ impl View for Workspace {
                             .cover()
                             .with_opacity(opacity_ratio)
                             .with_corner_radius(window_corner_radius)
-                            .enable_animation_with_start_time(std::time::Instant::now())
+                            .enable_animation_with_start_time(
+                                self.background_image_animation_start_time,
+                            )
                             .finish(),
                     )
                     .finish(),
