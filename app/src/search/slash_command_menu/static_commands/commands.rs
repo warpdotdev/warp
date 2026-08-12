@@ -27,7 +27,7 @@ pub static CLOUD_AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand
     description: "Start a new cloud agent conversation",
     kind: SlashCommandKind::CloudAgent,
     supported_surfaces: SlashCommandSurfaces::GuiOnly {
-        icon_path: "bundled/svg/oz-cloud.svg",
+        icon_path: "bundled/svg/warp-3.svg",
     },
     availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
@@ -565,7 +565,7 @@ pub static HOST: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     description: "Switch the cloud agent execution host",
     kind: SlashCommandKind::Host,
     supported_surfaces: SlashCommandSurfaces::GuiOnly {
-        icon_path: "bundled/svg/oz-cloud.svg",
+        icon_path: "bundled/svg/warp-3.svg",
     },
     availability: Availability::AGENT_VIEW
         | Availability::AI_ENABLED
