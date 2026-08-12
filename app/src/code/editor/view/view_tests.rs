@@ -11,6 +11,7 @@ use warpui::{App, TypedActionView, ViewHandle, WindowId};
 use super::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction};
 use crate::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::code::editor::find::view::FindAction;
 use crate::editor::InteractionState;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::server::server_api::team::MockTeamClient;
@@ -85,5 +86,36 @@ fn test_interaction_state_prevents_editing() {
         });
 
         assert_eq!(text.as_str(), "abc");
+    });
+}
+
+#[test]
+fn test_clicking_disabled_find_input_makes_it_editable_again() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view) = initialize_editor(&mut app);
+
+        let find_bar = editor_view
+            .update(&mut app, |view, ctx| {
+                view.handle_action(&CodeEditorViewAction::ShowFindBar, ctx);
+                view.find_bar_for_test().cloned()
+            })
+            .expect("code editor should have a find bar");
+
+        // Submitting a query in Vim mode disables the find input and moves focus to the editor.
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.set_find_input_editable(ctx, false);
+        });
+        editor_view.update(&mut app, |view, ctx| view.focus(ctx));
+
+        assert!(!find_bar.read(&app, |find_bar, ctx| find_bar.is_find_input_editable(ctx)));
+        assert!(!find_bar.read(&app, |find_bar, ctx| find_bar.is_find_input_focused(ctx)));
+
+        // Clicking the find input dispatches `FocusFindInput`.
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.handle_action(&FindAction::FocusFindInput, ctx);
+        });
+
+        assert!(find_bar.read(&app, |find_bar, ctx| find_bar.is_find_input_editable(ctx)));
+        assert!(find_bar.read(&app, |find_bar, ctx| find_bar.is_find_input_focused(ctx)));
     });
 }

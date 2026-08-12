@@ -63,6 +63,7 @@ struct ButtonMouseStates {
     toggle_regex_search: MouseStateHandle,
     toggle_replace_open: MouseStateHandle,
     toggle_preserve_case: MouseStateHandle,
+    find_input: MouseStateHandle,
 }
 
 #[derive(Debug)]
@@ -101,6 +102,7 @@ pub enum FindAction {
     ToggleReplaceOpen,
     ReplaceAll,
     TogglePreserveCase,
+    FocusFindInput,
 }
 
 pub fn init(app: &mut AppContext) {
@@ -268,6 +270,11 @@ impl CodeEditorFind {
         self.find_editor.as_ref(app).can_edit(app)
     }
 
+    #[cfg(test)]
+    pub(crate) fn is_find_input_focused(&self, app: &AppContext) -> bool {
+        self.find_editor.as_ref(app).is_focused()
+    }
+
     /// Enable or disable the find input editor's interactivity.
     pub fn set_find_input_editable(&self, ctx: &mut ViewContext<Self>, is_editable: bool) {
         self.find_editor.update(ctx, |editor, ctx| {
@@ -409,6 +416,25 @@ impl CodeEditorFind {
 
     fn close_find_bar(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.emit(Event::CloseFindBar);
+    }
+
+    /// Makes the find input editable and focuses it. Vim mode leaves the input disabled once the
+    /// query has been submitted, so this is how a click on the field resumes editing the query.
+    /// Does nothing when the input is already focused and editable, so that a click near the edge
+    /// of the field does not reset the caret the editor just placed.
+    fn focus_find_input(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_focused = self.find_editor.as_ref(ctx).is_focused();
+        let is_editable = self.find_editor.as_ref(ctx).can_edit(ctx);
+        if is_focused && is_editable {
+            return;
+        }
+
+        self.find_editor.update(ctx, |editor, ctx| {
+            editor.set_interaction_state(InteractionState::Editable, ctx);
+            editor.select_all(ctx);
+        });
+        ctx.focus(&self.find_editor);
+        ctx.notify();
     }
 
     fn toggle_case_sensitivity(&mut self, ctx: &mut ViewContext<Self>) {
@@ -811,25 +837,30 @@ impl CodeEditorFind {
                 .with_margin_right(HORIZONTAL_ICON_SPACING)
                 .finish(),
             );
-        find_row.add_child(
-            Shrinkable::new(
-                1.,
-                Container::new(query_editor_row.finish())
-                    .with_padding_right(4.)
-                    .with_padding_left(8.)
-                    .with_background(appearance.theme().surface_1())
-                    .with_border(
-                        Border::all(FIND_EDITOR_BORDER_WIDTH)
-                            .with_border_fill(appearance.theme().surface_3()),
-                    )
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
-                        FIND_EDITOR_BORDER_RADIUS,
-                    )))
-                    .with_margin_right(2. * HORIZONTAL_ICON_SPACING)
-                    .finish(),
-            )
-            .finish(),
-        );
+        // The find editor consumes clicks itself while it is editable. Vim mode disables the
+        // input once a query has been submitted, and a disabled editor ignores mouse events, so
+        // this handler catches those clicks and hands focus back to the input.
+        let find_input = Hoverable::new(self.button_mouse_states.find_input.clone(), |_| {
+            Container::new(query_editor_row.finish())
+                .with_padding_right(4.)
+                .with_padding_left(8.)
+                .with_background(appearance.theme().surface_1())
+                .with_border(
+                    Border::all(FIND_EDITOR_BORDER_WIDTH)
+                        .with_border_fill(appearance.theme().surface_3()),
+                )
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                    FIND_EDITOR_BORDER_RADIUS,
+                )))
+                .with_margin_right(2. * HORIZONTAL_ICON_SPACING)
+                .finish()
+        })
+        .with_defer_events_to_children()
+        .on_mouse_down(move |ctx, _, _| {
+            ctx.dispatch_typed_action(FindAction::FocusFindInput);
+        })
+        .finish();
+        find_row.add_child(Shrinkable::new(1., find_input).finish());
         find_row
             .add_child(Container::new(ChildView::new(&self.select_all_button).finish()).finish());
         find_row.finish()
@@ -914,6 +945,7 @@ impl TypedActionView for CodeEditorFind {
                 self.preserve_case_enabled = !self.preserve_case_enabled;
                 ctx.notify();
             }
+            FindAction::FocusFindInput => self.focus_find_input(ctx),
         }
     }
 }

@@ -500,6 +500,11 @@ impl CodeEditorView {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn find_bar_for_test(&self) -> Option<&ViewHandle<Find>> {
+        self.find_bar.as_ref()
+    }
+
     fn find_bar_open(&self, ctx: &mut ViewContext<Self>) -> bool {
         if let Some(find) = &self.find_bar {
             find.as_ref(ctx).is_open()
