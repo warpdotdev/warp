@@ -1,7 +1,10 @@
-use super::{MemberUsageRow, SourceFilter};
+use super::{MemberUsageRow, SourceFilter, members_for_team};
+use crate::auth::UserUid;
+use crate::server::ids::ServerId;
+use crate::workspaces::team::{MembershipRole, Team, TeamMember};
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    AiCreditsUsageSource, BillingCycleUsageEntry,
+    AiCreditsUsageSource, BillingCycleUsageEntry, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 const VIEWER_UID: &str = "viewer-uid";
@@ -18,6 +21,7 @@ fn entry(
         subject_type,
         subject_uid: subject_uid.map(|s| s.to_string()),
         subject_display_name: None,
+        attributed_team_uid: None,
         cost_type: AiCreditsUsageAndCostType::BaseLimit,
         usage_bucket: AiCreditsUsageBucket::Ai,
         usage_source,
@@ -136,4 +140,49 @@ fn build_own_usage_row_cloud_filter_drops_local_entries() {
         SourceFilter::Cloud,
     );
     assert_eq!(row.total_credits, 20);
+}
+
+fn team_member(uid: &str, email: &str) -> TeamMember {
+    TeamMember {
+        uid: UserUid::new(uid),
+        email: email.to_string(),
+        role: MembershipRole::User,
+    }
+}
+
+fn workspace_member(uid: &str, email: &str) -> WorkspaceMember {
+    WorkspaceMember {
+        uid: UserUid::new(uid),
+        email: email.to_string(),
+        role: MembershipRole::User,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: false,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    }
+}
+
+#[test]
+fn members_for_team_excludes_sibling_team_members() {
+    // Regression: a workspace can bundle multiple teams (native workspaces),
+    // and `Workspace::members` spans every one of them. A member of Team B
+    // must never appear when rendering Team A's usage page.
+    let team_a = Team::from_local_cache(
+        ServerId::from(1i64),
+        "Team A".to_string(),
+        None,
+        None,
+        Some(vec![team_member(VIEWER_UID, "viewer@warp.dev")]),
+    );
+    let workspace_members = vec![
+        workspace_member(VIEWER_UID, "viewer@warp.dev"),
+        workspace_member(OTHER_UID, "other@warp.dev"),
+    ];
+
+    let scoped = members_for_team(&workspace_members, &team_a);
+
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0].email, "viewer@warp.dev");
 }

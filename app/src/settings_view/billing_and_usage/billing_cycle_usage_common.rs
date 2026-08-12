@@ -197,6 +197,30 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
         .collect()
 }
 
+/// Scopes `entries` to a single team, mirroring the web client's
+/// `filterEntriesByAttributedTeam`. The native billing/usage view always
+/// renders exactly one team's window — there is no "workspace admin panel"
+/// mode here — so this filter should be applied unconditionally once the
+/// current team is known, before entries are used for team totals or
+/// per-member rows, so both consume the same scoped set.
+///
+/// A workspace can bundle multiple teams (native workspaces), and both
+/// `Workspace::members` and `Workspace::billing_cycle_usage` span every team
+/// in the workspace, not just the one currently being viewed. Entries with
+/// no `attributed_team_uid` (teamless subjects) are dropped: their usage
+/// still counts at the workspace level, but has no single team to attribute
+/// a row to here.
+pub fn filter_entries_to_team(
+    entries: &[BillingCycleUsageEntry],
+    team_uid: &str,
+) -> Vec<BillingCycleUsageEntry> {
+    entries
+        .iter()
+        .filter(|e| e.attributed_team_uid.as_deref() == Some(team_uid))
+        .cloned()
+        .collect()
+}
+
 /// Cost-type buckets to surface in the usage legend, in display order.
 ///
 /// Mirrors the buckets the stacked bars actually render: legacy buckets are

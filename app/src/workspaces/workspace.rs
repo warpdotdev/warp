@@ -602,6 +602,11 @@ pub struct BillingCycleUsageEntry {
     pub subject_type: AiCreditsUsageAndCostSubjectType,
     pub subject_uid: Option<String>,
     pub subject_display_name: Option<String>,
+    /// The team the subject was on at request time, or `None` for a
+    /// teamless subject. Scopes workspace-wide usage down to a single
+    /// team; see callers of `filter_entries_to_team` in
+    /// billing_cycle_usage_section.rs.
+    pub attributed_team_uid: Option<String>,
     pub cost_type: AiCreditsUsageAndCostType,
     pub usage_bucket: AiCreditsUsageBucket,
     pub usage_source: AiCreditsUsageSource,

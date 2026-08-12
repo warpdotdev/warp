@@ -1,5 +1,6 @@
 use super::{
-    BarSegment, aggregate_segments, filter_legacy_buckets, has_non_viewer_data, legend_cost_types,
+    BarSegment, aggregate_segments, filter_entries_to_team, filter_legacy_buckets,
+    has_non_viewer_data, legend_cost_types,
 };
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
@@ -18,10 +19,34 @@ fn entry(
     credits_used: i32,
     cost_cents: i32,
 ) -> BillingCycleUsageEntry {
+    entry_for_team(
+        subject_type,
+        subject_uid,
+        None,
+        cost_type,
+        usage_bucket,
+        usage_source,
+        credits_used,
+        cost_cents,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn entry_for_team(
+    subject_type: AiCreditsUsageAndCostSubjectType,
+    subject_uid: Option<&str>,
+    attributed_team_uid: Option<&str>,
+    cost_type: AiCreditsUsageAndCostType,
+    usage_bucket: AiCreditsUsageBucket,
+    usage_source: AiCreditsUsageSource,
+    credits_used: i32,
+    cost_cents: i32,
+) -> BillingCycleUsageEntry {
     BillingCycleUsageEntry {
         subject_type,
         subject_uid: subject_uid.map(|s| s.to_string()),
         subject_display_name: None,
+        attributed_team_uid: attributed_team_uid.map(|s| s.to_string()),
         cost_type,
         usage_bucket,
         usage_source,
@@ -373,4 +398,60 @@ fn legend_cost_types_excludes_legacy_only_buckets() {
         legend_cost_types(&entries).is_empty(),
         "legacy-only base-limit usage must not surface any legend bucket"
     );
+}
+
+const TEAM_A_UID: &str = "team-a";
+const TEAM_B_UID: &str = "team-b";
+
+#[test]
+fn filter_entries_to_team_keeps_only_matching_team() {
+    // Regression: a workspace member's entry attributed to a sibling team
+    // (native workspaces bundle multiple teams) must never leak into this
+    // team's usage view.
+    let entries = vec![
+        entry_for_team(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            Some(TEAM_A_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            10,
+            0,
+        ),
+        entry_for_team(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(OTHER_UID),
+            Some(TEAM_B_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            999,
+            999,
+        ),
+    ];
+
+    let filtered = filter_entries_to_team(&entries, TEAM_A_UID);
+
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].subject_uid.as_deref(), Some(VIEWER_UID));
+}
+
+#[test]
+fn filter_entries_to_team_drops_teamless_entries() {
+    // A workspace member with no team membership carries `attributed_team_uid
+    // = None`; their usage rolls up at the workspace level but has no single
+    // team to attribute a row to on a team-scoped page.
+    let entries = vec![entry_for_team(
+        AiCreditsUsageAndCostSubjectType::User,
+        Some(OTHER_UID),
+        None,
+        AiCreditsUsageAndCostType::BaseLimit,
+        AiCreditsUsageBucket::Ai,
+        AiCreditsUsageSource::Local,
+        5,
+        0,
+    )];
+
+    assert!(filter_entries_to_team(&entries, TEAM_A_UID).is_empty());
 }

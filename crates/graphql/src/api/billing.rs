@@ -384,6 +384,10 @@ pub struct UsageEntry {
     pub subject_type: AiCreditsUsageAndCostSubjectType,
     pub subject_uid: Option<String>,
     pub subject_display_name: Option<String>,
+    /// The team the subject was on at request time, or `None` for a
+    /// teamless subject. Used to scope workspace-wide usage down to a
+    /// single team on the client (see `BillingCycleUsageEntry`).
+    pub attributed_team_uid: Option<String>,
     pub cost_type: AiCreditsUsageAndCostType,
     pub usage_bucket: AiCreditsUsageBucket,
     pub usage_source: AiCreditsUsageSource,

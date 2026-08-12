@@ -24,6 +24,7 @@ use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
 };
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
+use crate::workspaces::team::Team;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource, BillingCycleUsageEntry, UsageVisibility, UsageVisibilityGranularity,
@@ -282,8 +283,23 @@ impl MemberUsageRow {
     }
 }
 
+/// `workspace.members` spans every team in a (possibly multi-team, native
+/// workspaces) workspace; intersect with `team`'s own roster so members of a
+/// sibling team never surface in that team's usage view, mirroring the web
+/// client's `individualUsageMembers`.
+fn members_for_team(workspace_members: &[WorkspaceMember], team: &Team) -> Vec<WorkspaceMember> {
+    let team_member_uids: std::collections::HashSet<_> =
+        team.members.iter().map(|m| m.uid).collect();
+    workspace_members
+        .iter()
+        .filter(|m| team_member_uids.contains(&m.uid))
+        .cloned()
+        .collect()
+}
+
 fn build_rows(
     workspace: &Workspace,
+    team: &Team,
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
     source_filter: SourceFilter,
@@ -312,7 +328,8 @@ fn build_rows(
             rows
         }
         UsageVisibilityGranularity::PerUserTotals | UsageVisibilityGranularity::FullBreakdown => {
-            MemberUsageRow::for_each_member(entries, &workspace.members, source_filter)
+            let team_members = members_for_team(&workspace.members, team);
+            MemberUsageRow::for_each_member(entries, &team_members, source_filter)
         }
     };
 
@@ -753,6 +770,7 @@ pub fn render_own_usage_solo_row(
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows(
     workspace: &Workspace,
+    team: &Team,
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
     source_filter: SourceFilter,
@@ -761,7 +779,7 @@ pub fn render_rows(
     app: &AppContext,
     on_filter_change: FilterChangeFn,
 ) -> Box<dyn Element> {
-    let rows = build_rows(workspace, entries, visibility, source_filter, app);
+    let rows = build_rows(workspace, team, entries, visibility, source_filter, app);
 
     let mut column = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
