@@ -668,7 +668,7 @@ const CONTEXT_MENU_WIDTH: f32 = 280.;
 const MIN_DELTA_FOR_TEXT_SELECTION: f32 = 0.5;
 
 /// Notifications-specific info
-/// TODO (suraj): add documentation for notifications in gitbook
+/// TODO (suraj): add documentation for notifications in docs
 const NOTIFICATIONS_LEARN_MORE_URL: &str =
     "https://docs.warp.dev/terminal/more-features/notifications";
 pub const NOTIFICATIONS_TROUBLESHOOT_URL: &str =
