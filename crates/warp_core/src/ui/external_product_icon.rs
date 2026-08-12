@@ -19,23 +19,20 @@ pub enum ExternalProductIcon {
 impl ExternalProductIcon {
     /// Product name prefixes, matched case-insensitively against the start of a
     /// server title. Add a new product by adding a row here.
-    const PREFIXES: &'static [(&'static str, ExternalProductIcon)] = &[
-        ("heroku", ExternalProductIcon::Heroku),
-        ("notion", ExternalProductIcon::Notion),
-        ("linear", ExternalProductIcon::Linear),
-        ("figma", ExternalProductIcon::Figma),
-        ("github", ExternalProductIcon::Github),
-        ("slack", ExternalProductIcon::Slack),
-        ("composio", ExternalProductIcon::Composio),
-        ("resend", ExternalProductIcon::Resend),
-        ("sentry", ExternalProductIcon::Sentry),
-        ("you.com", ExternalProductIcon::YouDotCom),
+    const PREFIXES: &'static [(&'static str, Self)] = &[
+        ("heroku", Self::Heroku),
+        ("notion", Self::Notion),
+        ("linear", Self::Linear),
+        ("figma", Self::Figma),
+        ("github", Self::Github),
+        ("slack", Self::Slack),
+        ("composio", Self::Composio),
+        ("resend", Self::Resend),
+        ("sentry", Self::Sentry),
+        ("you.com", Self::YouDotCom),
     ];
 
-    /// Matches when the title starts with a known product name, case-insensitively,
-    /// so decorated titles like "Sentry (OAuth)" still resolve to the base
-    /// product's icon.
-    pub fn from_string(s: &str) -> Option<ExternalProductIcon> {
+    pub fn from_string(s: &str) -> Option<Self> {
         let s_lower = s.to_ascii_lowercase();
         Self::PREFIXES
             .iter()
@@ -45,16 +42,16 @@ impl ExternalProductIcon {
 
     pub fn get_path(&self) -> &'static str {
         match self {
-            ExternalProductIcon::Heroku => "bundled/svg/heroku.svg",
-            ExternalProductIcon::Notion => "bundled/svg/notion.svg",
-            ExternalProductIcon::Linear => "bundled/svg/linear.svg",
-            ExternalProductIcon::Figma => "bundled/svg/figma.svg",
-            ExternalProductIcon::Github => "bundled/svg/github.svg",
-            ExternalProductIcon::Slack => "bundled/svg/slack-logo.svg",
-            ExternalProductIcon::Composio => "bundled/svg/composio.svg",
-            ExternalProductIcon::Resend => "bundled/svg/resend.svg",
-            ExternalProductIcon::Sentry => "bundled/svg/sentry.svg",
-            ExternalProductIcon::YouDotCom => "bundled/svg/you-com.svg",
+            Self::Heroku => "bundled/svg/heroku.svg",
+            Self::Notion => "bundled/svg/notion.svg",
+            Self::Linear => "bundled/svg/linear.svg",
+            Self::Figma => "bundled/svg/figma.svg",
+            Self::Github => "bundled/svg/github.svg",
+            Self::Slack => "bundled/svg/slack-logo.svg",
+            Self::Composio => "bundled/svg/composio.svg",
+            Self::Resend => "bundled/svg/resend.svg",
+            Self::Sentry => "bundled/svg/sentry.svg",
+            Self::YouDotCom => "bundled/svg/you-com.svg",
         }
     }
 
