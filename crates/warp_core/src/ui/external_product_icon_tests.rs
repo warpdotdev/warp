@@ -62,3 +62,45 @@ fn returns_none_for_unknown_title() {
 
     assert!(icon.is_none());
 }
+
+#[test]
+fn matches_title_with_nested_trailing_parenthetical_qualifier() {
+    let icon = ExternalProductIcon::from_string("Sentry (OAuth (work))");
+
+    assert_eq!(icon.map(|i| i.get_path()), Some("bundled/svg/sentry.svg"));
+}
+
+#[test]
+fn returns_none_for_unbalanced_trailing_parenthetical() {
+    let icon = ExternalProductIcon::from_string("Sentry (OAuth))");
+
+    assert!(icon.is_none());
+}
+
+#[test]
+fn returns_none_for_title_with_unclosed_parenthetical() {
+    let icon = ExternalProductIcon::from_string("Sentry (OAuth");
+
+    assert!(icon.is_none());
+}
+
+#[test]
+fn returns_none_for_title_with_multiple_trailing_parenthetical_groups() {
+    let icon = ExternalProductIcon::from_string("Sentry (a)(b)");
+
+    assert!(icon.is_none());
+}
+
+#[test]
+fn returns_none_for_whitespace_only_title() {
+    let icon = ExternalProductIcon::from_string("   ");
+
+    assert!(icon.is_none());
+}
+
+#[test]
+fn returns_none_for_empty_title() {
+    let icon = ExternalProductIcon::from_string("");
+
+    assert!(icon.is_none());
+}

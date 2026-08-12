@@ -33,22 +33,48 @@ impl ExternalProductIcon {
         }
     }
 
-    /// Strips a single trailing parenthetical qualifier (e.g. "Sentry (OAuth)" ->
-    /// "sentry") so decorated server titles still resolve to their base product's
-    /// icon, then lowercases the result for matching. A title made up entirely of
-    /// a parenthetical (no base text before it) is left untouched, since there is
-    /// nothing to safely strip. This intentionally does not strip or match
-    /// anywhere else in the title, so unrelated titles that merely contain a known
-    /// product name (e.g. "GitHub scraper thing") still fall through to `None`.
+    /// Strips a single, fully-balanced trailing parenthetical qualifier (e.g.
+    /// "Sentry (OAuth)" -> "sentry", "Sentry (OAuth (work))" -> "sentry") so
+    /// decorated server titles still resolve to their base product's icon, then
+    /// lowercases the result for matching. This intentionally does not strip or
+    /// match anywhere else in the title, so unrelated titles that merely contain
+    /// a known product name (e.g. "GitHub scraper thing") still fall through to
+    /// `None`.
     fn normalize_title(s: &str) -> String {
         let trimmed = s.trim();
-        let base = match trimmed.rfind('(') {
-            Some(paren_idx) if paren_idx > 0 && trimmed.ends_with(')') => {
-                trimmed[..paren_idx].trim_end()
-            }
-            _ => trimmed,
-        };
+        let base = Self::strip_trailing_parenthetical(trimmed).unwrap_or(trimmed);
         base.to_ascii_lowercase()
+    }
+
+    /// Returns the text preceding a fully-balanced trailing parenthetical group,
+    /// e.g. "Sentry (OAuth)" -> Some("Sentry"), "Sentry (OAuth (work))" ->
+    /// Some("Sentry"). Returns `None` when the title doesn't end with a balanced
+    /// group (an unmatched or extra closing parenthesis, such as
+    /// "Sentry (OAuth))") or when there is no base text before it (e.g.
+    /// "(OAuth)"), leaving those titles unmodified rather than guessing.
+    fn strip_trailing_parenthetical(s: &str) -> Option<&str> {
+        if !s.ends_with(')') {
+            return None;
+        }
+
+        let mut depth = 0i32;
+        let mut open_idx = None;
+        for (idx, ch) in s.char_indices().rev() {
+            match ch {
+                ')' => depth += 1,
+                '(' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        open_idx = Some(idx);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let base = s[..open_idx?].trim_end();
+        if base.is_empty() { None } else { Some(base) }
     }
 
     pub fn get_path(&self) -> &'static str {
