@@ -288,7 +288,7 @@ fn prepare_codex_environment_config_publishes_factory_skills() {
     }
 
     result.unwrap();
-    let published = home_dir.join(".agents").join("skills").join("linear");
+    let published = working_dir.join(".agents").join("skills").join("linear");
     assert!(
         fs::symlink_metadata(&published)
             .unwrap()
@@ -299,6 +299,98 @@ fn prepare_codex_environment_config_publishes_factory_skills() {
         fs::read_link(&published).unwrap(),
         skills_source.join("linear")
     );
+    // Nothing was published to the Codex home skill root.
+    assert!(!home_dir.join(".agents/skills/linear").exists());
+}
+
+#[test]
+#[serial_test::serial]
+fn prepare_codex_environment_config_publishes_factory_skills_per_working_dir() {
+    // Two "concurrent" tasks with different working directories and different
+    // factory skill sources must not collide, even though both run on the
+    // same host/HOME (the self-hosted direct-backend scenario the review
+    // flagged).
+    let tmp = TempDir::new().unwrap();
+    let home_dir = tmp.path().join("home");
+    fs::create_dir_all(&home_dir).unwrap();
+    let task_a_working_dir = tmp.path().join("workspaces/task-a");
+    let task_b_working_dir = tmp.path().join("workspaces/task-b");
+    fs::create_dir_all(&task_a_working_dir).unwrap();
+    fs::create_dir_all(&task_b_working_dir).unwrap();
+    let task_a_skills = tmp.path().join("task-a-skills");
+    let task_b_skills = tmp.path().join("task-b-skills");
+    for (source, name) in [(&task_a_skills, "github"), (&task_b_skills, "linear")] {
+        fs::create_dir_all(source.join(name)).unwrap();
+        fs::write(
+            source.join(name).join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: test\n---\nBody"),
+        )
+        .unwrap();
+    }
+
+    let prev_home = std::env::var_os("HOME");
+    let prev_openai_api_key = std::env::var_os(OPENAI_API_KEY_ENV);
+    let prev_skill_dirs = std::env::var_os(WARP_SKILL_DIRS_ENV);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", &home_dir) };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var(OPENAI_API_KEY_ENV) };
+
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(WARP_SKILL_DIRS_ENV, &task_a_skills) };
+    let result_a = prepare_codex_environment_config(
+        &task_a_working_dir,
+        None,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+    );
+
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(WARP_SKILL_DIRS_ENV, &task_b_skills) };
+    let result_b = prepare_codex_environment_config(
+        &task_b_working_dir,
+        None,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        None,
+    );
+
+    match prev_home {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(v) => unsafe { std::env::set_var("HOME", v) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    match prev_openai_api_key {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(v) => unsafe { std::env::set_var(OPENAI_API_KEY_ENV, v) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var(OPENAI_API_KEY_ENV) },
+    }
+    match prev_skill_dirs {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(v) => unsafe { std::env::set_var(WARP_SKILL_DIRS_ENV, v) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var(WARP_SKILL_DIRS_ENV) },
+    }
+    result_a.unwrap();
+    result_b.unwrap();
+
+    let published_a = task_a_working_dir.join(".agents").join("skills");
+    let published_b = task_b_working_dir.join(".agents").join("skills");
+    assert_eq!(
+        fs::read_link(published_a.join("github")).unwrap(),
+        task_a_skills.join("github")
+    );
+    assert!(!published_a.join("linear").exists());
+    assert_eq!(
+        fs::read_link(published_b.join("linear")).unwrap(),
+        task_b_skills.join("linear")
+    );
+    assert!(!published_b.join("github").exists());
 }
 
 fn read_codex_config(path: &std::path::Path) -> toml::Table {

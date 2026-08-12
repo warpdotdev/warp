@@ -808,7 +808,7 @@ fn prepare_claude_environment_config_publishes_factory_skills() {
     }
 
     result.unwrap();
-    let published = home_dir.path().join(".claude/skills/github");
+    let published = working_dir.join(".claude").join("skills").join("github");
     assert!(
         fs::symlink_metadata(&published)
             .unwrap()
@@ -819,6 +819,80 @@ fn prepare_claude_environment_config_publishes_factory_skills() {
         fs::read_link(&published).unwrap(),
         skills_source.path().join("github")
     );
+    // Nothing was published to the Claude home skill root.
+    assert!(!home_dir.path().join(".claude/skills/github").exists());
+}
+
+#[test]
+#[serial_test::serial]
+fn prepare_claude_environment_config_publishes_factory_skills_per_working_dir() {
+    // Two "concurrent" tasks with different working directories and different
+    // factory skill sources must not collide, even though both run on the
+    // same host/HOME (the self-hosted direct-backend scenario the review
+    // flagged).
+    let home_dir = TempDir::new().unwrap();
+    let task_a_skills = TempDir::new().unwrap();
+    let task_b_skills = TempDir::new().unwrap();
+    for (source, name) in [(&task_a_skills, "github"), (&task_b_skills, "linear")] {
+        fs::create_dir_all(source.path().join(name)).unwrap();
+        fs::write(
+            source.path().join(name).join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: test\n---\nBody"),
+        )
+        .unwrap();
+    }
+
+    let old_home = std::env::var_os("HOME");
+    let old_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+    let old_skill_dirs = std::env::var_os(WARP_SKILL_DIRS_ENV);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", home_dir.path()) };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
+
+    let task_a_working_dir = home_dir.path().join("workspaces/task-a");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(WARP_SKILL_DIRS_ENV, task_a_skills.path()) };
+    let result_a = prepare_claude_environment_config(&task_a_working_dir, &HashMap::new());
+
+    let task_b_working_dir = home_dir.path().join("workspaces/task-b");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(WARP_SKILL_DIRS_ENV, task_b_skills.path()) };
+    let result_b = prepare_claude_environment_config(&task_b_working_dir, &HashMap::new());
+
+    match old_home {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(home) => unsafe { std::env::set_var("HOME", home) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    match old_config_dir {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(dir) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
+    }
+    match old_skill_dirs {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(dirs) => unsafe { std::env::set_var(WARP_SKILL_DIRS_ENV, dirs) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var(WARP_SKILL_DIRS_ENV) },
+    }
+    result_a.unwrap();
+    result_b.unwrap();
+
+    let published_a = task_a_working_dir.join(".claude").join("skills");
+    let published_b = task_b_working_dir.join(".claude").join("skills");
+    assert_eq!(
+        fs::read_link(published_a.join("github")).unwrap(),
+        task_a_skills.path().join("github")
+    );
+    assert!(!published_a.join("linear").exists());
+    assert_eq!(
+        fs::read_link(published_b.join("linear")).unwrap(),
+        task_b_skills.path().join("linear")
+    );
+    assert!(!published_b.join("github").exists());
 }
 
 #[test]

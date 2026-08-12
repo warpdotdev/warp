@@ -619,22 +619,30 @@ pub(crate) fn prepare_claude_environment_config(
     let api_key_suffix = resolve_anthropic_api_key_suffix(resolved_env_vars);
     prepare_claude_config(&claude_json_path, working_dir, api_key_suffix.as_deref())?;
     prepare_claude_settings(&claude_settings_path)?;
-    publish_factory_skills_for_claude(working_dir, &claude_dir);
+    publish_factory_skills_for_claude(working_dir);
     Ok(())
 }
 
 /// Publish factory playbook skills, under their own names, as symlinks under
-/// the Claude Code skill root (`<claude_dir>/skills`), so a factory agent
-/// running on Claude Code sees the same skills the Oz harness loads from
-/// `WARP_SKILL_DIRS`. A factory skill overrides any existing entry with the
-/// same name (see `factory_skills::publish_factory_skill`). A no-op when no
+/// `<working_dir>/.claude/skills`, so a factory agent running on Claude Code
+/// sees the same skills the Oz harness loads from `WARP_SKILL_DIRS`.
+///
+/// Published into the task's own working directory rather than the Claude
+/// home skill root: Claude Code discovers `.claude/skills` by walking up from
+/// its starting directory to the repository root (or, absent a repository,
+/// just the starting directory itself), so a factory agent's task-scoped
+/// working directory is a skill root Claude Code already searches on its
+/// own. This keeps concurrent tasks (e.g. on a self-hosted direct-backend
+/// worker sharing one host) from publishing into the same shared home
+/// directory. A factory skill overrides any existing entry with the same
+/// name (see `factory_skills::publish_factory_skill`). A no-op when no
 /// factory skill directories are configured for this run.
-fn publish_factory_skills_for_claude(working_dir: &Path, claude_dir: &Path) {
+fn publish_factory_skills_for_claude(working_dir: &Path) {
     let source_dirs = super::factory_skills::factory_skill_source_dirs(working_dir);
     if source_dirs.is_empty() {
         return;
     }
-    let skill_root = claude_dir.join("skills");
+    let skill_root = working_dir.join(".claude").join("skills");
     let published = super::factory_skills::publish_factory_skills(&skill_root, &source_dirs);
     if published > 0 {
         safe_info!(

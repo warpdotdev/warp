@@ -553,23 +553,25 @@ fn prepare_codex_environment_config(
 }
 
 /// Publish factory playbook skills, under their own names, as symlinks under
-/// `$HOME/.agents/skills`, so a factory agent running on Codex sees the same
-/// skills the Oz harness loads from `WARP_SKILL_DIRS`. A factory skill
-/// overrides any existing entry with the same name (see
-/// `factory_skills::publish_factory_skill`). Uses the real home directory
-/// rather than `CODEX_HOME`, matching what Codex's own docs describe for
-/// user skills. A no-op when no factory skill directories are configured for
-/// this run.
+/// `<working_dir>/.agents/skills`, so a factory agent running on Codex sees
+/// the same skills the Oz harness loads from `WARP_SKILL_DIRS`.
+///
+/// Published into the task's own working directory rather than `$HOME` or
+/// `CODEX_HOME`: Codex discovers `.agents/skills` as a REPO-scoped root by
+/// walking up from its starting directory to the repository root (falling
+/// back to just the starting directory itself when no repository is found),
+/// so a factory agent's task-scoped working directory is a skill root Codex
+/// already searches on its own. This keeps concurrent tasks (e.g. on a
+/// self-hosted direct-backend worker sharing one host) from publishing into
+/// the same shared home directory. A factory skill overrides any existing
+/// entry with the same name (see `factory_skills::publish_factory_skill`). A
+/// no-op when no factory skill directories are configured for this run.
 fn publish_factory_skills_for_codex(working_dir: &Path) {
     let source_dirs = super::factory_skills::factory_skill_source_dirs(working_dir);
     if source_dirs.is_empty() {
         return;
     }
-    let Some(home_dir) = dirs::home_dir() else {
-        log::warn!("Factory skill publish: could not determine home directory for Codex");
-        return;
-    };
-    let skill_root = home_dir.join(".agents").join("skills");
+    let skill_root = working_dir.join(".agents").join("skills");
     let published = super::factory_skills::publish_factory_skills(&skill_root, &source_dirs);
     if published > 0 {
         safe_info!(
