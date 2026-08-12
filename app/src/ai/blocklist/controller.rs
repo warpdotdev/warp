@@ -59,7 +59,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::document::ai_document_model::{
     AIDocumentId, AIDocumentModel, AIDocumentUserEditStatus,
 };
-use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::llms::{LLMId, LLMPreferences, LLMProvider};
 use crate::ai::skills::{ActiveSkillLookupError, SkillManager};
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::features::FeatureFlag;
@@ -189,6 +189,15 @@ pub enum BlocklistAIControllerEvent {
 
     ExecuteLocalHarnessCommand {
         command: String,
+    },
+
+    /// Emitted when a request-time Gemini Enterprise credential refresh begins
+    /// (`waiting: true`) or ends (`waiting: false`). The status bar subscribes
+    /// to this event to update the displayed status text.
+    WaitingForCredentialRefresh {
+        stream_id: ResponseStreamId,
+        provider: LLMProvider,
+        waiting: bool,
     },
 }
 
@@ -354,6 +363,11 @@ pub struct BlocklistAIController {
             Option<PassiveSuggestionTrigger>,
         )>,
     >,
+
+    /// Streams currently blocked on a request-time Gemini Enterprise credential
+    /// refresh. Populated by [`ResponseStreamEvent::WaitingForCredentialRefresh`]
+    /// and cleared when the refresh completes or the stream finishes.
+    credential_refresh_waiting_streams: HashMap<ResponseStreamId, LLMProvider>,
 }
 
 enum InputQueryType {
@@ -634,7 +648,37 @@ impl BlocklistAIController {
             pending_local_claude_wakes: HashMap::new(),
             pending_passive_follow_ups: HashSet::new(),
             pending_passive_suggestion_results: HashMap::new(),
+            credential_refresh_waiting_streams: HashMap::new(),
         }
+    }
+
+    /// Returns the provider whose request-time credential refresh is currently
+    /// blocking `stream_id`, or `None` when no refresh is in progress.
+    pub fn credential_refresh_provider(&self, stream_id: &ResponseStreamId) -> Option<LLMProvider> {
+        self.credential_refresh_waiting_streams
+            .get(stream_id)
+            .copied()
+    }
+
+    /// Test helper: set whether `stream_id` is blocked on a GEAP credential refresh.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn set_credential_refresh_waiting_for_test(
+        &mut self,
+        stream_id: ResponseStreamId,
+        waiting: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if waiting {
+            self.credential_refresh_waiting_streams
+                .insert(stream_id.clone(), LLMProvider::Google);
+        } else {
+            self.credential_refresh_waiting_streams.remove(&stream_id);
+        }
+        ctx.emit(BlocklistAIControllerEvent::WaitingForCredentialRefresh {
+            stream_id,
+            provider: LLMProvider::Google,
+            waiting,
+        });
     }
 
     /// Internal method to send a query to the AI model. External callers should use either
@@ -2504,6 +2548,19 @@ impl BlocklistAIController {
             )
         });
         let response_stream_id = response_stream.as_ref(ctx).id().clone();
+        // Recover the initial credential-refresh state before subscribing.
+        // `ResponseStream::spawn_request` may have emitted `WaitingForCredentialRefresh`
+        // during construction (before the subscription below was wired), so we read the
+        // retained state directly and mirror it into the controller map.
+        if let Some(provider) = response_stream.as_ref(ctx).waiting_for_credential_refresh() {
+            self.credential_refresh_waiting_streams
+                .insert(response_stream_id.clone(), provider);
+            ctx.emit(BlocklistAIControllerEvent::WaitingForCredentialRefresh {
+                stream_id: response_stream_id.clone(),
+                provider,
+                waiting: true,
+            });
+        }
         let response_stream_clone = response_stream.clone();
         let input_contains_user_query = request_input
             .all_inputs()
@@ -3010,6 +3067,20 @@ impl BlocklistAIController {
                     }
                 }
             }
+            ResponseStreamEvent::WaitingForCredentialRefresh { provider, waiting } => {
+                // Track which streams are blocked on a request-time credential refresh.
+                if *waiting {
+                    self.credential_refresh_waiting_streams
+                        .insert(stream_id.clone(), *provider);
+                } else {
+                    self.credential_refresh_waiting_streams.remove(&stream_id);
+                }
+                ctx.emit(BlocklistAIControllerEvent::WaitingForCredentialRefresh {
+                    stream_id: stream_id.clone(),
+                    provider: *provider,
+                    waiting: *waiting,
+                });
+            }
             ResponseStreamEvent::WaitingForNetwork { waiting } => {
                 let Some(conversation_id) = BlocklistAIHistoryModel::as_ref(ctx)
                     .conversation_for_response_stream(&stream_id)
@@ -3037,6 +3108,15 @@ impl BlocklistAIController {
                 });
             }
             ResponseStreamEvent::AfterStreamFinished { cancellation } => {
+                // Ensure any in-progress credential-refresh indicator is cleared when the
+                // stream finishes (covers cancellation and superseded-request paths).
+                if let Some(provider) = self.credential_refresh_waiting_streams.remove(&stream_id) {
+                    ctx.emit(BlocklistAIControllerEvent::WaitingForCredentialRefresh {
+                        stream_id: stream_id.clone(),
+                        provider,
+                        waiting: false,
+                    });
+                }
                 // Cancellations provide conversation_id (survives truncation); otherwise use dynamic lookup.
                 let conversation_id = match &cancellation {
                     Some(stream_cancellation) => stream_cancellation.conversation_id,

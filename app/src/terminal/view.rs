@@ -23016,6 +23016,74 @@ impl TerminalView {
     ) -> ViewHandle<AIBlock> {
         self.insert_dummy_ai_block_internal(query, None, ctx)
     }
+    /// Drives the real controller/history/status-bar event path for integration
+    /// screenshots without requiring a live Gemini Enterprise account.
+    #[cfg(feature = "integration_tests")]
+    pub fn set_credential_refresh_waiting_for_integration_test(
+        &mut self,
+        stream_id: crate::ai::blocklist::ResponseStreamId,
+        waiting: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if waiting
+            && BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation_for_response_stream(&stream_id)
+                .is_none()
+        {
+            use chrono::Local;
+
+            use crate::ai::blocklist::RequestInput;
+            use crate::ai::llms::LLMId;
+
+            let terminal_surface_id = ctx.view_id();
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                let conversation_id =
+                    history.start_new_conversation(terminal_surface_id, false, false, false, ctx);
+                let task_id = history
+                    .conversation(&conversation_id)
+                    .expect("integration conversation exists")
+                    .get_root_task_id()
+                    .clone();
+                history
+                    .update_conversation_for_new_request_input(
+                        RequestInput {
+                            conversation_id,
+                            input_messages: HashMap::from([(task_id, vec![])]),
+                            working_directory: None,
+                            model_id: LLMId::from("integration-test-model"),
+                            coding_model_id: LLMId::from("integration-test-coding-model"),
+                            cli_agent_model_id: LLMId::from("integration-test-cli-agent-model"),
+                            computer_use_model_id: LLMId::from(
+                                "integration-test-computer-use-model",
+                            ),
+                            shared_session_response_initiator: None,
+                            request_start_ts: Local::now(),
+                            supported_tools_override: None,
+                        },
+                        stream_id.clone(),
+                        terminal_surface_id,
+                        ctx,
+                    )
+                    .expect("integration exchange appended");
+            });
+        }
+
+        self.ai_controller.update(ctx, |controller, ctx| {
+            controller.set_credential_refresh_waiting_for_test(stream_id, waiting, ctx);
+        });
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn is_credential_refresh_text_visible_for_integration_test(
+        &self,
+        ctx: &AppContext,
+    ) -> bool {
+        self.input
+            .as_ref(ctx)
+            .agent_status_bar()
+            .as_ref(ctx)
+            .is_credential_refresh_text_visible_for_integration_test()
+    }
 
     /// Shared body for the dummy AI block insertion helpers. Creates a fresh
     /// conversation for the block; a `None` output models a block that is

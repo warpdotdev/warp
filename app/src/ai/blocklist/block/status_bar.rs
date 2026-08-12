@@ -46,10 +46,11 @@ use crate::ai::blocklist::summarization_cancel_dialog::{
 };
 use crate::ai::blocklist::{
     BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextEvent,
-    BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent, BlocklistAIInputEvent,
-    BlocklistAIInputModel, QueuedQueryEvent, QueuedQueryModel, ResponseStreamId, ai_brand_color,
+    BlocklistAIContextModel, BlocklistAIController, BlocklistAIControllerEvent,
+    BlocklistAIHistoryEvent, BlocklistAIInputEvent, BlocklistAIInputModel, QueuedQueryEvent,
+    QueuedQueryModel, ResponseStreamId, ai_brand_color,
 };
-use crate::ai::llms::LLMPreferences;
+use crate::ai::llms::{LLMPreferences, LLMProvider};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{InputModeSettings, InputSettings, PrivacySettings};
@@ -71,6 +72,18 @@ use crate::terminal::{
 };
 use crate::util::bindings::keybinding_name_to_keystroke;
 use crate::{BlocklistAIHistoryModel, send_telemetry_from_app_ctx};
+
+/// How long to wait before showing the "Refreshing Gemini Enterprise credentials..."
+/// status text. The delay prevents a distracting flash for very fast refreshes.
+const CREDENTIAL_REFRESH_DISPLAY_DELAY_MS: u64 = 300;
+
+/// Status bar text shown while a request is blocked on a Gemini Enterprise credential
+/// refresh. Never surfaces the internal term "GEAP" to users.
+const REFRESHING_CREDENTIALS_MESSAGE: &str = "Refreshing Gemini Enterprise credentials...";
+
+#[cfg(test)]
+#[path = "status_bar_tests.rs"]
+mod tests;
 
 pub fn init(app: &mut AppContext) {
     summarization_cancel_dialog::init(app);
@@ -123,6 +136,13 @@ pub struct BlocklistAIStatusBar {
     /// Agent tip to display below the warping indicator.
     current_tip: Option<AgentTip>,
 
+    /// True after the 300 ms delay elapses while a GEAP credential refresh is
+    /// blocking the active request. Set by `update_credential_refresh_display`.
+    credential_refresh_text_visible: bool,
+    /// Handle for the pending delay timer. Cancelled when the refresh ends before
+    /// the delay elapses so no flash occurs.
+    credential_refresh_delay_handle: Option<SpawnedFutureHandle>,
+
     ephemeral_message_model: ModelHandle<EphemeralMessageModel>,
     agent_message_bar: ViewHandle<AgentMessageBar>,
 }
@@ -165,6 +185,7 @@ impl BlocklistAIStatusBar {
                 } => {
                     if let Some(response_stream_id) = response_stream_id.clone() {
                         me.latest_response_stream_id = Some(response_stream_id);
+                        me.update_credential_refresh_display(ctx);
                     }
                     me.reset_model_for_exchange(*exchange_id, *conversation_id, ctx);
                 }
@@ -334,6 +355,18 @@ impl BlocklistAIStatusBar {
             ctx.notify();
         });
 
+        ctx.subscribe_to_model(&controller, move |me, _, event, ctx| {
+            if let BlocklistAIControllerEvent::WaitingForCredentialRefresh {
+                stream_id,
+                provider: LLMProvider::Google,
+                ..
+            } = event
+                && me.latest_response_stream_id.as_ref() == Some(stream_id)
+            {
+                me.update_credential_refresh_display(ctx);
+            }
+        });
+
         let agent_message_bar = ctx.add_typed_action_view(|ctx| {
             AgentMessageBar::new(
                 agent_view_controller.clone(),
@@ -374,6 +407,8 @@ impl BlocklistAIStatusBar {
             last_read_refresh_handle: None,
             ambient_agent_view_model: None,
             current_tip: None,
+            credential_refresh_text_visible: false,
+            credential_refresh_delay_handle: None,
             ephemeral_message_model,
             agent_message_bar,
         };
@@ -426,6 +461,11 @@ impl BlocklistAIStatusBar {
                 .active_exchange_model
                 .as_ref()
                 .is_some_and(|model| model.is_conversation_summarization_active(app))
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub(crate) fn is_credential_refresh_text_visible_for_integration_test(&self) -> bool {
+        self.credential_refresh_text_visible
     }
     pub fn summarization_cancel_dialog_handle(&self) -> &ViewHandle<SummarizationCancelDialog> {
         &self.summarization_cancel_dialog
@@ -727,6 +767,60 @@ impl BlocklistAIStatusBar {
         }
     }
 
+    /// Called when the controller emits a `WaitingForCredentialRefresh` event or
+    /// when the active stream ID changes. Starts a 300 ms delay before showing
+    /// "Refreshing Gemini Enterprise credentials..." to avoid a flash for fast
+    /// refreshes, and clears the text immediately when the refresh ends.
+    fn update_credential_refresh_display(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_refreshing = self
+            .latest_response_stream_id
+            .as_ref()
+            .is_some_and(|stream_id| {
+                self.controller
+                    .as_ref(ctx)
+                    .credential_refresh_provider(stream_id)
+                    == Some(LLMProvider::Google)
+            });
+
+        if is_refreshing {
+            if self.credential_refresh_delay_handle.is_none()
+                && !self.credential_refresh_text_visible
+            {
+                let handle = ctx.spawn(
+                    async move {
+                        Timer::after(Duration::from_millis(CREDENTIAL_REFRESH_DISPLAY_DELAY_MS))
+                            .await;
+                    },
+                    |me, _, ctx| {
+                        me.credential_refresh_delay_handle = None;
+                        if me
+                            .latest_response_stream_id
+                            .as_ref()
+                            .is_some_and(|stream_id| {
+                                me.controller
+                                    .as_ref(ctx)
+                                    .credential_refresh_provider(stream_id)
+                                    == Some(LLMProvider::Google)
+                            })
+                        {
+                            me.credential_refresh_text_visible = true;
+                            ctx.notify();
+                        }
+                    },
+                );
+                self.credential_refresh_delay_handle = Some(handle);
+            }
+        } else {
+            if let Some(handle) = self.credential_refresh_delay_handle.take() {
+                handle.abort();
+            }
+            if self.credential_refresh_text_visible {
+                self.credential_refresh_text_visible = false;
+                ctx.notify();
+            }
+        }
+    }
+
     fn update_agent_tip(&mut self, ctx: &mut ViewContext<Self>) {
         if FeatureFlag::AgentTips.is_enabled() && *InputSettings::as_ref(ctx).show_agent_tips {
             let current_working_directory = self
@@ -830,10 +924,14 @@ impl BlocklistAIStatusBar {
             model.as_ref(),
             app,
         );
-        let default_warping_text = fallback_warping_text
-            .as_deref()
-            .unwrap_or(LOAD_OUTPUT_MESSAGE)
-            .to_owned();
+        // If a request-time Gemini Enterprise credential refresh is blocking the
+        // request (and the 300 ms delay has elapsed), show the alternate text.
+        // Background refreshes never set credential_refresh_text_visible, so they
+        // always retain the normal "Warping..." text.
+        let default_warping_text = resolve_default_warping_text(
+            self.credential_refresh_text_visible,
+            fallback_warping_text.as_deref(),
+        );
         let secondary_element = if fallback_warping_text.is_some() {
             Some(render_fallback_explanation(model.as_ref(), app))
         } else {
@@ -1390,6 +1488,23 @@ pub enum BlocklistAIStatusBarAction {
     ForceRefreshAgentView {
         block_id: crate::terminal::model::block::BlockId,
     },
+}
+
+/// Selects the primary status text for the warping indicator.
+///
+/// A request-blocking credential refresh takes precedence over fallback-model
+/// messaging. Background refreshes never set `credential_refresh_text_visible`.
+fn resolve_default_warping_text(
+    credential_refresh_text_visible: bool,
+    fallback_warping_text: Option<&str>,
+) -> String {
+    if credential_refresh_text_visible {
+        REFRESHING_CREDENTIALS_MESSAGE.to_owned()
+    } else {
+        fallback_warping_text
+            .unwrap_or(LOAD_OUTPUT_MESSAGE)
+            .to_owned()
+    }
 }
 
 impl TypedActionView for BlocklistAIStatusBar {

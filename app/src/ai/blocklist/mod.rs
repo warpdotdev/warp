@@ -17,7 +17,7 @@ pub(crate) mod orchestration_events;
 pub(crate) mod orchestration_topology;
 mod passive_suggestions;
 pub(crate) mod queued_query;
-pub(super) use controller::RequestInput;
+pub(crate) use controller::RequestInput;
 pub mod history_model;
 pub mod inline_action;
 mod input_mode_policy;
@@ -96,6 +96,9 @@ pub use controller::input_context::{
 };
 #[cfg(test)]
 pub(crate) use controller::response_stream::ResponseStream;
+#[cfg(feature = "integration_tests")]
+pub use controller::response_stream::ResponseStreamId;
+#[cfg(not(feature = "integration_tests"))]
 pub(crate) use controller::response_stream::ResponseStreamId;
 pub(crate) use controller::{
     BlocklistAIControllerEvent, ClientIdentifiers, SessionContext, SlashCommandRequest,

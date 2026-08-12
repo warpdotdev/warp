@@ -15,6 +15,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 use crate::ai::agent::api::{self, ConvertToAPITypeError, generate_multi_agent_output};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIIdentifiers, CancellationReason};
+use crate::ai::llms::LLMProvider;
 use crate::network::NetworkStatus;
 use crate::send_telemetry_from_ctx;
 use crate::server::server_api::{AIApiError, ServerApiProvider};
@@ -83,7 +84,7 @@ impl ResponseStreamId {
         Self(format!("{}-{}", init_event.request_id, Uuid::new_v4()))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "integration_tests"))]
     pub fn new_for_test() -> Self {
         Self(Uuid::new_v4().to_string())
     }
@@ -110,6 +111,11 @@ pub struct ResponseStream {
     has_received_client_actions: bool,
     /// AI identifiers for telemetry emission
     ai_identifiers: AIIdentifiers,
+
+    /// Provider whose request-time credential refresh is currently blocking this
+    /// stream (`Some`) or not (`None`). Set before the async wait so the
+    /// controller can recover the initial state immediately after subscribing.
+    waiting_for_credential_refresh: Option<LLMProvider>,
 
     /// Whether this request can attempt to resume the conversation on error.
     /// This is true for all requests except those that are themselves the result of a resume
@@ -157,6 +163,19 @@ impl ResponseStream {
             event,
         ))));
     }
+    /// Emits a `WaitingForCredentialRefresh` event for testing.
+    #[cfg(test)]
+    pub fn emit_credential_refresh_waiting_for_test(
+        &mut self,
+        waiting: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(ResponseStreamEvent::WaitingForCredentialRefresh {
+            provider: LLMProvider::Google,
+            waiting,
+        });
+    }
+
     #[cfg(test)]
     pub fn new_for_test(id: ResponseStreamId) -> Self {
         let (cancellation_tx, _rx) = oneshot::channel();
@@ -170,6 +189,7 @@ impl ResponseStream {
             original_error: None,
             has_received_client_actions: false,
             ai_identifiers: AIIdentifiers::default(),
+            waiting_for_credential_refresh: None,
             can_attempt_resume_on_error: false,
             should_resume_conversation_after_stream_finished: false,
             stream_finished_received: false,
@@ -189,7 +209,8 @@ impl ResponseStream {
         let start_time = Local::now();
 
         let request_id = Uuid::new_v4();
-        Self::spawn_request(request_id, params.clone(), cancellation_rx, ctx);
+        let waiting_for_credential_refresh =
+            Self::spawn_request(request_id, params.clone(), cancellation_rx, ctx);
         Self {
             id: ResponseStreamId(Uuid::new_v4().to_string()),
             params,
@@ -200,6 +221,7 @@ impl ResponseStream {
             original_error: None,
             has_received_client_actions: false,
             ai_identifiers,
+            waiting_for_credential_refresh,
             can_attempt_resume_on_error,
             should_resume_conversation_after_stream_finished: false,
             stream_finished_received: false,
@@ -216,6 +238,14 @@ impl ResponseStream {
     /// Returns true if we should attempt to resume the conversation after the stream finishes.
     pub fn should_resume_conversation_after_stream_finished(&self) -> bool {
         self.should_resume_conversation_after_stream_finished
+    }
+
+    /// Returns the provider whose request-time credential refresh is blocking this
+    /// stream, or `None` when no refresh is in progress. Read by the controller
+    /// immediately after construction (before it subscribes to events) to recover
+    /// any start event that fired during construction.
+    pub fn waiting_for_credential_refresh(&self) -> Option<LLMProvider> {
+        self.waiting_for_credential_refresh
     }
 
     /// Helper function to emit AgentModeError telemetry for error that is retryable (not user visible).
@@ -251,7 +281,8 @@ impl ResponseStream {
 
         let request_id = Uuid::new_v4();
         self.current_request_id = Some(request_id);
-        Self::spawn_request(request_id, self.params.clone(), cancellation_rx, ctx);
+        self.waiting_for_credential_refresh =
+            Self::spawn_request(request_id, self.params.clone(), cancellation_rx, ctx);
     }
 
     /// Sends the request for `request_id`. When the request's model is served by
@@ -265,7 +296,7 @@ impl ResponseStream {
         params: api::RequestParams,
         cancellation_rx: oneshot::Receiver<()>,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> Option<LLMProvider> {
         // The Grok subscription and its OAuth refresh are native-only.
         #[cfg(not(target_family = "wasm"))]
         {
@@ -326,7 +357,7 @@ impl ResponseStream {
                             }
                         },
                     );
-                    return;
+                    return None;
                 }
             }
 
@@ -350,9 +381,23 @@ impl ResponseStream {
                     })
                 });
                 if let Some(refresh_rx) = refresh_rx {
+                    // Signal that this request is now blocked on a credential refresh so the
+                    // status bar can show "Refreshing Gemini Enterprise credentials..." in
+                    // place of the default "Warping..." text.
+                    ctx.emit(ResponseStreamEvent::WaitingForCredentialRefresh {
+                        provider: LLMProvider::Google,
+                        waiting: true,
+                    });
                     let _ = ctx.spawn(
                         async move { refresh_rx.with_timeout(GEAP_REFRESH_REQUEST_TIMEOUT).await },
                         move |me, result, ctx| {
+                            // The refresh has resolved. Clear the indicator unconditionally
+                            // so the status bar reverts even if this attempt was superseded.
+                            me.waiting_for_credential_refresh = None;
+                            ctx.emit(ResponseStreamEvent::WaitingForCredentialRefresh {
+                                provider: LLMProvider::Google,
+                                waiting: false,
+                            });
                             // Cancelled or superseded while waiting — drop this attempt.
                             if me.current_request_id != Some(request_id) {
                                 return;
@@ -380,12 +425,13 @@ impl ResponseStream {
                             );
                         },
                     );
-                    return;
+                    return Some(LLMProvider::Google);
                 }
             }
         }
 
         Self::spawn_generate(request_id, params, cancellation_rx, ctx);
+        None
     }
 
     /// Emits a terminal, user-visible error for a failed request-time Grok token
@@ -426,6 +472,7 @@ impl ResponseStream {
         ctx: &mut ModelContext<Self>,
     ) {
         self.current_request_id = None;
+        self.waiting_for_credential_refresh = None;
         let Some(cancellation_tx) = self.cancellation_tx.take() else {
             return;
         };
@@ -796,6 +843,19 @@ pub enum ResponseStreamEvent {
     /// request failure while offline — never speculatively before an attempt. Consumers
     /// can therefore treat `waiting: true` as a transient-error (reconnecting) state.
     WaitingForNetwork {
+        waiting: bool,
+    },
+    /// Emitted when a request-time Gemini Enterprise credential refresh begins
+    /// (`waiting: true`) or ends (`waiting: false`). The controller stores this
+    /// as transient display state so the status bar can show
+    /// "Refreshing Gemini Enterprise credentials..." in place of "Warping...".
+    ///
+    /// Only emitted from the non-wasm GEAP branch of [`ResponseStream::spawn_request`].
+    /// `waiting: false` is emitted unconditionally so the status bar reverts even
+    /// if the attempt was superseded or cancelled.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    WaitingForCredentialRefresh {
+        provider: LLMProvider,
         waiting: bool,
     },
     AfterStreamFinished {

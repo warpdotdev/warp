@@ -17,7 +17,7 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment, PendingFile, RequestInput,
     ResponseStream, ResponseStreamId,
 };
-use crate::ai::llms::LLMId;
+use crate::ai::llms::{LLMId, LLMProvider};
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
@@ -485,6 +485,125 @@ fn optimistic_cli_subagent_completion_with_in_flight_stream_reports_success() {
             assert_eq!(
                 history.conversation(&conversation_id).map(|c| c.status()),
                 Some(&crate::ai::agent::conversation::ConversationStatus::Success)
+            );
+        });
+    });
+}
+
+/// `WaitingForCredentialRefresh { waiting: true }` must mark the stream as
+/// waiting (with its provider), and `waiting: false` must clear it.
+/// Cancellation must also clear the transient state even if no end event fires.
+#[test]
+fn credential_refresh_waiting_tracks_start_end_and_cancellation() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let (stream_id, stream) = terminal.update(&mut app, |view, ctx| {
+            let terminal_surface_id = view.id();
+            let stream_id = ResponseStreamId::new_for_test();
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    let conversation_id = history.start_new_conversation(
+                        terminal_surface_id,
+                        false,
+                        false,
+                        false,
+                        ctx,
+                    );
+                    let task_id = history
+                        .conversation(&conversation_id)
+                        .unwrap()
+                        .get_root_task_id()
+                        .clone();
+                    history
+                        .update_conversation_for_new_request_input(
+                            RequestInput {
+                                conversation_id,
+                                input_messages: HashMap::from([(task_id, vec![])]),
+                                working_directory: None,
+                                model_id: LLMId::from("test-model"),
+                                coding_model_id: LLMId::from("test-coding-model"),
+                                cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+                                computer_use_model_id: LLMId::from("test-computer-use-model"),
+                                shared_session_response_initiator: None,
+                                request_start_ts: Local::now(),
+                                supported_tools_override: None,
+                            },
+                            stream_id.clone(),
+                            terminal_surface_id,
+                            ctx,
+                        )
+                        .unwrap();
+                    conversation_id
+                });
+            let stream = ctx.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
+            view.ai_controller().update(ctx, |controller, ctx| {
+                controller.register_mock_stream_for_test(
+                    stream_id.clone(),
+                    conversation_id,
+                    stream.clone(),
+                    ctx,
+                );
+            });
+            (stream_id, stream)
+        });
+
+        // Before any event: no provider tracked.
+        terminal.update(&mut app, |view, ctx| {
+            assert!(
+                view.ai_controller()
+                    .as_ref(ctx)
+                    .credential_refresh_provider(&stream_id)
+                    .is_none()
+            );
+        });
+
+        // After WaitingForCredentialRefresh { waiting: true }: provider is Google.
+        stream.update(&mut app, |s, ctx| {
+            s.emit_credential_refresh_waiting_for_test(true, ctx);
+        });
+        terminal.update(&mut app, |view, ctx| {
+            assert_eq!(
+                view.ai_controller()
+                    .as_ref(ctx)
+                    .credential_refresh_provider(&stream_id),
+                Some(LLMProvider::Google)
+            );
+        });
+
+        // After WaitingForCredentialRefresh { waiting: false }: cleared.
+        stream.update(&mut app, |s, ctx| {
+            s.emit_credential_refresh_waiting_for_test(false, ctx);
+        });
+        terminal.update(&mut app, |view, ctx| {
+            assert!(
+                view.ai_controller()
+                    .as_ref(ctx)
+                    .credential_refresh_provider(&stream_id)
+                    .is_none()
+            );
+        });
+
+        // Re-arm, then cancel — AfterStreamFinished must also clear the flag.
+        stream.update(&mut app, |s, ctx| {
+            s.emit_credential_refresh_waiting_for_test(true, ctx);
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.ai_controller().update(ctx, |controller, ctx| {
+                assert!(controller.cancel_request(
+                    &stream_id,
+                    CancellationReason::ManuallyCancelled,
+                    ctx,
+                ));
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            assert!(
+                view.ai_controller()
+                    .as_ref(ctx)
+                    .credential_refresh_provider(&stream_id)
+                    .is_none()
             );
         });
     });
