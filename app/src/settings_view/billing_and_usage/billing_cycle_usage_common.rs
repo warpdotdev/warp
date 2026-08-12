@@ -18,9 +18,10 @@ use crate::settings_view::billing_and_usage_page_v2::{
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
 use crate::ui_components::blended_colors;
+use crate::workspaces::team::{Team, TeamMember};
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    BillingCycleUsageEntry,
+    BillingCycleUsageEntry, WorkspaceMember,
 };
 
 // for a bunch of this (min fill ratio, cost type order, ... )
@@ -197,16 +198,115 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
         .collect()
 }
 
+/// True when `entry` is the viewer's own personal usage.
+///
+/// Matches the server's `isOwn` in `filterEntriesToTeamScope`: a `User`
+/// subject whose uid is the caller's. An empty viewer uid never matches.
+fn is_viewer_entry(entry: &BillingCycleUsageEntry, viewer_uid: Option<&str>) -> bool {
+    viewer_uid.is_some_and(|viewer| {
+        !viewer.is_empty()
+            && entry.subject_type == AiCreditsUsageAndCostSubjectType::User
+            && entry.subject_uid.as_deref() == Some(viewer)
+    })
+}
+
+/// Restricts `entries` to the usage attributed to `team_uid`, plus the
+/// viewer's own usage whatever it is attributed to.
+///
+/// `Workspace.billingCycleUsageHistory` covers every team in the workspace,
+/// while this page only ever renders one of them, so a page-level admin check
+/// against a single team would otherwise expose its sibling teams' usage.
+/// Entries the server left unattributed belong to no team in particular and
+/// are dropped rather than billed to the team in view.
+///
+/// The own-usage exception mirrors `filterEntriesToTeamScope` in
+/// `warp-server/logic/ai/ai_usage/visibility.go`, which keeps an entry when
+/// `isOwn || <in scope>`. It is a deliberate divergence from the web's
+/// `filterEntriesByAttributedTeam`, which has no such carve-out: a workspace
+/// admin can be shown a team they do not belong to, and without the exception
+/// their own row would read zero on their own usage page. Showing you your own
+/// data is not a leak.
+pub fn filter_entries_by_attributed_team(
+    entries: &[BillingCycleUsageEntry],
+    team_uid: &str,
+    viewer_uid: Option<&str>,
+) -> Vec<BillingCycleUsageEntry> {
+    entries
+        .iter()
+        .filter(|e| {
+            is_viewer_entry(e, viewer_uid) || e.attributed_team_uid.as_deref() == Some(team_uid)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Restricts the workspace roster to the members of the team in view.
+///
+/// Per-member rows are seeded from the roster so that members with no usage
+/// still appear; the roster spans the whole workspace, so without this the
+/// other teams' members surface as zero-usage rows. Mirrors
+/// `individualUsageMembers` in the web admin panel, which likewise leaves the
+/// roster untouched when there is no team in view.
+pub fn scope_members_to_team(
+    members: &[WorkspaceMember],
+    team_members: Option<&[TeamMember]>,
+) -> Vec<WorkspaceMember> {
+    let Some(team_members) = team_members else {
+        return members.to_vec();
+    };
+    members
+        .iter()
+        .filter(|member| team_members.iter().any(|m| m.uid == member.uid))
+        .cloned()
+        .collect()
+}
+
+/// The slice of a workspace's usage data that the team currently in view may
+/// show: its entries and its roster, narrowed together.
+///
+/// The two must move as a pair. Entries decide what usage is displayed and the
+/// roster decides which members get a row at all, so scoping one without the
+/// other still leaks — either another team's totals or another team's names.
+#[derive(Debug)]
+pub struct TeamScopedUsage {
+    pub entries: Vec<BillingCycleUsageEntry>,
+    pub members: Vec<WorkspaceMember>,
+}
+
+impl TeamScopedUsage {
+    /// Narrows a cycle's `entries` and the `workspace_members` roster to
+    /// `team`. With no team in view there is nothing to scope against, so both
+    /// pass through and the own-usage paths keep attributing to the viewer.
+    pub fn new(
+        entries: &[BillingCycleUsageEntry],
+        workspace_members: &[WorkspaceMember],
+        team: Option<&Team>,
+        viewer_uid: Option<&str>,
+    ) -> Self {
+        let entries = filter_legacy_buckets(entries);
+        let Some(team) = team else {
+            return Self {
+                entries,
+                members: workspace_members.to_vec(),
+            };
+        };
+        Self {
+            entries: filter_entries_by_attributed_team(&entries, &team.uid.uid(), viewer_uid),
+            members: scope_members_to_team(workspace_members, Some(&team.members)),
+        }
+    }
+}
+
 /// Cost-type buckets to surface in the usage legend, in display order.
 ///
-/// Mirrors the buckets the stacked bars actually render: legacy buckets are
-/// dropped (see [`filter_legacy_buckets`]) and a cost type only counts when it
-/// has real usage (`credits_used > 0`), exactly like [`aggregate_segments`],
-/// which retains only segments with `credits > 0`. Without the usage check a
-/// zero-credit entry (e.g. an untouched base-limit row) would list "Base" in
-/// the legend even though it contributed nothing to the chart.
+/// `entries` must already have had its legacy buckets dropped (see
+/// [`filter_legacy_buckets`]) so the legend matches the stacked bars. A cost
+/// type only counts when it has real usage (`credits_used > 0`), exactly like
+/// [`aggregate_segments`], which retains only segments with `credits > 0`.
+/// Without the usage check a zero-credit entry (e.g. an untouched base-limit
+/// row) would list "Base" in the legend even though it contributed nothing to
+/// the chart.
 pub fn legend_cost_types(entries: &[BillingCycleUsageEntry]) -> Vec<AiCreditsUsageAndCostType> {
-    let filtered = filter_legacy_buckets(entries);
     [
         AiCreditsUsageAndCostType::BaseLimit,
         AiCreditsUsageAndCostType::BonusGrant,
@@ -216,7 +316,7 @@ pub fn legend_cost_types(entries: &[BillingCycleUsageEntry]) -> Vec<AiCreditsUsa
     ]
     .into_iter()
     .filter(|cost_type| {
-        filtered
+        entries
             .iter()
             .any(|e| e.cost_type == *cost_type && e.credits_used > 0)
     })

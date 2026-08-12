@@ -122,6 +122,7 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
                 usageSource
                 creditsUsed
                 costCents
+                attributedTeamUid
               }
             }
           }

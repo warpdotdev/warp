@@ -389,6 +389,10 @@ pub struct UsageEntry {
     pub usage_source: AiCreditsUsageSource,
     pub credits_used: i32,
     pub cost_cents: i32,
+    /// The team the usage is billed against. The history is fetched
+    /// workspace-wide, so consumers rendering a single team must scope
+    /// entries by this field.
+    pub attributed_team_uid: Option<String>,
 }
 
 #[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]

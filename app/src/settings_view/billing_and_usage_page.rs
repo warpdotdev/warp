@@ -32,6 +32,7 @@ use warpui::{
 
 use super::SettingsSection;
 use super::admin_actions::AdminActions;
+use super::billing_and_usage::billing_cycle_usage_common::scope_members_to_team;
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -2851,17 +2852,22 @@ impl BillingAndUsagePageView {
     ) -> Box<dyn Element> {
         let mut usage = Flex::column();
 
-        let workspace = UserWorkspaces::as_ref(app).current_workspace();
-        // Check if we should show the sort button (admin with team size > 1)
-        let workspace_team_members = workspace
-            .map(|workspace| workspace.members.clone())
-            .unwrap_or_default();
+        let workspaces = UserWorkspaces::as_ref(app);
+        let workspace = workspaces.current_workspace();
         let current_user_email = AuthStateProvider::as_ref(app)
             .get()
             .user_email()
             .unwrap_or_default();
-        let workspaces = UserWorkspaces::as_ref(app);
         let team = workspaces.team_for_view_handle(&self.self_handle, app);
+        // Admin rights are resolved against the team in view, but the roster
+        // below spans every team in the workspace and the per-member request
+        // counters carry no team attribution. Narrow it up front so the team
+        // total and the per-member rows only cover that team.
+        let workspace_team_members = workspace
+            .map(|workspace| {
+                scope_members_to_team(&workspace.members, team.map(|team| team.members.as_slice()))
+            })
+            .unwrap_or_default();
         let billing_metadata = workspaces.current_workspace_billing_metadata();
         let has_admin_permissions =
             team.is_some_and(|team| team.has_admin_permissions(&current_user_email));

@@ -607,6 +607,10 @@ pub struct BillingCycleUsageEntry {
     pub usage_source: AiCreditsUsageSource,
     pub credits_used: i32,
     pub cost_cents: i32,
+    /// The team this usage is billed against, when the server knows it. The
+    /// history is fetched for the whole workspace, so a view rendering a
+    /// single team must scope entries by this field.
+    pub attributed_team_uid: Option<String>,
 }
 
 /// Per-cycle bucket of redacted usage entries with explicit period bounds.
