@@ -182,33 +182,6 @@ fn text_styles_follow_light_theme_foreground() {
 }
 
 #[test]
-fn read_only_menu_header_background_is_a_further_blend_step_than_the_body() {
-    // The `/usage` panel's header row needs to read as visually distinct
-    // from (a touch brighter than) the rest of a read-only menu's body.
-    for theme in [dark_theme(), light_theme()] {
-        let builder = TuiUiBuilder {
-            warp_theme: theme.clone(),
-        };
-        let accent = ThemeFill::from(theme.terminal_colors().normal.cyan);
-        let body: Color = CoreFill::from(theme.background().blend(&accent.with_opacity(10))).into();
-        let header: Color = CoreFill::from(
-            theme
-                .background()
-                .blend(&accent.with_opacity(10))
-                .blend(&accent.with_opacity(10)),
-        )
-        .into();
-        assert_eq!(builder.read_only_menu_background(), body);
-        assert_eq!(builder.read_only_menu_header_background(), header);
-        assert_ne!(
-            builder.read_only_menu_header_background(),
-            builder.read_only_menu_background(),
-            "the header background must be visually distinct from the body"
-        );
-    }
-}
-
-#[test]
 fn selected_state_suffix_midpoint_matches_figma_dark_palette() {
     assert_eq!(
         rounded_midpoint_color(

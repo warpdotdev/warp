@@ -63,11 +63,11 @@ fn credit_bar_row(
         (used as f64 / limit as f64).clamp(0.0, 1.0)
     };
     let filled = ((ratio * BAR_WIDTH as f64).round() as usize).min(BAR_WIDTH);
-    // Both the filled and empty segments are solid blocks in the design
-    // (distinguished by color, not by a lighter/dithered glyph).
+    // The filled segment is a solid block; the empty segment is a lighter,
+    // dithered fill — confirmed against the designer's own screenshot.
     let mut spans = vec![("█".repeat(filled), filled_style)];
     if filled < BAR_WIDTH {
-        spans.push(("█".repeat(BAR_WIDTH - filled), empty_style));
+        spans.push(("░".repeat(BAR_WIDTH - filled), empty_style));
     }
     spans_row(spans)
 }
@@ -129,18 +129,36 @@ fn credit_section(
     filled_style: TuiStyle,
     builder: &TuiUiBuilder,
 ) -> Vec<Box<dyn TuiElement>> {
-    let primary_bold = builder.primary_text_style().add_modifier(Modifier::BOLD);
     let primary = builder.primary_text_style();
+    let primary_bold = primary.add_modifier(Modifier::BOLD);
+    let muted = builder.muted_text_style();
     let empty = builder.dim_text_style();
     let remaining = (bar.limit - bar.used).max(0);
+
+    // Only the numeric value is bold; the label and "remaining" stay regular
+    // weight, per the designer's screenshot ("Base credits **400** remaining").
+    let title_row = spans_row(vec![
+        (format!("{title:<LABEL_WIDTH$}"), primary),
+        (remaining.to_string(), primary_bold),
+        (" remaining".to_owned(), primary),
+    ]);
+
+    // The "Credits used:" label is muted; only the used/limit figure is
+    // brightened to match "Base credits", per the designer's screenshot.
+    let used_value = format!("{}/{}", bar.used, bar.limit);
+    let prefix = "Credits used: ".to_owned();
+    let padding = " ".repeat(LABEL_WIDTH.saturating_sub(prefix.len() + used_value.len()));
+    let credits_used_row = spans_row(vec![
+        (prefix, muted),
+        (used_value, primary),
+        (padding, muted),
+        (bar.note.clone(), muted),
+    ]);
+
     vec![
-        label_value_row(title, &format!("{remaining} remaining"), primary_bold),
+        title_row,
         credit_bar_row(bar.used, bar.limit, filled_style, empty),
-        label_value_row(
-            &format!("Credits used: {}/{}", bar.used, bar.limit),
-            &bar.note,
-            primary,
-        ),
+        credits_used_row,
     ]
 }
 
@@ -160,15 +178,20 @@ fn pay_as_you_go_section(
     } else {
         NOT_KICKED_IN_NOTE
     };
-    rows.push(label_value_row(
-        &format!(
-            "Spend: {} credits / {}",
-            payg.credits_used,
-            dollars(payg.cost_cents)
-        ),
-        kicks_in_note,
-        muted,
-    ));
+    // Same dim-label/bright-value split as "Credits used:", for consistency.
+    let spend_value = format!(
+        "{} credits / {}",
+        payg.credits_used,
+        dollars(payg.cost_cents)
+    );
+    let spend_prefix = "Spend: ".to_owned();
+    let padding = " ".repeat(LABEL_WIDTH.saturating_sub(spend_prefix.len() + spend_value.len()));
+    rows.push(spans_row(vec![
+        (spend_prefix, muted),
+        (spend_value, primary),
+        (padding, muted),
+        (kicks_in_note.to_owned(), muted),
+    ]));
     rows
 }
 
@@ -191,15 +214,18 @@ pub(super) fn render(
 
     // Title on the left, metadata (and the admin-only manage-billing link)
     // flush right on the same row, matching the design's single header line.
-    // The leading glyph is a pie-chart icon, per the design.
+    // The leading glyph and the " | " separators between the trailing items
+    // match the design's header row exactly; there is no distinct header
+    // background — the whole card shares one background with the title
+    // distinguished only by bold weight, matching the `?` shortcuts menu.
     let mut metadata = format!("Plan: {}", info.plan_name);
     if let Some(team_name) = &info.team_name {
-        metadata.push_str(&format!("   Team: {team_name}"));
+        metadata.push_str(&format!(" | Team: {team_name}"));
     }
     let mut trailing = TuiFlex::row().child(plain_row(metadata, muted));
     if let Some(manage_billing_url) = info.manage_billing_url.clone() {
         trailing = trailing
-            .child(plain_row("   ", muted))
+            .child(plain_row(" | ", muted))
             .child(hoverable_link(
                 "Manage billing and usage",
                 manage_billing_mouse,
@@ -207,18 +233,12 @@ pub(super) fn render(
                 manage_billing_url,
             ));
     }
-    // The header row gets its own, slightly brighter background than the rest
-    // of the panel body, matching the design's distinct title-bar treatment.
     column = column.child(
-        TuiContainer::new(
-            TuiFlex::row()
-                .child(plain_row("\u{25D1} Usage", primary_bold))
-                .flex_child(TuiText::new(String::new()).finish())
-                .child(trailing.finish())
-                .finish(),
-        )
-        .with_background(builder.read_only_menu_header_background())
-        .finish(),
+        TuiFlex::row()
+            .child(plain_row("\u{25D4} Usage", primary_bold))
+            .flex_child(TuiText::new(String::new()).finish())
+            .child(trailing.finish())
+            .finish(),
     );
 
     if let Some(base) = &info.base_credits {
