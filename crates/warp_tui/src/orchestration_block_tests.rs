@@ -249,6 +249,10 @@ fn build_request_omits_the_auth_secret_when_the_picker_is_not_applicable() {
 struct TestController {
     executed_requests: RefCell<Vec<RunAgentsRequest>>,
     accept_error: RefCell<Option<String>>,
+    /// When set, `action_status` reports `None` instead of `Blocked`,
+    /// simulating a tool call that was cancelled before it was ever queued
+    /// into the action model (still mid-stream at cancellation time).
+    force_no_status: Cell<bool>,
 }
 
 impl OrchestrationBlockController for TestController {
@@ -257,7 +261,11 @@ impl OrchestrationBlockController for TestController {
         _action_id: &AIAgentActionId,
         _ctx: &warpui::AppContext,
     ) -> Option<AIActionStatus> {
-        Some(AIActionStatus::Blocked)
+        if self.force_no_status.get() {
+            None
+        } else {
+            Some(AIActionStatus::Blocked)
+        }
     }
 
     fn snapshot_for_page(
@@ -464,6 +472,55 @@ fn acceptance_card_discloses_nested_children_only_with_multi_level_enabled() {
             assert!(
                 !lines.iter().any(|line| line.contains("child agents")),
                 "the disclosure is gated on the multi-level flag: {lines:?}"
+            );
+        });
+    }
+}
+
+// Regression tests for the bug where cancelling the conversation while a
+// `run_agents` tool call was still streaming left the card spinning on
+// "Configuring agents..." forever: the action is never queued into the
+// action model (`controller.action_status` stays `None`), so there was no
+// terminal action event to key a cancelled presentation off of.
+mod cancelled_while_streaming_tests {
+    use super::*;
+
+    #[test]
+    fn block_cancelled_with_no_action_status_renders_cancelled_fallback() {
+        App::test((), |mut app| async move {
+            let (block, controller) =
+                test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+            controller.force_no_status.set(true);
+            block.update(&mut app, |block, ctx| {
+                block.set_block_cancelled(true, ctx);
+            });
+
+            let lines = rendered_block_lines(&block, &app);
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("Spawn agents cancelled")),
+                "a block cancelled mid-stream must render the cancelled fallback \
+                 instead of the streaming placeholder: {lines:?}"
+            );
+            assert!(
+                !lines.iter().any(|line| line.contains("Configuring agents")),
+                "the streaming placeholder must not persist after cancellation: {lines:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn block_still_streaming_with_no_action_status_keeps_the_placeholder() {
+        App::test((), |mut app| async move {
+            let (block, controller) =
+                test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+            controller.force_no_status.set(true);
+
+            let lines = rendered_block_lines(&block, &app);
+            assert!(
+                lines.iter().any(|line| line.contains("Configuring agents")),
+                "a still-streaming block must keep showing the placeholder: {lines:?}"
             );
         });
     }

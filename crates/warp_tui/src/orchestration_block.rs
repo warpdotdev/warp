@@ -167,6 +167,13 @@ pub(crate) struct TuiOrchestrationBlock {
     /// Identity palette pinned at construction so identities stay stable
     /// across re-renders, edits, and theme switches.
     identity_palette: Vec<AgentIdentity>,
+    /// Whether the enclosing exchange's response stream has been cancelled.
+    /// Set by [`crate::agent_block::TuiAIBlock::sync_action_views`] via
+    /// [`Self::set_block_cancelled`]. Needed because a `run_agents` tool
+    /// call cancelled while it is still streaming never gets queued into
+    /// the action model, so `controller.action_status` never resolves past
+    /// `None` and there is no terminal action event to key off of.
+    block_cancelled: bool,
 }
 
 impl TuiOrchestrationBlock {
@@ -334,6 +341,7 @@ impl TuiOrchestrationBlock {
             entered_event_emitted: false,
             decision_event_emitted: false,
             identity_palette,
+            block_cancelled: false,
         }
     }
 
@@ -424,6 +432,18 @@ impl TuiOrchestrationBlock {
         self.resolve_interactive_defaults(ctx);
         self.refresh_active_page(ctx);
         ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
+        ctx.notify();
+    }
+
+    /// Records whether the enclosing exchange's response stream has been
+    /// cancelled, notifying so the fallback presentation (see
+    /// `render::fallback_status`) picks up the change. Mirrors the GUI's
+    /// `RunAgentsCardView` reacting to `AIBlockModel::status().is_cancelled()`.
+    pub(crate) fn set_block_cancelled(&mut self, cancelled: bool, ctx: &mut ViewContext<Self>) {
+        if self.block_cancelled == cancelled {
+            return;
+        }
+        self.block_cancelled = cancelled;
         ctx.notify();
     }
 

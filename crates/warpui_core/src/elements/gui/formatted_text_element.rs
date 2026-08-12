@@ -2310,6 +2310,11 @@ impl Element for FormattedTextElement {
     fn as_selectable_element(&self) -> Option<&dyn SelectableElement> {
         if self.is_selectable { Some(self) } else { None }
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_text_content(&self) -> Option<String> {
+        Some(self.formatted_text.raw_text())
+    }
 }
 
 impl SelectableElement for FormattedTextElement {

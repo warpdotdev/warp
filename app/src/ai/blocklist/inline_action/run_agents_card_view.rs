@@ -74,6 +74,11 @@ use crate::view_components::{FilterableDropdownEvent, FilterableDropdownOrientat
 
 const RUN_AGENTS_CARD_TITLE: &str = "Can I start additional agents for this task?";
 
+/// Shared label for every cancelled-card presentation (restored history,
+/// mid-stream cancellation, and a cancelled `RunAgentsResult`) so the
+/// wording stays consistent across all cancellation phases.
+const SPAWN_AGENTS_CANCELLED_LABEL: &str = "Spawn agents cancelled";
+
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
 
@@ -1256,7 +1261,7 @@ impl View for RunAgentsCardView {
         // because restored blocks have no pending action status.
         if self.block_model.is_restored() {
             return render_status_only_card(
-                "Spawn agents cancelled".to_string(),
+                SPAWN_AGENTS_CANCELLED_LABEL.to_string(),
                 appearance,
                 StatusKind::Cancelled,
                 app,
@@ -1267,12 +1272,15 @@ impl View for RunAgentsCardView {
         // the action reaches Blocked status (i.e., streaming is complete
         // and the action is queued for user confirmation).
         if !matches!(status, Some(AIActionStatus::Blocked)) {
-            return render_status_only_card(
-                "Configuring agents\u{2026}".to_string(),
-                appearance,
-                StatusKind::Spawning,
-                app,
-            );
+            // Cancelling the conversation while this tool call is still
+            // streaming happens before the action is ever queued into the
+            // action model, so `get_action_status` never resolves past
+            // `None` and there is no `FinishedAction` event to key off of.
+            // Fall back to the block's own cancelled status so the card
+            // doesn't spin on the placeholder forever.
+            let (label, kind) =
+                pending_confirmation_status(self.block_model.status(app).is_cancelled());
+            return render_status_only_card(label, appearance, kind, app);
         }
 
         let is_blocked = matches!(status, Some(AIActionStatus::Blocked));
@@ -1651,7 +1659,29 @@ pub(crate) fn format_terminal_state(result: &RunAgentsResult) -> (String, Status
             };
             (label, StatusKind::Failure)
         }
-        RunAgentsResult::Cancelled => ("Spawn agents cancelled".to_string(), StatusKind::Cancelled),
+        RunAgentsResult::Cancelled => (
+            SPAWN_AGENTS_CANCELLED_LABEL.to_string(),
+            StatusKind::Cancelled,
+        ),
+    }
+}
+
+/// Determines what the "awaiting confirmation" fallback should render when
+/// the action hasn't reached `Blocked` status yet: either the still-
+/// streaming placeholder, or a cancelled state if the underlying response
+/// stream was cancelled before the action was ever queued into the action
+/// model (so `get_action_status` never resolves past `None`).
+fn pending_confirmation_status(block_is_cancelled: bool) -> (String, StatusKind) {
+    if block_is_cancelled {
+        (
+            SPAWN_AGENTS_CANCELLED_LABEL.to_string(),
+            StatusKind::Cancelled,
+        )
+    } else {
+        (
+            "Configuring agents\u{2026}".to_string(),
+            StatusKind::Spawning,
+        )
     }
 }
 

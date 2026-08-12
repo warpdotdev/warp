@@ -654,6 +654,21 @@ impl TuiAIBlock {
         let mut materialized_active_blocker = false;
         let status = self.block_model.status(ctx);
         let output_streaming = status.is_streaming();
+        let block_is_cancelled = status.is_cancelled();
+
+        // Push the block's own cancelled status into every live orchestration
+        // card. A RunAgents confirmation card whose tool call was still
+        // streaming when the conversation was cancelled never gets queued
+        // into the action model, so it has no `FinishedAction` event to key
+        // off of and would otherwise spin on "Configuring agents..." forever.
+        for view in self.action_views.values() {
+            if let TuiToolCallView::OrchestrationBlock(view) = view {
+                view.update(ctx, |view, ctx| {
+                    view.set_block_cancelled(block_is_cancelled, ctx);
+                });
+            }
+        }
+
         let mut ask_question_actions = Vec::new();
         let mut file_edit_actions = Vec::new();
         let mut generic_actions = Vec::new();

@@ -1,10 +1,12 @@
 //! Element construction for the orchestration card.
 
+use std::sync::Arc;
+
 use warp::tui_export::{
-    AIActionStatus, AuthSecretSelection, Harness, HarnessAvailabilityModel,
-    ORCHESTRATION_WARP_WORKER_HOST, OptionSnapshot, RunAgentsExecutionMode,
-    empty_env_recommendation_message, environment_snapshot, model_snapshot,
-    should_show_auth_secret_picker,
+    AIActionStatus, AIAgentActionResult, AIAgentActionResultType, AuthSecretSelection, Harness,
+    HarnessAvailabilityModel, ORCHESTRATION_WARP_WORKER_HOST, OptionSnapshot,
+    RunAgentsExecutionMode, RunAgentsResult, empty_env_recommendation_message,
+    environment_snapshot, model_snapshot, should_show_auth_secret_picker,
 };
 use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity;
@@ -242,6 +244,26 @@ impl TuiOrchestrationBlock {
     }
 }
 
+/// Synthesizes a terminal `Cancelled` status for the fallback row when the
+/// tool call's action was never queued into the action model (`status` is
+/// still `None`) but the enclosing exchange has already been cancelled.
+/// Without this, the row falls back to `ToolCallDisplayState::Pending` and
+/// renders "Configuring agents..." forever. Leaves an already-resolved
+/// status untouched.
+fn fallback_status(
+    block: &TuiOrchestrationBlock,
+    status: Option<AIActionStatus>,
+) -> Option<AIActionStatus> {
+    if status.is_some() || !block.block_cancelled {
+        return status;
+    }
+    Some(AIActionStatus::Finished(Arc::new(AIAgentActionResult {
+        id: block.action_id.clone(),
+        task_id: block.action.task_id.clone(),
+        result: AIAgentActionResultType::RunAgents(RunAgentsResult::Cancelled),
+    })))
+}
+
 /// Renders the orchestration block in interactive or fallback form.
 pub(super) fn render(block: &TuiOrchestrationBlock, app: &AppContext) -> Box<dyn TuiElement> {
     let status = block.controller.action_status(&block.action_id, app);
@@ -249,6 +271,7 @@ pub(super) fn render(block: &TuiOrchestrationBlock, app: &AppContext) -> Box<dyn
         && block.spawning.is_none()
         && matches!(status, Some(AIActionStatus::Blocked));
     if !interactive {
+        let status = fallback_status(block, status);
         return render_fallback_tool_call_section(&block.action, status.as_ref(), false, None, app);
     }
 

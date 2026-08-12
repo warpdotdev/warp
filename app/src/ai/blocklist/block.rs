@@ -1938,6 +1938,17 @@ impl AIBlock {
                 self.spawn_link_detection(ctx);
                 self.finish(FinishReason::Cancelled, ctx);
 
+                // A RunAgents confirmation card whose tool call was still
+                // streaming when the conversation was cancelled never gets
+                // queued into the action model, so it never receives a
+                // `FinishedAction` event to notify it directly. Wake each
+                // live card explicitly so it re-renders against the now-
+                // cancelled block status instead of spinning on
+                // "Configuring agents..." forever.
+                for card_view in self.run_agents_card_views.values() {
+                    card_view.update(ctx, |_, ctx| ctx.notify());
+                }
+
                 let server_output_id = self.model.server_output_id(ctx);
                 send_telemetry_from_ctx!(
                     TelemetryEvent::AgentModeCreatedAIBlock {

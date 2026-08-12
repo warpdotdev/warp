@@ -324,6 +324,175 @@ fn to_request_round_trips_request_fields() {
     assert_eq!(round_tripped.plan_id, req.plan_id);
 }
 
+mod pending_confirmation_status_tests {
+    use super::super::{StatusKind, pending_confirmation_status};
+
+    // Regression test for the bug where cancelling the conversation while a
+    // `run_agents` tool call is still streaming (i.e. before the action is
+    // ever queued into the action model) left the card spinning on
+    // "Configuring agents..." forever, with no cancelled state ever shown.
+    #[test]
+    fn block_cancelled_while_awaiting_confirmation_renders_cancelled() {
+        let (label, kind) = pending_confirmation_status(true);
+        assert_eq!(label, "Spawn agents cancelled");
+        assert!(matches!(kind, StatusKind::Cancelled));
+    }
+
+    #[test]
+    fn block_not_cancelled_while_awaiting_confirmation_renders_spawning_placeholder() {
+        let (label, kind) = pending_confirmation_status(false);
+        assert_eq!(label, "Configuring agents\u{2026}");
+        assert!(matches!(kind, StatusKind::Spawning));
+    }
+}
+
+/// End-to-end regression test for the same bug, driven through a real
+/// `RunAgentsCardView` instead of the pure `pending_confirmation_status`
+/// helper: it constructs the actual view against a real (unqueued)
+/// `BlocklistAIActionModel`, flips a fake block model from streaming to
+/// `Cancelled`, and asserts the card's own `render()` output changes
+/// accordingly. This also exercises `RunAgentsCardView::render`'s
+/// `self.block_model.status(app).is_cancelled()` fallback branch directly,
+/// rather than just the extracted decision function.
+mod cancelled_while_streaming_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use ai::agent::action::RunAgentsExecutionMode;
+    use warpui::platform::WindowStyle;
+    use warpui::{App, AppContext, View, ViewContext};
+
+    use super::super::RunAgentsCardView;
+    use super::make_request;
+    use crate::ai::agent::conversation::AIConversationId;
+    use crate::ai::agent::{AIAgentActionId, AIAgentInput, CancellationReason, ServerOutputId};
+    use crate::ai::blocklist::action_model::RunAgentsExecutor;
+    use crate::ai::blocklist::block::AIBlock;
+    use crate::ai::blocklist::block::model::{
+        AIBlockModel, AIBlockOutputStatus, AIRequestType, OutputStatusUpdateCallback,
+    };
+    use crate::ai::llms::LLMId;
+    use crate::server::experiments::ServerExperiments;
+    use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+
+    /// A block model whose cancelled status can be flipped after
+    /// construction, to simulate the enclosing conversation being cancelled
+    /// while the `run_agents` tool call is still streaming.
+    struct FakeStreamingBlockModel {
+        status: RefCell<AIBlockOutputStatus>,
+        model_id: LLMId,
+    }
+
+    impl FakeStreamingBlockModel {
+        fn new() -> Rc<Self> {
+            Rc::new(Self {
+                status: RefCell::new(AIBlockOutputStatus::Pending),
+                model_id: "fake-llm".to_string().into(),
+            })
+        }
+
+        fn cancel(&self) {
+            *self.status.borrow_mut() = AIBlockOutputStatus::Cancelled {
+                partial_output: None,
+                reason: CancellationReason::ManuallyCancelled,
+            };
+        }
+    }
+
+    impl AIBlockModel for FakeStreamingBlockModel {
+        type View = AIBlock;
+
+        fn status(&self, _app: &AppContext) -> AIBlockOutputStatus {
+            self.status.borrow().clone()
+        }
+
+        fn server_output_id(&self, _app: &AppContext) -> Option<ServerOutputId> {
+            None
+        }
+
+        fn model_id(&self, _app: &AppContext) -> Option<LLMId> {
+            None
+        }
+
+        fn base_model<'a>(&'a self, _app: &'a AppContext) -> Option<&'a LLMId> {
+            Some(&self.model_id)
+        }
+
+        fn inputs_to_render<'a>(&'a self, _app: &'a AppContext) -> &'a [AIAgentInput] {
+            &[]
+        }
+
+        fn conversation_id(&self, _app: &AppContext) -> Option<AIConversationId> {
+            None
+        }
+
+        fn on_updated_output(
+            &self,
+            _callback: OutputStatusUpdateCallback<AIBlock>,
+            _ctx: &mut ViewContext<AIBlock>,
+        ) {
+        }
+
+        fn request_type(&self, _app: &AppContext) -> AIRequestType {
+            AIRequestType::Active
+        }
+    }
+
+    #[test]
+    fn block_cancelled_with_no_action_status_renders_cancelled_fallback() {
+        App::test((), |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            app.add_singleton_model(|ctx| ServerExperiments::new_from_cache(vec![], ctx));
+            let terminal_view = add_window_with_terminal(&mut app, None);
+            let (action_model, run_agents_executor) = app.read(|ctx| {
+                let action_model = terminal_view.as_ref(ctx).ai_action_model().clone();
+                let run_agents_executor: warpui::ModelHandle<RunAgentsExecutor> =
+                    action_model.as_ref(ctx).run_agents_executor(ctx);
+                (action_model, run_agents_executor)
+            });
+
+            let block_model = FakeStreamingBlockModel::new();
+            let block_model_for_view: Rc<dyn AIBlockModel<View = AIBlock>> = block_model.clone();
+            let action_id = AIAgentActionId::from("run-agents-1".to_string());
+            let request = make_request("oz", RunAgentsExecutionMode::Local);
+            let (_window_id, card) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+                RunAgentsCardView::new(
+                    action_id,
+                    &request,
+                    None,
+                    action_model,
+                    run_agents_executor,
+                    block_model_for_view,
+                    ctx,
+                )
+            });
+
+            // The action was never queued (still streaming, per the real bug
+            // scenario), so the card should show the streaming placeholder.
+            let before = card.read(&app, |card, ctx| {
+                card.render(ctx).debug_text_content().unwrap_or_default()
+            });
+            assert!(
+                before.contains("Configuring agents"),
+                "expected the still-streaming placeholder before cancellation: {before}"
+            );
+
+            // Cancel the block: the action still never gets queued, but the
+            // card must now render the cancelled fallback instead of
+            // spinning on the placeholder forever.
+            block_model.cancel();
+
+            let after = card.read(&app, |card, ctx| {
+                card.render(ctx).debug_text_content().unwrap_or_default()
+            });
+            assert!(
+                after.contains("Spawn agents cancelled"),
+                "expected the cancelled fallback once the block is cancelled: {after}"
+            );
+        });
+    }
+}
+
 mod format_terminal_state_tests {
     use super::super::{StatusKind, format_terminal_state};
     use super::*;
