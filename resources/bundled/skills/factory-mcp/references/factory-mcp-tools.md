@@ -167,9 +167,12 @@ Inputs:
 ## complete_task
 
 Mark a factory task complete (its terminal `COMPLETE` stage). The completing
-factory agent calls this once when the work is done. Idempotent and terminal:
+agent calls this once when the work is done. Idempotent and terminal:
 completing an already-complete task is a success no-op, and this only ever sets
-`COMPLETE` — never any other stage.
+`COMPLETE` — never any other stage. See the skill's
+[Completing a task](../SKILL.md#completing-a-task) section for the rules on
+*when* to call it — a merged PR is the primary trigger, but never call it for
+abandoned, rejected, or merely handed-off work.
 
 Inputs (provide one):
 - `run_id` — any run id in the task's run tree (e.g. the calling agent's own run

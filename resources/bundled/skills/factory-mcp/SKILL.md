@@ -48,7 +48,9 @@ tool schema when the two differ.
 - `message_foreman` — send an ongoing coordination message (status, question,
   blocker, what you just pushed) to a task's foreman; read replies with
   `get_conversation`.
-- `complete_task` — mark a task complete (terminal `COMPLETE` stage).
+- `complete_task` — mark a task complete (terminal `COMPLETE` stage) once the
+  work is verified done; see [Completing a task](#completing-a-task) below for
+  when to call it.
 - `get_conversation` — read the raw foreman transcript for a task.
 
 Always start by resolving the factory:
@@ -228,11 +230,46 @@ Avatars are not settable over MCP — set one afterward with the REST endpoint
 
 ## Completing a task
 
-When the work is truly done, mark the task complete with `complete_task`. Pass a
-`run_id` from anywhere in the task's run tree (for a factory agent, its own run
-id works) or the `factory_task_uid` explicitly. It only ever sets the terminal
-`COMPLETE` stage and is idempotent — completing an already-complete task is a
-successful no-op. Do not use it to move a task to any other stage.
+`complete_task` sets a task's terminal `COMPLETE` stage. Call it once the work
+is genuinely finished — whether you are a factory agent closing out your own
+task or an outside caller confirming one over MCP. Pass a `run_id` from
+anywhere in the task's run tree (for a factory agent, its own run id works) or
+the `factory_task_uid` explicitly.
+
+**A merged PR is the primary trigger.** Most tasks finish by landing their work
+as a pull request. Do not take a merge notification at face value — a message
+or a task's own metadata is not proof. Get the task's PR outputs (e.g. from
+`get_task`) to see which PRs are relevant, then check each one's state against
+the code host itself, the authoritative source of merged state. When a task
+carries several linked PRs, every one that carries the work needs to have
+merged, not just one of them. If any relevant PR is not merged, or you cannot
+verify one's state, leave the task uncompleted.
+
+**Done without a merge is the secondary trigger.** Some tasks legitimately
+finish without merging anything: a question got answered, an investigation
+produced its findings, the work shipped by another route. Complete these too,
+but only once the requested outcome has actually been delivered and nothing
+further is expected of the task.
+
+**Never complete abandoned, rejected, or merely handed-off work.**
+`complete_task` only ever writes `COMPLETE` — it has no way to express
+cancellation. Do not call it for work that was abandoned, rejected,
+superseded, or closed without merging; leave those tasks alone rather than
+mislabeling them as complete. Likewise, do not complete a task that is merely
+waiting on a human — a PR out for review, a question still unanswered — since
+handing work off is not finishing it.
+
+**Call it once, near the end, and treat it as best-effort.** The call is
+idempotent (completing an already-complete task is a successful no-op), but it
+is also terminal, so completing too early — not a repeat call — is the real
+risk: the stage cannot be walked back through this tool. Make it the last
+*applicable* close-out step: when a tracking issue and a human-facing wrap-up
+exist for the task, update and send those first. But do not let those
+artifacts gate `complete_task` when a task has neither — an ad-hoc task, or
+one an outside MCP caller has no ownership of — since it may be the only
+durable close-out signal you can give. Treat the call itself as best-effort
+too — when the Factory MCP is not connected, `complete_task` simply is not in
+your tool set, and that must not stop the rest of your close-out.
 
 ## Inspecting the foreman conversation
 
