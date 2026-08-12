@@ -279,6 +279,14 @@ impl CodeEditorFind {
             editor.set_interaction_state(state, ctx);
         });
     }
+
+    /// Returns a handle to the find input editor, for use by tests that need to drive or inspect
+    /// it directly (e.g. focus/interaction-state behavior around the Enter keystroke).
+    #[cfg(test)]
+    pub(crate) fn find_editor(&self) -> ViewHandle<EditorView> {
+        self.find_editor.clone()
+    }
+
     fn handle_find_editor_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
         match event {
             EditorEvent::Edited(_) => {
@@ -300,10 +308,14 @@ impl CodeEditorFind {
                 if !vim_enabled {
                     self.focus_next_match(FindDirection::Down, ctx);
                 } else {
-                    // Vim: treat "enter" as ending the search query entry and shift focus back to the editor
+                    // Vim: treat "enter" as ending the search query entry and shift focus back to the
+                    // editor. Use `Selectable` rather than `Disabled` so the input stays clickable:
+                    // `Disabled` blocks mouse hit-testing entirely, which would leave the field
+                    // permanently unclickable until the find bar is reopened. `on_focus` below
+                    // restores full editability as soon as the user clicks back into the field.
                     self.find_editor.update(ctx, |editor, ctx| {
                         editor.clear_selections(ctx);
-                        editor.set_interaction_state(InteractionState::Disabled, ctx);
+                        editor.set_interaction_state(InteractionState::Selectable, ctx);
                     });
                     ctx.emit(Event::VimEnterAndFocusEditor);
                 }
@@ -954,7 +966,16 @@ impl View for CodeEditorFind {
         self.searcher.update(ctx, |searcher, _ctx| {
             searcher.set_auto_select(true);
         });
-        if focus_ctx.is_self_focused() {
+
+        // Restore full editability whenever the find bar opens (`SelfFocused`, e.g. via cmd-f) or
+        // the user clicks directly into the find input (`DescendentFocused`). The latter also
+        // covers re-enabling the input after Vim mode's Enter handling leaves it in a
+        // `Selectable`, not-yet-editable state (see `handle_find_editor_event`).
+        let find_editor_directly_focused = match focus_ctx {
+            FocusContext::SelfFocused => false,
+            FocusContext::DescendentFocused(id) => *id == self.find_editor.id(),
+        };
+        if focus_ctx.is_self_focused() || find_editor_directly_focused {
             self.find_editor.update(ctx, |editor, ctx| {
                 editor.set_interaction_state(InteractionState::Editable, ctx);
                 editor.select_all(ctx);

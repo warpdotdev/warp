@@ -20,6 +20,7 @@ use warpui::{App, SingletonEntity, TypedActionView, UpdateModel, ViewHandle};
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction};
+use crate::editor::EditorAction;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
@@ -174,6 +175,56 @@ fn scroll_top(editor: &ViewHandle<CodeEditorView>, app: &App) -> f32 {
             .scroll_top()
             .as_f32()
     })
+}
+
+#[test]
+fn test_find_input_click_after_vim_enter_reenables_editing() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        let editor = add_code_editor("foo bar foo", &mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::ShowFindBar, ctx);
+        });
+
+        let find_bar = editor
+            .read(&app, |view, _ctx| view.find_bar.clone())
+            .expect("find bar should be available");
+        let find_editor = find_bar.read(&app, |find_bar, _ctx| find_bar.find_editor());
+
+        // Type a query and press Enter, mirroring the reported repro steps in Vim mode.
+        find_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(&EditorAction::UserInsert(UserInput::new("foo")), ctx);
+        });
+        find_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(&EditorAction::Enter, ctx);
+        });
+
+        // Vim mode's Enter handling shifts focus to the editor and marks the find input
+        // non-editable, but it must remain clickable so the user can return to it.
+        assert!(
+            !find_editor.read(&app, |editor, ctx| editor.can_edit(ctx)),
+            "find input should not be directly editable immediately after vim-mode Enter"
+        );
+        assert!(
+            find_editor.read(&app, |editor, ctx| editor.can_select(ctx)),
+            "find input should remain selectable after vim-mode Enter so a click can refocus it"
+        );
+
+        // Simulate clicking on the find input: this is exactly what `EditorElement::mouse_down`
+        // dispatches when the click lands inside the input's bounds and it is selectable.
+        find_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(&EditorAction::Focus, ctx);
+        });
+
+        assert!(
+            find_editor.read(&app, |editor, ctx| editor.can_edit(ctx)),
+            "clicking the find input after vim-mode Enter should restore editability"
+        );
+    });
 }
 
 #[test]

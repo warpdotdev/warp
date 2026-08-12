@@ -11,7 +11,7 @@ use warpui::{App, TypedActionView, ViewHandle, WindowId};
 use super::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction};
 use crate::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
-use crate::editor::InteractionState;
+use crate::editor::{EditorAction, InteractionState};
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
@@ -85,5 +85,58 @@ fn test_interaction_state_prevents_editing() {
         });
 
         assert_eq!(text.as_str(), "abc");
+    });
+}
+
+#[test]
+fn test_find_input_can_be_refocused_by_click_after_enter() {
+    App::test((), |mut app| async move {
+        let (window, editor_view) = initialize_editor(&mut app);
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &CodeEditorViewAction::UserTyped(UserInput::new("foo bar foo")),
+                ctx,
+            );
+            view.handle_action(&CodeEditorViewAction::ShowFindBar, ctx);
+        });
+
+        let find_bar = editor_view
+            .read(&app, |view, _ctx| view.find_bar.clone())
+            .expect("find bar should be available");
+        let find_editor = find_bar.read(&app, |find_bar, _ctx| find_bar.find_editor());
+
+        // Type a query and press Enter, mirroring the reported repro steps.
+        find_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(&EditorAction::UserInsert(UserInput::new("foo")), ctx);
+        });
+        find_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(&EditorAction::Enter, ctx);
+        });
+
+        // A real mouse click is dropped by `EditorElement::mouse_down` before it can dispatch
+        // `EditorAction::Focus` unless the input is still selectable.
+        let can_select_after_enter = find_editor.read(&app, |editor, ctx| editor.can_select(ctx));
+        assert!(
+            can_select_after_enter,
+            "find input should remain selectable after Enter so a click can refocus it"
+        );
+
+        // Move focus away from the find input, matching the reported flow where the field is no
+        // longer focused after Enter.
+        editor_view.update(&mut app, |view, ctx| view.focus(ctx));
+        assert_ne!(app.focused_view_id(window), Some(find_editor.id()));
+
+        // Simulate clicking on the find input: this is exactly what `EditorElement::mouse_down`
+        // dispatches when the click lands inside the input's bounds and it is selectable.
+        find_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(&EditorAction::Focus, ctx);
+        });
+
+        assert_eq!(
+            app.focused_view_id(window),
+            Some(find_editor.id()),
+            "clicking the find input after pressing Enter should refocus it for editing"
+        );
     });
 }
