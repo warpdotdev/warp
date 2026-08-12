@@ -15,6 +15,7 @@ use warpui::elements::{
 pub use warpui::elements::{ParentElement as _, Stack};
 pub use warpui::geometry::vector::vec2f;
 use warpui::keymap::EditableBinding;
+use warpui::platform::Cursor;
 use warpui::presenter::ChildView;
 use warpui::ui_components::components::UiComponent;
 use warpui::{
@@ -53,6 +54,9 @@ pub const CASE_SENSITIVE_TOOLTIP: &str = "Case sensitive search";
 pub const PRESERVE_CASE_TOOLTIP: &str = "Preserve case";
 pub const FIND_PLACEHOLDER_TEXT: &str = "Find";
 pub const REPLACE_PLACEHOLDER_TEXT: &str = "Replace";
+/// The `SavePosition` id for the find input's bordered box, used to recover its painted bounds
+/// for tests that simulate real clicks.
+pub const FIND_INPUT_POSITION_ID: &str = "find_input_box";
 
 #[derive(Default)]
 struct ButtonMouseStates {
@@ -81,6 +85,7 @@ pub struct CodeEditorFind {
     replace_editor: ViewHandle<EditorView>,
     searcher: ModelHandle<Searcher>,
     button_mouse_states: ButtonMouseStates,
+    find_input_mouse_state: MouseStateHandle,
     preserve_case_enabled: bool,
     is_open: bool,
     is_replace_open: bool,
@@ -101,6 +106,8 @@ pub enum FindAction {
     ToggleReplaceOpen,
     ReplaceAll,
     TogglePreserveCase,
+    /// The find input was clicked; see `focus_find_input` for details.
+    FocusFindInput,
 }
 
 pub fn init(app: &mut AppContext) {
@@ -229,6 +236,7 @@ impl CodeEditorFind {
             replace_editor,
             searcher,
             button_mouse_states: Default::default(),
+            find_input_mouse_state: Default::default(),
             preserve_case_enabled: false,
             is_open: false,
             is_replace_open: false,
@@ -409,6 +417,17 @@ impl CodeEditorFind {
 
     fn close_find_bar(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.emit(Event::CloseFindBar);
+    }
+
+    /// Reclaims focus for the find bar. Bound to a click on the find input's `Hoverable`, which
+    /// is configured with `with_defer_events_to_children()` so this only fires when the input
+    /// itself did not already consume the click (e.g. it's disabled, as Vim's Enter handling and
+    /// `search_word_at_cursor` leave it while keeping the find bar open as a status indicator).
+    /// Focusing the find bar routes through `on_focus`, which re-enables and re-selects the
+    /// input, the same way Cmd-F does. Because a click the input already handled never reaches
+    /// here, this can't disrupt an active field's own click-to-place-cursor behavior.
+    fn focus_find_input(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.focus_self();
     }
 
     fn toggle_case_sensitivity(&mut self, ctx: &mut ViewContext<Self>) {
@@ -781,6 +800,32 @@ impl CodeEditorFind {
         query_editor_row.add_child(regex_icon);
         query_editor_row.add_child(case_sensitive_icon);
 
+        // The whole bordered box (padding, input, and toggle icons) is wrapped in a `Hoverable`
+        // so that clicking anywhere in the visible find input -- not just its exact text rect --
+        // reclaims focus when it's disabled (see `focus_find_input`). `with_defer_events_to_children`
+        // means this only fires when nothing inside (the input's own click handling, or a toggle
+        // icon's `Hoverable`) already consumed the click.
+        let find_input_box = Hoverable::new(self.find_input_mouse_state.clone(), |_state| {
+            Container::new(query_editor_row.finish())
+                .with_padding_right(4.)
+                .with_padding_left(8.)
+                .with_background(appearance.theme().surface_1())
+                .with_border(
+                    Border::all(FIND_EDITOR_BORDER_WIDTH)
+                        .with_border_fill(appearance.theme().surface_3()),
+                )
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                    FIND_EDITOR_BORDER_RADIUS,
+                )))
+                .finish()
+        })
+        .with_defer_events_to_children()
+        .with_cursor(Cursor::IBeam)
+        .on_mouse_down(move |ctx, _app, _position| {
+            ctx.dispatch_typed_action(FindAction::FocusFindInput);
+        })
+        .finish();
+
         // Create the find row with replace toggle, query editor, and select all button
         let mut find_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -814,17 +859,7 @@ impl CodeEditorFind {
         find_row.add_child(
             Shrinkable::new(
                 1.,
-                Container::new(query_editor_row.finish())
-                    .with_padding_right(4.)
-                    .with_padding_left(8.)
-                    .with_background(appearance.theme().surface_1())
-                    .with_border(
-                        Border::all(FIND_EDITOR_BORDER_WIDTH)
-                            .with_border_fill(appearance.theme().surface_3()),
-                    )
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
-                        FIND_EDITOR_BORDER_RADIUS,
-                    )))
+                Container::new(SavePosition::new(find_input_box, FIND_INPUT_POSITION_ID).finish())
                     .with_margin_right(2. * HORIZONTAL_ICON_SPACING)
                     .finish(),
             )
@@ -894,6 +929,13 @@ impl Entity for CodeEditorFind {
     type Event = Event;
 }
 
+#[cfg(test)]
+impl CodeEditorFind {
+    pub(crate) fn find_editor_for_test(&self) -> ViewHandle<EditorView> {
+        self.find_editor.clone()
+    }
+}
+
 impl TypedActionView for CodeEditorFind {
     type Action = FindAction;
 
@@ -914,6 +956,7 @@ impl TypedActionView for CodeEditorFind {
                 self.preserve_case_enabled = !self.preserve_case_enabled;
                 ctx.notify();
             }
+            FindAction::FocusFindInput => self.focus_find_input(ctx),
         }
     }
 }
