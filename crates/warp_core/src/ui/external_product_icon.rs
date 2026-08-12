@@ -17,8 +17,6 @@ pub enum ExternalProductIcon {
 }
 
 impl ExternalProductIcon {
-    /// Product name prefixes, matched case-insensitively against the start of a
-    /// server title. Add a new product by adding a row here.
     const PREFIXES: &'static [(&'static str, Self)] = &[
         ("heroku", Self::Heroku),
         ("notion", Self::Notion),
