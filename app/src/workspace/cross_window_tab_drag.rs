@@ -901,6 +901,11 @@ impl CrossWindowTabDrag {
                     target_ws.update(ctx, |workspace, ctx| {
                         let tab = workspace.tabs.remove(current_index);
                         workspace.tabs.insert(target_index, tab);
+                        // The reorder above is raw, so it can drop the tab
+                        // outside the run of the group automatic grouping just
+                        // put it in. Committing that as a placement is what
+                        // keeps every group's members contiguous.
+                        workspace.detach_tab_if_it_left_its_group_run(target_index, ctx);
                         workspace.set_active_tab_index(target_index, ctx);
                         ctx.notify();
                     });

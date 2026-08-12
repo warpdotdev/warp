@@ -1338,3 +1338,165 @@ fn a_group_replacing_another_keeps_a_color_the_user_cleared() {
         });
     });
 }
+
+// Manual membership changes -- a drag committed through `commit_dragged_tab_group`
+// or the "Move to group" menu -- run the same colour rule automation's own paths
+// run. Without it a tab keeps the colour of a project it no longer sits with, and
+// provenance then reads that stale colour as the user's for ever.
+
+#[test]
+fn a_manual_drag_into_another_projects_group_takes_that_projects_colour() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_group_colors(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 2, ctx);
+            keyed_group(workspace, API, &[0]);
+            let web_group = keyed_group(workspace, WEB, &[1]);
+            paint_as_automation(workspace, 0, API);
+
+            workspace.commit_dragged_tab_group(0, Some(web_group), ctx);
+
+            assert_eq!(
+                tab_color(workspace, 0),
+                derived(WEB),
+                "the tab wears the project of the group it was dropped into"
+            );
+        });
+    });
+}
+
+#[test]
+fn a_manual_drag_out_of_every_group_hands_the_colour_back() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_group_colors(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 2, ctx);
+            keyed_group(workspace, API, &[0, 1]);
+            paint_as_automation(workspace, 0, API);
+
+            workspace.commit_dragged_tab_group(0, None, ctx);
+
+            assert_eq!(tab_color(workspace, 0), SelectedTabColor::Unset);
+        });
+    });
+}
+
+#[test]
+fn a_colour_the_user_chose_survives_a_manual_drag() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_group_colors(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 2, ctx);
+            keyed_group(workspace, API, &[0]);
+            let web_group = keyed_group(workspace, WEB, &[1]);
+            let user_color = color_the_user_would_have_picked(API);
+            set_tab_color(workspace, 0, SelectedTabColor::Color(user_color));
+
+            workspace.commit_dragged_tab_group(0, Some(web_group), ctx);
+
+            assert_eq!(
+                tab_color(workspace, 0),
+                SelectedTabColor::Color(user_color),
+                "dragging a tab is not licence to repaint a colour the user set"
+            );
+        });
+    });
+}
+
+// The cross-window drag reorders the target window's tab list directly, so the
+// contiguity convention has to be restored by hand afterwards.
+
+#[test]
+fn a_reorder_that_leaves_the_group_run_detaches_the_tab() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_group_colors(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 3, ctx);
+            let api_group = keyed_group(workspace, API, &[0, 1]);
+            paint_as_automation(workspace, 0, API);
+            let moved = workspace.tabs[0].pane_group.id();
+
+            // The raw reorder the drag performs: past the ungrouped third tab,
+            // which strands the group's members at 0 and 2.
+            let tab = workspace.tabs.remove(0);
+            workspace.tabs.insert(2, tab);
+
+            workspace.detach_tab_if_it_left_its_group_run(2, ctx);
+
+            let moved_index = workspace
+                .tab_index_for_pane_group(moved)
+                .expect("the tab still exists");
+            assert_eq!(
+                workspace.tabs[moved_index].group_id, None,
+                "a tab dragged out of its group's run leaves the group"
+            );
+            assert_eq!(
+                tab_color(workspace, moved_index),
+                SelectedTabColor::Unset,
+                "and gives automation's colour back with the membership"
+            );
+            assert!(workspace.tab_groups.contains_key(&api_group));
+            assert_groups_contiguous(workspace);
+        });
+    });
+}
+
+#[test]
+fn a_reorder_inside_the_group_run_keeps_the_membership() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_group_colors(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 3, ctx);
+            let api_group = keyed_group(workspace, API, &[0, 1, 2]);
+            paint_as_automation(workspace, 0, API);
+            let moved = workspace.tabs[0].pane_group.id();
+
+            // Nudged within its own run, which stays contiguous.
+            let tab = workspace.tabs.remove(0);
+            workspace.tabs.insert(2, tab);
+
+            workspace.detach_tab_if_it_left_its_group_run(2, ctx);
+
+            let moved_index = workspace
+                .tab_index_for_pane_group(moved)
+                .expect("the tab still exists");
+            assert_eq!(
+                workspace.tabs[moved_index].group_id,
+                Some(api_group),
+                "moving inside the run is not a placement and must not detach"
+            );
+            assert_eq!(tab_color(workspace, moved_index), derived(API));
+            assert_groups_contiguous(workspace);
+        });
+    });
+}

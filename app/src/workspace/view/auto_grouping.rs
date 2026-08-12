@@ -69,6 +69,19 @@ impl AutoGroupingState {
     fn record_resolved_key(&mut self, pane_group_id: EntityId, key: ProjectKey) {
         self.last_resolved_keys.insert(pane_group_id, key);
     }
+
+    /// Drops everything the resolver remembers about a tab that is gone for
+    /// good.
+    ///
+    /// Both maps are keyed by pane-group identity and are only ever written on
+    /// the way in, so without this they accumulate for the life of the window.
+    /// `EntityId` is a monotonic counter, so a stale entry can never be adopted
+    /// by a later tab — the cost is memory, not correctness, which is why this
+    /// is upkeep rather than a guard.
+    pub(super) fn forget(&mut self, pane_group_id: EntityId) {
+        self.last_resolved_keys.remove(&pane_group_id);
+        self.anchors.remove(&pane_group_id);
+    }
 }
 
 /// Whether a stored group key came from git identity rather than from a plain
@@ -423,7 +436,7 @@ impl Workspace {
     /// Returns whether the tab's colour actually changed, so the callers that
     /// are not already saving and notifying for a move can do so only when
     /// there is something to save.
-    fn apply_derived_tab_color(
+    pub(super) fn apply_derived_tab_color(
         &mut self,
         tab_index: usize,
         key: Option<&ProjectKey>,
@@ -675,6 +688,13 @@ impl Workspace {
     /// disturbing it, and only the anchor closing re-anchors, to the next
     /// remaining terminal pane. A restored tab has no recorded anchor, so it
     /// re-derives to the first terminal pane of the restored layout.
+    ///
+    /// "Closing" is tested against the pane group's membership rather than
+    /// against visibility. A pane hidden for a move, a job, a temporary
+    /// replacement or a child agent is still this tab's anchor; re-anchoring on
+    /// a transient hide would move a two-split tab onto whichever repository the
+    /// *other* split happens to be checked out from, and that new anchor is then
+    /// recorded permanently.
     fn refresh_tab_anchor(&mut self, pane_group_id: EntityId, ctx: &mut ViewContext<Self>) -> bool {
         let Some(pane_group) = self.pane_group_for_id(pane_group_id) else {
             return false;
@@ -687,14 +707,19 @@ impl Workspace {
 
         let anchor_pane_id = {
             let group = pane_group.as_ref(ctx);
-            let terminal_panes: Vec<PaneId> = group
-                .visible_pane_ids()
-                .into_iter()
-                .filter(|pane_id| group.terminal_view_from_pane_id(*pane_id, ctx).is_some())
-                .collect();
-            match recorded {
-                Some(pane_id) if terminal_panes.contains(&pane_id) => Some(pane_id),
-                _ => terminal_panes.first().copied(),
+            let recorded_still_present = recorded.is_some_and(|pane_id| {
+                group.has_pane_id(pane_id)
+                    && group.terminal_view_from_pane_id(pane_id, ctx).is_some()
+            });
+            if recorded_still_present {
+                recorded
+            } else {
+                // Choosing a *new* anchor still prefers a visible pane: a hidden
+                // one has no place being adopted as the tab's project source.
+                group
+                    .visible_pane_ids()
+                    .into_iter()
+                    .find(|pane_id| group.terminal_view_from_pane_id(*pane_id, ctx).is_some())
             }
         };
 

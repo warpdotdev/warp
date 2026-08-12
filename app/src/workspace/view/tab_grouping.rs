@@ -570,16 +570,56 @@ impl Workspace {
     /// looking at.
     ///
     /// `group_id` is `None` when the drag left every group.
+    ///
+    /// The colour follows the membership, exactly as it does on automation's own
+    /// paths: the key the tab is leaving judges whether the colour it carries is
+    /// automation's, and the group it lands in supplies the new one. A drag out
+    /// of every group resolves to no key, which hands the colour back. Detaching
+    /// the tab (R13) does not freeze its colour on the project it left — a tab
+    /// wearing one project's colour inside another project's group is the state
+    /// this avoids.
     pub(super) fn commit_dragged_tab_group(
         &mut self,
         tab_index: usize,
         group_id: Option<TabGroupId>,
         ctx: &mut ViewContext<Self>,
     ) {
+        let previous_key = self.project_key_of_tabs_group(tab_index);
         // Membership only; `assign_tab_to_group` never reorders, so
         // `tab_index` still addresses the same tab afterwards.
         self.assign_tab_to_group(tab_index, group_id, ctx);
         self.note_manual_tab_placement(tab_index);
+        let key = self.project_key_of_tabs_group(tab_index);
+        self.apply_derived_tab_color(tab_index, key.as_ref(), previous_key.as_ref(), ctx);
+    }
+
+    /// Restores the contiguity convention after a raw reorder moved the tab at
+    /// `tab_index`.
+    ///
+    /// The cross-window drag reorders the target window's tab list directly
+    /// while the drag is in flight, and automatic grouping may have put the
+    /// arriving tab into a group first. Dragging it out of that group's run is
+    /// the same gesture the in-window drag path already reads as a deliberate
+    /// placement, so it is committed as one: the tab leaves the group, which
+    /// prunes the group when it is now empty and hands automation's colour back.
+    /// A tab still inside its own run keeps its membership, so nudging a tab
+    /// around within its group does not detach it.
+    pub(crate) fn detach_tab_if_it_left_its_group_run(
+        &mut self,
+        tab_index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(group_id) = self.tabs.get(tab_index).and_then(|tab| tab.group_id) else {
+            return;
+        };
+        let indices: Vec<usize> = group_member_indices(&self.tabs, group_id).collect();
+        let (Some(&first), Some(&last)) = (indices.first(), indices.last()) else {
+            return;
+        };
+        if last - first + 1 == indices.len() {
+            return;
+        }
+        self.commit_dragged_tab_group(tab_index, None, ctx);
     }
 
     /// Returns the slot just past the last member of `group_id`, suitable as

@@ -20,6 +20,7 @@ use warp_core::features::FeatureFlag;
 use warpui::App;
 
 use super::*;
+use crate::pane_group::Event;
 use crate::workspace::view::tests::{initialize_app, mock_workspace};
 
 /// Three unrelated non-git directories, none a prefix of another, so
@@ -75,14 +76,14 @@ fn cd(
     let anchor = anchor_pane(workspace, tab_index, ctx);
     set_pane_directory(workspace, anchor, directory);
     let pane_group = workspace.tabs[tab_index].pane_group.clone();
-    workspace.handle_file_tree_event(pane_group, &crate::pane_group::Event::AppStateChanged, ctx);
+    workspace.handle_file_tree_event(pane_group, &Event::AppStateChanged, ctx);
 }
 
 /// Delivers a repository-detection answer, the trigger that is deliberately not
 /// guarded on a directory delta.
 fn repo_changed(workspace: &mut Workspace, tab_index: usize, ctx: &mut ViewContext<Workspace>) {
     let pane_group = workspace.tabs[tab_index].pane_group.clone();
-    workspace.handle_file_tree_event(pane_group, &crate::pane_group::Event::RepoChanged, ctx);
+    workspace.handle_file_tree_event(pane_group, &Event::RepoChanged, ctx);
 }
 
 fn tab_index_of(workspace: &Workspace, pane_group_id: EntityId) -> usize {

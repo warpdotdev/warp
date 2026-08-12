@@ -13,7 +13,7 @@ use warp_core::features::FeatureFlag;
 use warpui::App;
 
 use super::*;
-use crate::pane_group::Direction;
+use crate::pane_group::{Direction, Event};
 use crate::tab::TabData;
 use crate::workspace::view::TransferredTab;
 use crate::workspace::view::tests::{initialize_app, mock_workspace};
@@ -102,7 +102,7 @@ fn set_git_resolution(workspace: &mut Workspace, directory: &str, resolution: Gi
 fn fire(
     workspace: &mut Workspace,
     tab_index: usize,
-    event: crate::pane_group::Event,
+    event: Event,
     ctx: &mut ViewContext<Workspace>,
 ) {
     let pane_group = workspace.tabs[tab_index].pane_group.clone();
@@ -114,21 +114,11 @@ fn directory_changed(
     tab_index: usize,
     ctx: &mut ViewContext<Workspace>,
 ) {
-    fire(
-        workspace,
-        tab_index,
-        crate::pane_group::Event::AppStateChanged,
-        ctx,
-    );
+    fire(workspace, tab_index, Event::AppStateChanged, ctx);
 }
 
 fn repo_changed(workspace: &mut Workspace, tab_index: usize, ctx: &mut ViewContext<Workspace>) {
-    fire(
-        workspace,
-        tab_index,
-        crate::pane_group::Event::RepoChanged,
-        ctx,
-    );
+    fire(workspace, tab_index, Event::RepoChanged, ctx);
 }
 
 fn group_key_of_tab(workspace: &Workspace, tab_index: usize) -> Option<String> {
@@ -989,6 +979,62 @@ fn disabling_the_mode_changes_nothing() {
             directory_changed(workspace, 0, ctx);
 
             assert_eq!(group_key_of_tab(workspace, 0).as_deref(), Some(SCRATCH));
+        });
+    });
+}
+
+// The resolver's two maps are keyed by pane-group identity and are only ever
+// written on the way in, so closing a tab has to release its entries or they
+// accumulate for the life of the window.
+#[test]
+fn closing_a_tab_releases_its_resolver_state() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        enable_auto_grouping(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            grow_to(workspace, 2, ctx);
+            let anchor = anchor_pane(workspace, 0, ctx);
+            let pane_group_id = workspace.tabs[0].pane_group.id();
+            set_pane_directory(workspace, anchor, SCRATCH);
+            directory_changed(workspace, 0, ctx);
+
+            assert!(
+                workspace
+                    .auto_grouping_state
+                    .last_resolved_keys
+                    .contains_key(&pane_group_id),
+                "the reconcile records the key it resolved"
+            );
+            assert!(
+                workspace
+                    .auto_grouping_state
+                    .anchors
+                    .contains_key(&pane_group_id),
+                "and the anchor it chose"
+            );
+
+            let closed = tab_index_of(workspace, pane_group_id);
+            workspace.remove_tab(closed, false, false, ctx);
+
+            assert!(
+                !workspace
+                    .auto_grouping_state
+                    .last_resolved_keys
+                    .contains_key(&pane_group_id),
+                "closing the tab releases its resolved key"
+            );
+            assert!(
+                !workspace
+                    .auto_grouping_state
+                    .anchors
+                    .contains_key(&pane_group_id),
+                "and its anchor"
+            );
         });
     });
 }
