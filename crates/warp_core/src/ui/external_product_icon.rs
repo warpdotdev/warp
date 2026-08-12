@@ -17,8 +17,8 @@ pub enum ExternalProductIcon {
 
 impl ExternalProductIcon {
     pub fn from_string(s: &str) -> Option<ExternalProductIcon> {
-        let s_lower = s.to_ascii_lowercase();
-        match s_lower.as_str() {
+        let normalized = Self::normalize_title(s);
+        match normalized.as_str() {
             "heroku" => Some(ExternalProductIcon::Heroku),
             "notion" => Some(ExternalProductIcon::Notion),
             "linear" => Some(ExternalProductIcon::Linear),
@@ -31,6 +31,24 @@ impl ExternalProductIcon {
             "you.com" => Some(ExternalProductIcon::YouDotCom),
             _other => None,
         }
+    }
+
+    /// Strips a single trailing parenthetical qualifier (e.g. "Sentry (OAuth)" ->
+    /// "sentry") so decorated server titles still resolve to their base product's
+    /// icon, then lowercases the result for matching. A title made up entirely of
+    /// a parenthetical (no base text before it) is left untouched, since there is
+    /// nothing to safely strip. This intentionally does not strip or match
+    /// anywhere else in the title, so unrelated titles that merely contain a known
+    /// product name (e.g. "GitHub scraper thing") still fall through to `None`.
+    fn normalize_title(s: &str) -> String {
+        let trimmed = s.trim();
+        let base = match trimmed.rfind('(') {
+            Some(paren_idx) if paren_idx > 0 && trimmed.ends_with(')') => {
+                trimmed[..paren_idx].trim_end()
+            }
+            _ => trimmed,
+        };
+        base.to_ascii_lowercase()
     }
 
     pub fn get_path(&self) -> &'static str {
@@ -53,3 +71,7 @@ impl ExternalProductIcon {
         WarpUiIcon::new(path, color.into_solid())
     }
 }
+
+#[cfg(test)]
+#[path = "external_product_icon_tests.rs"]
+mod tests;
