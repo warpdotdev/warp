@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
@@ -13,14 +13,16 @@ use warpui::elements::{
 };
 use warpui::fonts::{Properties, Weight};
 
+use crate::server::ids::ServerId;
 use crate::settings_view::billing_and_usage_page_v2::{
     AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
 use crate::ui_components::blended_colors;
+use crate::workspaces::team::TeamMember;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    BillingCycleUsageEntry,
+    BillingCycleUsageEntry, WorkspaceMember,
 };
 
 // for a bunch of this (min fill ratio, cost type order, ... )
@@ -221,6 +223,40 @@ pub fn legend_cost_types(entries: &[BillingCycleUsageEntry]) -> Vec<AiCreditsUsa
             .any(|e| e.cost_type == *cost_type && e.credits_used > 0)
     })
     .collect()
+}
+
+/// Narrows `entries` down to only those attributed to `team_uid`. Mirrors the
+/// web client's `filterEntriesByAttributedTeam`: this is a strict-equality
+/// match, so entries with no attribution (`None`) are dropped on a
+/// team-scoped view rather than treated as belonging to the team being
+/// viewed. The billing usage feed is workspace-wide, so without this filter
+/// a team admin would see every other team's usage rows as well.
+pub fn filter_entries_by_attributed_team(
+    entries: &[BillingCycleUsageEntry],
+    team_uid: ServerId,
+) -> Vec<BillingCycleUsageEntry> {
+    let team_uid = team_uid.to_string();
+    entries
+        .iter()
+        .filter(|e| e.attributed_team_uid.as_deref() == Some(team_uid.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Narrows the workspace-wide member roster down to just the members of
+/// `team_members`. Mirrors the web client's `individualUsageMembers` scoping
+/// so a team-scoped view never lists members from another team in the same
+/// workspace.
+pub fn scope_members_to_team(
+    members: &[WorkspaceMember],
+    team_members: &[TeamMember],
+) -> Vec<WorkspaceMember> {
+    let team_uids: HashSet<_> = team_members.iter().map(|m| m.uid).collect();
+    members
+        .iter()
+        .filter(|m| team_uids.contains(&m.uid))
+        .cloned()
+        .collect()
 }
 
 /// "Is there any data in `entries` that's not my own?"

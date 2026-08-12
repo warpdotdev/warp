@@ -1,4 +1,6 @@
 use super::{TeamTotalCardSummary, build_team_total_card_summaries};
+use crate::server::ids::ServerId;
+use crate::settings_view::billing_and_usage::billing_cycle_usage_common::filter_entries_by_attributed_team;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource, BillingCycleUsageEntry, UsageVisibility, UsageVisibilityGranularity,
@@ -18,6 +20,7 @@ fn entry(
         usage_source,
         credits_used,
         cost_cents,
+        attributed_team_uid: None,
     }
 }
 
@@ -33,6 +36,14 @@ fn entries_two_per_source() -> Vec<BillingCycleUsageEntry> {
         entry(AiCreditsUsageSource::Local, 30, 10),
         entry(AiCreditsUsageSource::Cloud, 70, 25),
     ]
+}
+
+fn with_attribution(
+    mut e: BillingCycleUsageEntry,
+    team_uid: Option<&str>,
+) -> BillingCycleUsageEntry {
+    e.attributed_team_uid = team_uid.map(|s| s.to_string());
+    e
 }
 
 fn titles(summaries: &[TeamTotalCardSummary]) -> Vec<&'static str> {
@@ -92,4 +103,35 @@ fn full_breakdown_visibility_returns_three_cards_with_partitioned_sums() {
     assert_eq!(summaries[1].total_cost_cents, 10);
     assert_eq!(summaries[2].total_credits, 70);
     assert_eq!(summaries[2].total_cost_cents, 25);
+}
+
+#[test]
+fn team_totals_reflect_only_the_selected_teams_usage() {
+    // The billing feed is workspace-wide; a team-scoped view must sum only
+    // the entries attributed to the team being viewed.
+    let team_a = ServerId::from(1i64);
+    let team_b = ServerId::from(2i64);
+
+    let entries = vec![
+        with_attribution(
+            entry(AiCreditsUsageSource::Local, 30, 10),
+            Some(&team_a.to_string()),
+        ),
+        with_attribution(
+            entry(AiCreditsUsageSource::Cloud, 999, 999),
+            Some(&team_b.to_string()),
+        ),
+    ];
+
+    let scoped_entries = filter_entries_by_attributed_team(&entries, team_a);
+    let summaries = build_team_total_card_summaries(
+        &scoped_entries,
+        &visibility(UsageVisibilityGranularity::FullBreakdown),
+    );
+
+    assert_eq!(
+        summaries[0].total_credits, 30,
+        "team B's usage must not leak into team A's total"
+    );
+    assert_eq!(summaries[0].total_cost_cents, 10);
 }

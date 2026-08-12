@@ -389,6 +389,9 @@ pub struct UsageEntry {
     pub usage_source: AiCreditsUsageSource,
     pub credits_used: i32,
     pub cost_cents: i32,
+    /// The team this usage should be billed to. `None` for legacy/unattributed
+    /// rows. Used to scope a workspace-wide usage entry down to a single team.
+    pub attributed_team_uid: Option<String>,
 }
 
 #[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]

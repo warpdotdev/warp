@@ -1,7 +1,9 @@
 use super::{MemberUsageRow, SourceFilter};
+use crate::auth::UserUid;
+use crate::workspaces::team::MembershipRole;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    AiCreditsUsageSource, BillingCycleUsageEntry,
+    AiCreditsUsageSource, BillingCycleUsageEntry, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 const VIEWER_UID: &str = "viewer-uid";
@@ -23,7 +25,42 @@ fn entry(
         usage_source,
         credits_used,
         cost_cents,
+        attributed_team_uid: None,
     }
+}
+
+fn workspace_member(uid: &str, email: &str) -> WorkspaceMember {
+    WorkspaceMember {
+        uid: UserUid::new(uid),
+        email: email.to_string(),
+        role: MembershipRole::User,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: false,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    }
+}
+
+#[test]
+fn for_each_member_omits_members_outside_the_provided_roster() {
+    // A team-scoped view passes an already-scoped member list (see
+    // `scope_members_to_team`); members outside that scope must not appear,
+    // not even as a zero-usage row.
+    let entries = vec![entry(
+        AiCreditsUsageAndCostSubjectType::User,
+        Some(VIEWER_UID),
+        AiCreditsUsageSource::Local,
+        10,
+        0,
+    )];
+    let members = vec![workspace_member(VIEWER_UID, "viewer@warp.dev")];
+
+    let rows = MemberUsageRow::for_each_member(&entries, &members, SourceFilter::All);
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].subject_uid.as_deref(), Some(VIEWER_UID));
 }
 
 #[test]

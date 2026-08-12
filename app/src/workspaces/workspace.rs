@@ -607,6 +607,10 @@ pub struct BillingCycleUsageEntry {
     pub usage_source: AiCreditsUsageSource,
     pub credits_used: i32,
     pub cost_cents: i32,
+    /// The team this usage should be billed to, if any. `None` for
+    /// legacy/unattributed rows. A team-scoped view must drop these rather
+    /// than treat them as belonging to the team being viewed.
+    pub attributed_team_uid: Option<String>,
 }
 
 /// Per-cycle bucket of redacted usage entries with explicit period bounds.

@@ -1,9 +1,13 @@
 use super::{
-    BarSegment, aggregate_segments, filter_legacy_buckets, has_non_viewer_data, legend_cost_types,
+    BarSegment, aggregate_segments, filter_entries_by_attributed_team, filter_legacy_buckets,
+    has_non_viewer_data, legend_cost_types, scope_members_to_team,
 };
+use crate::auth::UserUid;
+use crate::server::ids::ServerId;
+use crate::workspaces::team::{MembershipRole, TeamMember};
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    AiCreditsUsageSource, BillingCycleUsageEntry,
+    AiCreditsUsageSource, BillingCycleUsageEntry, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 const VIEWER_UID: &str = "viewer-uid";
@@ -27,6 +31,38 @@ fn entry(
         usage_source,
         credits_used,
         cost_cents,
+        attributed_team_uid: None,
+    }
+}
+
+/// Sets `attributed_team_uid` on an already-built entry.
+fn with_attribution(
+    mut e: BillingCycleUsageEntry,
+    team_uid: Option<&str>,
+) -> BillingCycleUsageEntry {
+    e.attributed_team_uid = team_uid.map(|s| s.to_string());
+    e
+}
+
+fn workspace_member(uid: &str, email: &str) -> WorkspaceMember {
+    WorkspaceMember {
+        uid: UserUid::new(uid),
+        email: email.to_string(),
+        role: MembershipRole::User,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: false,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    }
+}
+
+fn team_member(uid: &str, email: &str) -> TeamMember {
+    TeamMember {
+        uid: UserUid::new(uid),
+        email: email.to_string(),
+        role: MembershipRole::User,
     }
 }
 
@@ -373,4 +409,57 @@ fn legend_cost_types_excludes_legacy_only_buckets() {
         legend_cost_types(&entries).is_empty(),
         "legacy-only base-limit usage must not surface any legend bucket"
     );
+}
+
+#[test]
+fn filter_entries_by_attributed_team_keeps_only_matching_team() {
+    let team_a = ServerId::from(1i64);
+    let team_b = ServerId::from(2i64);
+
+    let entries = vec![
+        with_attribution(viewer_user_entry(), Some(&team_a.to_string())),
+        with_attribution(viewer_user_entry(), Some(&team_b.to_string())),
+    ];
+
+    let filtered = filter_entries_by_attributed_team(&entries, team_a);
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(
+        filtered[0].attributed_team_uid.as_deref(),
+        Some(team_a.to_string().as_str())
+    );
+}
+
+#[test]
+fn filter_entries_by_attributed_team_drops_unattributed_entries() {
+    // A team-scoped view must never treat a workspace-wide/unattributed row
+    // as if it belonged to the team being viewed.
+    let team_a = ServerId::from(1i64);
+    let entries = vec![with_attribution(viewer_user_entry(), None)];
+
+    let filtered = filter_entries_by_attributed_team(&entries, team_a);
+    assert!(
+        filtered.is_empty(),
+        "entries with no attribution must be dropped on a team-scoped view"
+    );
+}
+
+#[test]
+fn scope_members_to_team_excludes_members_outside_the_team() {
+    let members = vec![
+        workspace_member("a", "a@warp.dev"),
+        workspace_member("b", "b@warp.dev"),
+    ];
+    let team_members = vec![team_member("a", "a@warp.dev")];
+
+    let scoped = scope_members_to_team(&members, &team_members);
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0].email, "a@warp.dev");
+}
+
+#[test]
+fn scope_members_to_team_returns_empty_when_team_has_no_overlap() {
+    let members = vec![workspace_member("a", "a@warp.dev")];
+    let team_members = vec![team_member("b", "b@warp.dev")];
+
+    assert!(scope_members_to_team(&members, &team_members).is_empty());
 }

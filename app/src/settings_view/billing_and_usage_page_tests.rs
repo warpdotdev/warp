@@ -1,4 +1,100 @@
-use super::{SortKey, SortOrder, UserSortingCriteria, sort_user_items_in_place};
+use super::{
+    SortKey, SortOrder, TEAM_MEMBERS_USAGE_LABEL, TEAM_MEMBERS_USAGE_WORKSPACE_WIDE_CAPTION,
+    UserSortingCriteria, resolve_team_scoped_members, sort_user_items_in_place,
+};
+use crate::auth::UserUid;
+use crate::server::ids::ServerId;
+use crate::workspaces::team::{MembershipRole, Team, TeamMember};
+use crate::workspaces::workspace::{
+    Workspace, WorkspaceMember, WorkspaceMemberUsageInfo, WorkspaceUid,
+};
+
+fn workspace_member(uid: &str, email: &str) -> WorkspaceMember {
+    WorkspaceMember {
+        uid: UserUid::new(uid),
+        email: email.to_string(),
+        role: MembershipRole::User,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: false,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    }
+}
+
+fn team_member(uid: &str, email: &str) -> TeamMember {
+    TeamMember {
+        uid: UserUid::new(uid),
+        email: email.to_string(),
+        role: MembershipRole::User,
+    }
+}
+
+fn workspace_with_members(members: Vec<WorkspaceMember>) -> Workspace {
+    let mut workspace = Workspace::from_local_cache(
+        WorkspaceUid::from(ServerId::from(0i64)),
+        "workspace".to_string(),
+        None,
+    );
+    workspace.members = members;
+    workspace
+}
+
+#[test]
+fn resolve_team_scoped_members_fails_closed_when_team_unresolved() {
+    let workspace = workspace_with_members(vec![workspace_member("a", "a@warp.dev")]);
+    assert!(resolve_team_scoped_members(Some(&workspace), None).is_empty());
+}
+
+#[test]
+fn resolve_team_scoped_members_fails_closed_when_workspace_unresolved() {
+    let team = Team::from_local_cache(
+        ServerId::from(1i64),
+        "Team A".to_string(),
+        None,
+        None,
+        Some(vec![team_member("a", "a@warp.dev")]),
+    );
+    assert!(resolve_team_scoped_members(None, Some(&team)).is_empty());
+}
+
+#[test]
+fn resolve_team_scoped_members_excludes_members_outside_the_team() {
+    let workspace = workspace_with_members(vec![
+        workspace_member("a", "a@warp.dev"),
+        workspace_member("b", "b@warp.dev"),
+    ]);
+    let team = Team::from_local_cache(
+        ServerId::from(1i64),
+        "Team A".to_string(),
+        None,
+        None,
+        Some(vec![team_member("a", "a@warp.dev")]),
+    );
+
+    let scoped = resolve_team_scoped_members(Some(&workspace), Some(&team));
+
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0].email, "a@warp.dev");
+}
+
+#[test]
+fn team_members_usage_label_and_caption_do_not_claim_team_scoping() {
+    // Regression: `WorkspaceMemberUsageInfo.requests_used_since_last_refresh`
+    // has no per-team attribution, so the summed row and per-member counters
+    // built from it are workspace-wide, not scoped to the team being viewed.
+    // The label must not claim otherwise, and the caption must disclose it.
+    assert_ne!(
+        TEAM_MEMBERS_USAGE_LABEL, "Team total",
+        "the label must not claim these workspace-wide counters are team-scoped"
+    );
+    let caption_lower = TEAM_MEMBERS_USAGE_WORKSPACE_WIDE_CAPTION.to_lowercase();
+    assert!(
+        caption_lower.contains("every team") || caption_lower.contains("workspace"),
+        "caption must plainly disclose that the figures span every team the member belongs to, got: {TEAM_MEMBERS_USAGE_WORKSPACE_WIDE_CAPTION}"
+    );
+}
 
 #[test]
 pub fn test_default_sorting_pins_current_user_first_then_display_name_asc() {
