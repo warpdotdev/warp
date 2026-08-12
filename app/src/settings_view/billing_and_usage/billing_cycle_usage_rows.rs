@@ -24,10 +24,10 @@ use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
 };
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
+use crate::workspaces::team::TeamMember;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource, BillingCycleUsageEntry, UsageVisibility, UsageVisibilityGranularity,
-    Workspace, WorkspaceMember,
 };
 
 const BAR_HEIGHT: f32 = 8.;
@@ -182,12 +182,14 @@ impl MemberUsageRow {
     }
 
     /// Per-member rows for `PerUserTotals` / `FullBreakdown` visibility.
-    /// Iterates the workspace member list so zero-usage members still
-    /// get a row. Service accounts and other non-member subjects surface
-    /// as extra rows at the bottom, sorted by total credits desc.
+    /// Iterates the *current team's* member list (not the full workspace
+    /// roster, which may span other teams sharing the workspace) so
+    /// zero-usage members still get a row. Service accounts and other
+    /// non-member subjects surface as extra rows at the bottom, sorted by
+    /// total credits desc.
     fn for_each_member(
         entries: &[BillingCycleUsageEntry],
-        members: &[WorkspaceMember],
+        members: &[TeamMember],
         source_filter: SourceFilter,
     ) -> Vec<Self> {
         // Group entries by subject for joining against the member list below.
@@ -283,7 +285,7 @@ impl MemberUsageRow {
 }
 
 fn build_rows(
-    workspace: &Workspace,
+    members: &[TeamMember],
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
     source_filter: SourceFilter,
@@ -312,7 +314,7 @@ fn build_rows(
             rows
         }
         UsageVisibilityGranularity::PerUserTotals | UsageVisibilityGranularity::FullBreakdown => {
-            MemberUsageRow::for_each_member(entries, &workspace.members, source_filter)
+            MemberUsageRow::for_each_member(entries, members, source_filter)
         }
     };
 
@@ -752,7 +754,7 @@ pub fn render_own_usage_solo_row(
 
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows(
-    workspace: &Workspace,
+    members: &[TeamMember],
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
     source_filter: SourceFilter,
@@ -761,7 +763,7 @@ pub fn render_rows(
     app: &AppContext,
     on_filter_change: FilterChangeFn,
 ) -> Box<dyn Element> {
-    let rows = build_rows(workspace, entries, visibility, source_filter, app);
+    let rows = build_rows(members, entries, visibility, source_filter, app);
 
     let mut column = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)

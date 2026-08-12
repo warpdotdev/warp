@@ -197,6 +197,49 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
         .collect()
 }
 
+/// Filters `entries` down to those attributed to `team_uid`, mirroring the
+/// web admin panel's `filterEntriesByAttributedTeam` (see
+/// `warp-server/client/src/components/admin/team/billing/utils.ts`).
+///
+/// `Workspace.billing_cycle_usage` is workspace-scoped and can carry usage
+/// attributed to any team in the workspace, so a team-scoped view must apply
+/// this filter before it feeds team totals or member rows. Entries with no
+/// attribution (`attributed_team_uid: None`) are excluded — usage only
+/// appears in a team-scoped view when it's positively attributed to that
+/// team, matching web's strict equality check.
+pub fn filter_entries_by_attributed_team(
+    entries: &[BillingCycleUsageEntry],
+    team_uid: &str,
+) -> Vec<BillingCycleUsageEntry> {
+    entries
+        .iter()
+        .filter(|e| e.attributed_team_uid.as_deref() == Some(team_uid))
+        .cloned()
+        .collect()
+}
+
+/// Prepares a period's raw usage entries for a team-scoped (or
+/// workspace-level) view: drops legacy Voice/SuggestedCodeDiffs buckets via
+/// [`filter_legacy_buckets`], then narrows to `team_uid`'s attributed
+/// entries via [`filter_entries_by_attributed_team`] when a team is being
+/// viewed. Pass `team_uid: None` for the workspace-level / own-usage paths
+/// that intentionally see the full unfiltered period.
+///
+/// This is the single pipeline every team-scoped consumer (legend,
+/// team-section gating, team totals, member rows) must derive its entries
+/// from, so a team-scoping regression in one call site can't silently
+/// diverge from the others.
+pub fn prepare_team_scoped_entries(
+    entries: &[BillingCycleUsageEntry],
+    team_uid: Option<&str>,
+) -> Vec<BillingCycleUsageEntry> {
+    let legacy_filtered = filter_legacy_buckets(entries);
+    match team_uid {
+        Some(team_uid) => filter_entries_by_attributed_team(&legacy_filtered, team_uid),
+        None => legacy_filtered,
+    }
+}
+
 /// Cost-type buckets to surface in the usage legend, in display order.
 ///
 /// Mirrors the buckets the stacked bars actually render: legacy buckets are

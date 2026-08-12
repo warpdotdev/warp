@@ -607,6 +607,11 @@ pub struct BillingCycleUsageEntry {
     pub usage_source: AiCreditsUsageSource,
     pub credits_used: i32,
     pub cost_cents: i32,
+    /// The team this entry's usage is attributed to. `Workspace.billing_cycle_usage`
+    /// is workspace-scoped and can carry usage attributed to any team in the
+    /// workspace, so team-scoped views must filter on this field rather than
+    /// assuming every entry belongs to the team being viewed.
+    pub attributed_team_uid: Option<String>,
 }
 
 /// Per-cycle bucket of redacted usage entries with explicit period bounds.
