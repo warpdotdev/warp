@@ -405,12 +405,3 @@ fn publish_skill_dirs_recovers_from_missing_source_directory() {
     assert_eq!(published, 1);
     assert!(skill_root.path().join("github").exists());
 }
-
-#[test]
-fn is_sandbox_reflects_the_is_sandbox_env_var() {
-    let mut env_vars = HashMap::new();
-    assert!(!is_sandbox(&env_vars));
-
-    env_vars.insert(OsString::from("IS_SANDBOX"), OsString::from("1"));
-    assert!(is_sandbox(&env_vars));
-}

@@ -19,7 +19,8 @@
 //! does not imply "is ours" (a foreign symlink can exist too, and repeated
 //! runs need a real identity check, not an assumption). Anything else at the
 //! target — a real file or directory, or a symlink pointing elsewhere or
-//! nowhere — is a genuine conflict, resolved according to [`is_sandbox`]:
+//! nowhere — is a genuine conflict, resolved according to whether this run is
+//! sandboxed (see `warp_isolation_platform::detect`):
 //! - In a sandbox, we own the whole filesystem, so the published skill wins:
 //!   the conflicting entry is renamed aside with a `.backup` suffix rather
 //!   than deleted, so nothing is lost.
@@ -37,21 +38,13 @@
 //! helper script the skill invokes) pointing at the real, versioned skill
 //! tree.
 
-use std::collections::{HashMap, HashSet};
-use std::ffi::{OsStr, OsString};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use ai::skills::{parse_skills_dirs_env, resolve_skills_dirs};
 use anyhow::{Context, Result};
 use warp_core::safe_warn;
-
-/// Environment variable `AgentDriver` sets to `"1"` when it detects an
-/// isolation platform (a Namespace instance, a Docker Sandbox, Kubernetes, or
-/// a plain Docker container) — see `AgentDriver::new`. Its absence means we
-/// are running directly on a host, such as the self-hosted direct backend,
-/// which we do not necessarily own.
-const IS_SANDBOX_ENV: &str = "IS_SANDBOX";
 
 /// Suffix appended to a real (non-symlink) file or directory this module
 /// moves aside, in a sandbox, so a published skill can take over its name.
@@ -61,13 +54,6 @@ const SANDBOX_BACKUP_SUFFIX: &str = ".backup";
 /// Prefix used to publish a skill under an alternate name outside a sandbox,
 /// when a real, non-symlink entry already occupies its real name.
 const NON_SANDBOX_ALTERNATE_NAME_PREFIX: &str = "warp-";
-
-/// Whether this run is executing inside a sandbox we control (see
-/// [`IS_SANDBOX_ENV`]), as opposed to directly on a host we do not
-/// necessarily own.
-pub(super) fn is_sandbox(resolved_env_vars: &HashMap<OsString, OsString>) -> bool {
-    resolved_env_vars.contains_key(OsStr::new(IS_SANDBOX_ENV))
-}
 
 /// Resolve the `WARP_SKILL_DIRS` source directories, most specific first —
 /// the same directories and precedence order Oz uses (see
