@@ -1065,8 +1065,6 @@ pub struct Workspace {
     import_modal: ViewHandle<ImportModal>,
     theme_chooser_view: ViewHandle<ThemeChooser>,
     previous_theme: Option<ThemeKind>,
-    /// Fixed at construction so the background gif's elapsed time grows
-    /// across `render()` calls instead of resetting on every repaint.
     background_image_animation_start_time: std::time::Instant,
     reward_modal: ViewHandle<Modal<RewardView>>,
     reward_modal_pending: Option<RewardKind>,
