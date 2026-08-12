@@ -1051,7 +1051,7 @@ fn normalize_summary_text(text: &str) -> Option<String> {
 
 /// Returns the conversation status for a terminal pane, used to render the per-line status
 /// pill prefix in Summary mode. Mirrors the status sources used by `render_detail_status_pill`
-/// in the detail sidecar — CLI agent sessions with rich status, Oz agent conversations, or
+/// in the detail sidecar — CLI agent sessions with rich status, Warp Agent conversations, or
 /// ambient agent sessions. Returns `None` for plain terminals or conversations without status.
 fn summary_conversation_status_for_terminal(
     terminal_view: &TerminalView,
@@ -4157,7 +4157,7 @@ fn terminal_kind_badge_label(is_oz_agent: bool, cli_agent: Option<CLIAgent>) -> 
     if let Some(cli_agent) = cli_agent {
         cli_agent.display_name().to_string()
     } else if is_oz_agent {
-        "Oz".to_string()
+        "Warp Agent".to_string()
     } else {
         "Terminal".to_string()
     }
@@ -5252,7 +5252,7 @@ fn render_terminal_primary_line_for_view(
 
 /// Primary line for terminal pane rows. Precedence:
 /// 1. CLI agent session with plugin data (query/summary) + status
-/// 2. Oz agent conversation title + status
+/// 2. Warp Agent conversation title + status
 /// 3. Terminal title
 fn render_terminal_primary_line(
     primary_line: TerminalPrimaryLineData,

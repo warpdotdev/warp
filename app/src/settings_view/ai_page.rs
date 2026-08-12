@@ -326,8 +326,8 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         vec![
             ToggleSettingActionPair::custom(
                 SettingActionPairDescriptions::new(
-                    "Show Oz changelog in new agent conversation view",
-                    "Hide Oz changelog in new agent conversation view",
+                    "Show Warp Agent changelog in new agent conversation view",
+                    "Hide Warp Agent changelog in new agent conversation view",
                 ),
                 builder(SettingsAction::AI(
                     AISettingsPageAction::ToggleShowOzUpdatesInZeroState,
@@ -7551,7 +7551,7 @@ impl SettingsWidget for OtherAIWidget {
         if FeatureFlag::AgentView.is_enabled() {
             let mut agent_view_column = Flex::column()
                 .with_child(render_ai_setting_toggle::<ShouldShowOzUpdatesInZeroState>(
-                    "Show Oz changelog in new conversation view",
+                    "Show Warp Agent changelog in new conversation view",
                     AISettingsPageAction::ToggleShowOzUpdatesInZeroState,
                     *ai_settings.should_show_oz_updates_in_zero_state,
                     is_toggleable,
@@ -8207,7 +8207,7 @@ impl SettingsWidget for AgentAttributionWidget {
             )
             .with_child(toggle_row)
             .with_child(render_ai_setting_description(
-                "Oz can add attribution to commit messages and pull requests it creates",
+                "Warp Agent can add attribution to commit messages and pull requests it creates",
                 !state.is_disabled,
                 app,
             ))

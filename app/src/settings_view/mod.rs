@@ -139,7 +139,7 @@ const SIDEBAR_WIDTH_DEFAULT: f32 = 200.;
 /// Wider sidebar used when the settings-file footer is enabled. Sized to
 /// match Figma's settings nav rail (223px alert + 12px horizontal padding
 /// on each side + 1px right border), giving the error-alert footer enough
-/// room to render its "Open file" and "Fix with Oz" buttons side-by-side
+/// room to render its "Open file" and "Fix with Warp Agent" buttons side-by-side
 /// with the designed 24px indent and 8px internal padding.
 const SIDEBAR_WIDTH_WITH_FOOTER: f32 = 248.;
 

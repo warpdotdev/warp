@@ -954,6 +954,12 @@ pub enum FeatureFlag {
     /// static, non-interactive credits total. Will also gate the GUI footer's
     /// dollar display once that's built.
     PricingTransparency,
+
+    /// Enables periodic workspace-handoff checkpoints during a cloud agent run,
+    /// rather than only uploading a workspace snapshot once at end-of-run.
+    /// Requires `OzHandoff` to also be enabled; a no-op for local runs and when
+    /// `--no-snapshot` is set. Off by default while the coordinator rolls out.
+    PeriodicHandoffCheckpoints,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =

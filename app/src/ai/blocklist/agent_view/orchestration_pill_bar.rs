@@ -63,7 +63,7 @@ use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::pane_group::pane::view::PaneHeaderAction;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::icon_with_status::{
-    self, BadgeInnerShape, IconWithStatusVariant, StatusBadgeStyle,
+    BadgeInnerShape, IconWithStatusVariant, StatusBadgeStyle,
     render_icon_with_status_with_badge_style,
 };
 use crate::ui_components::icons::Icon;
@@ -73,7 +73,15 @@ const PILL_HEIGHT: f32 = 22.;
 const PILL_RADIUS: f32 = PILL_HEIGHT / 2.;
 const AVATAR_SIZE: f32 = 16.;
 const PILL_AVATAR_SLOT_SIZE: f32 = 20.;
-const PILL_AVATAR_DISC_SIZE: f32 = PILL_AVATAR_SLOT_SIZE * icon_with_status::CIRCLE_RATIO;
+
+/// Visible avatar disc diameter, per design.
+const PILL_AVATAR_DISC_SIZE: f32 = 15.;
+/// Gap between the avatar disc and each of the pill's horizontal edges. The
+/// disc is dead-centre in the pill, so this is symmetric: (22 - 15) / 2 = 3.5.
+const PILL_AVATAR_VERTICAL_PADDING: f32 = (PILL_HEIGHT - PILL_AVATAR_DISC_SIZE) / 2.;
+/// Square box the status badge is sized and anchored against. It does *not*
+/// size the avatar disc (that is [`PILL_AVATAR_DISC_SIZE`]) — it only reserves
+/// the square whose bottom-right corner the badge hangs off.
 const AVATAR_WITH_STATUS_TOTAL_SIZE: f32 = PILL_AVATAR_SLOT_SIZE;
 const PILL_LABEL_MAX_WIDTH: f32 = 83.;
 const PILL_ROW_GAP: f32 = 8.;
@@ -1700,8 +1708,17 @@ fn render_status_badge(
         .finish()
 }
 
+/// Places a pill's leading avatar content — an
+/// [`AVATAR_WITH_STATUS_TOTAL_SIZE`] box built by [`render_avatar_lockup_box`],
+/// with or without a status badge layered on it — in the fixed-width leading
+/// slot. The slot spans the full pill height so hover swaps (avatar ↔ pin
+/// button) never shift the label.
+///
+/// The box is bottom-aligned rather than centered: the status badge hangs off
+/// its bottom-right corner and design wants that badge flush with the pill's
+/// bottom edge, so the box's bottom has to be the pill's bottom.
 fn render_avatar_slot(avatar: Box<dyn Element>) -> Box<dyn Element> {
-    ConstrainedBox::new(Align::new(avatar).finish())
+    ConstrainedBox::new(Align::new(avatar).bottom_left().finish())
         .with_width(PILL_AVATAR_SLOT_SIZE)
         .with_height(PILL_HEIGHT)
         .finish()
@@ -1914,38 +1931,64 @@ fn render_pinned_divider(app: &AppContext) -> Box<dyn Element> {
     .finish()
 }
 
-/// Pin glyph centered in an avatar-sized hit target so swapping in and out
-/// on hover doesn't jitter sibling pill widths. Solid glyph when pinned,
-/// outline when unpinned.
-fn render_pin_glyph_centered(is_pinned: bool, icon_color: ColorU) -> Box<dyn Element> {
-    let icon_variant = if is_pinned {
+/// The clickable pin button a child pill shows in place of its avatar while
+/// hovered: a circle occupying exactly the avatar disc's rect.
+///
+/// Placement deliberately goes through the same
+/// [`render_avatar_slot`] / [`render_avatar_lockup_box`] pair the disc itself
+/// uses, and the circle is sized off [`PILL_AVATAR_DISC_SIZE`], so the swap
+/// cannot shift by a pixel and the two cannot drift apart if the disc's
+/// geometry is ever retuned.
+///
+/// The glyph is placed by explicit padding rather than by a centering
+/// container, which keeps it exact regardless of how the surrounding box
+/// behaves, and lets [`PIN_GLYPH_OPTICAL_DROP`] bias it downward without
+/// moving the circle.
+fn render_pin_button(
+    is_pinned: bool,
+    icon_color: ColorU,
+    mouse_state: MouseStateHandle,
+    conversation_id: AIConversationId,
+) -> Box<dyn Element> {
+    // Tint with the pill's own contrasting colour rather than a fixed
+    // foreground overlay. `fg_overlay_1` is the foreground at 5% opacity, and a
+    // selected pill's background *is* the foreground colour, so the old fill
+    // painted a colour onto itself and the hover state was invisible on every
+    // selected chip — which, since the bar anchors on the parent of whatever
+    // leaf you are viewing, is the common case rather than an edge case.
+    let hover_background = coloru_with_opacity(icon_color, PIN_BUTTON_HOVER_OPACITY);
+    let glyph_size = PILL_AVATAR_DISC_SIZE * PIN_GLYPH_RATIO;
+    let icon = if is_pinned {
         Icon::PinFilled
     } else {
         Icon::Pin
     };
-    let glyph: Box<dyn Element> =
-        ConstrainedBox::new(icon_variant.to_warpui_icon(icon_color.into()).finish())
-            .with_width(PILL_ICON_SIZE)
-            .with_height(PILL_ICON_SIZE)
+    let button = Hoverable::new(mouse_state, move |hover_state| {
+        let glyph = ConstrainedBox::new(icon.to_warpui_icon(icon_color.into()).finish())
+            .with_width(glyph_size)
+            .with_height(glyph_size)
             .finish();
-
-    let centered = Flex::column()
-        .with_main_axis_size(MainAxisSize::Max)
-        .with_main_axis_alignment(MainAxisAlignment::Center)
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(
-            Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_main_axis_alignment(MainAxisAlignment::Center)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(glyph)
-                .finish(),
-        )
-        .finish();
-    ConstrainedBox::new(centered)
-        .with_width(PILL_AVATAR_SLOT_SIZE)
-        .with_height(PILL_ICON_BUTTON_SIZE)
-        .finish()
+        // Top and bottom padding still sum to twice `padding`, so the circle
+        // keeps the avatar disc's rect exactly; only the glyph inside it moves.
+        let padding = (PILL_AVATAR_DISC_SIZE - glyph_size) / 2.;
+        let mut circle = Container::new(glyph)
+            .with_horizontal_padding(padding)
+            .with_padding_top(padding + PIN_GLYPH_OPTICAL_DROP)
+            .with_padding_bottom(padding - PIN_GLYPH_OPTICAL_DROP)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(
+                PILL_AVATAR_DISC_SIZE / 2.,
+            )));
+        if hover_state.is_hovered() || hover_state.is_clicked() {
+            circle = circle.with_background(hover_background);
+        }
+        circle.finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _app, _| {
+        ctx.dispatch_typed_action(OrchestrationPillBarAction::TogglePin(conversation_id));
+    })
+    .finish();
+    render_avatar_slot(render_avatar_lockup_box(button))
 }
 
 fn render_pill(
@@ -2090,41 +2133,21 @@ fn render_pill(
                     theme,
                     appearance,
                 ),
-                None => render_avatar_slot(render_avatar_disc(
-                    avatar_color,
-                    avatar_glyph,
-                    PILL_AVATAR_DISC_SIZE,
-                    theme,
-                    appearance,
-                )),
+                None => render_pill_avatar(avatar_color, avatar_glyph, theme, appearance),
             },
             PillKind::Child => {
                 if show_pin_glyph {
                     // Hovered: the leading slot becomes the clickable pin
-                    // button. We only attach the Hoverable + TogglePin
-                    // click handler here so that when the avatar is the
+                    // button. The Hoverable + TogglePin click handler is
+                    // attached only here so that when the avatar is the
                     // visible content (not hovered), clicks bubble up to
                     // the outer pill body and navigate as expected.
-                    let pin_button_mouse_state = pin_button_mouse_state.clone();
-                    Hoverable::new(pin_button_mouse_state, move |pin_hover_state| {
-                        let pin_button_hovered =
-                            pin_hover_state.is_hovered() || pin_hover_state.is_clicked();
-                        let mut container =
-                            Container::new(render_pin_glyph_centered(is_pinned, text_color))
-                                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
-                        if pin_button_hovered {
-                            container =
-                                container.with_background(internal_colors::fg_overlay_1(theme));
-                        }
-                        container.finish()
-                    })
-                    .with_cursor(Cursor::PointingHand)
-                    .on_click(move |ctx, _app, _| {
-                        ctx.dispatch_typed_action(OrchestrationPillBarAction::TogglePin(
-                            conversation_id,
-                        ));
-                    })
-                    .finish()
+                    render_pin_button(
+                        is_pinned,
+                        text_color,
+                        pin_button_mouse_state.clone(),
+                        conversation_id,
+                    )
                 } else if let Some(ref status) = status {
                     render_avatar_with_status_overlay(
                         avatar_color,
@@ -2136,13 +2159,7 @@ fn render_pill(
                         appearance,
                     )
                 } else {
-                    render_avatar_slot(render_avatar_disc(
-                        avatar_color,
-                        avatar_glyph,
-                        PILL_AVATAR_DISC_SIZE,
-                        theme,
-                        appearance,
-                    ))
+                    render_pill_avatar(avatar_color, avatar_glyph, theme, appearance)
                 }
             }
         };
@@ -2341,13 +2358,123 @@ fn render_overflow_button(
     SavePosition::new(button, &overflow_button_position_id(conversation_id)).finish()
 }
 
+/// Pin glyph size as a fraction of the avatar disc it sits in. Calibrated
+/// against the letter it replaces: matching the letter's ink height exactly
+/// read too *small*, because a thin outline carries less visual weight than a
+/// solid letterform, so design asked for roughly 4px more. This is the knob to
+/// nudge if it still reads wrong.
+const PIN_GLYPH_RATIO: f32 = 0.71;
+
+/// Downward nudge of the pin glyph inside its circle.
+///
+/// This is an *optical* correction, not a geometry one — do not "fix" it to
+/// zero because the arithmetic says centered. The pin's mass is concentrated
+/// in its head, so a geometrically centered glyph reads as sitting high.
+///
+/// Absolute pixels rather than a ratio because the pin is only ever drawn in
+/// the chip's [`PILL_AVATAR_DISC_SIZE`] circle. If it gains another size, this
+/// needs revisiting rather than silently scaling.
+const PIN_GLYPH_OPTICAL_DROP: f32 = 1.;
+
+/// Opacity of the pin button's hover tint, over the pill's contrasting colour.
+/// A little stronger than the 5% `fg_overlay_1` used to apply, because that
+/// colour is nearer the pill's own background than the contrasting one is.
+const PIN_BUTTON_HOVER_OPACITY: u8 = 8;
+
+/// Cutout-ring diameter of the status badge, per design.
+const PILL_BADGE_RING_SIZE: f32 = 11.;
+/// Bounding box of the status icon inside that ring, per design. The 1px it
+/// leaves on each side is the visible cutout.
+const PILL_BADGE_ICON_SIZE: f32 = 9.;
+
+/// `icon_with_status` expresses badge geometry as fractions of the box the
+/// badge is anchored to, so convert the designed absolute sizes once here
+/// rather than restating them as ratios.
 const PILL_BADGE_STYLE: StatusBadgeStyle = StatusBadgeStyle {
-    ring_ratio: 0.57,
-    icon_ratio: 0.36,
+    ring_ratio: PILL_BADGE_RING_SIZE / AVATAR_WITH_STATUS_TOTAL_SIZE,
+    icon_ratio: PILL_BADGE_ICON_SIZE / AVATAR_WITH_STATUS_TOTAL_SIZE,
     inner_shape: BadgeInnerShape::RoundedSquare { radius_px: 2.0 },
 };
+
+/// Extra overhang of the status badge past the avatar circle's bottom-right
+/// edge, as a signed fraction of [`AVATAR_WITH_STATUS_TOTAL_SIZE`] added to
+/// `icon_with_status`'s default overhang.
+///
+/// It is not a free parameter: `0.05` is exactly what cancels that helper's
+/// built-in `0.19` default, putting the badge's bottom-right corner on the
+/// lockup box's own bottom-right corner. Since the box is bottom-aligned in
+/// the slot, that is what makes the ring flush with the pill's bottom edge.
 const PILL_BADGE_OVERHANG_RATIO: f32 = 0.05;
 
+/// Top inset of the avatar disc inside the [`AVATAR_WITH_STATUS_TOTAL_SIZE`]
+/// box. The box is bottom-aligned in the [`PILL_HEIGHT`]-tall slot so the
+/// badge anchored to its bottom-right corner reaches the pill's bottom edge,
+/// so this inset plus that bottom-alignment offset has to add up to
+/// [`PILL_AVATAR_VERTICAL_PADDING`]: 2 + 1.5 = 3.5.
+const PILL_AVATAR_LOCKUP_TOP_INSET: f32 =
+    PILL_AVATAR_VERTICAL_PADDING - (PILL_HEIGHT - AVATAR_WITH_STATUS_TOTAL_SIZE);
+
+/// Places the avatar disc inside the square box that the status badge is
+/// anchored against, applying the designed padding. Shared by the
+/// plain and status-badged paths so a pill's avatar lands in exactly the same
+/// spot whether or not it currently has a status.
+///
+/// The disc hugs the box's leading edge and sits
+/// [`PILL_AVATAR_LOCKUP_TOP_INSET`] down from its top edge. Only the vertical
+/// placement is ours to choose; horizontally the disc has to stay flush left,
+/// because the badge is anchored to the box's bottom-right corner and every
+/// pixel the disc moves right is a pixel more of it the badge's cutout ring
+/// eats — enough to swallow the agent's initial.
+fn render_avatar_lockup_box(disc: Box<dyn Element>) -> Box<dyn Element> {
+    ConstrainedBox::new(
+        Container::new(Align::new(disc).top_left().finish())
+            .with_padding_top(PILL_AVATAR_LOCKUP_TOP_INSET)
+            .finish(),
+    )
+    .with_width(AVATAR_WITH_STATUS_TOTAL_SIZE)
+    .with_height(AVATAR_WITH_STATUS_TOTAL_SIZE)
+    .finish()
+}
+
+/// Renders the leading avatar for a pill with no status badge.
+fn render_pill_avatar(
+    avatar_color: ColorU,
+    glyph: AvatarGlyph,
+    theme: &WarpTheme,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    render_avatar_slot(render_avatar_lockup_box(render_avatar_disc(
+        avatar_color,
+        glyph,
+        PILL_AVATAR_DISC_SIZE,
+        theme,
+        appearance,
+    )))
+}
+
+/// Renders the leading avatar for a pill that has a status: the avatar disc
+/// plus its status badge, in the same slot [`render_pill_avatar`] uses.
+///
+/// Geometry, in pill-content coordinates (the pill is [`PILL_HEIGHT`] = 22
+/// tall with a [`PILL_RADIUS`] = 11 stadium cap, and the leading slot spans
+/// x = 4..24 after [`PILL_HORIZONTAL_PADDING_LEFT`]):
+/// * Lockup box: [`AVATAR_WITH_STATUS_TOTAL_SIZE`] = 20 square, bottom-aligned
+///   in the 22-tall slot, so it spans y = 2..22.
+/// * Avatar disc: [`PILL_AVATAR_DISC_SIZE`] = 15, inset
+///   [`PILL_AVATAR_LOCKUP_TOP_INSET`] = 1.5 from the box's top and flush with
+///   its left edge, so it spans y = 3.5..18.5 and x = 4..19 — dead-centre in
+///   the pill, [`PILL_AVATAR_VERTICAL_PADDING`] = 3.5 above and below.
+/// * Status badge: [`PILL_BADGE_RING_SIZE`] = 11 cutout ring, anchored BR-to-BR
+///   with `corner_overlay_offset(20, 0.05)` = 0, so its BR lands on the lockup
+///   box's BR at (24, 22) and the ring spans y = 11..22, x = 13..24. That is
+///   9 horizontally and 7.5 vertically in from the disc's top-left, per design,
+///   and its bottom is flush with the pill's — an emergent property of the
+///   box being bottom-aligned, not a hardcoded 22. The ring starts at
+///   x = 13 > `PILL_RADIUS`, so it sits in the pill's flat-bottom region and
+///   is tangent to that edge rather than clipped by the rounded cap (only
+///   x < 11 is governed by the cap's arc).
+/// * Status icon: [`PILL_BADGE_ICON_SIZE`] = 9 bounding box centred in the
+///   ring, leaving the 1px cutout.
 fn render_avatar_with_status_overlay(
     avatar_color: ColorU,
     glyph: AvatarGlyph,
@@ -2357,15 +2484,13 @@ fn render_avatar_with_status_overlay(
     theme: &WarpTheme,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    // Top-left anchor inside the helper's `total_size` box so the disc sits
-    // where Figma places it (TL of the slot, leaving the BR for the badge).
-    let avatar = render_avatar_disc(
+    let avatar = render_avatar_lockup_box(render_avatar_disc(
         avatar_color,
         glyph,
-        icon_with_status::circle_size(AVATAR_WITH_STATUS_TOTAL_SIZE),
+        PILL_AVATAR_DISC_SIZE,
         theme,
         appearance,
-    );
+    ));
     let lockup = render_icon_with_status_with_badge_style(
         IconWithStatusVariant::CustomAvatar {
             avatar,
@@ -2379,19 +2504,9 @@ fn render_avatar_with_status_overlay(
         // Cutout ring color for the local badge; ignored by the cloud path.
         pill_background.into(),
     );
-    // Bottom-anchor the lockup in the pill so the badge BR sits flush with
-    // the pill's bottom edge (matches Figma).
-    ConstrainedBox::new(
-        Flex::column()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::End)
-            .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(lockup)
-            .finish(),
-    )
-    .with_width(PILL_AVATAR_SLOT_SIZE)
-    .with_height(PILL_HEIGHT)
-    .finish()
+    // Same slot helper as the no-status path, so both share one placement
+    // rule and the leading slot keeps identical width across the swap.
+    render_avatar_slot(lockup)
 }
 
 /// Renders the avatar circle as a colored disc with a centered glyph (letter
@@ -2423,6 +2538,11 @@ fn render_avatar_disc(
                     weight: Weight::Bold,
                     ..Default::default()
                 })
+                // The default 1.2 ratio pads the text box with leading, so
+                // centering the box leaves the letter's ink sitting high in
+                // the disc. At 1.0 the box is the glyph, and centering it
+                // centers what you can see.
+                .with_line_height_ratio(1.)
                 .finish()
         }
         AvatarGlyph::Icon(icon) => {
@@ -2433,27 +2553,10 @@ fn render_avatar_disc(
         }
     };
 
-    // Center the glyph on top of the disc both horizontally and vertically by
-    // using `MainAxisAlignment::Center` (along axis) and
-    // `CrossAxisAlignment::Center` (perpendicular) on both Flex containers.
-    let glyph_centered = ConstrainedBox::new(
-        Flex::column()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::Center)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Flex::row()
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_main_axis_alignment(MainAxisAlignment::Center)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(glyph_element)
-                    .finish(),
-            )
-            .finish(),
-    )
-    .with_width(size)
-    .with_height(size)
-    .finish();
+    let glyph_centered = ConstrainedBox::new(Align::new(glyph_element).finish())
+        .with_width(size)
+        .with_height(size)
+        .finish();
 
     Stack::new()
         .with_child(disc)

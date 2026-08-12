@@ -7673,24 +7673,24 @@ impl TerminalView {
                 .get_pending_action(app)
                 .map(|action| match &action.action {
                     AIAgentActionType::RequestCommandOutput { command, .. } => {
-                        format!("Oz needs your permission to run `{command}`")
+                        format!("Warp Agent needs your permission to run `{command}`")
                     }
                     AIAgentActionType::ReadFiles(..) => {
-                        "Oz needs your permission to read files".to_string()
+                        "Warp Agent needs your permission to read files".to_string()
                     }
                     AIAgentActionType::SearchCodebase(..) => {
-                        "Oz needs your permission to search your codebase".to_string()
+                        "Warp Agent needs your permission to search your codebase".to_string()
                     }
                     AIAgentActionType::RequestFileEdits { .. } => {
-                        "Oz needs your permission to edit a file".to_string()
+                        "Warp Agent needs your permission to edit a file".to_string()
                     }
                     AIAgentActionType::WriteToLongRunningShellCommand { .. } => {
-                        "Oz needs your permission to interact with a running shell command"
+                        "Warp Agent needs your permission to interact with a running shell command"
                             .to_string()
                     }
-                    _ => "Oz needs your confirmation to continue".to_string(),
+                    _ => "Warp Agent needs your confirmation to continue".to_string(),
                 })
-                .unwrap_or("Oz needs your confirmation to continue".to_string());
+                .unwrap_or("Warp Agent needs your confirmation to continue".to_string());
             return Some(AIBlockNotificationSummary {
                 success: false,
                 title,
@@ -7951,6 +7951,13 @@ impl TerminalView {
 
     pub fn ai_input_model(&self) -> &ModelHandle<BlocklistAIInputModel> {
         &self.ai_input_model
+    }
+
+    /// Used by [`crate::ai::agent_sdk::driver::checkpoint_coordinator`] to check whether the
+    /// terminal's conversation has any pending or running actions before starting a periodic
+    /// checkpoint attempt.
+    pub fn ai_action_model(&self) -> &ModelHandle<BlocklistAIActionModel> {
+        &self.ai_action_model
     }
 
     pub fn agent_view_controller(&self) -> &ModelHandle<AgentViewController> {
