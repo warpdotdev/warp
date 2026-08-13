@@ -1085,7 +1085,7 @@ fn test_hidden_lines_window_is_symmetric_around_changes() {
 }
 
 #[test]
-fn test_fold_nearest_bracket_block_and_unfold() {
+fn folds_bracket_block_at_cursor() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
         let text = "fn main() {\n    let x = 1;\n}\n";
@@ -1112,8 +1112,268 @@ fn test_fold_nearest_bracket_block_and_unfold() {
                 ]
             );
         });
+    });
+}
 
-        editor.update(&mut app, |editor, ctx| editor.unfold(ctx));
+#[test]
+fn unfolds_manual_fold_from_closing_boundary() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = mock_model(
+            &mut app,
+            "fn main() {\n    let x = 1;\n}\n",
+            ContentVersion::new(),
+        );
+        layout_model(&mut app, &editor).await;
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.cursor_at(CharOffset::from(18), ctx);
+            editor.fold(ctx);
+            let closing_line = editor
+                .content
+                .as_ref(ctx)
+                .line_start(ContentLineCount::from(3));
+            editor.cursor_at(closing_line, ctx);
+            editor.unfold(ctx);
+        });
+        editor.read(&app, |editor, ctx| {
+            assert!(editor.hidden_ranges(ctx).is_empty());
+        });
+    });
+}
+
+#[test]
+fn folds_disjoint_selected_line_ranges_independently() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = mock_model(
+            &mut app,
+            "one\ntwo\nthree\ngap\nfour\nfive\nsix\ntail\n",
+            ContentVersion::new(),
+        );
+        layout_model(&mut app, &editor).await;
+
+        editor.update(&mut app, |editor, ctx| {
+            let (first_start, first_end, second_start, second_end) = {
+                let buffer = editor.content.as_ref(ctx);
+                (
+                    buffer.line_start(ContentLineCount::from(1)),
+                    buffer.line_start(ContentLineCount::from(4)),
+                    buffer.line_start(ContentLineCount::from(5)),
+                    buffer.line_start(ContentLineCount::from(8)),
+                )
+            };
+            editor.selection_model.update(ctx, |selections, _| {
+                selections.set_selection_offsets(vec1![
+                    SelectionOffsets {
+                        head: first_end,
+                        tail: first_start,
+                    },
+                    SelectionOffsets {
+                        head: second_end,
+                        tail: second_start,
+                    },
+                ]);
+            });
+            editor.fold_selected_ranges(ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            let buffer = editor.content.as_ref(ctx);
+            assert_eq!(
+                editor.selections(ctx),
+                vec1![
+                    SelectionOffsets {
+                        head: buffer.line_start(ContentLineCount::from(4)),
+                        tail: buffer.line_start(ContentLineCount::from(1)),
+                    },
+                    SelectionOffsets {
+                        head: buffer.line_start(ContentLineCount::from(8)),
+                        tail: buffer.line_start(ContentLineCount::from(5)),
+                    },
+                ]
+            );
+            assert_eq!(
+                editor
+                    .hidden_ranges(ctx)
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec![
+                    buffer.line_start(ContentLineCount::from(2))
+                        ..buffer.line_start(ContentLineCount::from(3)),
+                    buffer.line_start(ContentLineCount::from(6))
+                        ..buffer.line_start(ContentLineCount::from(7)),
+                ]
+            );
+        });
+    });
+}
+
+#[test]
+fn fold_with_selection_still_folds_bracket_block() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = mock_model(
+            &mut app,
+            "fn main() {\n    one();\n    two();\n}\n",
+            ContentVersion::new(),
+        );
+        layout_model(&mut app, &editor).await;
+
+        editor.update(&mut app, |editor, ctx| {
+            editor
+                .buffer_selection_model()
+                .update(ctx, |selections, _| {
+                    selections.set_selection_offsets(vec1![SelectionOffsets {
+                        head: CharOffset::from(32),
+                        tail: CharOffset::from(18),
+                    }]);
+                });
+            editor.fold(ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            let buffer = editor.content.as_ref(ctx);
+            assert_eq!(
+                editor
+                    .hidden_ranges(ctx)
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec![
+                    buffer.line_start(ContentLineCount::from(2))
+                        ..buffer.line_start(ContentLineCount::from(4))
+                ]
+            );
+        });
+    });
+}
+
+#[test]
+fn unfolds_outer_manual_fold_at_shared_closing_boundary() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = mock_model(
+            &mut app,
+            "outer {\n    inner {\n        body\n}\n",
+            ContentVersion::new(),
+        );
+        layout_model(&mut app, &editor).await;
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.fold_line_range(0..3, ctx);
+            editor.fold_line_range(1..3, ctx);
+            let closing_line = editor
+                .content
+                .as_ref(ctx)
+                .line_start(ContentLineCount::from(4));
+            editor.cursor_at(closing_line, ctx);
+            editor.unfold(ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            let buffer = editor.content.as_ref(ctx);
+            assert_eq!(
+                editor
+                    .hidden_ranges(ctx)
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec![
+                    buffer.line_start(ContentLineCount::from(3))
+                        ..buffer.line_start(ContentLineCount::from(4))
+                ]
+            );
+        });
+    });
+}
+
+#[test]
+fn manual_folds_compose_with_configured_hidden_lines() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = mock_model(
+            &mut app,
+            "start {\n    one\n    two\n}\nvisible\nconfigured\ntail\n",
+            ContentVersion::new(),
+        );
+        layout_model(&mut app, &editor).await;
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_hidden_lines(
+                RangeSet::from_iter([ContentLineCount::from(5)..ContentLineCount::from(6)]),
+                ctx,
+            );
+            editor.cursor_at(CharOffset::from(18), ctx);
+            editor.fold(ctx);
+            editor.unfold(ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            let buffer = editor.content.as_ref(ctx);
+            assert_eq!(
+                editor
+                    .hidden_ranges(ctx)
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec![
+                    buffer.line_start(ContentLineCount::from(6))
+                        ..buffer.line_start(ContentLineCount::from(7))
+                ]
+            );
+        });
+    });
+}
+
+#[test]
+fn expanding_manual_fold_keeps_it_open() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = mock_model(
+            &mut app,
+            "fn main() {\n    let x = 1;\n}\n",
+            ContentVersion::new(),
+        );
+        layout_model(&mut app, &editor).await;
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.cursor_at(CharOffset::from(18), ctx);
+            editor.fold(ctx);
+            editor
+                .set_visible_line_range(ContentLineCount::from(1)..ContentLineCount::from(2), ctx);
+            editor.cursor_at(CharOffset::from(1), ctx);
+            editor.insert("// ", EditOrigin::UserTyped, ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            assert!(editor.hidden_ranges(ctx).is_empty());
+        });
+    });
+}
+
+#[test]
+fn resetting_content_clears_manual_folds() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = mock_model(
+            &mut app,
+            "fn main() {\n    let x = 1;\n}\n",
+            ContentVersion::new(),
+        );
+        layout_model(&mut app, &editor).await;
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.cursor_at(CharOffset::from(18), ctx);
+            editor.fold(ctx);
+            editor.reset_content(
+                InitialBufferState::plain_text("new\ncontent\n")
+                    .with_version(ContentVersion::new()),
+                ctx,
+            );
+        });
+
         editor.read(&app, |editor, ctx| {
             assert!(editor.hidden_ranges(ctx).is_empty());
         });
@@ -1149,6 +1409,45 @@ fn manual_fold_stays_hidden_after_edit() {
                 vec![
                     buffer.line_start(ContentLineCount::from(2))
                         ..buffer.line_start(ContentLineCount::from(3))
+                ]
+            );
+        });
+    });
+}
+
+#[test]
+fn manual_fold_tracks_edit_at_closing_boundary() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = mock_model(
+            &mut app,
+            "fn main() {\n    let x = 1;\n}\n",
+            ContentVersion::new(),
+        );
+        layout_model(&mut app, &editor).await;
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.cursor_at(CharOffset::from(18), ctx);
+            editor.fold(ctx);
+            let closing_line = editor
+                .content
+                .as_ref(ctx)
+                .line_start(ContentLineCount::from(3));
+            editor.cursor_at(closing_line, ctx);
+            editor.insert("\n", EditOrigin::UserTyped, ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            let buffer = editor.content.as_ref(ctx);
+            assert_eq!(
+                editor
+                    .hidden_ranges(ctx)
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec![
+                    buffer.line_start(ContentLineCount::from(2))
+                        ..buffer.line_start(ContentLineCount::from(4))
                 ]
             );
         });

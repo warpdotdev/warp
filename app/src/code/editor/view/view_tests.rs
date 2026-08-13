@@ -1,14 +1,21 @@
 use std::sync::Arc;
 
+use string_offset::CharOffset;
+use vec1::vec1;
 use warp_core::ui::appearance::Appearance;
+use warp_editor::content::buffer::{InitialBufferState, SelectionOffsets};
+use warp_editor::content::text::LineCount;
+use warp_editor::model::CoreEditorModel;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_util::content_version::ContentVersion;
 use warp_util::user_input::UserInput;
 use warpui::elements::ScrollbarWidth;
 use warpui::elements::new_scrollable::ScrollableAppearance;
+use warpui::keymap::Keystroke;
 use warpui::platform::WindowStyle;
 use warpui::{App, TypedActionView, ViewHandle, WindowId};
 
-use super::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction};
+use super::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction, init};
 use crate::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::editor::InteractionState;
@@ -85,5 +92,97 @@ fn test_interaction_state_prevents_editing() {
         });
 
         assert_eq!(text.as_str(), "abc");
+    });
+}
+
+#[test]
+fn fold_shortcuts_dispatch_in_focused_code_editor() {
+    App::test((), |mut app| async move {
+        app.update(init);
+        let (window_id, editor_view) = initialize_editor(&mut app);
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.reset(
+                InitialBufferState::plain_text("fn main() {\n    let x = 1;\n}\n")
+                    .with_version(ContentVersion::new()),
+                ctx,
+            );
+            view.model.update(ctx, |model, ctx| {
+                model.cursor_at(CharOffset::from(18), ctx);
+            });
+            view.focus(ctx);
+        });
+
+        let fold = if cfg!(target_os = "macos") {
+            "alt-cmd-["
+        } else {
+            "alt-ctrl-["
+        };
+        assert!(
+            app.dispatch_keystroke(
+                window_id,
+                &[editor_view.id()],
+                &Keystroke::parse(fold).expect("valid fold shortcut"),
+                false,
+            )
+            .expect("fold shortcut should dispatch")
+        );
+        editor_view.read(&app, |view, ctx| {
+            assert!(!view.model.as_ref(ctx).hidden_ranges(ctx).is_empty());
+        });
+
+        let unfold = if cfg!(target_os = "macos") {
+            "alt-cmd-]"
+        } else {
+            "alt-ctrl-]"
+        };
+        assert!(
+            app.dispatch_keystroke(
+                window_id,
+                &[editor_view.id()],
+                &Keystroke::parse(unfold).expect("valid unfold shortcut"),
+                false,
+            )
+            .expect("unfold shortcut should dispatch")
+        );
+        editor_view.read(&app, |view, ctx| {
+            assert!(view.model.as_ref(ctx).hidden_ranges(ctx).is_empty());
+        });
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.model.update(ctx, |model, ctx| {
+                let (start, end) = {
+                    let buffer = model.buffer().as_ref(ctx);
+                    (
+                        buffer.line_start(LineCount::from(1)),
+                        buffer.line_start(LineCount::from(4)),
+                    )
+                };
+                model.buffer_selection_model().update(ctx, |selections, _| {
+                    selections.set_selection_offsets(vec1![SelectionOffsets {
+                        head: end,
+                        tail: start,
+                    }]);
+                });
+            });
+        });
+
+        let fold_selection = if cfg!(target_os = "macos") {
+            "alt-cmd-f"
+        } else {
+            "alt-ctrl-f"
+        };
+        assert!(
+            app.dispatch_keystroke(
+                window_id,
+                &[editor_view.id()],
+                &Keystroke::parse(fold_selection).expect("valid fold selection shortcut"),
+                false,
+            )
+            .expect("fold selection shortcut should dispatch")
+        );
+        editor_view.read(&app, |view, ctx| {
+            assert!(!view.model.as_ref(ctx).hidden_ranges(ctx).is_empty());
+        });
     });
 }
