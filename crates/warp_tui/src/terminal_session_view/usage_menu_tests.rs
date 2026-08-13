@@ -80,27 +80,33 @@ fn render_snapshot_lines(snapshot: TuiUsageSnapshot) -> Vec<String> {
 
 #[test]
 fn credit_bar_row_is_empty_at_zero_percent() {
+    const WIDTH: u16 = 60;
     let row = credit_bar_row(0, 1500, TuiStyle::default(), TuiStyle::default());
     let lines = App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        lines_of(&app, row, TuiSize::new(BAR_WIDTH as u16, 1))
+        lines_of(&app, row, TuiSize::new(WIDTH, 1))
     });
     let line = &lines[0];
     assert_eq!(count(line, '█'), 0, "filled segment is a solid block");
-    assert_eq!(count(line, '░'), BAR_WIDTH, "empty segment is light-shade");
+    assert_eq!(
+        count(line, '░'),
+        WIDTH as usize,
+        "empty segment is light-shade"
+    );
 }
 
 #[test]
 fn credit_bar_row_reflects_partial_percentage() {
     // 100/500 = 20% used, matching the designer-confirmed rule that the bar
     // fill is a strict function of credits used / limit.
+    const WIDTH: u16 = 60;
     let row = credit_bar_row(100, 500, TuiStyle::default(), TuiStyle::default());
     let lines = App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        lines_of(&app, row, TuiSize::new(BAR_WIDTH as u16, 1))
+        lines_of(&app, row, TuiSize::new(WIDTH, 1))
     });
     let line = &lines[0];
-    let expected_filled = (BAR_WIDTH as f64 * 0.2).round() as usize;
+    let expected_filled = (WIDTH as f64 * 0.2).round() as usize;
     assert_eq!(
         count(line, '█'),
         expected_filled,
@@ -108,79 +114,100 @@ fn credit_bar_row_reflects_partial_percentage() {
     );
     assert_eq!(
         count(line, '░'),
-        BAR_WIDTH - expected_filled,
+        WIDTH as usize - expected_filled,
         "empty segment is light-shade"
     );
 }
 
 #[test]
 fn credit_bar_row_is_full_at_limit() {
+    const WIDTH: u16 = 60;
     let row = credit_bar_row(1500, 1500, TuiStyle::default(), TuiStyle::default());
     let lines = App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        lines_of(&app, row, TuiSize::new(BAR_WIDTH as u16, 1))
+        lines_of(&app, row, TuiSize::new(WIDTH, 1))
     });
     let line = &lines[0];
     assert_eq!(
         count(line, '█'),
-        BAR_WIDTH,
+        WIDTH as usize,
         "filled segment is a solid block"
     );
     assert_eq!(count(line, '░'), 0, "no empty segment remains");
 }
 
 #[test]
+fn credit_bar_row_reactively_fills_whatever_width_it_is_offered() {
+    // The same 20%-used bar, laid out at two different widths, must fill
+    // proportionally to *each* width rather than a fixed guess baked in
+    // ahead of time — this is what makes it look right on any real terminal
+    // size, not just one reference width.
+    for width in [40u16, 74, 120, 200] {
+        let row = credit_bar_row(100, 500, TuiStyle::default(), TuiStyle::default());
+        let lines = App::test((), |app| async move {
+            app.add_singleton_model(|_| Appearance::mock());
+            lines_of(&app, row, TuiSize::new(width, 1))
+        });
+        let line = &lines[0];
+        let expected_filled = (f64::from(width) * 0.2).round() as usize;
+        assert_eq!(
+            count(line, '█') + count(line, '░'),
+            width as usize,
+            "the bar must span the full offered width {width}"
+        );
+        assert_eq!(
+            count(line, '█'),
+            expected_filled,
+            "20% of width {width} should be filled"
+        );
+    }
+}
+
+#[test]
 fn pay_as_you_go_not_kicked_in_renders_a_single_dashed_row() {
-    let rows = pay_as_you_go_rows(0, TuiStyle::default(), TuiStyle::default());
-    assert_eq!(rows.len(), 1);
+    const WIDTH: u16 = 60;
+    let row = pay_as_you_go_rows(0, TuiStyle::default(), TuiStyle::default());
     let lines = App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        lines_of(
-            &app,
-            rows.into_iter().next().unwrap(),
-            TuiSize::new(BAR_WIDTH as u16, 1),
-        )
+        lines_of(&app, row, TuiSize::new(WIDTH, 1))
     });
+    assert_eq!(lines.len(), 1);
     assert_eq!(count(&lines[0], '●'), 0);
-    assert_eq!(count(&lines[0], '-'), BAR_WIDTH);
+    assert_eq!(count(&lines[0], '-'), WIDTH as usize);
 }
 
 #[test]
 fn pay_as_you_go_renders_one_row_of_circles_when_under_a_row() {
-    // 3500 credits / 500 credits-per-circle = 7 circles, well under BAR_WIDTH.
-    let rows = pay_as_you_go_rows(3500, TuiStyle::default(), TuiStyle::default());
-    assert_eq!(rows.len(), 1);
+    const WIDTH: u16 = 60;
+    // 3500 credits / 500 credits-per-circle = 7 circles, well under WIDTH.
+    let row = pay_as_you_go_rows(3500, TuiStyle::default(), TuiStyle::default());
     let lines = App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        lines_of(
-            &app,
-            rows.into_iter().next().unwrap(),
-            TuiSize::new(BAR_WIDTH as u16, 1),
-        )
+        lines_of(&app, row, TuiSize::new(WIDTH, 1))
     });
+    assert_eq!(lines.len(), 1);
     assert_eq!(count(&lines[0], '●'), 7);
-    assert_eq!(count(&lines[0], '-'), BAR_WIDTH - 7);
+    assert_eq!(count(&lines[0], '-'), WIDTH as usize - 7);
 }
 
 #[test]
 fn pay_as_you_go_wraps_across_multiple_rows_when_it_overflows_a_row() {
-    // 60,000 credits / 500 = 120 circles, which overflows a single BAR_WIDTH-wide row.
+    const WIDTH: u16 = 60;
+    // 60,000 credits / 500 = 120 circles, which overflows a single WIDTH-wide row.
     let total_circles = 120usize;
-    let rows = pay_as_you_go_rows(60_000, TuiStyle::default(), TuiStyle::default());
-    let expected_rows = total_circles.div_ceil(BAR_WIDTH);
-    assert_eq!(rows.len(), expected_rows);
+    let row = pay_as_you_go_rows(60_000, TuiStyle::default(), TuiStyle::default());
+    let expected_rows = total_circles.div_ceil(WIDTH as usize);
     assert!(expected_rows > 1, "this scenario must actually wrap");
 
     let lines = App::test((), |app| async move {
         app.add_singleton_model(|_| Appearance::mock());
-        rows.into_iter()
-            .map(|row| lines_of(&app, row, TuiSize::new(BAR_WIDTH as u16, 1))[0].clone())
-            .collect::<Vec<_>>()
+        lines_of(&app, row, TuiSize::new(WIDTH, 400))
     });
+    assert_eq!(lines.len(), expected_rows);
 
     let mut remaining = total_circles;
     for (index, line) in lines.iter().enumerate() {
-        let filled_in_row = remaining.min(BAR_WIDTH);
+        let filled_in_row = remaining.min(WIDTH as usize);
         remaining -= filled_in_row;
         assert_eq!(
             count(line, '●'),
@@ -189,8 +216,29 @@ fn pay_as_you_go_wraps_across_multiple_rows_when_it_overflows_a_row() {
         );
         assert_eq!(
             count(line, '-'),
-            BAR_WIDTH - filled_in_row,
+            WIDTH as usize - filled_in_row,
             "row {index} dash count"
+        );
+    }
+}
+
+#[test]
+fn pay_as_you_go_rows_reactively_wraps_at_whatever_width_it_is_offered() {
+    // The same spend, laid out at two different widths, must wrap into a
+    // different number of rows proportional to *each* width, not a fixed
+    // guess baked in ahead of time.
+    let total_circles = 120usize;
+    for width in [40u16, 74, 200] {
+        let row = pay_as_you_go_rows(60_000, TuiStyle::default(), TuiStyle::default());
+        let lines = App::test((), |app| async move {
+            app.add_singleton_model(|_| Appearance::mock());
+            lines_of(&app, row, TuiSize::new(width, 400))
+        });
+        let expected_rows = total_circles.div_ceil(width as usize);
+        assert_eq!(
+            lines.len(),
+            expected_rows,
+            "width {width} should wrap into {expected_rows} rows"
         );
     }
 }

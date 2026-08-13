@@ -8,23 +8,188 @@
 //! component.
 
 use warp::tui_export::{TuiUsageCreditBar, TuiUsagePayAsYouGo, TuiUsageSnapshot};
+use warpui_core::AppContext;
 use warpui_core::elements::tui::{
-    Modifier, TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiStyle, TuiText,
+    Modifier, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiHoverable, TuiLayoutContext,
+    TuiPaintContext, TuiPaintSurface, TuiScreenPoint, TuiScreenPosition, TuiSize, TuiStyle,
+    TuiText,
 };
 use warpui_core::elements::{CrossAxisAlignment, MouseStateHandle};
 
 use crate::tui_builder::TuiUiBuilder;
 
-/// Width (in cells) of the base/add-on credit bars and each pay-as-you-go
-/// circle row. Fixed rather than reactive to the live terminal width,
-/// matching the rest of this read-only-menu family (see
-/// `status_menu`/`shortcuts`, which format rows to a fixed label width too).
-/// Sized to reach the panel's own right edge in the design's 80-column
-/// reference layout: 80 - 4 (the session's outer `with_padding_x(2)`) - 2
-/// (this panel's own `with_padding_x(1)`) = 74.
-const BAR_WIDTH: usize = 74;
 /// Credits represented by a single pay-as-you-go circle.
 const CREDITS_PER_CIRCLE: i64 = 500;
+
+/// A single-row bar that fills whatever width it's laid out at: the leading
+/// `ratio` fraction renders `filled_char`/`filled_style`, and the remainder
+/// renders `empty_char`/`empty_style`. Unlike a `TuiText` built from a
+/// fixed-length string, this measures against the constraint it's actually
+/// offered, so the credit bars reactively span the card's real width on any
+/// terminal size instead of a fixed guess tuned to one reference width.
+struct TuiUsageBar {
+    ratio: f64,
+    filled_char: char,
+    empty_char: char,
+    filled_style: TuiStyle,
+    empty_style: TuiStyle,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
+}
+
+impl TuiUsageBar {
+    fn new(
+        ratio: f64,
+        filled_char: char,
+        empty_char: char,
+        filled_style: TuiStyle,
+        empty_style: TuiStyle,
+    ) -> Self {
+        Self {
+            ratio: ratio.clamp(0.0, 1.0),
+            filled_char,
+            empty_char,
+            filled_style,
+            empty_style,
+            size: None,
+            origin: None,
+        }
+    }
+}
+
+impl TuiElement for TuiUsageBar {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        let size = TuiSize::new(constraint.max.width, constraint.constrain_height(1));
+        self.size = Some(size);
+        size
+    }
+
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let Some(size) = self.size else {
+            return;
+        };
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        let filled = ((self.ratio * f64::from(size.width)).round() as u16).min(size.width);
+        for column in 0..size.width {
+            let (glyph, style) = if column < filled {
+                (self.filled_char, self.filled_style)
+            } else {
+                (self.empty_char, self.empty_style)
+            };
+            if let Some(cell) = surface.cell_mut(origin.offset(i32::from(column), 0)) {
+                cell.set_symbol(glyph.to_string().as_str()).set_style(style);
+            }
+        }
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
+    }
+}
+
+/// One or more rows of filled/empty circles representing pay-as-you-go
+/// spend, wrapping onto as many rows as the offered width requires. Unlike
+/// the fixed-limit credit bars, pay-as-you-go spend has no ceiling, so it
+/// can't be split into rows ahead of a known width — this element performs
+/// that split during layout against whatever width it's actually offered,
+/// reactively wrapping instead of assuming a fixed guess.
+struct TuiUsagePayAsYouGoRows {
+    total_circles: usize,
+    filled_style: TuiStyle,
+    empty_style: TuiStyle,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
+}
+
+impl TuiUsagePayAsYouGoRows {
+    fn new(total_circles: usize, filled_style: TuiStyle, empty_style: TuiStyle) -> Self {
+        Self {
+            total_circles,
+            filled_style,
+            empty_style,
+            size: None,
+            origin: None,
+        }
+    }
+}
+
+impl TuiElement for TuiUsagePayAsYouGoRows {
+    fn layout(
+        &mut self,
+        constraint: TuiConstraint,
+        _ctx: &mut TuiLayoutContext,
+        _app: &AppContext,
+    ) -> TuiSize {
+        let width = usize::from(constraint.max.width.max(1));
+        let rows = if self.total_circles == 0 {
+            1
+        } else {
+            self.total_circles.div_ceil(width)
+        };
+        let rows = u16::try_from(rows).unwrap_or(u16::MAX);
+        let size = TuiSize::new(constraint.max.width, constraint.constrain_height(rows));
+        self.size = Some(size);
+        size
+    }
+
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let Some(size) = self.size else {
+            return;
+        };
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        let width = usize::from(size.width);
+        let mut remaining = self.total_circles;
+        for row in 0..size.height {
+            let filled_in_row = remaining.min(width);
+            remaining -= filled_in_row;
+            for column in 0..size.width {
+                let (glyph, style) = if usize::from(column) < filled_in_row {
+                    ('\u{25CF}', self.filled_style)
+                } else {
+                    ('-', self.empty_style)
+                };
+                if let Some(cell) =
+                    surface.cell_mut(origin.offset(i32::from(column), i32::from(row)))
+                {
+                    cell.set_symbol(glyph.to_string().as_str()).set_style(style);
+                }
+            }
+        }
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
+    }
+}
 
 const KICKED_IN_NOTE: &str = "Kicks in after credits are exhausted.";
 const NOT_KICKED_IN_NOTE: &str = "Kicks in after base and add-on credits are exhausted.";
@@ -61,9 +226,10 @@ fn spans_row(spans: Vec<(String, TuiStyle)>) -> Box<dyn TuiElement> {
     TuiText::from_spans(spans).truncate().finish()
 }
 
-/// Renders a fixed-width bar: `used / limit` filled cells followed by empty
-/// cells for the remainder. `used` is drawn as a strict percentage of
-/// `limit`, regardless of the bar's current visual state.
+/// Renders a bar that reactively fills the card's real width: `used / limit`
+/// as a filled fraction followed by an empty remainder. `used` is drawn as a
+/// strict percentage of `limit`, regardless of the bar's current visual
+/// state.
 fn credit_bar_row(
     used: i64,
     limit: i64,
@@ -75,41 +241,20 @@ fn credit_bar_row(
     } else {
         (used as f64 / limit as f64).clamp(0.0, 1.0)
     };
-    let filled = ((ratio * BAR_WIDTH as f64).round() as usize).min(BAR_WIDTH);
     // The filled segment is a solid block; the empty segment is a lighter,
     // dithered fill — confirmed against the designer's own screenshot.
-    let mut spans = vec![("█".repeat(filled), filled_style)];
-    if filled < BAR_WIDTH {
-        spans.push(("░".repeat(BAR_WIDTH - filled), empty_style));
-    }
-    spans_row(spans)
+    TuiUsageBar::new(ratio, '█', '░', filled_style, empty_style).finish()
 }
 
-/// Splits pay-as-you-go usage into rows of filled/empty circles, wrapping
-/// onto as many rows as needed. Unlike the fixed-limit credit bars,
-/// pay-as-you-go spend has no ceiling, so full rows have no empty remainder
-/// and only the last (possibly partial) row does.
+/// Renders the pay-as-you-go circle block, wrapping onto as many rows as the
+/// card's real width requires.
 fn pay_as_you_go_rows(
     credits_used: i64,
     filled_style: TuiStyle,
     empty_style: TuiStyle,
-) -> Vec<Box<dyn TuiElement>> {
+) -> Box<dyn TuiElement> {
     let total_circles = (credits_used.max(0) as f64 / CREDITS_PER_CIRCLE as f64).ceil() as usize;
-    if total_circles == 0 {
-        return vec![spans_row(vec![("-".repeat(BAR_WIDTH), empty_style)])];
-    }
-    let mut rows = Vec::new();
-    let mut remaining = total_circles;
-    while remaining > 0 {
-        let filled_in_row = remaining.min(BAR_WIDTH);
-        remaining -= filled_in_row;
-        let mut spans = vec![("●".repeat(filled_in_row), filled_style)];
-        if filled_in_row < BAR_WIDTH {
-            spans.push(("-".repeat(BAR_WIDTH - filled_in_row), empty_style));
-        }
-        rows.push(spans_row(spans));
-    }
-    rows
+    TuiUsagePayAsYouGoRows::new(total_circles, filled_style, empty_style).finish()
 }
 
 fn hoverable_link(
@@ -186,8 +331,10 @@ fn pay_as_you_go_section(
     let filled = builder.link_text_style();
     let empty = builder.dim_text_style();
 
-    let mut rows = vec![label_value_row("Pay-as-you-go", "No limit", primary)];
-    rows.extend(pay_as_you_go_rows(payg.credits_used, filled, empty));
+    let mut rows = vec![
+        label_value_row("Pay-as-you-go", "No limit", primary),
+        pay_as_you_go_rows(payg.credits_used, filled, empty),
+    ];
     let kicks_in_note = if payg.has_kicked_in {
         KICKED_IN_NOTE
     } else {
@@ -318,9 +465,11 @@ pub(super) fn render(
     .finish();
 
     // "Esc to exit" sits outside the panel's background, on the plain
-    // terminal background below it, per the design.
+    // terminal background below it, per the design, with a blank row
+    // between the panel and it.
     TuiFlex::column()
         .child(panel)
+        .child(plain_row(" ", dim))
         .child(plain_row("Esc to exit", dim))
         .finish()
 }
