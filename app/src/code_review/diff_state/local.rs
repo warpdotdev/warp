@@ -2527,14 +2527,7 @@ impl LocalDiffStateModel {
             }
         };
 
-        // Guard against excessive memory use before parsing. A single file's raw
-        // patch can be enormous (e.g. a large minified/bundled file inside an
-        // untracked `node_modules` tree). Parsing it into `DiffHunk`/`DiffLine`
-        // structs multiplies its memory footprint several-fold and every such
-        // file is retained in the in-memory diff list, which has caused multi-GB
-        // spikes. Since `compute_diff_size` would classify a patch this large as
-        // `Unrenderable` anyway, skip parsing entirely and return an empty,
-        // unrenderable diff.
+        // Skip parsing oversized diffs; compute_diff_size would mark them Unrenderable anyway.
         if diff_output.len() > MAX_DIFF_SIZE {
             return Ok(FileDiff {
                 file_path: file_path.to_owned(),
