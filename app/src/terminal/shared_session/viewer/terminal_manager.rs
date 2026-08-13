@@ -21,7 +21,7 @@ use warpui::{
 
 use super::event_loop::SharedSessionInitialLoadMode;
 use super::network::{
-    Network, NetworkEvent, agent_prompt_failure_reason_string,
+    Network, NetworkEvent, ServerMessageSendOutcome, agent_prompt_failure_reason_string,
     command_execution_failure_reason_string, control_action_failure_reason_string,
     session_ended_reason_string, viewer_removed_reason_string, write_to_pty_failure_reason_string,
 };
@@ -761,7 +761,7 @@ impl TerminalManager {
     // readability win, since the closure body still needs each clone
     // individually. Suppress the lint instead.
     #[allow(clippy::too_many_arguments)]
-    fn handle_network_events(
+    pub(crate) fn handle_network_events(
         network: &ModelHandle<Network>,
         view: &ViewHandle<TerminalView>,
         model: Arc<FairMutex<TerminalModel>>,
@@ -865,6 +865,8 @@ impl TerminalManager {
                     }
 
                 let session_id = network.as_ref(ctx).session_id();
+                let is_current_network = Self::current_network(&current_network)
+                    .is_some_and(|current| current.as_ref(ctx).session_id() == session_id);
                 Manager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.joined_share(weak_view_handle.clone(), session_id, ctx);
                 });
@@ -893,6 +895,14 @@ impl TerminalManager {
                         source.source_type.clone(),
                         ctx,
                     );
+
+                    // A queue left over from a previous execution continues here rather than at
+                    // `ExecutionSessionReady`, which fires before this network has connected.
+                    if is_current_network {
+                        terminal_view.drain_disconnected_viewer_queue_after_replacement_join(
+                            session_id, ctx,
+                        );
+                    }
                 });
 
                 #[cfg(target_family = "wasm")]
@@ -1141,8 +1151,23 @@ impl TerminalManager {
                     return;
                 };
 
+                // A replaced network can still emit this after the swap; only the live one may
+                // retry a prompt.
+                let rejoined_session_id = network.as_ref(ctx).session_id();
+                let is_current_network = Self::current_network(&current_network)
+                    .is_some_and(|current| current.as_ref(ctx).session_id() == rejoined_session_id);
+
                 view.update(ctx, |view, ctx| {
-                    view.on_shared_session_reconnection_status_changed(false, ctx)
+                    view.on_shared_session_reconnection_status_changed(false, ctx);
+                    if is_current_network {
+                        // `RejoinedSuccessfully` already flushed the buffered input updates, so
+                        // the editor clear that accompanied the original submission has landed
+                        // before the prompt is retried.
+                        view.retry_disconnected_viewer_prompt_after_rejoin(
+                            rejoined_session_id,
+                            ctx,
+                        );
+                    }
                 });
             }
             NetworkEvent::ParticipantRoleChanged {
@@ -1227,19 +1252,21 @@ impl TerminalManager {
                     terminal_view.show_persistent_toast(reason_string, ToastFlavor::Error, ctx);
                 });
             }
-            NetworkEvent::AgentPromptRequestInFlight(_id) => {
+            NetworkEvent::AgentPromptRequestInFlight(id) => {
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;
                 };
                 view.update(ctx, |terminal_view, ctx| {
-                    // Restore frozen visual state. optimistically_show_empty=true creates
-                    // a display-only empty ephemeral for immediate UX feedback. Unlike a
+                    // Only the pane's own outstanding request is finalized here; an
+                    // acknowledgement for a retired revision or a duplicate resolves nothing
+                    // and must not disturb the editor.
+                    //
+                    // Restoring frozen visual state passes optimistically_show_empty=true, which
+                    // creates a display-only empty ephemeral for immediate UX feedback. Unlike a
                     // regular ephemeral, this one discards its content on materialization
                     // instead of restoring it to the regular buffer, so no spurious CRDT
                     // delete ops are generated for concurrent edits by other viewers.
-                    terminal_view.input().update(ctx, |input, ctx| {
-                        input.unfreeze_agent_input(true, ctx);
-                    });
+                    terminal_view.on_viewer_prompt_acknowledged(id, ctx);
                 });
             }
             NetworkEvent::AgentPromptRequestFailed { reason, .. } => {
@@ -1509,7 +1536,7 @@ impl TerminalManager {
         apply_selected_conversation_update(weak_view_handle, selected_conversation, guard, ctx);
     }
 
-    fn handle_view_events(
+    pub(crate) fn handle_view_events(
         current_network: Arc<FairMutex<Option<ModelHandle<Network>>>>,
         view: &ViewHandle<TerminalView>,
         model: Arc<FairMutex<TerminalModel>>,
@@ -1580,15 +1607,36 @@ impl TerminalManager {
                 });
             }
             TerminalViewEvent::SendAgentPrompt {
+                snapshot,
                 server_conversation_token,
                 prompt,
                 attachments,
             } => {
-                Self::update_current_network(&current_network, ctx, |network, _| {
-                    network.send_agent_prompt_request(
-                        *server_conversation_token,
-                        prompt.clone(),
-                        attachments.clone(),
+                let network = Self::current_network(&current_network);
+                let session_id = network
+                    .as_ref()
+                    .map(|network| network.as_ref(ctx).session_id());
+                let outcome = match &network {
+                    Some(network) => network.update(ctx, |network, _| {
+                        network.send_agent_prompt_request(
+                            snapshot.request_id().clone(),
+                            *server_conversation_token,
+                            prompt.clone(),
+                            attachments.clone(),
+                        )
+                    }),
+                    // No viewer network is attached, so nothing can carry the prompt.
+                    None => ServerMessageSendOutcome::Undeliverable,
+                };
+                let snapshot = (**snapshot).clone();
+                let server_conversation_token = *server_conversation_token;
+                view.update(ctx, |terminal_view, ctx| {
+                    terminal_view.on_viewer_prompt_send_outcome(
+                        snapshot,
+                        server_conversation_token,
+                        session_id,
+                        outcome,
+                        ctx,
                     );
                 });
             }
@@ -1859,6 +1907,10 @@ impl TerminalManager {
                     });
                 }
                 terminal_view.on_ambient_agent_execution_ended(ctx);
+                // Runs after the follow-up state above is settled but while the ended session is
+                // still known, so the head row can be matched to it and routed to the cloud.
+                terminal_view
+                    .handoff_disconnected_viewer_queue_to_cloud_followup(ended_session_id, ctx);
             });
         }
         terminal_view.update(ctx, |terminal_view, ctx| {

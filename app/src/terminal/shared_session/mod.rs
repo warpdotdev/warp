@@ -25,7 +25,7 @@ pub mod role_change_modal;
 mod selections;
 pub mod settings;
 pub mod share_modal;
-pub(super) mod shared_handlers;
+pub(crate) mod shared_handlers;
 pub mod sharer;
 pub mod viewer;
 

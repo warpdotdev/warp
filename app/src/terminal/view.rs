@@ -111,10 +111,10 @@ use repo_metadata::repositories::RepoDetectionSource;
 use serde::Serialize;
 use serde_json::json;
 use session_sharing_protocol::common::{
-    AgentAttachment, LongRunningCommandAgentInteraction, LongRunningCommandAgentInteractionState,
-    ParticipantId, Role, RoleRequestId, RoleRequestResponse,
-    ServerConversationToken as SessionSharingServerConversationToken,
-    WindowSize as SessionSharingWindowSize,
+    AgentAttachment, AgentPromptRequestId, LongRunningCommandAgentInteraction,
+    LongRunningCommandAgentInteractionState, ParticipantId, Role, RoleRequestId,
+    RoleRequestResponse, ServerConversationToken as SessionSharingServerConversationToken,
+    SessionId as SessionSharingSessionId, WindowSize as SessionSharingWindowSize,
 };
 use session_sharing_protocol::sharer::{
     RoleUpdateReason, SessionEndedReason, SessionRetentionReason,
@@ -262,9 +262,9 @@ use crate::ai::blocklist::{
     InputTypeAutoDetectionSource, LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel,
     MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel, PRE_REWIND_PREFIX,
     PassiveSuggestionsModels, PendingAttachment, PendingQueryState, QueuedQuery, QueuedQueryId,
-    QueuedQueryModel, QueuedQueryOrigin, RequestFileEditsFormatKind, ShellCommandExecutor,
-    ShellCommandExecutorEvent, SlashCommandRequest, StartAgentExecutor, StartAgentExecutorEvent,
-    StartAgentRequest, ai_brand_color, block_context_from_terminal_model,
+    QueuedQueryModel, QueuedQueryOrigin, RequestFileEditsFormatKind, SharedSessionTarget,
+    ShellCommandExecutor, ShellCommandExecutorEvent, SlashCommandRequest, StartAgentExecutor,
+    StartAgentExecutorEvent, StartAgentRequest, ai_brand_color, block_context_from_terminal_model,
     get_ai_block_overflow_menu_element_position_id, get_attached_blocks_chip_element_position_id,
     is_lrc_auto_queue_active,
 };
@@ -462,6 +462,7 @@ use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::role_change_modal::{
     RoleChangeCloseSource, RoleChangeOpenSource,
 };
+use crate::terminal::shared_session::viewer::network::ServerMessageSendOutcome;
 use crate::terminal::shared_session::{
     SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
     SharedSessionStatus,
@@ -508,7 +509,9 @@ use crate::terminal::{
     TerminalModel,
     block_list_element::BlockHoverAction,
     // find::{Event as FindEvent, Find, FindDirection},
-    input::{Event as InputEvent, INPUT_A11Y_HELPER, INPUT_A11Y_LABEL, Input},
+    input::{
+        Event as InputEvent, INPUT_A11Y_HELPER, INPUT_A11Y_LABEL, Input, ViewerPromptSnapshot,
+    },
     model::block::SerializedBlock,
     shell::ShellType,
     terminal_size_element::TerminalSizeElement,
@@ -1851,6 +1854,8 @@ pub enum Event {
     RequestSharedSessionRole(Role),
     /// A viewer in a shared session is requesting to send an agent prompt.
     SendAgentPrompt {
+        /// Everything needed to recover the prompt if the sharer never receives it.
+        snapshot: Box<ViewerPromptSnapshot>,
         server_conversation_token: Option<SessionSharingServerConversationToken>,
         prompt: String,
         attachments: Vec<AgentAttachment>,
@@ -2439,6 +2444,38 @@ pub fn is_prompt_suggestions_enabled(app: &AppContext) -> bool {
 }
 
 type TerminalViewCallback = Box<dyn FnOnce(&mut TerminalView, &mut ViewContext<TerminalView>)>;
+
+/// How long a viewer prompt may sit locally accepted but unacknowledged before the client stops
+/// waiting and gives the prompt back to the user as a queue row.
+///
+/// Production is matched to the shared-session startup timeout: comfortably longer than a healthy
+/// sharer round trip, and short enough that a proxy that swallowed the message does not leave the
+/// input frozen indefinitely.
+///
+/// **The test value is not authoritative.** It is shortened so the expiry can be awaited without
+/// sleeping for the production duration, following `PTY_WRITES_BATCH_THRESHOLD` in
+/// `terminal/shared_session/viewer/network.rs`. Five seconds is the real bound.
+const VIEWER_PROMPT_ACK_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_millis(20)
+} else {
+    Duration::from_secs(5)
+};
+
+/// A viewer prompt handed to the network and awaiting the sharer's correlated acknowledgement.
+///
+/// Distinct from the [`ViewerPromptSnapshot`] it holds: the snapshot is the transport-independent
+/// record of what the user submitted and travels across the event boundary, while this is the
+/// view's live bookkeeping for one outstanding send — where it went and when it gives up. It owns
+/// a timer handle tied to the view's lifetime, so it deliberately does not cross into an event.
+struct AwaitingAcknowledgement {
+    snapshot: ViewerPromptSnapshot,
+    server_conversation_token: Option<SessionSharingServerConversationToken>,
+    /// The session the prompt was addressed to, and therefore the only session a retry may go to.
+    session_id: Option<SessionSharingSessionId>,
+    /// Fires [`VIEWER_PROMPT_ACK_TIMEOUT`] after a locally-accepted send. Absent when the send was
+    /// rejected outright, since that failure needs no timer.
+    timeout: Option<SpawnedFutureHandle>,
+}
 type ConversationFinishedCallback =
     Box<dyn FnOnce(&mut TerminalView, FinishReason, &mut ViewContext<TerminalView>)>;
 
@@ -2909,6 +2946,11 @@ pub struct TerminalView {
     /// terminal view (not a specific agent view conversation).
     pending_cloud_mode_start_callback: Option<TerminalViewCallback>,
     pending_cloud_mode_start_abort_handle: Option<SpawnedFutureHandle>,
+
+    /// Viewer prompts the local network accepted but the sharer has not acknowledged yet, keyed by
+    /// the request ID the server echoes back. An entry is the only remaining copy of the prompt,
+    /// so it is either resolved by that acknowledgement or turned into a queue row.
+    pending_viewer_prompts: HashMap<AgentPromptRequestId, AwaitingAcknowledgement>,
 
     /// Active /init flow model, if any. Cleared when cancelled or completed.
     active_init_project_model: Option<ModelHandle<InitProjectModel>>,
@@ -4451,6 +4493,7 @@ impl TerminalView {
             pane_stack: None,
             pending_cloud_mode_start_callback: None,
             pending_cloud_mode_start_abort_handle: None,
+            pending_viewer_prompts: HashMap::new(),
             ephemeral_message_model,
             pty_recorder: ctx
                 .add_model(|ctx| PtyRecorder::new(inactive_pty_reads_rx, window_id, ctx)),
@@ -5492,6 +5535,406 @@ impl TerminalView {
                 ctx,
             );
         }
+    }
+
+    /// Records the result of handing a viewer prompt to the shared-session network.
+    ///
+    /// A locally-accepted prompt is still unacknowledged, so it stays pending under a bounded
+    /// timer rather than being treated as delivered.
+    pub(crate) fn on_viewer_prompt_send_outcome(
+        &mut self,
+        snapshot: ViewerPromptSnapshot,
+        server_conversation_token: Option<SessionSharingServerConversationToken>,
+        session_id: Option<SessionSharingSessionId>,
+        outcome: ServerMessageSendOutcome,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match (outcome, session_id) {
+            (ServerMessageSendOutcome::LocallyQueued, Some(session_id)) => {
+                let request_id = snapshot.request_id().clone();
+                let timeout_request_id = request_id.clone();
+                let timeout = ctx.spawn_abortable(
+                    Timer::after(VIEWER_PROMPT_ACK_TIMEOUT),
+                    move |me, _, ctx| {
+                        me.file_undelivered_viewer_prompt(&timeout_request_id, ctx);
+                    },
+                    |_, _| (),
+                );
+                self.pending_viewer_prompts.insert(
+                    request_id,
+                    AwaitingAcknowledgement {
+                        snapshot,
+                        server_conversation_token,
+                        session_id: Some(session_id),
+                        timeout: Some(timeout),
+                    },
+                );
+            }
+            (ServerMessageSendOutcome::LocallyQueued, None)
+            | (ServerMessageSendOutcome::Undeliverable, _) => {
+                let request_id = snapshot.request_id().clone();
+                let session_id = session_id.or_else(|| self.shared_session_id().copied());
+                self.pending_viewer_prompts.insert(
+                    request_id.clone(),
+                    AwaitingAcknowledgement {
+                        snapshot,
+                        server_conversation_token,
+                        session_id,
+                        timeout: None,
+                    },
+                );
+                self.file_undelivered_viewer_prompt(&request_id, ctx);
+            }
+        }
+    }
+
+    /// Resolves the pending prompt the sharer just acknowledged. An acknowledgement for anything
+    /// else — a retired revision, a duplicate, or a prompt this pane never sent — is a no-op.
+    pub(crate) fn on_viewer_prompt_acknowledged(
+        &mut self,
+        request_id: &AgentPromptRequestId,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(pending) = self.pending_viewer_prompts.remove(request_id) else {
+            return self.finalize_late_acknowledged_row(request_id, ctx);
+        };
+        if let Some(timeout) = pending.timeout {
+            timeout.abort();
+        }
+        // The sharer has the prompt, so the claimed row stays out of the queue for good.
+        QueuedQueryModel::handle(ctx).update(ctx, |model, _| {
+            if let Some(claim) = model.take_parked_claim(request_id) {
+                claim.accept();
+            }
+        });
+        self.input.update(ctx, |input, ctx| {
+            input.unfreeze_agent_input(true, ctx);
+        });
+        true
+    }
+
+    /// Removes a queue row whose acknowledgement arrived after the client had already given up on
+    /// it, so a prompt the sharer did receive is not left queued to be sent a second time.
+    ///
+    /// Only an untouched row matches: editing it mints a new request ID, which is what stops a
+    /// stale acknowledgement from deleting the user's revised prompt.
+    fn finalize_late_acknowledged_row(
+        &mut self,
+        request_id: &AgentPromptRequestId,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let queue_model = QueuedQueryModel::as_ref(ctx);
+        let Some((conversation_id, query_id)) = BlocklistAIHistoryModel::as_ref(ctx)
+            .all_live_conversations_for_terminal_surface(self.view_id)
+            .map(|conversation| conversation.id())
+            .find_map(|conversation_id| {
+                queue_model
+                    .row_for_request_id(conversation_id, request_id)
+                    .map(|row| (conversation_id, row.id()))
+            })
+        else {
+            return false;
+        };
+        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.remove_fired_row(conversation_id, query_id, ctx);
+        });
+        true
+    }
+
+    /// Turns an undelivered viewer prompt into the canonical, editable queue row and hands the
+    /// input back to the user.
+    fn file_undelivered_viewer_prompt(
+        &mut self,
+        request_id: &AgentPromptRequestId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(pending) = self.pending_viewer_prompts.remove(request_id) else {
+            return;
+        };
+        let AwaitingAcknowledgement {
+            snapshot,
+            server_conversation_token,
+            session_id,
+            timeout,
+        } = pending;
+        if let Some(timeout) = timeout {
+            timeout.abort();
+        }
+
+        let queued = match (snapshot.conversation_id(), session_id) {
+            (Some(conversation_id), Some(session_id))
+                if FeatureFlag::QueueSlashCommand.is_enabled() =>
+            {
+                let target = SharedSessionTarget::new(session_id, server_conversation_token);
+                QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                    match model.take_parked_claim(request_id) {
+                        Some(claim) => model.retarget_claim_to_shared_session(claim, target, ctx),
+                        None => {
+                            model.append(
+                                conversation_id,
+                                QueuedQuery::new_disconnected_viewer(
+                                    snapshot.prompt().to_owned(),
+                                    snapshot.pending_attachments().to_vec(),
+                                    request_id.clone(),
+                                    target,
+                                ),
+                                ctx,
+                            );
+                        }
+                    }
+                });
+                self.clear_stale_viewer_turn(conversation_id, ctx);
+                true
+            }
+            _ => false,
+        };
+
+        self.input.update(ctx, |input, ctx| {
+            // Hand the editor back immediately. `false` keeps whatever the user has typed since
+            // the submission started; the queue row is the in-flight affordance now.
+            input.unfreeze_agent_input(false, ctx);
+        });
+
+        if !queued {
+            // With no queue to hold it, the prompt would otherwise vanish silently.
+            self.restore_undelivered_viewer_prompt_to_input(snapshot.prompt(), ctx);
+            self.show_error_toast(
+                "Couldn't send that prompt to the shared session.".to_string(),
+                ctx,
+            );
+        }
+        ctx.notify();
+    }
+
+    /// Puts an undelivered prompt back in the editor when no queue row could hold it, but only
+    /// when doing so cannot clobber something the user has since typed.
+    fn restore_undelivered_viewer_prompt_to_input(
+        &mut self,
+        prompt: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.input.as_ref(ctx).buffer_text(ctx).is_empty() {
+            return;
+        }
+        self.input.update(ctx, |input, ctx| {
+            input.replace_buffer_content(prompt, ctx);
+            input.set_input_mode_agent(false, ctx);
+        });
+    }
+
+    /// Clears a conversation left reported as in progress purely because of a viewer submission
+    /// that never reached the sharer, so the `Warping...` indicator does not outlive it.
+    ///
+    /// A conversation reports `InProgress` from the moment it is created, so that status alone
+    /// says nothing about whether work is really running. The two signals that do are an
+    /// in-flight response stream and an agent-controlled active block — the same pair
+    /// `BlocklistAIStatusBar::render_warping_indicator_for_latest_exchange` renders on. While
+    /// either holds the turn is genuinely active, and the indicator belongs to it.
+    fn clear_stale_viewer_turn(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let is_in_progress = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|conversation| conversation.status().is_in_progress());
+        if !is_in_progress {
+            return;
+        }
+        let has_active_stream = self.ai_controller.read(ctx, |controller, app| {
+            controller.has_active_stream_for_conversation(conversation_id, app)
+        });
+        if has_active_stream {
+            return;
+        }
+        let agent_controls_active_block = {
+            let model = self.model.lock();
+            model.block_list().active_block().is_agent_in_control()
+        };
+        if agent_controls_active_block {
+            return;
+        }
+        let terminal_view_id = self.view_id;
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::Cancelled,
+                ctx,
+            );
+        });
+    }
+
+    /// Retries the FIFO head of a disconnected-viewer queue into the session that just came back.
+    ///
+    /// Only the head is retried, and only when it still points at this exact session and
+    /// conversation. A head that no longer matches stays queued and blocks the rows behind it,
+    /// rather than being redirected into work the user never addressed it to.
+    pub(crate) fn retry_disconnected_viewer_prompt_after_rejoin(
+        &mut self,
+        rejoined_session_id: SessionSharingSessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.model.lock().shared_session_status().is_executor() {
+            return;
+        }
+        let Some(conversation_id) = self.disconnected_viewer_head_conversation(ctx) else {
+            return;
+        };
+        if !self.disconnected_viewer_head_targets(conversation_id, rejoined_session_id, ctx) {
+            return;
+        }
+        self.submit_disconnected_viewer_head(conversation_id, ctx);
+    }
+
+    /// Continues a disconnected-viewer queue into the replacement execution that just joined.
+    ///
+    /// The join, not [`AmbientAgentViewModelEvent::ExecutionSessionReady`], is the trigger: at
+    /// readiness the new network has not connected yet and a send would be dropped.
+    pub(crate) fn drain_disconnected_viewer_queue_after_replacement_join(
+        &mut self,
+        joined_session_id: SessionSharingSessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.model.lock().shared_session_status().is_executor() {
+            return;
+        }
+        let Some(conversation_id) = self.disconnected_viewer_head_conversation(ctx) else {
+            return;
+        };
+        // The row was addressed to the session that ended, so re-point it at the replacement
+        // before sending; the conversation it continues is unchanged.
+        self.retarget_disconnected_viewer_head(conversation_id, joined_session_id, ctx);
+        self.submit_disconnected_viewer_head(conversation_id, ctx);
+    }
+
+    /// Converts the FIFO head into the cloud follow-up that starts the replacement execution,
+    /// after an ambient execution ended in a way it cannot recover from.
+    ///
+    /// Without this the queue would deadlock: the rows behind the head only drain once a new
+    /// execution joins, and no new execution is requested until the head is submitted.
+    pub(crate) fn handoff_disconnected_viewer_queue_to_cloud_followup(
+        &mut self,
+        ended_session_id: SessionSharingSessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::HandoffCloudCloud.is_enabled() {
+            return;
+        }
+        let Some(conversation_id) = self.disconnected_viewer_head_conversation(ctx) else {
+            return;
+        };
+        if !self.disconnected_viewer_head_targets(conversation_id, ended_session_id, ctx) {
+            return;
+        }
+        let Some(claim) = QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.claim_prompt_head(conversation_id, ctx)
+        }) else {
+            return;
+        };
+        let prompt = claim.query().text().to_owned();
+        if !self.try_submit_pending_cloud_followup(prompt, ctx) {
+            // Not eligible for a follow-up (read-only viewer, blocked source, missing task). The
+            // row is the canonical copy, so put it back untouched and tell the user.
+            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.restore_claim(claim, ctx);
+            });
+            self.show_error_toast("Couldn't continue this cloud task.".to_string(), ctx);
+        }
+    }
+
+    /// The conversation owning a queue whose head is a disconnected-viewer row, if any.
+    fn disconnected_viewer_head_conversation(&self, ctx: &AppContext) -> Option<AIConversationId> {
+        let queue_model = QueuedQueryModel::as_ref(ctx);
+        BlocklistAIHistoryModel::as_ref(ctx)
+            .all_live_conversations_for_terminal_surface(self.view_id)
+            .map(|conversation| conversation.id())
+            .find(|conversation_id| {
+                queue_model
+                    .queue(*conversation_id)
+                    .first()
+                    .is_some_and(|row| row.origin() == QueuedQueryOrigin::DisconnectedViewer)
+            })
+    }
+
+    /// Whether the head row still points at `session_id` and at a conversation that resolves to
+    /// the same server token it was filed against.
+    fn disconnected_viewer_head_targets(
+        &self,
+        conversation_id: AIConversationId,
+        session_id: SessionSharingSessionId,
+        ctx: &AppContext,
+    ) -> bool {
+        let Some(target) = QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .first()
+            .and_then(|row| row.shared_session_target())
+        else {
+            return false;
+        };
+        if target.session_id() != session_id {
+            return false;
+        }
+        let current_token = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .and_then(|conversation| conversation.server_conversation_token().cloned())
+            .and_then(|token| {
+                token
+                    .as_str()
+                    .parse()
+                    .ok()
+                    .map(SessionSharingServerConversationToken::from_uuid)
+            });
+        current_token == target.server_conversation_token()
+    }
+
+    /// Re-points the head row at `session_id`, used when a replacement execution takes over the
+    /// conversation the row was filed against.
+    fn retarget_disconnected_viewer_head(
+        &mut self,
+        conversation_id: AIConversationId,
+        session_id: SessionSharingSessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let token = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .and_then(|conversation| conversation.server_conversation_token().cloned())
+            .and_then(|token| {
+                token
+                    .as_str()
+                    .parse()
+                    .ok()
+                    .map(SessionSharingServerConversationToken::from_uuid)
+            });
+        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            let Some(claim) = model.claim_prompt_head(conversation_id, ctx) else {
+                return;
+            };
+            model.retarget_claim_to_shared_session(
+                claim,
+                SharedSessionTarget::new(session_id, token),
+                ctx,
+            );
+        });
+    }
+
+    /// Sends the head row through the ordinary queued-prompt path, which claims it, routes it, and
+    /// restores it if the attempt fails.
+    fn submit_disconnected_viewer_head(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some((query_id, text)) = QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .first()
+            .map(|row| (row.id(), row.text().to_owned()))
+        else {
+            return;
+        };
+        self.input.update(ctx, |input, ctx| {
+            input.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx);
+        });
     }
 
     /// Drains one prompt from the queued-query singleton for `conversation_id` when that
@@ -21633,11 +22076,13 @@ impl TerminalView {
                 );
             }
             InputEvent::SendAgentPrompt {
+                snapshot,
                 server_conversation_token,
                 prompt,
                 attachments,
             } => {
                 ctx.emit(Event::SendAgentPrompt {
+                    snapshot: snapshot.clone(),
                     server_conversation_token: *server_conversation_token,
                     prompt: prompt.clone(),
                     attachments: attachments.clone(),

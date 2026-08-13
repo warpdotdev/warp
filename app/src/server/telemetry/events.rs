@@ -1173,6 +1173,7 @@ pub enum TelemetryQueuedQueryOrigin {
     PendingLrcAutoQueue,
     CompactAndSlashCommand,
     ForkAndCompactSlashCommand,
+    DisconnectedViewer,
 }
 
 impl From<QueuedQueryOrigin> for TelemetryQueuedQueryOrigin {
@@ -1185,6 +1186,7 @@ impl From<QueuedQueryOrigin> for TelemetryQueuedQueryOrigin {
             QueuedQueryOrigin::PendingLrcAutoQueue => Self::PendingLrcAutoQueue,
             QueuedQueryOrigin::CompactAndSlashCommand => Self::CompactAndSlashCommand,
             QueuedQueryOrigin::ForkAndCompactSlashCommand => Self::ForkAndCompactSlashCommand,
+            QueuedQueryOrigin::DisconnectedViewer => Self::DisconnectedViewer,
         }
     }
 }

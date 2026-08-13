@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
+use session_sharing_protocol::common::{AgentPromptRequestId, ServerConversationToken, SessionId};
 use uuid::Uuid;
+use warp_errors::report_error;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
@@ -43,6 +45,40 @@ pub enum QueuedQueryOrigin {
     /// Filed as the follow-up prompt of a `/fork-and-compact <prompt>` slash command on the
     /// forked conversation, waiting for the fork's summarize to finish.
     ForkAndCompactSlashCommand,
+    /// Filed because a shared-session viewer prompt could not be delivered to the sharer — the
+    /// viewer network rejected it or the server never acknowledged it. The row is the canonical
+    /// copy of the prompt and stays fully user-managed while it waits for a retry trigger.
+    DisconnectedViewer,
+}
+
+/// Where an undelivered viewer prompt should be retried, captured when the row is filed.
+///
+/// A retry only proceeds when the live session and conversation still match these values, so a
+/// row is never redirected into a different session or an unrelated conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedSessionTarget {
+    session_id: SessionId,
+    server_conversation_token: Option<ServerConversationToken>,
+}
+
+impl SharedSessionTarget {
+    pub fn new(
+        session_id: SessionId,
+        server_conversation_token: Option<ServerConversationToken>,
+    ) -> Self {
+        Self {
+            session_id,
+            server_conversation_token,
+        }
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    pub fn server_conversation_token(&self) -> Option<ServerConversationToken> {
+        self.server_conversation_token
+    }
 }
 
 /// Whether a queued row is an agent prompt or a shell command. Attachments live inside the
@@ -51,7 +87,15 @@ pub enum QueuedQueryOrigin {
 enum QueuedQueryKind {
     /// An agent prompt, with any image/file attachments captured from the input when it was
     /// queued. The attachments fire with the prompt and are dropped when the row is removed.
-    Prompt { attachments: Vec<PendingAttachment> },
+    Prompt {
+        attachments: Vec<PendingAttachment>,
+        /// The ID the next viewer dispatch of this row sends under, and therefore the ID a server
+        /// acknowledgement must carry to finalize it. Committing an edit mints a new ID so an
+        /// acknowledgement still in flight for the previous text cannot remove the edited row.
+        request_id: AgentPromptRequestId,
+        /// Set only for [`QueuedQueryOrigin::DisconnectedViewer`] rows.
+        target: Option<SharedSessionTarget>,
+    },
     /// A shell command run in the terminal (or via the shared session for cloud panes).
     Command,
 }
@@ -79,7 +123,48 @@ impl QueuedQuery {
             id: QueuedQueryId::new(),
             text,
             origin,
-            kind: QueuedQueryKind::Prompt { attachments },
+            kind: QueuedQueryKind::Prompt {
+                attachments,
+                request_id: AgentPromptRequestId::new(),
+                target: None,
+            },
+        }
+    }
+
+    /// Builds the canonical row for a viewer prompt the client could not deliver. `request_id` is
+    /// the ID the failed attempt used, so a late acknowledgement for that attempt still matches
+    /// this row.
+    pub fn new_disconnected_viewer(
+        text: String,
+        attachments: Vec<PendingAttachment>,
+        request_id: AgentPromptRequestId,
+        target: SharedSessionTarget,
+    ) -> Self {
+        Self {
+            id: QueuedQueryId::new(),
+            text,
+            origin: QueuedQueryOrigin::DisconnectedViewer,
+            kind: QueuedQueryKind::Prompt {
+                attachments,
+                request_id,
+                target: Some(target),
+            },
+        }
+    }
+
+    /// The ID the next viewer dispatch of this row sends under, or `None` for a shell command.
+    pub fn request_id(&self) -> Option<&AgentPromptRequestId> {
+        match &self.kind {
+            QueuedQueryKind::Prompt { request_id, .. } => Some(request_id),
+            QueuedQueryKind::Command => None,
+        }
+    }
+
+    /// The retry target for a [`QueuedQueryOrigin::DisconnectedViewer`] row.
+    pub fn shared_session_target(&self) -> Option<&SharedSessionTarget> {
+        match &self.kind {
+            QueuedQueryKind::Prompt { target, .. } => target.as_ref(),
+            QueuedQueryKind::Command => None,
         }
     }
 
@@ -91,6 +176,19 @@ impl QueuedQuery {
             origin,
             kind: QueuedQueryKind::Command,
         }
+    }
+
+    /// Re-targets this prompt at the disconnected-viewer retry path, keeping its ID, text,
+    /// attachments, and queue position so the user sees one continuous row.
+    fn retarget_to_shared_session(&mut self, target: SharedSessionTarget) {
+        let QueuedQueryKind::Prompt {
+            target: existing, ..
+        } = &mut self.kind
+        else {
+            return;
+        };
+        *existing = Some(target);
+        self.origin = QueuedQueryOrigin::DisconnectedViewer;
     }
 
     pub fn id(&self) -> QueuedQueryId {
@@ -112,7 +210,7 @@ impl QueuedQuery {
 
     pub fn attachments(&self) -> &[PendingAttachment] {
         match &self.kind {
-            QueuedQueryKind::Prompt { attachments } => attachments,
+            QueuedQueryKind::Prompt { attachments, .. } => attachments,
             QueuedQueryKind::Command => &[],
         }
     }
@@ -158,6 +256,68 @@ pub enum AutofireAction {
     },
 }
 
+/// A prompt row taken out of the queue for exactly one dispatch attempt.
+///
+/// Holding the token is what gives a caller exclusive ownership of the prompt: while it exists
+/// the row is not in the queue, so no other lifecycle trigger can dispatch it. The caller must
+/// finish the attempt by either accepting the prompt or restoring the row.
+///
+/// Deliberately **not** `Clone`. A second copy would mean two owners of one prompt, which is
+/// precisely the double-submit this token exists to prevent — and it would make the leak check in
+/// [`Drop`] fire for a copy that was never meant to resolve.
+#[derive(Debug)]
+pub struct ClaimedQuery {
+    conversation_id: AIConversationId,
+    insert_index: usize,
+    query: QueuedQuery,
+    /// Set when the attempt reached a terminal outcome. A token dropped without this is a lost
+    /// prompt, so [`Drop`] reports it.
+    resolved: bool,
+}
+
+impl ClaimedQuery {
+    pub fn conversation_id(&self) -> AIConversationId {
+        self.conversation_id
+    }
+
+    pub fn query(&self) -> &QueuedQuery {
+        &self.query
+    }
+
+    /// Marks the attempt finished so the leak check does not fire, and hands back the row.
+    fn resolve(mut self) -> (AIConversationId, usize, QueuedQuery) {
+        self.resolved = true;
+        (
+            self.conversation_id,
+            self.insert_index,
+            // The row is moved out through a placeholder because `Drop` forbids destructuring.
+            std::mem::replace(
+                &mut self.query,
+                QueuedQuery::new(String::new(), QueuedQueryOrigin::QueueSlashCommand),
+            ),
+        )
+    }
+
+    /// Marks the prompt as accepted by a submission path. The row stays out of the queue.
+    pub fn accept(mut self) {
+        self.resolved = true;
+    }
+}
+
+impl Drop for ClaimedQuery {
+    fn drop(&mut self) {
+        if self.resolved {
+            return;
+        }
+        // The row is out of the queue and nothing put it back, so the user's prompt is gone —
+        // the exact failure this ticket exists to eliminate. `Drop` has no `ModelContext`, so it
+        // cannot restore the row; report it instead of failing silently.
+        report_error!(
+            "Dropped a claimed queued prompt without accepting or restoring it; the prompt was lost"
+        );
+    }
+}
+
 /// Per-conversation queue / edit / toggle state.
 /// Lives inside [`QueuedQueryModel::queues`]; a missing key means empty queue, no edit in
 /// progress, and no explicit auto-queue override (so the cached default from
@@ -185,6 +345,14 @@ struct ConversationQueueState {
 /// to in [`QueuedQueryModel::new`].
 pub struct QueuedQueryModel {
     queues: HashMap<AIConversationId, ConversationQueueState>,
+    /// Claims held while their dispatch attempt is in flight, keyed by the request ID the attempt
+    /// was sent under.
+    ///
+    /// The token lives here rather than travelling with the send event because that event is
+    /// cloned at every hop; a cloned token would mean two owners of one prompt. Only the request
+    /// ID crosses those boundaries, and whichever side resolves the attempt takes the claim back
+    /// out by that ID.
+    parked_claims: HashMap<AgentPromptRequestId, ClaimedQuery>,
     /// Cached value of the `AISettings::default_prompt_submission_mode` setting,
     /// refreshed by an `AISettingsChangedEvent::DefaultPromptSubmissionMode`
     /// subscription. Used as the fallback when a conversation has no explicit
@@ -275,6 +443,7 @@ impl QueuedQueryModel {
 
         Self {
             queues: HashMap::new(),
+            parked_claims: HashMap::new(),
             default_mode,
         }
     }
@@ -626,6 +795,82 @@ impl QueuedQueryModel {
         });
     }
 
+    /// Atomically removes the FIFO head of `conversation_id`'s prompt queue for one dispatch
+    /// attempt, returning the token the caller restores it with if the attempt fails before the
+    /// prompt is accepted.
+    ///
+    /// Taking the row up front is what keeps concurrent lifecycle events (reconnect, fatal end,
+    /// replacement join, conversation finished) from each dispatching the same prompt: only the
+    /// first sees a claimable head.
+    pub fn claim_prompt_head(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<ClaimedQuery> {
+        let state = self.queues.get_mut(&conversation_id)?;
+        let head = state.queue.first()?;
+        if head.is_locked() || head.is_command() || state.editing == Some(head.id) {
+            return None;
+        }
+        let query = state.queue.remove(0);
+        let query_id = query.id;
+        ctx.emit(QueuedQueryEvent::Removed {
+            conversation_id,
+            query_id,
+        });
+        Some(ClaimedQuery {
+            conversation_id,
+            insert_index: 0,
+            query,
+            resolved: false,
+        })
+    }
+
+    /// Holds `claim` until the attempt sent under `request_id` resolves.
+    pub fn park_claim(&mut self, request_id: AgentPromptRequestId, claim: ClaimedQuery) {
+        self.parked_claims.insert(request_id, claim);
+    }
+
+    /// Takes back the claim parked for `request_id`, if the attempt is still outstanding.
+    pub fn take_parked_claim(&mut self, request_id: &AgentPromptRequestId) -> Option<ClaimedQuery> {
+        self.parked_claims.remove(request_id)
+    }
+
+    /// Puts a claimed row back where it came from after a dispatch attempt failed before the
+    /// prompt was accepted.
+    pub fn restore_claim(&mut self, claim: ClaimedQuery, ctx: &mut ModelContext<Self>) {
+        let (conversation_id, insert_index, query) = claim.resolve();
+        self.restore_fired_row(conversation_id, insert_index, query, ctx);
+    }
+
+    /// Re-files `query` at the head of `conversation_id`'s queue as a disconnected-viewer row.
+    /// Used when a claimed row's dispatch failed in a way that also changed its retry target.
+    pub fn retarget_claim_to_shared_session(
+        &mut self,
+        claim: ClaimedQuery,
+        target: SharedSessionTarget,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let (conversation_id, insert_index, mut query) = claim.resolve();
+        query.retarget_to_shared_session(target);
+        self.restore_fired_row(conversation_id, insert_index, query, ctx);
+    }
+
+    /// Returns the row carrying `request_id`, if the queue still holds it. A retired ID (the row
+    /// was edited, deleted, or already accepted) matches nothing, which is what makes a late or
+    /// duplicate server acknowledgement a no-op.
+    pub fn row_for_request_id(
+        &self,
+        conversation_id: AIConversationId,
+        request_id: &AgentPromptRequestId,
+    ) -> Option<&QueuedQuery> {
+        self.queues
+            .get(&conversation_id)?
+            .queue
+            .iter()
+            .find(|row| row.request_id() == Some(request_id))
+    }
+
     /// Restores a fired row when submission fails after the row was removed.
     pub(crate) fn restore_fired_row(
         &mut self,
@@ -800,6 +1045,11 @@ impl QueuedQueryModel {
         }
         if let Some(row) = state.queue.iter_mut().find(|q| q.id == query_id) {
             row.text = new_text;
+            // Retire the previous request ID: an acknowledgement for the text the user just
+            // replaced must not be able to remove the edited row.
+            if let QueuedQueryKind::Prompt { request_id, .. } = &mut row.kind {
+                *request_id = AgentPromptRequestId::new();
+            }
         }
         ctx.emit(QueuedQueryEvent::EditCommitted {
             conversation_id,
