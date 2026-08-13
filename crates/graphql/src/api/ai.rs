@@ -12,6 +12,36 @@ pub enum RequestLimitRefreshDuration {
     EveryTwoWeeks,
 }
 
+#[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]
+pub enum AICreditAvailabilityDenialReason {
+    None,
+    OutOfCredits,
+    Delinquent,
+    EnterpriseTeamSpendLimitHit,
+    EnterprisePerUserSpendLimitHit,
+    EnterpriseWorkspaceSpendLimitHit,
+    #[cynic(fallback)]
+    Other(String),
+}
+
+#[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]
+pub enum AICreditAvailabilitySource {
+    BaseLimit,
+    BonusGrant,
+    Payg,
+    Overage,
+    AmbientBonusGrant,
+    #[cynic(fallback)]
+    Other(String),
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct AICreditAvailability {
+    pub available: bool,
+    pub denial_reason: AICreditAvailabilityDenialReason,
+    pub credit_source: Option<AICreditAvailabilitySource>,
+}
+
 #[derive(cynic::QueryFragment, Debug)]
 pub struct RequestLimitInfo {
     pub is_unlimited: bool,

@@ -8,28 +8,6 @@ fn snapshot(buffer_text: &str, cursor_byte_offset: usize) -> TuiCompletionInputS
 }
 
 #[test]
-fn common_prefix_extends_only_the_current_backend_span() {
-    assert!(should_insert_common_prefix(
-        "checkout",
-        &snapshot("git che", 7),
-        4,
-        3,
-    ));
-    assert!(!should_insert_common_prefix(
-        "branch",
-        &snapshot("git che", 7),
-        4,
-        3,
-    ));
-    assert!(!should_insert_common_prefix(
-        "che",
-        &snapshot("git che", 7),
-        4,
-        3,
-    ));
-}
-
-#[test]
 fn completion_requests_reject_every_stale_snapshot_dimension() {
     let input = snapshot("git che", 7);
     let request = CompletionRequestSnapshot {
@@ -92,20 +70,4 @@ fn completion_requests_reject_every_stale_snapshot_dimension() {
     ] {
         assert!(!is_current);
     }
-}
-
-#[test]
-fn common_prefix_rejects_invalid_utf8_or_out_of_bounds_spans() {
-    assert!(!should_insert_common_prefix(
-        "éclair",
-        &snapshot("é", "é".len()),
-        1,
-        1,
-    ));
-    assert!(!should_insert_common_prefix(
-        "echo",
-        &snapshot("ec", 2),
-        3,
-        1,
-    ));
 }

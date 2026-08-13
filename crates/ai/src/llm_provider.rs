@@ -23,7 +23,8 @@ impl LLMProvider {
             Self::OpenAI => Some(Icon::OpenAILogo),
             Self::Anthropic => Some(Icon::ClaudeLogo),
             Self::Google => Some(Icon::GeminiLogo),
-            Self::Xai | Self::Unknown => None,
+            Self::Xai => Some(Icon::GrokLogo),
+            Self::Unknown => None,
         }
     }
     pub fn supports_pasted_api_key(self) -> bool {

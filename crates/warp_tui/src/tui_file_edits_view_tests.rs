@@ -529,6 +529,8 @@ fn e_key_dispatches_toggle_expand_all_on_blocked_card() {
                 ctx,
             );
         });
+        let permission_prompt = app.read(|ctx| view.as_ref(ctx).permission_prompt.clone());
+        permission_prompt.update(&mut app, |_, ctx| ctx.focus_self());
         // Seed two real diffs so ToggleExpandAll operates on actual sections.
         seed_two_file_diffs(&mut app, &view);
 

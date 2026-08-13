@@ -22,7 +22,7 @@ use session_sharing_protocol::sharer::{
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
-use warpui::{AppContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
+use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId};
 
 use super::terminal_manager::{TerminalManager, TerminalSurfaceInit, TerminalSurfaceResult};
 use crate::NetworkStatus;
@@ -964,6 +964,7 @@ impl TerminalManager<TerminalView> {
                 });
 
                 terminal_view.update(ctx, |view, ctx| {
+                    view.notify_shared_session_link_changed(ctx);
                     let reason_string = failed_to_initialize_session_user_error(reason);
 
                     if matches!(
@@ -1181,6 +1182,7 @@ impl TerminalManager<TerminalView> {
                     view.input().update(ctx, |input, ctx| {
                         input.process_remote_edits(block_id, operations.clone(), ctx);
                     });
+                    emit_shared_session_viewer_input(view, ctx);
                 });
             }
             NetworkEvent::CommandExecutionRequested {
@@ -1240,6 +1242,7 @@ impl TerminalManager<TerminalView> {
                             ctx,
                         );
                     });
+                    emit_shared_session_viewer_input(view, ctx);
                 });
             }
             NetworkEvent::WriteToPtyRequested { id, bytes } => {
@@ -1285,6 +1288,7 @@ impl TerminalManager<TerminalView> {
 
                 terminal_view.update(ctx, |view, ctx| {
                     view.write_viewer_bytes_to_pty(bytes.clone(), ctx);
+                    emit_shared_session_viewer_input(view, ctx);
                 });
             }
             NetworkEvent::AgentPromptRequested {
@@ -2006,6 +2010,19 @@ impl TerminalManagerTrait for TerminalManager<TerminalView> {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+}
+
+/// Reports viewer input on a cloud agent's shared session so the agent driver can treat someone
+/// debugging in the session as activity.
+///
+/// Scoped to those sessions because a cloud agent's sharer is a process that can hold the session
+/// open on the strength of this signal. Ordinary shared sessions have no consumer for it, and
+/// these fire at keystroke frequency.
+fn emit_shared_session_viewer_input(view: &TerminalView, ctx: &mut ViewContext<TerminalView>) {
+    if !view.model.lock().is_shared_ambient_agent_session() {
+        return;
+    }
+    ctx.emit(TerminalViewEvent::SharedSessionViewerInput);
 }
 
 /// Send a Shutdown event to each PTY's event loop and waits for the

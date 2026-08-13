@@ -15,12 +15,12 @@ use warp::tui_export::{
     AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIAgentTodoList,
     AIBlockModel, AIBlockOutputStatus, AIConversationId, AIRequestType, ActiveSession,
     AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram, AgentOutputTable,
-    Appearance, BlocklistAIActionModel, FailedOutputPresentation, GetRelevantFilesController,
-    LLMId, MessageId, ModelEventDispatcher, OutputStatusUpdateCallback, ReceivedMessageDisplay,
-    RenderableAIError, RequestCommandOutputResult, ServerOutputId, Sessions, Shared,
-    SummarizationType, TaskId, TerminalModel, TodoOperation, TodoStatus, TuiOnboardingMarker,
-    TuiOnboardingMarkers, UserQueryMode, register_tui_session_view_test_singletons,
-    should_show_failed_output_usage_notice,
+    Appearance, AuthStateProvider, BlocklistAIActionModel, FailedOutputPresentation,
+    GetRelevantFilesController, LLMId, MessageId, ModelEventDispatcher, OutputStatusUpdateCallback,
+    ReceivedMessageDisplay, RenderableAIError, RequestCommandOutputResult, ServerOutputId,
+    Sessions, Shared, SummarizationType, TaskId, TerminalModel, TodoOperation, TodoStatus,
+    TuiOnboardingMarker, TuiOnboardingMarkers, UserQueryMode, queue_tui_permission_action,
+    register_tui_session_view_test_singletons, should_show_failed_output_usage_notice,
 };
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
@@ -39,7 +39,7 @@ use warpui_core::{App, AppContext, EntityId, EntityIdMap, TuiView, ViewContext, 
 use super::{
     CollapsibleSectionStates, TuiAIBlock, TuiAIBlockAction, TuiAIBlockEvent, TuiAIBlockSection,
     TuiCodeBlockKey, TuiRichTextSection, TuiToolCallView, render_failure_section,
-    render_first_credit_gate, should_consume_first_credit_gate,
+    render_first_credit_gate, should_consume_first_credit_gate, upgrade_url,
 };
 use crate::agent_block_sections::{
     completed_todos_label, render_fallback_tool_call_section, render_todo_list_section,
@@ -109,9 +109,11 @@ fn restored_out_of_credits_exchange_does_not_consume_first_credit_gate() {
 }
 
 #[test]
-fn first_credit_gate_matches_design_and_opens_pricing() {
+fn first_credit_gate_matches_design_and_opens_upgrade() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        let expected_upgrade_url = app.read(upgrade_url);
         let opened_urls = Rc::new(RefCell::new(Vec::new()));
         let opened_urls_for_callback = opened_urls.clone();
         app.update(|ctx| {
@@ -137,10 +139,10 @@ fn first_credit_gate_matches_design_and_opens_pricing() {
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
                 vec![
-                    "You need AI credits in order to use Warp’s agent.",
-                    "Start using AI (ctrl+o).",
-                    "",
-                    "https://www.warp.dev/pricing",
+                    "You need AI credits in order to use Warp’s agent.".to_owned(),
+                    "Start using AI (ctrl+o).".to_owned(),
+                    String::new(),
+                    expected_upgrade_url.clone(),
                 ]
             );
             let builder = TuiUiBuilder::from_app(ctx);
@@ -165,10 +167,7 @@ fn first_credit_gate_matches_design_and_opens_pricing() {
             );
         });
 
-        assert_eq!(
-            &*opened_urls.borrow(),
-            &["https://www.warp.dev/pricing".to_owned()]
-        );
+        assert_eq!(&*opened_urls.borrow(), &[expected_upgrade_url]);
     });
 }
 
@@ -361,9 +360,11 @@ fn agent_block_renders_context_window_failure() {
 }
 
 #[test]
-fn out_of_credits_failure_matches_tui_design_and_opens_pricing() {
+fn out_of_credits_failure_matches_tui_design_and_opens_upgrade() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        let expected_upgrade_url = app.read(upgrade_url);
         let opened_urls = Rc::new(RefCell::new(Vec::new()));
         let opened_urls_for_callback = opened_urls.clone();
         app.update(|ctx| {
@@ -398,12 +399,13 @@ fn out_of_credits_failure_matches_tui_design_and_opens_pricing() {
                     .map(|line| line.trim_end().to_owned())
                     .collect::<Vec<_>>(),
                 vec![
-                    "⚠ I’m sorry, I couldn’t complete that request.",
-                    "  In order to use Warp’s AI features, subscribe to a Warp plan or buy packs of credits.",
-                    "",
-                    "  Get started with AI (ctrl+o)",
-                    "",
-                    "  https://www.warp.dev/pricing",
+                    "⚠ I’m sorry, I couldn’t complete that request.".to_owned(),
+                    "  In order to use Warp’s AI features, subscribe to a Warp plan or buy packs of credits."
+                        .to_owned(),
+                    String::new(),
+                    "  Get started with AI (ctrl+o)".to_owned(),
+                    String::new(),
+                    format!("  {expected_upgrade_url}"),
                 ]
             );
             let builder = TuiUiBuilder::from_app(ctx);
@@ -466,10 +468,7 @@ fn out_of_credits_failure_matches_tui_design_and_opens_pricing() {
             );
         });
 
-        assert_eq!(
-            &*opened_urls.borrow(),
-            &["https://www.warp.dev/pricing".to_owned()]
-        );
+        assert_eq!(&*opened_urls.borrow(), &[expected_upgrade_url]);
     });
 }
 
@@ -1202,6 +1201,112 @@ fn ask_user_question_action_registers_a_stateful_child_view() {
 }
 
 #[test]
+fn materializing_an_already_blocked_question_notifies_the_owner() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action = ask_user_question_action("ask-1", "Which one?");
+        let action_id = action.id.clone();
+        let conversation_id = AIConversationId::new();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: AIBlockOutputStatus::Pending,
+            },
+        );
+        let blocking_state_changes = Rc::new(Cell::new(0));
+        let changes_for_subscription = blocking_state_changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| match event {
+                TuiAIBlockEvent::BlockingStateChanged => {
+                    changes_for_subscription.set(changes_for_subscription.get() + 1);
+                }
+                TuiAIBlockEvent::LayoutInvalidated
+                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+            });
+        });
+        let action_model = block.read(&app, |block, _| block.action_model.clone());
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action.clone(), conversation_id, ctx);
+        });
+        assert_eq!(blocking_state_changes.get(), 0);
+
+        block.update(&mut app, |block, ctx| {
+            block.replace_model(
+                block.conversation_id,
+                Rc::new(FakeAgentBlockModel {
+                    inputs: Vec::new(),
+                    status: complete_output_messages(vec![action_message("message-1", action)]),
+                }),
+            );
+            let action_model = block.action_model.clone();
+            block.sync_action_views(&action_model, ctx);
+        });
+
+        assert_eq!(blocking_state_changes.get(), 1);
+        assert!(block.read(&app, |block, ctx| {
+            let Some(TuiToolCallView::AskQuestion(view)) = block.action_views.get(&action_id)
+            else {
+                return false;
+            };
+            view.as_ref(ctx).is_awaiting_answers(ctx)
+        }));
+    });
+}
+
+#[test]
+fn materializing_an_already_blocked_permission_prompt_notifies_the_owner() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let action = test_action("generic-1");
+        let action_id = action.id.clone();
+        let conversation_id = AIConversationId::new();
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: AIBlockOutputStatus::Pending,
+            },
+        );
+        let blocking_state_changes = Rc::new(Cell::new(0));
+        let changes_for_subscription = blocking_state_changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&block, move |_, event, _| match event {
+                TuiAIBlockEvent::BlockingStateChanged => {
+                    changes_for_subscription.set(changes_for_subscription.get() + 1);
+                }
+                TuiAIBlockEvent::LayoutInvalidated
+                | TuiAIBlockEvent::ReplacementGuidanceSubmitted { .. } => {}
+            });
+        });
+        let action_model = block.read(&app, |block, _| block.action_model.clone());
+        action_model.update(&mut app, |model, ctx| {
+            queue_tui_permission_action(model, action.clone(), conversation_id, ctx);
+        });
+        assert_eq!(blocking_state_changes.get(), 0);
+
+        block.update(&mut app, |block, ctx| {
+            block.replace_model(
+                block.conversation_id,
+                Rc::new(FakeAgentBlockModel {
+                    inputs: Vec::new(),
+                    status: complete_output_messages(vec![action_message("message-1", action)]),
+                }),
+            );
+            let action_model = block.action_model.clone();
+            block.sync_action_views(&action_model, ctx);
+        });
+
+        assert_eq!(blocking_state_changes.get(), 1);
+        assert!(block.read(&app, |block, ctx| {
+            let Some(TuiToolCallView::Generic(view)) = block.action_views.get(&action_id) else {
+                return false;
+            };
+            view.as_ref(ctx).active_permission_prompt(ctx).is_some()
+        }));
+    });
+}
+#[test]
 fn streamed_ask_user_question_payload_replaces_the_initial_empty_child_view() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -1401,12 +1506,15 @@ fn agent_block_preserves_and_renders_code_sections_in_order() {
                 TuiRect::new(0, 0, 40, 3),
                 app_ctx,
             );
-            assert!(
+            assert_eq!(
                 frame
                     .buffer
                     .to_lines()
-                    .iter()
-                    .any(|line| line.contains("println!"))
+                    .into_iter()
+                    .map(|line| line.trim_end().to_owned())
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>(),
+                vec!["println!(\"hi\");"]
             );
 
             let rendered = render_block_lines(block, 40, app_ctx);

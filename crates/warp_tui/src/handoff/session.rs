@@ -61,7 +61,7 @@ impl TuiTerminalSessionView {
             TuiHandoffBlockEvent::LayoutInvalidated => ctx.notify(),
         });
         self.handoff = Some(handoff_block);
-        self.refresh_input_focus(ctx);
+        self.reconcile_focus(ctx);
         record_static_slash_command_accepted("/handoff", true, ctx);
     }
 
@@ -91,7 +91,12 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            TuiHandoffModelEvent::Changed { .. } => return,
+            TuiHandoffModelEvent::Changed { focus_block } => {
+                if *focus_block {
+                    self.reconcile_focus(ctx);
+                }
+                return;
+            }
             TuiHandoffModelEvent::Cancelled(restoration) => {
                 self.clear_handoff_interaction();
                 if let Some(restoration) = restoration {
@@ -119,6 +124,6 @@ impl TuiTerminalSessionView {
                 self.start_new_conversation(None, ctx);
             }
         }
-        self.refresh_input_focus(ctx);
+        self.reconcile_focus(ctx);
     }
 }

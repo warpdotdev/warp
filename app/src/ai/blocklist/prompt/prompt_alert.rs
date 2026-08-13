@@ -12,6 +12,7 @@ use warpui::{
 
 use crate::ai::AIRequestUsageModel;
 use crate::ai::blocklist::error_color;
+use crate::ai::credit_availability::{AICreditAvailability, AICreditDenialReason};
 use crate::auth::AuthStateProvider;
 use crate::network::NetworkStatus;
 use crate::server::ids::ServerId;
@@ -123,7 +124,10 @@ impl PromptAlertView {
         }
 
         let request_usage_model = AIRequestUsageModel::as_ref(app);
-        let has_requests_remaining = request_usage_model.has_requests_remaining();
+        // Anonymous soft/hard gates are based on the base-plan request quota,
+        // not overall AI availability (bonus grants / BYO / etc.).
+        let has_base_plan_requests_remaining =
+            request_usage_model.has_base_plan_requests_remaining();
         let auth_state = AuthStateProvider::as_ref(app).get();
 
         // Next, if the user is anonymous, we check if they have reached a certain percentage of requests used.
@@ -134,13 +138,23 @@ impl PromptAlertView {
             let percentage_used = request_usage_model.request_percentage_used();
 
             if percentage_used >= ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PERCENTAGE {
-                if has_requests_remaining {
+                if has_base_plan_requests_remaining {
                     return PromptAlertState::AnonymousUserRequestLimitSoftGate;
                 } else {
                     return PromptAlertState::AnonymousUserRequestLimitHardGate;
                 }
             }
         }
+
+        // The server-authoritative availability decision drives the alert once
+        // it has been fetched; local data below is only a pre-fetch fallback.
+        if let Some(availability) = request_usage_model.server_availability() {
+            return Self::state_from_server_availability(availability, app);
+        }
+
+        // Legacy locally derived fallback, used only before the first
+        // successful availability fetch (e.g. right after startup or against
+        // servers that don't support the availability field yet).
 
         // Next, make sure the user isn't delinquent in their plan.
         let workspace = UserWorkspaces::as_ref(app).current_workspace();
@@ -153,8 +167,46 @@ impl PromptAlertView {
             return PromptAlertState::NoAlert;
         }
 
+        Self::out_of_credits_presentation(app)
+    }
+
+    /// Maps the server-authoritative availability decision to presentation
+    /// state. The server decides *whether* AI is available; workspace policy
+    /// only shapes the call-to-action copy.
+    fn state_from_server_availability(
+        availability: AICreditAvailability,
+        app: &AppContext,
+    ) -> PromptAlertState {
+        if availability.available {
+            return PromptAlertState::NoAlert;
+        }
+
+        match availability.denial_reason {
+            AICreditDenialReason::Delinquent => PromptAlertState::DelinquentDueToPaymentIssue,
+            AICreditDenialReason::EnterpriseTeamSpendLimitHit
+            | AICreditDenialReason::EnterprisePerUserSpendLimitHit
+            | AICreditDenialReason::EnterpriseWorkspaceSpendLimitHit => {
+                PromptAlertState::MonthlyOveragesSpendLimitReached
+            }
+            AICreditDenialReason::None
+            | AICreditDenialReason::OutOfCredits
+            | AICreditDenialReason::Unknown => {
+                // An out-of-credits denial only means the server found no path
+                // it can see; a locally stored API key still permits requests,
+                // which `has_any_ai_remaining` accounts for.
+                if AIRequestUsageModel::as_ref(app).has_any_ai_remaining(app) {
+                    return PromptAlertState::NoAlert;
+                }
+                Self::out_of_credits_presentation(app)
+            }
+        }
+    }
+
+    /// Picks the most actionable presentation for an out-of-credits denial
+    /// based on the current workspace's overage policy.
+    fn out_of_credits_presentation(app: &AppContext) -> PromptAlertState {
         // Check if overages are available.
-        if let Some(workspace) = workspace {
+        if let Some(workspace) = UserWorkspaces::as_ref(app).current_workspace() {
             let are_overages_toggleable = workspace.are_overages_toggleable();
             let are_overages_enabled = workspace.are_overages_enabled();
 
@@ -481,3 +533,7 @@ impl TypedActionView for PromptAlertView {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "prompt_alert_tests.rs"]
+mod tests;

@@ -104,6 +104,12 @@ arboard = { workspace = true }
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 arboard = { workspace = true, features = ["wayland-data-control"] }
 
+# `dunce::simplified` strips the Win32 extended-length (`\\?\`) prefix that
+# `Path::canonicalize` produces, which the Inno Setup updater rejects in its
+# `/DIR` argument. Windows-only, so it stays out of the portable dependency set.
+[target.'cfg(windows)'.dependencies]
+dunce.workspace = true
+
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["html_reports"] }
 tempfile.workspace = true

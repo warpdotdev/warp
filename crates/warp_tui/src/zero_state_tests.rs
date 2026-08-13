@@ -19,10 +19,11 @@ use warpui_core::elements::tui::{
 use warpui_core::{App, AppContext};
 
 use super::{
-    ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, build_zero_state_layout, build_zero_state_overlay,
-    build_zero_state_stack_layout, changelog_bullets_from_changelog, mcp_status_label,
-    render_first_run_top_section,
+    ANIMATION_PANEL_COLS, LEFT_COLUMN_COLS, ZeroStateSectionVisibility, autoupdate_status_label,
+    build_zero_state_layout, build_zero_state_overlay, build_zero_state_stack_layout,
+    changelog_bullets_from_changelog, mcp_status_label, render_first_run_top_section,
 };
+use crate::autoupdate::TuiAutoupdateStatus;
 use crate::tui_builder::TuiUiBuilder;
 use crate::zero_state_animation::{
     WarpLogoStyles, ZeroStateAnimationConfig, ZeroStateAnimationElement,
@@ -77,6 +78,22 @@ fn changelog_bullets_are_empty_when_only_other_surfaces_have_updates() {
 }
 
 #[test]
+fn failed_autoupdate_status_has_visible_label() {
+    assert_eq!(
+        autoupdate_status_label(TuiAutoupdateStatus::Failed),
+        Some("automatic update failed")
+    );
+}
+
+#[test]
+fn homebrew_update_status_shows_the_upgrade_command() {
+    assert_eq!(
+        autoupdate_status_label(TuiAutoupdateStatus::UpdateAvailable),
+        Some("update available — run brew upgrade --cask warp-agent-cli")
+    );
+}
+
+#[test]
 fn first_zero_state_matches_welcome_design_copy() {
     App::test((), |mut app| async move {
         register_tui_session_view_test_singletons(&mut app);
@@ -84,7 +101,8 @@ fn first_zero_state_matches_welcome_design_copy() {
         let lines = app.read(|ctx| {
             let builder = TuiUiBuilder::from_app(ctx);
             render_element_lines(
-                render_first_run_top_section(&builder, ctx).finish(),
+                render_first_run_top_section(&builder, ZeroStateSectionVisibility::default(), ctx)
+                    .finish(),
                 ctx,
                 LEFT_COLUMN_COLS,
                 16,
@@ -94,18 +112,28 @@ fn first_zero_state_matches_welcome_design_copy() {
         for expected in [
             "Welcome to Warp",
             "What’s different about Warp",
-            "✶ /natural-language-detection",
-            "to autodetect",
-            "prompts or shell commands",
-            "✶ /modify-settings to set up custom model",
-            "routers",
-            "✶ /orchestrate to spawn fleets of agents",
-            "✶ Run full-screen terminal apps and cd into",
-            "other directories",
+            "✶ State of the art coding agents",
+            "✶ Frontier and open-weight models",
+            "✶ Fully customizable model routers",
+            "✶ Orchestration for fleets of agents",
+            "✶ Better shell command support",
         ] {
             assert!(
                 rendered.contains(expected),
                 "first zero state should contain {expected:?}:\n{rendered}"
+            );
+        }
+        for unexpected in [
+            "/natural-language-detection",
+            "/modify-settings",
+            "/orchestrate",
+            "Run full-screen terminal apps",
+            "Orchestrate fleets of agents",
+            "Work with shell commands like in a native terminal",
+        ] {
+            assert!(
+                !rendered.contains(unexpected),
+                "first zero state should not contain {unexpected:?}:\n{rendered}"
             );
         }
         assert!(!rendered.contains("What's new"));

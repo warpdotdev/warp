@@ -81,8 +81,9 @@ impl BuyCreditsBanner {
 
         ctx.subscribe_to_model(
             &AIRequestUsageModel::handle(ctx),
-            |me, _handle, event, ctx| {
-                if let AIRequestUsageModelEvent::RequestUsageUpdated = event {
+            |me, _handle, event, ctx| match event {
+                AIRequestUsageModelEvent::RequestUsageUpdated
+                | AIRequestUsageModelEvent::CreditAvailabilityUpdated => {
                     if me.checkout_pending
                         && matches!(
                             AIRequestUsageModel::as_ref(ctx)
@@ -98,6 +99,8 @@ impl BuyCreditsBanner {
                     }
                     ctx.notify();
                 }
+                AIRequestUsageModelEvent::AmbientCreditsBannerDismissed
+                | AIRequestUsageModelEvent::RequestBonusRefunded { .. } => {}
             },
         );
 
@@ -757,7 +760,7 @@ impl BuyCreditsBanner {
             } else {
                 // Default message when not at limit
                 let banner_description = if has_admin_permissions {
-                    "Add more credits to your account to continue using Oz agents."
+                    "Add more credits to your account to continue using the Warp Agent."
                 } else {
                     "Contact a team admin to purchase more credits to continue."
                 };

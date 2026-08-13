@@ -2,22 +2,68 @@
 use std::time::Duration;
 
 use pathfinder_color::ColorU;
-use warp::tui_export::light_theme;
+use warp::tui_export::{dark_theme, light_theme};
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::Fill as CoreFill;
 use warpui_core::elements::tui::{Color, Modifier};
-use warpui_core::runtime::ProbedRgb;
 
 use super::{TuiUiBuilder, rounded_midpoint_color};
+
+fn rgb(value: u32) -> Color {
+    let color = ColorU::from_u32(value);
+    Color::Rgb(color.r, color.g, color.b)
+}
+
+#[test]
+fn design_palettes_match_figma_in_dark_and_light_themes() {
+    for (theme, brand_primary, brand_accent, agent_colors) in [
+        (
+            dark_theme(),
+            0xD2B5FFFF,
+            0xE2FFD4FF,
+            [
+                0xD0D1FEFF, 0xA5D5FEFF, 0xFF8FFDFF, 0xD2B5FFFF, 0xFF8AA6FF, 0xE2FFD4FF, 0xFBDC79FF,
+            ],
+        ),
+        (
+            light_theme(),
+            0x9C58F0FF,
+            0x33770BFF,
+            [
+                0x20A5BAFF, 0x008EC4FF, 0x523C79FF, 0x9C58F0FF, 0xFF8AA6FF, 0x33770BFF, 0xC79A18FF,
+            ],
+        ),
+    ] {
+        let builder = TuiUiBuilder { warp_theme: theme };
+
+        assert_eq!(builder.brand_primary_style().fg, Some(rgb(brand_primary)));
+        assert_eq!(builder.brand_accent_style().fg, Some(rgb(brand_accent)));
+        assert_eq!(
+            builder.warping_base_color(),
+            ColorU::from_u32(brand_primary)
+        );
+        assert_eq!(
+            builder
+                .agent_identity_palette()
+                .into_iter()
+                .take(agent_colors.len())
+                .map(|identity| identity.style.fg)
+                .collect::<Vec<_>>(),
+            agent_colors
+                .into_iter()
+                .map(|color| Some(rgb(color)))
+                .collect::<Vec<_>>()
+        );
+    }
+}
 
 #[test]
 fn text_styles_follow_light_theme_foreground() {
     let theme = light_theme();
     let builder = TuiUiBuilder {
         warp_theme: theme.clone(),
-        terminal_background: None,
     };
 
     let details = theme.details();
@@ -136,29 +182,6 @@ fn text_styles_follow_light_theme_foreground() {
 }
 
 #[test]
-fn base_background_uses_terminal_background_snapshot() {
-    let terminal_background = ProbedRgb {
-        r: 240,
-        g: 230,
-        b: 220,
-    };
-    let builder = TuiUiBuilder {
-        warp_theme: light_theme(),
-        terminal_background: Some(terminal_background),
-    };
-
-    assert_eq!(
-        builder.base_background(),
-        ThemeFill::Solid(ColorU::new(
-            terminal_background.r,
-            terminal_background.g,
-            terminal_background.b,
-            u8::MAX,
-        ))
-    );
-}
-
-#[test]
 fn selected_state_suffix_midpoint_matches_figma_dark_palette() {
     assert_eq!(
         rounded_midpoint_color(
@@ -175,7 +198,6 @@ fn voice_input_border_pulses_between_cyan_overlay_2_and_lilac_600() {
     let theme = light_theme();
     let builder = TuiUiBuilder {
         warp_theme: theme.clone(),
-        terminal_background: None,
     };
     let cyan_fill = ThemeFill::from(theme.terminal_colors().normal.cyan);
     let cyan: Color = CoreFill::from(cyan_fill).into();

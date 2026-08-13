@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 use std::{env, path};
 
 use anyhow::{Result, anyhow};
@@ -198,14 +198,26 @@ fn microsoft_store_app_path() -> Option<PathBuf> {
     Some(microsoft_store_app_path)
 }
 
+static KASPERSKY_RUNNING: OnceLock<bool> = OnceLock::new();
+
 /// Determines if Kaspersky is currently running by checking if there is a
 /// process with the name "avp" running.
+///
+/// The result is cached for the lifetime of the process: antivirus presence does not meaningfully
+/// change mid-session, and the full process-table enumeration this requires is expensive enough on
+/// Windows that repeating it per session bootstrap can trip the DPC watchdog.
 pub fn is_kaspersky_running(ctx: &mut AppContext) -> bool {
-    SystemInfo::handle(ctx).update(ctx, |system_info, _| {
+    if let Some(cached) = KASPERSKY_RUNNING.get() {
+        return *cached;
+    }
+
+    let running = SystemInfo::handle(ctx).update(ctx, |system_info, _| {
         system_info.refresh_all_processes();
         system_info
             .processes_by_name(KASPERSKY_PROCESS_NAME)
             .next()
             .is_some()
-    })
+    });
+
+    *KASPERSKY_RUNNING.get_or_init(|| running)
 }

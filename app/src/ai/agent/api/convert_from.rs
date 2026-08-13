@@ -209,8 +209,8 @@ impl ConvertAPIMessageToClientOutputMessage for api::Message {
         let citations = self
             .citations
             .iter()
-            .map(|citation| (*citation).clone().try_into())
-            .collect::<Result<Vec<AIAgentCitation>, UnknownCitationTypeError>>()?;
+            .filter_map(|citation| AIAgentCitation::try_from((*citation).clone()).ok())
+            .collect::<Vec<AIAgentCitation>>();
 
         match message {
             api::message::Message::AgentOutput(output) => Ok(MaybeAIAgentOutputMessage::Message(

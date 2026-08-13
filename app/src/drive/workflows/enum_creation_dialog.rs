@@ -191,6 +191,7 @@ impl EnumCreationDialog {
                         PropagateAndNoOpNavigationKeys::Always,
                     soft_wrap: true,
                     placeholder_soft_wrap: true,
+                    supports_vim_mode: true,
                     ..Default::default()
                 };
 

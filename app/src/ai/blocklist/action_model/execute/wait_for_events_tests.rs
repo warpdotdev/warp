@@ -81,12 +81,12 @@ fn watchdog_timeout_preserves_large_stamped_value() {
 }
 
 #[test]
-fn execute_invokes_parent_registration_and_honors_child_short_circuit() {
+fn execute_invokes_parent_registration_for_child_conversations() {
     // `execute()` must route into the orchestration streamer behind the flag.
-    // For a child conversation (is_child_agent_conversation), the streamer
-    // short-circuits without a server fetch (asserted via the mock's times(0)
-    // expectation), and the wait still flips the conversation into
-    // WaitingForEvents.
+    // A child conversation is eligible for wait-time parent registration —
+    // with multi-level orchestration a mid-tree node may have children of
+    // its own — so the streamer issues a `get_ambient_agent_task` fetch,
+    // and the wait still flips the conversation into WaitingForEvents.
     App::test((), |mut app| async move {
         let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
 
@@ -94,15 +94,20 @@ fn execute_invokes_parent_registration_and_honors_child_short_circuit() {
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
 
-        // A streamer whose server fetch must never be called: the child
-        // short-circuit precedes any `get_ambient_agent_task` call.
+        // The registration fetch must be issued for the child (the old code
+        // short-circuited children entirely, i.e. zero fetches). At least
+        // once, not exactly once: the Err return below can also be refetched
+        // by the streamer's restore-retry loop, and whether a retry lands
+        // before test teardown is a platform timing race.
         let mut mock = MockAIClient::new();
-        mock.expect_get_ambient_agent_task().times(0);
+        mock.expect_get_ambient_agent_task()
+            .times(1..)
+            .returning(|_| Err(anyhow::anyhow!("fetch observed")));
         let ai_client: Arc<dyn AIClient> = Arc::new(mock);
         let server_api = ServerApiProvider::new_for_test().get();
-        // Held for the lifetime of the test so the mock's times(0) expectation
-        // is verified on drop; resolved internally by `execute()` via
-        // `OrchestrationEventStreamer::handle`.
+        // Held for the lifetime of the test so the mock's times(1..)
+        // expectation is verified on drop; resolved internally by `execute()`
+        // via `OrchestrationEventStreamer::handle`.
         let _streamer = app.add_singleton_model(|ctx| {
             OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
         });
@@ -147,6 +152,13 @@ fn execute_invokes_parent_registration_and_honors_child_short_circuit() {
             "WaitForEvents should yield an async execution"
         );
 
+        // Drive the spawned registration fetch so the mock observes it; the
+        // times(1..) expectation is verified when `_streamer` drops at test
+        // teardown.
+        for _ in 0..3 {
+            futures_lite::future::yield_now().await;
+        }
+
         history_model.read(&app, |model, _| {
             assert!(
                 matches!(
@@ -156,9 +168,5 @@ fn execute_invokes_parent_registration_and_honors_child_short_circuit() {
                 "execute() must flip the conversation into WaitingForEvents"
             );
         });
-        // The child short-circuit is asserted by the mock's times(0)
-        // expectation, verified when `_streamer` drops at test teardown:
-        // a child conversation must never trigger a `get_ambient_agent_task`
-        // fetch.
     });
 }

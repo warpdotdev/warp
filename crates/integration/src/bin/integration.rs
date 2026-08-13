@@ -358,6 +358,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     register_test!(test_context_chips_prompt_at_bootstrap);
 
+    register_test!(test_cycle_active_tab_color_with_keybinding);
     register_test!(test_active_session_follows_focus);
     register_test!(test_tab_context_menu_copies_metadata);
     register_test!(test_vertical_tab_context_menu_copies_metadata);
@@ -437,6 +438,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_selection_last_to_ai_semantic);
     register_test!(test_selection_last_to_ai_lines);
     register_test!(test_restored_ai_block_renders_mermaid_and_local_images);
+    register_test!(test_cancelled_run_agents_card_renders_cancelled_state);
 
     register_test!(test_agent_mode_pane_minimum_size);
     register_test!(test_git_prompt_chips);
@@ -462,6 +464,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     // Copy current path command-palette action
     register_test!(test_copy_current_path_copies_terminal_pwd);
+    register_test!(test_copy_current_path_copies_code_editor_file_path);
 
     // Go to Line tests
     register_test!(test_goto_line_dialog_open_close);

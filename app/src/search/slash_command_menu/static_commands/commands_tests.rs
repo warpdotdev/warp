@@ -68,6 +68,24 @@ fn command_registry_filters_explicit_surface_metadata() {
 }
 
 #[test]
+fn command_registry_contains_commands_for_both_surfaces() {
+    let registry = Registry::new();
+
+    assert_eq!(
+        registry
+            .get_command_with_name(UPGRADE.name)
+            .map(|command| command.supported_surfaces),
+        Some(SlashCommandSurfaces::TuiOnly)
+    );
+    assert!(matches!(
+        registry
+            .get_command_with_name(ADD_MCP.name)
+            .map(|command| command.supported_surfaces),
+        Some(SlashCommandSurfaces::GuiOnly { .. })
+    ));
+}
+
+#[test]
 fn voice_command_is_registered_only_for_tui_mode() {
     assert!(
         all_commands(settings::SettingsMode::Tui)
@@ -116,6 +134,67 @@ fn api_keys_command_is_tui_only_and_has_no_arguments() {
         all_commands(settings::SettingsMode::Tui)
             .iter()
             .all(|command| !matches!(command.name, "/add-api-key" | "/clear-provider-api-key"))
+    );
+}
+
+#[test]
+fn connect_grok_command_is_tui_only_and_has_no_arguments() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::ConnectGrok)
+        .expect("expected /connect-grok to be registered in TUI mode");
+    assert_eq!(command, CONNECT_GROK);
+    assert_eq!(command.name, "/connect-grok");
+    assert_eq!(command.supported_surfaces, SlashCommandSurfaces::TuiOnly);
+    assert_eq!(command.availability, Availability::AI_ENABLED);
+    assert!(!command.auto_enter_ai_mode);
+    assert!(command.argument.is_none());
+    assert_eq!(
+        command.description,
+        "Connect your Grok (X Premium / SuperGrok) account"
+    );
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::ConnectGrok)
+    );
+}
+
+#[test]
+fn manage_billing_command_is_always_available_only_in_tui_mode() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::ManageBilling)
+        .expect("expected /manage-billing to be registered in TUI mode");
+
+    assert_eq!(command, MANAGE_BILLING);
+    assert_eq!(command.availability, Availability::ALWAYS);
+    assert_eq!(command.supported_surfaces, SlashCommandSurfaces::TuiOnly);
+    assert!(!command.auto_enter_ai_mode);
+    assert!(command.argument.is_none());
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::ManageBilling)
+    );
+}
+
+#[test]
+fn upgrade_command_is_always_available_only_in_tui_mode() {
+    let command = all_commands(settings::SettingsMode::Tui)
+        .into_iter()
+        .find(|command| command.kind == SlashCommandKind::Upgrade)
+        .expect("expected /upgrade to be registered in TUI mode");
+
+    assert_eq!(command, UPGRADE);
+    assert_eq!(command.availability, Availability::ALWAYS);
+    assert_eq!(command.supported_surfaces, SlashCommandSurfaces::TuiOnly);
+    assert!(!command.auto_enter_ai_mode);
+    assert!(command.argument.is_none());
+    assert!(
+        all_commands(settings::SettingsMode::Gui)
+            .iter()
+            .all(|command| command.kind != SlashCommandKind::Upgrade)
     );
 }
 #[test]

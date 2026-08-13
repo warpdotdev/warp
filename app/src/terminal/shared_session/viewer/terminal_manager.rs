@@ -500,6 +500,9 @@ impl TerminalManager {
         self.model
             .lock()
             .set_shared_session_status(SharedSessionStatus::ViewPending);
+        self.view.update(ctx, |view, ctx| {
+            view.notify_shared_session_link_changed(ctx);
+        });
 
         let network = ctx.add_model(|ctx| {
             Network::new(
@@ -1858,6 +1861,9 @@ impl TerminalManager {
                 terminal_view.on_ambient_agent_execution_ended(ctx);
             });
         }
+        terminal_view.update(ctx, |terminal_view, ctx| {
+            terminal_view.notify_shared_session_link_changed(ctx);
+        });
         if Self::current_network(current_network)
             .is_some_and(|network| network.as_ref(ctx).session_id() == ended_session_id)
         {

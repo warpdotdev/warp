@@ -588,27 +588,45 @@ fn scratch_directories_are_unique_0700_outside_repo_and_retained() {
     }
 }
 
-#[test]
-fn process_runner_classifies_spawn_nonzero_and_timeout() {
-    let missing = block_on(run_command_with_timeout(
-        Command::new_with_process_group("/definitely/missing/spacectl"),
-        Duration::from_millis(50),
-    ));
-    assert_eq!(missing, Err(CacheSetupError::SpawnFailed));
+/// A budget no spawn or immediate exit can plausibly exceed, used by the tests that classify a
+/// finished process. They assert on the classification, not on the clock, so the timeout must
+/// never be the thing that wins the race — process-spawn latency varies by orders of magnitude
+/// under load, and a tight budget made this suite flaky on Windows CI.
+const UNREACHABLE_TIMEOUT: Duration = Duration::from_secs(300);
 
+#[test]
+fn process_runner_classifies_spawn_failed() {
+    let result = block_on(run_command_with_timeout(
+        Command::new_with_process_group("/definitely/missing/spacectl"),
+        UNREACHABLE_TIMEOUT,
+    ));
+    assert_eq!(result, Err(CacheSetupError::SpawnFailed));
+}
+
+#[test]
+fn process_runner_classifies_nonzero_exit() {
     let mut nonzero = Command::new_with_process_group("sh");
     nonzero.args(["-c", "exit 17"]);
     assert_eq!(
-        block_on(run_command_with_timeout(nonzero, Duration::from_secs(1))),
+        block_on(run_command_with_timeout(nonzero, UNREACHABLE_TIMEOUT)),
         Err(CacheSetupError::NonzeroExit {
             exit_code: Some(17)
         })
     );
+}
 
+#[test]
+fn process_runner_classifies_timeout() {
+    // This must stay a shell builtin loop rather than a shelled-out `sleep`: process-group kill
+    // is Unix-only (see the `TODO(roland)` in `Command::new_with_process_group`), so on Windows a
+    // subprocess spawned by `sh` could survive when only the immediate `sh` process is killed.
     let mut timeout = Command::new_with_process_group("sh");
-    timeout.args(["-c", "sleep 1"]);
+    timeout.args(["-c", "while :; do :; done"]);
     assert_eq!(
-        block_on(run_command_with_timeout(timeout, Duration::from_millis(10))),
+        block_on(run_command_with_timeout(
+            timeout,
+            Duration::from_millis(100)
+        )),
         Err(CacheSetupError::Timeout)
     );
 }

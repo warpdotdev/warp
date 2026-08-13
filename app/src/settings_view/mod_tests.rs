@@ -4,6 +4,60 @@ use warpui::{App, AppContext, Element, Entity, View};
 
 use super::*;
 use crate::appearance::Appearance;
+use crate::workspaces::workspace::{BillingMetadata, CustomerType};
+
+fn billing_metadata(customer_type: CustomerType) -> BillingMetadata {
+    BillingMetadata {
+        customer_type,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn paid_workspace_without_team_shows_only_workspace_badge() {
+    let billing_metadata = billing_metadata(CustomerType::Enterprise);
+
+    let presentation = plan_header_presentation(Some(&billing_metadata), false, false);
+
+    assert_eq!(presentation.badge_label.as_deref(), Some("Enterprise"));
+    assert!(!presentation.show_personal_upgrade);
+}
+
+#[test]
+fn free_workspace_without_team_shows_free_badge_once() {
+    let billing_metadata = billing_metadata(CustomerType::Free);
+
+    let presentation = plan_header_presentation(Some(&billing_metadata), false, false);
+
+    assert_eq!(presentation.badge_label.as_deref(), Some("Free"));
+    assert!(presentation.show_personal_upgrade);
+}
+
+#[test]
+fn paid_workspace_with_team_shows_only_workspace_badge() {
+    let billing_metadata = billing_metadata(CustomerType::Enterprise);
+
+    let presentation = plan_header_presentation(Some(&billing_metadata), true, false);
+
+    assert_eq!(presentation.badge_label.as_deref(), Some("Enterprise"));
+    assert!(!presentation.show_personal_upgrade);
+}
+
+#[test]
+fn anonymous_account_shows_free_badge_once() {
+    let presentation = plan_header_presentation(None, false, true);
+
+    assert_eq!(presentation.badge_label.as_deref(), Some("Free"));
+    assert!(presentation.show_personal_upgrade);
+}
+
+#[test]
+fn signed_in_account_without_workspace_shows_free_badge_once() {
+    let presentation = plan_header_presentation(None, false, false);
+
+    assert_eq!(presentation.badge_label.as_deref(), Some("Free"));
+    assert!(presentation.show_personal_upgrade);
+}
 
 // ── SettingsSection classification ──────────────────────────────────────────
 

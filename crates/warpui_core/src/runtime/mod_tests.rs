@@ -29,12 +29,42 @@ struct TextElement {
 }
 
 #[test]
-fn blocking_runtime_suspends_and_resumes_repaint_deadlines_with_focus() {
+fn blocking_runtime_continues_repaint_deadlines_while_unfocused_by_default() {
     App::test((), |mut app| async move {
         let (window_id, root) =
             app.update(|ctx| ctx.add_tui_window(window_options(), |_| RepaintingView));
         let terminal = TestTerminal::new(TuiSize::new(20, 3));
         let mut runtime = TuiRuntime::with_terminal(&app, window_id, root, terminal);
+
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(runtime.pending_repaint.is_some());
+
+        runtime
+            .screen
+            .terminal
+            .events
+            .push_back(CrosstermEvent::FocusLost);
+        runtime.poll_and_dispatch(&mut app, Duration::ZERO).unwrap();
+        assert!(!runtime.focused);
+        assert!(
+            runtime.pending_repaint.is_some(),
+            "unfocused repaint suspension should be opt-in"
+        );
+
+        runtime.dirty.set(true);
+        runtime.draw_if_dirty(&mut app).unwrap();
+        assert!(runtime.pending_repaint.is_some());
+    });
+}
+
+#[test]
+fn blocking_runtime_suspends_and_resumes_repaint_deadlines_when_enabled() {
+    App::test((), |mut app| async move {
+        let (window_id, root) =
+            app.update(|ctx| ctx.add_tui_window(window_options(), |_| RepaintingView));
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut runtime = TuiRuntime::with_terminal(&app, window_id, root, terminal);
+        runtime.freeze_repaints_when_unfocused = true;
 
         runtime.draw_if_dirty(&mut app).unwrap();
         assert!(runtime.pending_repaint.is_some());
@@ -77,19 +107,51 @@ fn invalidation_driver_does_not_schedule_repaints_while_unfocused() {
             window_id,
             root,
             TestTerminal::new(TuiSize::new(20, 3)),
-            Arc::new(Mutex::new(())),
         )));
         let timer = Rc::new(RefCell::new(None));
         let focused = Rc::new(Cell::new(true));
+        let freeze_repaints_when_unfocused = Rc::new(Cell::new(true));
 
-        app.update(|ctx| draw_and_schedule_repaint(&screen, &timer, &focused, ctx))
-            .unwrap();
+        app.update(|ctx| {
+            draw_and_schedule_repaint(
+                &screen,
+                &timer,
+                &focused,
+                &freeze_repaints_when_unfocused,
+                ctx,
+            )
+        })
+        .unwrap();
         assert!(timer.borrow().is_some());
 
         focused.set(false);
-        app.update(|ctx| draw_and_schedule_repaint(&screen, &timer, &focused, ctx))
-            .unwrap();
+        app.update(|ctx| {
+            draw_and_schedule_repaint(
+                &screen,
+                &timer,
+                &focused,
+                &freeze_repaints_when_unfocused,
+                ctx,
+            )
+        })
+        .unwrap();
         assert!(timer.borrow().is_none());
+
+        freeze_repaints_when_unfocused.set(false);
+        app.update(|ctx| {
+            draw_and_schedule_repaint(
+                &screen,
+                &timer,
+                &focused,
+                &freeze_repaints_when_unfocused,
+                ctx,
+            )
+        })
+        .unwrap();
+        assert!(
+            timer.borrow().is_some(),
+            "disabling the opt-in should resume repaint scheduling while unfocused"
+        );
     });
 }
 
@@ -155,6 +217,84 @@ impl TuiView for TextView {
 
 impl TypedActionView for TextView {
     type Action = ();
+}
+struct PresentedFocusRoot {
+    visible: crate::ViewHandle<TextView>,
+}
+
+impl Entity for PresentedFocusRoot {
+    type Event = ();
+}
+
+impl TuiView for PresentedFocusRoot {
+    fn ui_name() -> &'static str {
+        "PresentedFocusRoot"
+    }
+
+    fn child_view_ids(&self, _app: &AppContext) -> Vec<crate::EntityId> {
+        vec![self.visible.id()]
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn TuiElement> {
+        TuiChildView::new(&self.visible).finish()
+    }
+}
+
+impl TypedActionView for PresentedFocusRoot {
+    type Action = ();
+}
+
+#[test]
+fn draw_preserves_focus_outside_the_presented_tree_by_default() {
+    App::test((), |mut app| async move {
+        let (window_id, _) = app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
+        let visible = app.update(|ctx| ctx.add_tui_view(window_id, |_| TextView));
+        let hidden = app.update(|ctx| ctx.add_tui_view(window_id, |_| TextView));
+        let visible_for_root = visible.clone();
+        let root = app.update(|ctx| {
+            ctx.add_tui_view(window_id, move |_| PresentedFocusRoot {
+                visible: visible_for_root,
+            })
+        });
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
+
+        visible.update(&mut app, |_, ctx| ctx.focus_self());
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+        hidden.update(&mut app, |_, ctx| ctx.focus_self());
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+
+        assert!(app.read(|ctx| hidden.is_focused(ctx)));
+    });
+}
+
+#[test]
+fn opt_in_draw_repairs_focus_owned_by_a_view_outside_the_presented_tree() {
+    App::test((), |mut app| async move {
+        let (window_id, _) = app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
+        let visible = app.update(|ctx| ctx.add_tui_view(window_id, |_| TextView));
+        let hidden = app.update(|ctx| ctx.add_tui_view(window_id, |_| TextView));
+        let visible_for_root = visible.clone();
+        let root = app.update(|ctx| {
+            ctx.add_tui_view(window_id, move |_| PresentedFocusRoot {
+                visible: visible_for_root,
+            })
+        });
+        let terminal = TestTerminal::new(TuiSize::new(20, 3));
+        let mut screen = TuiScreen::new(window_id, root.clone(), terminal)
+            .with_focus_policy(TuiFocusPolicy::PresentedTree);
+
+        visible.update(&mut app, |_, ctx| ctx.focus_self());
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+        assert!(screen.presenter.presented_views.contains(&root.id()));
+        assert!(screen.presenter.presented_views.contains(&visible.id()));
+        assert!(!screen.presenter.presented_views.contains(&hidden.id()));
+
+        hidden.update(&mut app, |_, ctx| ctx.focus_self());
+        assert!(app.read(|ctx| hidden.is_focused(ctx)));
+        app.update(|ctx| screen.draw(ctx)).unwrap();
+        assert!(app.read(|ctx| root.is_focused(ctx)));
+    });
 }
 
 struct RepaintingElement {
@@ -380,8 +520,7 @@ fn repeats_dispatch_keymaps_while_modifier_events_bypass_them() {
             })
         });
         let terminal = TestTerminal::new(TuiSize::new(20, 3));
-        let mut screen =
-            TuiScreen::new(window_id, root.clone(), terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root.clone(), terminal);
         app.update(|ctx| screen.draw(ctx)).unwrap();
 
         let modifier = screen
@@ -411,7 +550,7 @@ fn shift_lifecycle_restores_shift_and_normalizes_symbol_keystrokes() {
         let (window_id, root) =
             app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
         let terminal = TestTerminal::new(TuiSize::new(20, 3));
-        let mut screen = TuiScreen::new(window_id, root, terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
 
         screen
             .convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
@@ -469,7 +608,7 @@ fn shift_remains_active_until_both_shift_keys_are_released() {
         let (window_id, root) =
             app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
         let terminal = TestTerminal::new(TuiSize::new(20, 3));
-        let mut screen = TuiScreen::new(window_id, root, terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
 
         for modifier in [ModifierKeyCode::LeftShift, ModifierKeyCode::RightShift] {
             screen.convert_event(CrosstermEvent::Key(KeyEvent::new_with_kind(
@@ -515,7 +654,7 @@ fn stale_shift_state_is_cleared_by_events_that_report_shift_accurately() {
         let (window_id, root) =
             app.update(|ctx| ctx.add_tui_window(window_options(), |_| TextView));
         let terminal = TestTerminal::new(TuiSize::new(20, 3));
-        let mut screen = TuiScreen::new(window_id, root, terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root, terminal);
 
         let shift_press = || {
             CrosstermEvent::Key(KeyEvent::new_with_kind(
@@ -749,8 +888,7 @@ fn synthetic_mouse_move_after_redraw_updates_hover() {
             })
         });
         let terminal = TestTerminal::new(TuiSize::new(20, 5));
-        let mut screen =
-            TuiScreen::new(window_id, root.clone(), terminal, Arc::new(Mutex::new(())));
+        let mut screen = TuiScreen::new(window_id, root.clone(), terminal);
         app.update(|ctx| screen.draw(ctx)).unwrap();
 
         let mouse_moved = TuiEvent::MouseMoved {
@@ -848,32 +986,6 @@ fn terminal_screen_lifecycle_toggles_focus_reporting() {
     );
 }
 
-#[test]
-fn terminal_background_probe_only_runs_on_quiet_active_focus_gain() {
-    let key = CrosstermEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()));
-
-    assert!(should_probe_after_event(
-        &CrosstermEvent::FocusGained,
-        true,
-        false,
-    ));
-    assert!(!should_probe_after_event(
-        &CrosstermEvent::FocusGained,
-        false,
-        false,
-    ));
-    assert!(!should_probe_after_event(
-        &CrosstermEvent::FocusGained,
-        true,
-        true,
-    ));
-    assert!(!should_probe_after_event(
-        &CrosstermEvent::FocusLost,
-        true,
-        false,
-    ));
-    assert!(!should_probe_after_event(&key, true, false));
-}
 /// Enhancement-capable terminals report standalone modifier event types while
 /// preserving shifted text through Crossterm's alternate-key decoding (CSI
 /// `>15u`), then restore the previous protocol on exit.

@@ -11,7 +11,9 @@ use warpui_core::elements::tui::{TuiChildView, TuiElement};
 use warpui_core::keymap::FixedBinding;
 use warpui_core::keymap::macros::*;
 use warpui_core::platform::TerminationMode;
-use warpui_core::{AppContext, Entity, EntityId, TuiView, TypedActionView, ViewContext, keymap};
+use warpui_core::{
+    AppContext, Entity, EntityId, FocusContext, TuiView, TypedActionView, ViewContext, keymap,
+};
 
 use crate::clipboard::copy_to_clipboard;
 use crate::keybindings::TUI_BINDING_GROUP;
@@ -169,11 +171,14 @@ impl RootTuiView {
         }
 
         match copy(url) {
-            Ok(()) => self.login_copy_hint.show_success(
-                "Login URL copied to clipboard".to_owned(),
-                ctx,
-                |view| &mut view.login_copy_hint,
-            ),
+            Ok(()) => {
+                self.login_copy_hint.show_success(
+                    "Login URL copied to clipboard".to_owned(),
+                    ctx,
+                    |view| &mut view.login_copy_hint,
+                );
+                TuiLoginModel::record_login_url_copied(true, ctx);
+            }
             Err(error) => {
                 log::warn!("Failed to copy TUI login URL: {error}");
                 self.login_copy_hint.show_error(
@@ -181,6 +186,7 @@ impl RootTuiView {
                     ctx,
                     |view| &mut view.login_copy_hint,
                 );
+                TuiLoginModel::record_login_url_copied(false, ctx);
             }
         }
     }
@@ -205,6 +211,14 @@ impl TuiView for RootTuiView {
         }
     }
 
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused()
+            && matches!(self.state, RootTuiState::Terminal)
+            && let Some(view) = self.focused_session_view(ctx)
+        {
+            view.activate(ctx);
+        }
+    }
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         match self.state {
             RootTuiState::Auth => match TuiLoginModel::as_ref(ctx).phase() {
@@ -316,7 +330,12 @@ impl TypedActionView for RootTuiView {
 
     fn handle_action(&mut self, action: &RootTuiAction, ctx: &mut ViewContext<Self>) {
         match action {
-            RootTuiAction::ExitApp => ctx.terminate_app(TerminationMode::ForceTerminate, None),
+            RootTuiAction::ExitApp => {
+                if matches!(self.state, RootTuiState::Auth) {
+                    TuiLoginModel::record_authentication_abandoned(ctx);
+                }
+                ctx.terminate_app(TerminationMode::ForceTerminate, None);
+            }
             RootTuiAction::StartDeviceLogin => {
                 if matches!(
                     TuiLoginModel::as_ref(ctx).phase(),
@@ -333,7 +352,7 @@ impl TypedActionView for RootTuiView {
                 ) {
                     self.reset_login_copy_state();
                     self.copy_login_url_when_available = true;
-                    TuiLoginModel::start_device_login(ctx);
+                    TuiLoginModel::start_device_login_and_copy_url(ctx);
                 }
             }
             RootTuiAction::OpenLoginUrl(url) => {
