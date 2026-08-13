@@ -614,6 +614,76 @@ mod override_from_approved_config_tests {
     }
 }
 
+mod resolve_pre_blocked_card_state_tests {
+    use std::sync::Arc;
+
+    use ai::agent::action_result::{AIAgentActionResultType, RunAgentsResult};
+
+    use super::super::{PreBlockedCardState, resolve_pre_blocked_card_state};
+    use crate::ai::agent::task::TaskId;
+    use crate::ai::agent::{AIAgentActionId, AIAgentActionResult};
+    use crate::ai::blocklist::action_model::AIActionStatus;
+
+    fn finished_run_agents(result: RunAgentsResult) -> AIActionStatus {
+        AIActionStatus::Finished(Arc::new(AIAgentActionResult {
+            id: AIAgentActionId::from("action-1".to_string()),
+            task_id: TaskId::new("task-1".to_string()),
+            result: AIAgentActionResultType::RunAgents(result),
+        }))
+    }
+
+    #[test]
+    fn still_streaming_with_no_status_shows_configuring() {
+        // Mirrors a partially-streamed RunAgents tool call: the action
+        // model has no status yet, and the block hasn't been cancelled.
+        let state = resolve_pre_blocked_card_state(None, false);
+        assert_eq!(state, PreBlockedCardState::Configuring);
+    }
+
+    #[test]
+    fn cancelled_block_with_no_status_shows_cancelled() {
+        // The bug this change fixes: cancelling mid-stream, before the
+        // action is ever queued, leaves `status` at `None` forever. The
+        // block's own cancelled status must still surface a terminal card.
+        let state = resolve_pre_blocked_card_state(None, true);
+        assert_eq!(state, PreBlockedCardState::Cancelled);
+    }
+
+    #[test]
+    fn running_async_with_cancelled_block_still_shows_cancelled() {
+        // RunningAsync is handled by an earlier branch in `render`, but the
+        // decision function itself treats any non-Blocked status the same
+        // way once the block is cancelled.
+        let state = resolve_pre_blocked_card_state(Some(&AIActionStatus::RunningAsync), true);
+        assert_eq!(state, PreBlockedCardState::Cancelled);
+    }
+
+    #[test]
+    fn blocked_status_shows_confirmation_even_if_block_cancelled() {
+        // Blocked always wins: a block can't legitimately be both awaiting
+        // confirmation and cancelled, but the decision function should
+        // still prefer the actionable state if it somehow is.
+        let state = resolve_pre_blocked_card_state(Some(&AIActionStatus::Blocked), true);
+        assert_eq!(state, PreBlockedCardState::Confirmation);
+    }
+
+    #[test]
+    fn blocked_status_shows_confirmation() {
+        let state = resolve_pre_blocked_card_state(Some(&AIActionStatus::Blocked), false);
+        assert_eq!(state, PreBlockedCardState::Confirmation);
+    }
+
+    #[test]
+    fn finished_status_is_not_reachable_here_but_defaults_to_configuring() {
+        // `render` short-circuits on `Finished` before calling this
+        // function, but the function itself should not panic or
+        // misclassify a `Finished` status if ever reached directly.
+        let status = finished_run_agents(RunAgentsResult::Cancelled);
+        let state = resolve_pre_blocked_card_state(Some(&status), false);
+        assert_eq!(state, PreBlockedCardState::Configuring);
+    }
+}
+
 #[test]
 fn local_to_cloud_idempotent_when_already_remote() {
     let mut state = RunAgentsEditState::from_request(&make_request(

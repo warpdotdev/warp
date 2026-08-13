@@ -272,6 +272,38 @@ pub struct RunAgentsCardView {
     runners_loading: bool,
 }
 
+/// Which non-blocked state the confirmation card should render while its
+/// action has not (yet, or ever) reached [`AIActionStatus::Blocked`].
+#[derive(Debug, PartialEq, Eq)]
+enum PreBlockedCardState {
+    /// The action reached `Blocked`; render the interactive confirmation card.
+    Confirmation,
+    /// The response stream was cancelled before this action was ever queued
+    /// (partially-streamed actions that are cancelled are deliberately never
+    /// queued), so the action model has no status for it and `status` stays
+    /// `None` forever. Render the terminal cancelled state instead of
+    /// falling into `Configuring` indefinitely.
+    Cancelled,
+    /// Still streaming and not yet cancelled; show the placeholder.
+    Configuring,
+}
+
+/// Pure decision logic, independent of an [`AppContext`] or a full
+/// [`RunAgentsCardView`], so the interaction between the action's status and
+/// the containing block's cancellation state can be tested directly.
+fn resolve_pre_blocked_card_state(
+    status: Option<&AIActionStatus>,
+    block_is_cancelled: bool,
+) -> PreBlockedCardState {
+    if matches!(status, Some(AIActionStatus::Blocked)) {
+        PreBlockedCardState::Confirmation
+    } else if block_is_cancelled {
+        PreBlockedCardState::Cancelled
+    } else {
+        PreBlockedCardState::Configuring
+    }
+}
+
 /// Resolves UI-only interactive defaults on edit state that has
 /// already had config-inherited fields resolved. These defaults are
 /// for the picker display and should NOT run before auto-launch
@@ -1263,16 +1295,25 @@ impl View for RunAgentsCardView {
             return render_cancelled_card(appearance, app);
         }
 
-        // Still streaming: show "Configuring agents..." placeholder until
-        // the action reaches Blocked status (i.e., streaming is complete
-        // and the action is queued for user confirmation).
-        if !matches!(status, Some(AIActionStatus::Blocked)) {
-            return render_status_only_card(
-                "Configuring agents\u{2026}".to_string(),
-                appearance,
-                StatusKind::Spawning,
-                app,
-            );
+        // Resolves the placeholder/cancelled/confirmation split for every
+        // remaining case (still streaming, cancelled mid-stream, or ready
+        // for user confirmation).
+        match resolve_pre_blocked_card_state(
+            status.as_ref(),
+            self.block_model.status(app).is_cancelled(),
+        ) {
+            PreBlockedCardState::Cancelled => {
+                return render_terminal_state(&RunAgentsResult::Cancelled, appearance, app);
+            }
+            PreBlockedCardState::Configuring => {
+                return render_status_only_card(
+                    "Configuring agents\u{2026}".to_string(),
+                    appearance,
+                    StatusKind::Spawning,
+                    app,
+                );
+            }
+            PreBlockedCardState::Confirmation => {}
         }
 
         let is_blocked = matches!(status, Some(AIActionStatus::Blocked));

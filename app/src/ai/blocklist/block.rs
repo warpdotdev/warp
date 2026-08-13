@@ -1939,6 +1939,15 @@ impl AIBlock {
                 self.spawn_link_detection(ctx);
                 self.finish(FinishReason::Cancelled, ctx);
 
+                // `update_request` (invoked from `handle_updated_output` above)
+                // only notifies a run_agents card when the streamed request
+                // content itself changed. A cancellation with no new request
+                // content would otherwise leave the card's own view un-notified
+                // even though it must now render its terminal cancelled state.
+                for view in self.run_agents_card_views.values() {
+                    view.update(ctx, |_, ctx| ctx.notify());
+                }
+
                 let server_output_id = self.model.server_output_id(ctx);
                 send_telemetry_from_ctx!(
                     TelemetryEvent::AgentModeCreatedAIBlock {
