@@ -1,10 +1,11 @@
 mod convert;
-
+pub mod diff_application_failure;
 use std::fmt::Display;
 use std::ops::Range;
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Local};
+pub use convert::failures_from_proto_error;
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use warp_core::command::ExitCode;
@@ -12,6 +13,7 @@ use warp_multi_agent_api::apply_file_diffs_result::success::UpdatedFileContent;
 use warp_terminal::model::BlockId;
 
 use crate::agent::FileLocations;
+use crate::agent::action_result::diff_application_failure::DiffApplicationFailure;
 use crate::document::{AIDocumentId, AIDocumentVersion};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -655,7 +657,7 @@ impl Display for SearchCodebaseResult {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum RequestFileEditsResult {
     Success {
         diff: String,
@@ -665,10 +667,38 @@ pub enum RequestFileEditsResult {
         lines_removed: usize,
     },
     Cancelled,
-    /// Diff application failed.
+    /// Diff application failed; carries one or more structured failure entries.
     DiffApplicationFailed {
-        error: String,
+        failures: Vec<DiffApplicationFailure>,
     },
+}
+
+/// Manual `Debug` impl: delegates to `DiffApplicationFailure`'s redacted Debug
+/// so file paths and search text never leak into logs or crash reports.
+impl std::fmt::Debug for RequestFileEditsResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RequestFileEditsResult::Success {
+                diff,
+                updated_files,
+                deleted_files,
+                lines_added,
+                lines_removed,
+            } => f
+                .debug_struct("Success")
+                .field("diff", diff)
+                .field("updated_files", updated_files)
+                .field("deleted_files", deleted_files)
+                .field("lines_added", lines_added)
+                .field("lines_removed", lines_removed)
+                .finish(),
+            RequestFileEditsResult::Cancelled => write!(f, "Cancelled"),
+            RequestFileEditsResult::DiffApplicationFailed { failures } => f
+                .debug_struct("DiffApplicationFailed")
+                .field("failures", failures) // uses DiffApplicationFailure's redacted Debug
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -718,8 +748,12 @@ impl Display for RequestFileEditsResult {
                 )
             }
             RequestFileEditsResult::Cancelled => write!(f, "File edits cancelled"),
-            RequestFileEditsResult::DiffApplicationFailed { error } => {
-                write!(f, "File edits failed: {error}")
+            RequestFileEditsResult::DiffApplicationFailed { failures } => {
+                write!(
+                    f,
+                    "File edits failed: {}",
+                    diff_application_failure::render(failures)
+                )
             }
         }
     }

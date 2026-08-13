@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
+use ai::agent::action_result::diff_application_failure::DiffApplicationFailure;
 use futures::FutureExt;
 use futures::future::{BoxFuture, join_all};
 use itertools::Itertools;
@@ -165,7 +166,7 @@ pub struct UpdatedFileState {
 
 /// Fails the whole edit when any file failed to save.
 fn save_failure_result(errors: &[Arc<FileSaveError>]) -> RequestFileEditsResult {
-    let error = errors
+    let message = errors
         .iter()
         .map(|error| match error.as_ref() {
             FileSaveError::IOError { error, path } => {
@@ -174,7 +175,9 @@ fn save_failure_result(errors: &[Arc<FileSaveError>]) -> RequestFileEditsResult 
             other => other.to_string(),
         })
         .join("\n");
-    RequestFileEditsResult::DiffApplicationFailed { error }
+    RequestFileEditsResult::DiffApplicationFailed {
+        failures: vec![DiffApplicationFailure::Opaque { message }],
+    }
 }
 
 /// Combines per-file report state and the combined result diff into one

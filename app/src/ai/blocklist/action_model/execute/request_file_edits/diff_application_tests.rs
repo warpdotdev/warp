@@ -1,14 +1,18 @@
 use std::io::Write as _;
 use std::sync::Arc;
 
-use ai::diff_validation::{DiffDelta, ParsedDiff, V4AHunk};
+use ai::agent::action_result::diff_application_failure::{
+    DiffApplicationFailure, MAX_DIFF_MATCH_FAILURE_BYTES,
+};
+use ai::diff_validation::{DiffDelta, DiffMatchFailure, DiffMatchFailures, ParsedDiff, V4AHunk};
 use async_io::block_on;
 use tempfile::NamedTempFile;
 use vec1::vec1;
+use warp_multi_agent_api as api;
 use warpui::App;
 
 use super::*;
-use crate::ai::agent::{AIIdentifiers, FileEdit};
+use crate::ai::agent::{AIIdentifiers, FileEdit, RequestFileEditsResult};
 use crate::ai::blocklist::SessionContext;
 use crate::auth::auth_state::AuthState;
 
@@ -627,86 +631,6 @@ fn test_create_edit_for_existing_file() {
     });
 }
 
-#[test]
-fn test_format_match_error() {
-    let err = DiffApplicationError::UnmatchedDiffs {
-        file: "file.txt".to_string(),
-        match_failures: DiffMatchFailures {
-            fuzzy_match_failures: 1,
-            noop_deltas: 0,
-            missing_line_numbers: 0,
-        },
-    };
-
-    assert_eq!(
-        err.to_conversation_message(),
-        "Could not apply all diffs to file.txt."
-    );
-
-    let err = DiffApplicationError::UnmatchedDiffs {
-        file: "file.txt".to_string(),
-        match_failures: DiffMatchFailures {
-            fuzzy_match_failures: 0,
-            noop_deltas: 1,
-            missing_line_numbers: 0,
-        },
-    };
-
-    assert_eq!(
-        err.to_conversation_message(),
-        "The changes to file.txt were already made."
-    );
-
-    let err = DiffApplicationError::UnmatchedDiffs {
-        file: "file.txt".to_string(),
-        match_failures: DiffMatchFailures {
-            fuzzy_match_failures: 2,
-            noop_deltas: 2,
-            missing_line_numbers: 0,
-        },
-    };
-
-    assert_eq!(
-        err.to_conversation_message(),
-        "Could not apply all diffs to file.txt. The changes to file.txt were already made."
-    );
-}
-
-#[test]
-fn test_format_multiple_errors() {
-    let errs = vec1![
-        DiffApplicationError::MissingFile {
-            file: "missing.rs".to_string(),
-        },
-        DiffApplicationError::UnmatchedDiffs {
-            file: "unmatched.rs".to_string(),
-            match_failures: DiffMatchFailures {
-                fuzzy_match_failures: 1,
-                noop_deltas: 0,
-                missing_line_numbers: 0,
-            },
-        },
-    ];
-
-    assert_eq!(
-        DiffApplicationError::error_for_conversation(&errs),
-        "* missing.rs does not exist. Is the path correct?\n* Could not apply all diffs to unmatched.rs."
-    );
-}
-
-#[test]
-fn test_format_single_errors() {
-    let errs = vec1![DiffApplicationError::ReadFailed {
-        file: "no_permissions.scala".to_string(),
-        message: "permission denied".to_string(),
-    },];
-
-    assert_eq!(
-        DiffApplicationError::error_for_conversation(&errs),
-        "Could not read no_permissions.scala"
-    );
-}
-
 // V4A Tests
 
 #[test]
@@ -1299,4 +1223,70 @@ fn test_apply_v4a_rename_to_existing_file_no_deltas() {
             other => panic!("Expected Update diff_type for target, got {other:?}"),
         }
     });
+}
+
+#[test]
+fn error_to_failures_preserves_raw_search_and_proto_sets_truncated() {
+    // PRODUCT 8 — end-to-end regression: the byte cap must be applied ONLY in the
+    // proto-conversion layer (convert.rs), not by error_to_failures.
+    //
+    // Before the fix, error_to_failures truncated b.search before storing it in
+    // DiffSearchBlockFailure, so diff_application_failure_to_proto saw a short string
+    // and always set truncated=false.
+    let oversized_search = "x".repeat(MAX_DIFF_MATCH_FAILURE_BYTES + 100);
+    let errors = vec1![DiffApplicationError::UnmatchedDiffs {
+        file: "foo.rs".to_string(),
+        match_failures: DiffMatchFailures {
+            fuzzy_match_failures: 1,
+            noop_deltas: 0,
+            missing_line_numbers: 0,
+            search_block_failures: vec![DiffMatchFailure {
+                search: oversized_search.clone(),
+                expected_range: None,
+            }],
+        },
+    }];
+
+    let failures = errors_to_failures(&errors);
+
+    // After error_to_failures the raw search text must be fully preserved — not yet capped.
+    let DiffApplicationFailure::UnmatchedDiffs {
+        search_block_failures,
+        ..
+    } = &failures[0]
+    else {
+        panic!("expected UnmatchedDiffs");
+    };
+    assert_eq!(
+        search_block_failures[0].search.len(),
+        MAX_DIFF_MATCH_FAILURE_BYTES + 100,
+        "error_to_failures must preserve the raw (uncapped) search text"
+    );
+
+    // Convert to proto — the cap is applied here and truncated must be set.
+    let proto_result = api::request::input::tool_call_result::Result::try_from(
+        RequestFileEditsResult::DiffApplicationFailed { failures },
+    )
+    .expect("DiffApplicationFailed should convert");
+
+    let api::request::input::tool_call_result::Result::ApplyFileDiffs(apply) = proto_result else {
+        panic!("expected ApplyFileDiffs result");
+    };
+    let Some(api::apply_file_diffs_result::Result::Error(error)) = apply.result else {
+        panic!("expected Error result");
+    };
+    let Some(api::apply_file_diffs_result::failure::Kind::UnmatchedDiffs(u)) =
+        &error.failures[0].kind
+    else {
+        panic!("expected UnmatchedDiffs proto kind");
+    };
+    let sb = &u.search_block_failures[0];
+    assert!(
+        sb.truncated,
+        "proto SearchBlockFailure.truncated must be true when search exceeds MAX_DIFF_MATCH_FAILURE_BYTES"
+    );
+    assert!(
+        sb.search.len() <= MAX_DIFF_MATCH_FAILURE_BYTES,
+        "proto search must be capped to MAX_DIFF_MATCH_FAILURE_BYTES"
+    );
 }

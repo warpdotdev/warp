@@ -149,6 +149,7 @@ impl AIRequestedCodeDiff {
                 fuzzy_match_failures,
                 noop_deltas,
                 missing_line_numbers: _,
+                search_block_failures: _,
             }) => {
                 let update_deltas_empty = match &self.diff_type {
                     DiffType::Update { deltas, .. } => deltas.is_empty(),
@@ -323,14 +324,62 @@ fn remove_extra_line_num_prefix(replace: String) -> String {
         .join("\n")
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize)]
+/// Per-search-block detail for a single block that failed to match.
+///
+/// Carries the raw (pre-truncation) search text so that the proto-conversion
+/// layer can apply `MAX_DIFF_MATCH_FAILURE_BYTES` and set `truncated`
+/// accordingly.
+///
+/// Sensitive — **never** print `search` in cleartext via logs or telemetry.
+/// Uses a manual `Debug` impl that redacts the search text.
+#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct DiffMatchFailure {
+    /// The search text of the failing block; NOT truncated here.
+    pub search: String,
+    /// Expected 1-indexed, exclusive-end line range, if line numbers were
+    /// present in the diff.
+    pub expected_range: Option<Range<usize>>,
+}
+
+/// Redacted `Debug` impl — never prints `search` in cleartext.
+impl std::fmt::Debug for DiffMatchFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiffMatchFailure")
+            .field("search", &"<redacted>")
+            .field("expected_range", &self.expected_range)
+            .finish()
+    }
+}
+
+/// Aggregate failure counters plus per-block details for a diff-match attempt.
+///
+/// `Copy` has been intentionally dropped because the embedded
+/// `search_block_failures` vec cannot be `Copy`.
+#[derive(Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiffMatchFailures {
-    /// Failures to perform a fuzzy match with content.
+    /// Number of search blocks that failed to match via any strategy.
     pub fuzzy_match_failures: u8,
-    /// The <search> and <replace> content was identical.
+    /// Number of search blocks where `<search>` and `<replace>` were identical.
     pub noop_deltas: u8,
-    /// Search blocks that are missing line numbers.
+    /// Number of search blocks that were missing expected line numbers.
     pub missing_line_numbers: u8,
+    /// Per-block details for the blocks that failed fuzzy matching.
+    /// Populated at the same time `fuzzy_match_failures` is incremented.
+    /// Sensitive: search text is NOT included in telemetry (skipped on ser).
+    #[serde(skip)]
+    pub search_block_failures: Vec<DiffMatchFailure>,
+}
+
+/// Redacted `Debug` impl — delegates to `DiffMatchFailure`'s redacted Debug.
+impl std::fmt::Debug for DiffMatchFailures {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiffMatchFailures")
+            .field("fuzzy_match_failures", &self.fuzzy_match_failures)
+            .field("noop_deltas", &self.noop_deltas)
+            .field("missing_line_numbers", &self.missing_line_numbers)
+            .field("search_block_failures", &self.search_block_failures) // redacted via DiffMatchFailure::Debug
+            .finish()
+    }
 }
 
 /// Fix two common issues with responses from the models that request code actions:
@@ -426,6 +475,14 @@ pub fn fuzzy_match_v4a_diffs(
             None => {
                 log::warn!("Failed to find matching location for V4A diff");
                 failures.fuzzy_match_failures += 1;
+                // Capture per-block detail so the server can enumerate the failed
+                // blocks (PRODUCT criterion 2). Use the hunk's `old` content as the
+                // search text; V4A hunks don't carry explicit line numbers so
+                // expected_range is None.
+                failures.search_block_failures.push(DiffMatchFailure {
+                    search: diff.old.clone(),
+                    expected_range: None,
+                });
             }
         }
     }
@@ -509,6 +566,14 @@ fn fuzzy_match_file_diffs(
             failures.noop_deltas += 1;
             continue;
         }
+
+        // Snapshot the line range hint BEFORE the if-else below potentially moves
+        // `line_range` (the prepend branch moves it into `fuzzy_match_line_numbers`).
+        // Note: this snapshot is taken before the out-of-bounds filter a few lines below
+        // (the `line_range.filter(...)` call), so a range the matcher subsequently
+        // rejects as invalid can still appear as the block's expected location hint.
+        // This is intentional — the hint is approximate and useful even if rejected.
+        let hint_range_for_failure = line_range.clone();
 
         // Find similar sections in the file content using the matching strategies.
         let fuzzy_match_line_numbers = if line_range == Some(0..0) {
@@ -624,6 +689,13 @@ fn fuzzy_match_file_diffs(
             }
             None => {
                 failures.fuzzy_match_failures += 1;
+                // Capture per-block detail (search text + hint range) for structured
+                // error reporting. The byte cap is applied later at proto-conversion
+                // time via MAX_DIFF_MATCH_FAILURE_BYTES.
+                failures.search_block_failures.push(DiffMatchFailure {
+                    search: search.to_owned(),
+                    expected_range: hint_range_for_failure,
+                });
             }
         }
     }

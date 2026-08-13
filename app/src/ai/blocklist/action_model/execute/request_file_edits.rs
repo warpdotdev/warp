@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use ai::diff_validation::AIRequestedCodeDiff;
 use apply_diff_model::ApplyDiffModel;
-use diff_application::DiffApplicationError;
+use diff_application::{DiffApplicationError, errors_to_failures};
 pub(crate) use diff_application::{FileReadResult, apply_edits};
 use futures::FutureExt;
 use futures::channel::oneshot;
@@ -154,7 +154,7 @@ impl RequestFileEditsExecutor {
         if let Some(errors) = self.diff_application_failures.remove(id) {
             return ActionExecution::Sync(AIAgentActionResultType::RequestFileEdits(
                 RequestFileEditsResult::DiffApplicationFailed {
-                    error: DiffApplicationError::error_for_conversation(&errors),
+                    failures: errors_to_failures(&errors),
                 },
             ));
         }

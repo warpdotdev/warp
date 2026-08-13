@@ -159,7 +159,7 @@ fn accept_reports_write_dispatch_failure() {
 
         assert!(matches!(
             result,
-            RequestFileEditsResult::DiffApplicationFailed { .. }
+            RequestFileEditsResult::DiffApplicationFailed { failures: _ }
         ));
     });
 }

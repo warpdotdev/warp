@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use ai::agent::FileLocations;
 use ai::agent::action_result::AnyFileContent;
+use ai::agent::action_result::diff_application_failure::DiffApplicationFailure;
 use futures::FutureExt as _;
 use warpui::{App, Entity, ModelHandle};
 
@@ -105,10 +106,13 @@ fn accept_reports_save_failure_for_the_whole_edit() {
         );
         let future = surface.update(&mut app, |surface, ctx| surface.accept_and_save(ctx));
 
-        let RequestFileEditsResult::DiffApplicationFailed { error } = future.await else {
+        let RequestFileEditsResult::DiffApplicationFailed { failures } = future.await else {
             panic!("expected a failed save to fail the edit");
         };
-        assert!(error.contains("disk full"));
+        let [DiffApplicationFailure::Opaque { message }] = failures.as_slice() else {
+            panic!("expected a single Opaque failure, got {failures:?}");
+        };
+        assert!(message.contains("disk full"));
     });
 }
 
