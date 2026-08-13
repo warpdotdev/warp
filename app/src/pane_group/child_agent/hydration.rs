@@ -189,7 +189,17 @@ impl PaneGroup {
 
         match decide_remote_child_hydration_action(&task) {
             RemoteChildHydrationAction::LiveAttach => {
+                let live_session_id = match task.active_live_session_state() {
+                    AmbientAgentLiveSessionState::Attachable { session_id } => Some(session_id),
+                    _ => None,
+                };
                 self.apply_existing_ambient_task_to_pane(pane_id, child_id, task_id, ctx);
+                // Attach the live shared session so the pane renders the
+                // child's output immediately rather than showing a blank
+                // placeholder until the next ambient agent poll.
+                if let Some(session_id) = live_session_id {
+                    self.attach_execution_session_to_ambient_pane(pane_id, session_id, ctx);
+                }
             }
             RemoteChildHydrationAction::LoadTranscript {
                 server_token,

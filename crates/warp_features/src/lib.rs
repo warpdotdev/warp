@@ -718,6 +718,12 @@ pub enum FeatureFlag {
     /// fails gracefully instead of presenting a card in a hidden pane.
     MultiLevelOrchestration,
 
+    /// Gates the unified orchestration child-tracking stack: a single
+    /// `OrchestrationChildTracker` as the sole entry point for child state,
+    /// one `include_self` ancestor SSE per parent family, and a single
+    /// `is_remote_child` placeholder flavor for both owner and viewer.
+    OrchestrationUnifiedStack,
+
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
     PendingUserQueryIndicator,
@@ -1031,6 +1037,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::JupyterNotebookRendering,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::MultiLevelOrchestration,
+    FeatureFlag::OrchestrationUnifiedStack,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::WellKnownMcpIds,
