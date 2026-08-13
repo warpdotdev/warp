@@ -13,14 +13,16 @@ use warpui::elements::{
 };
 use warpui::fonts::{Properties, Weight};
 
+use crate::server::ids::ServerId;
 use crate::settings_view::billing_and_usage_page_v2::{
     AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
 use crate::ui_components::blended_colors;
+use crate::workspaces::team::Team;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    BillingCycleUsageEntry,
+    BillingCycleUsageEntry, WorkspaceMember,
 };
 
 // for a bunch of this (min fill ratio, cost type order, ... )
@@ -192,6 +194,49 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
         .filter(|e| {
             e.usage_bucket != AiCreditsUsageBucket::Voice
                 && e.usage_bucket != AiCreditsUsageBucket::SuggestedCodeDiffs
+        })
+        .cloned()
+        .collect()
+}
+
+/// Drops entries not attributed to `team_uid`.
+///
+/// A native workspace can span multiple teams, but
+/// `Workspace.billingCycleUsageHistory` returns every team's usage in one
+/// shot (mirroring `Workspace.members`). Callers must scope down to the team
+/// currently being viewed before rendering per-member totals, otherwise an
+/// admin of one team would see every other team's usage too. Entries with no
+/// `attributed_team_uid` (legacy pre-attribution data) are dropped rather
+/// than guessed at, matching the web admin panel's
+/// `filterEntriesByAttributedTeam`.
+pub fn filter_entries_to_team(
+    entries: &[BillingCycleUsageEntry],
+    team_uid: ServerId,
+) -> Vec<BillingCycleUsageEntry> {
+    let team_uid = team_uid.to_string();
+    entries
+        .iter()
+        .filter(|entry| entry.attributed_team_uid.as_deref() == Some(team_uid.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Workspace members belonging to `team`.
+///
+/// `Workspace.members` spans every team in a native workspace, so per-member
+/// usage rows must be scoped to the team currently being viewed the same way
+/// [`filter_entries_to_team`] scopes the usage entries — otherwise the
+/// member roster itself leaks other teams' members into the usage view.
+pub fn workspace_members_for_team(
+    workspace_members: &[WorkspaceMember],
+    team: &Team,
+) -> Vec<WorkspaceMember> {
+    workspace_members
+        .iter()
+        .filter(|member| {
+            team.members
+                .iter()
+                .any(|team_member| team_member.uid == member.uid)
         })
         .cloned()
         .collect()

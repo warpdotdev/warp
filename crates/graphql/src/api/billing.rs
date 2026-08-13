@@ -389,6 +389,11 @@ pub struct UsageEntry {
     pub usage_source: AiCreditsUsageSource,
     pub credits_used: i32,
     pub cost_cents: i32,
+    /// The team this entry is attributed to. A native workspace can span
+    /// multiple teams, so client code must filter on this field to scope
+    /// usage down to the team currently being viewed. `None` on legacy
+    /// entries recorded before per-team attribution existed.
+    pub attributed_team_uid: Option<String>,
 }
 
 #[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]

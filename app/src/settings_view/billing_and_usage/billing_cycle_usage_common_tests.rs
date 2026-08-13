@@ -1,13 +1,20 @@
 use super::{
-    BarSegment, aggregate_segments, filter_legacy_buckets, has_non_viewer_data, legend_cost_types,
+    BarSegment, aggregate_segments, filter_entries_to_team, filter_legacy_buckets,
+    has_non_viewer_data, legend_cost_types, workspace_members_for_team,
 };
+use crate::auth::UserUid;
+use crate::server::ids::ServerId;
+use crate::workspaces::team::{MembershipRole, Team, TeamMember};
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    AiCreditsUsageSource, BillingCycleUsageEntry,
+    AiCreditsUsageSource, BillingCycleUsageEntry, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 const VIEWER_UID: &str = "viewer-uid";
 const OTHER_UID: &str = "other-uid";
+// `ServerId::from_string_lossy` requires exactly 22 characters.
+const TEAM_A_UID: &str = "team_a_uid000000000000";
+const TEAM_B_UID: &str = "team_b_uid000000000000";
 
 fn entry(
     subject_type: AiCreditsUsageAndCostSubjectType,
@@ -27,6 +34,7 @@ fn entry(
         usage_source,
         credits_used,
         cost_cents,
+        attributed_team_uid: None,
     }
 }
 
@@ -342,6 +350,100 @@ fn legend_cost_types_includes_used_buckets_in_display_order() {
         ],
         "used buckets should render in canonical order, not input order"
     );
+}
+
+fn entry_with_team(
+    subject_uid: &str,
+    attributed_team: Option<ServerId>,
+    credits_used: i32,
+) -> BillingCycleUsageEntry {
+    BillingCycleUsageEntry {
+        subject_type: AiCreditsUsageAndCostSubjectType::User,
+        subject_uid: Some(subject_uid.to_string()),
+        subject_display_name: None,
+        cost_type: AiCreditsUsageAndCostType::BaseLimit,
+        usage_bucket: AiCreditsUsageBucket::Ai,
+        usage_source: AiCreditsUsageSource::Local,
+        credits_used,
+        cost_cents: 0,
+        attributed_team_uid: attributed_team.map(|uid| uid.to_string()),
+    }
+}
+
+#[test]
+fn filter_entries_to_team_keeps_only_entries_attributed_to_that_team() {
+    // Regression: `Workspace.billingCycleUsageHistory` returns every team's
+    // usage in one workspace-wide list, so an admin of team A must not see
+    // team B's entries once the current team is known.
+    let team_a = ServerId::from_string_lossy(TEAM_A_UID);
+    let team_b = ServerId::from_string_lossy(TEAM_B_UID);
+    let entries = vec![
+        entry_with_team(VIEWER_UID, Some(team_a), 10),
+        entry_with_team(OTHER_UID, Some(team_b), 999),
+    ];
+
+    let filtered = filter_entries_to_team(&entries, team_a);
+
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].subject_uid.as_deref(), Some(VIEWER_UID));
+}
+
+#[test]
+fn filter_entries_to_team_drops_legacy_entries_with_no_attribution() {
+    let team_a = ServerId::from_string_lossy(TEAM_A_UID);
+    let entries = vec![entry_with_team(VIEWER_UID, None, 10)];
+
+    let filtered = filter_entries_to_team(&entries, team_a);
+
+    assert!(
+        filtered.is_empty(),
+        "legacy entries with no attributed_team_uid must not surface once a team is selected"
+    );
+}
+
+fn workspace_member(uid: &str, email: &str) -> WorkspaceMember {
+    WorkspaceMember {
+        uid: UserUid::new(uid),
+        email: email.to_string(),
+        role: MembershipRole::User,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: false,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    }
+}
+
+fn team_member(uid: &str, email: &str) -> TeamMember {
+    TeamMember {
+        uid: UserUid::new(uid),
+        email: email.to_string(),
+        role: MembershipRole::User,
+    }
+}
+
+#[test]
+fn workspace_members_for_team_narrows_to_team_roster() {
+    // Regression: `Workspace.members` spans every team in a native
+    // workspace, so an admin of team A must not see team B's roster once
+    // the current team is known.
+    let workspace_members = vec![
+        workspace_member("user-a", "a@example.com"),
+        workspace_member("user-b", "b@example.com"),
+    ];
+    let team_a = Team::from_local_cache(
+        ServerId::from_string_lossy(TEAM_A_UID),
+        "Team A".to_string(),
+        None,
+        None,
+        Some(vec![team_member("user-a", "a@example.com")]),
+    );
+
+    let scoped = workspace_members_for_team(&workspace_members, &team_a);
+
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0].uid, UserUid::new("user-a"));
 }
 
 #[test]
