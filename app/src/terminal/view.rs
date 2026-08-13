@@ -15224,7 +15224,7 @@ impl TerminalView {
         self.rich_content_views.retain(|rich_content| {
             if let Some(ai_metadata) = rich_content.ai_block_metadata() {
                 let is_hidden = ai_metadata.ai_block_handle.read(ctx, |ai_block, ctx| {
-                    ai_block.is_hidden(ctx) && ai_block.is_passive_conversation()
+                    ai_block.is_passive_conversation() && ai_block.is_hidden(ctx)
                 });
                 if is_hidden {
                     ai_block_ids_to_remove.push(ai_metadata.ai_block_handle.id());

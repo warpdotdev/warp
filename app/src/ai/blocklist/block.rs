@@ -911,14 +911,9 @@ fn default_orchestration_collapsible_state(expanded: bool) -> CollapsibleElement
 pub struct AIBlock {
     model: Rc<dyn AIBlockModel<View = AIBlock>>,
 
-    /// Cached result of `model.request_type(app).is_passive()`.
-    ///
-    /// Whether a conversation is passive or active is immutable for the lifetime of an
-    /// `AIBlock` (see `is_passive_conversation`), but computing it live requires looking up
-    /// the backing conversation and exchange from `BlocklistAIHistoryModel`, which is
-    /// expensive when called from hot paths like rendering, `is_hidden`, and keymap context.
-    /// Denormalizing the bool here avoids that lookup. This must be kept in sync whenever
-    /// `model` changes (see `reset_conversation_id`).
+    /// Cached result of `model.request_type(app).is_passive()`. Safe to cache because whether a
+    /// conversation is passive or active is fixed at exchange creation and never changes for the
+    /// lifetime of the block (see `is_passive_conversation`).
     is_passive: bool,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     client_ids: ClientIdentifiers,
@@ -1500,9 +1495,6 @@ impl AIBlock {
             comment_states.insert(id, state);
         }
 
-        // Whether this conversation is passive or active is immutable for the lifetime of an
-        // `AIBlock` (see `is_passive_conversation`), so it's safe to compute and cache it once
-        // here rather than re-deriving it via an expensive history-model lookup on every call.
         let is_passive = model.request_type(ctx).is_passive();
 
         let mut me = Self {
@@ -1860,9 +1852,6 @@ impl AIBlock {
 
         self.client_ids.conversation_id = new_conversation_id;
         self.model = new_model;
-        // The new conversation's exchange is guaranteed to have the same passive payload as
-        // before (see `reset_conversation_id` callers), but recompute rather than assume, since
-        // the cached value must never diverge from a live `request_type().is_passive()` lookup.
         self.is_passive = self.model.request_type(ctx).is_passive();
         let user_avatar_info = user_avatar_info_for_ai_block(self.model.as_ref(), ctx);
         self.profile_image_path = user_avatar_info.profile_image_path;
@@ -3020,9 +3009,6 @@ impl AIBlock {
 
     /// Returns `true` if this block's conversation was started from a passive entrypoint (e.g. a
     /// suggested code diff or unit test suggestion), as opposed to a directly-issued user query.
-    ///
-    /// This is immutable for the lifetime of the block, so the result is cached at construction
-    /// time (and recomputed on conversation reassignment) rather than re-derived here.
     pub fn is_passive_conversation(&self) -> bool {
         self.is_passive
     }
