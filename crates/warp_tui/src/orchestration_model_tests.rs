@@ -828,6 +828,7 @@ fn seed_remote_child(
                 name.to_owned(),
                 parent_conversation_id,
                 Some(Harness::Oz),
+                true,
                 ctx,
             );
             if let Some(conversation) = history.conversation_mut(&child_id) {
@@ -1479,6 +1480,7 @@ fn restore_skips_unsupported_or_malformed_children() {
                     "no-identity".to_owned(),
                     parent_conversation_id,
                     Some(Harness::Oz),
+                    true,
                     ctx,
                 );
                 history
@@ -1496,6 +1498,7 @@ fn restore_skips_unsupported_or_malformed_children() {
                     "claude-child".to_owned(),
                     parent_conversation_id,
                     Some(Harness::Claude),
+                    false,
                     ctx,
                 )
             })
@@ -1508,6 +1511,7 @@ fn restore_skips_unsupported_or_malformed_children() {
                     "shared-viewer".to_owned(),
                     parent_conversation_id,
                     Some(Harness::Oz),
+                    false,
                     ctx,
                 );
                 history
@@ -1603,6 +1607,7 @@ fn restored_local_oz_child_materializes_terminal_session_without_relaunch() {
                     "local-child".to_owned(),
                     parent_conversation_id,
                     Some(Harness::Oz),
+                    false,
                     ctx,
                 )
             })

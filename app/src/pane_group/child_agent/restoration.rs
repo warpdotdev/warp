@@ -53,22 +53,15 @@ impl PaneGroup {
             .child_conversation_ids_of(&parent_conversation_id)
             .to_vec();
 
-        // Local (non-ambient) parents have no other discovery path for
-        // remote children: unlike ambient/viewer restore, nothing else
-        // calls `seed_child_conversations_from_task` for them. If none of
-        // the children we already know about are remote — either because
-        // `child_ids` is empty, or because a mix of persisted local children
-        // (still loaded via `initialize_historical_conversations`) and
-        // not-yet-discovered remote ones means `child_ids` only contains the
-        // local ones — kick off the same ancestor-list seed the ambient path
-        // uses. Idempotent (routes through the pending map) and a no-op once
-        // resolved if the parent never spawned any remote children.
-        let has_discovered_remote_children = child_ids.iter().any(|id| {
-            BlocklistAIHistoryModel::as_ref(ctx)
-                .conversation(id)
-                .is_some_and(AIConversation::is_remote_child)
-        });
-        if trigger_seed_if_empty && !has_discovered_remote_children {
+        // Local (non-ambient) parents have no other discovery path for remote
+        // children: unlike ambient/viewer restore, nothing else calls
+        // `seed_child_conversations_from_task` for them. Always trigger the
+        // ancestor-list seed when `trigger_seed_if_empty` is true, regardless
+        // of how many remote children are already known locally — some may be
+        // missing if the flag state changed between sessions. The seed is
+        // idempotent (guarded by `pending_parent_child_seeds`) and a no-op for
+        // parents that never spawned any remote children.
+        if trigger_seed_if_empty {
             let parent_task_id = BlocklistAIHistoryModel::as_ref(ctx)
                 .conversation(&parent_conversation_id)
                 .and_then(AIConversation::task_id);

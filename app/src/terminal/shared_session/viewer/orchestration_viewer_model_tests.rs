@@ -60,6 +60,17 @@ fn settled_states_map_to_matching_conversation_status() {
     }
 }
 
+// ---- Stub UUIDs used throughout these tests ---------------------------------
+
+const PARENT_TASK_ID: &str = "11111111-1111-1111-1111-111111111111";
+const CHILD_A_TASK_ID: &str = "22222222-2222-2222-2222-222222222222";
+const CHILD_B_TASK_ID: &str = "33333333-3333-3333-3333-333333333333";
+const SESSION_A: &str = "44444444-4444-4444-4444-444444444444";
+
+fn task_id(id: &str) -> AmbientAgentTaskId {
+    id.parse().expect("hardcoded task id parses")
+}
+
 // ---- Child registration -----------------------------------------------------
 
 #[test]

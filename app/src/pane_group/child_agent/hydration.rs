@@ -435,6 +435,13 @@ impl PaneGroup {
                         "child transcript upgrade fetch-empty \
                          child_conversation_id={child_id:?}"
                     );
+                    // Re-queue for retry when task data refreshes; the
+                    // transcript may not be written yet or the fetch was
+                    // transient.
+                    group.pending_child_hydrations.insert(task_id, child_id);
+                    AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.evict_and_refetch_task(&task_id, ctx);
+                    });
                     return;
                 }
             };
@@ -624,7 +631,9 @@ impl PaneGroup {
         }
         let Some(task_id) = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&child_id)
-            .filter(|conversation| conversation.is_viewing_shared_session())
+            .filter(|conversation| {
+                conversation.is_viewing_shared_session() || conversation.is_remote_child()
+            })
             .and_then(|conversation| conversation.task_id())
         else {
             return;

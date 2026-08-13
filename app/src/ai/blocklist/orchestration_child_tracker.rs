@@ -36,6 +36,7 @@ use warpui::SingletonEntity;
 
 #[cfg(not(test))]
 use super::history_model::BlocklistAIHistoryModel;
+use crate::ai::agent::conversation::ConversationStatus;
 use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
     conversation_status_from_lifecycle_event_type,
@@ -78,6 +79,10 @@ pub struct TrackedChild {
     /// own a real local conversation and are tracked for status only.
     #[allow(dead_code)]
     pub is_remote_child: bool,
+    /// The most recent SSE lifecycle event type received for this child, if
+    /// any. Used by the placeholder-completion callback to backfill status
+    /// when a lifecycle event arrived before the async metadata fetch finished.
+    last_lifecycle: Option<api::LifecycleEventType>,
 }
 
 /// Owns discovery, placeholder bookkeeping, claim-time metadata refetch, and
@@ -197,6 +202,7 @@ impl OrchestrationChildTracker {
                 session_id,
                 last_state: None,
                 is_remote_child: true,
+                last_lifecycle: None,
             },
             ctx,
         );
@@ -219,6 +225,9 @@ impl OrchestrationChildTracker {
     ) {
         let tracker_known = self.children.contains_key(&task_id);
         if tracker_known {
+            if let Some(child) = self.children.get_mut(&task_id) {
+                child.last_lifecycle = Some(kind);
+            }
             let status = conversation_status_from_lifecycle_event_type(kind);
             // Write status through immediately so the pill bar badge reflects
             // the lifecycle transition without waiting for a redraw cycle.
@@ -258,6 +267,9 @@ impl OrchestrationChildTracker {
         // and publish the status immediately. This handles a missed or
         // reordered child_agent_started event without a tracker-only ghost.
         self.apply_started(task_id, run_id, ctx);
+        if let Some(child) = self.children.get_mut(&task_id) {
+            child.last_lifecycle = Some(kind);
+        }
         let status = conversation_status_from_lifecycle_event_type(kind);
         ctx.emit(OrchestrationEventStreamerEvent::ChildStatusChanged {
             parent_task_id: self.parent_task_id,
@@ -293,6 +305,7 @@ impl OrchestrationChildTracker {
                 // In-band children own a real local conversation; they are
                 // never persisted as `is_remote_child` placeholders.
                 is_remote_child: false,
+                last_lifecycle: None,
             },
             ctx,
         );
@@ -338,6 +351,7 @@ impl OrchestrationChildTracker {
                 session_id,
                 last_state: Some(state),
                 is_remote_child: true,
+                last_lifecycle: None,
             },
             ctx,
         );
@@ -469,6 +483,19 @@ impl OrchestrationChildTracker {
             self.in_band_children.remove(&task_id);
             self.pending_session_ids.remove(&task_id);
         }
+    }
+
+    /// Returns the `ConversationStatus` derived from the last SSE lifecycle
+    /// event received for `run_id`. Used by the placeholder-completion path to
+    /// backfill terminal status that arrived before the async metadata fetch
+    /// resolved and had no conversation to write to yet.
+    pub(super) fn child_conversation_status_from_lifecycle(
+        &self,
+        run_id: &str,
+    ) -> Option<ConversationStatus> {
+        let task_id = self.children_by_run_id.get(run_id)?;
+        let child = self.children.get(task_id)?;
+        child.last_lifecycle.map(conversation_status_from_lifecycle_event_type)
     }
 
     /// Test-only: number of metadata-fetch dispatches issued so far.

@@ -657,8 +657,22 @@ impl BlocklistAIHistoryModel {
         child_id: AIConversationId,
         parent_id: AIConversationId,
     ) {
+        let old_parent = self
+            .conversations_by_id
+            .get(&child_id)
+            .and_then(|c| c.parent_conversation_id());
         if let Some(conversation) = self.conversations_by_id.get_mut(&child_id) {
             conversation.set_parent_conversation_id(parent_id);
+        }
+        // Remove from the old parent's index when re-parenting to keep the
+        // index consistent. For initial creation the old parent is None so
+        // this is a no-op.
+        if let Some(old_parent) = old_parent
+            && old_parent != parent_id
+        {
+            if let Some(siblings) = self.children_by_parent.get_mut(&old_parent) {
+                siblings.retain(|id| *id != child_id);
+            }
         }
         self.index_child_conversation(child_id, parent_id);
     }

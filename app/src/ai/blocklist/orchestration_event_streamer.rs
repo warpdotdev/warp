@@ -789,6 +789,33 @@ impl OrchestrationEventStreamer {
                 ctx,
             )
         });
+
+        // If a terminal lifecycle event arrived via SSE before this async fetch
+        // resolved, the tracker already processed it but had no conversation to
+        // write status to. Apply it now so the pill badge shows the correct
+        // state rather than remaining at the placeholder default.
+        let pending_status = self
+            .streams
+            .get(&parent_conversation_id)
+            .and_then(|stream| stream.tracker.as_ref())
+            .and_then(|tracker| tracker.child_conversation_status_from_lifecycle(&child_run_id));
+        if let Some(status) = pending_status {
+            let child_info = {
+                let history = BlocklistAIHistoryModel::as_ref(ctx);
+                history
+                    .conversation_id_for_agent_id(&child_run_id)
+                    .and_then(|child_conv_id| {
+                        history
+                            .terminal_surface_id_for_conversation(&child_conv_id)
+                            .map(|surface_id| (child_conv_id, surface_id))
+                    })
+            };
+            if let Some((child_conv_id, surface_id)) = child_info {
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.update_conversation_status(surface_id, child_conv_id, status, ctx);
+                });
+            }
+        }
     }
 
     /// Owner-side family drain: reads the conversation's SSE buffer and routes
