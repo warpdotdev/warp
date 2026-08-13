@@ -5,8 +5,8 @@ use itertools::Itertools as _;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
 use warp_graphql::billing::AddonCreditsOption;
 use warp_graphql::error::BudgetExceededError;
 use warpui::elements::{
@@ -19,7 +19,10 @@ use warpui::elements::{
 use warpui::fonts::Weight;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent as _, UiComponentStyles};
-use warpui::{AppContext, Element, Entity, SingletonEntity as _, View, ViewContext, ViewHandle};
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity as _, View, ViewContext, ViewHandle,
+    WeakViewHandle,
+};
 
 use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, BuyCreditsBannerDisplayState,
@@ -45,6 +48,7 @@ struct MouseStates {
 }
 
 pub struct BuyCreditsBanner {
+    view_handle: WeakViewHandle<Self>,
     mouse_states: MouseStates,
     denomination_dropdown: ViewHandle<Dropdown<Action>>,
     addon_credits_options: Vec<AddonCreditsOption>,
@@ -55,6 +59,10 @@ pub struct BuyCreditsBanner {
     is_denomination_dropdown_open: bool,
     auto_reload_enabled: bool,
     banner_auto_reload_update_in_flight: bool,
+    /// True after a purchase was handed off to the browser for checkout (no
+    /// saved payment method). Shows a "finish in browser" banner until the
+    /// credits land via polling or the user dismisses it.
+    checkout_pending: bool,
 }
 
 impl BuyCreditsBanner {
@@ -73,10 +81,26 @@ impl BuyCreditsBanner {
 
         ctx.subscribe_to_model(
             &AIRequestUsageModel::handle(ctx),
-            |_me, _handle, event, ctx| {
-                if let AIRequestUsageModelEvent::RequestUsageUpdated = event {
+            |me, _handle, event, ctx| match event {
+                AIRequestUsageModelEvent::RequestUsageUpdated
+                | AIRequestUsageModelEvent::CreditAvailabilityUpdated => {
+                    if me.checkout_pending
+                        && matches!(
+                            AIRequestUsageModel::as_ref(ctx)
+                                .compute_buy_addon_credits_banner_display_state(ctx),
+                            BuyCreditsBannerDisplayState::Hidden
+                        )
+                    {
+                        me.checkout_pending = false;
+                        // The browser checkout completed; honor the
+                        // auto-reload opt-in made when initiating the
+                        // purchase, like the synchronous purchase path does.
+                        me.enable_auto_reload_if_requested(ctx);
+                    }
                     ctx.notify();
                 }
+                AIRequestUsageModelEvent::AmbientCreditsBannerDismissed
+                | AIRequestUsageModelEvent::RequestBonusRefunded { .. } => {}
             },
         );
 
@@ -104,6 +128,7 @@ impl BuyCreditsBanner {
         });
 
         let mut me = Self {
+            view_handle: ctx.handle(),
             mouse_states: Default::default(),
             denomination_dropdown,
             addon_credits_options: Default::default(),
@@ -114,6 +139,7 @@ impl BuyCreditsBanner {
             is_denomination_dropdown_open: false,
             auto_reload_enabled: false,
             banner_auto_reload_update_in_flight: false,
+            checkout_pending: false,
         };
         me.update_addon_credits_options(ctx);
         me
@@ -125,8 +151,23 @@ impl BuyCreditsBanner {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
+            UserWorkspacesEvent::TeamsChanged => {
+                // Pricing labels depend on the current team's purchase policy
+                // (premium surcharge), so rebuild them when teams change.
+                self.update_addon_credits_options(ctx);
+                ctx.notify();
+            }
+            UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { checkout_url } => {
+                if self.purchase_addon_credits_loading {
+                    self.purchase_addon_credits_loading = false;
+                    self.checkout_pending = true;
+                    ctx.open_url(checkout_url);
+                    ctx.notify();
+                }
+            }
             UserWorkspacesEvent::PurchaseAddonCreditsSuccess => {
                 self.purchase_addon_credits_loading = false;
+                self.checkout_pending = false;
 
                 let banner_toggle_flag_enabled =
                     FeatureFlag::BuildPlanAutoReloadBannerToggle.is_enabled();
@@ -139,7 +180,7 @@ impl BuyCreditsBanner {
                     .map(|option| option.credits);
                 let has_admin_permissions = {
                     let auth_state = AuthStateProvider::as_ref(ctx).get();
-                    let current_team = UserWorkspaces::as_ref(ctx).current_team();
+                    let current_team = UserWorkspaces::as_ref(ctx).team_for_view(ctx);
                     auth_state
                         .user_email()
                         .zip(current_team)
@@ -170,21 +211,7 @@ impl BuyCreditsBanner {
                 // - Banner toggle flow: optionally enable auto-reload immediately.
                 // - Post-purchase modal flow: show the modal.
                 if banner_toggle_flag_enabled {
-                    if has_admin_permissions && self.auto_reload_enabled {
-                        self.banner_auto_reload_update_in_flight = true;
-
-                        if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
-                            UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-                                user_workspaces.update_addon_credits_settings(
-                                    team_uid,
-                                    Some(true),
-                                    None, // Don't change monthly spend limit
-                                    selected_credits,
-                                    ctx,
-                                );
-                            });
-                        }
-                    }
+                    self.enable_auto_reload_if_requested(ctx);
                 } else if has_admin_permissions && post_purchase_modal_flag_enabled {
                     // Default selection in the modal should match the denomination the user clicked "buy" on.
                     ctx.emit(BuyCreditsBannerEvent::OpenAutoReloadModal {
@@ -223,6 +250,48 @@ impl BuyCreditsBanner {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// If the user opted into auto-reload via the banner checkbox (banner
+    /// toggle experiment), persist the setting after a completed purchase.
+    fn enable_auto_reload_if_requested(&mut self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::BuildPlanAutoReloadBannerToggle.is_enabled() || !self.auto_reload_enabled {
+            return;
+        }
+
+        let has_admin_permissions = {
+            let auth_state = AuthStateProvider::as_ref(ctx).get();
+            let current_team = UserWorkspaces::as_ref(ctx).team_for_view(ctx);
+            auth_state
+                .user_email()
+                .zip(current_team)
+                .map(|(email, team)| team.has_admin_permissions(&email))
+                .unwrap_or_default()
+        };
+        if !has_admin_permissions {
+            return;
+        }
+
+        let selected_credits = self
+            .addon_credits_options
+            .get(self.selected_denomination_index)
+            .map(|option| option.credits);
+        self.banner_auto_reload_update_in_flight = true;
+
+        if let Some(team_uid) = UserWorkspaces::as_ref(ctx)
+            .team_for_view(ctx)
+            .map(|team| team.uid)
+        {
+            UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                user_workspaces.update_addon_credits_settings(
+                    team_uid,
+                    Some(true),
+                    None, // Don't change monthly spend limit
+                    selected_credits,
+                    ctx,
+                );
+            });
         }
     }
 
@@ -318,6 +387,10 @@ impl BuyCreditsBanner {
             .map(|opts| opts.to_vec())
             .unwrap_or_default();
 
+        let workspaces = UserWorkspaces::as_ref(ctx);
+        let premium_bps = workspaces
+            .purchase_policy_for_team(workspaces.team_for_view(ctx))
+            .map_or(0, |policy| policy.effective_premium_bps());
         let base_rate = self
             .addon_credits_options
             .first()
@@ -327,11 +400,13 @@ impl BuyCreditsBanner {
             .iter()
             .enumerate()
             .map(|(index, option)| {
-                let primary_text = format!(
-                    "${:.0} / {} credits",
-                    option.price_usd_cents as f32 / 100.,
-                    option.credits
-                );
+                let price_cents = option.price_usd_cents_with_premium(premium_bps);
+                let price_label = if price_cents % 100 == 0 {
+                    format!("${}", price_cents / 100)
+                } else {
+                    format!("${:.2}", price_cents as f64 / 100.)
+                };
+                let primary_text = format!("{price_label} / {} credits", option.credits);
                 let discount_percent = if base_rate > 0.0 {
                     let actual_rate = option.rate();
                     ((base_rate - actual_rate) / base_rate * 100.0).round() as u32
@@ -408,7 +483,7 @@ impl BuyCreditsBanner {
         .finish();
 
         let auth_state = AuthStateProvider::as_ref(app).get();
-        let current_team = UserWorkspaces::as_ref(app).current_team();
+        let current_team = UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app);
         let has_admin_permissions = auth_state
             .user_email()
             .zip(current_team)
@@ -506,6 +581,76 @@ impl BuyCreditsBanner {
             .finish()
     }
 
+    /// Rendered instead of the out-of-credits banner after a purchase was
+    /// handed off to the browser for checkout.
+    fn render_checkout_pending(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+
+        let alert_icon = Container::new(
+            ConstrainedBox::new(
+                Icon::AlertCircle
+                    .to_warpui_icon(theme.foreground())
+                    .finish(),
+            )
+            .with_height(16.)
+            .with_width(16.)
+            .finish(),
+        )
+        .with_margin_right(8.)
+        .finish();
+
+        let banner_text = Flex::column()
+            .with_children([
+                appearance
+                    .ui_builder()
+                    .paragraph("Finish your purchase in the browser")
+                    .with_style(UiComponentStyles {
+                        font_size: Some(14.),
+                        ..Default::default()
+                    })
+                    .build()
+                    .finish(),
+                appearance
+                    .ui_builder()
+                    .paragraph("Credits will be added to your account after checkout.")
+                    .with_style(UiComponentStyles {
+                        font_color: Some(theme.sub_text_color(theme.surface_1()).into()),
+                        ..Default::default()
+                    })
+                    .build()
+                    .finish(),
+            ])
+            .finish();
+
+        let close_button = appearance
+            .ui_builder()
+            .close_button(16., self.mouse_states.close_button.clone())
+            .build()
+            .on_click(|ctx, _, _| ctx.dispatch_typed_action(Action::Close))
+            .finish();
+
+        let content = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_children([
+                alert_icon,
+                Shrinkable::new(1., Align::new(banner_text).left().finish()).finish(),
+                close_button,
+            ])
+            .finish();
+
+        Container::new(content)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+            .with_border(Border::all(1.).with_border_fill(theme.outline()))
+            .with_background_color(theme.surface_1().into())
+            .with_horizontal_padding(16.)
+            .with_vertical_padding(12.)
+            .with_horizontal_margin(8.)
+            .with_drop_shadow(DropShadow::new_with_standard_offset_and_spread(
+                ColorU::new(0, 0, 0, 48),
+            ))
+            .finish()
+    }
+
     fn render_out_of_credits(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         // When the auto-reload checkbox is present, we need more horizontal space before we can
         // fit everything on one row.
@@ -531,44 +676,53 @@ impl BuyCreditsBanner {
         };
 
         let auth_state = AuthStateProvider::as_ref(app).get();
-        let current_team = UserWorkspaces::as_ref(app).current_team();
-        let has_admin_permissions = auth_state
-            .user_email()
-            .zip(current_team)
-            .map(|(email, team)| team.has_admin_permissions(&email))
-            .unwrap_or_default();
-        let delinquent_due_to_payment_issue = current_team
-            .is_some_and(|team| team.billing_metadata.is_delinquent_due_to_payment_issue());
+        let workspaces = UserWorkspaces::as_ref(app);
+        let current_team = workspaces.team_for_view_handle(&self.view_handle, app);
+        let has_admin_permissions = current_team.is_none_or(|team| {
+            auth_state
+                .user_email()
+                .is_some_and(|email| team.has_admin_permissions(&email))
+        });
+        let delinquent_due_to_payment_issue = workspaces
+            .team_billing_metadata(current_team)
+            .is_some_and(|billing| billing.is_delinquent_due_to_payment_issue());
         let auto_reload_banner_toggle_ff =
             FeatureFlag::BuildPlanAutoReloadBannerToggle.is_enabled();
 
         // Check if user has reached their monthly addon credits limit
-        let current_workspace = UserWorkspaces::as_ref(app).current_workspace();
+        let current_workspace = workspaces.current_workspace();
         let is_at_monthly_limit = current_workspace
             .map(|workspace| workspace.is_at_addon_credits_monthly_limit())
             .unwrap_or(false);
 
         // Check if the selected purchase would reach/exceed the monthly limit
+        let premium_bps = workspaces
+            .purchase_policy_for_team(current_team)
+            .map_or(0, |policy| policy.effective_premium_bps());
         let selected_option = self
             .addon_credits_options
             .get(self.selected_denomination_index);
         let would_purchase_exceed_limit = current_workspace
             .zip(selected_option)
             .map(|(workspace, option)| {
-                workspace.would_addon_purchase_reach_limit(option.price_usd_cents)
+                workspace.would_addon_purchase_reach_limit(
+                    option.price_usd_cents_with_premium(premium_bps),
+                )
             })
             .unwrap_or(false);
 
         let make_banner_text = || {
-            let mut banner_text_children = vec![appearance
-                .ui_builder()
-                .paragraph("Out of credits")
-                .with_style(UiComponentStyles {
-                    font_size: Some(14.),
-                    ..Default::default()
-                })
-                .build()
-                .finish()];
+            let mut banner_text_children = vec![
+                appearance
+                    .ui_builder()
+                    .paragraph("Out of credits")
+                    .with_style(UiComponentStyles {
+                        font_size: Some(14.),
+                        ..Default::default()
+                    })
+                    .build()
+                    .finish(),
+            ];
 
             // Show different message based on whether purchase would exceed limit
             if is_at_monthly_limit || would_purchase_exceed_limit {
@@ -606,7 +760,7 @@ impl BuyCreditsBanner {
             } else {
                 // Default message when not at limit
                 let banner_description = if has_admin_permissions {
-                    "Add more credits to your account to continue using Oz agents."
+                    "Add more credits to your account to continue using the Warp Agent."
                 } else {
                     "Contact a team admin to purchase more credits to continue."
                 };
@@ -681,9 +835,7 @@ impl BuyCreditsBanner {
                 .with_text_label(button_text)
                 .build()
                 .on_click(move |ctx, _, _| {
-                    if let Some(team_uid) = team_uid {
-                        ctx.dispatch_typed_action(Action::PurchaseAddonCredits { team_uid });
-                    }
+                    ctx.dispatch_typed_action(Action::PurchaseAddonCredits { team_uid });
                 });
 
             if buy_button_disabled {
@@ -834,7 +986,11 @@ impl View for BuyCreditsBanner {
                 Container::new(warpui::elements::Empty::new().finish()).finish()
             }
             BuyCreditsBannerDisplayState::OutOfCredits => {
-                self.render_out_of_credits(appearance, app)
+                if self.checkout_pending {
+                    self.render_checkout_pending(appearance)
+                } else {
+                    self.render_out_of_credits(appearance, app)
+                }
             }
             BuyCreditsBannerDisplayState::MonthlyLimitReached => {
                 self.render_auto_reload_blocked(appearance, app)
@@ -847,7 +1003,7 @@ impl View for BuyCreditsBanner {
 pub enum Action {
     SelectDenomination(usize),
     Close,
-    PurchaseAddonCredits { team_uid: ServerId },
+    PurchaseAddonCredits { team_uid: Option<ServerId> },
     ManageBilling,
     ToggleAutoReload,
 }
@@ -875,6 +1031,7 @@ impl warpui::TypedActionView for BuyCreditsBanner {
                     ctx
                 );
 
+                self.checkout_pending = false;
                 self.should_display_banner = false;
                 AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
                     model.dismiss_buy_credits_banner(ctx);

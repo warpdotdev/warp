@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use settings::Setting;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill;
@@ -17,16 +16,11 @@ use warpui::{
 
 use super::{AgentInputButtonTheme, AmbientAgentViewModel};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::appearance::Appearance;
-use crate::cloud_object::model::generic_string_model::StringModel;
-use crate::cloud_object::model::persistence::CloudModel;
-use crate::cloud_object::CloudObjectLookup as _;
 use crate::context_chips::display_menu::{
     ChipMenuType, DisplayChipMenu, FixedFooter, GenericMenuItem, PromptDisplayMenuEvent,
 };
-use crate::report_if_error;
 use crate::server::ids::SyncId;
 use crate::terminal::input::{
     HandoffComposeState, HandoffComposeStateEvent, MenuPositioning, MenuPositioningProvider,
@@ -101,6 +95,7 @@ impl EnvironmentSelectorTarget {
 pub struct EnvironmentSelector {
     button: ViewHandle<ActionButton>,
     dropdown: ViewHandle<DisplayChipMenu>,
+    environments: ModelHandle<CloudEnvironmentCatalog>,
     is_menu_open: bool,
     menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
     target: EnvironmentSelectorTarget,
@@ -180,22 +175,6 @@ impl GenericMenuItem for NewEnvironmentMenuItem {
     }
 }
 
-pub(crate) fn sort_environments_by_recency(environments: &mut [CloudAmbientAgentEnvironment]) {
-    environments.sort_by(|a, b| {
-        // Sort by last-used timestamp descending (most recent first), then by display name ascending
-        b.metadata
-            .last_task_run_ts
-            .cmp(&a.metadata.last_task_run_ts)
-            .then_with(|| {
-                a.model()
-                    .string_model
-                    .name
-                    .to_lowercase()
-                    .cmp(&b.model().string_model.name.to_lowercase())
-            })
-    });
-}
-
 impl EnvironmentSelector {
     pub fn new(
         menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
@@ -254,8 +233,9 @@ impl EnvironmentSelector {
                     );
                     if me.is_configuring(ctx) {
                         me.target.set_environment_id(Some(env_item.id), true, ctx);
-                        // Persist the selection to settings for next time.
-                        me.save_selected_environment_to_settings(env_item.id, ctx);
+                        me.environments.update(ctx, |catalog, ctx| {
+                            catalog.persist_selection(env_item.id, ctx);
+                        });
                     }
                     me.set_menu_visibility(false, ctx);
                 }
@@ -265,9 +245,9 @@ impl EnvironmentSelector {
             }
         });
 
-        // Subscribe to CloudModel to refresh when environments are added/removed.
-        ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, _, _, ctx| {
-            me.ensure_default_selection(ctx);
+        let environments = CloudEnvironmentCatalog::handle(ctx);
+        ctx.subscribe_to_model(&environments, |me, _, _, ctx| {
+            me.auto_select_default_environment_if_new_session(ctx);
             me.refresh_menu(ctx);
             me.refresh_button(ctx);
             ctx.notify();
@@ -289,7 +269,8 @@ impl EnvironmentSelector {
                             if !me.is_configuring(ctx) {
                                 me.set_menu_visibility(false, ctx);
                             }
-                            me.ensure_default_selection(ctx);
+
+                            me.auto_select_default_environment_if_new_session(ctx);
                             me.refresh_menu(ctx);
                         }
                         HandoffComposeStateEvent::EnvironmentSelected => {
@@ -303,13 +284,14 @@ impl EnvironmentSelector {
         let mut me = Self {
             button,
             dropdown,
+            environments,
             is_menu_open: false,
             menu_positioning_provider,
             target,
         };
         me.refresh_menu(ctx);
         me.refresh_button(ctx);
-        me.ensure_default_selection(ctx);
+        me.auto_select_default_environment_if_new_session(ctx);
         me
     }
 
@@ -333,9 +315,13 @@ impl EnvironmentSelector {
             return;
         };
 
-        let mut environments = CloudAmbientAgentEnvironment::get_all(ctx);
-        sort_environments_by_recency(&mut environments);
-        let Some(index) = environments.iter().position(|env| env.id == selected_id) else {
+        let Some(index) = self
+            .environments
+            .as_ref(ctx)
+            .environments()
+            .iter()
+            .position(|environment| environment.id == selected_id)
+        else {
             return;
         };
 
@@ -359,6 +345,21 @@ impl EnvironmentSelector {
         ctx.notify();
     }
 
+    fn auto_select_default_environment_if_new_session(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.should_auto_select_default_environment(ctx) {
+            self.ensure_default_selection(ctx);
+        }
+    }
+
+    fn should_auto_select_default_environment(&self, ctx: &AppContext) -> bool {
+        match &self.target {
+            EnvironmentSelectorTarget::CloudPane(model) => {
+                model.as_ref(ctx).is_configuring_ambient_agent()
+            }
+            EnvironmentSelectorTarget::Handoff(state) => state.as_ref(ctx).is_active(),
+        }
+    }
+
     /// Ensures a default environment is selected if none is currently selected.
     fn ensure_default_selection(&mut self, ctx: &mut ViewContext<Self>) {
         let current_selection = self.target.selected_environment_id(ctx);
@@ -366,56 +367,28 @@ impl EnvironmentSelector {
             return;
         }
 
-        // First, try to restore the user's last selected environment from settings.
-        if let Some(env_id) = self.get_saved_environment_from_settings(ctx) {
-            // Verify the environment still exists.
-            if CloudAmbientAgentEnvironment::get_by_id(&env_id, ctx).is_some() {
-                self.target.ensure_default_environment_id(env_id, ctx);
-                return;
-            }
+        if let Some(environment_id) = self.environments.as_ref(ctx).default_environment_id(ctx) {
+            self.target
+                .ensure_default_environment_id(environment_id, ctx);
         }
-
-        // Fall back to auto-selecting the most recently used environment.
-        let mut environments = CloudAmbientAgentEnvironment::get_all(ctx);
-        sort_environments_by_recency(&mut environments);
-        if let Some(first_env) = environments.first() {
-            self.target.ensure_default_environment_id(first_env.id, ctx);
-        }
-    }
-
-    /// Retrieves the last selected environment ID from settings.
-    fn get_saved_environment_from_settings(&self, ctx: &ViewContext<Self>) -> Option<SyncId> {
-        *CloudAgentSettings::as_ref(ctx)
-            .last_selected_environment_id
-            .value()
-    }
-
-    /// Saves the selected environment ID to settings.
-    fn save_selected_environment_to_settings(&self, env_id: SyncId, ctx: &mut ViewContext<Self>) {
-        CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .last_selected_environment_id
-                .set_value(Some(env_id), ctx));
-        });
     }
 
     fn refresh_menu(&mut self, ctx: &mut ViewContext<Self>) {
-        let mut environments = CloudAmbientAgentEnvironment::get_all(ctx);
-        sort_environments_by_recency(&mut environments);
-
         let selected_id = self.target.selected_environment_id(ctx);
-
-        let menu_items: Vec<EnvironmentMenuItem> = environments
+        let menu_items = self
+            .environments
+            .as_ref(ctx)
+            .environments()
             .iter()
-            .map(|env| {
-                let is_selected = selected_id.as_ref() == Some(&env.id);
+            .map(|environment| {
+                let is_selected = selected_id == Some(environment.id);
                 EnvironmentMenuItem {
-                    id: env.id,
-                    name: env.model().string_model.display_name(),
+                    id: environment.id,
+                    name: environment.name.clone(),
                     is_selected,
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
 
         self.dropdown.update(ctx, |menu, ctx| {
             menu.update_menu_items(menu_items, ctx);
@@ -427,15 +400,19 @@ impl EnvironmentSelector {
     }
 
     fn refresh_button(&mut self, ctx: &mut ViewContext<Self>) {
-        let label = if let Some(id) = self.target.selected_environment_id(ctx) {
-            CloudAmbientAgentEnvironment::get_by_id(&id, ctx)
-                .map(|env| env.model().string_model.display_name())
-                .unwrap_or_else(|| "New environment".to_string())
-        } else {
-            "New environment".to_string()
-        };
-
         let is_configuring = self.is_configuring(ctx);
+
+        let label = if let Some(id) = self.target.selected_environment_id(ctx) {
+            self.environments
+                .as_ref(ctx)
+                .environment(id)
+                .map(|environment| environment.name.clone())
+                .unwrap_or_else(|| "New environment".to_string())
+        } else if is_configuring {
+            "New environment".to_string()
+        } else {
+            "Empty environment".to_string()
+        };
 
         self.button.update(ctx, |button, ctx| {
             button.set_label(label, ctx);

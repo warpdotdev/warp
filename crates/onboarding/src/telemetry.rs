@@ -1,7 +1,36 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use strum_macros::{EnumDiscriminants, EnumIter};
+use warp_core::features::FeatureFlag;
 use warp_core::telemetry::{EnablementState, TelemetryEvent, TelemetryEventDesc};
+
+pub const ACCOUNT_FIRST_FLOW_VERSION: &str = "account_first_v1";
+
+fn flow_version() -> Option<&'static str> {
+    FeatureFlag::AccountFirstOnboarding
+        .is_enabled()
+        .then_some(ACCOUNT_FIRST_FLOW_VERSION)
+}
+
+fn with_flow_version(mut payload: Value) -> Value {
+    if let Some(flow_version) = flow_version()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("flow_version".to_string(), json!(flow_version));
+    }
+    payload
+}
+
+/// Adds the REV-1939 `experiment_arm` key to a payload when the event carries
+/// an arm. Absent (rather than `null`) for events outside the arm experiment.
+fn with_experiment_arm(mut payload: Value, experiment_arm: &Option<String>) -> Value {
+    if let Some(experiment_arm) = experiment_arm
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("experiment_arm".to_string(), json!(experiment_arm));
+    }
+    payload
+}
 
 /// Telemetry events for the onboarding flow.
 #[derive(Clone, Debug, Serialize, Deserialize, EnumDiscriminants)]
@@ -11,7 +40,11 @@ pub enum OnboardingEvent {
     /// The onboarding flow was started.
     OnboardingStarted,
     /// A specific slide was viewed.
-    SlideViewed { slide_name: String },
+    SlideViewed {
+        slide_name: String,
+        /// The REV-1939 offer arm, set only for the "choose how to start" offer.
+        experiment_arm: Option<String>,
+    },
     /// A setting was changed during onboarding.
     SettingChanged { setting: String, value: String },
     /// The onboarding slides were completed.
@@ -50,6 +83,37 @@ pub enum OnboardingEvent {
     AgentSlideUpgradeClicked,
     /// The user clicked the "Log in" link on the welcome/intro slide.
     WelcomeLoginClicked,
+    /// A canonical user action within the account-first flow.
+    OnboardingAction {
+        slide_name: String,
+        action: String,
+        account_class: Option<String>,
+        /// The REV-1939 offer arm, set only for "choose how to start" actions.
+        experiment_arm: Option<String>,
+    },
+    OnboardingAuthCompleted {
+        account_class: String,
+        has_team: bool,
+        is_paid: bool,
+        team_discovery_outcome: String,
+    },
+    OnboardingUpgradeStarted {
+        source_slide: String,
+        account_class: String,
+        /// The REV-1939 offer arm, set only for the "choose how to start" offer.
+        experiment_arm: Option<String>,
+    },
+    OnboardingUpgradeCompleted {
+        source_slide: String,
+        account_class: String,
+        /// The REV-1939 offer arm, set only for the "choose how to start" offer.
+        experiment_arm: Option<String>,
+    },
+    OnboardingCompleted {
+        completion_type: String,
+        /// The REV-1939 offer arm, set only for the "choose how to start" offer.
+        experiment_arm: Option<String>,
+    },
 }
 
 impl TelemetryEvent for OnboardingEvent {
@@ -72,32 +136,48 @@ impl TelemetryEvent for OnboardingEvent {
             OnboardingEvent::NoAiConfirmationCancelled => "onboarding_no_ai_confirmation_cancelled",
             OnboardingEvent::AgentSlideUpgradeClicked => "onboarding_agent_slide_upgrade_clicked",
             OnboardingEvent::WelcomeLoginClicked => "onboarding_welcome_login_clicked",
+            OnboardingEvent::OnboardingAction { .. } => "onboarding_action",
+            OnboardingEvent::OnboardingAuthCompleted { .. } => "onboarding_auth_completed",
+            OnboardingEvent::OnboardingUpgradeStarted { .. } => "onboarding_upgrade_started",
+            OnboardingEvent::OnboardingUpgradeCompleted { .. } => "onboarding_upgrade_completed",
+            OnboardingEvent::OnboardingCompleted { .. } => "onboarding_completed",
         }
     }
 
     fn payload(&self) -> Option<Value> {
         match self {
-            OnboardingEvent::OnboardingStarted => None,
-            OnboardingEvent::SlideViewed { slide_name } => Some(json!({
-                "slide_name": slide_name,
-            })),
-            OnboardingEvent::SettingChanged { setting, value } => Some(json!({
+            OnboardingEvent::OnboardingStarted => flow_version().map(|flow_version| {
+                json!({
+                    "flow_version": flow_version,
+                    "entrypoint": "native_app",
+                })
+            }),
+            OnboardingEvent::SlideViewed {
+                slide_name,
+                experiment_arm,
+            } => Some(with_experiment_arm(
+                with_flow_version(json!({
+                    "slide_name": slide_name,
+                })),
+                experiment_arm,
+            )),
+            OnboardingEvent::SettingChanged { setting, value } => Some(with_flow_version(json!({
                 "setting": setting,
                 "value": value,
-            })),
+            }))),
             OnboardingEvent::OnboardingSlidesCompleted {
                 intention,
                 model,
                 autonomy,
                 has_project_path,
                 ai_access,
-            } => Some(json!({
+            } => Some(with_flow_version(json!({
                 "intention": intention,
                 "model": model,
                 "autonomy": autonomy,
                 "has_project_path": has_project_path,
                 "ai_access": ai_access,
-            })),
+            }))),
             OnboardingEvent::GetStartedClicked => None,
             OnboardingEvent::FolderSelectionStarted => None,
             OnboardingEvent::FolderSelected => None,
@@ -115,6 +195,70 @@ impl TelemetryEvent for OnboardingEvent {
             OnboardingEvent::NoAiConfirmationCancelled => None,
             OnboardingEvent::AgentSlideUpgradeClicked => None,
             OnboardingEvent::WelcomeLoginClicked => None,
+            OnboardingEvent::OnboardingAction {
+                slide_name,
+                action,
+                account_class,
+                experiment_arm,
+            } => {
+                let mut payload = json!({
+                    "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+                    "slide_name": slide_name,
+                    "action": action,
+                });
+                if let Some(account_class) = account_class
+                    && let Some(object) = payload.as_object_mut()
+                {
+                    object.insert("account_class".to_string(), json!(account_class));
+                }
+                Some(with_experiment_arm(payload, experiment_arm))
+            }
+            OnboardingEvent::OnboardingAuthCompleted {
+                account_class,
+                has_team,
+                is_paid,
+                team_discovery_outcome,
+            } => Some(json!({
+                "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+                "account_class": account_class,
+                "has_team": has_team,
+                "is_paid": is_paid,
+                "team_discovery_outcome": team_discovery_outcome,
+            })),
+            OnboardingEvent::OnboardingUpgradeStarted {
+                source_slide,
+                account_class,
+                experiment_arm,
+            } => Some(with_experiment_arm(
+                json!({
+                    "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+                    "source_slide": source_slide,
+                    "account_class": account_class,
+                }),
+                experiment_arm,
+            )),
+            OnboardingEvent::OnboardingUpgradeCompleted {
+                source_slide,
+                account_class,
+                experiment_arm,
+            } => Some(with_experiment_arm(
+                json!({
+                    "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+                    "source_slide": source_slide,
+                    "account_class": account_class,
+                }),
+                experiment_arm,
+            )),
+            OnboardingEvent::OnboardingCompleted {
+                completion_type,
+                experiment_arm,
+            } => Some(with_experiment_arm(
+                json!({
+                    "flow_version": ACCOUNT_FIRST_FLOW_VERSION,
+                    "completion_type": completion_type,
+                }),
+                experiment_arm,
+            )),
         }
     }
 
@@ -146,6 +290,21 @@ impl TelemetryEvent for OnboardingEvent {
             }
             OnboardingEvent::WelcomeLoginClicked => {
                 "User clicked the Log in link on the welcome/intro slide"
+            }
+            OnboardingEvent::OnboardingAction { .. } => {
+                "User performed an action in the account-first onboarding flow"
+            }
+            OnboardingEvent::OnboardingAuthCompleted { .. } => {
+                "User completed account-first browser authentication"
+            }
+            OnboardingEvent::OnboardingUpgradeStarted { .. } => {
+                "User started an upgrade from account-first onboarding"
+            }
+            OnboardingEvent::OnboardingUpgradeCompleted { .. } => {
+                "User completed an upgrade from account-first onboarding"
+            }
+            OnboardingEvent::OnboardingCompleted { .. } => {
+                "User completed account-first onboarding"
             }
         }
     }
@@ -191,6 +350,13 @@ impl TelemetryEventDesc for OnboardingEventDiscriminant {
                 "onboarding_agent_slide_upgrade_clicked"
             }
             OnboardingEventDiscriminant::WelcomeLoginClicked => "onboarding_welcome_login_clicked",
+            OnboardingEventDiscriminant::OnboardingAction => "onboarding_action",
+            OnboardingEventDiscriminant::OnboardingAuthCompleted => "onboarding_auth_completed",
+            OnboardingEventDiscriminant::OnboardingUpgradeStarted => "onboarding_upgrade_started",
+            OnboardingEventDiscriminant::OnboardingUpgradeCompleted => {
+                "onboarding_upgrade_completed"
+            }
+            OnboardingEventDiscriminant::OnboardingCompleted => "onboarding_completed",
         }
     }
 
@@ -231,6 +397,21 @@ impl TelemetryEventDesc for OnboardingEventDiscriminant {
             OnboardingEventDiscriminant::WelcomeLoginClicked => {
                 "User clicked the Log in link on the welcome/intro slide"
             }
+            OnboardingEventDiscriminant::OnboardingAction => {
+                "User performed an action in the account-first onboarding flow"
+            }
+            OnboardingEventDiscriminant::OnboardingAuthCompleted => {
+                "User completed account-first browser authentication"
+            }
+            OnboardingEventDiscriminant::OnboardingUpgradeStarted => {
+                "User started an upgrade from account-first onboarding"
+            }
+            OnboardingEventDiscriminant::OnboardingUpgradeCompleted => {
+                "User completed an upgrade from account-first onboarding"
+            }
+            OnboardingEventDiscriminant::OnboardingCompleted => {
+                "User completed account-first onboarding"
+            }
         }
     }
 
@@ -240,3 +421,7 @@ impl TelemetryEventDesc for OnboardingEventDiscriminant {
 }
 
 warp_core::register_telemetry_event!(OnboardingEvent);
+
+#[cfg(test)]
+#[path = "telemetry_tests.rs"]
+mod tests;

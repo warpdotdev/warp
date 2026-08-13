@@ -9,6 +9,7 @@ use session_sharing_protocol::common::{Guest, PendingGuest, SessionId, TeamAclDa
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill as ThemeFill;
 use warp_editor::editor::NavigationKey;
+use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
@@ -27,10 +28,10 @@ use warpui::{
     ViewHandle, WeakViewHandle,
 };
 
-use super::qr_code::{qr_matrix_for_url, qr_png_for_url, QrMatrix, QUIET_ZONE_MODULES};
+use super::qr_code::{QUIET_ZONE_MODULES, QrMatrix, qr_matrix_for_url, qr_png_for_url};
 use super::{
-    style, ContentEditability, LinkSharingSubjectType, ShareableObject, SharingAccessLevel,
-    Subject, SubjectExt, TeamKind, UserKind,
+    ContentEditability, LinkSharingSubjectType, ShareableObject, SharingAccessLevel, Subject,
+    SubjectExt, TeamKind, UserKind, style,
 };
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::auth::AuthStateProvider;
@@ -46,11 +47,11 @@ use crate::server::ids::ServerId;
 use crate::server::telemetry::{
     CloudObjectTelemetryMetadata, OpenedSharingDialogEvent, SharingDialogSource,
 };
+use crate::terminal::TerminalView;
+use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::shared_session::permissions_manager::{
     SessionPermissionsEvent, SessionPermissionsManager,
 };
-use crate::terminal::shared_session::SharedSessionActionSource;
-use crate::terminal::TerminalView;
 use crate::ui_components::buttons::icon_button_with_color;
 use crate::ui_components::icons::Icon;
 use crate::view_components::DismissibleToast;
@@ -60,7 +61,7 @@ use crate::word_block_editor::{
 };
 use crate::workspace::{ToastStack, WorkspaceAction};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 mod inheritance;
 
@@ -327,9 +328,9 @@ impl SharingDialog {
                 CloudModelEvent::ObjectPermissionsUpdated { type_and_id, .. } => type_and_id,
                 CloudModelEvent::ObjectDeleted { .. } => return,
                 CloudModelEvent::ObjectForceExpanded { .. } => return,
-                CloudModelEvent::ObjectSynced { .. } | CloudModelEvent::InitialLoadCompleted => {
-                    return
-                }
+                CloudModelEvent::ObjectSynced { .. }
+                | CloudModelEvent::InitialLoadCompleted
+                | CloudModelEvent::EnvironmentLastTaskRunTimestampsUpdated => return,
             };
 
             if event_object_id.sync_id().into_server() == Some(target_server_id) {
@@ -374,10 +375,10 @@ impl SharingDialog {
         } = event
         {
             // Check if this event is for the conversation we're currently showing
-            if let Some(ShareableObject::AIConversation(target_id)) = &self.target {
-                if target_id == conversation_id {
-                    self.refresh_object_permission_states(ctx);
-                }
+            if let Some(ShareableObject::AIConversation(target_id)) = &self.target
+                && target_id == conversation_id
+            {
+                self.refresh_object_permission_states(ctx);
             }
         }
     }
@@ -401,13 +402,24 @@ impl SharingDialog {
             .is_some_and(|target| matches!(target, ShareableObject::Session { .. }))
     }
 
+    pub(crate) fn has_shared_session_link(&self, app: &AppContext) -> bool {
+        self.has_shared_session_target() && self.target_link(app).is_some()
+    }
+
     pub fn show_qr_code(&mut self, ctx: &mut ViewContext<Self>) {
-        if matches!(self.target, Some(ShareableObject::Session { .. })) {
+        if self.has_shared_session_link(ctx) {
             self.set_open_menu(OpenMenuState::None, ctx);
             self.mode = SharingDialogMode::QrCode;
             ctx.focus_self();
             ctx.notify();
         }
+    }
+
+    pub(crate) fn refresh_shared_session_link(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.mode == SharingDialogMode::QrCode && !self.has_shared_session_link(ctx) {
+            self.mode = SharingDialogMode::Access;
+        }
+        ctx.notify();
     }
 
     /// Returns `true` if the target is an AI conversation that cannot be shared.
@@ -436,6 +448,12 @@ impl SharingDialog {
     fn target_cloud_object<'a>(&self, app: &'a AppContext) -> Option<&'a dyn CloudObject> {
         self.target_cloud_object_id(app)
             .and_then(|id| CloudModel::as_ref(app).get_by_uid(&id.uid()))
+    }
+
+    fn window_team_uid(&self, app: &AppContext) -> Option<ServerId> {
+        UserWorkspaces::as_ref(app)
+            .team_for_view_handle(&self.self_handle, app)
+            .map(|team| team.uid)
     }
 
     /// The name of the targeted object.
@@ -502,28 +520,24 @@ impl SharingDialog {
                                 if let Owner::User {
                                     user_uid: owner_uid,
                                 } = permissions.space
+                                    && owner_uid == user_uid
                                 {
-                                    if owner_uid == user_uid {
-                                        return Some(SharingAccessLevel::Full);
-                                    }
+                                    return Some(SharingAccessLevel::Full);
                                 }
                                 // Check if user is on the owning team (for team-owned conversations)
-                                if let Owner::Team { team_uid } = permissions.space {
-                                    if UserWorkspaces::as_ref(app).current_team_uid()
-                                        == Some(team_uid)
-                                    {
-                                        return Some(SharingAccessLevel::Full);
-                                    }
+                                if let Owner::Team { team_uid } = permissions.space
+                                    && self.window_team_uid(app) == Some(team_uid)
+                                {
+                                    return Some(SharingAccessLevel::Full);
                                 }
                                 // Check if user is in guests
                                 let user_firebase_uid = user_uid.to_string();
                                 permissions.guests.iter().find_map(|guest| {
                                     if let ServerGuestSubject::User { firebase_uid } =
                                         &guest.subject
+                                        && firebase_uid == &user_firebase_uid
                                     {
-                                        if firebase_uid == &user_firebase_uid {
-                                            return Some(guest.access_level.into());
-                                        }
+                                        return Some(guest.access_level.into());
                                     }
                                     None
                                 })
@@ -537,7 +551,7 @@ impl SharingDialog {
                     }
                 }
             }
-            Some(ShareableObject::Session { ref handle, .. }) => {
+            Some(ShareableObject::Session { handle, .. }) => {
                 // Sharer always has Full access.
                 if handle.upgrade(app).is_some_and(|handle| {
                     handle
@@ -550,19 +564,18 @@ impl SharingDialog {
 
                 if let Some(owner) = self.owner(app) {
                     // If we are the user owner, we have Full access.
-                    if let Some(user_uid) = AuthStateProvider::as_ref(app).get().user_id() {
-                        if owner.is_user(user_uid) {
-                            return SharingAccessLevel::Full;
-                        }
+                    if let Some(user_uid) = AuthStateProvider::as_ref(app).get().user_id()
+                        && owner.is_user(user_uid)
+                    {
+                        return SharingAccessLevel::Full;
                     }
                     // Team members of owning team have Full access.
-                    if let Subject::Team(team_kind) = owner {
-                        if UserWorkspaces::as_ref(app)
-                            .current_team_uid()
+                    if let Subject::Team(team_kind) = owner
+                        && self
+                            .window_team_uid(app)
                             .is_some_and(|current| current == team_kind.team_uid())
-                        {
-                            return SharingAccessLevel::Full;
-                        }
+                    {
+                        return SharingAccessLevel::Full;
                     }
                 }
 
@@ -573,28 +586,24 @@ impl SharingDialog {
                     level = level.max(link_level);
                 }
 
-                if let Some(team_level) = self.team_sharing_state.access_level {
-                    if let Some(TeamKind::SharedSessionTeam { ref team_uid, .. }) =
+                if let Some(team_level) = self.team_sharing_state.access_level
+                    && let Some(TeamKind::SharedSessionTeam { ref team_uid, .. }) =
                         self.team_sharing_state.team
-                    {
-                        if UserWorkspaces::as_ref(app)
-                            .current_team_uid()
-                            .is_some_and(|current| current == *team_uid)
-                        {
-                            level = level.max(team_level);
-                        }
-                    }
+                    && self
+                        .window_team_uid(app)
+                        .is_some_and(|current| current == *team_uid)
+                {
+                    level = level.max(team_level);
                 }
 
-                if let Some(user_uid) = AuthStateProvider::as_ref(app).get().user_id() {
-                    if let Some(guest_level) = self
+                if let Some(user_uid) = AuthStateProvider::as_ref(app).get().user_id()
+                    && let Some(guest_level) = self
                         .guest_states
                         .iter()
                         .find(|guest| guest.subject.is_user(user_uid))
                         .map(|guest| guest.current_access_level)
-                    {
-                        level = level.max(guest_level);
-                    }
+                {
+                    level = level.max(guest_level);
                 }
 
                 level
@@ -661,13 +670,12 @@ impl SharingDialog {
                 // Check if team has Full access - if so, team is the owner.
                 if let Some(TeamKind::SharedSessionTeam { team_uid, name }) =
                     self.team_sharing_state.team.as_ref()
+                    && self.team_sharing_state.access_level == Some(SharingAccessLevel::Full)
                 {
-                    if self.team_sharing_state.access_level == Some(SharingAccessLevel::Full) {
-                        return Some(Subject::Team(TeamKind::SharedSessionTeam {
-                            team_uid: *team_uid,
-                            name: name.clone(),
-                        }));
-                    }
+                    return Some(Subject::Team(TeamKind::SharedSessionTeam {
+                        team_uid: *team_uid,
+                        name: name.clone(),
+                    }));
                 }
 
                 // Otherwise, the sharer is the owner.
@@ -985,14 +993,16 @@ impl SharingDialog {
             let is_session = matches!(self.target, Some(ShareableObject::Session { .. }));
 
             self.guest_menu.update(ctx, |menu, ctx| {
-                let mut items = vec![MenuItemFields::new(SharingAccessLevel::View.label())
-                    .with_on_select_action(SharingDialogAction::SetGuestAccessLevel(
-                        SharingAccessLevel::View,
-                    ))
-                    .with_disabled(
-                        inherited_access && current_access_level >= SharingAccessLevel::View,
-                    )
-                    .into_item()];
+                let mut items = vec![
+                    MenuItemFields::new(SharingAccessLevel::View.label())
+                        .with_on_select_action(SharingDialogAction::SetGuestAccessLevel(
+                            SharingAccessLevel::View,
+                        ))
+                        .with_disabled(
+                            inherited_access && current_access_level >= SharingAccessLevel::View,
+                        )
+                        .into_item(),
+                ];
 
                 // Only add Edit option if not an AI conversation
                 if !is_ai_conversation {
@@ -1088,7 +1098,7 @@ impl SharingDialog {
         };
 
         let Some(handle) = handle.upgrade(ctx) else {
-            log::error!(
+            report_error!(
                 "Unable to upgrade handle to TerminalView when removing guest from session"
             );
             return;
@@ -1193,7 +1203,7 @@ impl SharingDialog {
         };
 
         let Some(handle) = handle.upgrade(ctx) else {
-            log::error!(
+            report_error!(
                 "Unable to upgrade handle to TerminalView when setting guest ACL for session"
             );
             return;
@@ -1366,11 +1376,13 @@ impl SharingDialog {
         let is_ai_conversation = matches!(self.target, Some(ShareableObject::AIConversation(_)));
 
         self.invite_form.access_level_menu.update(ctx, |menu, ctx| {
-            let mut items = vec![MenuItemFields::new(SharingAccessLevel::View.label())
-                .with_on_select_action(SharingDialogAction::SetInviteAccessLevel(
-                    SharingAccessLevel::View,
-                ))
-                .into_item()];
+            let mut items = vec![
+                MenuItemFields::new(SharingAccessLevel::View.label())
+                    .with_on_select_action(SharingDialogAction::SetInviteAccessLevel(
+                        SharingAccessLevel::View,
+                    ))
+                    .into_item(),
+            ];
 
             // Only add Edit option if not an AI conversation
             if !is_ai_conversation {
@@ -1621,7 +1633,9 @@ impl SharingDialog {
             }
             Some(ShareableObject::Session { handle, .. }) => {
                 let Some(handle) = handle.upgrade(ctx) else {
-                    log::error!("Unable to upgrade handle to TerminalView when sending email invitations for session");
+                    report_error!(
+                        "Unable to upgrade handle to TerminalView when sending email invitations for session"
+                    );
                     return;
                 };
 
@@ -2121,17 +2135,17 @@ impl SharingDialog {
         // to add permissions for.
         let team_kind = if can_edit_access {
             TeamKind::Team {
-                team_uid: UserWorkspaces::as_ref(app).current_team_uid()?,
+                team_uid: self.window_team_uid(app)?,
             }
         } else {
             self.team_sharing_state.team.clone()?
         };
         // If this team is the owner of the object, don't render this team sharing ACL since
         // we already rendered the team as the owner (and you can't change ACLs on it).
-        if let Some(Subject::Team(team_owner)) = self.owner(app) {
-            if team_owner.team_uid() == team_kind.team_uid() {
-                return None;
-            }
+        if let Some(Subject::Team(team_owner)) = self.owner(app)
+            && team_owner.team_uid() == team_kind.team_uid()
+        {
+            return None;
         }
 
         let mut subject_row = Flex::row();
@@ -2784,7 +2798,7 @@ impl SharingDialog {
             .on_click(|ctx, _, _| ctx.dispatch_typed_action(SharingDialogAction::CopyLink))
             .finish();
 
-        let qr_button = matches!(self.target, Some(ShareableObject::Session { .. })).then(|| {
+        let qr_button = self.has_shared_session_link(app).then(|| {
             self.render_footer_icon_button(
                 Icon::QrCode,
                 SharingDialogAction::ShowQrCode,
@@ -2846,9 +2860,9 @@ impl View for SharingDialog {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
-        let (contents, width) = if self.mode == SharingDialogMode::QrCode
-            && matches!(self.target, Some(ShareableObject::Session { .. }))
-        {
+        let should_render_qr_code =
+            self.mode == SharingDialogMode::QrCode && self.has_shared_session_link(app);
+        let (contents, width) = if should_render_qr_code {
             (self.render_qr_dialog(appearance, app), QR_DIALOG_WIDTH)
         } else {
             let mut contents = Flex::column();
@@ -2959,7 +2973,10 @@ impl TypedActionView for SharingDialog {
                     let Some(view) = handle.upgrade(ctx) else {
                         return;
                     };
-                    let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() else {
+                    let Some(team_uid) = UserWorkspaces::as_ref(ctx)
+                        .team_for_view(ctx)
+                        .map(|team| team.uid)
+                    else {
                         return;
                     };
 
@@ -3001,3 +3018,7 @@ impl TypedActionView for SharingDialog {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

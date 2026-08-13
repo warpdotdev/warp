@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use warp_core::features::FeatureFlag;
-use warp_core::send_telemetry_from_ctx;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, ViewHandle, WindowId};
 
+use crate::BlocklistAIHistoryModel;
 use crate::ai::active_agent_views_model::{ActiveAgentViewsEvent, ActiveAgentViewsModel};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent_management::notifications::{
@@ -12,15 +12,12 @@ use crate::ai::agent_management::notifications::{
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, ConversationStatusUpdate, QueuedQueryModel};
-use crate::server::telemetry::TelemetryEvent;
-use crate::settings::AISettings;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::{CLIAgent, TerminalView};
 use crate::workspace::util::is_terminal_view_in_same_tab;
 use crate::workspace::{Workspace, WorkspaceRegistry};
-use crate::BlocklistAIHistoryModel;
 
 /// Singleton model responsible for triggering in-app notifications on blocking conversation
 /// status updates and tracking/storing these notifications for the notifications mailbox.
@@ -169,6 +166,35 @@ impl AgentNotificationsModel {
                         title,
                         message.to_owned(),
                         NotificationCategory::Complete,
+                        NotificationSourceAgent::CLI {
+                            agent: *agent,
+                            is_ambient: metadata.is_ambient,
+                        },
+                        NotificationOrigin::CLISession(*terminal_view_id),
+                        *terminal_view_id,
+                        vec![],
+                        metadata.branch,
+                        ctx,
+                    );
+                }
+                CLIAgentSessionStatus::Failed {
+                    error_type,
+                    message,
+                } => {
+                    let title = session_context
+                        .display_title()
+                        .unwrap_or_else(|| format!("{} failed", agent.display_name()));
+                    let body = match (message.as_deref(), error_type.as_deref()) {
+                        (Some(msg), Some(kind)) => format!("{kind}: {msg}"),
+                        (Some(msg), None) => msg.to_owned(),
+                        (None, Some(kind)) => kind.to_owned(),
+                        (None, None) => "The agent encountered an error.".to_owned(),
+                    };
+                    let metadata = TerminalViewMetadata::lookup(*terminal_view_id, ctx);
+                    self.add_notification(
+                        title,
+                        body,
+                        NotificationCategory::Error,
                         NotificationSourceAgent::CLI {
                             agent: *agent,
                             is_ambient: metadata.is_ambient,
@@ -437,8 +463,6 @@ impl AgentNotificationsModel {
         branch: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let show_agent_notifications = *AISettings::as_ref(ctx).show_agent_notifications;
-
         let is_visible = is_terminal_view_visible(terminal_view_id, ctx);
         let item = NotificationItem::new(
             title,
@@ -451,14 +475,6 @@ impl AgentNotificationsModel {
             artifacts,
             branch,
         );
-        if show_agent_notifications {
-            send_telemetry_from_ctx!(
-                TelemetryEvent::AgentNotificationShown {
-                    agent_variant: agent.into(),
-                },
-                ctx
-            );
-        }
 
         let id = item.id;
         self.notifications.push(item);
@@ -576,10 +592,10 @@ fn find_terminal_view_by_id(
         for pane_group in workspace_handle.as_ref(app).tab_views() {
             let pane_group = pane_group.as_ref(app);
             for pane_id in pane_group.terminal_pane_ids() {
-                if let Some(terminal_view) = pane_group.terminal_view_from_pane_id(pane_id, app) {
-                    if terminal_view.id() == terminal_view_id {
-                        return Some(terminal_view);
-                    }
+                if let Some(terminal_view) = pane_group.terminal_view_from_pane_id(pane_id, app)
+                    && terminal_view.id() == terminal_view_id
+                {
+                    return Some(terminal_view);
                 }
             }
         }

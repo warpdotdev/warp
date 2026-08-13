@@ -6,7 +6,8 @@
 
 use super::*;
 use crate::elements::tui::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiRect, TuiSize,
+    TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext, TuiPaintSurface,
+    TuiScreenPosition, TuiSize,
 };
 use crate::platform::WindowStyle;
 
@@ -158,7 +159,13 @@ impl TuiElement for TuiEmpty {
         TuiSize::ZERO
     }
 
-    fn render(&self, _area: TuiRect, _buffer: &mut TuiBuffer, _ctx: &mut TuiPaintContext) {}
+    fn render(
+        &mut self,
+        _origin: TuiScreenPosition,
+        _surface: &mut TuiPaintSurface<'_>,
+        _ctx: &mut TuiPaintContext,
+    ) {
+    }
 }
 
 impl TuiView for ActionView {

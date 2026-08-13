@@ -8,8 +8,9 @@ use futures::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWr
 use futures::lock::Mutex;
 use jsonrpc::Transport;
 use simple_logger::SimpleLogger;
-use warpui_core::r#async::executor::{Background, BackgroundTask};
+use warp_errors::report_error;
 use warpui_core::r#async::Timer;
+use warpui_core::r#async::executor::{Background, BackgroundTask};
 
 /// Transport implementation for LSP communication over process stdin/stdout.
 /// Also manages the LSP server process lifecycle with graceful shutdown capabilities.
@@ -74,12 +75,14 @@ impl ProcessTransport {
                         log::debug!("ProcessTransport [pid: {child_pid}] stderr: {message}");
                     }
                     Err(e) => {
-                        log::error!(
-                            "ProcessTransport [pid: {child_pid}]: Error reading stderr: {e}"
-                        );
                         if let Some(ref logger) = logger {
                             logger.log(format!("[error] Error reading stderr: {e}"));
                         }
+                        report_error!(
+                            anyhow::Error::new(e)
+                                .context("ProcessTransport: Error reading stderr"),
+                            extra: { "pid" => %child_pid }
+                        );
                         break;
                     }
                 }
@@ -183,10 +186,10 @@ impl Transport for ProcessTransport {
         // Wait for the stderr task because it owns the last logger clone.
         // Joining it ensures that clone is dropped before restart so the same
         // log path can be registered again without colliding with a stale entry.
-        if let Some(stderr_task) = self.stderr_task.lock().await.take() {
-            if let Err(e) = stderr_task.await {
-                log::warn!("LSP: Failed to join stderr task: {e}");
-            }
+        if let Some(stderr_task) = self.stderr_task.lock().await.take()
+            && let Err(e) = stderr_task.await
+        {
+            log::warn!("LSP: Failed to join stderr task: {e}");
         }
         log::info!("LSP: Server shut down.");
         Ok(())

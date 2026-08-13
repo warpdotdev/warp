@@ -1,8 +1,8 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
@@ -21,9 +21,11 @@ use session_sharing_protocol::sharer::{
 };
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::send_telemetry_from_ctx;
-use warpui::{AppContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
+use warp_errors::report_error;
+use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId};
 
 use super::terminal_manager::{TerminalManager, TerminalSurfaceInit, TerminalSurfaceResult};
+use crate::NetworkStatus;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
@@ -52,23 +54,22 @@ use crate::terminal::shared_session::presence_manager::PresenceManager;
 use crate::terminal::shared_session::replay_agent_conversations::reconstruct_response_events_from_conversations;
 use crate::terminal::shared_session::settings::SharedSessionSettings;
 use crate::terminal::shared_session::shared_handlers::{
-    apply_auto_approve_agent_actions_update, apply_cli_agent_state_update, apply_input_mode_update,
-    apply_selected_agent_model_update, apply_selected_conversation_update,
-    build_selected_conversation_update, RemoteUpdateGuard,
+    RemoteUpdateGuard, apply_auto_approve_agent_actions_update, apply_cli_agent_state_update,
+    apply_input_mode_update, apply_selected_agent_model_update, apply_selected_conversation_update,
+    build_selected_conversation_update,
 };
 use crate::terminal::shared_session::sharer::network::{
-    failed_to_add_guests_user_error, failed_to_initialize_session_user_error,
-    session_terminated_reason_string, Network, NetworkEvent,
+    Network, NetworkEvent, failed_to_add_guests_user_error,
+    failed_to_initialize_session_user_error, session_terminated_reason_string,
 };
 use crate::terminal::shared_session::{
     SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
-    SharedSessionStatus,
+    SharedSessionStatus, max_session_size,
 };
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as TerminalViewEvent};
 use crate::terminal::writeable_pty::terminal_manager_util::wire_up_remote_server_controller_with_view;
 use crate::terminal::{TerminalManager as TerminalManagerTrait, TerminalModel, TerminalView};
 use crate::view_components::ToastFlavor;
-use crate::NetworkStatus;
 
 const ACL_UPDATE_FAILURE_RESPONSE: &str = "Something went wrong. Please try again.";
 
@@ -114,11 +115,7 @@ pub(crate) fn terminal_view_restored_blocks(
                     .collect();
                 // Because there are multiple conversations that may have interleaved timestamps, we need to sort by start_ts
                 items.sort_by_key(|item| item.start_ts());
-                if items.is_empty() {
-                    None
-                } else {
-                    Some(items)
-                }
+                if items.is_empty() { None } else { Some(items) }
             }
             _ => None,
         })
@@ -131,7 +128,7 @@ pub(crate) fn create_terminal_view_surface(
     ctx: &mut AppContext,
 ) -> TerminalSurfaceResult<
     TerminalView,
-    impl FnOnce(&mut TerminalManager<TerminalView>, &ViewHandle<TerminalView>, &mut AppContext),
+    impl FnOnce(&mut TerminalManager<TerminalView>, &ViewHandle<TerminalView>, &mut AppContext) + use<>,
 > {
     let TerminalSurfaceInit {
         wakeups_rx,
@@ -265,7 +262,7 @@ fn wire_up_terminal_view_session_sharing(
         });
         if let Some(network) = session_sharer_clone.borrow().as_ref() {
             let Ok(serialized_prompt) = serde_json::to_string(&prompt_snapshot) else {
-                log::error!("Failed to serialize prompt snapshot to send active prompt update to shared session server");
+                report_error!("Failed to serialize prompt snapshot to send active prompt update to shared session server");
                 return
             };
             network.update(ctx, |network, _| {
@@ -668,14 +665,13 @@ impl TerminalManager<TerminalView> {
         ai_context_model: &ModelHandle<BlocklistAIContextModel>,
         ctx: &mut AppContext,
     ) {
-        if let Some(network) = session_sharer.borrow().as_ref() {
-            if let Some(update) =
+        if let Some(network) = session_sharer.borrow().as_ref()
+            && let Some(update) =
                 build_selected_conversation_update(agent_view_controller, ai_context_model, ctx)
-            {
-                network.update(ctx, |network, _| {
-                    network.send_universal_developer_input_context_update(update)
-                });
-            }
+        {
+            network.update(ctx, |network, _| {
+                network.send_universal_developer_input_context_update(update)
+            });
         }
     }
 
@@ -735,7 +731,7 @@ impl TerminalManager<TerminalView> {
         } else {
             let current_prompt_snapshot = prompt_type.as_ref(ctx).snapshot(ctx);
             let Ok(serialized_prompt) = serde_json::to_string(&current_prompt_snapshot) else {
-                log::error!(
+                report_error!(
                     "Failed to serialize prompt snapshot to send active prompt update to shared session server"
                 );
                 return;
@@ -748,15 +744,9 @@ impl TerminalManager<TerminalView> {
         });
 
         let (events_tx, events_rx) = async_channel::unbounded();
-        let input_replica_id = terminal_view
-            .as_ref(ctx)
-            .input()
-            .as_ref(ctx)
-            .editor()
-            .as_ref(ctx)
-            .replica_id(ctx);
 
         let scrollback_first_block_index = scrollback_type.first_block_index(&model.lock());
+        let max_session_size = max_session_size(window_id, ctx);
 
         // TODO: rather than picking which constructor we use here,
         // we might want to use a dedicated terminal manager for tests.
@@ -766,14 +756,20 @@ impl TerminalManager<TerminalView> {
                 let network = ctx.add_model(|ctx| Network::new_for_test(
                     model.clone(),
                     events_rx,
-                    scrollback_type,
                     active_prompt,
                     selection,
-                    input_replica_id,
+                    max_session_size,
                     ctx,
                 ));
             } else {
                 let input_config = terminal_view.as_ref(ctx).input_config(ctx);
+                let input_replica_id = terminal_view
+                    .as_ref(ctx)
+                    .input()
+                    .as_ref(ctx)
+                    .editor()
+                    .as_ref(ctx)
+                    .replica_id(ctx);
                 // Compute current auto-approve state from the AI context model
                 let auto_approve_agent_actions = terminal_view
                     .as_ref(ctx)
@@ -856,6 +852,7 @@ impl TerminalManager<TerminalView> {
                         universal_developer_input_context,
                         lifetime,
                         source.clone(),
+                        max_session_size,
                         ctx,
                     )
                 });
@@ -967,6 +964,7 @@ impl TerminalManager<TerminalView> {
                 });
 
                 terminal_view.update(ctx, |view, ctx| {
+                    view.notify_shared_session_link_changed(ctx);
                     let reason_string = failed_to_initialize_session_user_error(reason);
 
                     if matches!(
@@ -1184,6 +1182,7 @@ impl TerminalManager<TerminalView> {
                     view.input().update(ctx, |input, ctx| {
                         input.process_remote_edits(block_id, operations.clone(), ctx);
                     });
+                    emit_shared_session_viewer_input(view, ctx);
                 });
             }
             NetworkEvent::CommandExecutionRequested {
@@ -1243,6 +1242,7 @@ impl TerminalManager<TerminalView> {
                             ctx,
                         );
                     });
+                    emit_shared_session_viewer_input(view, ctx);
                 });
             }
             NetworkEvent::WriteToPtyRequested { id, bytes } => {
@@ -1288,6 +1288,7 @@ impl TerminalManager<TerminalView> {
 
                 terminal_view.update(ctx, |view, ctx| {
                     view.write_viewer_bytes_to_pty(bytes.clone(), ctx);
+                    emit_shared_session_viewer_input(view, ctx);
                 });
             }
             NetworkEvent::AgentPromptRequested {
@@ -2009,6 +2010,19 @@ impl TerminalManagerTrait for TerminalManager<TerminalView> {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+}
+
+/// Reports viewer input on a cloud agent's shared session so the agent driver can treat someone
+/// debugging in the session as activity.
+///
+/// Scoped to those sessions because a cloud agent's sharer is a process that can hold the session
+/// open on the strength of this signal. Ordinary shared sessions have no consumer for it, and
+/// these fire at keystroke frequency.
+fn emit_shared_session_viewer_input(view: &TerminalView, ctx: &mut ViewContext<TerminalView>) {
+    if !view.model.lock().is_shared_ambient_agent_session() {
+        return;
+    }
+    ctx.emit(TerminalViewEvent::SharedSessionViewerInput);
 }
 
 /// Send a Shutdown event to each PTY's event loop and waits for the

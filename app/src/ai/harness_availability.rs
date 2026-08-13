@@ -6,17 +6,17 @@ use serde::{Deserialize, Serialize};
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences;
+use warp_errors::report_error;
 use warp_managed_secrets::client::SecretOwner;
 use warp_managed_secrets::{ManagedSecretManager, ManagedSecretValue};
 use warpui::{Entity, ModelContext, RequestState, SingletonEntity};
 
 use crate::ai::harness_display;
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
-use crate::report_error;
 use crate::server::retry_strategies::{
-    is_transient_graphql_or_http_error, OUT_OF_BAND_REQUEST_RETRY_STRATEGY,
+    OUT_OF_BAND_REQUEST_RETRY_STRATEGY, is_transient_graphql_or_http_error,
 };
 use crate::server::server_api::ServerApiProvider;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
@@ -47,7 +47,7 @@ pub struct HarnessAvailability {
 fn default_harnesses() -> Vec<HarnessAvailability> {
     vec![HarnessAvailability {
         harness: Harness::Oz,
-        display_name: "Warp".to_string(),
+        display_name: harness_display::display_name(Harness::Oz).to_string(),
         enabled: true,
         available_models: vec![],
     }]
@@ -349,6 +349,7 @@ impl HarnessAvailabilityModel {
             async move { ai_client.get_available_harnesses().await },
             |me, result, ctx| match result {
                 Ok(new_harnesses) => {
+                    let new_harnesses = normalize_harness_display_names(new_harnesses);
                     if new_harnesses != me.harnesses {
                         me.harnesses = new_harnesses;
                         me.cache(ctx);
@@ -368,13 +369,12 @@ impl HarnessAvailabilityModel {
     }
 
     fn cache(&self, ctx: &ModelContext<Self>) {
-        if let Ok(serialized) = serde_json::to_string(&self.harnesses) {
-            if let Err(e) = ctx
+        if let Ok(serialized) = serde_json::to_string(&self.harnesses)
+            && let Err(e) = ctx
                 .private_user_preferences()
                 .write_value(CACHE_KEY, serialized)
-            {
-                report_error!(anyhow::anyhow!(e).context("Failed to cache available harnesses"));
-            }
+        {
+            report_error!(anyhow::anyhow!(e).context("Failed to cache available harnesses"));
         }
     }
 }
@@ -384,7 +384,23 @@ fn get_cached(ctx: &ModelContext<HarnessAvailabilityModel>) -> Option<Vec<Harnes
         .private_user_preferences()
         .read_value(CACHE_KEY)
         .ok()??;
-    serde_json::from_str::<Vec<HarnessAvailability>>(&raw).ok()
+    serde_json::from_str::<Vec<HarnessAvailability>>(&raw)
+        .ok()
+        .map(normalize_harness_display_names)
+}
+
+fn normalize_harness_display_names(
+    harnesses: Vec<HarnessAvailability>,
+) -> Vec<HarnessAvailability> {
+    harnesses
+        .into_iter()
+        .map(|mut harness| {
+            if harness.harness == Harness::Oz {
+                harness.display_name = harness_display::display_name(Harness::Oz).to_string();
+            }
+            harness
+        })
+        .collect()
 }
 
 fn secret_owner_from_space(space: &warp_graphql::object::Space) -> SecretOwner {

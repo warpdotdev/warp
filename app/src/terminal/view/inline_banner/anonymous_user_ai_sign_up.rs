@@ -1,10 +1,10 @@
+use warpui::Element;
 use warpui::elements::{
     Container, CornerRadius, CrossAxisAlignment, Flex, Icon, MainAxisAlignment, MainAxisSize,
     MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::Element;
 
 use super::{
     INLINE_BANNER_BUTTON_HOVER_OPACITY, INLINE_BANNER_BUTTON_PADDING,

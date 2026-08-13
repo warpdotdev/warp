@@ -1,8 +1,8 @@
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 
-use crate::presenter::PositionCache;
 use crate::SizeConstraint;
+use crate::presenter::PositionCache;
 
 /// Defines the positioning for an element in a stack on both X and Y axes relative to the parent of
 /// the stack or another child element within the stack. The child element is anchored to
@@ -615,7 +615,10 @@ impl PositioningAxis<XAxisAnchor> {
                         Ok(Some(max_width.clamp(0., window_width)))
                     }
                     PositioningAnchor::RelativeToParent => {
-                        debug_assert!(false, "Bounding element size to window is not supported for parent-offset stack children.");
+                        debug_assert!(
+                            false,
+                            "Bounding element size to window is not supported for parent-offset stack children."
+                        );
                         Ok(None)
                     }
                 }
@@ -818,7 +821,10 @@ impl PositioningAxis<YAxisAnchor> {
                         Ok(Some(max_height.clamp(0., window_height)))
                     }
                     PositioningAnchor::RelativeToParent => {
-                        debug_assert!(false, "Bounding element size to window is not supported for parent-offset stack children.");
+                        debug_assert!(
+                            false,
+                            "Bounding element size to window is not supported for parent-offset stack children."
+                        );
                         Ok(None)
                     }
                 }

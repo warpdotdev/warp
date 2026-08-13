@@ -3,14 +3,15 @@ use std::time::{Duration, SystemTime};
 pub use ai::api_keys::AwsCredentials;
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy, AwsCredentialsState};
 use anyhow::Context;
-use aws_credential_types::provider::error::CredentialsError;
 use aws_credential_types::provider::ProvideCredentials;
+use aws_credential_types::provider::error::CredentialsError;
 use futures::channel::oneshot::channel;
 use futures::future::BoxFuture;
 use tokio::sync::Mutex;
 use vec1::vec1;
-use warp_managed_secrets::client::IdentityTokenOptions;
+use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretManager;
+use warp_managed_secrets::client::IdentityTokenOptions;
 use warpui::{ModelContext, ModelHandle, SingletonEntity};
 
 use crate::settings::{AISettings, AISettingsChangedEvent};
@@ -101,10 +102,10 @@ static STS_CLIENT_CACHE: Mutex<Option<(String, aws_sdk_sts::Client)>> = Mutex::c
 
 pub(crate) async fn sts_client(region: &str) -> aws_sdk_sts::Client {
     let mut cache = STS_CLIENT_CACHE.lock().await;
-    if let Some((cached_region, client)) = cache.as_ref() {
-        if cached_region == region {
-            return client.clone();
-        }
+    if let Some((cached_region, client)) = cache.as_ref()
+        && cached_region == region
+    {
+        return client.clone();
     }
 
     let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
@@ -359,12 +360,15 @@ fn refresh_aws_credentials_oidc(
                 .send()
                 .await
                 .map_err(|err| {
-                    log::error!("Bedrock OIDC: STS AssumeRoleWithWebIdentity SDK error: {err:#?}");
                     // Surface the AWS service error message for a user-friendly error.
                     let detail = err
                         .as_service_error()
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| err.to_string());
+                    report_error!(
+                        anyhow::Error::new(err)
+                            .context("Bedrock OIDC: STS AssumeRoleWithWebIdentity SDK error")
+                    );
                     anyhow::anyhow!("STS AssumeRoleWithWebIdentity failed: {detail}")
                 })?
                 .credentials
@@ -390,8 +394,8 @@ fn refresh_aws_credentials_oidc(
                     )
                 }
                 Err(e) => {
-                    log::error!("Bedrock OIDC: failed to load credentials: {e:#}");
                     let message = e.to_string();
+                    report_error!(e.context("Bedrock OIDC: failed to load credentials"));
                     (
                         AwsCredentialsState::Failed {
                             message: message.clone(),

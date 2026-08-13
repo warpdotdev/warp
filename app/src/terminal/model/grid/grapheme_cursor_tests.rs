@@ -9,7 +9,7 @@ fn cell(c: char) -> Cell {
 #[test]
 fn test_cursor() {
     macro_rules! assert_cursor_contents_eq {
-        ($c:expr, $cursor:ident) => {
+        ($c:expr_2021, $cursor:ident) => {
             let item = $cursor
                 .current_item()
                 .expect("cursor location should be valid");

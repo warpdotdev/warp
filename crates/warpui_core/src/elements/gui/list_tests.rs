@@ -1,4 +1,4 @@
-use super::{number_to_alphabet, number_to_roman, ListNumbering};
+use super::{ListNumbering, number_to_alphabet, number_to_roman};
 use crate::elements::OrderedListLabel;
 
 #[test]

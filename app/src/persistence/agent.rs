@@ -1,15 +1,16 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::NaiveDateTime;
+use diesel::SqliteConnection;
 use diesel::associations::HasTable;
 use diesel::prelude::*;
 use diesel::result::Error;
-use diesel::SqliteConnection;
 use prost::Message;
+use warp_errors::report_error;
 use warp_multi_agent_api as api;
 
-use super::model::{AgentConversation, AgentConversationData, AgentConversationSummary};
 use super::ConversationSummaryBackfill;
+use super::model::{AgentConversation, AgentConversationData, AgentConversationSummary};
 use crate::persistence::model::{AgentConversationRecord, AgentTaskRecord};
 use crate::persistence::schema::{self, agent_conversations, agent_tasks};
 
@@ -270,7 +271,9 @@ pub(super) fn read_agent_conversation_metadata(
                 match api::Task::decode(&task_record.task[..]) {
                     Ok(task) => decoded_tasks.push(task),
                     Err(e) => {
-                        log::error!("Failed to decode task protobuf: {e}");
+                        report_error!(
+                            anyhow::Error::new(e).context("Failed to decode task protobuf")
+                        );
                         decode_failed = true;
                         break;
                     }
@@ -376,7 +379,7 @@ pub(crate) fn read_agent_conversation_by_id(
         match api::Task::decode(&task_record.task[..]) {
             Ok(task) => decoded_tasks.push(task),
             Err(e) => {
-                log::error!("Failed to decode task protobuf: {e}");
+                report_error!(anyhow::Error::new(e).context("Failed to decode task protobuf"));
             }
         }
     }

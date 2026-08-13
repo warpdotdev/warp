@@ -33,8 +33,8 @@ use std::fmt::Write;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ai::skills::SkillReference;
@@ -42,8 +42,8 @@ use async_channel::Sender;
 use base64::Engine as _;
 #[cfg(feature = "local_fs")]
 use diesel::SqliteConnection;
-use futures::stream::AbortHandle;
 use futures::FutureExt as _;
+use futures::stream::AbortHandle;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use ordered_float::Float;
@@ -60,48 +60,50 @@ use vec1::Vec1;
 use vim::vim::{VimHandler, VimMode};
 use warp_cli::agent::Harness;
 use warp_completer::completer::{
-    self, CompleterOptions, CompletionContext, CompletionsFallbackStrategy, Description, Match,
-    MatchStrategy, MatchType, PathSeparators, SuggestionResults,
+    self, CompleterOptions, CompletionContext, CompletionsFallbackStrategy, Description,
+    ExplicitTabCompletion, MatchStrategy, MatchType, PathSeparators, PreparedSuggestion,
+    SuggestionResults,
 };
 use warp_completer::meta::{HasSpan, Spanned};
-use warp_completer::parsers::simple::command_at_cursor_position;
 use warp_completer::parsers::LiteCommand;
+use warp_completer::parsers::simple::command_at_cursor_position;
 use warp_completer::signatures::CommandRegistry;
 use warp_completer::util::parse_current_commands_and_tokens;
-use warp_core::context_flag::ContextFlag;
 use warp_core::r#async::debounce;
-use warp_core::ui::theme::color::internal_colors;
+use warp_core::context_flag::ContextFlag;
 use warp_core::ui::theme::AnsiColorIdentifier;
+use warp_core::ui::theme::color::internal_colors;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_editor::editor::NavigationKey;
+use warp_errors::{report_error, report_if_error};
 use warp_util::path::ShellFamily;
+pub use warpui::WindowId;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use warpui::r#async::FutureExt as _;
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::clipboard::{ClipboardContent, ImageData};
 use warpui::clipboard_utils::CLIPBOARD_IMAGE_MIME_TYPES;
 use warpui::color::ColorU;
 use warpui::elements::{
-    resizable_state_handle, Align, AnchorPair, ChildAnchor, Clipped, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, DispatchEventResult, DropTargetData, Element, EventHandler,
-    Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType,
-    ParentAnchor, ParentElement, PositionedElementOffsetBounds, PositioningAxis, Radius,
-    ResizableStateHandle, SavePosition, SelectionHandle, Text, Wrap, XAxisAnchor, YAxisAnchor,
+    Align, AnchorPair, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, DispatchEventResult, DropTargetData, Element, EventHandler, Flex,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, OffsetType, ParentAnchor,
+    ParentElement, PositionedElementOffsetBounds, PositioningAxis, Radius, ResizableStateHandle,
+    SavePosition, SelectionHandle, Text, Wrap, XAxisAnchor, YAxisAnchor, resizable_state_handle,
 };
 pub use warpui::elements::{ParentElement as _, Stack};
-pub use warpui::geometry::vector::{vec2f, Vector2F};
+pub use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::keymap::{BindingDescription, EditableBinding, FixedBinding, Keystroke};
 use warpui::platform::OperatingSystem;
 use warpui::presenter::ChildView;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use warpui::r#async::FutureExt as _;
-use warpui::r#async::SpawnedFutureHandle;
 use warpui::text_layout::TextStyle;
 use warpui::ui_components::chip::Chip;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::IntoPixels;
-pub use warpui::WindowId;
 use warpui::{
-    end_trace, start_trace, AppContext, Entity, EntityId, FocusContext, ModelAsRef, ModelHandle,
-    SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
+    AppContext, Entity, EntityId, FocusContext, ModelAsRef, ModelHandle, SingletonEntity,
+    TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle, end_trace, start_trace,
 };
 
 use self::decorations::InputBackgroundJobOptions;
@@ -115,23 +117,23 @@ use super::model::block::{
 };
 use super::model::session::{Session, SessionId, SessionType, Sessions};
 use super::prompt_render_helper::{
-    should_render_prompt_on_same_line, should_render_prompt_using_editor_decorator_elements,
-    PromptRenderHelper, SameLinePromptElements,
+    PromptRenderHelper, SameLinePromptElements, should_render_prompt_on_same_line,
+    should_render_prompt_using_editor_decorator_elements,
 };
 use super::safe_mode_settings::{
-    get_secret_obfuscation_mode, SafeModeSettings, SafeModeSettingsChangedEvent,
+    SafeModeSettings, SafeModeSettingsChangedEvent, get_secret_obfuscation_mode,
 };
 use super::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use super::settings::{SpacingMode, TerminalSettings, TerminalSettingsChangedEvent};
+use super::shared_session::SharedSessionStatus;
 use super::shared_session::presence_manager::PresenceManager;
 use super::shared_session::viewer::history_model::SharedSessionHistoryModel;
-use super::shared_session::SharedSessionStatus;
 use super::shell::ShellType;
 use super::universal_developer_input::{
     UniversalDeveloperInputButtonBar, UniversalDeveloperInputButtonBarEvent,
 };
 use super::view::ambient_agent::{
-    is_cloud_agent_pre_first_exchange, AmbientAgentViewModel, AmbientAgentViewModelEvent,
+    AmbientAgentViewModel, AmbientAgentViewModelEvent, is_cloud_agent_pre_first_exchange,
 };
 use super::view::inline_banner::{
     PromptSuggestionBannerState, ZeroStatePromptSuggestionTriggeredFrom,
@@ -139,10 +141,13 @@ use super::view::inline_banner::{
 };
 use super::view::queued_prompts_panel::{QueuedPromptsPanelEvent, QueuedPromptsPanelView};
 use super::view::{
-    ExecuteCommandEvent, SyncInputType, TerminalAction, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT,
+    ExecuteCommandEvent, PADDING_LEFT as TERMINAL_VIEW_PADDING_LEFT, SyncInputType, TerminalAction,
 };
 use super::warpify::SubshellSource;
-use super::{prompt, History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig};
+use super::{History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig, prompt};
+#[allow(unused_imports)]
+use crate::ASSETS;
+use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentContext, AIAgentExchangeId, CancellationReason, EntrypointType, ImageContext,
@@ -153,50 +158,52 @@ use crate::ai::agent_conversations_model::{
 use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::attachment_utils::MAX_ATTACHMENT_SIZE_BYTES;
 use crate::ai::block_context::BlockContext;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::agent_view::agent_input_footer::sort_environments_by_recency;
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
 use crate::ai::blocklist::agent_view::{
-    is_in_cloud_context, AgentInputFooter, AgentInputFooterEvent, AgentViewController,
-    AgentViewEntryOrigin, EphemeralMessageModel,
+    AgentInputFooter, AgentInputFooterEvent, AgentViewController, AgentViewEntryOrigin,
+    EphemeralMessageModel, is_in_cloud_context,
 };
 use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
 use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBar;
+use crate::ai::blocklist::conversation_selection::ConversationSelectionHandle;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::touched_repos::{
-    pick_handoff_overlap_env, resolve_repo_for_path, TouchedWorkspace,
+use crate::ai::blocklist::handoff::{
+    HandoffLaunchAttachments, PendingCloudLaunch, suggest_handoff_environment,
 };
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::blocklist::handoff::{HandoffLaunchAttachments, PendingCloudLaunch};
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::ai::blocklist::{
-    ai_brand_color, ai_indicator_height, render_ai_agent_mode_icon, render_ai_follow_up_icon,
-    AttachmentType, BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
-    BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
-    InputTypeAutoDetectionSource, PendingAttachment, PendingFile, QueuedQuery, QueuedQueryEvent,
-    QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin, SlashCommandRequest,
-    BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
+    AttachmentType, BLOCK_CONTEXT_ATTACHMENT_REGEX, BlocklistAIActionModel,
+    BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    BlocklistAIInputEvent, BlocklistAIInputModel, DIFF_HUNK_ATTACHMENT_REGEX,
+    DRIVE_OBJECT_ATTACHMENT_REGEX, InputConfig, InputType, InputTypeAutoDetectionSource,
+    PendingAttachment, PendingFile, QueuedQuery, QueuedQueryEvent, QueuedQueryId, QueuedQueryModel,
+    QueuedQueryOrigin, SlashCommandRequest, ai_brand_color, ai_indicator_height,
+    render_ai_agent_mode_icon, render_ai_follow_up_icon,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::connected_self_hosted_workers::{
+    ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
+};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::conversation_export::export_conversation_markdown;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::predict::next_command_model::{
-    is_command_valid, is_next_command_enabled, NextCommandModel, NextCommandModelEvent,
-    NextCommandSuggestionState, ZeroStateSuggestionInfo,
+    NextCommandModel, NextCommandModelEvent, NextCommandSuggestionState, ZeroStateSuggestionInfo,
+    is_command_valid, is_next_command_enabled,
 };
 use crate::ai::predict::predict_am_queries::PredictAMQueriesRequest;
 use crate::ai::predict::prompt_suggestions::{
     has_pending_code_or_unit_test_prompt_suggestion,
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
-use crate::ai::skills::{SkillManager, SkillOpenOrigin, SkillTelemetryEvent};
-use crate::ai::AIRequestUsageModel;
+use crate::ai::skills::{SkillOpenOrigin, SkillTelemetryEvent};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::channel::{Channel, ChannelState};
@@ -214,14 +221,14 @@ use crate::context_chips::display_chip::{DisplayChipConfig, PromptChipShellComma
 use crate::context_chips::prompt_type::PromptType;
 use crate::context_chips::spacing;
 use crate::editor::{
-    default_cursor_colors, position_id_for_cached_point, position_id_for_cursor,
-    position_id_for_first_cursor, AttachedImage as AttachedImageRawData, AutosuggestionLocation,
-    AutosuggestionType, BaselinePositionComputationMethod, CommandXRayAnchor, CrdtOperation,
-    CursorColors, DisplayPoint, EditOrigin, EditorAction, EditorDecoratorElements, EditorOptions,
-    EditorSnapshot, EditorView, Event as EditorEvent, ImageContextOptions, InteractionState,
-    PathTransformerFn, PlainTextEditorViewAction, Point as BufferPoint, PropagateAndNoOpEscapeKey,
-    PropagateAndNoOpNavigationKeys, PropagateHorizontalNavigationKeys, ReplicaId, TextColors,
-    TextRun, MAX_IMAGES_PER_CONVERSATION,
+    AttachedImage as AttachedImageRawData, AutosuggestionLocation, AutosuggestionType,
+    BaselinePositionComputationMethod, CommandXRayAnchor, CrdtOperation, CursorColors,
+    DisplayPoint, EditOrigin, EditorAction, EditorDecoratorElements, EditorOptions, EditorSnapshot,
+    EditorView, Event as EditorEvent, ImageContextOptions, InteractionState,
+    MAX_IMAGES_PER_CONVERSATION, PathTransformerFn, PlainTextEditorViewAction,
+    Point as BufferPoint, PropagateAndNoOpEscapeKey, PropagateAndNoOpNavigationKeys,
+    PropagateHorizontalNavigationKeys, ReplicaId, TextColors, TextRun, default_cursor_colors,
+    position_id_for_cached_point, position_id_for_cursor, position_id_for_first_cursor,
 };
 use crate::env_vars::EnvVarCollectionExt;
 use crate::features::FeatureFlag;
@@ -230,26 +237,27 @@ use crate::input_suggestions::{
     TabCompletionsPreselectOption,
 };
 use crate::network::NetworkStatus;
-use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::PaneGroupAction;
+use crate::pane_group::focus_state::PaneFocusHandle;
 #[cfg(feature = "local_fs")]
-use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
+use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
 use crate::prefix::longest_common_prefix;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::resource_center::{
-    mark_feature_used_and_write_to_user_defaults, Tip, TipAction, TipHint, TipsCompleted,
+    Tip, TipAction, TipHint, TipsCompleted, mark_feature_used_and_write_to_user_defaults,
 };
+use crate::search::QueryFilter;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::ai_context_menu::search::is_valid_search_query;
 use crate::search::ai_context_menu::view::AIContextMenuAction;
 use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
-use crate::search::QueryFilter;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::SyncId;
-use crate::server::server_api::ai::AttachmentFileInfo;
+use crate::server::server_api::ServerApi;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::server::server_api::ai::AttachmentInput;
-use crate::server::server_api::ServerApi;
+use crate::server::server_api::ai::{AIClient, AttachmentFileInfo};
+use crate::server::server_api::presigned_upload::upload_to_target;
 use crate::server::telemetry::{
     AICommandSearchEntrypoint, AgentModeAutoDetectionFalsePositivePayload,
     AgentModeAutoDetectionSettingOrigin, AnonymousUserSignupEntrypoint, CommandXRayTrigger,
@@ -260,12 +268,13 @@ use crate::session_management::SessionNavigationPromptElements;
 use crate::settings::{
     AISettings, AISettingsChangedEvent, AliasExpansionSettings, AppEditorSettings,
     AppEditorSettingsChangedEvent, InputModeSettings, InputSettings, InputSettingsChangedEvent,
-    PrivacySettings, MAX_TIMES_TO_SHOW_AUTOSUGGESTION_HINT,
+    MAX_TIMES_TO_SHOW_AUTOSUGGESTION_HINT, PrivacySettings,
 };
-use crate::settings_view::{flags, SettingsSection};
+use crate::settings_view::{SettingsSection, flags};
 use crate::suggestions::ignored_suggestions_model::{
     IgnoredSuggestionsModel, IgnoredSuggestionsModelEvent, SuggestionType,
 };
+use crate::terminal::CLIAgent;
 use crate::terminal::buy_credits_banner::{BuyCreditsBanner, BuyCreditsBannerEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
@@ -287,11 +296,14 @@ use crate::terminal::input::profiles::{InlineProfileSelectorEvent, InlineProfile
 use crate::terminal::input::prompts::{InlinePromptsMenuEvent, InlinePromptsMenuView};
 use crate::terminal::input::repos::{InlineReposMenuEvent, InlineReposMenuView};
 use crate::terminal::input::rewind::{RewindMenuEvent, RewindMenuView};
-use crate::terminal::input::skills::{InlineSkillSelectorEvent, InlineSkillSelectorView};
+use crate::terminal::input::skills::{
+    InlineSkillSelectorEvent, InlineSkillSelectorView, LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE,
+};
 use crate::terminal::input::slash_command_model::{SlashCommandEntryState, SlashCommandModel};
 use crate::terminal::input::slash_commands::{
-    slash_command_is_submitted_as_prompt, CloudModeV2SlashCommandView, InlineSlashCommandView,
-    SlashCommandDataSource, SlashCommandTrigger,
+    CloudModeV2SlashCommandView, GuiSlashCommandDataSource, InlineSlashCommandView,
+    SlashCommandDataSource as _, SlashCommandTrigger, UpdatedActiveCommands,
+    slash_command_is_submitted_as_prompt,
 };
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
@@ -308,12 +320,11 @@ use crate::terminal::view::ambient_agent::{
     HarnessSelector, HarnessSelectorEvent, HostSelector, HostSelectorEvent, NakedHeaderButtonTheme,
 };
 use crate::terminal::view::inline_banner::{PromptSuggestionsEvent, PromptSuggestionsView};
-use crate::terminal::view::{resolve_ai_query_routing, AIQueryRouting, CodeDiffAction};
-use crate::terminal::CLIAgent;
+use crate::terminal::view::{AIQueryRouting, CodeDiffAction, resolve_ai_query_routing};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::user_config::WarpConfig;
-use crate::util::bindings::{self, keybinding_name_to_normalized_string, CustomAction};
+use crate::util::bindings::{self, CustomAction, keybinding_name_to_normalized_string};
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor;
 use crate::util::image::MAX_IMAGE_COUNT_FOR_QUERY;
@@ -325,11 +336,12 @@ use crate::voltron::{
 };
 use crate::workflows::aliases::WorkflowAliases;
 use crate::workflows::command_parser::{
-    compute_workflow_display_data, compute_workflow_display_data_for_history_command,
-    compute_workflow_display_data_with_overrides, WorkflowArgumentIndex, WorkflowDisplayData,
+    WorkflowArgumentIndex, WorkflowDisplayData, compute_workflow_display_data,
+    compute_workflow_display_data_for_history_command,
+    compute_workflow_display_data_with_overrides,
 };
 use crate::workflows::info_box::{
-    WorkflowsInfoBoxViewEvent, WorkflowsMoreInfoView, WORKFLOW_PARAMETER_HIGHLIGHT_COLOR,
+    WORKFLOW_PARAMETER_HIGHLIGHT_COLOR, WorkflowsInfoBoxViewEvent, WorkflowsMoreInfoView,
 };
 use crate::workflows::local_workflows::LocalWorkflows;
 use crate::workflows::workflow_enum::EnumVariants;
@@ -341,12 +353,7 @@ use crate::workspace::{
 };
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 #[allow(unused_imports)]
-use crate::ASSETS;
-#[allow(unused_imports)]
-use crate::{
-    cmd_or_ctrl_shift, report_if_error, send_telemetry_from_ctx, AgentModeEntrypoint,
-    ServerApiProvider,
-};
+use crate::{AgentModeEntrypoint, ServerApiProvider, cmd_or_ctrl_shift, send_telemetry_from_ctx};
 
 /// Drop target data for dropping content on the [`Input`].
 #[derive(Debug, Clone)]
@@ -1679,8 +1686,8 @@ pub struct Input {
 
     inline_slash_commands_view: ViewHandle<InlineSlashCommandView>,
     cloud_mode_v2_slash_commands_view: Option<ViewHandle<CloudModeV2SlashCommandView>>,
-    slash_command_data_source: ModelHandle<SlashCommandDataSource>,
-    cloud_mode_composer_slash_command_data_source: Option<ModelHandle<SlashCommandDataSource>>,
+    slash_command_data_source: ModelHandle<GuiSlashCommandDataSource>,
+    cloud_mode_composer_slash_command_data_source: Option<ModelHandle<GuiSlashCommandDataSource>>,
 
     /// Inline conversation menu for selecting AI conversations.
     inline_conversation_menu_view: ViewHandle<InlineConversationMenuView>,
@@ -1811,6 +1818,116 @@ impl DeferredRemoteOperations {
     fn flush(&mut self) -> Option<Vec<CrdtOperation>> {
         self.deferred_ops.remove(&self.latest_block_id)
     }
+}
+
+/// Per-attachment outcome from [`upload_pending_attachments_to_task`].
+enum TaskAttachmentUploadOutcome {
+    /// Successfully uploaded to the task's storage bucket. `attachment_id` is the
+    /// server-assigned identifier the new VM downloads at startup.
+    Uploaded {
+        attachment_id: String,
+        file_name: String,
+    },
+    /// Could not be uploaded — decode error, size limit exceeded, or HTTP failure.
+    /// `error` is a human-readable message suitable for display.
+    Failed { file_name: String, error: String },
+}
+
+/// Decode, size-check, and upload `pending_attachments` to the given task's storage
+/// via presigned upload targets obtained from the server. Returns one
+/// [`TaskAttachmentUploadOutcome`] per input attachment in the same order.
+///
+/// The outer `Err` is returned only when [`AIClient::prepare_attachments_for_upload`] fails
+/// (meaning no individual uploads were attempted). Decode errors, size-limit violations,
+/// and individual HTTP failures are surfaced as [`TaskAttachmentUploadOutcome::Failed`]
+/// entries so each caller can choose its own error-handling policy (fail-fast vs. best-effort).
+async fn upload_pending_attachments_to_task(
+    ai_client: Arc<dyn AIClient>,
+    server_api: Arc<ServerApi>,
+    task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+    pending_attachments: Vec<PendingAttachment>,
+) -> anyhow::Result<Vec<TaskAttachmentUploadOutcome>> {
+    let n = pending_attachments.len();
+    // Reserve a slot for each input attachment; filled below in original order.
+    let mut outcomes: Vec<Option<TaskAttachmentUploadOutcome>> =
+        std::iter::repeat_with(|| None).take(n).collect();
+    // Collect successfully decoded files together with their original index so we can
+    // zip the prepare-upload response back to the correct outcome slot.
+    let mut files_to_upload: Vec<(usize, String, String, Vec<u8>)> = Vec::new();
+
+    for (i, attachment) in pending_attachments.into_iter().enumerate() {
+        let decoded = match attachment {
+            PendingAttachment::File(file) => std::fs::read(&file.file_path)
+                .map(|bytes| (file.file_name.clone(), file.mime_type.clone(), bytes))
+                .map_err(|e| (file.file_name, format!("Failed to read attachment: {e}"))),
+            PendingAttachment::Image(image) => base64::engine::general_purpose::STANDARD
+                .decode(&image.data)
+                .map(|bytes| (image.file_name.clone(), image.mime_type.clone(), bytes))
+                .map_err(|e| (image.file_name, format!("Failed to decode attachment: {e}"))),
+        };
+        match decoded {
+            Ok((file_name, mime_type, bytes)) => {
+                if bytes.len() > MAX_ATTACHMENT_SIZE_BYTES {
+                    outcomes[i] = Some(TaskAttachmentUploadOutcome::Failed {
+                        file_name: file_name.clone(),
+                        error: format!("{file_name} exceeds the 10 MB attachment limit"),
+                    });
+                } else {
+                    files_to_upload.push((i, file_name, mime_type, bytes));
+                }
+            }
+            Err((file_name, error)) => {
+                outcomes[i] = Some(TaskAttachmentUploadOutcome::Failed { file_name, error });
+            }
+        }
+    }
+
+    if !files_to_upload.is_empty() {
+        let file_infos: Vec<AttachmentFileInfo> = files_to_upload
+            .iter()
+            .map(|(_, name, mime, _)| AttachmentFileInfo {
+                filename: name.clone(),
+                mime_type: mime.clone(),
+            })
+            .collect();
+
+        let prepare_response = ai_client
+            .prepare_attachments_for_upload(&task_id, &file_infos)
+            .await?;
+
+        if prepare_response.attachments.len() != files_to_upload.len() {
+            anyhow::bail!(
+                "Attachment upload preparation returned {} targets for {} files",
+                prepare_response.attachments.len(),
+                files_to_upload.len()
+            );
+        }
+
+        for ((orig_idx, file_name, mime_type, file_bytes), upload_info) in files_to_upload
+            .iter()
+            .zip(prepare_response.attachments.iter())
+        {
+            let target = upload_info.resolve_upload_target(mime_type);
+            let result =
+                upload_to_target(server_api.http_client(), &target, file_bytes.clone()).await;
+
+            outcomes[*orig_idx] = Some(match result {
+                Ok(()) => TaskAttachmentUploadOutcome::Uploaded {
+                    attachment_id: upload_info.attachment_id.clone(),
+                    file_name: file_name.clone(),
+                },
+                Err(e) => TaskAttachmentUploadOutcome::Failed {
+                    file_name: file_name.clone(),
+                    error: format!("{e:#}"),
+                },
+            });
+        }
+    }
+
+    Ok(outcomes
+        .into_iter()
+        .map(|o| o.expect("all slots filled during upload_pending_attachments_to_task"))
+        .collect())
 }
 
 pub fn init(app: &mut AppContext) {
@@ -2457,6 +2574,16 @@ impl Input {
                 self.menu_positioning_provider.clone(),
                 ctx,
             );
+            // Re-render when connected workers change so the host selector shows/hides
+            // (it isn't mounted while hidden to drive this itself).
+            ctx.subscribe_to_model(
+                &ConnectedSelfHostedWorkersModel::handle(ctx),
+                |_me, _, event, ctx| {
+                    if matches!(event, ConnectedSelfHostedWorkersEvent::Changed) {
+                        ctx.notify();
+                    }
+                },
+            );
             let (auth_secret_selector, auth_secret_ftux_view) = Self::build_auth_secret_selector(
                 view_model.clone(),
                 self.menu_positioning_provider.clone(),
@@ -2493,6 +2620,7 @@ impl Input {
         ai_context_model: ModelHandle<BlocklistAIContextModel>,
         ai_input_model: ModelHandle<BlocklistAIInputModel>,
         ai_action_model: ModelHandle<BlocklistAIActionModel>,
+        conversation_selection: ConversationSelectionHandle,
         cli_subagent_controller: ModelHandle<CLISubagentController>,
         terminal_view_id: EntityId,
         current_repo_path: Option<PathBuf>,
@@ -2652,6 +2780,7 @@ impl Input {
                 // The UseAgentToolbar shares this same AgentInputFooter instance,
                 // so its subscriber always fires alongside ours for every chip click.
                 AgentInputFooterEvent::WriteToPty(_)
+                | AgentInputFooterEvent::InsertIntoCLIPty(_)
                 | AgentInputFooterEvent::InsertIntoCLIRichInput(_)
                 | AgentInputFooterEvent::ToggleCodeReviewPane(_)
                 | AgentInputFooterEvent::ToggleFileExplorer(_)
@@ -3087,7 +3216,7 @@ impl Input {
             None
         };
 
-        let terminal_input_message_bar = ctx.add_view(|ctx| {
+        let terminal_input_message_bar = ctx.add_typed_action_view(|ctx| {
             TerminalInputMessageBar::new(
                 model.clone(),
                 ai_input_model.clone(),
@@ -3109,7 +3238,12 @@ impl Input {
         current_prompt.update(ctx, |prompt_type, ctx| {
             if let PromptType::Dynamic { prompt } = prompt_type {
                 prompt.update(ctx, |current_prompt, ctx| {
-                    current_prompt.subscribe_to_input_editor(editor.clone(), ctx);
+                    current_prompt.subscribe_to_input_editor(
+                        editor.clone(),
+                        agent_view_controller.clone(),
+                        terminal_view_id,
+                        ctx,
+                    );
                 });
             }
         });
@@ -3451,7 +3585,7 @@ impl Input {
         });
 
         let slash_command_data_source = ctx.add_model(|ctx| {
-            let args = slash_commands::DataSourceArgs {
+            let args = slash_commands::GuiDataSourceArgs {
                 active_session: active_session.clone(),
                 agent_view_controller: agent_view_controller.clone(),
                 cli_subagent_controller: cli_subagent_controller.clone(),
@@ -3459,12 +3593,19 @@ impl Input {
                 // Wired post-construction via `attach_ambient_agent_view_model`.
                 ambient_agent_view_model: None,
             };
-            SlashCommandDataSource::new(args, ctx)
+            GuiSlashCommandDataSource::new(args, ctx)
         });
+        ctx.subscribe_to_model(
+            &slash_command_data_source,
+            |me, _, _: &UpdatedActiveCommands, ctx| {
+                me.set_zero_state_hint_text(ctx);
+                ctx.notify();
+            },
+        );
 
         let cloud_mode_composer_slash_command_data_source =
             if FeatureFlag::CloudModeInputV2.is_enabled() {
-                let args = slash_commands::DataSourceArgs {
+                let args = slash_commands::GuiDataSourceArgs {
                     active_session: active_session.clone(),
                     agent_view_controller: agent_view_controller.clone(),
                     cli_subagent_controller: cli_subagent_controller.clone(),
@@ -3472,7 +3613,7 @@ impl Input {
                     // Wired post-construction via `attach_ambient_agent_view_model`.
                     ambient_agent_view_model: None,
                 };
-                Some(ctx.add_model(|ctx| SlashCommandDataSource::for_cloud_mode_v2(args, ctx)))
+                Some(ctx.add_model(|ctx| GuiSlashCommandDataSource::for_cloud_mode_v2(args, ctx)))
             } else {
                 None
             };
@@ -3480,7 +3621,6 @@ impl Input {
             SlashCommandModel::new(
                 &buffer_model,
                 &ai_input_model,
-                active_session.clone(),
                 slash_command_data_source.clone(),
                 ctx,
             )
@@ -3493,6 +3633,7 @@ impl Input {
             InlineConversationMenuView::new(
                 suggestions_mode_model.clone(),
                 agent_view_controller.clone(),
+                conversation_selection,
                 &buffer_model,
                 &inline_terminal_menu_positioner,
                 active_session.clone(),
@@ -3642,22 +3783,23 @@ impl Input {
         });
 
         let cloud_mode_v2_slash_commands_view =
-            if let Some(v2_data_source) = cloud_mode_composer_slash_command_data_source.clone() {
-                let view = ctx.add_typed_action_view(|ctx| {
-                    CloudModeV2SlashCommandView::new(
-                        &slash_command_model,
-                        v2_data_source,
-                        suggestions_mode_model.clone(),
-                        buffer_model.clone(),
-                        ctx,
-                    )
-                });
-                ctx.subscribe_to_view(&view, |me, _, event, ctx| {
-                    me.handle_slash_commands_menu_event(event, ctx);
-                });
-                Some(view)
-            } else {
-                None
+            match cloud_mode_composer_slash_command_data_source.clone() {
+                Some(v2_data_source) => {
+                    let view = ctx.add_typed_action_view(|ctx| {
+                        CloudModeV2SlashCommandView::new(
+                            &slash_command_model,
+                            v2_data_source,
+                            suggestions_mode_model.clone(),
+                            buffer_model.clone(),
+                            ctx,
+                        )
+                    });
+                    ctx.subscribe_to_view(&view, |me, _, event, ctx| {
+                        me.handle_slash_commands_menu_event(event, ctx);
+                    });
+                    Some(view)
+                }
+                _ => None,
             };
 
         ctx.subscribe_to_model(&ai_input_model, move |me, _, event, ctx| {
@@ -3855,10 +3997,10 @@ impl Input {
         };
 
         #[cfg(feature = "local_fs")]
-        if let Some(db_url) = database_file_path_for_scope(&PersistenceScope::App).to_str() {
-            if let Ok(conn) = establish_ro_connection(db_url) {
-                input.conn = Some(Arc::new(Mutex::new(conn)));
-            }
+        if let Some(db_url) = database_file_path_for_current_scope().to_str()
+            && let Ok(conn) = establish_ro_connection(db_url)
+        {
+            input.conn = Some(Arc::new(Mutex::new(conn)));
         }
 
         if input.model.lock().shared_session_status().is_viewer() {
@@ -4100,10 +4242,30 @@ impl Input {
                 }
                 true
             }
-            AIQueryRouting::NewCloudVm { .. } => {
+            AIQueryRouting::NewCloudVm { task_id } => {
                 if FeatureFlag::HandoffCloudCloud.is_enabled() {
                     let prompt = self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned();
-                    ctx.emit(Event::SubmitCloudFollowup { prompt });
+                    let pending_attachments = self
+                        .ai_context_model
+                        .as_ref(ctx)
+                        .pending_attachments()
+                        .to_vec();
+                    if Self::should_upload_cloud_followup_attachments(&pending_attachments) {
+                        self.freeze_input_in_loading_state(ctx);
+                        self.upload_files_then_submit_cloud_followup(
+                            task_id,
+                            prompt,
+                            pending_attachments,
+                            ctx,
+                        );
+                    } else {
+                        if !pending_attachments.is_empty() {
+                            log::warn!(
+                                "Cannot upload cloud follow-up attachments: CloudModeImageContext is disabled"
+                            );
+                        }
+                        ctx.emit(Event::SubmitCloudFollowup { prompt });
+                    }
                 } else {
                     // Cloud-to-cloud follow-up is unavailable; block rather than run locally.
                     self.show_ephemeral_error_toast(
@@ -4121,6 +4283,10 @@ impl Input {
                 true
             }
         }
+    }
+
+    fn should_upload_cloud_followup_attachments(pending_attachments: &[PendingAttachment]) -> bool {
+        !pending_attachments.is_empty() && FeatureFlag::CloudModeImageContext.is_enabled()
     }
 
     /// Primary entry point for submitting the input buffer as an AI query. Routes to the correct
@@ -4280,29 +4446,19 @@ impl Input {
         };
 
         let handoff_compose_state = self.handoff_compose_state.clone();
+        let suggestion = suggest_handoff_environment(pwd, ctx);
         ctx.spawn(
             async move {
-                resolve_repo_for_path(&pwd)
+                suggestion
                     .with_timeout(Duration::from_secs(5))
                     .await
                     .ok()
                     .flatten()
             },
-            move |_input, touched_repo, ctx| {
-                use crate::cloud_object::CloudObjectLookup as _;
-
-                let Some(touched_repo) = touched_repo else {
-                    return;
-                };
-                let workspace = TouchedWorkspace {
-                    repos: vec![touched_repo],
-                    orphan_files: vec![],
-                };
-                let mut envs = CloudAmbientAgentEnvironment::get_all(ctx);
-                sort_environments_by_recency(&mut envs);
-                if let Some(overlap_env) = pick_handoff_overlap_env(&workspace, envs) {
+            move |_input, environment_id, ctx| {
+                if let Some(environment_id) = environment_id {
                     handoff_compose_state.update(ctx, |state, ctx| {
-                        state.set_environment_id(Some(overlap_env), false, ctx);
+                        state.set_environment_id(Some(environment_id), false, ctx);
                     });
                 }
             },
@@ -4315,13 +4471,13 @@ impl Input {
     }
 
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    pub(crate) fn exit_cloud_handoff_compose_and_clear(&mut self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn exit_cloud_handoff_compose_and_clear_prompt(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
         self.exit_cloud_handoff_compose(ctx);
         self.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
-        });
-        self.ai_context_model.update(ctx, |context_model, ctx| {
-            context_model.clear_pending_attachments(ctx);
         });
     }
 
@@ -4359,10 +4515,7 @@ impl Input {
             && AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx);
         let is_cloud = {
             let terminal_model = self.model.lock();
-            is_in_cloud_context(
-                terminal_model.block_list().agent_view_state(),
-                &terminal_model,
-            )
+            is_in_cloud_context(&terminal_model)
         };
         *edit_origin == EditOrigin::UserTyped
             && AISettings::as_ref(ctx).is_ampersand_handoff_enabled(ctx)
@@ -4461,7 +4614,7 @@ impl Input {
                     });
                 }
                 Err(e) => {
-                    log::error!("Failed to read file {}: {e}", file.file_path.display());
+                    log::warn!("Failed to read file {}: {e}", file.file_path.display());
                 }
             }
         }
@@ -4568,7 +4721,7 @@ impl Input {
                 .selected_environment_id()
                 .cloned();
             let entry_point = self.handoff_compose_state.as_ref(ctx).entry_point();
-            self.exit_cloud_handoff_compose_and_clear(ctx);
+            self.exit_cloud_handoff_compose_and_clear_prompt(ctx);
             ctx.dispatch_typed_action_deferred(WorkspaceAction::OpenLocalToCloudHandoffPane {
                 launch: None,
                 environment_id,
@@ -4594,7 +4747,7 @@ impl Input {
             attachments,
         };
 
-        self.exit_cloud_handoff_compose_and_clear(ctx);
+        self.exit_cloud_handoff_compose_and_clear_prompt(ctx);
 
         ctx.dispatch_typed_action_deferred(WorkspaceAction::OpenLocalToCloudHandoffPane {
             launch: Some(launch),
@@ -4918,17 +5071,20 @@ impl Input {
                     ctx.notify();
                 }
                 self.clear_buffer_and_reset_undo_stack(ctx);
-                if let Some(action) = AgentConversationsModel::resolve_open_action(
+                match AgentConversationsModel::resolve_open_action(
                     AgentConversationNavigationSubject::Entry(*item_id),
                     Some(RestoreConversationLayout::ActivePane),
                     ctx,
                 ) {
-                    ctx.dispatch_typed_action_deferred(action);
-                } else {
-                    ctx.emit(Event::ShowToast {
-                        message: "Couldn't navigate to conversation.".to_string(),
-                        flavor: ToastFlavor::Error,
-                    });
+                    Some(action) => {
+                        ctx.dispatch_typed_action_deferred(action);
+                    }
+                    _ => {
+                        ctx.emit(Event::ShowToast {
+                            message: "Couldn't navigate to conversation.".to_string(),
+                            flavor: ToastFlavor::Error,
+                        });
+                    }
                 }
             }
             InlineConversationMenuEvent::Dismissed => {
@@ -4986,9 +5142,10 @@ impl Input {
                 selected_tab,
                 set_as_default,
             } => {
-                let profile_id = *AIExecutionProfilesModel::as_ref(ctx)
+                let profile_id = AIExecutionProfilesModel::as_ref(ctx)
                     .active_profile(Some(self.terminal_view_id), ctx)
-                    .id();
+                    .id()
+                    .clone();
 
                 match selected_tab {
                     InlineModelSelectorTab::BaseAgent => {
@@ -5001,13 +5158,13 @@ impl Input {
                         });
                         if *set_as_default {
                             AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
-                                profiles.set_base_model(profile_id, Some(id.clone()), ctx);
+                                profiles.set_base_model(&profile_id, Some(id.clone()), ctx);
                             });
                         }
                     }
                     InlineModelSelectorTab::FullTerminalUse => {
                         AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
-                            profiles.set_cli_agent_model(profile_id, Some(id.clone()), ctx);
+                            profiles.set_cli_agent_model(&profile_id, Some(id.clone()), ctx);
                         });
                     }
                 }
@@ -5067,7 +5224,11 @@ impl Input {
         match event {
             InlineProfileSelectorEvent::SelectedProfile { profile_id } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_active_profile(self.terminal_view_id, *profile_id, ctx);
+                    profiles_model.set_active_profile(
+                        self.terminal_view_id,
+                        profile_id.clone(),
+                        ctx,
+                    );
                 });
 
                 // Remove any LLM override when switching profiles
@@ -5385,7 +5546,7 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) {
         if !self.suggestions_mode_model.as_ref(ctx).is_user_query_menu() {
-            log::error!("handle_user_query_menu_event called when mode is not UserQueryMenu");
+            report_error!("handle_user_query_menu_event called when mode is not UserQueryMenu");
             return;
         }
 
@@ -5404,7 +5565,7 @@ impl Input {
                     .as_ref(ctx)
                     .user_query_conversation_id()
                 else {
-                    log::error!("No conversation_id in UserQueryMenu mode when accepting");
+                    report_error!("No conversation_id in UserQueryMenu mode when accepting");
                     return;
                 };
 
@@ -5685,7 +5846,7 @@ impl Input {
 
     fn handle_rewind_menu_event(&mut self, event: &RewindMenuEvent, ctx: &mut ViewContext<Self>) {
         if !self.suggestions_mode_model.as_ref(ctx).is_rewind_menu() {
-            log::error!("handle_rewind_menu_event called when mode is not RewindMenu");
+            report_error!("handle_rewind_menu_event called when mode is not RewindMenu");
             return;
         }
 
@@ -5712,7 +5873,7 @@ impl Input {
                     .as_ref(ctx)
                     .rewind_conversation_id()
                 else {
-                    log::error!("No conversation_id in RewindMenu mode when accepting");
+                    report_error!("No conversation_id in RewindMenu mode when accepting");
                     return;
                 };
 
@@ -5766,15 +5927,6 @@ impl Input {
             );
         });
 
-        send_telemetry_from_ctx!(
-            TelemetryEvent::OpenSuggestionsMenu(
-                self.suggestions_mode_model
-                    .as_ref(ctx)
-                    .mode()
-                    .to_telemetry_mode(),
-            ),
-            ctx
-        );
         ctx.notify();
     }
 
@@ -5814,8 +5966,7 @@ impl Input {
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
                     DismissibleToast::default(
-                        "Local skills cannot run on a remote machine. Try forking the conversation locally and running the skill."
-                            .to_owned(),
+                        LOCAL_SKILLS_REMOTE_EXECUTION_ERROR_MESSAGE.to_owned(),
                     ),
                     window_id,
                     ctx,
@@ -5825,14 +5976,12 @@ impl Input {
         }
 
         let is_queued_prompt = queued_query_id.is_some();
-        // Resolve the skill from the catalog selected by the active session's host,
-        // so remote sessions invoke the host-rendered bundled skill.
-        let path_origin = self.ai_controller.as_ref(ctx).skill_path_origin(ctx);
-        let skill = match SkillManager::handle(ctx)
+        let skill = match self
+            .ai_controller
             .as_ref(ctx)
-            .active_skill_by_reference_with_origin(&reference, &path_origin, ctx)
+            .resolve_skill_for_invocation(&reference, ctx)
         {
-            Ok(skill) => skill.clone(),
+            Ok(skill) => skill,
             Err(error) => {
                 // Show error toast if skill not found
                 let window_id = ctx.window_id();
@@ -5870,19 +6019,14 @@ impl Input {
             });
         }
 
-        // Send the skill invocation request
-        let request = SlashCommandRequest::InvokeSkill { skill, user_query };
         self.ai_controller.update(ctx, move |controller, ctx| {
-            if let Some(query_id) = queued_query_id {
-                controller.send_queued_slash_command_request(
-                    request,
-                    query_id,
-                    conversation_id_override,
-                    ctx,
-                );
-            } else {
-                controller.send_slash_command_request(request, ctx);
-            }
+            controller.send_resolved_skill_invocation(
+                skill,
+                user_query,
+                queued_query_id,
+                conversation_id_override,
+                ctx,
+            );
         });
 
         true
@@ -5894,11 +6038,6 @@ impl Input {
         filename_arg: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
-        use std::fs;
-        use std::path::PathBuf;
-
-        use chrono::Local;
-
         let history = BlocklistAIHistoryModel::handle(ctx);
         let Some(conversation) = history
             .as_ref(ctx)
@@ -5912,115 +6051,44 @@ impl Input {
             });
             return;
         };
-
-        // Determine the filename
-        let filename = if let Some(name) = filename_arg.as_ref().filter(|s| !s.trim().is_empty()) {
-            name.trim().to_string()
-        } else {
-            // Generate default filename: timestamp-conversation_title.md
-            let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-            let title = conversation
-                .title()
-                .unwrap_or_else(|| "conversation".to_string())
-                .chars()
-                .map(|c| {
-                    // Replace spaces with underscores, keep alphanumeric, underscores, and hyphens
-                    if c.is_whitespace() {
-                        '_'
-                    } else if c.is_alphanumeric() || c == '_' || c == '-' {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .collect::<String>();
-            format!("{timestamp}-{title}.md")
-        };
-
-        // Ensure the filename has .md extension
-        let filename = if !filename.ends_with(".md") {
-            format!("{filename}.md")
-        } else {
-            filename
-        };
-
-        let current_dir = self
+        let current_directory = self
             .active_block_metadata
             .as_ref()
             .and_then(|metadata| metadata.current_working_directory())
-            .map(PathBuf::from)
-            .or_else(|| {
-                log::debug!(
-                    "No CWD from active_block_metadata, falling back to std::env::current_dir()"
-                );
-                std::env::current_dir().ok()
-            })
-            .unwrap_or_else(|| {
-                log::warn!("Failed to determine current directory, using '.'");
-                PathBuf::from(".")
-            });
-
-        let file_path = current_dir.join(&filename);
+            .map(str::to_owned);
+        let conversation_title = conversation.title();
 
         let action_model = self.ai_action_model.as_ref(ctx);
         let conversation_text = conversation.export_to_markdown(Some(action_model));
-
-        // Check if file already exists and warn user
-        let file_exists = file_path.exists();
-        if file_exists {
-            let window_id = ctx.window_id();
-            let display_path = file_path.display().to_string();
-            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                let toast = DismissibleToast::default(format!(
-                    "File {display_path} already exists and will be overwritten"
-                ));
-                toast_stack.add_ephemeral_toast(toast, window_id, ctx);
-            });
-        }
-
-        // Write to file
-        match fs::write(&file_path, conversation_text) {
-            Ok(_) => {
-                // Show success toast
+        match export_conversation_markdown(
+            current_directory.as_deref(),
+            filename_arg.as_deref(),
+            conversation_title.as_deref(),
+            &conversation_text,
+        ) {
+            Ok(export) => {
                 let window_id = ctx.window_id();
-                let display_path = file_path.display().to_string();
+                let display_path = export.path().display().to_string();
                 ToastStack::handle(ctx).update(ctx, move |toast_stack, ctx| {
+                    if export.overwrote_existing() {
+                        let toast = DismissibleToast::default(format!(
+                            "File {display_path} already exists and will be overwritten"
+                        ));
+                        toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+                    }
                     let toast = DismissibleToast::default(format!(
                         "Conversation exported to {display_path}"
                     ));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }
-            Err(e) => {
-                // Show error toast with user-friendly message
-                let user_message = match e.kind() {
-                    std::io::ErrorKind::PermissionDenied => {
-                        format!(
-                            "Permission denied writing to {}. Check file permissions.",
-                            file_path.display()
-                        )
-                    }
-                    std::io::ErrorKind::NotFound => {
-                        format!(
-                            "Directory not found: {}",
-                            file_path
-                                .parent()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_default()
-                        )
-                    }
-                    std::io::ErrorKind::AlreadyExists => {
-                        format!("File {} already exists", file_path.display())
-                    }
-                    _ => {
-                        format!("Failed to export to {}: {}", file_path.display(), e)
-                    }
-                };
+            Err(error) => {
+                let user_message = error.user_message();
+                let path = error.path().to_path_buf();
 
                 log::error!(
-                    "Failed to write conversation to file {}: {}",
-                    file_path.display(),
-                    e
+                    "Failed to write conversation to file {}: {error}",
+                    path.display()
                 );
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, move |toast_stack, ctx| {
@@ -6029,8 +6097,6 @@ impl Input {
                 });
             }
         }
-
-        // Clear the buffer after execution
         self.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
         });
@@ -6506,17 +6572,16 @@ impl Input {
             (InputType::AI, _) => {
                 if let Some(conversation) =
                     self.ai_context_model.as_ref(app).selected_conversation(app)
+                    && conversation.is_child_agent_conversation()
                 {
-                    if conversation.is_child_agent_conversation() {
-                        let agent_name = conversation.agent_name().unwrap_or("child");
-                        if conversation.status().is_in_progress() {
-                            if is_queue_next_prompt_enabled {
-                                return format!("Queue a follow up for the {agent_name} agent");
-                            }
-                            return format!("Steer the {agent_name} agent");
+                    let agent_name = conversation.agent_name().unwrap_or("child");
+                    if conversation.status().is_in_progress() {
+                        if is_queue_next_prompt_enabled {
+                            return format!("Queue a follow up for the {agent_name} agent");
                         }
-                        return format!("Ask the {agent_name} agent a follow up");
+                        return format!("Steer the {agent_name} agent");
                     }
+                    return format!("Ask the {agent_name} agent a follow up");
                 }
 
                 // Follow the `agent_indicator` pattern (see `app/src/tab.rs`):
@@ -6991,6 +7056,24 @@ impl Input {
     }
 
     pub fn set_zero_state_hint_text(&mut self, ctx: &mut ViewContext<Self>) {
+        let slash_command_hint_prefixes = COMMAND_REGISTRY
+            .all_commands()
+            .filter(|command| {
+                command
+                    .argument
+                    .as_ref()
+                    .and_then(|argument| argument.hint_text)
+                    .is_some()
+            })
+            .map(|command| format!("{} ", command.name))
+            .collect_vec();
+
+        self.editor.update(ctx, |editor, ctx| {
+            for prefix in slash_command_hint_prefixes {
+                editor.clear_placeholder_text_with_prefix(&prefix, ctx);
+            }
+        });
+
         if CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id) {
             let hint = self.cli_agent_rich_input_hint_text(ctx);
             self.editor.update(ctx, |editor, ctx| {
@@ -7045,20 +7128,23 @@ impl Input {
 
         let toggled_on = *InputSettings::as_ref(ctx).show_hint_text;
 
-        // Loop through all static commands and set placeholders for those with hint text
-        self.editor.update(ctx, |editor, ctx| {
-            for command in COMMAND_REGISTRY.all_commands() {
-                if let Some(hint_text) = command
+        let slash_command_placeholders = self
+            .slash_command_data_source
+            .as_ref(ctx)
+            .active_commands()
+            .filter_map(|(_, command)| {
+                command
                     .argument
                     .as_ref()
                     .and_then(|argument| argument.hint_text)
-                {
-                    editor.set_placeholder_text_with_prefix(
-                        format!("{} ", command.name),
-                        hint_text,
-                        ctx,
-                    );
-                }
+                    .map(|hint_text| (command.name, hint_text))
+            })
+            .collect_vec();
+
+        // Loop through active static commands and set placeholders for those with hint text
+        self.editor.update(ctx, |editor, ctx| {
+            for (command_name, hint_text) in slash_command_placeholders {
+                editor.set_placeholder_text_with_prefix(format!("{command_name} "), hint_text, ctx);
             }
         });
 
@@ -7541,52 +7627,48 @@ impl Input {
         {
             // Skip any empty blocks created by the user. Keep the last zero-state autosuggestion
             // until the user executes a command.
-            if !command.is_empty() {
-                if let Some(ZeroStateSuggestionInfo {
+            if !command.is_empty()
+                && let Some(ZeroStateSuggestionInfo {
                     request,
                     response,
                     is_from_ai,
                     history_based_autosuggestion_state,
                     request_duration_ms,
                 }) = zerostate_next_command_suggestion_info
-                {
-                    self.last_intelligent_autosuggestion_result =
-                        Some(IntelligentAutosuggestionResult {
-                            was_suggestion_accepted: self.was_intelligent_autosuggestion_accepted,
-                            is_from_ai,
-                            predicted_command: response.most_likely_action.clone(),
-                        });
+            {
+                self.last_intelligent_autosuggestion_result =
+                    Some(IntelligentAutosuggestionResult {
+                        was_suggestion_accepted: self.was_intelligent_autosuggestion_accepted,
+                        is_from_ai,
+                        predicted_command: response.most_likely_action.clone(),
+                    });
 
-                    let should_collect_ugc = should_collect_ai_ugc_telemetry(
-                        ctx,
-                        PrivacySettings::as_ref(ctx).is_telemetry_enabled,
-                    );
-                    send_telemetry_from_ctx!(
-                        TelemetryEvent::AgentModePrediction {
-                            was_suggestion_accepted: self.was_intelligent_autosuggestion_accepted,
-                            request_duration_ms,
-                            is_from_ai,
-                            does_actual_command_match_prediction: response.most_likely_action
-                                == command,
-                            does_actual_command_match_history_prediction:
-                                history_based_autosuggestion_state.history_command_prediction
-                                    == command,
-                            history_prediction_likelihood: history_based_autosuggestion_state
-                                .history_command_prediction_likelihood,
-                            total_history_count: history_based_autosuggestion_state
-                                .total_history_count,
-                            actual_next_command_run: should_collect_ugc
-                                .then_some(command.to_string()),
-                            history_based_autosuggestion_state: should_collect_ugc
-                                .then_some(history_based_autosuggestion_state.clone()),
-                            generate_ai_input_suggestions_request: should_collect_ugc
-                                .then_some(*request),
-                            generate_ai_input_suggestions_response: should_collect_ugc
-                                .then(|| response.clone())
-                        },
-                        ctx
-                    );
-                }
+                let should_collect_ugc = should_collect_ai_ugc_telemetry(
+                    ctx,
+                    PrivacySettings::as_ref(ctx).is_telemetry_enabled,
+                );
+                send_telemetry_from_ctx!(
+                    TelemetryEvent::AgentModePrediction {
+                        was_suggestion_accepted: self.was_intelligent_autosuggestion_accepted,
+                        request_duration_ms,
+                        is_from_ai,
+                        does_actual_command_match_prediction: response.most_likely_action
+                            == command,
+                        does_actual_command_match_history_prediction:
+                            history_based_autosuggestion_state.history_command_prediction == command,
+                        history_prediction_likelihood: history_based_autosuggestion_state
+                            .history_command_prediction_likelihood,
+                        total_history_count: history_based_autosuggestion_state.total_history_count,
+                        actual_next_command_run: should_collect_ugc.then_some(command.to_string()),
+                        history_based_autosuggestion_state: should_collect_ugc
+                            .then_some(history_based_autosuggestion_state.clone()),
+                        generate_ai_input_suggestions_request: should_collect_ugc
+                            .then_some(*request),
+                        generate_ai_input_suggestions_response: should_collect_ugc
+                            .then(|| response.clone())
+                    },
+                    ctx
+                );
             }
             // Reset state for whether the user accepted the intelligent autosuggestion.
             self.was_intelligent_autosuggestion_accepted = false;
@@ -7715,6 +7797,23 @@ impl Input {
                 editor.set_text_colors(TextColors::from_appearance(appearance), ctx);
             });
         }
+    }
+
+    /// Restores a VM-down cloud follow-up after an attachment upload fails. Unlike
+    /// [`Self::unfreeze_agent_input`], this path runs on a disconnected cloud pane rather than an
+    /// active shared-session viewer, so it must restore the visible prompt and editable state
+    /// directly.
+    fn restore_cloud_followup_input_after_upload_failure(
+        &mut self,
+        prompt: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.editor.update(ctx, |editor, ctx| {
+            editor.set_buffer_text(prompt, ctx);
+            editor.set_interaction_state(InteractionState::Editable, ctx);
+            let appearance: &Appearance = Appearance::as_ref(ctx);
+            editor.set_text_colors(TextColors::from_appearance(appearance), ctx);
+        });
     }
 
     pub fn reset_after_cloud_followup_submission(&mut self, ctx: &mut ViewContext<Self>) {
@@ -7855,10 +7954,10 @@ impl Input {
         }
 
         // The vim status bar should be shown and hidden immediately upon toggling.
-        if settings.as_ref(ctx).vim_mode_enabled() {
-            if let AppEditorSettingsChangedEvent::VimStatusBar { .. } = evt {
-                ctx.notify();
-            }
+        if settings.as_ref(ctx).vim_mode_enabled()
+            && let AppEditorSettingsChangedEvent::VimStatusBar { .. } = evt
+        {
+            ctx.notify();
         }
     }
 
@@ -8850,41 +8949,40 @@ impl Input {
         should_restore_buffer_before_history_up: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        if should_restore_buffer_before_history_up {
-            if let InputSuggestionsMode::HistoryUp {
+        if should_restore_buffer_before_history_up
+            && let InputSuggestionsMode::HistoryUp {
                 original_buffer,
                 original_cursor_point,
                 original_input_was_locked,
                 original_input_type,
                 ..
             } = self.suggestions_mode_model.as_ref(ctx).mode()
-            {
-                let original_buffer = original_buffer.clone();
-                let original_cursor_point = *original_cursor_point;
-                let original_input_was_locked = *original_input_was_locked;
-                let original_input_type = *original_input_type;
-                // If the user closes the input suggestions menu, we want to reset the AI input mode
-                // to the exact same state it was originally, which includes the mode itself and
-                // whether it was locked to that mode.
-                self.ai_input_model.update(ctx, |ai_input_model, ctx| {
-                    ai_input_model.set_input_config(
-                        InputConfig {
-                            input_type: original_input_type,
-                            is_locked: original_input_was_locked,
-                        },
-                        original_buffer.is_empty(),
-                        Some(InputTypeAutoDetectionSource::RestoreSavedConfig),
-                        ctx,
-                    );
-                });
+        {
+            let original_buffer = original_buffer.clone();
+            let original_cursor_point = *original_cursor_point;
+            let original_input_was_locked = *original_input_was_locked;
+            let original_input_type = *original_input_type;
+            // If the user closes the input suggestions menu, we want to reset the AI input mode
+            // to the exact same state it was originally, which includes the mode itself and
+            // whether it was locked to that mode.
+            self.ai_input_model.update(ctx, |ai_input_model, ctx| {
+                ai_input_model.set_input_config(
+                    InputConfig {
+                        input_type: original_input_type,
+                        is_locked: original_input_was_locked,
+                    },
+                    original_buffer.is_empty(),
+                    Some(InputTypeAutoDetectionSource::RestoreSavedConfig),
+                    ctx,
+                );
+            });
 
-                self.editor.update(ctx, |editor, ctx| {
-                    editor.set_buffer_text_ignoring_undo(&original_buffer, ctx);
-                    if let Some(original_cursor_point) = original_cursor_point {
-                        editor.reset_selections_to_point(&original_cursor_point, ctx);
-                    }
-                });
-            }
+            self.editor.update(ctx, |editor, ctx| {
+                editor.set_buffer_text_ignoring_undo(&original_buffer, ctx);
+                if let Some(original_cursor_point) = original_cursor_point {
+                    editor.reset_selections_to_point(&original_cursor_point, ctx);
+                }
+            });
         }
         self.close_input_suggestions(/*should_focus_input=*/ should_focus_input, ctx);
     }
@@ -8969,13 +9067,13 @@ impl Input {
     }
 
     pub fn focus_input_box(&self, ctx: &mut ViewContext<Self>) {
-        if self.should_show_auth_secret_ftux(ctx) {
-            if let Some(ftux_view) = self.auth_secret_ftux_view().cloned() {
-                ftux_view.update(ctx, |view, ctx| {
-                    view.focus_dropdown_editor(ctx);
-                });
-                return;
-            }
+        if self.should_show_auth_secret_ftux(ctx)
+            && let Some(ftux_view) = self.auth_secret_ftux_view().cloned()
+        {
+            ftux_view.update(ctx, |view, ctx| {
+                view.focus_dropdown_editor(ctx);
+            });
+            return;
         }
         ctx.focus_self();
     }
@@ -9054,14 +9152,14 @@ impl Input {
             return;
         }
 
-        if let Some(selector) = self.auth_secret_selector() {
-            if selector.as_ref(ctx).is_menu_open() {
-                let selector = selector.clone();
-                selector.update(ctx, |selector, ctx| {
-                    selector.select_previous(ctx);
-                });
-                return;
-            }
+        if let Some(selector) = self.auth_secret_selector()
+            && selector.as_ref(ctx).is_menu_open()
+        {
+            let selector = selector.clone();
+            selector.update(ctx, |selector, ctx| {
+                selector.select_previous(ctx);
+            });
+            return;
         }
 
         if self.is_editing_queued_prompt(ctx) {
@@ -9233,15 +9331,6 @@ impl Input {
                 );
             });
 
-            send_telemetry_from_ctx!(
-                TelemetryEvent::OpenSuggestionsMenu(
-                    self.suggestions_mode_model
-                        .as_ref(ctx)
-                        .mode()
-                        .to_telemetry_mode(),
-                ),
-                ctx
-            );
             ctx.notify();
             return;
         }
@@ -9430,9 +9519,11 @@ impl Input {
             .info_box_expanded;
 
         InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-            report_if_error!(input_settings
-                .workflows_box_expanded
-                .set_value(info_box_expanded, ctx));
+            report_if_error!(
+                input_settings
+                    .workflows_box_expanded
+                    .set_value(info_box_expanded, ctx)
+            );
         });
     }
 
@@ -9684,52 +9775,50 @@ impl Input {
                     #[cfg(feature = "local_fs")]
                     // First, use rich history to find commands with a matching prefix that were run
                     // in a similar context, taking into account the most recent block run.
-                    if let Some(conn) = conn {
-                        if let Some(last_user_block_completed) =
+                    if let Some(conn) = conn
+                        && let Some(last_user_block_completed) =
                             &completer_data.last_user_block_completed
-                        {
-                            let similar_history_contexts = {
-                                let mut conn = conn.lock();
-                                NextCommandModel::get_similar_history_context(
-                                    &mut conn,
-                                    last_user_block_completed,
-                                    0,
-                                )
-                            };
-                            if !similar_history_contexts.is_empty() {
-                                let mut history_next_command_counts =
-                                    counter::Counter::<String>::new();
-                                // Find the most likely next command after a similar context, out of those that have a matching prefix and aren't ignored.
-                                for history_context in &similar_history_contexts {
-                                    if history_context
-                                        .next_command
-                                        .command
-                                        .starts_with(&buffer_text)
-                                        && !ignored_suggestions
-                                            .contains(&history_context.next_command.command)
-                                    {
-                                        history_next_command_counts
-                                            [&history_context.next_command.command] += 1;
-                                    }
-                                }
-
-                                for (most_likely_next_command, _) in
-                                    history_next_command_counts.k_most_common_ordered(5)
+                    {
+                        let similar_history_contexts = {
+                            let mut conn = conn.lock();
+                            NextCommandModel::get_similar_history_context(
+                                &mut conn,
+                                last_user_block_completed,
+                                0,
+                            )
+                        };
+                        if !similar_history_contexts.is_empty() {
+                            let mut history_next_command_counts = counter::Counter::<String>::new();
+                            // Find the most likely next command after a similar context, out of those that have a matching prefix and aren't ignored.
+                            for history_context in &similar_history_contexts {
+                                if history_context
+                                    .next_command
+                                    .command
+                                    .starts_with(&buffer_text)
+                                    && !ignored_suggestions
+                                        .contains(&history_context.next_command.command)
                                 {
-                                    if is_command_valid(
-                                        &most_likely_next_command,
-                                        completion_context.as_ref(),
-                                        session_env_vars.as_ref(),
-                                    )
-                                    .await
-                                    {
-                                        return AutoSuggestionResult {
-                                            buffer_text,
-                                            autosuggestion_result: Some(
-                                                most_likely_next_command.clone(),
-                                            ),
-                                        };
-                                    }
+                                    history_next_command_counts
+                                        [&history_context.next_command.command] += 1;
+                                }
+                            }
+
+                            for (most_likely_next_command, _) in
+                                history_next_command_counts.k_most_common_ordered(5)
+                            {
+                                if is_command_valid(
+                                    &most_likely_next_command,
+                                    completion_context.as_ref(),
+                                    session_env_vars.as_ref(),
+                                )
+                                .await
+                                {
+                                    return AutoSuggestionResult {
+                                        buffer_text,
+                                        autosuggestion_result: Some(
+                                            most_likely_next_command.clone(),
+                                        ),
+                                    };
                                 }
                             }
                         }
@@ -9846,13 +9935,12 @@ impl Input {
         // If there is an abbreviation, we expand it as long as we aren't executing.
         // In fish, an alias formatted like `ls=echo Hello && ls` would get expanded
         // twice if we also performed expansion on enter.
-        if matches!(executing, Executing::No) {
-            if let Some(abbr_value) = session_context
+        if matches!(executing, Executing::No)
+            && let Some(abbr_value) = session_context
                 .session
                 .abbreviation_value(&first_token.item)
-            {
-                return Some((first_token, abbr_value));
-            }
+        {
+            return Some((first_token, abbr_value));
         }
 
         // We only expand aliases if the user has turned the setting on.
@@ -10166,17 +10254,7 @@ impl Input {
                             input_render_state_model.set_editor_modified_since_block_finished(true);
                         },
                     );
-
-                    if !self
-                        .model
-                        .lock()
-                        .block_list()
-                        .active_block()
-                        .has_received_precmd()
-                    {
-                        send_telemetry_from_ctx!(TelemetryEvent::EditedInputBeforePrecmd, ctx);
-                        ctx.notify();
-                    }
+                    ctx.notify();
                 }
 
                 let is_editor_empty = self.editor.as_ref(ctx).is_empty(ctx);
@@ -10550,6 +10628,19 @@ impl Input {
                 // e.g., we don't want to sync EditorEvent::CmdUpOnFirstRow.
                 self.send_input_sync_event(edit_origin, ctx);
 
+                // Distinguish edits the completion system applied itself (accepting or
+                // cycling through a candidate) from edits the user made (typing,
+                // backspacing, pasting). System-applied edits are allowed to diverge from
+                // the original completion query so that classic cycling keeps working;
+                // user edits still have to be revalidated against that query.
+                let is_user_edit = !matches!(
+                    self.editor.as_ref(ctx).get_last_action(ctx),
+                    Some(
+                        PlainTextEditorViewAction::AcceptCompletionSuggestion
+                            | PlainTextEditorViewAction::CycleCompletionSuggestion
+                    )
+                );
+
                 let mode = self.suggestions_mode_model.as_ref(ctx).mode().clone();
                 match &mode {
                     InputSuggestionsMode::CompletionSuggestions {
@@ -10623,6 +10714,7 @@ impl Input {
                                 replacement_start,
                                 buffer_text_original.as_str(),
                                 &completion_results,
+                                is_user_edit,
                                 ctx,
                             );
                             if should_close {
@@ -10791,10 +10883,13 @@ impl Input {
                             let replacement_start = *replacement_start;
                             let buffer_text_original = buffer_text_original.clone();
                             let completion_results = completion_results.clone();
+                            // A selection change is a cursor move, not a buffer edit, so it
+                            // never counts as a user edit for invalidation purposes.
                             let should_close = self.update_tab_completion_menu(
                                 replacement_start,
                                 buffer_text_original.as_str(),
                                 &completion_results,
+                                /*is_user_edit=*/ false,
                                 ctx,
                             );
 
@@ -10882,17 +10977,9 @@ impl Input {
                 }
             }
             EditorEvent::AutosuggestionAccepted {
-                insertion_length,
-                buffer_char_length,
                 autosuggestion_type,
+                ..
             } => {
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::AutosuggestionInserted {
-                        insertion_length: *insertion_length,
-                        buffer_length: *buffer_char_length
-                    },
-                    ctx
-                );
                 ctx.emit(Event::AutosuggestionAccepted);
 
                 self.input_suggestions
@@ -10932,9 +11019,11 @@ impl Input {
                                         current_count + 1
                                     };
 
-                                    report_if_error!(input_settings
-                                        .autosuggestion_accepted_count
-                                        .set_value(new_count, ctx))
+                                    report_if_error!(
+                                        input_settings
+                                            .autosuggestion_accepted_count
+                                            .set_value(new_count, ctx)
+                                    )
                                 }
                             })
                         }
@@ -11056,26 +11145,14 @@ impl Input {
 
                 match token_at {
                     CommandXRayAnchor::Cursor => {
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::CommandXRayTriggered {
-                                trigger: CommandXRayTrigger::Keystroke
-                            },
-                            ctx
-                        );
                         let pos = self.start_byte_index_of_first_selection(ctx);
                         self.start_xray_at_offset(pos, CommandXRayTrigger::Keystroke, ctx);
                     }
                     CommandXRayAnchor::Hover(mouse_position) => {
-                        if let Some(offset) = self.start_byte_index_at_point(mouse_position, ctx) {
-                            if !self.suggestions_mode_model.as_ref(ctx).is_visible() {
-                                send_telemetry_from_ctx!(
-                                    TelemetryEvent::CommandXRayTriggered {
-                                        trigger: CommandXRayTrigger::Hover
-                                    },
-                                    ctx
-                                );
-                                self.start_xray_at_offset(offset, CommandXRayTrigger::Hover, ctx);
-                            }
+                        if let Some(offset) = self.start_byte_index_at_point(mouse_position, ctx)
+                            && !self.suggestions_mode_model.as_ref(ctx).is_visible()
+                        {
+                            self.start_xray_at_offset(offset, CommandXRayTrigger::Hover, ctx);
                         }
                     }
                 }
@@ -11574,7 +11651,7 @@ impl Input {
         if let Err(e) = self.agent_view_controller.update(ctx, |controller, ctx| {
             controller.try_enter_agent_view(None, AgentViewEntryOrigin::ImageAdded, ctx)
         }) {
-            log::error!("Failed to enter agent view when adding images: {e:?}");
+            log::warn!("Failed to enter agent view when adding images: {e}");
         }
     }
 
@@ -11726,6 +11803,7 @@ impl Input {
         replacement_start: usize,
         buffer_text_original: &str,
         completion_results: &SuggestionResults,
+        is_user_edit: bool,
         ctx: &mut ViewContext<Input>,
     ) -> bool {
         let editor_text = self.editor.as_ref(ctx).buffer_text(ctx);
@@ -11742,13 +11820,18 @@ impl Input {
         // then we should close the completion menu because the result set
         // was based on a different query.
         //
-        // For classic completions, this is a poor heuristic: when you cycle
-        // through fuzzy matches, the text up to the cursor might not start
-        // with the original buffer text anymore.
-        // TODO: there's a bug here where if you hit tab and backspace,
-        // the result set won't go away (stale).
+        // Classic completions get an exemption from this check, but only for
+        // system-applied edits: when the completion system cycles through fuzzy
+        // matches it rewrites the buffer to each candidate, and the text up to the
+        // cursor may no longer start with the original buffer text. Keeping the
+        // result set alive in that case is what lets cycling work.
+        //
+        // A user edit (typing, backspacing, pasting) that diverges from the original
+        // query must still invalidate the result set. Otherwise a Tab followed by
+        // Backspace past the replacement boundary would leave stale suggestions on
+        // screen (and an empty prefix would re-show the entire original result set).
         if !text_up_to_cursor.starts_with(buffer_text_original)
-            && !self.is_classic_completions_enabled(ctx)
+            && (!self.is_classic_completions_enabled(ctx) || is_user_edit)
         {
             // Close the input suggestions since the buffer was edited to no longer
             // contain the text that triggered tab completion.
@@ -11843,15 +11926,6 @@ impl Input {
                 ctx,
             );
         });
-        send_telemetry_from_ctx!(
-            TelemetryEvent::OpenSuggestionsMenu(
-                self.suggestions_mode_model
-                    .as_ref(ctx)
-                    .mode()
-                    .to_telemetry_mode(),
-            ),
-            ctx
-        );
 
         self.select_and_refresh_voltron(VoltronItem::History, ctx);
 
@@ -11912,13 +11986,12 @@ impl Input {
             return Vec::new();
         };
 
-        let commands = history_model
+        // TODO: append viewer's local shell history
+        history_model
             .as_ref(ctx)
             .entries()
             .map(|entry| HistoryInputSuggestion::Command { entry })
-            .collect();
-        // TODO: append viewer's local shell history
-        commands
+            .collect()
     }
 
     /// Returns a collection of history entries that are user AI queries or shell commands in order
@@ -11930,7 +12003,7 @@ impl Input {
         let input_config = self.ai_input_model.as_ref(ctx).input_config();
         let config = UpArrowHistoryConfig::for_input_config(&input_config);
 
-        History::as_ref(ctx).up_arrow_suggestions_for_terminal_view(
+        History::as_ref(ctx).up_arrow_suggestions_for_terminal_surface(
             self.terminal_view_id,
             self.active_block_session_id(),
             config,
@@ -12200,10 +12273,10 @@ impl Input {
             _ => CompletionsFallbackStrategy::None,
         };
 
-        if self.is_completions_while_typing_turned_on(ctx) {
-            if let Some(last_abort_handle) = self.completions_abort_handle.take() {
-                last_abort_handle.abort();
-            }
+        if self.is_completions_while_typing_turned_on(ctx)
+            && let Some(last_abort_handle) = self.completions_abort_handle.take()
+        {
+            last_abort_handle.abort();
         }
 
         let input_type = self.ai_input_model.as_ref(ctx).input_type();
@@ -12497,140 +12570,113 @@ impl Input {
                 });
             }
             Some(results) => {
-                match (results.single_prefix_suggestion(), completions_trigger) {
-                    (Some(only_prefix_suggestion), CompletionsTrigger::Keybinding) => {
-                        // If there is exactly one prefix suggestion, just insert into the buffer.
+                let query = results.replacement_span.slice(&buffer_text);
+                let buffer_text_original = buffer_text
+                    [0..self.start_byte_index_of_last_selection(ctx).as_usize()]
+                    .to_string();
+                let decision = if completions_trigger == CompletionsTrigger::Keybinding {
+                    results.explicit_tab_completion(query, self.path_separators(ctx).all)
+                } else {
+                    ExplicitTabCompletion::Open {
+                        suggestions: results
+                            .prepare_for_query(query, self.path_separators(ctx).all),
+                        replacement_span: results.replacement_span,
+                    }
+                };
+                let prepared_suggestions: Vec<PreparedSuggestion> = match decision {
+                    ExplicitTabCompletion::NoAction => {
+                        self.suggestions_mode_model.update(ctx, |model, ctx| {
+                            model.set_mode(InputSuggestionsMode::Closed, ctx);
+                        });
+                        ctx.notify();
+                        return;
+                    }
+                    ExplicitTabCompletion::InsertSingle {
+                        suggestion,
+                        replacement_span,
+                    } => {
                         self.insert_completion_result_into_editor(
-                            only_prefix_suggestion.replacement(),
-                            results.replacement_span.start(),
+                            &suggestion.suggestion.replacement,
+                            replacement_span.start(),
                             Executing::No,
                             ctx,
                         );
+                        ctx.notify();
+                        return;
                     }
-                    (_, completions_trigger) => {
-                        let buffer_text_original = buffer_text
-                            [0..self.start_byte_index_of_last_selection(ctx).as_usize()]
-                            .to_string();
+                    ExplicitTabCompletion::InsertCommonPrefixAndOpen {
+                        common_prefix,
+                        suggestions,
+                        replacement_span,
+                    } => {
+                        self.insert_completion_prefix_into_editor(
+                            ctx,
+                            &common_prefix,
+                            replacement_span.start(),
+                        );
+                        suggestions
+                    }
+                    ExplicitTabCompletion::Open { suggestions, .. } => suggestions,
+                };
 
-                        if completions_trigger == CompletionsTrigger::Keybinding {
-                            if let Some(common_prefix) = longest_common_prefix(
-                                results
-                                    .suggestions
-                                    .iter()
-                                    .filter(|suggestion| {
-                                        // Ignore fuzzy matches and case-insensitive matches
-                                        // when calculating the longest common prefix, so we
-                                        // are able to insert a common prefix more often.
-                                        matches!(
-                                            suggestion.match_type,
-                                            Match::Prefix {
-                                                is_case_sensitive: true
-                                            } | Match::Exact {
-                                                is_case_sensitive: true
-                                            }
-                                        )
-                                    })
-                                    .map(|suggestion| suggestion.replacement()),
-                            ) {
-                                // Insert the common prefix if it is longer than what the user has
-                                // already typed. This check is necessary because the suggestions
-                                // are case-insensitive, while the common prefix is necessarily
-                                // case-sensitive. That can lead to the common prefix being shorter
-                                // than the input, causing confusing behavior where the input is
-                                // truncated. Also, only fill in the common prefix if the
-                                // replacement itself is a prefix of the common prefix. If there
-                                // are only fuzzy completions, then it's possible this is not the
-                                // case, and we don't want to fill in the common prefix in that
-                                // case.
-                                let replacement_start = results.replacement_span.start();
-                                let current_word = &buffer_text_original[replacement_start
-                                    ..self.start_byte_index_of_last_selection(ctx).as_usize()];
-                                if common_prefix.len() > results.replacement_span.distance()
-                                    && common_prefix.starts_with(current_word)
-                                {
-                                    self.insert_completion_prefix_into_editor(
-                                        ctx,
-                                        common_prefix,
-                                        results.replacement_span.start(),
-                                    );
-                                }
-                            }
-                        }
+                // If not using completions as you type, then
+                // clear any autosuggestions when tab completions are open.
+                // The autosuggestion will be repopulated when the menu is closed.
+                // We don't do this for completions as you type because the user would
+                // otherwise hardly see autosuggestons.
+                if FeatureFlag::RemoveAutosuggestionDuringTabCompletions.is_enabled()
+                    && !self.is_completions_while_typing_turned_on(ctx)
+                {
+                    self.editor.update(ctx, |view, ctx| {
+                        view.clear_autosuggestion(ctx);
+                    });
+                }
 
-                        // If not using completions as you type, then
-                        // clear any autosuggestions when tab completions are open.
-                        // The autosuggestion will be repopulated when the menu is closed.
-                        // We don't do this for completions as you type because the user would
-                        // otherwise hardly see autosuggestons.
-                        if FeatureFlag::RemoveAutosuggestionDuringTabCompletions.is_enabled()
-                            && !self.is_completions_while_typing_turned_on(ctx)
-                        {
-                            self.editor.update(ctx, |view, ctx| {
-                                view.clear_autosuggestion(ctx);
-                            });
-                        }
-
-                        // Decide where to render the tab completion menu.
-                        // If we're rendering it at a specific position, let's make sure
-                        // that position exists in the position cache.
-                        let position = self.tab_completions_menu_position(
-                            &results,
-                            &buffer_text_original,
+                // Decide where to render the tab completion menu.
+                // If we're rendering it at a specific position, let's make sure
+                // that position exists in the position cache.
+                let position =
+                    self.tab_completions_menu_position(&results, &buffer_text_original, ctx);
+                let menu_position = if let Some(position) = position {
+                    self.editor.update(ctx, |editor, ctx| {
+                        editor.cache_buffer_point(
+                            position,
+                            COMPLETIONS_START_OF_REPLACEMENT_SPAN_POSITION_ID,
                             ctx,
                         );
-                        let menu_position = if let Some(position) = position {
-                            self.editor.update(ctx, |editor, ctx| {
-                                editor.cache_buffer_point(
-                                    position,
-                                    COMPLETIONS_START_OF_REPLACEMENT_SPAN_POSITION_ID,
-                                    ctx,
-                                );
-                            });
-                            TabCompletionsMenuPosition::AtStartOfReplacementSpan
-                        } else {
-                            TabCompletionsMenuPosition::AtLastCursor
-                        };
+                    });
+                    TabCompletionsMenuPosition::AtStartOfReplacementSpan
+                } else {
+                    TabCompletionsMenuPosition::AtLastCursor
+                };
 
-                        self.suggestions_mode_model.update(ctx, |m, ctx| {
-                            m.set_mode(
-                                InputSuggestionsMode::CompletionSuggestions {
-                                    replacement_start: results.replacement_span.start(),
-                                    buffer_text_original,
-                                    completion_results: results.clone(),
-                                    trigger: completions_trigger,
-                                    menu_position,
-                                },
-                                ctx,
-                            );
-                        });
+                self.suggestions_mode_model.update(ctx, |model, ctx| {
+                    model.set_mode(
+                        InputSuggestionsMode::CompletionSuggestions {
+                            replacement_start: results.replacement_span.start(),
+                            buffer_text_original,
+                            completion_results: results.clone(),
+                            trigger: completions_trigger,
+                            menu_position,
+                        },
+                        ctx,
+                    );
+                });
 
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::OpenSuggestionsMenu(
-                                self.suggestions_mode_model
-                                    .as_ref(ctx)
-                                    .mode()
-                                    .to_telemetry_mode(),
-                            ),
-                            ctx
+                let preselect_option = if self.is_classic_completions_enabled(ctx) {
+                    TabCompletionsPreselectOption::Unselected
+                } else {
+                    TabCompletionsPreselectOption::First
+                };
+
+                self.input_suggestions
+                    .update(ctx, |input_suggestions, ctx| {
+                        input_suggestions.set_prepared_tab_completions(
+                            prepared_suggestions,
+                            preselect_option,
+                            ctx,
                         );
-
-                        let preselect_option = if self.is_classic_completions_enabled(ctx) {
-                            TabCompletionsPreselectOption::Unselected
-                        } else {
-                            TabCompletionsPreselectOption::First
-                        };
-
-                        self.input_suggestions
-                            .update(ctx, |input_suggestions, ctx| {
-                                input_suggestions.prefix_search_for_tab_completion(
-                                    results.replacement_span.slice(&buffer_text),
-                                    &results,
-                                    preselect_option,
-                                    ctx,
-                                );
-                            });
-                    }
-                }
+                    });
             }
         }
         ctx.notify();
@@ -12690,7 +12736,6 @@ impl Input {
                 ctx,
             );
         });
-        send_telemetry_from_ctx!(TelemetryEvent::TabSingleResultAutocompletion, ctx);
     }
 
     /// Whether the editor is in a state where we should tab complete instead of indenting text
@@ -12720,9 +12765,9 @@ impl Input {
     ) -> (Option<WorkflowArgumentIndex>, Vec<Range<ByteOffset>>) {
         // If we aren't in a workflow, return
         let Some(workflow_state) = &self.workflows_state.selected_workflow_state else {
-            log::error!(
+            report_error!(anyhow::anyhow!(
                 "Tried to get the current argument when no workflow is loaded into the input",
-            );
+            ));
             return (None, Vec::new());
         };
 
@@ -13137,7 +13182,7 @@ impl Input {
         let current_buffer_text = self.editor.as_ref(app).buffer_text(app);
         selected_item.is_none_or(|selected_item| {
             let Some(replacement) = &current_buffer_text.get(*replacement_start..) else {
-                log::error!("Failed to get replacement range in current buffer text");
+                report_error!("Failed to get replacement range in current buffer text");
                 return true;
             };
             if replacement == &selected_item {
@@ -13164,10 +13209,10 @@ impl Input {
                             // Kind of a quirk, but PowerShell only inserts a
                             // newline after a backtick if the character preceding
                             // the backtick is whitespace.
-                            if let Some(c) = preceding_chars.next() {
-                                if !c.is_ascii_whitespace() {
-                                    return false;
-                                }
+                            if let Some(c) = preceding_chars.next()
+                                && !c.is_ascii_whitespace()
+                            {
+                                return false;
                             }
                             return true;
                         }
@@ -13175,10 +13220,10 @@ impl Input {
                     Some(ShellFamily::Posix) | None => {
                         if c == '\\' {
                             // Continue if there are more \ characters
-                            if let Some(c) = preceding_chars.next() {
-                                if c == '\\' {
-                                    continue;
-                                }
+                            if let Some(c) = preceding_chars.next()
+                                && c == '\\'
+                            {
+                                continue;
                             }
                             // Odd number of \ characters
                             return true;
@@ -13205,10 +13250,7 @@ impl Input {
             });
         }
         self.ai_controller.update(ctx, move |controller, ctx| {
-            controller.send_slash_command_request(
-                SlashCommandRequest::CreateNewProject { query: ai_query },
-                ctx,
-            )
+            controller.send_create_new_project_request(ai_query, ctx)
         });
     }
 
@@ -13477,24 +13519,6 @@ impl Input {
             && (self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
                 || self.is_cloud_mode_input_v2_composing(ctx))
         {
-            // If we're submitting an AI query, we want to send telemetry for the input type.
-            let input_model = self.ai_input_model.as_ref(ctx);
-            let input_type = input_model.input_type();
-            let is_locked = input_model.is_input_type_locked();
-            let input_type_decision_source = input_model.last_ai_autodetection_source();
-            let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
-            let block_id = self.model.lock().active_block_id().clone();
-            send_telemetry_from_ctx!(
-                TelemetryEvent::InputBufferSubmitted {
-                    input_type,
-                    is_locked,
-                    input_type_decision_source,
-                    was_lock_set_with_empty_buffer,
-                    block_id,
-                },
-                ctx
-            );
-
             // Check if we're configuring an ambient agent and spawn it instead of submitting a regular AI query.
             if self
                 .ambient_agent_view_model()
@@ -13527,16 +13551,16 @@ impl Input {
                     return;
                 }
 
-                if self.is_cloud_mode_input_v2_composing(ctx) {
-                    if let Some(ambient_agent_view_model) = self.ambient_agent_view_model() {
-                        let needs_env_modal = ambient_agent_view_model
-                            .as_ref(ctx)
-                            .selected_environment_id()
-                            .is_none();
-                        if needs_env_modal {
-                            ctx.emit(Event::OpenCloudModeV2EnvironmentCreationModal);
-                            return;
-                        }
+                if self.is_cloud_mode_input_v2_composing(ctx)
+                    && let Some(ambient_agent_view_model) = self.ambient_agent_view_model()
+                {
+                    let needs_env_modal = ambient_agent_view_model
+                        .as_ref(ctx)
+                        .selected_environment_id()
+                        .is_none();
+                    if needs_env_modal {
+                        ctx.emit(Event::OpenCloudModeV2EnvironmentCreationModal);
+                        return;
                     }
                 }
 
@@ -13547,34 +13571,7 @@ impl Input {
                 #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
                 let attachments = vec![];
 
-                // For local-to-cloud handoff panes, gate the buffer clear on the
-                // async `derive_touched_workspace` derivation having completed and
-                // no orchestrator already being in flight. If we cleared early and
-                // then bailed inside `submit_handoff`, the user's prompt and
-                // pending attachments would be silently dropped. Surface a toast
-                // so the user gets some feedback instead of seeing the submit do
-                // nothing — the prompt and attachments are intentionally left
-                // intact so the next submit picks them back up.
-                if let Some(ambient_agent_view_model) = self.ambient_agent_view_model().cloned() {
-                    let is_handoff_not_ready = {
-                        let model = ambient_agent_view_model.as_ref(ctx);
-                        model.is_local_to_cloud_handoff() && !model.is_handoff_ready_to_submit()
-                    };
-                    if is_handoff_not_ready {
-                        let window_id = ctx.window_id();
-                        ToastStack::handle(ctx).update(ctx, |ts, ctx| {
-                            ts.add_ephemeral_toast(
-                                DismissibleToast::default(
-                                    "Preparing handoff — try again in a moment.".to_owned(),
-                                )
-                                .with_object_id("local-to-cloud-handoff-not-ready".to_owned()),
-                                window_id,
-                                ctx,
-                            );
-                        });
-                        return;
-                    }
-                }
+                self.emit_input_buffer_submitted_telemetry(ctx);
 
                 // Clear the buffer and pending attachments after collecting them.
                 self.editor.update(ctx, |editor, ctx| {
@@ -13586,11 +13583,7 @@ impl Input {
 
                 if let Some(ambient_agent_view_model) = self.ambient_agent_view_model() {
                     ambient_agent_view_model.update(ctx, |state, ctx| {
-                        if state.is_local_to_cloud_handoff() {
-                            state.submit_handoff(prompt, attachments, ctx);
-                        } else {
-                            state.spawn_agent(prompt, attachments, ctx);
-                        }
+                        state.spawn_agent(prompt, attachments, ctx);
                     });
                 }
                 return;
@@ -13598,24 +13591,6 @@ impl Input {
 
             self.submit_ai_query_with_routing(None, ctx);
         } else {
-            // If we're submitting a shell command, we want to send telemetry for the input type.
-            let input_model = self.ai_input_model.as_ref(ctx);
-            let input_type = input_model.input_type();
-            let is_locked = input_model.is_input_type_locked();
-            let last_ai_autodetection_source = input_model.last_ai_autodetection_source();
-            let was_lock_set_with_empty_buffer = input_model.was_lock_set_with_empty_buffer();
-            let block_id = self.model.lock().active_block_id().clone();
-            send_telemetry_from_ctx!(
-                TelemetryEvent::InputBufferSubmitted {
-                    input_type,
-                    is_locked,
-                    input_type_decision_source: last_ai_autodetection_source,
-                    was_lock_set_with_empty_buffer,
-                    block_id,
-                },
-                ctx
-            );
-
             if FeatureFlag::WorkflowAliases.is_enabled() {
                 let mut command_string = self.editor.as_ref(ctx).buffer_text(ctx);
                 // If the alias was inserted from the completions menu, it will have trailing
@@ -13654,6 +13629,7 @@ impl Input {
             if !self.try_execute_command(&command, ctx) {
                 return;
             }
+            self.emit_input_buffer_submitted_telemetry(ctx);
 
             if FeatureFlag::AgentMode.is_enabled()
                 && AISettings::as_ref(ctx).is_ai_autodetection_enabled(ctx)
@@ -13863,8 +13839,8 @@ impl Input {
                     number_of_bottom_lines_per_grid,
                 )
             } else {
-                log::error!(
-                    "Failed to fetch predicted queries, could not find block with ID: {:?}",
+                log::warn!(
+                    "Failed to fetch predicted queries, could not find block with ID {:?}",
                     block.serialized_block.id
                 );
                 return;
@@ -13897,7 +13873,7 @@ impl Input {
                 match server_api.predict_am_queries(&request).await {
                     Ok(resp) => Some(resp.suggestion),
                     Err(err) => {
-                        log::error!("Failed to fetch predicted queries: {err:?}");
+                        log::warn!("Failed to fetch predicted queries: {err}");
                         None
                     }
                 }
@@ -14263,6 +14239,7 @@ impl Input {
         self.ai_input_model.update(ctx, |model, ctx| {
             model.handle_input_buffer_submitted(ctx);
         });
+        self.emit_input_buffer_submitted_telemetry(ctx);
         self.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
         });
@@ -14331,6 +14308,7 @@ impl Input {
         if prompt.is_empty() {
             return false;
         }
+        self.emit_input_buffer_submitted_telemetry(ctx);
 
         self.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
@@ -14397,8 +14375,6 @@ impl Input {
             return;
         }
 
-        let has_requests_remaining = AIRequestUsageModel::as_ref(ctx).has_requests_remaining();
-
         let has_any_ai = AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx);
         if !has_any_ai {
             AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
@@ -14407,15 +14383,6 @@ impl Input {
         }
 
         if PromptAlertView::does_alert_block_ai_requests(ctx) {
-            if !has_requests_remaining {
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::AgentModeUserAttemptedQueryAtRequestLimit {
-                        limit: AIRequestUsageModel::as_ref(ctx).request_limit()
-                    },
-                    ctx
-                );
-            }
-
             AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
                 // Rate limit requests to fetch the user's AI usage if triggered by enter
                 // keypress.
@@ -14451,6 +14418,7 @@ impl Input {
         IgnoredSuggestionsModel::handle(ctx).update(ctx, |model, ctx| {
             model.remove_ignored_suggestion(ai_query.clone(), SuggestionType::AIQuery, ctx);
         });
+        self.emit_input_buffer_submitted_telemetry(ctx);
 
         self.ai_input_model.update(ctx, |model, ctx| {
             model.handle_input_buffer_submitted(ctx);
@@ -14478,25 +14446,25 @@ impl Input {
 
         ctx.emit(Event::ExecuteAIQuery);
 
-        if let Some(workflow_state) = self.workflows_state.selected_workflow_state.as_ref() {
-            if let WorkflowType::Cloud(workflow) = &workflow_state.workflow_type {
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::ExecutedWarpDrivePrompt {
-                        id: workflow.id.into_server().map(Into::into),
-                        selection_source: workflow_state.workflow_selection_source,
-                    },
-                    ctx
-                );
+        if let Some(workflow_state) = self.workflows_state.selected_workflow_state.as_ref()
+            && let WorkflowType::Cloud(workflow) = &workflow_state.workflow_type
+        {
+            send_telemetry_from_ctx!(
+                TelemetryEvent::ExecutedWarpDrivePrompt {
+                    id: workflow.id.into_server().map(Into::into),
+                    selection_source: workflow_state.workflow_selection_source,
+                },
+                ctx
+            );
 
-                UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
-                    update_manager.record_object_action(
-                        workflow.cloud_object_type_and_id(),
-                        ObjectActionType::Execute,
-                        None,
-                        ctx,
-                    )
-                });
-            }
+            UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
+                update_manager.record_object_action(
+                    workflow.cloud_object_type_and_id(),
+                    ObjectActionType::Execute,
+                    None,
+                    ctx,
+                )
+            });
         }
     }
 
@@ -14518,15 +14486,15 @@ impl Input {
             .slash_command_model
             .as_ref(ctx)
             .detect_command(&prompt, ctx)
+            && !slash_command_is_submitted_as_prompt(&detected.command)
         {
-            if !slash_command_is_submitted_as_prompt(&detected.command) {
-                return false;
-            }
+            return false;
         }
 
         // We're committed to sending the prompt, so finalize any in-flight image-attachment
         // processing. This drops images that haven't finished processing; already-processed ones
         // are collected as pending context below. (Local-action slash commands returned above.)
+        self.emit_input_buffer_submitted_telemetry(ctx);
         self.editor.update(ctx, |editor, ctx| {
             editor.abort_attached_images_future_handle(ctx);
         });
@@ -14600,6 +14568,77 @@ impl Input {
         true
     }
 
+    /// Upload pending attachments to the task definition before emitting the text-only cloud
+    /// follow-up event. `SubmitCloudFollowup` only carries the prompt text, so this helper owns
+    /// the prompt and attachment payloads until the async upload either succeeds and submits the
+    /// prompt or fails and restores the input. A new VM execution downloads these task attachments
+    /// during startup.
+    fn upload_files_then_submit_cloud_followup(
+        &mut self,
+        task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        prompt: String,
+        pending_attachments: Vec<PendingAttachment>,
+        ctx: &mut ViewContext<Self>,
+    ) -> SpawnedFutureHandle {
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let server_api = ServerApiProvider::as_ref(ctx).get();
+
+        ctx.spawn(
+            async move {
+                // Fail fast: any per-attachment failure (decode, size-limit, or HTTP) is fatal
+                // on the VM-down follow-up path; the user can fix the attachment and retry.
+                let outcomes = upload_pending_attachments_to_task(
+                    ai_client,
+                    server_api,
+                    task_id,
+                    pending_attachments,
+                )
+                .await
+                .map_err(|e| format!("Failed to prepare attachment uploads: {e:#}"))?;
+                for outcome in &outcomes {
+                    if let TaskAttachmentUploadOutcome::Failed { error, .. } = outcome {
+                        return Err(error.clone());
+                    }
+                }
+                Ok::<(), String>(())
+            },
+            move |input, result, ctx| {
+                if let Err(error) = result {
+                    input.restore_cloud_followup_input_after_upload_failure(&prompt, ctx);
+                    let window_id = ctx.window_id();
+                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!("Couldn't upload attachment: {error}")),
+                            window_id,
+                            ctx,
+                        );
+                    });
+                    return;
+                }
+
+                input.ai_context_model.update(ctx, |context_model, ctx| {
+                    context_model.clear_pending_attachments(ctx);
+                });
+                ctx.emit(Event::SubmitCloudFollowup { prompt });
+            },
+        )
+    }
+
+    fn emit_input_buffer_submitted_telemetry(&self, ctx: &mut ViewContext<Self>) {
+        let input_model = self.ai_input_model.as_ref(ctx);
+        let block_id = self.model.lock().active_block_id().clone();
+        send_telemetry_from_ctx!(
+            TelemetryEvent::InputBufferSubmitted {
+                input_type: input_model.input_type(),
+                is_locked: input_model.is_input_type_locked(),
+                input_type_decision_source: input_model.last_ai_autodetection_source(),
+                was_lock_set_with_empty_buffer: input_model.was_lock_set_with_empty_buffer(),
+                block_id,
+            },
+            ctx
+        );
+    }
+
     /// Uploads `images`/`files` (when the cloud pane supports it) and emits `Event::SendAgentPrompt`
     /// with the resulting attachments. Shared by the immediate viewer submission and the queued
     /// viewer drain so both go through the identical upload-then-send path.
@@ -14663,101 +14702,61 @@ impl Input {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let server_api = ServerApiProvider::as_ref(ctx).get();
 
-        // Decode all images upfront; drop any that fail so that file_infos
-        // and files_to_upload stay in sync (they're zipped later).
-        let mut files_to_upload: Vec<(String, String, Vec<u8>)> = pending_images
+        // Combine images and files into a unified list so
+        // `upload_pending_attachments_to_task` can handle both kinds uniformly.
+        let pending_attachments: Vec<PendingAttachment> = pending_images
             .iter()
-            .filter_map(|img| {
-                base64::engine::general_purpose::STANDARD
-                    .decode(&img.data)
-                    .map(|bytes| (img.file_name.clone(), img.mime_type.clone(), bytes))
-                    .map_err(|e| {
-                        log::error!("Failed to decode base64 image {}: {e}", img.file_name)
-                    })
-                    .ok()
-            })
+            .cloned()
+            .map(PendingAttachment::Image)
+            .chain(pending_files.iter().cloned().map(PendingAttachment::File))
             .collect();
-
-        // Also read non-image files from disk and add them to the upload list.
-        for file in pending_files {
-            match std::fs::read(&file.file_path) {
-                Ok(bytes) => {
-                    if bytes.len() > MAX_ATTACHMENT_SIZE_BYTES {
-                        log::warn!(
-                            "Skipping file {} ({} bytes) — exceeds 10MB limit",
-                            file.file_name,
-                            bytes.len()
-                        );
-                        continue;
-                    }
-                    files_to_upload.push((file.file_name.clone(), file.mime_type.clone(), bytes));
-                }
-                Err(e) => {
-                    log::error!("Failed to read file {}: {e}", file.file_path.display());
-                }
-            }
-        }
-
-        let file_infos: Vec<AttachmentFileInfo> = files_to_upload
-            .iter()
-            .map(|(name, mime, _)| AttachmentFileInfo {
-                filename: name.clone(),
-                mime_type: mime.clone(),
-            })
-            .collect();
+        let pending_count = pending_attachments.len();
 
         ctx.spawn(
             async move {
-                let response = match ai_client
-                    .prepare_attachments_for_upload(&task_id, &file_infos)
-                    .await
+                // Best-effort: continue with successful uploads even when individual
+                // attachments fail (decode / size-limit / HTTP). Return `None` only when
+                // the prepare call fails entirely (maps to the "too many attachments" toast).
+                let outcomes = match upload_pending_attachments_to_task(
+                    ai_client,
+                    server_api,
+                    task_id,
+                    pending_attachments,
+                )
+                .await
                 {
-                    Ok(resp) => resp,
+                    Ok(outcomes) => outcomes,
                     Err(e) => {
                         log::error!(
-                            "Failed to prepare attachment uploads for task {task_id}: {e:?}"
+                            "Failed to prepare attachment uploads for task {task_id}: {e:#}"
                         );
                         return None;
                     }
                 };
 
                 let mut uploaded = Vec::new();
-                for ((file_name, mime_type, file_bytes), upload_info) in
-                    files_to_upload.iter().zip(response.attachments.iter())
-                {
-                    let result = server_api
-                        .http_client()
-                        .put(&upload_info.upload_url)
-                        .header("Content-Type", mime_type.as_str())
-                        .body(file_bytes.clone())
-                        .send()
-                        .await;
-
-                    match result {
-                        Ok(resp) if resp.status().is_success() => {
+                for outcome in outcomes {
+                    match outcome {
+                        TaskAttachmentUploadOutcome::Uploaded {
+                            attachment_id,
+                            file_name,
+                        } => {
                             uploaded.push(AgentAttachment::FileReference {
-                                attachment_id: upload_info.attachment_id.clone(),
-                                file_name: file_name.clone(),
+                                attachment_id,
+                                file_name,
                             });
                         }
-                        Ok(resp) => {
-                            log::error!(
-                                "Failed to upload attachment {}: HTTP {}",
-                                file_name,
-                                resp.status()
-                            );
-                        }
-                        Err(e) => {
-                            log::error!("Failed to upload attachment {file_name}: {e:?}");
+                        TaskAttachmentUploadOutcome::Failed { file_name, error } => {
+                            log::warn!("Failed to upload attachment {file_name}: {error}");
                         }
                     }
                 }
 
-                if uploaded.len() < files_to_upload.len() {
+                if uploaded.len() < pending_count {
                     log::warn!(
                         "Only {}/{} attachments uploaded successfully",
                         uploaded.len(),
-                        files_to_upload.len()
+                        pending_count
                     );
                 }
 
@@ -14855,31 +14854,30 @@ impl Input {
 
         // If the buffer is non-empty, we should kick off the autodetection process, in case the
         // classification doesn't match the previous locked mode.
-        if !buffer_text.is_empty() {
-            if let Some(completion_context) = self.completion_session_context(ctx) {
-                let ai_input_model = self.ai_input_model.clone();
+        if !buffer_text.is_empty()
+            && let Some(completion_context) = self.completion_session_context(ctx)
+        {
+            let ai_input_model = self.ai_input_model.clone();
 
-                ctx.spawn(
-                    async move {
-                        (
-                            parse_current_commands_and_tokens(buffer_text, &completion_context)
-                                .await,
+            ctx.spawn(
+                async move {
+                    (
+                        parse_current_commands_and_tokens(buffer_text, &completion_context).await,
+                        completion_context,
+                    )
+                },
+                move |_input, (parsed_tokens, completion_context), ctx| {
+                    let session_id = completion_context.session.id();
+                    ai_input_model.update(ctx, |model, ctx| {
+                        model.detect_and_set_input_type(
+                            parsed_tokens,
                             completion_context,
-                        )
-                    },
-                    move |_input, (parsed_tokens, completion_context), ctx| {
-                        let session_id = completion_context.session.id();
-                        ai_input_model.update(ctx, |model, ctx| {
-                            model.detect_and_set_input_type(
-                                parsed_tokens,
-                                completion_context,
-                                Some(session_id),
-                                ctx,
-                            );
-                        });
-                    },
-                );
-            }
+                            Some(session_id),
+                            ctx,
+                        );
+                    });
+                },
+            );
         }
     }
 
@@ -15262,19 +15260,22 @@ impl Input {
                 self.flush_deferred_remote_operations(ctx);
 
                 // Update shared session history model
-                if let Some(shared_session_history_model) = self
+                match self
                     .shared_session_input_state
                     .as_ref()
                     .map(|state| state.history_model.clone())
                 {
-                    shared_session_history_model.update(ctx, |history_model, _ctx| {
-                        history_model.push(HistoryEntry::for_completed_block(
-                            block_completed.command,
-                            &block_completed.serialized_block,
-                        ))
-                    })
-                } else {
-                    log::warn!("Tried to access non-existent shared session history model")
+                    Some(shared_session_history_model) => {
+                        shared_session_history_model.update(ctx, |history_model, _ctx| {
+                            history_model.push(HistoryEntry::for_completed_block(
+                                block_completed.command,
+                                &block_completed.serialized_block,
+                            ))
+                        })
+                    }
+                    _ => {
+                        log::warn!("Tried to access non-existent shared session history model")
+                    }
                 }
             } else if is_next_command_enabled(ctx) {
                 self.maybe_predict_next_action_ai(block_completed, ctx);
@@ -15443,12 +15444,14 @@ impl Input {
             prompt_chip_snapshot: None,
         };
 
-        if let Some(block) = block {
-            if !is_udi && block.honor_ps1() && model.block_list().is_bootstrapped() {
-                // PS1 mode: capture the raw prompt grid so the command palette
-                // can render it with full fidelity (CORE-1683).
-                prompt_elements.ps1_prompt_grid = Some(block.prompt_grid().clone());
-            }
+        if let Some(block) = block
+            && !is_udi
+            && block.honor_ps1()
+            && model.block_list().is_bootstrapped()
+        {
+            // PS1 mode: capture the raw prompt grid so the command palette
+            // can render it with full fidelity (CORE-1683).
+            prompt_elements.ps1_prompt_grid = Some(block.prompt_grid().clone());
         }
 
         // Always capture a chip snapshot as the fallback prompt representation.
@@ -16303,10 +16306,10 @@ impl View for Input {
             ctx.set.insert(flags::CODE_SUGGESTIONS_FLAG);
         }
 
-        if let Some(workflow) = self.workflows_state.selected_workflow_state.clone() {
-            if workflow.should_show_more_info_view {
-                ctx.set.insert("WorkflowInfoBox");
-            }
+        if let Some(workflow) = self.workflows_state.selected_workflow_state.clone()
+            && workflow.should_show_more_info_view
+        {
+            ctx.set.insert("WorkflowInfoBox");
         }
 
         let is_profile_model_selector_open = self.should_show_universal_developer_input(app)

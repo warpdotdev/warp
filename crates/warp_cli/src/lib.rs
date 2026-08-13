@@ -34,6 +34,7 @@ pub mod mcp;
 pub mod memory_store;
 pub mod model;
 pub mod provider;
+pub mod runner;
 pub mod schedule;
 pub mod secret;
 pub mod share;
@@ -91,7 +92,12 @@ pub struct RemoteServerIdentityArgs {
 #[derive(Debug, Default, Clone, clap::Args)]
 pub struct GlobalOptions {
     /// API key for server authentication.
-    #[arg(long = "api-key", global = true, env = "WARP_API_KEY")]
+    #[arg(
+        long = "api-key",
+        global = true,
+        env = "WARP_API_KEY",
+        hide_env_values = true
+    )]
     pub api_key: Option<String>,
 
     /// Set the output format.
@@ -123,7 +129,7 @@ Use the CLI to:
 * Manage the environments that cloud agents run in
 * Upload secrets to Oz's secure storage"#
 )]
-#[clap(args_conflicts_with_subcommands = true)]
+#[clap(subcommand_precedence_over_arg = true)]
 pub struct Args {
     #[clap(flatten)]
     global_options: GlobalOptions,
@@ -273,6 +279,15 @@ impl Args {
                     }
                 }
 
+                if !FeatureFlag::CloudAgentRunners.is_enabled() {
+                    let args: Vec<String> = env::args().collect();
+                    if args.len() > 1 && args[1] == "runner" {
+                        eprintln!("error: unrecognized subcommand 'runner'\n");
+                        eprintln!("For more information, try '--help'");
+                        std::process::exit(2);
+                    }
+                }
+
                 let command = Self::clap_command();
 
                 command.try_get_matches()
@@ -327,6 +342,20 @@ impl Args {
             });
         }
 
+        // Hide the third-party harness flags on `run-cloud` when the harness
+        // feature is off, so `--help` matches the runtime gating (a non-oz
+        // `--harness` is rejected unless AgentHarness is enabled).
+        if !FeatureFlag::AgentHarness.is_enabled() {
+            command = command.mut_subcommand("agent", |agent_cmd| {
+                agent_cmd.mut_subcommand("run-cloud", |cloud_cmd| {
+                    cloud_cmd
+                        .mut_arg("harness", |arg| arg.hide(true))
+                        .mut_arg("claude_auth_secret", |arg| arg.hide(true))
+                        .mut_arg("codex_auth_secret", |arg| arg.hide(true))
+                })
+            });
+        }
+
         // Hide the provider subcommand from help text
         if !FeatureFlag::ProviderCommand.is_enabled() {
             command = command.mut_subcommand("provider", |c| c.hide(true));
@@ -376,6 +405,11 @@ impl Args {
         // Hide the api-key subcommand from help text.
         if !FeatureFlag::APIKeyManagement.is_enabled() {
             command = command.mut_subcommand("api-key", |c| c.hide(true));
+        }
+
+        // Hide the runner subcommand from help text.
+        if !FeatureFlag::CloudAgentRunners.is_enabled() {
+            command = command.mut_subcommand("runner", |c| c.hide(true));
         }
 
         // Wire up `--version` / `-V` using the same version metadata used elsewhere in the
@@ -574,6 +608,10 @@ pub enum CliCommand {
     /// Manage API keys.
     #[command(subcommand)]
     ApiKey(crate::api_key::ApiKeyCommand),
+
+    /// Manage cloud agent runners.
+    #[command(subcommand)]
+    Runner(crate::runner::RunnerCommand),
 }
 
 impl CliCommand {
@@ -598,6 +636,7 @@ impl CliCommand {
             CliCommand::ApiKey(command) => command.as_str_for_tracing(),
             CliCommand::MemoryStore(command) => command.as_str_for_tracing(),
             CliCommand::Memory(command) => command.as_str_for_tracing(),
+            CliCommand::Runner(command) => command.as_str_for_tracing(),
         }
     }
 }

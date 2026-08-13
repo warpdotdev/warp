@@ -21,9 +21,22 @@ pub(crate) const TRANSIENT_HINT_DURATION: Duration = Duration::from_secs(3);
 #[derive(Debug, Default)]
 pub(crate) struct TransientHint {
     /// The currently displayed notice, if any.
-    text: Option<String>,
+    content: Option<TransientHintContent>,
     /// The pending expiry for the current notice; aborted when superseded.
     timer: Option<SpawnedFutureHandle>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TransientHintTone {
+    Muted,
+    Success,
+    Error,
+}
+
+#[derive(Debug)]
+struct TransientHintContent {
+    text: String,
+    tone: TransientHintTone,
 }
 
 impl TransientHint {
@@ -38,12 +51,41 @@ impl TransientHint {
         ctx: &mut ViewContext<V>,
         transient_hint: impl Fn(&mut V) -> &mut TransientHint + 'static,
     ) {
-        self.text = Some(text);
+        self.show_with_tone(text, TransientHintTone::Muted, ctx, transient_hint);
+    }
+
+    /// Displays success feedback in the shared transient footer slot.
+    pub(crate) fn show_success<V: Entity>(
+        &mut self,
+        text: String,
+        ctx: &mut ViewContext<V>,
+        transient_hint: impl Fn(&mut V) -> &mut TransientHint + 'static,
+    ) {
+        self.show_with_tone(text, TransientHintTone::Success, ctx, transient_hint);
+    }
+    /// Displays error feedback in the shared transient footer slot.
+    pub(crate) fn show_error<V: Entity>(
+        &mut self,
+        text: String,
+        ctx: &mut ViewContext<V>,
+        transient_hint: impl Fn(&mut V) -> &mut TransientHint + 'static,
+    ) {
+        self.show_with_tone(text, TransientHintTone::Error, ctx, transient_hint);
+    }
+
+    fn show_with_tone<V: Entity>(
+        &mut self,
+        text: String,
+        tone: TransientHintTone,
+        ctx: &mut ViewContext<V>,
+        transient_hint: impl Fn(&mut V) -> &mut TransientHint + 'static,
+    ) {
+        self.content = Some(TransientHintContent { text, tone });
         let timer = ctx.spawn(
             Timer::after(TRANSIENT_HINT_DURATION),
             move |view, _, ctx| {
                 let hint = transient_hint(view);
-                hint.text = None;
+                hint.content = None;
                 hint.timer = None;
                 ctx.notify();
             },
@@ -60,9 +102,19 @@ impl TransientHint {
         }
     }
 
+    /// Clears the current notice and cancels its pending expiry.
+    pub(crate) fn clear(&mut self) {
+        self.content = None;
+        if let Some(timer) = self.timer.take() {
+            timer.abort();
+        }
+    }
+
     /// The currently displayed notice, if any.
-    pub(crate) fn current(&self) -> Option<&str> {
-        self.text.as_deref()
+    pub(crate) fn current(&self) -> Option<(&str, TransientHintTone)> {
+        self.content
+            .as_ref()
+            .map(|content| (content.text.as_str(), content.tone))
     }
 }
 

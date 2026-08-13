@@ -5,8 +5,8 @@ use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
 
 use super::{
-    skill_reference_from_api_skill_ref, skill_reference_from_read_skill_ref, SkillConversionError,
-    SkillPathOrigin,
+    SkillConversionError, SkillPathOrigin, skill_reference_from_api_skill_ref,
+    skill_reference_from_read_skill_ref,
 };
 use crate::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope};
 

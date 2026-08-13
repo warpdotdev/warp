@@ -89,7 +89,7 @@ impl SecretManager {
                         ONE_PASSWORD_INSTALLED_COMMAND.join(" ").as_str(),
                     )
                     .await
-                    .is_ok()
+                    .is_ok();
                 }
                 SecretManager::LastPass => {
                     return execute_command(
@@ -99,7 +99,7 @@ impl SecretManager {
                         LASTPASS_INSTALLED_COMMAND.join(" ").as_str(),
                     )
                     .await
-                    .is_ok()
+                    .is_ok();
                 }
             }
         }
@@ -125,7 +125,7 @@ impl SecretManager {
                     )
                     .await
                     .ok()
-                    .and_then(|output| parse_onepassword_secrets(&output).ok())
+                    .and_then(|output| parse_onepassword_secrets(&output).ok());
                 }
                 SecretManager::LastPass => {
                     let lastpass_command: Vec<&str> = LASTPASS_LIST_SECRETS_COMMAND

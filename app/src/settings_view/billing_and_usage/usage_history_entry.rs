@@ -1,5 +1,6 @@
 use chrono::Local;
 use warp_core::ui::appearance::Appearance;
+use warp_errors::report_error;
 use warp_graphql::queries::get_conversation_usage::ConversationUsage;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
@@ -45,28 +46,28 @@ impl UsageHistoryEntry {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(self.render_header(appearance));
 
-        if let Some(entry) = &self.entry {
-            if self.is_expanded {
-                res = res
-                    .with_child(
-                        // Separator between header and usage component
-                        Container::new(Empty::new().finish())
-                            .with_border(
-                                Border::top(2.0).with_border_fill(appearance.theme().outline()),
-                            )
-                            .with_overdraw_bottom(0.)
-                            .finish(),
-                    )
-                    .with_child(
-                        ConversationUsageView::new(
-                            ConversationUsageInfo::from(entry),
-                            DisplayMode::Settings,
-                            None,
-                            self.tooltip_mouse_state.clone(),
+        if let Some(entry) = &self.entry
+            && self.is_expanded
+        {
+            res = res
+                .with_child(
+                    // Separator between header and usage component
+                    Container::new(Empty::new().finish())
+                        .with_border(
+                            Border::top(2.0).with_border_fill(appearance.theme().outline()),
                         )
-                        .render(app),
-                    );
-            }
+                        .with_overdraw_bottom(0.)
+                        .finish(),
+                )
+                .with_child(
+                    ConversationUsageView::new(
+                        ConversationUsageInfo::from(entry),
+                        DisplayMode::Settings,
+                        None,
+                        self.tooltip_mouse_state.clone(),
+                    )
+                    .render(app),
+                );
         }
 
         Container::new(res.finish())
@@ -82,7 +83,7 @@ impl UsageHistoryEntry {
         };
         let Some(mouse_state) = &self.mouse_state else {
             // If there is a provided entry, there should always be a mouse state as well.
-            log::error!("Mouse state is required to render usage history entry header");
+            report_error!("Mouse state is required to render usage history entry header");
             return Empty::new().finish();
         };
 

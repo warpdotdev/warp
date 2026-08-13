@@ -1,11 +1,11 @@
+use warp_errors::report_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
-use crate::report_error;
-use crate::server::server_api::ai::ConnectedSelfHostedWorker;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::ConnectedSelfHostedWorker;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 pub const WARP_WORKER_HOST: &str = "warp";
 
@@ -111,6 +111,23 @@ impl ConnectedSelfHostedWorkersModel {
         }
         self.workers.clear();
         true
+    }
+}
+
+#[cfg(test)]
+impl ConnectedSelfHostedWorkersModel {
+    /// Test hook: set the connected workers and emit `Changed`.
+    pub fn set_workers_for_test(&mut self, worker_hosts: &[&str], ctx: &mut ModelContext<Self>) {
+        self.workers = worker_hosts
+            .iter()
+            .map(|host| ConnectedSelfHostedWorker {
+                worker_host: (*host).to_string(),
+                connection_count: 1,
+                connected_at: String::new(),
+                last_seen_at: String::new(),
+            })
+            .collect();
+        ctx.emit(ConnectedSelfHostedWorkersEvent::Changed);
     }
 }
 

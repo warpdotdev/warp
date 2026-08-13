@@ -32,6 +32,12 @@ impl Display for ServerExperiment {
             }
             Self::OzMultiHarnessControl => "OZ_MULTI_HARNESS_CONTROL",
             Self::OzMultiHarnessExperiment => "OZ_MULTI_HARNESS_EXPERIMENT",
+            Self::MacosRunnersControl => "MACOS_RUNNERS_CONTROL",
+            Self::MacosRunnersExperiment => "MACOS_RUNNERS_EXPERIMENT",
+            Self::OnboardingChooseHowToStartControl => "ONBOARDING_CHOOSE_HOW_TO_START_CONTROL",
+            Self::OnboardingChooseHowToStartExperiment => {
+                "ONBOARDING_CHOOSE_HOW_TO_START_EXPERIMENT"
+            }
             #[cfg(test)]
             Self::TestExperiment => "TEST_EXPERIMENT",
         };
@@ -61,6 +67,12 @@ impl ServerExperiment {
             "PROMPT_SUGGESTIONS_VIA_MAA_EXPERIMENT" => Ok(Self::PromptSuggestionsViaMaaExperiment),
             "OZ_MULTI_HARNESS_CONTROL" => Ok(Self::OzMultiHarnessControl),
             "OZ_MULTI_HARNESS_EXPERIMENT" => Ok(Self::OzMultiHarnessExperiment),
+            "MACOS_RUNNERS_CONTROL" => Ok(Self::MacosRunnersControl),
+            "MACOS_RUNNERS_EXPERIMENT" => Ok(Self::MacosRunnersExperiment),
+            "ONBOARDING_CHOOSE_HOW_TO_START_CONTROL" => Ok(Self::OnboardingChooseHowToStartControl),
+            "ONBOARDING_CHOOSE_HOW_TO_START_EXPERIMENT" => {
+                Ok(Self::OnboardingChooseHowToStartExperiment)
+            }
             s => Err(anyhow::anyhow!(
                 "String doesn't match any server experiment variant {s}"
             )),
@@ -96,6 +108,14 @@ impl TryFrom<Experiment> for ServerExperiment {
             }
             Experiment::OzMultiHarnessControl => Ok(Self::OzMultiHarnessControl),
             Experiment::OzMultiHarnessExperiment => Ok(Self::OzMultiHarnessExperiment),
+            Experiment::MacosRunnersControl => Ok(Self::MacosRunnersControl),
+            Experiment::MacosRunnersExperiment => Ok(Self::MacosRunnersExperiment),
+            Experiment::OnboardingChooseHowToStartControl => {
+                Ok(Self::OnboardingChooseHowToStartControl)
+            }
+            Experiment::OnboardingChooseHowToStartExperiment => {
+                Ok(Self::OnboardingChooseHowToStartExperiment)
+            }
             // Experiments that we no longer support on the client.
             e => Err(anyhow::anyhow!(
                 "Server-side enabled experiment '{e:?}' is no longer supported by the client."
@@ -106,7 +126,7 @@ impl TryFrom<Experiment> for ServerExperiment {
 
 #[macro_export]
 macro_rules! convert_to_server_experiment {
-    ($gql_type:expr) => {{
+    ($gql_type:expr_2021) => {{
         let mut acc = Vec::new();
         for a in $gql_type {
             // Note for server experiments we don't currently track on the client.

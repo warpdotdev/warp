@@ -15,8 +15,8 @@ use warpui::elements::{
     ScrollbarWidth, Shrinkable, Stack, Text, UniformList, UniformListState,
 };
 use warpui::fonts::{Properties, Weight};
-use warpui::keymap::macros::*;
 use warpui::keymap::FixedBinding;
+use warpui::keymap::macros::*;
 use warpui::platform::Cursor;
 use warpui::text_layout::TextAlignment;
 use warpui::{
@@ -34,22 +34,22 @@ use crate::ai::agent_management::telemetry::{AgentManagementTelemetryEvent, Open
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::conversation_rename::rename_conversation;
 use crate::appearance::Appearance;
-use crate::drive::sharing::dialog::SharingDialog;
 use crate::drive::sharing::ShareableObject;
+use crate::drive::sharing::dialog::SharingDialog;
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys,
     PropagateHorizontalNavigationKeys, SingleLineEditorOptions, TextOptions,
 };
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::server::telemetry::SharingDialogSource;
-use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
 use crate::view_components::DismissibleToast;
+use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
 use crate::workspace::global_actions::ForkedConversationDestination;
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::TabSettings;
 use crate::workspace::view::conversation_list::item::{
-    render_item, render_static_item, ItemProps, ItemState, OverflowMenuDisplay, StaticItemProps,
-    STATIC_ITEM_MIN_HEIGHT,
+    ItemProps, ItemState, OverflowMenuDisplay, STATIC_ITEM_MIN_HEIGHT, StaticItemProps,
+    render_item, render_static_item,
 };
 use crate::workspace::{ToastStack, WorkspaceAction};
 
@@ -1233,10 +1233,10 @@ impl TypedActionView for ConversationListView {
 
                 // If the selection is no longer valid (because it was one of the
                 // list items that we're now hiding), select the last selectable item.
-                if let Some(index) = self.selected_index {
-                    if !self.is_selectable(index) {
-                        self.selected_index = self.find_last_selectable_index();
-                    }
+                if let Some(index) = self.selected_index
+                    && !self.is_selectable(index)
+                {
+                    self.selected_index = self.find_last_selectable_index();
                 }
 
                 ctx.notify();

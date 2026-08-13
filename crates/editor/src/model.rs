@@ -165,6 +165,31 @@ pub trait CoreEditorModel: Entity {
         self.validate(ctx);
     }
 
+    fn replace_first_n_characters(
+        &mut self,
+        n: CharOffset,
+        text: &str,
+        ctx: &mut ModelContext<Self::T>,
+    ) {
+        let selection_model = self.buffer_selection_model().clone();
+        self.update_content(
+            |mut content, ctx| {
+                let start = CharOffset::from(1);
+                let end = std::cmp::min(start + n.as_usize(), content.buffer().max_charoffset());
+                content.apply_edit(
+                    BufferEditAction::InsertAtCharOffsetRanges {
+                        edits: &vec1![(text.to_owned(), start..end)],
+                    },
+                    EditOrigin::UserInitiated,
+                    selection_model,
+                    ctx,
+                );
+            },
+            ctx,
+        );
+        self.validate(ctx);
+    }
+
     /// Truncate the buffer to the given length.
     fn truncate(&mut self, len: usize, ctx: &mut ModelContext<Self::T>) {
         self.update_content(

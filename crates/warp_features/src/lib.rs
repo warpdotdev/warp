@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use enum_iterator::{cardinality, Sequence};
+use enum_iterator::{Sequence, cardinality};
 #[cfg(feature = "test-util")]
 pub use overrides::{get_overrides, set_overrides};
 
@@ -113,6 +113,11 @@ pub enum FeatureFlag {
     /// Enables the settings file feature.
     SettingsFile,
 
+    /// Stores GUI execution profiles in the shared settings collection.
+    ///
+    /// TUI builds use the collection on every channel independently of this flag.
+    FileBackedExecutionProfiles,
+
     /// Enables rect selection.
     RectSelection,
 
@@ -181,6 +186,10 @@ pub enum FeatureFlag {
 
     /// Maximizes data in flat storage to reduce memory usage.
     MaximizeFlatStorage,
+
+    /// Recognizes the OSC 8 hyperlink escape sequence and makes the
+    /// linked text Cmd+click-able.
+    OscHyperlinks,
 
     ImeMarkedText,
 
@@ -361,9 +370,6 @@ pub enum FeatureFlag {
     /// Enables multiple agent profiles in settings for managing different AI agent configurations.
     MultiProfile,
 
-    /// Enables the /pr-comments slash command.
-    PRCommentsSlashCommand,
-
     /// Enables displaying imported PR review comments in the blocklist.
     PRCommentsV2,
 
@@ -411,9 +417,6 @@ pub enum FeatureFlag {
 
     /// Enables the one-time modal on app startup for existing users for the Code launch.
     CodeLaunchModal,
-
-    /// Enables API key authentication for Agent SDK
-    APIKeyAuthentication,
 
     /// Enables API key management UI in settings
     APIKeyManagement,
@@ -516,8 +519,8 @@ pub enum FeatureFlag {
     /// Enables v2 of the context window usage UI.
     ContextWindowUsageV2,
 
-    /// Dev-only: enables the expandable per-segment context window usage
-    /// breakdown in the conversation usage card.
+    /// Enables the expandable per-segment context window usage breakdown in
+    /// the conversation usage card.
     ContextWindowUsageBreakdown,
 
     /// Enables global search
@@ -669,6 +672,9 @@ pub enum FeatureFlag {
     /// Enables the orchestration launch modal announcing multi-agent orchestration features.
     OrchestrationLaunchModal,
 
+    /// Enables the launch modal announcing the Warp Agent CLI.
+    AgentCliLaunchModal,
+
     /// Updated tab styling (background colors, border, close button positioning, margins).
     NewTabStyling,
 
@@ -700,29 +706,17 @@ pub enum FeatureFlag {
     /// flows while the default behavior temporarily keeps them disabled.
     LocalClaudeCodexChildHarnesses,
 
-    /// Gates client-side support for the `orchestrate` tool, which batches
-    /// multiple child agents into a single tool call with an inline
-    /// confirmation card. When enabled, the client advertises
-    /// `RequestSettings.SupportsOrchestrate = true` and the server's
-    /// orchestrate tool replaces `start_agent` / `start_agent_v2` for
-    /// orchestration-capable conversations. Layered on top of
-    /// `OrchestrationV2`; has no effect when v2 is off.
-    RunAgentsTool,
-
-    /// Replaces `OrchestrationViewerModel`'s REST polling loop with an SSE-driven
-    /// `ancestor_run_id` stream consumed via `OrchestrationEventStreamer`'s new
-    /// viewer-mode entry. Off by default; flipping it on activates the
-    /// per-orchestrator viewer-mode consumer and the broadcast `ChildSpawned`
-    /// / `ChildStatusChanged` events. See `specs/orch-viewer-polling/TECH.md`.
-    OrchestrationViewerStreamer,
-
-    /// Uses a parent-family ancestor stream for owner-side orchestrator event delivery.
-    OwnerOrchestrationAncestorStreamer,
-
     /// On `wait_for_events`, confirms parent status against the server and
     /// registers an orchestrator for the owner-side ancestor stream so it
     /// receives events for children created out-of-band (Oz CLI / web API).
     WaitForEventsParentRegistration,
+
+    /// Gates the client-side multi-level orchestration surfaces: child
+    /// conversations auto-executing their own `run_agents` calls and the
+    /// confirmation-card disclosure that launched agents may start
+    /// children of their own. When disabled, a child's `run_agents` call
+    /// fails gracefully instead of presenting a card in a hidden pane.
+    MultiLevelOrchestration,
 
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
@@ -898,7 +892,9 @@ pub enum FeatureFlag {
 
     /// Gates NLD input classification matching the buffer against agent
     /// prompt history (in addition to shell command history). Still in
-    /// development, so enabled only for dev/dogfood builds.
+    /// development; currently disabled on all channels as a mitigation for
+    /// misclassification bug reports (see PR #12586). Re-enable via
+    /// `DOGFOOD_FLAGS` once the underlying issues are resolved.
     NldPromptHistoryMatch,
 
     /// Gates the custom model router feature, which allows users to define
@@ -920,6 +916,50 @@ pub enum FeatureFlag {
     /// collapsible tree with typed colors and per-row Copy JSON, instead of
     /// a flat pretty-printed blob.
     McpJsonTreeView,
+
+    /// Renders supported solid box-drawing characters (`U+2500..=U+257F`)
+    /// procedurally as cell-filling rectangles instead of from the font,
+    /// eliminating seams between adjacent box-drawing cells in the terminal.
+    BoxDrawingGlyphs,
+
+    /// Enables cloud agent runner selection: the `oz runner` CRUD commands
+    /// for managing runners via the CLI, and the Runner dropdown in the
+    /// orchestration (`run_agents`) confirmation card and plan-card config
+    /// block for choosing a runner when starting remote child agents.
+    CloudAgentRunners,
+
+    /// Gates the account-first onboarding flow, including the reordered
+    /// pre-auth slides and post-auth account offer.
+    AccountFirstOnboarding,
+
+    /// Accepts well-known non-UUID managed MCP ids (e.g. `"linear"`) as
+    /// `warp_id` values in MCP configs and as bare identifiers in CLI
+    /// `--mcp` arguments, resolved server-side at run setup.
+    WellKnownMcpIds,
+
+    /// Automatically attaches the Warp-hosted Factory MCP server
+    /// (`/api/v1/mcp/factory`) to agents as a built-in MCP server,
+    /// authenticated with the logged-in user's session token. No manual MCP
+    /// setup or API key required.
+    FactoryMcp,
+
+    /// Gates client-side display of the real dollar cost (from `RequestCost.cost_in_cents`)
+    /// alongside credits in the GUI footer and TUI. Mirrors the server-side
+    /// `PricingTransparencyEnabled` flag in warp-server, but is a fully independent
+    /// flag — the two do not sync automatically. Consolidated from the former
+    /// `TuiCostTransparency` flag: when enabled (dogfood/staging and local/dev
+    /// builds), the TUI footer usage entry follows the persisted
+    /// `agents.usage_display_mode` setting and is click-to-toggleable between
+    /// credits and dollars; when disabled (prod/stable), it falls back to a
+    /// static, non-interactive credits total. Will also gate the GUI footer's
+    /// dollar display once that's built.
+    PricingTransparency,
+
+    /// Enables periodic workspace-handoff checkpoints during a cloud agent run,
+    /// rather than only uploading a workspace snapshot once at end-of-run.
+    /// Requires `OzHandoff` to also be enabled; a no-op for local runs and when
+    /// `--no-snapshot` is set. Off by default while the coordinator rolls out.
+    PeriodicHandoffCheckpoints,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -986,20 +1026,21 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
-    FeatureFlag::NldPromptHistoryMatch,
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
-    FeatureFlag::BackgroundComputerUse,
-    FeatureFlag::ContextWindowUsageBreakdown,
     FeatureFlag::JupyterNotebookRendering,
-    FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
+    FeatureFlag::MultiLevelOrchestration,
     FeatureFlag::McpJsonTreeView,
+    FeatureFlag::BoxDrawingGlyphs,
+    FeatureFlag::WellKnownMcpIds,
+    FeatureFlag::FactoryMcp,
+    FeatureFlag::PricingTransparency,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[FeatureFlag::AsyncFind, FeatureFlag::PinnedTabs];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely
@@ -1008,6 +1049,7 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::Autoupdate,
     FeatureFlag::Changelog,
     FeatureFlag::CrashReporting,
+    FeatureFlag::VideoRecording,
     // Marked text is currently only supported on MacOS.
     #[cfg(target_os = "macos")]
     FeatureFlag::ImeMarkedText,
@@ -1106,10 +1148,6 @@ impl FeatureFlag {
             ),
             GitOperationsInCodeReview => Some(
                 "Enables commit, push, and create-PR actions directly from the code review panel.",
-            ),
-            PinnedTabs => Some("Enables pinning individual tabs and tab groups to the front of the tab bar."),
-            AsyncFind => Some(
-                "Runs terminal find on a background thread to keep the UI responsive while searching large outputs.",
             ),
             _ => None,
         }

@@ -4,13 +4,15 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_if_error;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
     ParentOffsetBounds, Stack,
 };
 use warpui::fonts::{Properties, Weight};
+use warpui::text_layout::ClipConfig;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -19,7 +21,6 @@ use crate::ai::blocklist::inline_action::orchestration_controls::ORCHESTRATION_W
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
-use crate::report_if_error;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, TooltipAlignment,
@@ -298,6 +299,8 @@ fn build_menu_items(
             .with_font_size_override(ITEM_FONT_SIZE)
             .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
             .with_override_hover_background_color(hover_background)
+            // Ellipsize long worker names so they don't overflow into the right-side badge.
+            .with_clip_config(ClipConfig::ellipsis())
             .with_on_select_action(HostSelectorAction::SelectHost(host));
         if let Some(badge) = badge {
             fields = fields.with_right_side_label(

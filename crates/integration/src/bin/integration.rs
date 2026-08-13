@@ -3,11 +3,11 @@ use std::env;
 
 use anyhow::Result;
 use clap::Parser;
-use integration::test::*;
 use integration::Builder;
+use integration::test::*;
 use warp_cli::WorkerCommand;
-use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
 use warp_core::AppId;
+use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
 
 /// The Warp integration test runner.
 #[derive(Debug, Default, Parser, Clone)]
@@ -299,6 +299,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_code_review_scroll_preserved_deleted_range);
     register_test!(test_code_review_scroll_preserved_header_range);
     register_test!(test_code_review_scroll_preserved_footer_range);
+    register_test!(test_code_review_double_click_fully_expands_hidden_section);
     register_test!(test_alt_screen_context_menu_with_sgr_with_mouse_reporting);
     register_test!(test_alt_screen_context_menu_with_sgr_without_mouse_reporting);
     register_test!(test_alt_screen_context_menu_without_sgr_with_mouse_reporting);
@@ -348,8 +349,16 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_secret_case_sensitivity);
     register_test!(test_secrets_are_always_redacted_in_ai_inputs);
 
+    // OSC 8 hyperlink tests (GH6393)
+    register_test!(test_osc8_open_close_renders_visible_text);
+    register_test!(test_osc8_copy_block_yields_visible_text_only);
+    register_test!(test_osc8_open_link_action_opens_url);
+    register_test!(test_osc8_file_scheme_opens_url);
+    register_test!(test_osc8_no_regression_on_url_autodetect);
+
     register_test!(test_context_chips_prompt_at_bootstrap);
 
+    register_test!(test_cycle_active_tab_color_with_keybinding);
     register_test!(test_active_session_follows_focus);
     register_test!(test_tab_context_menu_copies_metadata);
     register_test!(test_vertical_tab_context_menu_copies_metadata);
@@ -396,6 +405,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_latest_buffer_operations);
 
     register_test!(test_pass_control_sequences_to_long_running_block);
+    register_test!(test_execution_profiles_load_from_settings_file);
+    register_test!(test_execution_profile_model_persists_and_hot_reloads_settings_file);
     register_test!(test_settings_file_migration_from_native_store);
     register_test!(test_settings_file_hot_reload_applies_new_values);
 
@@ -427,6 +438,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_selection_last_to_ai_semantic);
     register_test!(test_selection_last_to_ai_lines);
     register_test!(test_restored_ai_block_renders_mermaid_and_local_images);
+    register_test!(test_cancelled_run_agents_card_renders_cancelled_state);
 
     register_test!(test_agent_mode_pane_minimum_size);
     register_test!(test_git_prompt_chips);
@@ -452,6 +464,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     // Copy current path command-palette action
     register_test!(test_copy_current_path_copies_terminal_pwd);
+    register_test!(test_copy_current_path_copies_code_editor_file_path);
 
     // Go to Line tests
     register_test!(test_goto_line_dialog_open_close);

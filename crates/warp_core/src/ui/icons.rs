@@ -186,6 +186,7 @@ pub enum Icon {
     Kali,
     Arch,
     Linux,
+    Apple,
     Cancelled,
     BookOpen,
     LoadingDots0,
@@ -274,6 +275,7 @@ pub enum Icon {
     ChatDashed,
     ClaudeLogo,
     GeminiLogo,
+    GrokLogo,
     OpenAILogo,
     XLogo,
     AmpLogo,
@@ -281,13 +283,21 @@ pub enum Icon {
     OpenCodeLogo,
     CopilotLogo,
     PiLogo,
+    OhMyPiLogo,
     AuggieLogo,
     CursorLogo,
     GooseLogo,
     AntigravityLogo,
     NLD,
     Oz,
-    OzCloud,
+    /// The Warp "W" glyph used as the agent brand mark (sourced from
+    /// `bundled/svg/warp-drive.svg`). The background and tint color are
+    /// the **call site's responsibility** — this variant carries the shape
+    /// only. Most surfaces tint it with the surrounding theme color (light
+    /// theme: dark glyph; dark theme: light glyph). Kept distinct from
+    /// `Warp` so agent surfaces and non-agent Warp UI (e.g.
+    /// `QueryFilter::Drive`) can evolve independently.
+    Agent,
     Conversation,
     Prompt,
     Grid,
@@ -325,6 +335,7 @@ pub enum Icon {
     Dataflow04,
     LayersThree01,
     Aws,
+    GeminiEnterpriseAgentPlatform,
     // Language-specific icons for the code block dropdown
     MermaidLang,
     GoLang,
@@ -521,6 +532,7 @@ impl From<Icon> for &'static str {
             Icon::Kali => "bundled/svg/kali.svg",
             Icon::Arch => "bundled/svg/arch.svg",
             Icon::Linux => "bundled/svg/linux.svg",
+            Icon::Apple => "bundled/svg/apple.svg",
             Icon::Cancelled => "bundled/svg/cancelled.svg",
             Icon::BookOpen => "bundled/svg/book-open.svg",
             Icon::LoadingDots0 => "bundled/svg/dots-0.svg",
@@ -611,6 +623,7 @@ impl From<Icon> for &'static str {
             Icon::ChatDashed => "bundled/svg/chat-dashed.svg",
             Icon::ClaudeLogo => "bundled/svg/claude.svg",
             Icon::GeminiLogo => "bundled/svg/gemini_cli.svg",
+            Icon::GrokLogo => "bundled/svg/grok.svg",
             Icon::OpenAILogo => "bundled/svg/openai.svg",
             Icon::XLogo => "bundled/svg/x-logo.svg",
             Icon::AmpLogo => "bundled/svg/amp.svg",
@@ -618,13 +631,14 @@ impl From<Icon> for &'static str {
             Icon::OpenCodeLogo => "bundled/svg/opencode.svg",
             Icon::CopilotLogo => "bundled/svg/copilot.svg",
             Icon::PiLogo => "bundled/svg/pi.svg",
+            Icon::OhMyPiLogo => "bundled/svg/oh_my_pi.svg",
             Icon::AuggieLogo => "bundled/svg/auggie.svg",
             Icon::CursorLogo => "bundled/svg/cursor.svg",
             Icon::GooseLogo => "bundled/svg/goose.svg",
             Icon::AntigravityLogo => "bundled/svg/antigravity_cli.svg",
             Icon::NLD => "bundled/svg/nld.svg",
-            Icon::Oz => "bundled/svg/oz.svg",
-            Icon::OzCloud => "bundled/svg/oz-cloud.svg",
+            Icon::Oz => "bundled/svg/warp-3.svg",
+            Icon::Agent => "bundled/svg/warp-drive.svg",
             Icon::Conversation => "bundled/svg/conversation.svg",
             Icon::Prompt => "bundled/svg/prompt.svg",
             Icon::Grid => "bundled/svg/grid.svg",
@@ -657,6 +671,9 @@ impl From<Icon> for &'static str {
             Icon::Dataflow04 => "bundled/svg/dataflow-04.svg",
             Icon::LayersThree01 => "bundled/svg/layers-three-01.svg",
             Icon::Aws => "bundled/svg/aws.svg",
+            Icon::GeminiEnterpriseAgentPlatform => {
+                "bundled/svg/gemini-enterprise-agent-platform.svg"
+            }
             Icon::MermaidLang => "bundled/svg/file_type/mermaid.svg",
             Icon::GoLang => "bundled/svg/file_type/go.svg",
             Icon::CppLang => "bundled/svg/file_type/cpp.svg",

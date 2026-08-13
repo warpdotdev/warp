@@ -179,8 +179,16 @@ impl TaskStore {
     }
 
     pub fn exchange_by_id(&self, exchange_id: AIAgentExchangeId) -> Option<&AIAgentExchange> {
-        let exchange_ref = self.exchanges.get(&exchange_id)?;
-        self.lookup_exchange(exchange_ref)
+        if let Some(exchange) = self
+            .exchanges
+            .get(&exchange_id)
+            .and_then(|exchange_ref| self.lookup_exchange(exchange_ref))
+        {
+            return Some(exchange);
+        }
+        self.tasks
+            .values()
+            .find_map(|task| task.exchange(exchange_id))
     }
 
     pub fn first_exchange(&self) -> Option<&AIAgentExchange> {
@@ -221,11 +229,11 @@ impl TaskStore {
             };
 
             // Check if we should append to the last group or start a new one
-            if let Some((last_task_id, exchanges)) = result.last_mut() {
-                if last_task_id == &exchange_ref.task_id {
-                    exchanges.push(exchange);
-                    continue;
-                }
+            if let Some((last_task_id, exchanges)) = result.last_mut()
+                && last_task_id == &exchange_ref.task_id
+            {
+                exchanges.push(exchange);
+                continue;
             }
 
             // Start a new group
@@ -281,10 +289,9 @@ impl TaskStore {
                 if let Some(subagent_call) = message
                     .tool_call()
                     .and_then(|tc: &api::message::ToolCall| tc.subagent())
+                    && let Some(subtask) = me.get(&TaskId::new(subagent_call.task_id.clone()))
                 {
-                    if let Some(subtask) = me.get(&TaskId::new(subagent_call.task_id.clone())) {
-                        collect_messages_dfs(me, messages, subtask);
-                    }
+                    collect_messages_dfs(me, messages, subtask);
                 }
             }
         }
@@ -367,10 +374,10 @@ impl TaskStore {
                 continue;
             };
             for message in task.messages() {
-                if let Some(subagent) = message.tool_call().and_then(|tc| tc.subagent()) {
-                    if !subagent.task_id.is_empty() {
-                        queue.push(TaskId::new(subagent.task_id.clone()));
-                    }
+                if let Some(subagent) = message.tool_call().and_then(|tc| tc.subagent())
+                    && !subagent.task_id.is_empty()
+                {
+                    queue.push(TaskId::new(subagent.task_id.clone()));
                 }
             }
         }
@@ -418,12 +425,10 @@ impl TaskStore {
                     for output_message in output.get().messages.iter() {
                         if let AIAgentOutputMessageType::Subagent(subagent_call) =
                             &output_message.message
-                        {
-                            if let Some(subtask) =
+                            && let Some(subtask) =
                                 tasks.get(&TaskId::new(subagent_call.task_id.clone()))
-                            {
-                                append_refs_for_task(tasks, refs, subtask);
-                            }
+                        {
+                            append_refs_for_task(tasks, refs, subtask);
                         }
                     }
                 }

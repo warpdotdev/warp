@@ -1,3 +1,4 @@
+use warp_errors::report_error;
 use warpui::{SingletonEntity, ViewContext};
 
 use crate::ai::agent::api::ServerConversationToken;
@@ -6,9 +7,9 @@ use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::{
     AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskId,
 };
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::CloudConversationData;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::pane_group::{AmbientAgentViewModelHandleExt, PaneGroup, PaneId};
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
@@ -88,17 +89,20 @@ impl PaneGroup {
         let child_id = child_conversation.id();
 
         // Idempotency guard — see fn doc.
-        if let Some(existing_pane_id) = self.child_agent_panes.get(&child_id).copied() {
-            if self.has_pane_id(existing_pane_id) {
-                return;
-            }
+        if let Some(existing_pane_id) = self.child_agent_panes.get(&child_id).copied()
+            && self.has_pane_id(existing_pane_id)
+        {
+            return;
         }
 
         let new_pane_id =
             self.insert_ambient_agent_pane_hidden_for_child_agent(parent_pane_id, ctx);
 
         let Some(new_terminal_view) = self.terminal_view_from_pane_id(new_pane_id, ctx) else {
-            log::error!("Failed to get terminal view for remote child agent pane {child_id:?}");
+            report_error!(
+                "Failed to get terminal view for remote child agent pane",
+                extra: { "child_id" => ?child_id }
+            );
             self.discard_pane(new_pane_id.into(), ctx);
             return;
         };
@@ -126,8 +130,9 @@ impl PaneGroup {
         });
 
         if !restored {
-            log::error!(
-                "Failed to restore remote child agent pane {child_id:?}: missing ambient agent view model"
+            report_error!(
+                "Failed to restore remote child agent pane: missing ambient agent view model",
+                extra: { "child_id" => ?child_id }
             );
             self.discard_pane(new_pane_id.into(), ctx);
             return;

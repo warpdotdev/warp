@@ -13,13 +13,14 @@ use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
+use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, DragAxis, Draggable, DraggableState, Empty, Expanded, Fill,
-    Flex, Hoverable, MinSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack, Text,
-    DEFAULT_UI_LINE_HEIGHT_RATIO,
+    CornerRadius, CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, DragAxis, Draggable,
+    DraggableState, Empty, Expanded, Fill, Flex, Hoverable, MinSize, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
+    ScrollbarWidth, Shrinkable, Stack, Text,
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::keymap::Keystroke;
@@ -80,13 +81,10 @@ fn build_row_state(
     let is_initial_cloud_mode_prompt = origin == QueuedQueryOrigin::InitialCloudMode;
     // The send-now tooltip is owned by `update_send_now_availability`, which swaps in a
     // "wait for the cloud agent" message while send-now is disabled; "Send now" is the default.
-    let (edit_tooltip, delete_tooltip) = if is_initial_cloud_mode_prompt {
-        (
-            INITIAL_CLOUD_MODE_PROMPT_TOOLTIP,
-            INITIAL_CLOUD_MODE_PROMPT_TOOLTIP,
-        )
+    let edit_tooltip = if is_initial_cloud_mode_prompt {
+        INITIAL_CLOUD_MODE_PROMPT_TOOLTIP
     } else {
-        ("Edit", "Delete")
+        "Edit"
     };
 
     let send_now_button = ctx.add_typed_action_view(move |_| {
@@ -112,17 +110,28 @@ fn build_row_state(
     let delete_button = ctx.add_typed_action_view(move |_| {
         ActionButton::new("", NakedTheme)
             .with_icon(TerminalIcon::Trash)
-            .with_tooltip(delete_tooltip)
+            .with_tooltip("Delete")
             .with_size(ButtonSize::XSmall)
             .with_disabled_theme(NakedTheme)
             .on_click(move |ctx| {
                 ctx.dispatch_typed_action(QueuedPromptsPanelAction::DeleteRow(query_id));
             })
     });
+    let copy_button = is_initial_cloud_mode_prompt.then(|| {
+        ctx.add_typed_action_view(move |_| {
+            ActionButton::new("", NakedTheme)
+                .with_icon(TerminalIcon::Copy)
+                .with_tooltip("Copy")
+                .with_size(ButtonSize::XSmall)
+                .with_disabled_theme(NakedTheme)
+                .on_click(move |ctx| {
+                    ctx.dispatch_typed_action(QueuedPromptsPanelAction::CopyRow(query_id));
+                })
+        })
+    });
 
     if is_initial_cloud_mode_prompt {
         edit_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
-        delete_button.update(ctx, |button, ctx| button.set_disabled(true, ctx));
     }
 
     QueuedPromptRowState {
@@ -135,6 +144,7 @@ fn build_row_state(
         send_now_button,
         edit_button,
         delete_button,
+        copy_button,
         draggable_state: DraggableState::default(),
     }
 }
@@ -148,6 +158,7 @@ struct QueuedPromptRowState {
     send_now_button: ViewHandle<ActionButton>,
     edit_button: ViewHandle<ActionButton>,
     delete_button: ViewHandle<ActionButton>,
+    copy_button: Option<ViewHandle<ActionButton>>,
     draggable_state: DraggableState,
 }
 
@@ -195,6 +206,7 @@ pub enum QueuedPromptsPanelAction {
     SendNow(QueuedQueryId),
     StartEditingRow(QueuedQueryId),
     DeleteRow(QueuedQueryId),
+    CopyRow(QueuedQueryId),
     StartDrag(QueuedQueryId),
     DragMoved { rect: RectF },
     DropEnd,
@@ -263,6 +275,10 @@ impl QueuedPromptsPanelView {
 
         ctx.subscribe_to_model(&cli_subagent_controller, |me, _, event, ctx| {
             me.handle_cli_subagent_event(event, ctx);
+        });
+
+        ctx.subscribe_to_model(&suggestions_mode_model, |_, _, _, ctx| {
+            ctx.notify();
         });
 
         let host_editor_was_empty = host_editor.as_ref(ctx).is_empty(ctx);
@@ -452,7 +468,9 @@ impl QueuedPromptsPanelView {
             | CLISubagentEvent::ControlHandedBackAfterTransfer => {
                 self.update_send_now_availability(ctx);
             }
-            CLISubagentEvent::UpdatedLastSnapshot | CLISubagentEvent::ToggledHideResponses => {}
+            CLISubagentEvent::UpdatedInstruction { .. }
+            | CLISubagentEvent::UpdatedLastSnapshot
+            | CLISubagentEvent::ToggledHideResponses => {}
         }
     }
 
@@ -640,15 +658,15 @@ impl QueuedPromptsPanelView {
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.commit_edit(conv_id, new_text, ctx);
         });
-        if let Some(origin) = origin {
-            if !was_empty {
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::QueuedPromptEdited {
-                        origin: origin.into(),
-                    },
-                    ctx
-                );
-            }
+        if let Some(origin) = origin
+            && !was_empty
+        {
+            send_telemetry_from_ctx!(
+                TelemetryEvent::QueuedPromptEdited {
+                    origin: origin.into(),
+                },
+                ctx
+            );
         }
         ctx.emit(QueuedPromptsPanelEvent::EditEnded);
     }
@@ -762,6 +780,17 @@ impl TypedActionView for QueuedPromptsPanelView {
                     model.enter_edit_mode(conv_id, query_id, ctx);
                 });
             }
+            QueuedPromptsPanelAction::CopyRow(query_id) => {
+                let query_id = *query_id;
+                let text = QueuedQueryModel::as_ref(ctx)
+                    .queue(conv_id)
+                    .iter()
+                    .find(|row| row.id() == query_id)
+                    .map(|row| row.text().to_owned());
+                if let Some(text) = text {
+                    ctx.clipboard().write(ClipboardContent::plain_text(text));
+                }
+            }
             QueuedPromptsPanelAction::DeleteRow(query_id) => {
                 let query_id = *query_id;
                 let removed = QueuedQueryModel::handle(ctx)
@@ -828,17 +857,16 @@ impl TypedActionView for QueuedPromptsPanelView {
                 let origin = to_index.map(|idx| queue[idx].origin());
                 if let (Some(from_index), Some(to_index), Some(origin)) =
                     (from_index, to_index, origin)
+                    && from_index != to_index
                 {
-                    if from_index != to_index {
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::QueuedPromptReordered {
-                                origin: origin.into(),
-                                from_index,
-                                to_index,
-                            },
-                            ctx
-                        );
-                    }
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::QueuedPromptReordered {
+                            origin: origin.into(),
+                            from_index,
+                            to_index,
+                        },
+                        ctx
+                    );
                 }
                 ctx.notify();
             }
@@ -973,21 +1001,21 @@ fn updated_index_from_vertical_drag(
 ) -> usize {
     let dragged_midpoint_y = (drag_position.min_y() + drag_position.max_y()) / 2.;
 
-    if current_index > 0 {
-        if let Some(neighbor_rect) = item_rect(current_index - 1) {
-            let neighbor_midpoint_y = (neighbor_rect.min_y() + neighbor_rect.max_y()) / 2.;
-            if dragged_midpoint_y < neighbor_midpoint_y {
-                return current_index - 1;
-            }
+    if current_index > 0
+        && let Some(neighbor_rect) = item_rect(current_index - 1)
+    {
+        let neighbor_midpoint_y = (neighbor_rect.min_y() + neighbor_rect.max_y()) / 2.;
+        if dragged_midpoint_y < neighbor_midpoint_y {
+            return current_index - 1;
         }
     }
 
-    if current_index + 1 < item_count {
-        if let Some(neighbor_rect) = item_rect(current_index + 1) {
-            let neighbor_midpoint_y = (neighbor_rect.min_y() + neighbor_rect.max_y()) / 2.;
-            if dragged_midpoint_y > neighbor_midpoint_y {
-                return current_index + 1;
-            }
+    if current_index + 1 < item_count
+        && let Some(neighbor_rect) = item_rect(current_index + 1)
+    {
+        let neighbor_midpoint_y = (neighbor_rect.min_y() + neighbor_rect.max_y()) / 2.;
+        if dragged_midpoint_y > neighbor_midpoint_y {
+            return current_index + 1;
         }
     }
 
@@ -1125,6 +1153,7 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
         send_now_button,
         edit_button,
         delete_button,
+        copy_button,
         draggable_state,
     } = row_state;
 
@@ -1282,7 +1311,11 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             if !is_in_edit_mode {
                 buttons.add_child(ChildView::new(&edit_button).finish());
             }
-            buttons.add_child(ChildView::new(&delete_button).finish());
+            if let Some(copy_button) = &copy_button {
+                buttons.add_child(ChildView::new(copy_button).finish());
+            } else {
+                buttons.add_child(ChildView::new(&delete_button).finish());
+            }
             buttons.finish()
         } else {
             let count = if is_in_edit_mode { 2. } else { 3. };

@@ -4,14 +4,16 @@ use std::collections::HashMap;
 use std::env::{self, VarError};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
+use std::str;
 
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use typed_path::{
-    PathType, TypedComponent, TypedPath, TypedPathBuf, UnixComponent, WindowsComponent,
-    WindowsPath, WindowsPathBuf,
+    PathType, TypedComponent, TypedPath, TypedPathBuf, UnixComponent, Utf8Component,
+    Utf8WindowsComponent, Utf8WindowsPath, Utf8WindowsPrefix, WindowsComponent, WindowsPath,
+    WindowsPathBuf, WindowsPrefix, WindowsPrefixComponent,
 };
 
 use crate::standardized_path::StandardizedPath;
@@ -347,6 +349,20 @@ pub fn msys2_exe_to_root(exe_path: &WindowsPath) -> WindowsPathBuf {
         })
 }
 
+/// [`is_wsl_unc_host`] for a [`typed_path`] prefix, e.g. `\\wsl$\Ubuntu`, `//WSL.localhost/Ubuntu`,
+/// or `\\?\UNC\wsl$\Ubuntu`. Non-UNC prefixes are never WSL paths.
+fn is_wsl_unc_prefix(prefix: &WindowsPrefixComponent) -> bool {
+    match prefix.kind() {
+        WindowsPrefix::UNC(host, _) | WindowsPrefix::VerbatimUNC(host, _) => {
+            str::from_utf8(host).is_ok_and(is_wsl_unc_host)
+        }
+        WindowsPrefix::Verbatim(_)
+        | WindowsPrefix::VerbatimDisk(_)
+        | WindowsPrefix::DeviceNS(_)
+        | WindowsPrefix::Disk(_) => false,
+    }
+}
+
 /// Converts the given [`typed_path::TypedPath`] representing a file from within Windows' MSYS2 to
 /// a Windows-native [`std::path::PathBuf`] such that the same file can be accessed from the
 /// native Windows environment.
@@ -357,12 +373,12 @@ pub fn convert_msys2_to_windows_native_path(
     if !unix_path.is_unix() {
         match unix_path.components().next() {
             // Generally Windows-encoded paths won't come out of MSYS2 sessions.
-            // However, there is an exception. WSL paths in MSYS2 have this UNIX-like prefix
-            // `//wsl$/` which, counter-intuitively, gets inferred as a Windows prefix when given
-            // to [`TypedPathBuf::from`]. This is the only Windows-encoded path we allow as input
-            // to this function.
+            // However, there is an exception. WSL paths in MSYS2 have a UNIX-like prefix such as
+            // `//wsl$/` or `//wsl.localhost/` which, counter-intuitively, gets inferred as a
+            // Windows UNC prefix when given to [`TypedPathBuf::from`]. This is the only
+            // Windows-encoded path we allow as input to this function.
             Some(TypedComponent::Windows(WindowsComponent::Prefix(prefix)))
-                if prefix.as_bytes().starts_with(b"//wsl$/") => {}
+                if is_wsl_unc_prefix(&prefix) => {}
             _ => {
                 return Err(MSYS2PathConversionError::NonUnixPath);
             }
@@ -375,14 +391,14 @@ pub fn convert_msys2_to_windows_native_path(
         [TypedComponent::Unix(UnixComponent::Normal(component)), ..] if *component == b"~" => {
             unix_path.with_windows_encoding()
         }
-        [TypedComponent::Windows(WindowsComponent::Prefix(prefix)), ..]
-            if prefix.as_bytes().starts_with(b"//wsl$/") =>
-        {
-            unix_path.to_path_buf()
-        }
-        [TypedComponent::Unix(UnixComponent::RootDir), TypedComponent::Unix(UnixComponent::Normal(bytes))]
-            if DIRS_IN_MSYS2_ROOT.contains(bytes) =>
-        {
+        [
+            TypedComponent::Windows(WindowsComponent::Prefix(prefix)),
+            ..,
+        ] if is_wsl_unc_prefix(prefix) => unix_path.to_path_buf(),
+        [
+            TypedComponent::Unix(UnixComponent::RootDir),
+            TypedComponent::Unix(UnixComponent::Normal(bytes)),
+        ] if DIRS_IN_MSYS2_ROOT.contains(bytes) => {
             let mut windows_path = msys2_root.to_typed_path_buf();
             for component in unix_path.with_windows_encoding().components().skip(1) {
                 windows_path.push(component.as_bytes());
@@ -390,10 +406,11 @@ pub fn convert_msys2_to_windows_native_path(
             windows_path
         }
         // Check if the prefix is "/c/" or similar, which is how MSYS2 refers to Windows drive
-        // "C:\". Valid drive names are a..=z, which are bytes 97..=122.
-        [TypedComponent::Unix(UnixComponent::RootDir), TypedComponent::Unix(UnixComponent::Normal(bytes))]
-            if bytes.len() == 1 && (97..=122).contains(&bytes[0]) =>
-        {
+        // "C:\". Valid drive names are single ASCII letters, in either case.
+        [
+            TypedComponent::Unix(UnixComponent::RootDir),
+            TypedComponent::Unix(UnixComponent::Normal(bytes)),
+        ] if bytes.len() == 1 && bytes[0].is_ascii_alphabetic() => {
             let mut windows_path = TypedPathBuf::new(PathType::Windows);
             windows_path.push([*bytes, b":\\"].concat());
             for component in unix_path.with_windows_encoding().components().skip(2) {
@@ -403,9 +420,11 @@ pub fn convert_msys2_to_windows_native_path(
         }
         // WSL paths from within MSYS2, e.g. you can do `ls //wsl$/Ubuntu/home`. The 2 slashes
         // in the beginning are required.
-        [TypedComponent::Unix(UnixComponent::RootDir), TypedComponent::Unix(UnixComponent::Normal(bytes))]
-            if String::from_utf8(bytes.to_vec())
-                .is_ok_and(|s| s.to_lowercase().starts_with("wsl")) =>
+        [
+            TypedComponent::Unix(UnixComponent::RootDir),
+            TypedComponent::Unix(UnixComponent::Normal(bytes)),
+        ] if String::from_utf8(bytes.to_vec())
+            .is_ok_and(|s| s.to_lowercase().starts_with("wsl")) =>
         {
             let mut windows_path = TypedPathBuf::new(PathType::Windows);
             windows_path.push([b"\\\\", *bytes].concat());
@@ -458,10 +477,12 @@ pub fn convert_wsl_to_windows_host_path(
     let mut windows_path = TypedPathBuf::new(PathType::Windows);
     match prefix.as_slice() {
         // Check if the prefix is "/mnt/c/" or similar, which is how WSL refers to Windows drive
-        // "C:\". Valid drive names are a..=z, which are bytes 97..=122.
-        [TypedComponent::Unix(UnixComponent::RootDir), TypedComponent::Unix(UnixComponent::Normal(b"mnt")), TypedComponent::Unix(UnixComponent::Normal(bytes))]
-            if bytes.len() == 1 && (97..=122).contains(&bytes[0]) =>
-        {
+        // "C:\". Valid drive names are single ASCII letters, in either case.
+        [
+            TypedComponent::Unix(UnixComponent::RootDir),
+            TypedComponent::Unix(UnixComponent::Normal(b"mnt")),
+            TypedComponent::Unix(UnixComponent::Normal(bytes)),
+        ] if bytes.len() == 1 && bytes[0].is_ascii_alphabetic() => {
             windows_path.push([*bytes, b":\\"].concat());
             for component in unix_path.with_windows_encoding().components().skip(3) {
                 windows_path.push(component.as_bytes());
@@ -488,6 +509,63 @@ pub fn convert_wsl_to_windows_host_path(
     }
 }
 
+/// A path inside a WSL distribution, decomposed from the UNC form that
+/// [`convert_wsl_to_windows_host_path`] produces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WslUncPath {
+    /// The distribution name exactly as it appears in the UNC path (case preserved).
+    pub distro: String,
+    /// The Linux absolute path, using `/` separators. The distribution root maps to `/`.
+    pub linux_path: String,
+}
+
+/// The host components that identify a WSL UNC path.
+const WSL_UNC_HOSTS: &[&str] = &["wsl$", "wsl.localhost"];
+
+/// Returns true if the given UNC host component names the WSL filesystem provider rather than a
+/// remote machine. UNC host names are case-insensitive, so `\\WSL$\...`, `\\wsl$\...`, and
+/// `\\Wsl.Localhost\...` all name the local WSL filesystem.
+fn is_wsl_unc_host(host: &str) -> bool {
+    WSL_UNC_HOSTS.iter().any(|h| host.eq_ignore_ascii_case(h))
+}
+
+/// Parses a WSL UNC path into its distribution and Linux path, the inverse of
+/// [`convert_wsl_to_windows_host_path`]. Accepts the `\\wsl$\...`, `\\wsl.localhost\...`,
+/// verbatim `\\?\UNC\wsl$\...`, and forward-slash `//wsl$/...` spellings, matching the host
+/// case-insensitively. Returns `None` for non-WSL UNC paths, drive-letter paths, and relative
+/// paths.
+pub fn parse_wsl_unc_path(path: &Path) -> Option<WslUncPath> {
+    let mut components = Utf8WindowsPath::new(path.to_str()?).components();
+    let (host, distro) = match components.next()? {
+        Utf8WindowsComponent::Prefix(prefix) => match prefix.kind() {
+            Utf8WindowsPrefix::UNC(host, distro) | Utf8WindowsPrefix::VerbatimUNC(host, distro) => {
+                (host, distro)
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+    if distro.is_empty() || !is_wsl_unc_host(host) {
+        return None;
+    }
+
+    let linux_path: String = components
+        .filter_map(|component| match component {
+            Utf8WindowsComponent::RootDir => None,
+            component => Some(format!("/{}", component.as_str())),
+        })
+        .collect();
+
+    Some(WslUncPath {
+        distro: distro.to_string(),
+        linux_path: if linux_path.is_empty() {
+            "/".to_string()
+        } else {
+            linux_path
+        },
+    })
+}
+
 #[cfg(windows)]
 fn prefix(path: &Path) -> Option<std::path::Prefix<'_>> {
     use std::path::Component;
@@ -508,8 +586,11 @@ pub fn is_network_resource(path: &Path) -> bool {
     use std::path::Prefix;
 
     match prefix(path) {
-        // Treat "WSL$" as a special case, not a network resource.
-        Some(Prefix::UNC(server, _)) | Some(Prefix::VerbatimUNC(server, _)) => server != "WSL$",
+        // Windows exposes the WSL filesystem over UNC, but it is served locally, so it is not a
+        // network resource.
+        Some(Prefix::UNC(host, _)) | Some(Prefix::VerbatimUNC(host, _)) => {
+            !host.to_str().is_some_and(is_wsl_unc_host)
+        }
         _ => false,
     }
 }
@@ -584,10 +665,10 @@ pub fn to_relative_path(is_wsl: bool, absolute_path: &Path, cwd: &Path) -> Optio
         });
 
         // If both paths have drive prefixes but they're different, return None
-        if let (Some(abs_prefix), Some(cwd_prefix)) = (abs_drive, cwd_drive) {
-            if abs_prefix != cwd_prefix {
-                return None;
-            }
+        if let (Some(abs_prefix), Some(cwd_prefix)) = (abs_drive, cwd_drive)
+            && abs_prefix != cwd_prefix
+        {
+            return None;
         }
     }
 
@@ -697,6 +778,31 @@ pub fn convert_windows_path_to_wsl(windows_path: &str) -> String {
 /// Converts a Windows-native path to an MSYS2 POSIX-style path, e.g. `C:\foo` → `/c/foo`.
 pub fn convert_windows_path_to_msys2(windows_path: &str) -> String {
     convert_windows_path_with_drive_prefix(windows_path, "/")
+}
+
+/// Converts a `file://` URI drive path back into a Windows-native path, e.g.
+/// `/E:/CLAUDE-BASE` → `E:\CLAUDE-BASE` and `/E:/` → `E:\`.
+///
+/// # Examples
+/// ```
+/// use warp_util::path::file_uri_drive_path_to_windows;
+///
+/// assert_eq!(file_uri_drive_path_to_windows("/E:/CLAUDE-BASE"), "E:\\CLAUDE-BASE");
+/// assert_eq!(file_uri_drive_path_to_windows("/E:/"), "E:\\");
+/// assert_eq!(file_uri_drive_path_to_windows("/Users/foo/bar"), "/Users/foo/bar");
+/// ```
+pub fn file_uri_drive_path_to_windows(path: &str) -> Cow<'_, str> {
+    let bytes = path.as_bytes();
+    let is_drive_path = bytes.len() >= 3
+        && bytes[0] == b'/'
+        && bytes[1].is_ascii_alphabetic()
+        && bytes[2] == b':'
+        && (bytes.len() == 3 || bytes[3] == b'/');
+    if is_drive_path {
+        Cow::Owned(path[1..].replace('/', "\\"))
+    } else {
+        Cow::Borrowed(path)
+    }
 }
 
 /// Trait for path-like values that can participate in ancestor-aware

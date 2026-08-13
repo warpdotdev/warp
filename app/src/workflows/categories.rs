@@ -4,7 +4,7 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use fuzzy_match::{FuzzyMatchResult, match_indices_case_insensitive};
 use itertools::Itertools;
 use warp_core::ui::builder::UiBuilder;
 use warp_core::ui::theme::color::internal_colors;
@@ -14,9 +14,9 @@ use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::color::ColorU;
 use warpui::elements::{
     Align, ConstrainedBox, Container, CrossAxisAlignment, DispatchEventResult, Element,
-    EventHandler, Fill, Flex, Highlight, Hoverable, MainAxisSize, MouseStateHandle, ParentElement,
-    ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Text,
-    UniformList, UniformListState, LEFT_PADDING as SCROLLABLE_LEFT_PADDING,
+    EventHandler, Fill, Flex, Highlight, Hoverable, LEFT_PADDING as SCROLLABLE_LEFT_PADDING,
+    MainAxisSize, MouseStateHandle, ParentElement, ScrollStateHandle, Scrollable,
+    ScrollableElement, ScrollbarWidth, Shrinkable, Text, UniformList, UniformListState,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
@@ -26,8 +26,8 @@ use warpui::{
     AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, WeakViewHandle,
 };
 
-use super::workflow::Workflow;
 use super::WorkflowSource;
+use super::workflow::Workflow;
 use crate::appearance::Appearance;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::editor::Event as EditorEvent;
@@ -495,7 +495,7 @@ impl CategoriesView {
         let user_workspaces = UserWorkspaces::as_ref(ctx);
         let cloud_model = CloudModel::as_ref(ctx);
 
-        for space in user_workspaces.all_user_spaces(ctx) {
+        for space in user_workspaces.spaces_for_window(ctx.window_id(), ctx) {
             let workflows_in_space = cloud_model.active_workflows_in_space(space, ctx);
             let new_workflows_in_space = Self::categorize_workflows(
                 // Don't include AI workflows in Voltron.
@@ -568,8 +568,9 @@ impl CategoriesView {
                 })
                 .unwrap_or_default(),
             WorkflowViewType::Team => {
-                // TODO: this only assumes one team
-                let team_uid = UserWorkspaces::as_ref(ctx).current_team_uid();
+                let team_uid = UserWorkspaces::as_ref(ctx)
+                    .team_for_view(ctx)
+                    .map(|team| team.uid);
                 if let Some(team_uid) = team_uid {
                     self.workflows_by_source
                         .get(&WorkflowSource::Team { team_uid })

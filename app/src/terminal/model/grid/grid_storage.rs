@@ -9,6 +9,7 @@ use std::cmp::min;
 use std::ops::{Index, IndexMut, Range};
 
 use serde::{Deserialize, Serialize};
+use warp_errors::report_error;
 pub use warp_terminal::model::grid::Dimensions;
 
 use crate::features::FeatureFlag;
@@ -550,8 +551,9 @@ impl GridStorage {
         let mut point = self.cursor_point();
 
         if point.row >= self.total_rows() || point.col >= self.columns() {
-            log::error!(
-                "Error retrieving cursor cell, cursor point was outside the bounds of the grid: {point:?}"
+            report_error!(
+                "Error retrieving cursor cell, cursor point was outside the bounds of the grid",
+                extra: { "point" => ?point }
             );
             point = Point {
                 row: self.total_rows().saturating_sub(1),

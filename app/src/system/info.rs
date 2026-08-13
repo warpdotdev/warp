@@ -14,7 +14,7 @@ use warpui::{App, AppContext, Entity, ModelContext, SingletonEntity};
 use crate::server::telemetry;
 use crate::system::memory_footprint;
 use crate::terminal::TerminalView;
-use crate::{send_telemetry_from_app_ctx, send_telemetry_sync_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_app_ctx, send_telemetry_sync_from_ctx};
 
 /// The threshold at which we emit a memory usage warning.
 const MEMORY_USAGE_WARNING_THRESHOLD: Option<Byte> = byte_unit::Byte::GIGABYTE.multiply(10);
@@ -228,12 +228,25 @@ impl SystemInfo {
             .with_cpu()
     }
 
+    /// Returns the [`sysinfo::ProcessRefreshKind`] that should be used when enumerating the entire
+    /// process table.
+    ///
+    /// This samples neither CPU nor memory: on Windows each per-process CPU sample issues an
+    /// `NtQueryInformationProcess(ProcessCycleTime)` call, which forces a
+    /// `KeFlushProcessWriteBuffers` inter-processor interrupt across every logical core. Across the
+    /// whole process table that can pin all cores at `DISPATCH_LEVEL` long enough to trip the DPC
+    /// watchdog and bugcheck high-core-count machines.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn all_processes_refresh_kind() -> sysinfo::ProcessRefreshKind {
+        sysinfo::ProcessRefreshKind::nothing()
+    }
+
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn refresh_all_processes(&mut self) {
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true, /* remove_dead_processes */
-            Self::refresh_kind(),
+            Self::all_processes_refresh_kind(),
         );
     }
 

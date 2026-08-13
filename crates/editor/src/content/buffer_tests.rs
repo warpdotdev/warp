@@ -2318,6 +2318,36 @@ fn test_containing_offset() {
 }
 
 #[test]
+fn test_containing_line_first_nonwhitespace_for_plain_text() {
+    App::test((), |mut app| async move {
+        let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
+        let selection = app.add_model(|_| BufferSelectionModel::new(buffer.clone()));
+
+        buffer.update(&mut app, |buffer, ctx| {
+            buffer.edit_internal_first_selection(
+                CharOffset::from(1)..CharOffset::from(1),
+                "  first\n\t second\n   ",
+                Default::default(),
+                selection,
+                ctx,
+            );
+
+            assert_eq!(
+                buffer.containing_line_first_nonwhitespace(CharOffset::from(1)),
+                CharOffset::from(3)
+            );
+            assert_eq!(
+                buffer.containing_line_first_nonwhitespace(CharOffset::from(9)),
+                CharOffset::from(11)
+            );
+            assert_eq!(
+                buffer.containing_line_first_nonwhitespace(CharOffset::from(18)),
+                CharOffset::from(18)
+            );
+        });
+    });
+}
+#[test]
 fn test_delete_unpaired_block_style_marker() {
     App::test((), |mut app| async move {
         let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));

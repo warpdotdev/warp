@@ -18,13 +18,13 @@ use warpui::{AppContext, Element, Gradient, SingletonEntity};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
+use crate::search::SearchItem;
 use crate::search::command_palette::conversations::search::MatchedConversation;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::command_palette::render_util::render_search_item_icon;
 use crate::search::command_palette::view::Action;
 use crate::search::item::IconLocation;
 use crate::search::result_renderer::ItemHighlightState;
-use crate::search::SearchItem;
 use crate::ui_components::buttons::icon_button;
 use crate::util::time_format::format_approx_duration_from_now;
 

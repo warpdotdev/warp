@@ -6,9 +6,9 @@ use warpui::App;
 
 use super::super::diff_state_tracker::RemoteDiffStateManager;
 use super::super::proto::{
-    remote_skill_proto, server_message, write_file_response, Authenticate, BundledSkillMetadata,
-    HomeSkillMetadata, Initialize, RemoteAgentContextSnapshot, RemoteContextFileProto,
-    RemoteSkillProto, ServerMessage, WriteFileResponse, WriteFileSuccess,
+    Authenticate, BundledSkillMetadata, HomeSkillMetadata, Initialize, RemoteAgentContextSnapshot,
+    RemoteContextFileProto, RemoteSkillProto, ServerMessage, WriteFileResponse, WriteFileSuccess,
+    remote_skill_proto, server_message, write_file_response,
 };
 use super::super::protocol::RequestId;
 use super::super::server_buffer_tracker::ServerBufferTracker;
