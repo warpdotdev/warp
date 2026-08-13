@@ -27,7 +27,7 @@ use crate::ui_components::icons::Icon;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource, BillingCycleUsageEntry, UsageVisibility, UsageVisibilityGranularity,
-    Workspace, WorkspaceMember,
+    WorkspaceMember,
 };
 
 const BAR_HEIGHT: f32 = 8.;
@@ -182,9 +182,9 @@ impl MemberUsageRow {
     }
 
     /// Per-member rows for `PerUserTotals` / `FullBreakdown` visibility.
-    /// Iterates the workspace member list so zero-usage members still
-    /// get a row. Service accounts and other non-member subjects surface
-    /// as extra rows at the bottom, sorted by total credits desc.
+    /// Iterates the member list so zero-usage members still get a row.
+    /// Service accounts and other non-member subjects surface as extra rows
+    /// at the bottom, sorted by total credits desc.
     fn for_each_member(
         entries: &[BillingCycleUsageEntry],
         members: &[WorkspaceMember],
@@ -222,7 +222,7 @@ impl MemberUsageRow {
 
         let mut rows: Vec<Self> = Vec::with_capacity(members.len());
 
-        // One row per workspace member, including zero-usage members.
+        // One row per member, including zero-usage members.
         let mut seen_keys: std::collections::HashSet<String> = Default::default();
         for member in members {
             let key = format!(
@@ -283,7 +283,7 @@ impl MemberUsageRow {
 }
 
 fn build_rows(
-    workspace: &Workspace,
+    members: &[WorkspaceMember],
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
     source_filter: SourceFilter,
@@ -312,7 +312,7 @@ fn build_rows(
             rows
         }
         UsageVisibilityGranularity::PerUserTotals | UsageVisibilityGranularity::FullBreakdown => {
-            MemberUsageRow::for_each_member(entries, &workspace.members, source_filter)
+            MemberUsageRow::for_each_member(entries, members, source_filter)
         }
     };
 
@@ -750,9 +750,11 @@ pub fn render_own_usage_solo_row(
     render_member_row_list(std::slice::from_ref(&row), mouse_states, appearance)
 }
 
+/// `members` is the roster the per-member rows are drawn from, already scoped
+/// to the team being viewed.
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows(
-    workspace: &Workspace,
+    members: &[WorkspaceMember],
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
     source_filter: SourceFilter,
@@ -761,7 +763,7 @@ pub fn render_rows(
     app: &AppContext,
     on_filter_change: FilterChangeFn,
 ) -> Box<dyn Element> {
-    let rows = build_rows(workspace, entries, visibility, source_filter, app);
+    let rows = build_rows(members, entries, visibility, source_filter, app);
 
     let mut column = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)

@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
@@ -13,14 +13,16 @@ use warpui::elements::{
 };
 use warpui::fonts::{Properties, Weight};
 
+use crate::auth::UserUid;
 use crate::settings_view::billing_and_usage_page_v2::{
     AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
 use crate::ui_components::blended_colors;
+use crate::workspaces::team::Team;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    BillingCycleUsageEntry,
+    BillingCycleUsageEntry, WorkspaceMember,
 };
 
 // for a bunch of this (min fill ratio, cost type order, ... )
@@ -221,6 +223,43 @@ pub fn legend_cost_types(entries: &[BillingCycleUsageEntry]) -> Vec<AiCreditsUsa
             .any(|e| e.cost_type == *cost_type && e.credits_used > 0)
     })
     .collect()
+}
+
+/// Restricts `entries` to the usage billed against `team_uid`.
+///
+/// One `billingCycleUsageHistory` payload covers every team the viewer is
+/// allowed to see — the whole workspace for a workspace admin, every
+/// administered team for someone who admins more than one — while this
+/// settings window is always scoped to a single team. Without this filter an
+/// admin of team A also sees team B's members and their credits.
+///
+/// Unattributed entries are dropped along with the other teams': usage the
+/// server couldn't attribute to a team belongs to no team's view. The web
+/// admin panel makes the same trade-off in `filterEntriesByAttributedTeam`,
+/// and surfaces the remainder in a workspace-level view that the client has
+/// no equivalent of.
+pub fn filter_entries_by_attributed_team(
+    entries: &[BillingCycleUsageEntry],
+    team_uid: &str,
+) -> Vec<BillingCycleUsageEntry> {
+    entries
+        .iter()
+        .filter(|entry| entry.attributed_team_uid.as_deref() == Some(team_uid))
+        .cloned()
+        .collect()
+}
+
+/// The subset of `members` that belongs to `team`, so per-member usage rows
+/// list the current team's roster instead of every member of the workspace.
+/// Sourced from the workspace roster rather than `team.members` so the rows
+/// keep the workspace-level member data (e.g. per-member usage limits).
+pub fn team_scoped_members(members: &[WorkspaceMember], team: &Team) -> Vec<WorkspaceMember> {
+    let team_member_uids: HashSet<UserUid> = team.members.iter().map(|member| member.uid).collect();
+    members
+        .iter()
+        .filter(|member| team_member_uids.contains(&member.uid))
+        .cloned()
+        .collect()
 }
 
 /// "Is there any data in `entries` that's not my own?"

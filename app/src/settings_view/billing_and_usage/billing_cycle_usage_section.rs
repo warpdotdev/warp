@@ -21,7 +21,8 @@ use crate::auth::{AuthManager, AuthStateProvider};
 use crate::menu::{self, Menu, MenuItem, MenuItemFields};
 use crate::settings_view::admin_actions::AdminActions;
 use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
-    BillingUsageMouseStates, filter_legacy_buckets, has_non_viewer_data, legend_cost_types,
+    BillingUsageMouseStates, filter_entries_by_attributed_team, filter_legacy_buckets,
+    has_non_viewer_data, legend_cost_types, team_scoped_members,
 };
 use crate::settings_view::billing_and_usage::billing_cycle_usage_rows::{
     SourceFilter, has_cloud_usage, render_own_usage_solo_row, render_own_usage_with_workspace_row,
@@ -33,11 +34,12 @@ use crate::settings_view::billing_and_usage_page_v2::{
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
 use crate::ui_components::icons::Icon;
+use crate::workspaces::team::Team;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AiCreditsUsageAndCostType, BillingCycleUsageSummary, MaxPriorCycles, UsageVisibility,
-    UsageVisibilityGranularity, Workspace,
+    AiCreditsUsageAndCostType, BillingCycleUsageEntry, BillingCycleUsageSummary, MaxPriorCycles,
+    UsageVisibility, UsageVisibilityGranularity, Workspace, WorkspaceMember,
 };
 
 const HEADER_FONT_SIZE: f32 = 16.;
@@ -120,14 +122,51 @@ impl BillingCycleUsageSectionView {
         AuthStateProvider::as_ref(app).get().user_email()
     }
 
+    /// The team this settings window is scoped to.
+    fn current_team<'a>(&self, app: &'a AppContext) -> Option<&'a Team> {
+        UserWorkspaces::as_ref(app).team_for_view_handle(&self.self_handle, app)
+    }
+
     fn viewer_is_team_admin(&self, app: &AppContext) -> bool {
-        let Some(team) = UserWorkspaces::as_ref(app).team_for_view_handle(&self.self_handle, app)
-        else {
+        let Some(team) = self.current_team(app) else {
             return false;
         };
         Self::resolved_viewer_email(app)
             .as_deref()
             .is_some_and(|email| team.has_admin_permissions(email))
+    }
+
+    /// The selected cycle's entries, narrowed to what this window should
+    /// show: legacy buckets dropped, and other teams' usage filtered out.
+    ///
+    /// The server returns one history for every team the viewer can see, so
+    /// an admin of more than one team (or of the workspace) is handed usage
+    /// that belongs to teams other than the one on screen.
+    fn visible_entries(
+        &self,
+        workspace: &Workspace,
+        app: &AppContext,
+    ) -> Vec<BillingCycleUsageEntry> {
+        let entries = filter_legacy_buckets(
+            self.current_summary(workspace)
+                .map(|summary| summary.entries.as_slice())
+                .unwrap_or_default(),
+        );
+        match self.current_team(app) {
+            Some(team) => filter_entries_by_attributed_team(&entries, &team.uid.uid()),
+            // Without a resolved team there's nothing to scope against, so
+            // show the workspace's usage rather than an empty page.
+            None => entries,
+        }
+    }
+
+    /// The member roster the usage rows are drawn from, scoped to the team
+    /// this window is showing.
+    fn visible_members(&self, workspace: &Workspace, app: &AppContext) -> Vec<WorkspaceMember> {
+        match self.current_team(app) {
+            Some(team) => team_scoped_members(&workspace.members, team),
+            None => workspace.members.clone(),
+        }
     }
 
     fn current_summary<'a>(
@@ -156,8 +195,8 @@ impl BillingCycleUsageSectionView {
     }
 
     /// Whether the "Team" block + "Members" subheader should render. We
-    /// hide them when the viewer has no team data to show: `members.len()
-    /// > 1` covers the common multi-member case; `has_non_viewer_data`
+    /// hide them when the viewer has no team data to show: a roster of more
+    /// than one covers the common multi-member case; `has_non_viewer_data`
     /// catches the edge case where the roster shrank to one after a
     /// teammate left mid-cycle but their usage is still attributed against
     /// this cycle. Together they keep solo teams from showing orphan
@@ -170,16 +209,13 @@ impl BillingCycleUsageSectionView {
         if visibility.granularity == UsageVisibilityGranularity::OwnOnly {
             return false;
         }
-        let entries = filter_legacy_buckets(
-            self.current_summary(workspace)
-                .map(|s| s.entries.as_slice())
-                .unwrap_or_default(),
-        );
+        let entries = self.visible_entries(workspace, app);
         let viewer_uid = AuthStateProvider::as_ref(app)
             .get()
             .user_id()
             .map(|uid| uid.as_string());
-        workspace.members.len() > 1 || has_non_viewer_data(&entries, viewer_uid.as_deref())
+        self.visible_members(workspace, app).len() > 1
+            || has_non_viewer_data(&entries, viewer_uid.as_deref())
     }
 }
 
@@ -277,11 +313,7 @@ impl BillingCycleUsageSectionView {
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
         column.add_child(self.render_header(Some(workspace), &visibility, appearance, app));
 
-        let entries = filter_legacy_buckets(
-            self.current_summary(workspace)
-                .map(|summary| summary.entries.as_slice())
-                .unwrap_or_default(),
-        );
+        let entries = self.visible_entries(workspace, app);
 
         let is_source_filter_shown = visibility.granularity
             == UsageVisibilityGranularity::FullBreakdown
@@ -309,7 +341,7 @@ impl BillingCycleUsageSectionView {
 
         column.add_child(
             Container::new(render_rows(
-                workspace,
+                &self.visible_members(workspace, app),
                 &entries,
                 &visibility,
                 source_filter,
@@ -334,11 +366,7 @@ impl BillingCycleUsageSectionView {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let visibility = workspace.resolve_usage_visibility(self.viewer_is_team_admin(app));
-        let entries = filter_legacy_buckets(
-            self.current_summary(workspace)
-                .map(|s| s.entries.as_slice())
-                .unwrap_or_default(),
-        );
+        let entries = self.visible_entries(workspace, app);
 
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
         column.add_child(self.render_header(Some(workspace), &visibility, appearance, app));
@@ -428,7 +456,7 @@ impl BillingCycleUsageSectionView {
         column.add_child(row.finish());
 
         let resets_text = self.render_resets_label(appearance, app);
-        let legend = workspace.and_then(|workspace| self.render_legend(workspace, appearance));
+        let legend = workspace.and_then(|workspace| self.render_legend(workspace, appearance, app));
         if resets_text.is_some() || legend.is_some() {
             let mut secondary_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -560,12 +588,12 @@ impl BillingCycleUsageSectionView {
         &self,
         workspace: &Workspace,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
-        let summary = self.current_summary(workspace)?;
         // Only list buckets that actually contribute to the stacked bars: drop
         // legacy buckets and cost types with no usage, so the legend never
         // shows a bucket (e.g. "Base") that has zero credits in the data.
-        let present_buckets = legend_cost_types(&summary.entries);
+        let present_buckets = legend_cost_types(&self.visible_entries(workspace, app));
         if present_buckets.is_empty() {
             return None;
         }
@@ -675,9 +703,9 @@ impl BillingCycleUsageSectionView {
             if self.viewer_is_native_workspaces_admin(workspace, app) {
                 NATIVE_WORKSPACES_CTA
             } else {
-                // Only show when there are teammates -- a single-member workspace
+                // Only show when there are teammates -- a single-member team
                 // doesn't benefit from any of the team-level visibility CTAs.
-                if workspace.members.len() <= 1 {
+                if self.visible_members(workspace, app).len() <= 1 {
                     return None;
                 }
                 let admin_granularity = workspace

@@ -389,6 +389,11 @@ pub struct UsageEntry {
     pub usage_source: AiCreditsUsageSource,
     pub credits_used: i32,
     pub cost_cents: i32,
+    /// The team this usage is billed against. `None` for usage the server
+    /// couldn't attribute to any team (legacy rows written before
+    /// attribution existed, and rows whose team is gone from both the live
+    /// and archived team tables).
+    pub attributed_team_uid: Option<String>,
 }
 
 #[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]
