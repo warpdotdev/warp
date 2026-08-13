@@ -1,9 +1,12 @@
 use super::{
-    BarSegment, aggregate_segments, filter_legacy_buckets, has_non_viewer_data, legend_cost_types,
+    BarSegment, aggregate_segments, filter_entries_by_attributed_team, filter_legacy_buckets,
+    has_non_viewer_data, legend_cost_types, scope_usage_to_team,
 };
+use crate::auth::UserUid;
+use crate::workspaces::team::{MembershipRole, TeamMember};
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    AiCreditsUsageSource, BillingCycleUsageEntry,
+    AiCreditsUsageSource, BillingCycleUsageEntry, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 const VIEWER_UID: &str = "viewer-uid";
@@ -27,6 +30,7 @@ fn entry(
         usage_source,
         credits_used,
         cost_cents,
+        attributed_team_uid: None,
     }
 }
 
@@ -342,6 +346,132 @@ fn legend_cost_types_includes_used_buckets_in_display_order() {
         ],
         "used buckets should render in canonical order, not input order"
     );
+}
+
+fn workspace_member(uid: &str, email: &str) -> WorkspaceMember {
+    WorkspaceMember {
+        uid: UserUid::new(uid),
+        email: email.to_string(),
+        role: MembershipRole::User,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: false,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    }
+}
+
+fn team_member(uid: &str, email: &str) -> TeamMember {
+    TeamMember {
+        uid: UserUid::new(uid),
+        email: email.to_string(),
+        role: MembershipRole::User,
+    }
+}
+
+/// Entry helper for attributed-team tests: a `User` subject with a real
+/// `subject_uid`, parameterized only on `credits_used` and
+/// `attributed_team_uid` since the other fields are irrelevant here.
+fn entry_for_team(
+    subject_uid: &str,
+    credits_used: i32,
+    attributed_team_uid: Option<&str>,
+) -> BillingCycleUsageEntry {
+    BillingCycleUsageEntry {
+        subject_type: AiCreditsUsageAndCostSubjectType::User,
+        subject_uid: Some(subject_uid.to_string()),
+        subject_display_name: None,
+        cost_type: AiCreditsUsageAndCostType::BaseLimit,
+        usage_bucket: AiCreditsUsageBucket::Ai,
+        usage_source: AiCreditsUsageSource::Local,
+        credits_used,
+        cost_cents: 0,
+        attributed_team_uid: attributed_team_uid.map(|s| s.to_string()),
+    }
+}
+
+#[test]
+fn filter_entries_by_attributed_team_keeps_only_matching_team() {
+    let entries = vec![
+        entry_for_team("user-a", 10, Some("team-a")),
+        entry_for_team("user-b", 20, Some("team-b")),
+        entry_for_team("user-c", 5, None),
+    ];
+    let filtered = filter_entries_by_attributed_team(&entries, "team-a");
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].subject_uid.as_deref(), Some("user-a"));
+}
+
+#[test]
+fn filter_entries_by_attributed_team_excludes_unattributed_entries() {
+    // Null attribution (e.g. pre-backfill data) must never leak into a
+    // specific team's view, matching the web's strict-equality filter.
+    let entries = vec![entry_for_team("user-a", 10, None)];
+    assert!(filter_entries_by_attributed_team(&entries, "team-a").is_empty());
+}
+
+#[test]
+fn scope_usage_to_team_filters_entries_and_roster_for_multi_team_workspace() {
+    // Regression for the cross-team data leak: an admin of team A must not
+    // see team B's subjects or credits, and unattributed entries must be
+    // dropped from the team-scoped view.
+    let entries = vec![
+        entry_for_team("admin-a", 10, Some("team-a")),
+        entry_for_team("member-b", 999, Some("team-b")),
+        entry_for_team("unattributed", 50, None),
+    ];
+    let workspace_members = vec![
+        workspace_member("admin-a", "admin-a@example.com"),
+        workspace_member("member-b", "member-b@example.com"),
+    ];
+    let team_a_members = vec![team_member("admin-a", "admin-a@example.com")];
+
+    let (scoped_entries, scoped_members) = scope_usage_to_team(
+        &entries,
+        &workspace_members,
+        2,
+        Some(("team-a", &team_a_members)),
+    );
+
+    assert_eq!(scoped_entries.len(), 1);
+    assert_eq!(scoped_entries[0].subject_uid.as_deref(), Some("admin-a"));
+    assert_eq!(scoped_members.len(), 1, "roster must be limited to team A");
+    assert_eq!(scoped_members[0].email, "admin-a@example.com");
+}
+
+#[test]
+fn scope_usage_to_team_is_unfiltered_for_single_team_workspace() {
+    // Single-team workspaces have nothing to scope away from, and their
+    // entries may predate attribution backfill (null attributed_team_uid),
+    // so filtering here must be a no-op.
+    let entries = vec![entry_for_team("user-a", 10, None)];
+    let workspace_members = vec![workspace_member("user-a", "user-a@example.com")];
+    let team_members = vec![team_member("user-a", "user-a@example.com")];
+
+    let (scoped_entries, scoped_members) = scope_usage_to_team(
+        &entries,
+        &workspace_members,
+        1,
+        Some(("team-a", &team_members)),
+    );
+
+    assert_eq!(scoped_entries.len(), entries.len());
+    assert_eq!(scoped_members.len(), workspace_members.len());
+}
+
+#[test]
+fn scope_usage_to_team_is_unfiltered_when_current_team_unresolved() {
+    // Workspace-level views (no resolvable current team, e.g. the admin's
+    // workspace-wide overview) must keep seeing every team's entries.
+    let entries = vec![entry_for_team("user-a", 10, Some("team-a"))];
+    let workspace_members = vec![workspace_member("user-a", "user-a@example.com")];
+
+    let (scoped_entries, scoped_members) =
+        scope_usage_to_team(&entries, &workspace_members, 2, None);
+
+    assert_eq!(scoped_entries.len(), entries.len());
+    assert_eq!(scoped_members.len(), workspace_members.len());
 }
 
 #[test]

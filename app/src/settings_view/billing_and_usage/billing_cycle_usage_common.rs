@@ -18,9 +18,10 @@ use crate::settings_view::billing_and_usage_page_v2::{
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
 use crate::ui_components::blended_colors;
+use crate::workspaces::team::TeamMember;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    BillingCycleUsageEntry,
+    BillingCycleUsageEntry, WorkspaceMember,
 };
 
 // for a bunch of this (min fill ratio, cost type order, ... )
@@ -221,6 +222,61 @@ pub fn legend_cost_types(entries: &[BillingCycleUsageEntry]) -> Vec<AiCreditsUsa
             .any(|e| e.cost_type == *cost_type && e.credits_used > 0)
     })
     .collect()
+}
+
+/// Scopes `entries` down to those attributed to `team_uid`, mirroring the
+/// web client's `filterEntriesByAttributedTeam` (see
+/// `warp-server/client/src/components/admin/team/billing/utils.ts`).
+///
+/// `Workspace.billingCycleUsageHistory` is workspace-scoped: it returns every
+/// team's entries tagged with `attributed_team_uid`, so a multi-team
+/// workspace's team view must filter down to its own team's entries or it
+/// leaks other teams' usage data. Comparison is strict equality — entries
+/// with no attribution (`None`) are excluded from every team's view, exactly
+/// like the web behavior.
+pub fn filter_entries_by_attributed_team(
+    entries: &[BillingCycleUsageEntry],
+    team_uid: &str,
+) -> Vec<BillingCycleUsageEntry> {
+    entries
+        .iter()
+        .filter(|e| e.attributed_team_uid.as_deref() == Some(team_uid))
+        .cloned()
+        .collect()
+}
+
+/// Scopes workspace-wide usage `entries` and `workspace_members` down to a
+/// single team's view. `current_team` is `Some((team_uid, team_members))`
+/// when the window has a resolvable current team.
+///
+/// Single-team workspaces (`teams_len <= 1`) and windows with no resolvable
+/// current team skip the filter and return `entries` / `workspace_members`
+/// unchanged: their entries may predate attribution backfill and carry no
+/// `attributed_team_uid`, and there's no other team's data to leak.
+pub fn scope_usage_to_team(
+    entries: &[BillingCycleUsageEntry],
+    workspace_members: &[WorkspaceMember],
+    teams_len: usize,
+    current_team: Option<(&str, &[TeamMember])>,
+) -> (Vec<BillingCycleUsageEntry>, Vec<WorkspaceMember>) {
+    if teams_len <= 1 {
+        return (entries.to_vec(), workspace_members.to_vec());
+    }
+    let Some((team_uid, team_members)) = current_team else {
+        return (entries.to_vec(), workspace_members.to_vec());
+    };
+
+    let scoped_entries = filter_entries_by_attributed_team(entries, team_uid);
+
+    let team_member_uids: std::collections::HashSet<_> =
+        team_members.iter().map(|m| m.uid).collect();
+    let scoped_members = workspace_members
+        .iter()
+        .filter(|m| team_member_uids.contains(&m.uid))
+        .cloned()
+        .collect();
+
+    (scoped_entries, scoped_members)
 }
 
 /// "Is there any data in `entries` that's not my own?"
