@@ -69,11 +69,9 @@ pub async fn text_diff(old_text: &str, new_text: &str) -> TextDiff {
     TextDiff { edits }
 }
 
-/// Synchronous counterpart to [`text_diff`], for callers that need the result
-/// immediately rather than as a cancellable background task (e.g. a one-shot
-/// conflict resolution rather than a per-keystroke or per-file-watcher-event
-/// operation). Computes the exact same diff via the same algorithm; the only
-/// difference from `text_diff` is the absence of cooperative-yield points.
+/// Computes the same Histogram diff as [`text_diff`] without cooperative
+/// yield points, for callers that need the result immediately rather than as
+/// a cancellable background task.
 pub fn text_diff_sync(old_text: &str, new_text: &str) -> TextDiff {
     let input = InternedInput::new(old_text, new_text);
     let diff = Diff::compute(Algorithm::Histogram, &input);

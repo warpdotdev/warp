@@ -80,3 +80,7 @@ required-features = ["test-util"]
 [[bench]]
 name = "text_layout_bench"
 harness = false
+
+[[bench]]
+name = "resolve_conflict_memory_bench"
+harness = false

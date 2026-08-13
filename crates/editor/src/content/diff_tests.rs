@@ -1,8 +1,7 @@
 use super::*;
 
-/// Pins the refactor that extracted a shared `edits_from_diff` core so
-/// `text_diff_sync` (used by `resolve_conflict`, APP-5357) and the existing
-/// async `text_diff` (used by auto-reload) compute the exact same diff.
+/// The synchronous and asynchronous diff entry points produce identical
+/// edits, since they share the same underlying diff core.
 #[test]
 fn text_diff_sync_matches_async_text_diff() {
     let old = "line1\nline2\nline3\nline4\nline5\n";
