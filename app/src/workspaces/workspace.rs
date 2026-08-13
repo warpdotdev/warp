@@ -607,6 +607,10 @@ pub struct BillingCycleUsageEntry {
     pub usage_source: AiCreditsUsageSource,
     pub credits_used: i32,
     pub cost_cents: i32,
+    /// The team this entry is attributed to, used to scope usage data to the
+    /// team currently being viewed. `None` when the entry has no team
+    /// attribution (e.g. the subject isn't a member of any team).
+    pub attributed_team_uid: Option<String>,
 }
 
 /// Per-cycle bucket of redacted usage entries with explicit period bounds.

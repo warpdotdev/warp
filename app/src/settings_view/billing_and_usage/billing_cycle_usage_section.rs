@@ -25,7 +25,7 @@ use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
 };
 use crate::settings_view::billing_and_usage::billing_cycle_usage_rows::{
     SourceFilter, has_cloud_usage, render_own_usage_solo_row, render_own_usage_with_workspace_row,
-    render_rows,
+    render_rows, team_scoped_members,
 };
 use crate::settings_view::billing_and_usage::billing_cycle_usage_team_totals::render_team_totals_block;
 use crate::settings_view::billing_and_usage_page_v2::{
@@ -33,15 +33,50 @@ use crate::settings_view::billing_and_usage_page_v2::{
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
 use crate::ui_components::icons::Icon;
+use crate::workspaces::team::Team;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AiCreditsUsageAndCostType, BillingCycleUsageSummary, MaxPriorCycles, UsageVisibility,
-    UsageVisibilityGranularity, Workspace,
+    AiCreditsUsageAndCostType, BillingCycleUsageEntry, BillingCycleUsageSummary, MaxPriorCycles,
+    UsageVisibility, UsageVisibilityGranularity, Workspace, WorkspaceMember,
 };
 
 const HEADER_FONT_SIZE: f32 = 16.;
 const LEGEND_DOT_SIZE: f32 = 8.;
+
+/// Usage entries and workspace roster scoped to the team currently being
+/// viewed. `workspace.billing_cycle_usage` entries and `workspace.members`
+/// span every team in the workspace, so this is the single choke point
+/// every v2 rendering path (section visibility, own-usage rendering, the
+/// legend, the CTA banner, team totals, and per-member rows) must read
+/// through -- computing it once and threading it everywhere is what keeps
+/// cross-team data from leaking regardless of visibility mode. No active
+/// team resolves to an empty scope rather than falling back to the whole
+/// workspace.
+#[derive(Default)]
+struct ActiveTeamUsageScope {
+    entries: Vec<BillingCycleUsageEntry>,
+    members: Vec<WorkspaceMember>,
+}
+
+/// Pure resolution of [`ActiveTeamUsageScope`] from raw, workspace-wide
+/// data. Extracted from [`BillingCycleUsageSectionView::active_team_scope`]
+/// so the raw-to-scoped boundary is unit-testable with mixed-team fixtures
+/// without needing a live `AppContext`.
+fn resolve_active_team_scope(
+    raw_entries: &[BillingCycleUsageEntry],
+    workspace_members: &[WorkspaceMember],
+    active_team: Option<&Team>,
+) -> ActiveTeamUsageScope {
+    let Some(team) = active_team else {
+        return ActiveTeamUsageScope::default();
+    };
+    let legacy_filtered = filter_legacy_buckets(raw_entries);
+    ActiveTeamUsageScope {
+        entries: filter_entries_by_attributed_team(&legacy_filtered, &team.uid.uid()),
+        members: team_scoped_members(workspace_members, &team.members),
+    }
+}
 
 pub struct BillingCycleUsageSectionView {
     self_handle: WeakViewHandle<Self>,
@@ -155,6 +190,23 @@ impl BillingCycleUsageSectionView {
         }
     }
 
+    /// Resolves the usage entries and member roster scoped to the team
+    /// currently being viewed. This is the only place production code
+    /// should read `workspace.billing_cycle_usage` entries or
+    /// `workspace.members` -- every other v2 rendering decision (section
+    /// visibility, own-usage rendering, the legend, the CTA banner, team
+    /// totals, and per-member rows) must go through the returned scope
+    /// instead, so cross-team data can't leak through a path that forgot
+    /// to filter.
+    fn active_team_scope(&self, workspace: &Workspace, app: &AppContext) -> ActiveTeamUsageScope {
+        let active_team = UserWorkspaces::as_ref(app).team_for_view_handle(&self.self_handle, app);
+        let raw_entries = self
+            .current_summary(workspace)
+            .map(|summary| summary.entries.as_slice())
+            .unwrap_or_default();
+        resolve_active_team_scope(raw_entries, &workspace.members, active_team)
+    }
+
     /// Whether the "Team" block + "Members" subheader should render. We
     /// hide them when the viewer has no team data to show: `members.len()
     /// > 1` covers the common multi-member case; `has_non_viewer_data`
@@ -165,21 +217,21 @@ impl BillingCycleUsageSectionView {
     ///
     /// Note: per the backend invariant `VIS != OwnOnly => viewer is admin`,
     /// so we don't need a separate admin gate here.
-    fn shows_team_section(&self, workspace: &Workspace, app: &AppContext) -> bool {
+    fn shows_team_section(
+        &self,
+        workspace: &Workspace,
+        scope: &ActiveTeamUsageScope,
+        app: &AppContext,
+    ) -> bool {
         let visibility = workspace.resolve_usage_visibility(self.viewer_is_team_admin(app));
         if visibility.granularity == UsageVisibilityGranularity::OwnOnly {
             return false;
         }
-        let entries = filter_legacy_buckets(
-            self.current_summary(workspace)
-                .map(|s| s.entries.as_slice())
-                .unwrap_or_default(),
-        );
         let viewer_uid = AuthStateProvider::as_ref(app)
             .get()
             .user_id()
             .map(|uid| uid.as_string());
-        workspace.members.len() > 1 || has_non_viewer_data(&entries, viewer_uid.as_deref())
+        scope.members.len() > 1 || has_non_viewer_data(&scope.entries, viewer_uid.as_deref())
     }
 }
 
@@ -255,10 +307,14 @@ impl View for BillingCycleUsageSectionView {
         let appearance = Appearance::as_ref(app);
         let workspace = UserWorkspaces::as_ref(app).current_workspace().cloned();
         match workspace.as_ref() {
-            Some(w) if self.shows_team_section(w, app) => {
-                self.render_team_usage(w, appearance, app)
+            Some(w) => {
+                let scope = self.active_team_scope(w, app);
+                if self.shows_team_section(w, &scope, app) {
+                    self.render_team_usage(w, &scope, appearance, app)
+                } else {
+                    self.render_own_usage_with_workspace(w, &scope, appearance, app)
+                }
             }
-            Some(w) => self.render_own_usage_with_workspace(w, appearance, app),
             None => self.render_own_usage_solo(appearance, app),
         }
     }
@@ -268,6 +324,7 @@ impl BillingCycleUsageSectionView {
     fn render_team_usage(
         &self,
         workspace: &Workspace,
+        scope: &ActiveTeamUsageScope,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -275,17 +332,17 @@ impl BillingCycleUsageSectionView {
         let visibility = workspace.resolve_usage_visibility(is_admin);
 
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-        column.add_child(self.render_header(Some(workspace), &visibility, appearance, app));
-
-        let entries = filter_legacy_buckets(
-            self.current_summary(workspace)
-                .map(|summary| summary.entries.as_slice())
-                .unwrap_or_default(),
-        );
+        column.add_child(self.render_header(
+            Some(workspace),
+            &scope.entries,
+            &visibility,
+            appearance,
+            app,
+        ));
 
         let is_source_filter_shown = visibility.granularity
             == UsageVisibilityGranularity::FullBreakdown
-            && has_cloud_usage(&entries);
+            && has_cloud_usage(&scope.entries);
         let source_filter = if is_source_filter_shown {
             self.source_filter
         } else {
@@ -294,7 +351,7 @@ impl BillingCycleUsageSectionView {
 
         column.add_child(
             Container::new(render_team_totals_block(
-                &entries,
+                &scope.entries,
                 &visibility,
                 &self.row_mouse_states,
                 appearance,
@@ -303,14 +360,17 @@ impl BillingCycleUsageSectionView {
             .finish(),
         );
 
-        if is_admin && let Some(banner) = self.render_visibility_cta_banner(workspace, app) {
+        if is_admin
+            && let Some(banner) =
+                self.render_visibility_cta_banner(workspace, scope.members.len(), app)
+        {
             column.add_child(Container::new(banner).with_margin_top(16.).finish());
         }
 
         column.add_child(
             Container::new(render_rows(
-                workspace,
-                &entries,
+                &scope.members,
+                &scope.entries,
                 &visibility,
                 source_filter,
                 &self.row_mouse_states,
@@ -330,21 +390,23 @@ impl BillingCycleUsageSectionView {
     fn render_own_usage_with_workspace(
         &self,
         workspace: &Workspace,
+        scope: &ActiveTeamUsageScope,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
         let visibility = workspace.resolve_usage_visibility(self.viewer_is_team_admin(app));
-        let entries = filter_legacy_buckets(
-            self.current_summary(workspace)
-                .map(|s| s.entries.as_slice())
-                .unwrap_or_default(),
-        );
 
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-        column.add_child(self.render_header(Some(workspace), &visibility, appearance, app));
+        column.add_child(self.render_header(
+            Some(workspace),
+            &scope.entries,
+            &visibility,
+            appearance,
+            app,
+        ));
         column.add_child(
             Container::new(render_own_usage_with_workspace_row(
-                &entries,
+                &scope.entries,
                 &self.row_mouse_states,
                 appearance,
                 app,
@@ -353,7 +415,8 @@ impl BillingCycleUsageSectionView {
             .finish(),
         );
         if self.viewer_is_native_workspaces_admin(workspace, app)
-            && let Some(banner) = self.render_visibility_cta_banner(workspace, app)
+            && let Some(banner) =
+                self.render_visibility_cta_banner(workspace, scope.members.len(), app)
         {
             column.add_child(Container::new(banner).with_margin_top(16.).finish());
         }
@@ -364,7 +427,13 @@ impl BillingCycleUsageSectionView {
     // So we "fake" a row and source data from the AIRequestUsageModel instead
     fn render_own_usage_solo(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-        column.add_child(self.render_header(None, &UsageVisibility::default(), appearance, app));
+        column.add_child(self.render_header(
+            None,
+            &[],
+            &UsageVisibility::default(),
+            appearance,
+            app,
+        ));
         column.add_child(
             Container::new(render_own_usage_solo_row(
                 &self.row_mouse_states,
@@ -382,6 +451,7 @@ impl BillingCycleUsageSectionView {
     fn render_header(
         &self,
         workspace: Option<&Workspace>,
+        entries: &[BillingCycleUsageEntry],
         visibility: &UsageVisibility,
         appearance: &Appearance,
         app: &AppContext,
@@ -428,7 +498,7 @@ impl BillingCycleUsageSectionView {
         column.add_child(row.finish());
 
         let resets_text = self.render_resets_label(appearance, app);
-        let legend = workspace.and_then(|workspace| self.render_legend(workspace, appearance));
+        let legend = self.render_legend(entries, appearance);
         if resets_text.is_some() || legend.is_some() {
             let mut secondary_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -558,14 +628,16 @@ impl BillingCycleUsageSectionView {
 
     fn render_legend(
         &self,
-        workspace: &Workspace,
+        entries: &[BillingCycleUsageEntry],
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let summary = self.current_summary(workspace)?;
         // Only list buckets that actually contribute to the stacked bars: drop
         // legacy buckets and cost types with no usage, so the legend never
         // shows a bucket (e.g. "Base") that has zero credits in the data.
-        let present_buckets = legend_cost_types(&summary.entries);
+        // `entries` is already scoped to the active team, so this can never
+        // reveal that another team has usage in a category the active team
+        // doesn't.
+        let present_buckets = legend_cost_types(entries);
         if present_buckets.is_empty() {
             return None;
         }
@@ -668,6 +740,7 @@ impl BillingCycleUsageSectionView {
     fn render_visibility_cta_banner(
         &self,
         workspace: &Workspace,
+        team_member_count: usize,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let appearance = Appearance::as_ref(app);
@@ -675,9 +748,12 @@ impl BillingCycleUsageSectionView {
             if self.viewer_is_native_workspaces_admin(workspace, app) {
                 NATIVE_WORKSPACES_CTA
             } else {
-                // Only show when there are teammates -- a single-member workspace
+                // Only show when there are teammates -- a single-member team
                 // doesn't benefit from any of the team-level visibility CTAs.
-                if workspace.members.len() <= 1 {
+                // Uses the active team's scoped roster, not the whole
+                // workspace, so this can't be used to infer another team's
+                // membership.
+                if team_member_count <= 1 {
                     return None;
                 }
                 let admin_granularity = workspace
@@ -812,6 +888,22 @@ fn render_aggregate_legend_tooltip(appearance: &Appearance) -> Box<dyn Element> 
                 .with_offset(vec2f(0., 4.)),
         )
         .finish()
+}
+
+/// Retains only entries attributed to `team_uid`, mirroring the web
+/// client's `filterEntriesByAttributedTeam`
+/// (`client/src/components/admin/team/billing/utils.ts` in warp-server).
+/// Strict equality: entries with no attribution, or attributed to a
+/// different (including archived or unknown) team, are excluded.
+fn filter_entries_by_attributed_team(
+    entries: &[BillingCycleUsageEntry],
+    team_uid: &str,
+) -> Vec<BillingCycleUsageEntry> {
+    entries
+        .iter()
+        .filter(|entry| entry.attributed_team_uid.as_deref() == Some(team_uid))
+        .cloned()
+        .collect()
 }
 
 fn format_period_range(start: DateTime<Utc>, end: DateTime<Utc>) -> String {

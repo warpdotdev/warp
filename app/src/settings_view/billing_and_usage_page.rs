@@ -32,6 +32,7 @@ use warpui::{
 
 use super::SettingsSection;
 use super::admin_actions::AdminActions;
+use super::billing_and_usage::billing_cycle_usage_rows::team_scoped_members;
 use super::billing_and_usage::overage_limit_modal::{SpendingLimitModal, SpendingLimitModalEvent};
 use super::billing_and_usage::usage_history_entry::UsageHistoryEntry;
 use super::billing_and_usage::usage_history_model::UsageHistoryModel;
@@ -58,10 +59,11 @@ use crate::ui_components::menu_button::{MenuDirection, icon_button_with_context_
 use crate::ui_components::tab_selector::{self, SettingsTab};
 use crate::view_components::ToastFlavor;
 use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
+use crate::workspaces::team::Team;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
-use crate::workspaces::workspace::{BillingMetadata, CustomerType, Workspace};
+use crate::workspaces::workspace::{BillingMetadata, CustomerType, Workspace, WorkspaceMember};
 use crate::{WorkspaceAction, send_telemetry_from_ctx};
 
 const HEADER_FONT_SIZE: f32 = 16.;
@@ -100,6 +102,22 @@ const ADDITIONAL_ADDON_CREDITS_DESCRIPTION_FOR_TEAM: &str =
 const AMBIENT_AGENT_TRIAL_TITLE: &str = "Cloud agent trial";
 /// The threshold below which we only show the "Buy more" button (not "New agent").
 use crate::ai::request_usage_model::AMBIENT_AGENT_TRIAL_CREDIT_THRESHOLD;
+
+/// Workspace members scoped to the team currently being viewed.
+/// `workspace.members` spans every team in the workspace, so this must
+/// intersect with the active team's roster before computing "Team total"
+/// and per-member rows -- otherwise an admin of team A would see team B's
+/// members too. No active team (or no workspace) fails closed to no
+/// members rather than falling back to the whole workspace.
+fn team_scoped_workspace_members(
+    workspace: Option<&Workspace>,
+    team: Option<&Team>,
+) -> Vec<WorkspaceMember> {
+    match (workspace, team) {
+        (Some(workspace), Some(team)) => team_scoped_members(&workspace.members, &team.members),
+        _ => Vec::new(),
+    }
+}
 
 pub fn create_discount_badge(discount: u32, appearance: &Appearance) -> Box<dyn Element> {
     if discount == 0 {
@@ -2852,16 +2870,13 @@ impl BillingAndUsagePageView {
         let mut usage = Flex::column();
 
         let workspace = UserWorkspaces::as_ref(app).current_workspace();
-        // Check if we should show the sort button (admin with team size > 1)
-        let workspace_team_members = workspace
-            .map(|workspace| workspace.members.clone())
-            .unwrap_or_default();
+        let workspaces = UserWorkspaces::as_ref(app);
+        let team = workspaces.team_for_view_handle(&self.self_handle, app);
+        let workspace_team_members = team_scoped_workspace_members(workspace, team);
         let current_user_email = AuthStateProvider::as_ref(app)
             .get()
             .user_email()
             .unwrap_or_default();
-        let workspaces = UserWorkspaces::as_ref(app);
-        let team = workspaces.team_for_view_handle(&self.self_handle, app);
         let billing_metadata = workspaces.current_workspace_billing_metadata();
         let has_admin_permissions =
             team.is_some_and(|team| team.has_admin_permissions(&current_user_email));

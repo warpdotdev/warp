@@ -594,7 +594,9 @@ impl From<GqlUsageVisibilityPolicy> for UsageVisibilityPolicy {
     }
 }
 
-fn convert_billing_cycle_usage(history: GqlBillingCycleUsageHistory) -> BillingCycleUsageData {
+pub(crate) fn convert_billing_cycle_usage(
+    history: GqlBillingCycleUsageHistory,
+) -> BillingCycleUsageData {
     BillingCycleUsageData {
         current_period_start: history.current_period_start.utc(),
         current_period_end: history.current_period_end.utc(),
@@ -616,6 +618,7 @@ fn convert_billing_cycle_usage(history: GqlBillingCycleUsageHistory) -> BillingC
                         usage_source: entry.usage_source,
                         credits_used: entry.credits_used,
                         cost_cents: entry.cost_cents,
+                        attributed_team_uid: entry.attributed_team_uid,
                     })
                     .collect(),
             })

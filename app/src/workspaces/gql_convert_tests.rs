@@ -343,3 +343,55 @@ mod team_settings_conversion {
         );
     }
 }
+
+mod billing_cycle_usage_conversion {
+    use chrono::{TimeZone, Utc};
+    use warp_graphql::billing::{
+        AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
+        AiCreditsUsageSource, BillingCycleUsageHistory, BillingCycleUsageSummary, UsageEntry,
+    };
+    use warp_graphql::scalars::time::ServerTimestamp;
+
+    use crate::workspaces::gql_convert::convert_billing_cycle_usage;
+
+    fn gql_entry(subject_uid: &str, attributed_team_uid: Option<&str>) -> UsageEntry {
+        UsageEntry {
+            subject_type: AiCreditsUsageAndCostSubjectType::User,
+            subject_uid: Some(subject_uid.to_string()),
+            subject_display_name: None,
+            cost_type: AiCreditsUsageAndCostType::BaseLimit,
+            usage_bucket: AiCreditsUsageBucket::Ai,
+            usage_source: AiCreditsUsageSource::Local,
+            credits_used: 10,
+            cost_cents: 5,
+            attributed_team_uid: attributed_team_uid.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn maps_attributed_team_uid_from_gql_including_null() {
+        let period_start = ServerTimestamp::new(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
+        let period_end = ServerTimestamp::new(Utc.with_ymd_and_hms(2026, 2, 1, 0, 0, 0).unwrap());
+        let history = BillingCycleUsageHistory {
+            current_period_start: period_start,
+            current_period_end: period_end,
+            summaries: vec![BillingCycleUsageSummary {
+                period_start,
+                period_end,
+                entries: vec![
+                    gql_entry("a-member", Some("team-a")),
+                    gql_entry("unassigned", None),
+                ],
+            }],
+        };
+
+        let converted = convert_billing_cycle_usage(history);
+
+        let attributed: Vec<Option<String>> = converted.summaries[0]
+            .entries
+            .iter()
+            .map(|e| e.attributed_team_uid.clone())
+            .collect();
+        assert_eq!(attributed, [Some("team-a".to_string()), None]);
+    }
+}

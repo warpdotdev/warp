@@ -24,10 +24,11 @@ use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
 };
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
+use crate::workspaces::team::TeamMember;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource, BillingCycleUsageEntry, UsageVisibility, UsageVisibilityGranularity,
-    Workspace, WorkspaceMember,
+    WorkspaceMember,
 };
 
 const BAR_HEIGHT: f32 = 8.;
@@ -282,8 +283,23 @@ impl MemberUsageRow {
     }
 }
 
+/// Workspace members that belong to `team_members`, matched by member UID.
+/// An empty or missing team roster yields no members — this must fail
+/// closed to an empty roster, never fall back to the full workspace member
+/// list, since that's exactly the cross-team leak this scoping prevents.
+pub fn team_scoped_members(
+    workspace_members: &[WorkspaceMember],
+    team_members: &[TeamMember],
+) -> Vec<WorkspaceMember> {
+    workspace_members
+        .iter()
+        .filter(|member| team_members.iter().any(|tm| tm.uid == member.uid))
+        .cloned()
+        .collect()
+}
+
 fn build_rows(
-    workspace: &Workspace,
+    members: &[WorkspaceMember],
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
     source_filter: SourceFilter,
@@ -312,7 +328,7 @@ fn build_rows(
             rows
         }
         UsageVisibilityGranularity::PerUserTotals | UsageVisibilityGranularity::FullBreakdown => {
-            MemberUsageRow::for_each_member(entries, &workspace.members, source_filter)
+            MemberUsageRow::for_each_member(entries, members, source_filter)
         }
     };
 
@@ -752,7 +768,7 @@ pub fn render_own_usage_solo_row(
 
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows(
-    workspace: &Workspace,
+    members: &[WorkspaceMember],
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
     source_filter: SourceFilter,
@@ -761,7 +777,7 @@ pub fn render_rows(
     app: &AppContext,
     on_filter_change: FilterChangeFn,
 ) -> Box<dyn Element> {
-    let rows = build_rows(workspace, entries, visibility, source_filter, app);
+    let rows = build_rows(members, entries, visibility, source_filter, app);
 
     let mut column = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
