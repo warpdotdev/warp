@@ -4445,7 +4445,7 @@ impl EditorView {
                         .is_some_and(|suggested_prompt| {
                             !suggested_prompt.as_ref(ctx).is_keybindings_hidden()
                         });
-                    block.is_passive_conversation(ctx)
+                    block.is_passive_conversation()
                         && (is_pending_code_diff || is_pending_suggested_prompt)
                 })
         });
