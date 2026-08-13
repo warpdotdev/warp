@@ -1259,7 +1259,7 @@ impl SettingsView {
         // About page
         let about_page_handle = ctx.add_view(AboutPageView::new);
 
-        // AI page
+        // Warp Agent page
         let warp_agent_page_handle = ctx.add_typed_action_view(WarpAgentPageView::new);
         ctx.subscribe_to_view(&warp_agent_page_handle, |me, _, event, ctx| {
             me.handle_warp_agent_page_event(event, ctx);

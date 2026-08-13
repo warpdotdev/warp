@@ -70,9 +70,6 @@ impl CLIAgentsPageView {
             input.set_placeholder_text("command (supports regex)", ctx);
             input
         });
-        // The coding agent footer command editor is always enabled,
-        // independent of the global AI toggle, because it controls
-        // third-party coding agents rather than Warp's own AI.
         update_editor_interaction_state(
             cli_agent_footer_command_editor.as_ref(ctx).editor().clone(),
             true,
@@ -431,9 +428,6 @@ impl SettingsWidget for CLIAgentWidget {
     ) -> Box<dyn Element> {
         let ai_settings = AISettings::as_ref(app);
 
-        // The Coding Agents section is always enabled, independent of the
-        // global AI toggle, because these settings control third-party coding
-        // agents (Claude Code, Codex, Gemini CLI) rather than Warp's own AI.
         let cli_agent_footer_toggle = render_ai_setting_toggle::<ShouldRenderCLIAgentToolbar>(
             "Show coding agent toolbar",
             CLIAgentsPageAction::ToggleCLIAgentToolbar,

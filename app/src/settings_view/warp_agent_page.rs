@@ -586,7 +586,6 @@ pub struct WarpAgentPageView {
     #[cfg(feature = "local_fs")]
     add_router_button: ViewHandle<ActionButton>,
 
-    // Custom inference (custom endpoints)
     custom_endpoint_modal_state: CustomEndpointModalViewState,
     remove_custom_endpoint_confirmation_dialog: ViewHandle<RemoveCustomEndpointConfirmationDialog>,
     pending_remove_custom_endpoint_index: Option<usize>,
@@ -892,7 +891,6 @@ impl WarpAgentPageView {
             ctx.notify();
         });
 
-        // Custom model router views
         #[cfg(feature = "local_fs")]
         let router_views = Self::create_router_views(ctx);
         #[cfg(feature = "local_fs")]
@@ -912,7 +910,6 @@ impl WarpAgentPageView {
             });
         }
 
-        // Custom inference
         let custom_inference_controls_enabled = is_any_ai_enabled
             && UserWorkspaces::as_ref(ctx).is_custom_inference_enabled(ctx)
             && UserWorkspaces::as_ref(ctx).are_member_byo_endpoints_allowed();
@@ -1883,7 +1880,6 @@ impl WarpAgentPageView {
 
         let mut widgets: Vec<Box<dyn SettingsWidget<View = WarpAgentPageView>>> = Vec::new();
 
-        // Global toggle + Active AI + Input + Other
         widgets.push(Box::new(GlobalAIWidget::default()));
         if ai_settings
             .intelligent_autosuggestions_enabled_internal

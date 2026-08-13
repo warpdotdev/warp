@@ -233,8 +233,8 @@ pub mod styles {
     use warp_core::ui::theme::Fill;
     use warpui::{AppContext, SingletonEntity};
 
-    // Apply a negative margin to the description text so it appears closer to the main
-    // settings option text.
+    /// Negative margin applied to description text so it appears closer to the
+    /// main settings option text.
     pub const DESCRIPTION_NEGATIVE_MARGIN_OFFSET: f32 = -12.;
 
     /// The space between a description and the next toggle.

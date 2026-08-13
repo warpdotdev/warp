@@ -110,15 +110,12 @@ pub struct AgentProfilesPageView {
     write_to_pty_autonomy_dropdown_menu: ViewHandle<Dropdown<AgentProfilesPageAction>>,
     mcp_permissions_dropdown_menu: ViewHandle<Dropdown<AgentProfilesPageAction>>,
 
-    // Allowlisting directories (default profile)
     directory_allowlist_mouse_state_handles: Vec<MouseStateHandle>,
     directory_allowlist_editor: ViewHandle<SubmittableTextInput>,
 
-    // Allowlisting commands (default profile)
     command_allowlist_mouse_state_handles: Vec<MouseStateHandle>,
     command_allowlist_editor: ViewHandle<SubmittableTextInput>,
 
-    // Denylisting commands (default profile)
     command_denylist_mouse_state_handles: Vec<MouseStateHandle>,
     command_denylist_tooltip_mouse_state_handles: Vec<MouseStateHandle>,
     command_denylist_editor: ViewHandle<SubmittableTextInput>,
@@ -137,7 +134,6 @@ pub struct AgentProfilesPageView {
     last_synced_context_window_editor_value: Option<u32>,
     dragged_context_window_value: Option<u32>,
 
-    // Profile views
     profile_views: Vec<ViewHandle<ExecutionProfileView>>,
     add_profile_button: ViewHandle<ActionButton>,
 }
@@ -2173,7 +2169,7 @@ impl SettingsWidget for AgentsWidget {
                     .finish(),
             );
         } else {
-            // Legacy layout: show Agents header + Models + Permissions
+            // Pre-revamp layout, kept until FeatureFlag::ProfilesDesignRevamp ships.
             let mut agents_header = Flex::column();
             agents_header.add_child(
                 build_sub_header(
@@ -3055,7 +3051,6 @@ impl AgentsWidget {
         column.finish()
     }
 
-    // Helper function to render the allow and denylists for mcp servers
     #[allow(clippy::too_many_arguments)]
     fn render_mcp_list(
         &self,

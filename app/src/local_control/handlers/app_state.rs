@@ -693,7 +693,7 @@ fn settings_section(page: String) -> Result<SettingsSection, ControlError> {
         )
     })?;
     // Warp Drive settings are reached through `surface.warp-drive.open`
-    // instead; this guard predates the page split and is intentional.
+    // instead, so this guard is intentional rather than an oversight.
     if section == SettingsSection::WarpDrive {
         return Err(ControlError::new(
             ErrorCode::UnsupportedAction,
