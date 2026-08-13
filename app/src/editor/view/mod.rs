@@ -1836,6 +1836,10 @@ pub struct EditorView {
     select_all_on_focus: bool,
     /// Indicates whether or not we want to clear selections in the editor on blur.
     clear_selections_on_blur: bool,
+    /// When true, skips select-all on the very next focus, even if `select_all_on_focus` is set.
+    /// Consumed (reset to `false`) as soon as that focus occurs. Used to reactivate an editor
+    /// (e.g. via a click) without clobbering the user's existing content/caret position.
+    suppress_next_focus_select_all: bool,
 
     /// A map from position ID to buffer point.
     /// Each entry in this map corresponds to a buffer position that will be cached
@@ -3225,6 +3229,7 @@ impl EditorView {
             render_decorator_elements: options.render_decorator_elements,
             select_all_on_focus: options.select_all_on_focus,
             clear_selections_on_blur: options.clear_selections_on_blur,
+            suppress_next_focus_select_all: false,
             get_cursor_colors_fn: options.cursor_colors_fn,
             cached_buffer_points: Default::default(),
             baseline_position_computation_method: options.baseline_position_computation_method,
@@ -3746,6 +3751,13 @@ impl EditorView {
 
     pub fn interaction_state<C: ModelAsRef>(&self, ctx: &C) -> InteractionState {
         self.editor_model.as_ref(ctx).interaction_state()
+    }
+
+    /// Skips select-all on the very next focus of this editor, even if it was configured with
+    /// `select_all_on_focus`. Useful for reactivating an editor (e.g. via a click) while
+    /// preserving its existing content and caret position instead of selecting everything.
+    pub fn suppress_next_focus_select_all(&mut self) {
+        self.suppress_next_focus_select_all = true;
     }
 
     pub fn set_interaction_state(
@@ -8857,7 +8869,9 @@ impl View for EditorView {
         if focus_ctx.is_self_focused() {
             self.focused = true;
             self.blink_cursors(self.blink_epoch, ctx);
-            if self.select_all_on_focus {
+            let suppress_select_all = self.suppress_next_focus_select_all;
+            self.suppress_next_focus_select_all = false;
+            if self.select_all_on_focus && !suppress_select_all {
                 self.select_all(ctx);
             }
             ctx.report_active_cursor_position_update();
