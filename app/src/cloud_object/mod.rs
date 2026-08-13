@@ -282,9 +282,13 @@ pub trait CloudObject: Debug {
                 if ancestors.contains(&hashed_parent_id) {
                     return true;
                 }
-                ancestors.insert(hashed_parent_id.clone());
 
-                match cloud_model.get_by_uid(&hashed_parent_id) {
+                let parent = cloud_model.get_by_uid(&hashed_parent_id);
+
+                // Insert before checking parent to avoid infinite recursion in case of cycles.
+                ancestors.insert(hashed_parent_id);
+
+                match parent {
                     Some(parent) => parent.is_trashed_internal(cloud_model, ancestors),
                     None => {
                         // If the object has a parent, but the parent is not in CloudModel, assume

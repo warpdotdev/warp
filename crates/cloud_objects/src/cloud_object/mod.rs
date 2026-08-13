@@ -268,7 +268,7 @@ impl From<ObjectType> for warp_graphql::object::ObjectType {
 /// The revision timestamp at which an object was edited. This is used by the server
 /// to determine if an edit to an object was at the latest revision. Edits at older
 /// revisions are rejected by the server.
-#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Debug, Deserialize, Serialize, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Revision(ServerTimestamp);
 
 impl Revision {
