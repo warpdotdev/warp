@@ -158,7 +158,8 @@ async fn dump_jemalloc_heap_profile_inner() -> anyhow::Result<Vec<u8>> {
 /// broken mapping collection fails loudly instead of producing another dead Sentry attachment.
 ///
 /// This is the same dump that [`handle_get_heap`] serves over HTTP, but invoked directly so callers
-/// don't need to reach the local HTTP server.
+/// don't need to reach the local HTTP server.  Unlike that endpoint, this path validates the
+/// mapping table before returning it -- see [`dump_pprof_for_current_platform`].
 #[cfg(all(
     feature = "jemalloc_pprof",
     any(target_os = "linux", target_os = "macos")
@@ -172,31 +173,43 @@ async fn dump_jemalloc_pprof_bytes() -> anyhow::Result<Vec<u8>> {
         anyhow::bail!("heap profiling not activated");
     }
 
-    dump_pprof_for_current_platform(&mut prof_ctl)
+    // This profile is about to be attached to a Sentry event, so validate it first.
+    dump_pprof_for_current_platform(&mut prof_ctl, true)
 }
 
 /// Builds a raw (unsymbolized), gzipped pprof from the current jemalloc heap dump, using this
 /// platform's mapping table when one is available.
 ///
-/// On macOS this validates the mapping table first (see [`ensure_mappings_are_symbolicatable`]) and
-/// supplies it via [`dump_macos_pprof`], since [`jemalloc_pprof::JemallocProfCtl::dump_pprof`]
-/// builds its mapping table from `mappings::MAPPINGS`, which is hard-coded to `None` on every
-/// non-Linux target because it walks `dl_iterate_phdr`/ELF program headers.  A pprof with no
-/// mappings carries no image paths, no build-ids, and raw run-time addresses, so nothing can
-/// symbolize it and the attachment is useless for triage.  Everywhere else, `dump_pprof` already
-/// does the right thing (Linux) or is the best we can do (other platforms), unchanged.
+/// On macOS this supplies the mapping table via [`dump_macos_pprof`], since
+/// [`jemalloc_pprof::JemallocProfCtl::dump_pprof`] builds its mapping table from
+/// `mappings::MAPPINGS`, which is hard-coded to `None` on every non-Linux target because it walks
+/// `dl_iterate_phdr`/ELF program headers.  A pprof with no mappings carries no image paths, no
+/// build-ids, and raw run-time addresses, so nothing can symbolize it and the attachment is useless
+/// for triage.  Everywhere else, `dump_pprof` already does the right thing (Linux) or is the best we
+/// can do (other platforms), unchanged.
+///
+/// `validate_for_sentry_attachment` gates [`ensure_mappings_are_symbolicatable`] (macOS only; a
+/// no-op elsewhere). Pass `true` only for a profile that is about to be attached to a Sentry event
+/// -- [`dump_jemalloc_pprof_bytes`] does. [`handle_get_heap`] passes `false`: a developer hitting
+/// that endpoint because mapping collection looks broken is better served by the raw, possibly
+/// mapping-less profile than by an opaque HTTP 500 from the very guard meant to protect Sentry from
+/// that same broken profile.
 #[cfg(all(feature = "jemalloc_pprof", target_os = "macos"))]
 fn dump_pprof_for_current_platform(
     prof_ctl: &mut jemalloc_pprof::JemallocProfCtl,
+    validate_for_sentry_attachment: bool,
 ) -> anyhow::Result<Vec<u8>> {
     let mappings = macos_mappings::collect();
-    ensure_mappings_are_symbolicatable(&mappings)?;
+    if validate_for_sentry_attachment {
+        ensure_mappings_are_symbolicatable(&mappings)?;
+    }
     dump_macos_pprof(prof_ctl, &mappings)
 }
 
 #[cfg(all(feature = "jemalloc_pprof", not(target_os = "macos")))]
 fn dump_pprof_for_current_platform(
     prof_ctl: &mut jemalloc_pprof::JemallocProfCtl,
+    _validate_for_sentry_attachment: bool,
 ) -> anyhow::Result<Vec<u8>> {
     prof_ctl.dump_pprof()
 }
@@ -297,7 +310,7 @@ fn mappings_are_symbolicatable(
 mod macos_mappings {
     #[cfg(any(target_os = "macos", test))]
     use pprof_util::BuildId;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", test))]
     use pprof_util::Mapping;
 
     /// `MH_MAGIC_64` from `<mach-o/loader.h>`.  Only used to interpret a live Mach-O header, so
@@ -336,15 +349,103 @@ mod macos_mappings {
     #[cfg(any(target_os = "macos", test))]
     const UUID_COMMAND_LEN: usize = LOAD_COMMAND_LEN + 16;
 
-    // dyld's image introspection API, from `<mach-o/dyld.h>`.  Declared here rather than taken from
-    // `libc`, whose bindings for these are deprecated in favour of a `mach2` dependency we would
-    // not otherwise need.
+    // dyld's image add/remove notification API, from `<mach-o/dyld.h>`.  We use these instead of
+    // the simpler `_dyld_image_count`/`_dyld_get_image_header`/`_dyld_get_image_name`-by-index API
+    // (what this module used to do) because Apple documents that by-index API as unsafe to use
+    // concurrently with image loading/unloading: another thread's `dlopen`/`dlclose` between two
+    // index-based calls can hand back a mismatched header/name/slide tuple, or a header pointer for
+    // an image that has already been unmapped -- a crash, in a process already at 10-20GB, at
+    // exactly the moment we're trying to diagnose it.
+    //
+    // Registering these callbacks instead gives us a coherent, incrementally-maintained snapshot in
+    // `LOADED_IMAGES`: `_dyld_register_func_for_add_image` synchronously invokes `on_image_added`
+    // once per already-loaded image before returning -- a full, race-free initial snapshot -- then
+    // keeps invoking it for every image loaded afterward. `_dyld_register_func_for_remove_image` is
+    // documented to run `on_image_removed` to completion *before* dyld unmaps the image being
+    // unloaded, so as long as removal and every read both go through `LOADED_IMAGES`'s lock, a
+    // concurrent unload can only ever block behind that lock, never race it: `on_image_removed`
+    // cannot finish (and dyld cannot proceed to unmap) while `collect()` still holds the lock and is
+    // reading a header, and `collect()` cannot observe a header after `on_image_removed` has removed
+    // it. This is the standard, Apple-recommended replacement for the by-index API for exactly this
+    // reason (the by-index accessors' own thread-safety caveats point at it).
+    //
+    // Residual risk: neither `_dyld_register_func_for_*` callback can be unregistered, so we
+    // register them (via `Once`) at most once per process rather than once per `collect()` call.
+    // The registration+lock design also means a `collect()` call briefly blocks any concurrent
+    // `dlclose` (bounded by how long we hold the lock, which is just a linear walk of already-loaded
+    // images -- no I/O), and would deadlock if `collect()` were ever invoked reentrantly from within
+    // a dyld image-add/remove callback on the same thread; neither this module nor its current
+    // callers do that.
     #[cfg(target_os = "macos")]
     unsafe extern "C" {
-        fn _dyld_image_count() -> u32;
-        fn _dyld_get_image_header(image_index: u32) -> *const u8;
-        fn _dyld_get_image_name(image_index: u32) -> *const std::ffi::c_char;
-        fn _dyld_get_image_vmaddr_slide(image_index: u32) -> isize;
+        fn _dyld_register_func_for_add_image(callback: DyldImageCallback);
+        fn _dyld_register_func_for_remove_image(callback: DyldImageCallback);
+    }
+
+    #[cfg(target_os = "macos")]
+    type DyldImageCallback = extern "C" fn(*const u8, isize);
+
+    /// A loaded Mach-O image, as reported by dyld's add-image callback.
+    #[cfg(target_os = "macos")]
+    struct LoadedImage {
+        header: *const u8,
+        slide: isize,
+        pathname: std::path::PathBuf,
+    }
+
+    // SAFETY: `header` is only ever dereferenced by `collect()`/`collect_image`, and only while
+    // holding `LOADED_IMAGES`'s lock; `on_image_removed` removes an image's entry under that same
+    // lock, and dyld guarantees it does so before unmapping the image (see the module-level safety
+    // comment above), so a `LoadedImage` can be safely handed to whichever thread calls `collect()`.
+    #[cfg(target_os = "macos")]
+    unsafe impl Send for LoadedImage {}
+
+    #[cfg(target_os = "macos")]
+    static LOADED_IMAGES: parking_lot::Mutex<Vec<LoadedImage>> =
+        parking_lot::Mutex::new(Vec::new());
+    #[cfg(target_os = "macos")]
+    static REGISTER_DYLD_CALLBACKS: std::sync::Once = std::sync::Once::new();
+
+    #[cfg(target_os = "macos")]
+    extern "C" fn on_image_added(header: *const u8, slide: isize) {
+        let Some(pathname) = image_pathname(header) else {
+            return;
+        };
+        LOADED_IMAGES.lock().push(LoadedImage {
+            header,
+            slide,
+            pathname,
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    extern "C" fn on_image_removed(header: *const u8, _slide: isize) {
+        LOADED_IMAGES.lock().retain(|image| image.header != header);
+    }
+
+    /// Resolves the on-disk path of the image whose Mach-O header starts at `header`, via `dladdr`.
+    ///
+    /// Unlike the by-index dyld accessors this module used to use, `dladdr` only requires that
+    /// `header` be a currently-valid address inside a mapped image -- which it is here, since it is
+    /// the very start of the image's mapping and we are called from dyld's own add-image callback
+    /// for that image.
+    #[cfg(target_os = "macos")]
+    fn image_pathname(header: *const u8) -> Option<std::path::PathBuf> {
+        use std::ffi::{CStr, OsStr};
+        use std::os::unix::ffi::OsStrExt as _;
+
+        // SAFETY: `Dl_info` is a plain-old-data struct with no invalid bit patterns; `dladdr` fills
+        // it in (or returns 0 without touching it) before we read any field.
+        let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+        // SAFETY: `dladdr` requires only that `header` be a valid address within this process; the
+        // caller guarantees that of the header dyld just reported as newly (or already) loaded.
+        if unsafe { libc::dladdr(header.cast(), &mut info) } == 0 || info.dli_fname.is_null() {
+            return None;
+        }
+        // SAFETY: `dladdr` documents `dli_fname` as a null-terminated string owned by dyld, valid
+        // for the life of the process.
+        let name = unsafe { CStr::from_ptr(info.dli_fname) };
+        Some(std::path::PathBuf::from(OsStr::from_bytes(name.to_bytes())))
     }
 
     /// An executable `LC_SEGMENT_64` found while walking an image's load commands.
@@ -364,39 +465,25 @@ mod macos_mappings {
     /// the linear mapping lookup `pprof_util` performs per address.
     #[cfg(target_os = "macos")]
     pub fn collect() -> Vec<Mapping> {
-        use std::ffi::{CStr, OsStr};
-        use std::os::unix::ffi::OsStrExt as _;
-        use std::path::PathBuf;
-
-        let mut mappings = Vec::new();
-
-        // SAFETY: `_dyld_image_count` only reads dyld's image list.  That list can grow if another
-        // thread loads an image while we iterate, in which case the accessors below simply return
-        // null for an index we no longer consider valid, and we skip it.
-        let count = unsafe { _dyld_image_count() };
-
-        for index in 0..count {
-            // SAFETY: `index` is less than the count reported by dyld, and both accessors return
-            // null rather than misbehaving for an out-of-range index.
-            let (header, name) =
-                unsafe { (_dyld_get_image_header(index), _dyld_get_image_name(index)) };
-            if header.is_null() || name.is_null() {
-                continue;
+        REGISTER_DYLD_CALLBACKS.call_once(|| {
+            // SAFETY: registering dyld image callbacks carries no preconditions; dyld may invoke
+            // them on any thread, at any time, including synchronously and repeatedly from within
+            // this very call (once for each image already loaded), which is how `LOADED_IMAGES`
+            // gets its initial, race-free contents.
+            unsafe {
+                _dyld_register_func_for_add_image(on_image_added);
+                _dyld_register_func_for_remove_image(on_image_removed);
             }
+        });
 
-            // SAFETY: dyld documents the image name as a null-terminated string that stays valid
-            // for as long as the image is loaded.
-            let name = unsafe { CStr::from_ptr(name) };
-            let pathname = PathBuf::from(OsStr::from_bytes(name.to_bytes()));
-
-            // SAFETY: `index` is in range, as above.
-            let slide = unsafe { _dyld_get_image_vmaddr_slide(index) };
-
-            // SAFETY: `header` points at the start of the Mach-O header of a loaded image, which
-            // stays mapped for as long as that image is loaded.
-            unsafe { collect_image(header, slide, &pathname, &mut mappings) };
+        let images = LOADED_IMAGES.lock();
+        let mut mappings = Vec::new();
+        for image in images.iter() {
+            // SAFETY: we hold `LOADED_IMAGES`'s lock for the duration of this loop, and
+            // `on_image_removed` only ever removes an entry (under that same lock) before dyld
+            // unmaps it, so `image.header` is guaranteed to still point at a mapped Mach-O header.
+            unsafe { collect_image(image.header, image.slide, &image.pathname, &mut mappings) };
         }
-
         mappings
     }
 
@@ -446,28 +533,45 @@ mod macos_mappings {
         // `parse_load_commands`.
         let (build_id, segments) = parse_load_commands(commands, ncmds);
 
-        for segment in segments {
-            let (Ok(vmaddr), Ok(vmsize)) = (
-                usize::try_from(segment.vmaddr),
-                usize::try_from(segment.vmsize),
-            ) else {
-                continue;
-            };
+        mappings.extend(
+            segments
+                .into_iter()
+                .filter_map(|segment| segment_mapping(&segment, slide, pathname, build_id.clone())),
+        );
+    }
 
-            // pprof recovers the address a symbolizer needs as `addr - memory_start +
-            // memory_offset`, so pairing the run-time start with the static `vmaddr` turns each
-            // sampled address back into the image-relative address recorded in the dSYM.
-            let memory_start = vmaddr.wrapping_add_signed(slide);
+    /// Builds the pprof mapping for a single executable segment of an image loaded at `slide`.
+    ///
+    /// `memory_start` is the segment's actual runtime address (`vmaddr + slide`); `memory_offset` is
+    /// left as the segment's *static* `vmaddr`. That pairing is exactly what lets `pprof_util`
+    /// recover the original, unslid Mach-O address for a sampled runtime address, via
+    /// `addr - memory_start + memory_offset` (see `pprof_util::StackProfile::to_pprof_proto`) --
+    /// which simplifies to `addr - slide`, the address a symbolizer can look up directly in the
+    /// unslid binary/dSYM. Getting this pairing right is the entire point of this module: a wrong
+    /// slide sign, or `memory_offset` set to anything other than the segment's own `vmaddr`, still
+    /// produces *a* mapping and *a* profile, just one that recovers the wrong address and silently
+    /// reproduces the original bug. See `profiling_tests.rs` for a test that serializes a mapping
+    /// built by this function through the real `pprof_util` pipeline and asserts the emitted
+    /// `Location.address` is correct.
+    #[cfg(any(target_os = "macos", test))]
+    pub(super) fn segment_mapping(
+        segment: &ExecutableSegment,
+        slide: isize,
+        pathname: &std::path::Path,
+        build_id: Option<BuildId>,
+    ) -> Option<Mapping> {
+        let vmaddr = usize::try_from(segment.vmaddr).ok()?;
+        let vmsize = usize::try_from(segment.vmsize).ok()?;
+        let memory_start = vmaddr.wrapping_add_signed(slide);
 
-            mappings.push(Mapping {
-                memory_start,
-                memory_end: memory_start.saturating_add(vmsize),
-                memory_offset: vmaddr,
-                file_offset: segment.fileoff,
-                pathname: pathname.to_path_buf(),
-                build_id: build_id.clone(),
-            });
-        }
+        Some(Mapping {
+            memory_start,
+            memory_end: memory_start.saturating_add(vmsize),
+            memory_offset: vmaddr,
+            file_offset: segment.fileoff,
+            pathname: pathname.to_path_buf(),
+            build_id,
+        })
     }
 
     /// Parses the Mach-O load commands following a header, given `ncmds` and the raw bytes of
@@ -625,8 +729,11 @@ pub async fn handle_get_heap()
 
     // Serve the same mapping-aware profile that the direct-dump path produces (see
     // `dump_pprof_for_current_platform`), rather than falling back to `dump_pprof`'s mapping-less
-    // output on macOS.
-    let pprof = dump_pprof_for_current_platform(&mut prof_ctl).map_err(|err| {
+    // output on macOS. `false` here means this endpoint is never subject to
+    // `ensure_mappings_are_symbolicatable`: a developer hitting this endpoint on purpose should see
+    // the raw profile (or the underlying dump error), not a 500 from a guard meant to protect
+    // Sentry attachments.
+    let pprof = dump_pprof_for_current_platform(&mut prof_ctl, false).map_err(|err| {
         (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             err.to_string(),

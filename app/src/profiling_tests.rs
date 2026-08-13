@@ -129,6 +129,127 @@ fn parse_load_commands_never_reads_past_the_buffer_it_is_given() {
     assert!(segments.is_empty());
 }
 
+// --- Mapping arithmetic, end to end through real pprof serialization ---------------------------
+
+/// Minimal mirrors of the `perftools.profiles` messages this test needs to inspect. `pprof_util`'s
+/// own generated proto types are private to that crate, but protobuf decoding against a subset of
+/// a message's fields is well-defined: unknown fields (`sample_type`, `sample`, `period_type`,
+/// etc.) are simply skipped, so these tags-only mirrors decode correctly against the real wire
+/// bytes `pprof_util::StackProfile::to_pprof` produces.
+#[derive(Clone, PartialEq, prost::Message)]
+struct TestProfile {
+    #[prost(message, repeated, tag = "3")]
+    mapping: Vec<TestMapping>,
+    #[prost(message, repeated, tag = "4")]
+    location: Vec<TestLocation>,
+    #[prost(string, repeated, tag = "6")]
+    string_table: Vec<String>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct TestMapping {
+    #[prost(uint64, tag = "1")]
+    id: u64,
+    #[prost(int64, tag = "5")]
+    filename: i64,
+    #[prost(int64, tag = "6")]
+    build_id: i64,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct TestLocation {
+    #[prost(uint64, tag = "1")]
+    id: u64,
+    #[prost(uint64, tag = "2")]
+    mapping_id: u64,
+    #[prost(uint64, tag = "3")]
+    address: u64,
+}
+
+/// This is the test that would have caught the original bug: it doesn't just check
+/// `segment_mapping`'s arithmetic in isolation, it serializes a mapping built by that function
+/// through the *real* `pprof_util::StackProfile::to_pprof` pipeline (the same one
+/// `dump_macos_pprof` uses) and decodes the *real* resulting protobuf bytes, then asserts the
+/// emitted `Location.address` is the static Mach-O address a symbolizer/dSYM actually expects.
+/// A wrong slide sign, or a `memory_offset` that isn't literally the segment's own `vmaddr`, would
+/// still produce a mapping and a profile -- just one with the wrong address, i.e. the same silent
+/// `<unknown>` frames this module exists to fix. That failure mode is invisible to tests that only
+/// look at `Mapping`'s fields in isolation, which is why this test goes all the way through
+/// serialization instead.
+#[test]
+fn segment_mapping_produces_the_correct_address_through_real_pprof_serialization() {
+    use std::io::Read as _;
+
+    // An image loaded at a large, nonzero ASLR slide -- the exact scenario that silently produced
+    // unresolvable addresses before this fix.
+    let segment = macos_mappings::ExecutableSegment {
+        vmaddr: 0x1_0000,
+        vmsize: 0x2000,
+        fileoff: 0,
+    };
+    let slide: isize = 0x5_5555_0000;
+    let build_id = BuildId(vec![0xAB; 16]);
+    let pathname = Path::new("/Applications/Warp.app/Contents/MacOS/stable");
+
+    let mapping =
+        macos_mappings::segment_mapping(&segment, slide, pathname, Some(build_id.clone()))
+            .expect("valid vmaddr/vmsize should always produce a mapping");
+
+    // A runtime sample address 0x20 bytes into the segment.
+    let runtime_addr = mapping.memory_start + 0x20;
+    assert!(
+        runtime_addr < mapping.memory_end,
+        "test address must fall inside the mapping"
+    );
+
+    let mut profile = pprof_util::StackProfile::default();
+    profile.push_mapping(mapping);
+    profile.push_stack(
+        pprof_util::WeightedStack {
+            addrs: vec![runtime_addr],
+            weight: 1.0,
+        },
+        None,
+    );
+
+    let gzipped = profile.to_pprof(("inuse_space", "bytes"), ("space", "bytes"), None);
+    let mut decompressed = Vec::new();
+    flate2::read::GzDecoder::new(gzipped.as_slice())
+        .read_to_end(&mut decompressed)
+        .expect("to_pprof always produces a valid gzip stream");
+
+    let decoded = <TestProfile as prost::Message>::decode(decompressed.as_slice())
+        .expect("to_pprof always produces a valid pprof protobuf");
+
+    assert_eq!(decoded.mapping.len(), 1, "expected exactly one mapping");
+    let wire_mapping = &decoded.mapping[0];
+    assert_eq!(
+        decoded.string_table[usize::try_from(wire_mapping.filename).unwrap()],
+        pathname.to_string_lossy()
+    );
+    assert_eq!(
+        decoded.string_table[usize::try_from(wire_mapping.build_id).unwrap()],
+        build_id.to_string()
+    );
+
+    assert_eq!(decoded.location.len(), 1, "expected exactly one location");
+    let location = &decoded.location[0];
+    assert_eq!(
+        location.mapping_id, wire_mapping.id,
+        "the location must reference the mapping we built"
+    );
+
+    // `to_pprof_proto` subtracts 1 from every sample address before rebasing it (stack addresses
+    // are return addresses, one past the call instruction), so the expected file-relative address
+    // is the static Mach-O address of our sample, minus 1.
+    let expected_static_addr = 0x1_0000_u64 + 0x20 - 1;
+    assert_eq!(
+        location.address, expected_static_addr,
+        "a wrong slide or memory_offset would recover the wrong address here, silently \
+         reproducing the original unsymbolicatable-profile bug"
+    );
+}
+
 // --- BuildId hex formatting ---------------------------------------------------------------------
 
 /// `pprof_util::BuildId`'s `Display` renders continuous lowercase hex with no separators. That is
