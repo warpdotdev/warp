@@ -183,7 +183,7 @@ impl PreciseDelta {
 /// Delta after an edit operation recording the old range of rows that got replaced
 /// and the content of new rows changed after the edit. This is necessary for the rendering
 /// model to know what block objects need a re-layout.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EditDelta {
     /// The exact replacement charoffset range where content was changed.
     pub precise_deltas: Vec<PreciseDelta>,

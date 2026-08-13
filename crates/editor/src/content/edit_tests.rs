@@ -1,6 +1,7 @@
 use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
+use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -17,7 +18,7 @@ use super::{
 };
 use crate::content::buffer::{StyledBufferRun, StyledTextBlock};
 use crate::content::edit::{
-    ParsedUrl, highlight_urls, layout_mermaid_block_for_test, resolve_asset_source,
+    EditDelta, ParsedUrl, highlight_urls, layout_mermaid_block_for_test, resolve_asset_source,
     resolve_asset_source_relative_to_directory,
 };
 use crate::content::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
@@ -220,6 +221,42 @@ fn test_text_around_link_not_auto_highlighted() {
     ];
 
     assert!(highlight_urls(runs).is_empty());
+}
+
+#[test]
+fn test_edit_delta_new_lines_arc_try_unwrap_succeeds_with_single_owner() {
+    // Regression test for APP-4844: `EditDelta::new_lines` is wrapped in an `Arc` so that
+    // cloning a delta (e.g. to stash it in `DelayRendering::edits`) is O(1) instead of
+    // O(file size). On the render pipeline's hot path, exactly one such clone survives past
+    // the original event, so `Arc::try_unwrap` in `layout_delta` should succeed without
+    // falling back to a full `Vec` clone.
+    let delta = EditDelta {
+        new_lines: Arc::new(vec![]),
+        ..EditDelta::default()
+    };
+    let cloned = delta.clone();
+    // Simulates the original event's owned delta being dropped once all subscribers
+    // (including the single clone made by `CodeEditorModel::handle_content_model_event`)
+    // have run.
+    drop(delta);
+
+    assert_eq!(Arc::strong_count(&cloned.new_lines), 1);
+    assert!(Arc::try_unwrap(cloned.new_lines).is_ok());
+}
+
+#[test]
+fn test_edit_delta_new_lines_arc_try_unwrap_falls_back_with_extra_owner() {
+    // If a second clone of the delta is still alive when layout runs, `try_unwrap` should
+    // fail so the fallback `Vec` clone is used instead of panicking or losing data.
+    let delta = EditDelta {
+        new_lines: Arc::new(vec![]),
+        ..EditDelta::default()
+    };
+    let cloned = delta.clone();
+
+    assert_eq!(Arc::strong_count(&cloned.new_lines), 2);
+    assert!(Arc::try_unwrap(cloned.new_lines).is_err());
+    drop(delta);
 }
 
 #[test]
