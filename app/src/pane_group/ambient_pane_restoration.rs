@@ -239,15 +239,13 @@ impl PaneGroup {
                     ambient_agent_task_id,
                     ctx,
                 );
-            } else {
-                if let Some(pane_id) =
-                    group.find_pane_id_for_terminal_view(target_view.id(), ctx)
-                {
-                    report_error!(
-                        "Failed to restore ambient agent pane, replacing with new cloud conversation"
-                    );
-                    group.replace_pane_with_new_cloud_conversation(pane_id, ctx);
-                }
+            } else if let Some(pane_id) =
+                group.find_pane_id_for_terminal_view(target_view.id(), ctx)
+            {
+                report_error!(
+                    "Failed to restore ambient agent pane, replacing with new cloud conversation"
+                );
+                group.replace_pane_with_new_cloud_conversation(pane_id, ctx);
             }
         });
     }

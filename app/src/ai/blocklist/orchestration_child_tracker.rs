@@ -36,11 +36,11 @@ use warpui::SingletonEntity;
 
 #[cfg(not(test))]
 use super::history_model::BlocklistAIHistoryModel;
-use crate::ai::agent::conversation::ConversationStatus;
 use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
     conversation_status_from_lifecycle_event_type,
 };
+use crate::ai::agent::conversation::ConversationStatus;
 // Compiled out of unit-test builds so the state machine can be exercised
 // without installing the full model singleton graph.
 #[cfg(not(test))]
@@ -495,7 +495,9 @@ impl OrchestrationChildTracker {
     ) -> Option<ConversationStatus> {
         let task_id = self.children_by_run_id.get(run_id)?;
         let child = self.children.get(task_id)?;
-        child.last_lifecycle.map(conversation_status_from_lifecycle_event_type)
+        child
+            .last_lifecycle
+            .map(conversation_status_from_lifecycle_event_type)
     }
 
     /// Test-only: number of metadata-fetch dispatches issued so far.

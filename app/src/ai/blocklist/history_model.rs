@@ -669,10 +669,9 @@ impl BlocklistAIHistoryModel {
         // this is a no-op.
         if let Some(old_parent) = old_parent
             && old_parent != parent_id
+            && let Some(siblings) = self.children_by_parent.get_mut(&old_parent)
         {
-            if let Some(siblings) = self.children_by_parent.get_mut(&old_parent) {
-                siblings.retain(|id| *id != child_id);
-            }
+            siblings.retain(|id| *id != child_id);
         }
         self.index_child_conversation(child_id, parent_id);
     }
