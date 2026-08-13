@@ -153,7 +153,9 @@ async fn dump_jemalloc_heap_profile_inner() -> anyhow::Result<Vec<u8>> {
 
 /// Produces a raw (unsymbolized), gzipped pprof heap profile directly from the in-process jemalloc
 /// profiler.  The profile carries sample addresses, mappings, and each loaded image's build-id, and
-/// is symbolized offline against the matching debug-info file (by build-id).
+/// is symbolized offline against the matching debug-info file (by build-id).  On macOS the mapping
+/// table is validated before it is used -- see [`ensure_mappings_are_symbolicatable`] -- so that a
+/// broken mapping collection fails loudly instead of producing another dead Sentry attachment.
 ///
 /// This is the same dump that [`handle_get_heap`] serves over HTTP, but invoked directly so callers
 /// don't need to reach the local HTTP server.
@@ -170,24 +172,90 @@ async fn dump_jemalloc_pprof_bytes() -> anyhow::Result<Vec<u8>> {
         anyhow::bail!("heap profiling not activated");
     }
 
-    cfg_if::cfg_if! {
-        if #[cfg(target_os = "macos")] {
-            // `ProfCtl::dump_pprof` builds the pprof mapping table from `mappings::MAPPINGS`, which
-            // is hard-coded to `None` on every non-Linux target because it walks
-            // `dl_iterate_phdr`/ELF program headers.  A pprof with no mappings carries no image
-            // paths, no build-ids, and raw run-time addresses, so nothing can symbolize it and the
-            // attachment is useless for triage.  Supply the mapping table ourselves from dyld and
-            // then run the same conversion `dump_pprof` would.
-            use std::io::BufReader;
+    dump_pprof_for_current_platform(&mut prof_ctl)
+}
 
-            let dump = prof_ctl.dump()?;
-            let mappings = macos_mappings::collect();
-            let profile = pprof_util::parse_jeheap(BufReader::new(dump), Some(&mappings))?;
-            Ok(profile.to_pprof(("inuse_space", "bytes"), ("space", "bytes"), None))
-        } else {
-            prof_ctl.dump_pprof()
-        }
+/// Builds a raw (unsymbolized), gzipped pprof from the current jemalloc heap dump, using this
+/// platform's mapping table when one is available.
+///
+/// On macOS this validates the mapping table first (see [`ensure_mappings_are_symbolicatable`]) and
+/// supplies it via [`dump_macos_pprof`], since [`jemalloc_pprof::JemallocProfCtl::dump_pprof`]
+/// builds its mapping table from `mappings::MAPPINGS`, which is hard-coded to `None` on every
+/// non-Linux target because it walks `dl_iterate_phdr`/ELF program headers.  A pprof with no
+/// mappings carries no image paths, no build-ids, and raw run-time addresses, so nothing can
+/// symbolize it and the attachment is useless for triage.  Everywhere else, `dump_pprof` already
+/// does the right thing (Linux) or is the best we can do (other platforms), unchanged.
+#[cfg(all(feature = "jemalloc_pprof", target_os = "macos"))]
+fn dump_pprof_for_current_platform(
+    prof_ctl: &mut jemalloc_pprof::JemallocProfCtl,
+) -> anyhow::Result<Vec<u8>> {
+    let mappings = macos_mappings::collect();
+    ensure_mappings_are_symbolicatable(&mappings)?;
+    dump_macos_pprof(prof_ctl, &mappings)
+}
+
+#[cfg(all(feature = "jemalloc_pprof", not(target_os = "macos")))]
+fn dump_pprof_for_current_platform(
+    prof_ctl: &mut jemalloc_pprof::JemallocProfCtl,
+) -> anyhow::Result<Vec<u8>> {
+    prof_ctl.dump_pprof()
+}
+
+/// Builds a raw (unsymbolized), gzipped pprof from the current jemalloc heap dump using the given
+/// macOS mapping table, exactly as [`jemalloc_pprof::JemallocProfCtl::dump_pprof`] would if
+/// `mappings::MAPPINGS` were populated on this platform.
+///
+/// Shared by [`dump_jemalloc_pprof_bytes`] and [`handle_get_heap`] so both produce the same,
+/// actually-symbolicatable profile on macOS instead of the HTTP endpoint falling back to a
+/// mapping-less one.
+#[cfg(all(feature = "jemalloc_pprof", target_os = "macos"))]
+fn dump_macos_pprof(
+    prof_ctl: &mut jemalloc_pprof::JemallocProfCtl,
+    mappings: &[pprof_util::Mapping],
+) -> anyhow::Result<Vec<u8>> {
+    use std::io::BufReader;
+
+    let dump = prof_ctl.dump()?;
+    let profile = pprof_util::parse_jeheap(BufReader::new(dump), Some(mappings))?;
+    Ok(profile.to_pprof(("inuse_space", "bytes"), ("space", "bytes"), None))
+}
+
+/// Fails with a reported error if `mappings` is not usable for offline symbolication, instead of
+/// letting a broken mapping table silently produce another unsymbolicatable Sentry attachment --
+/// the exact recurring failure (APP-4817/APP-4818) this module exists to fix.  We treat this as
+/// `report_error!`-worthy rather than a plain log: it means our own dyld/Mach-O walk in
+/// [`macos_mappings`] regressed, which is exactly the kind of "programming against a
+/// not-fully-understood external system" case where the failure may be our bug.
+#[cfg(all(feature = "jemalloc_pprof", target_os = "macos"))]
+fn ensure_mappings_are_symbolicatable(mappings: &[pprof_util::Mapping]) -> anyhow::Result<()> {
+    let current_exe = std::env::current_exe().unwrap_or_default();
+    if mappings_are_symbolicatable(mappings, &current_exe) {
+        return Ok(());
     }
+
+    warp_errors::report_error!(
+        "macOS heap profile mapping table cannot be symbolicated offline",
+        extra: {
+            "current_exe" => %current_exe.display(),
+            "mapping_count" => %mappings.len(),
+        },
+        warp_errors::ReportErrorLogMode::OncePerRun
+    );
+    anyhow::bail!("heap profile mapping table cannot be symbolicated offline")
+}
+
+/// Returns whether `mappings` are usable for offline symbolication: non-empty, with a mapping for
+/// `current_exe` itself that carries a build-id.  Without both, Sentry (or a human with the
+/// matching dSYM) has nothing to symbolicate the profile against.
+#[cfg(all(feature = "jemalloc_pprof", any(target_os = "macos", test)))]
+fn mappings_are_symbolicatable(
+    mappings: &[pprof_util::Mapping],
+    current_exe: &std::path::Path,
+) -> bool {
+    !mappings.is_empty()
+        && mappings
+            .iter()
+            .any(|mapping| mapping.pathname == current_exe && mapping.build_id.is_some())
 }
 
 /// Collects the pprof mapping table for the current process on macOS.
@@ -197,88 +265,76 @@ async fn dump_jemalloc_pprof_bytes() -> anyhow::Result<Vec<u8>> {
 /// segment lives at run time, where it lives in the file, and the image's build-id.  Sentry uses
 /// the build-id -- the Mach-O `LC_UUID`, which is exactly the debug-id the release process uploads
 /// dSYMs under -- to symbolize the profile offline.
-#[cfg(all(feature = "jemalloc_pprof", target_os = "macos"))]
+///
+/// NOTE: `pprof_util::BuildId`'s `Display` renders continuous lowercase hex with no separators
+/// (see `BuildId::fmt`), e.g. `e621e1f8c36c495a93fc0c247a3e6e5f`.  That is NOT the canonical
+/// hyphenated Mach-O UUID format that `dwarfdump --uuid`, `lldb`, and Sentry's own `DebugId` use
+/// (`E621E1F8-C36C-495A-93FC-0C247A3E6E5F`, plus a `-0` age suffix for `DebugId` specifically).
+/// Both encode the same 16 bytes, so this is a cosmetic mismatch, not a symbolication blocker --
+/// but it does mean a human cross-referencing this profile's build-id against a dSYM's UUID must
+/// strip the dashes (and any trailing age) first.  We can't fix the formatting here: `BuildId` is
+/// an upstream `pprof_util` type we don't control the `Display` impl of.
+#[cfg(feature = "jemalloc_pprof")]
 mod macos_mappings {
-    use std::ffi::{CStr, OsStr, c_char};
-    use std::os::unix::ffi::OsStrExt as _;
-    use std::path::{Path, PathBuf};
+    #[cfg(any(target_os = "macos", test))]
+    use pprof_util::BuildId;
+    #[cfg(target_os = "macos")]
+    use pprof_util::Mapping;
 
-    use pprof_util::{BuildId, Mapping};
-
-    /// `MH_MAGIC_64` from `<mach-o/loader.h>`.
+    /// `MH_MAGIC_64` from `<mach-o/loader.h>`.  Only used to interpret a live Mach-O header, so
+    /// (unlike the load-command constants below) it has no reason to exist outside macOS.
+    #[cfg(target_os = "macos")]
     const MH_MAGIC_64: u32 = 0xfeed_facf;
     /// `LC_SEGMENT_64` from `<mach-o/loader.h>`.
+    #[cfg(any(target_os = "macos", test))]
     const LC_SEGMENT_64: u32 = 0x19;
     /// `LC_UUID` from `<mach-o/loader.h>`.
+    #[cfg(any(target_os = "macos", test))]
     const LC_UUID: u32 = 0x1b;
     /// `VM_PROT_EXECUTE` from `<mach/vm_prot.h>`.
+    #[cfg(any(target_os = "macos", test))]
     const VM_PROT_EXECUTE: i32 = 0x4;
+
+    /// Size, in bytes, of `struct mach_header_64` from `<mach-o/loader.h>` (8 `u32`/`i32` fields).
+    /// Only used to locate the load commands that follow a live Mach-O header, so macOS-only.
+    #[cfg(target_os = "macos")]
+    const MACH_HEADER_64_LEN: usize = 32;
+    /// Byte offset of the `ncmds` field within `struct mach_header_64`.  macOS-only; see
+    /// `MACH_HEADER_64_LEN`.
+    #[cfg(target_os = "macos")]
+    const NCMDS_OFFSET: usize = 16;
+    /// Byte offset of the `sizeofcmds` field within `struct mach_header_64`.  macOS-only; see
+    /// `MACH_HEADER_64_LEN`.
+    #[cfg(target_os = "macos")]
+    const SIZEOFCMDS_OFFSET: usize = 20;
+    /// Size, in bytes, of `struct load_command`: `cmd` and `cmdsize`, each a `u32`.
+    #[cfg(any(target_os = "macos", test))]
+    const LOAD_COMMAND_LEN: usize = 8;
+    /// Size, in bytes, of `struct segment_command_64`.
+    #[cfg(any(target_os = "macos", test))]
+    const SEGMENT_COMMAND_64_LEN: usize = 72;
+    /// Size, in bytes, of `struct uuid_command`: the `load_command` header plus a 16-byte UUID.
+    #[cfg(any(target_os = "macos", test))]
+    const UUID_COMMAND_LEN: usize = LOAD_COMMAND_LEN + 16;
 
     // dyld's image introspection API, from `<mach-o/dyld.h>`.  Declared here rather than taken from
     // `libc`, whose bindings for these are deprecated in favour of a `mach2` dependency we would
     // not otherwise need.
+    #[cfg(target_os = "macos")]
     unsafe extern "C" {
         fn _dyld_image_count() -> u32;
-        fn _dyld_get_image_header(image_index: u32) -> *const MachHeader64;
-        fn _dyld_get_image_name(image_index: u32) -> *const c_char;
+        fn _dyld_get_image_header(image_index: u32) -> *const u8;
+        fn _dyld_get_image_name(image_index: u32) -> *const std::ffi::c_char;
         fn _dyld_get_image_vmaddr_slide(image_index: u32) -> isize;
     }
 
-    /// `struct mach_header_64` from `<mach-o/loader.h>`.
-    ///
-    /// The unread fields are kept so the declaration mirrors the C layout.
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    #[allow(dead_code)]
-    struct MachHeader64 {
-        magic: u32,
-        cputype: i32,
-        cpusubtype: i32,
-        filetype: u32,
-        ncmds: u32,
-        sizeofcmds: u32,
-        flags: u32,
-        reserved: u32,
-    }
-
-    /// `struct load_command` from `<mach-o/loader.h>`.
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct LoadCommand {
-        cmd: u32,
-        cmdsize: u32,
-    }
-
-    /// `struct segment_command_64` from `<mach-o/loader.h>`.
-    ///
-    /// The unread fields are kept so the declaration mirrors the C layout.
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    #[allow(dead_code)]
-    struct SegmentCommand64 {
-        cmd: u32,
-        cmdsize: u32,
-        segname: [u8; 16],
-        vmaddr: u64,
-        vmsize: u64,
-        fileoff: u64,
-        filesize: u64,
-        maxprot: i32,
-        initprot: i32,
-        nsects: u32,
-        flags: u32,
-    }
-
-    /// `struct uuid_command` from `<mach-o/loader.h>`.
-    ///
-    /// The unread fields are kept so the declaration mirrors the C layout.
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    #[allow(dead_code)]
-    struct UuidCommand {
-        cmd: u32,
-        cmdsize: u32,
-        uuid: [u8; 16],
+    /// An executable `LC_SEGMENT_64` found while walking an image's load commands.
+    #[cfg(any(target_os = "macos", test))]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) struct ExecutableSegment {
+        pub(super) vmaddr: u64,
+        pub(super) vmsize: u64,
+        pub(super) fileoff: u64,
     }
 
     /// Returns a mapping for every executable segment of every image currently loaded into this
@@ -287,7 +343,12 @@ mod macos_mappings {
     /// Only executable segments are reported: stack addresses in a heap profile only ever land in
     /// those, and emitting every segment of every image would bloat the attachment and slow down
     /// the linear mapping lookup `pprof_util` performs per address.
+    #[cfg(target_os = "macos")]
     pub fn collect() -> Vec<Mapping> {
+        use std::ffi::{CStr, OsStr};
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::path::PathBuf;
+
         let mut mappings = Vec::new();
 
         // SAFETY: `_dyld_image_count` only reads dyld's image list.  That list can grow if another
@@ -312,8 +373,8 @@ mod macos_mappings {
             // SAFETY: `index` is in range, as above.
             let slide = unsafe { _dyld_get_image_vmaddr_slide(index) };
 
-            // SAFETY: `header` points at the Mach-O header of a loaded image, which stays mapped
-            // for as long as that image is loaded.
+            // SAFETY: `header` points at the start of the Mach-O header of a loaded image, which
+            // stays mapped for as long as that image is loaded.
             unsafe { collect_image(header, slide, &pathname, &mut mappings) };
         }
 
@@ -324,64 +385,47 @@ mod macos_mappings {
     ///
     /// # Safety
     ///
-    /// `header` must point at the Mach-O header of an image that is currently loaded into this
-    /// process, and `slide` must be that image's vmaddr slide.
+    /// `header` must point at the start of the Mach-O header of an image that is currently loaded
+    /// into this process, and `slide` must be that image's vmaddr slide.
+    #[cfg(target_os = "macos")]
     unsafe fn collect_image(
-        header: *const MachHeader64,
+        header: *const u8,
         slide: isize,
-        pathname: &Path,
+        pathname: &std::path::Path,
         mappings: &mut Vec<Mapping>,
     ) {
-        // SAFETY: the caller guarantees `header` points at a mapped Mach-O header.  Every read here
-        // is unaligned because dyld makes no alignment promises about the pointers it hands out.
-        let MachHeader64 { magic, ncmds, .. } = unsafe { std::ptr::read_unaligned(header) };
+        // Read only the three fixed-size header fields we need. We deliberately avoid casting
+        // `header` to a `mach_header_64` struct pointer and reading it wholesale: we don't yet know
+        // that all `MACH_HEADER_64_LEN` bytes are valid to read as one access, and we want the
+        // unsafe surface limited to reads we can individually justify.
+        //
+        // SAFETY: the caller guarantees `header` points at a mapped Mach-O header, which is always
+        // at least `MACH_HEADER_64_LEN` bytes. Every read here is unaligned because dyld makes no
+        // alignment promises about the pointers it hands out.
+        let magic = unsafe { header.cast::<u32>().read_unaligned() };
         if magic != MH_MAGIC_64 {
             // Every image in the 64-bit-only builds we ship is Mach-O 64.
             return;
         }
+        // SAFETY: as above.
+        let ncmds = unsafe { header.add(NCMDS_OFFSET).cast::<u32>().read_unaligned() };
+        // SAFETY: as above.
+        let sizeofcmds = unsafe { header.add(SIZEOFCMDS_OFFSET).cast::<u32>().read_unaligned() };
 
-        // The load commands directly follow the header.
+        // The load commands directly follow the header, and `sizeofcmds` is the exact number of
+        // bytes they occupy per <mach-o/loader.h> -- unlike `ncmds`, it actually bounds how far we
+        // can walk, so we hand the parser a slice no wider than that instead of trusting `ncmds`
+        // alone to keep us in-bounds.
         //
-        // SAFETY: a Mach-O image is a header followed by `ncmds` load commands, all of which live
-        // within the image's own mapping.
-        let mut cursor = unsafe { header.add(1) }.cast::<u8>();
+        // SAFETY: a Mach-O image is a header followed by `sizeofcmds` bytes of load commands, all
+        // of which live within the image's own mapping.
+        let commands = unsafe {
+            std::slice::from_raw_parts(header.add(MACH_HEADER_64_LEN), sizeofcmds as usize)
+        };
 
-        let mut build_id = None;
-        let mut segments = Vec::new();
-
-        for _ in 0..ncmds {
-            // SAFETY: `cursor` walks forward by each command's self-reported size, so it stays
-            // inside the load command region.
-            let command: LoadCommand = unsafe { std::ptr::read_unaligned(cursor.cast()) };
-
-            let Ok(size) = usize::try_from(command.cmdsize) else {
-                break;
-            };
-            if size < std::mem::size_of::<LoadCommand>() {
-                // A bogus size would leave us walking in place forever.
-                break;
-            }
-
-            match command.cmd {
-                LC_SEGMENT_64 => {
-                    // SAFETY: `cmd` identifies this command as a `segment_command_64`.
-                    let segment: SegmentCommand64 =
-                        unsafe { std::ptr::read_unaligned(cursor.cast()) };
-                    if segment.initprot & VM_PROT_EXECUTE != 0 && segment.vmsize > 0 {
-                        segments.push(segment);
-                    }
-                }
-                LC_UUID => {
-                    // SAFETY: `cmd` identifies this command as a `uuid_command`.
-                    let uuid: UuidCommand = unsafe { std::ptr::read_unaligned(cursor.cast()) };
-                    build_id = Some(BuildId(uuid.uuid.to_vec()));
-                }
-                _ => {}
-            }
-
-            // SAFETY: still inside the load command region, as above.
-            cursor = unsafe { cursor.add(size) };
-        }
+        // Everything from here on is safe, bounds-checked slice parsing -- see
+        // `parse_load_commands`.
+        let (build_id, segments) = parse_load_commands(commands, ncmds);
 
         for segment in segments {
             let (Ok(vmaddr), Ok(vmsize)) = (
@@ -405,6 +449,72 @@ mod macos_mappings {
                 build_id: build_id.clone(),
             });
         }
+    }
+
+    /// Parses the Mach-O load commands following a header, given `ncmds` and the raw bytes of
+    /// exactly the header's `sizeofcmds`-byte load-command region.
+    ///
+    /// Returns the build-id carried by `LC_UUID`, if present, and every executable `LC_SEGMENT_64`.
+    /// This is pure, bounds-checked slice parsing with no unsafe code: every read is checked
+    /// against `buf`'s actual length, so a corrupt or truncated header can only cut the walk short,
+    /// never read out of bounds. This mirrors the level of rigor (if not the exact mechanism) of
+    /// the `mappings` crate's Linux `dl_iterate_phdr` callback.
+    #[cfg(any(target_os = "macos", test))]
+    pub(super) fn parse_load_commands(
+        buf: &[u8],
+        ncmds: u32,
+    ) -> (Option<BuildId>, Vec<ExecutableSegment>) {
+        let mut build_id = None;
+        let mut segments = Vec::new();
+        let mut offset = 0usize;
+
+        for _ in 0..ncmds {
+            let Some(header) = buf.get(offset..offset + LOAD_COMMAND_LEN) else {
+                break; // Not enough bytes left in `sizeofcmds` for another load command.
+            };
+            let cmd = u32::from_ne_bytes(header[0..4].try_into().expect("4-byte slice"));
+            let cmdsize = u32::from_ne_bytes(header[4..8].try_into().expect("4-byte slice"));
+            let Ok(cmdsize) = usize::try_from(cmdsize) else {
+                break;
+            };
+            if cmdsize < LOAD_COMMAND_LEN {
+                // A bogus size would leave us walking in place forever.
+                break;
+            }
+            let Some(command) = buf.get(offset..offset + cmdsize) else {
+                break; // The command claims to extend past `sizeofcmds`; the header is corrupt.
+            };
+
+            match cmd {
+                LC_SEGMENT_64 if command.len() >= SEGMENT_COMMAND_64_LEN => {
+                    let initprot =
+                        i32::from_ne_bytes(command[60..64].try_into().expect("4-byte slice"));
+                    let vmaddr =
+                        u64::from_ne_bytes(command[24..32].try_into().expect("8-byte slice"));
+                    let vmsize =
+                        u64::from_ne_bytes(command[32..40].try_into().expect("8-byte slice"));
+                    let fileoff =
+                        u64::from_ne_bytes(command[40..48].try_into().expect("8-byte slice"));
+                    if initprot & VM_PROT_EXECUTE != 0 && vmsize > 0 {
+                        segments.push(ExecutableSegment {
+                            vmaddr,
+                            vmsize,
+                            fileoff,
+                        });
+                    }
+                }
+                LC_UUID if command.len() >= UUID_COMMAND_LEN => {
+                    build_id = Some(BuildId(command[8..24].to_vec()));
+                }
+                // Either an uninteresting command, or one too small for the type its `cmd` claims
+                // (a corrupt header) -- skip it either way rather than misinterpreting its bytes.
+                _ => {}
+            }
+
+            offset += cmdsize;
+        }
+
+        (build_id, segments)
     }
 }
 
@@ -494,7 +604,10 @@ pub async fn handle_get_heap()
         ));
     }
 
-    let pprof = prof_ctl.dump_pprof().map_err(|err| {
+    // Serve the same mapping-aware profile that the direct-dump path produces (see
+    // `dump_pprof_for_current_platform`), rather than falling back to `dump_pprof`'s mapping-less
+    // output on macOS.
+    let pprof = dump_pprof_for_current_platform(&mut prof_ctl).map_err(|err| {
         (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             err.to_string(),
@@ -502,3 +615,7 @@ pub async fn handle_get_heap()
     })?;
     Ok(pprof)
 }
+
+#[cfg(all(test, feature = "jemalloc_pprof"))]
+#[path = "profiling_tests.rs"]
+mod tests;
