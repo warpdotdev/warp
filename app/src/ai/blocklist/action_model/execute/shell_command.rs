@@ -88,13 +88,13 @@ impl ShellCommandExecutor {
     /// Sampling is deliberately scoped to actions that can produce a snapshot,
     /// so ordinary terminal use never pays for it.
     fn begin_monitoring(&mut self, ctx: &mut ModelContext<Self>) -> LrcMonitoringGuard {
-        // The process and file tiers describe this machine, so they say nothing
-        // about a command running on another host.
+        // Process signals describe this machine, so they say nothing about a
+        // command running on another host. Remote sessions report no activity.
         let is_local = matches!(
             self.active_session.as_ref(ctx).session_type(ctx),
             Some(SessionType::Local)
         );
-        self.activity_monitor.set_signals_available(is_local);
+        self.activity_monitor.set_monitoring_enabled(is_local);
 
         let guard = LrcMonitoringGuard {
             monitor: self.activity_monitor.clone(),
@@ -573,7 +573,7 @@ impl ShellCommandExecutor {
                                                 cursor: CURSOR_MARKER,
                                                 is_alt_screen_active: model.is_alt_screen_active(),
                                                 is_preempted: false,
-                                                activity: monitor.report(block, &model),
+                                                activity: monitor.report(block.id()),
                                             }
                                         }
                                     }
@@ -728,7 +728,7 @@ impl ShellCommandExecutor {
                             cursor: CURSOR_MARKER,
                             is_alt_screen_active: model.is_alt_screen_active(),
                             is_preempted,
-                            activity: monitor.report(block, &model),
+                            activity: monitor.report(block.id()),
                         }
                     }
                 }

@@ -4,9 +4,9 @@
 //! The agent decides whether to cancel a long-running command from the snapshot
 //! it is given. When that snapshot is only a terminal grid, a command that
 //! redirects its output to a file, suppresses output, or computes silently is
-//! indistinguishable from a hung one. This module adds three tiers of evidence —
-//! terminal output changes, process-tree CPU and I/O, and growth of redirect
-//! target files — so the agent can tell "silent" from "stuck".
+//! indistinguishable from a hung one. This module adds process-tree evidence —
+//! CPU accrual, I/O writes, and churn in the set of live processes — so the
+//! agent can tell "silent" from "stuck".
 //!
 //! Sampling runs at a fixed 1 Hz for as long as an agent-monitored command is
 //! active, which is what makes the reported "seconds since last activity"
@@ -14,10 +14,12 @@
 //! sampler is started when an agent action that can produce a snapshot begins
 //! and stops as soon as no monitored command remains, so ordinary terminal use
 //! pays nothing for it.
+//!
+//! Remote sessions are not monitored at all: their processes live on another
+//! host, so nothing observable here says anything about them. They report no
+//! activity, the same as an older client.
 
 use std::collections::{HashMap, HashSet};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,28 +27,13 @@ use instant::Instant;
 use parking_lot::{FairMutex, Mutex};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
 
-use super::lrc_redirect::parse_redirect_targets;
-use crate::ai::agent::redaction::redact_secrets;
-use crate::ai::agent::{LrcActivity, LrcFileActivity, LrcProcessActivity, LrcProcessState};
+use crate::ai::agent::{LrcActivity, LrcProcessActivity, LrcProcessState};
 use crate::terminal::TerminalModel;
-use crate::terminal::model::block::{
-    Block, BlockId, CURSOR_MARKER, formatted_terminal_contents_for_input,
-};
+use crate::terminal::model::block::BlockId;
 use crate::terminal::model::terminal_model::ShellProcessInfo;
 
 /// How often liveness signals are sampled while a monitored command is active.
 pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
-
-/// Rows of terminal output hashed to detect on-screen changes. Enough to catch
-/// in-place progress bars and spinners without formatting the whole scrollback
-/// on every sample.
-const GRID_HASH_MAX_ROWS: usize = 200;
-
-/// Maximum bytes of a tracked file's tail included in a report.
-const MAX_TAIL_BYTES: u64 = 2048;
-
-/// Maximum lines of a tracked file's tail included in a report.
-const MAX_TAIL_LINES: usize = 20;
 
 /// Liveness signals for the commands an agent is currently monitoring.
 ///
@@ -66,27 +53,19 @@ struct MonitorState {
     armed_actions: usize,
     /// Whether a sampler task is currently running, so at most one exists.
     sampler_running: bool,
-    /// Whether the process and file tiers can be collected at all. False for
-    /// remote sessions, whose processes and files live on another host.
-    signals_available: bool,
+    /// Whether commands on this terminal can be monitored at all. False for
+    /// remote sessions, whose processes live on another host; they report no
+    /// activity rather than an ever-growing idle clock that falsely suggests
+    /// a hang.
+    monitoring_enabled: bool,
     system: System,
 }
 
 /// Per-command state, accumulated across samples and reset on each report.
 struct BlockActivity {
-    output: OutputTier,
     process: ProcessTier,
-    files: Vec<FileTier>,
-    /// When any tier last showed activity.
+    /// When the process tree last showed activity.
     last_activity: Instant,
-    /// Whether the process and file tiers are collectable for this command.
-    signals_available: bool,
-}
-
-struct OutputTier {
-    hash: u64,
-    last_change: Instant,
-    changed_since_report: bool,
 }
 
 #[derive(Default)]
@@ -109,22 +88,7 @@ struct ProcessTier {
     sampled: bool,
 }
 
-struct FileTier {
-    path: PathBuf,
-    /// Current size, or `None` while the file does not exist.
-    size: Option<u64>,
-    /// Size at the previous report, used to derive the reported delta.
-    size_at_last_report: u64,
-}
-
-/// One sample's raw observations for a single command.
-struct BlockSample {
-    output_hash: u64,
-    /// `None` when the process tier could not be collected.
-    process: Option<ProcessSample>,
-    file_sizes: Vec<Option<u64>>,
-}
-
+/// One sample's raw observations of the command's process tree.
 #[derive(Clone)]
 struct ProcessSample {
     per_pid: Vec<PidSample>,
@@ -143,18 +107,20 @@ impl LrcActivityMonitor {
         Self::default()
     }
 
-    /// Records whether the process and file tiers can be collected for this
-    /// terminal. Remote sessions report only the terminal-output tier.
-    pub fn set_signals_available(&self, available: bool) {
-        self.state.lock().signals_available = available;
+    /// Records whether commands on this terminal can be monitored. Remote
+    /// sessions cannot: they report no activity at all.
+    pub fn set_monitoring_enabled(&self, enabled: bool) {
+        self.state.lock().monitoring_enabled = enabled;
     }
 
     /// Registers an in-flight agent action and reports whether a sampler task
     /// must be started. The caller must pair this with [`Self::disarm`].
+    /// Returns `false` when monitoring is disabled: there is nothing for a
+    /// sampler to observe.
     pub fn arm(&self) -> bool {
         let mut state = self.state.lock();
         state.armed_actions += 1;
-        if state.sampler_running {
+        if !state.monitoring_enabled || state.sampler_running {
             return false;
         }
         state.sampler_running = true;
@@ -166,23 +132,24 @@ impl LrcActivityMonitor {
         state.armed_actions = state.armed_actions.saturating_sub(1);
     }
 
-    /// Builds the activity report for `block`, registering it on first sight.
+    /// Builds the activity report for `block_id`, registering it on first
+    /// sight. Returns `None` when monitoring is disabled for this terminal.
     ///
     /// Called while the terminal model lock is held, so it must not try to
     /// acquire it. The sampler never holds the monitor lock while taking the
     /// terminal lock, so this ordering cannot deadlock.
-    pub fn report(&self, block: &Block, model: &TerminalModel) -> Option<LrcActivity> {
+    pub fn report(&self, block_id: &BlockId) -> Option<LrcActivity> {
         let now = Instant::now();
         let mut state = self.state.lock();
-        let signals_available = state.signals_available;
-
-        if !state.blocks.contains_key(block.id()) {
-            let activity = BlockActivity::new(block, model, signals_available, now);
-            state.blocks.insert(block.id().clone(), activity);
+        if !state.monitoring_enabled {
+            return None;
         }
 
-        let block_activity = state.blocks.get_mut(block.id())?;
-        Some(block_activity.take_report(now, read_and_redact_tail))
+        let block_activity = state
+            .blocks
+            .entry(block_id.clone())
+            .or_insert_with(|| BlockActivity::new(now));
+        Some(block_activity.take_report(now))
     }
 
     /// Removes state for a command that is no longer being monitored.
@@ -196,77 +163,36 @@ impl LrcActivityMonitor {
     /// Locks are acquired one at a time and released before the next is taken,
     /// so this never holds the monitor lock while touching the terminal model.
     pub fn sample(&self, terminal_model: &Arc<FairMutex<TerminalModel>>) -> bool {
-        let tracked: Vec<(BlockId, Vec<PathBuf>)> = {
-            let state = self.state.lock();
-            state
-                .blocks
-                .iter()
-                .map(|(block_id, activity)| {
-                    (
-                        block_id.clone(),
-                        activity
-                            .files
-                            .iter()
-                            .map(|file| file.path.clone())
-                            .collect(),
-                    )
-                })
-                .collect()
-        };
+        let tracked: Vec<BlockId> = self.state.lock().blocks.keys().cloned().collect();
 
         // Read everything needed from the terminal in one pass, then release it
         // before doing any syscalls.
-        let (grid_hashes, finished, shell_process) = {
+        let (live, finished, shell_process) = {
             let model = terminal_model.lock();
-            let mut grid_hashes = HashMap::new();
+            let mut live = Vec::new();
             let mut finished = Vec::new();
-            for (block_id, _) in &tracked {
-                match model.block_list().block_with_id(block_id) {
-                    Some(block) if !block.finished() => {
-                        grid_hashes.insert(block_id.clone(), grid_hash(block, &model));
-                    }
+            for block_id in tracked {
+                match model.block_list().block_with_id(&block_id) {
+                    Some(block) if !block.finished() => live.push(block_id),
                     // Gone or completed: nothing left to monitor.
-                    Some(_) | None => finished.push(block_id.clone()),
+                    Some(_) | None => finished.push(block_id),
                 }
             }
-            (grid_hashes, finished, model.shell_process_info().cloned())
+            (live, finished, model.shell_process_info().cloned())
         };
 
-        let signals_available = self.state.lock().signals_available;
-        let process_sample = if signals_available {
-            self.collect_process_sample(shell_process.as_ref())
-        } else {
-            None
-        };
-
-        let mut samples = HashMap::new();
-        for (block_id, paths) in tracked {
-            let Some(output_hash) = grid_hashes.get(&block_id).copied() else {
-                continue;
-            };
-            let file_sizes = if signals_available {
-                paths.iter().map(|path| file_size(path)).collect()
-            } else {
-                vec![None; paths.len()]
-            };
-            samples.insert(
-                block_id,
-                BlockSample {
-                    output_hash,
-                    process: process_sample.clone(),
-                    file_sizes,
-                },
-            );
-        }
+        let process_sample = self.collect_process_sample(shell_process.as_ref());
 
         let now = Instant::now();
         let mut state = self.state.lock();
         for block_id in finished {
             state.blocks.remove(&block_id);
         }
-        for (block_id, sample) in samples {
-            if let Some(activity) = state.blocks.get_mut(&block_id) {
-                activity.apply_sample(sample, now);
+        if let Some(sample) = process_sample {
+            for block_id in live {
+                if let Some(activity) = state.blocks.get_mut(&block_id) {
+                    activity.apply_sample(sample.clone(), now);
+                }
             }
         }
 
@@ -311,125 +237,60 @@ impl LrcActivityMonitor {
 }
 
 impl BlockActivity {
-    fn new(block: &Block, model: &TerminalModel, signals_available: bool, now: Instant) -> Self {
-        let cwd = block.pwd().map(PathBuf::from);
-        let targets = parse_redirect_targets(
-            &block.command_with_secrets_unobfuscated(false),
-            cwd.as_deref(),
-        );
-        Self::from_parts(
-            grid_hash(block, model),
-            targets,
-            signals_available,
-            now,
-            file_size,
-        )
-    }
-
-    /// `probe_size` is injected so tests can drive the file tier without
-    /// touching the filesystem.
-    fn from_parts(
-        output_hash: u64,
-        targets: Vec<PathBuf>,
-        signals_available: bool,
-        now: Instant,
-        probe_size: impl Fn(&Path) -> Option<u64>,
-    ) -> Self {
-        let files = targets
-            .into_iter()
-            .map(|path| {
-                let size = signals_available.then(|| probe_size(&path)).flatten();
-                FileTier {
-                    path,
-                    size,
-                    size_at_last_report: size.unwrap_or(0),
-                }
-            })
-            .collect();
-
+    fn new(now: Instant) -> Self {
         Self {
-            output: OutputTier {
-                hash: output_hash,
-                last_change: now,
-                changed_since_report: false,
-            },
             process: ProcessTier::default(),
-            files,
             // A command that has only just come under monitoring has no history
             // of inactivity, so its clock starts now rather than at zero.
             last_activity: now,
-            signals_available,
         }
     }
 
     /// Folds one sample into the accumulated state.
-    fn apply_sample(&mut self, sample: BlockSample, now: Instant) {
-        let mut saw_activity = false;
+    fn apply_sample(&mut self, sample: ProcessSample, now: Instant) {
+        let mut cpu_ms_by_pid = HashMap::with_capacity(sample.per_pid.len());
+        let mut io_write_bytes_by_pid = HashMap::with_capacity(sample.per_pid.len());
+        let mut cpu_delta = 0u64;
+        let mut io_delta = 0u64;
 
-        if sample.output_hash != self.output.hash {
-            self.output.hash = sample.output_hash;
-            self.output.last_change = now;
-            self.output.changed_since_report = true;
-            saw_activity = true;
-        }
-
-        if let Some(process) = sample.process {
-            let mut cpu_ms_by_pid = HashMap::with_capacity(process.per_pid.len());
-            let mut io_write_bytes_by_pid = HashMap::with_capacity(process.per_pid.len());
-            let mut cpu_delta = 0u64;
-            let mut io_delta = 0u64;
-
-            for pid_sample in &process.per_pid {
-                // A pid seen for the first time contributes no delta: its
-                // accumulated total predates monitoring.
-                if let Some(previous) = self.process.cpu_ms_by_pid.get(&pid_sample.pid) {
-                    cpu_delta += pid_sample.cpu_ms.saturating_sub(*previous);
-                }
-                if let Some(previous) = self.process.io_write_bytes_by_pid.get(&pid_sample.pid) {
-                    io_delta += pid_sample.io_write_bytes.saturating_sub(*previous);
-                }
-                cpu_ms_by_pid.insert(pid_sample.pid, pid_sample.cpu_ms);
-                io_write_bytes_by_pid.insert(pid_sample.pid, pid_sample.io_write_bytes);
+        for pid_sample in &sample.per_pid {
+            // A pid seen for the first time contributes no delta: its
+            // accumulated total predates monitoring.
+            if let Some(previous) = self.process.cpu_ms_by_pid.get(&pid_sample.pid) {
+                cpu_delta += pid_sample.cpu_ms.saturating_sub(*previous);
             }
-            let pid_set_changed = cpu_ms_by_pid.len() != self.process.cpu_ms_by_pid.len()
-                || cpu_ms_by_pid
-                    .keys()
-                    .any(|pid| !self.process.cpu_ms_by_pid.contains_key(pid));
-
-            self.process.cpu_ms_by_pid = cpu_ms_by_pid;
-            self.process.io_write_bytes_by_pid = io_write_bytes_by_pid;
-            self.process.cpu_ms_since_report += cpu_delta;
-            self.process.io_write_bytes_since_report += io_delta;
-            self.process.state = process.state;
-            self.process.live_process_count = process.per_pid.len() as u32;
-            self.process.sampled = true;
-
-            // Process churn is itself progress: a build spawning and reaping
-            // compilers may never accumulate much CPU in any single process.
-            saw_activity |= cpu_delta > 0 || io_delta > 0 || pid_set_changed;
-        }
-
-        for (file, size) in self.files.iter_mut().zip(sample.file_sizes) {
-            if size.unwrap_or(0) > file.size.unwrap_or(0) {
-                saw_activity = true;
+            if let Some(previous) = self.process.io_write_bytes_by_pid.get(&pid_sample.pid) {
+                io_delta += pid_sample.io_write_bytes.saturating_sub(*previous);
             }
-            file.size = size;
+            cpu_ms_by_pid.insert(pid_sample.pid, pid_sample.cpu_ms);
+            io_write_bytes_by_pid.insert(pid_sample.pid, pid_sample.io_write_bytes);
         }
+        let pid_set_changed = cpu_ms_by_pid.len() != self.process.cpu_ms_by_pid.len()
+            || cpu_ms_by_pid
+                .keys()
+                .any(|pid| !self.process.cpu_ms_by_pid.contains_key(pid));
 
-        if saw_activity {
+        self.process.cpu_ms_by_pid = cpu_ms_by_pid;
+        self.process.io_write_bytes_by_pid = io_write_bytes_by_pid;
+        self.process.cpu_ms_since_report += cpu_delta;
+        self.process.io_write_bytes_since_report += io_delta;
+        self.process.state = sample.state;
+        self.process.live_process_count = sample.per_pid.len() as u32;
+        self.process.sampled = true;
+
+        // Process churn is itself progress: a build spawning and reaping
+        // compilers may never accumulate much CPU in any single process.
+        if cpu_delta > 0 || io_delta > 0 || pid_set_changed {
             self.last_activity = now;
         }
     }
 
     /// Produces the report for a snapshot and resets the per-report accumulators.
-    ///
-    /// `read_tail` is injected so the (comparatively expensive) file read and
-    /// secret-redaction pass happens only here, never on the sampling path.
-    fn take_report(&mut self, now: Instant, read_tail: impl Fn(&Path) -> String) -> LrcActivity {
+    fn take_report(&mut self, now: Instant) -> LrcActivity {
         // An all-zero process tier is a meaningful reading — an exited tree —
         // so it is reported rather than suppressed. It is only withheld when no
         // reading was taken at all, which must not be mistaken for one.
-        let process_collected = self.signals_available && self.process.sampled;
+        let process_collected = self.process.sampled;
         let process = process_collected.then(|| LrcProcessActivity {
             cpu_time_delta: Duration::from_millis(self.process.cpu_ms_since_report),
             state: self.process.state,
@@ -437,36 +298,12 @@ impl BlockActivity {
             io_write_bytes_delta: self.process.io_write_bytes_since_report,
         });
 
-        let files = self
-            .files
-            .iter_mut()
-            .filter_map(|file| {
-                let size = file.size?;
-                let activity = LrcFileActivity {
-                    path: file.path.to_string_lossy().into_owned(),
-                    size_bytes: size,
-                    size_delta_bytes: size as i64 - file.size_at_last_report as i64,
-                    tail: if is_log_file(&file.path) {
-                        read_tail(&file.path)
-                    } else {
-                        String::new()
-                    },
-                };
-                file.size_at_last_report = size;
-                Some(activity)
-            })
-            .collect();
-
         let report = LrcActivity {
             since_last_activity: Some(now.saturating_duration_since(self.last_activity)),
-            output_changed_since_last_read: self.output.changed_since_report,
-            since_output_change: Some(now.saturating_duration_since(self.output.last_change)),
             process,
-            files,
             signals_unavailable: !process_collected,
         };
 
-        self.output.changed_since_report = false;
         self.process.cpu_ms_since_report = 0;
         self.process.io_write_bytes_since_report = 0;
 
@@ -506,74 +343,6 @@ fn aggregate_state(states: &[LrcProcessState]) -> LrcProcessState {
         }
     }
     LrcProcessState::Unknown
-}
-
-fn grid_hash(block: &Block, model: &TerminalModel) -> u64 {
-    let contents = if model.is_alt_screen_active() {
-        formatted_terminal_contents_for_input(
-            model.alt_screen().grid_handler(),
-            Some(GRID_HASH_MAX_ROWS),
-            CURSOR_MARKER,
-        )
-    } else {
-        formatted_terminal_contents_for_input(
-            block.output_grid().grid_handler(),
-            Some(GRID_HASH_MAX_ROWS),
-            CURSOR_MARKER,
-        )
-    };
-
-    let mut hasher = DefaultHasher::new();
-    contents.hash(&mut hasher);
-    hasher.finish()
-}
-
-/// Size of `path`, or `None` when it does not exist or is not a regular file.
-/// Symlinks are not followed, so a command cannot be made to report on a file
-/// somewhere else entirely.
-fn file_size(path: &Path) -> Option<u64> {
-    let metadata = std::fs::symlink_metadata(path).ok()?;
-    metadata.is_file().then_some(metadata.len())
-}
-fn is_log_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("log"))
-}
-
-/// Reads the tail of `path` and redacts any secrets in it.
-fn read_and_redact_tail(path: &Path) -> String {
-    let Some(mut tail) = read_tail(path) else {
-        return String::new();
-    };
-    redact_secrets(&mut tail);
-    tail
-}
-
-fn read_tail(path: &Path) -> Option<String> {
-    use std::io::{Read, Seek, SeekFrom};
-    if !std::fs::symlink_metadata(path).ok()?.is_file() {
-        return None;
-    }
-
-    let mut file = std::fs::File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
-    let offset = len.saturating_sub(MAX_TAIL_BYTES);
-    file.seek(SeekFrom::Start(offset)).ok()?;
-
-    let mut buffer = Vec::with_capacity(MAX_TAIL_BYTES as usize);
-    file.take(MAX_TAIL_BYTES).read_to_end(&mut buffer).ok()?;
-
-    // Binary output is noise to the agent, and a partial read can split a
-    // multi-byte character at the start of the window.
-    let text = String::from_utf8_lossy(&buffer);
-    if text.contains('\u{0}') {
-        return None;
-    }
-
-    let lines: Vec<&str> = text.lines().collect();
-    let start = lines.len().saturating_sub(MAX_TAIL_LINES);
-    Some(lines[start..].join("\n"))
 }
 
 /// The processes belonging to the command the shell is currently running.

@@ -6,7 +6,6 @@ pub(super) mod fetch_conversation;
 pub(super) mod file_glob;
 pub(super) mod grep;
 pub(super) mod lrc_activity;
-pub(super) mod lrc_redirect;
 pub(super) mod read_documents;
 pub(super) mod read_files;
 pub(super) mod read_mcp_resource;

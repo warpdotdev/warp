@@ -3,7 +3,7 @@ use std::time::Duration;
 use warp_multi_agent_api as api;
 
 use super::{
-    AIAgentActionResultType, LrcActivity, LrcFileActivity, LrcProcessActivity, LrcProcessState,
+    AIAgentActionResultType, LrcActivity, LrcProcessActivity, LrcProcessState,
     RunAgentsAgentOutcome, RunAgentsAgentOutcomeKind, RunAgentsLaunchedExecutionMode,
     RunAgentsResult,
 };
@@ -63,20 +63,12 @@ fn run_agents_is_failed_when_no_agents_launch() {
 fn populated_activity() -> LrcActivity {
     LrcActivity {
         since_last_activity: Some(Duration::from_millis(1500)),
-        output_changed_since_last_read: true,
-        since_output_change: Some(Duration::from_secs(42)),
         process: Some(LrcProcessActivity {
             cpu_time_delta: Duration::from_millis(2750),
             state: LrcProcessState::DiskWait,
             live_process_count: 3,
             io_write_bytes_delta: 4096,
         }),
-        files: vec![LrcFileActivity {
-            path: "/tmp/build.log".to_string(),
-            size_bytes: 8192,
-            size_delta_bytes: -128,
-            tail: "linking\n".to_string(),
-        }],
         signals_unavailable: false,
     }
 }
@@ -94,18 +86,15 @@ fn activity_converts_durations_to_seconds_on_the_wire() {
     let wire = api::LongRunningCommandActivity::from(populated_activity());
 
     assert_eq!(wire.seconds_since_last_activity, 1.5);
-    assert_eq!(wire.seconds_since_output_change, 42.0);
     assert_eq!(wire.process.expect("process tier").cpu_time_delta_ms, 2750);
 }
 
 #[test]
-fn a_tier_that_never_reported_activity_is_sent_as_zero_seconds() {
+fn an_activity_clock_that_never_ticked_is_sent_as_zero_seconds() {
     let wire = api::LongRunningCommandActivity::from(LrcActivity::default());
 
     assert_eq!(wire.seconds_since_last_activity, 0.0);
-    assert_eq!(wire.seconds_since_output_change, 0.0);
     assert!(wire.process.is_none());
-    assert!(wire.files.is_empty());
 }
 
 #[test]
@@ -121,11 +110,11 @@ fn unavailable_signals_survive_the_round_trip() {
     assert!(LrcActivity::from(&wire).signals_unavailable);
 }
 
-/// The wire type has no way to say "never", so a tier that never reported
-/// activity is indistinguishable from one that reported it just now. The
-/// tier-level fields alongside it are what tell the two apart.
+/// The wire type has no way to say "never", so a clock that never ticked is
+/// indistinguishable from one that ticked just now. The process submessage and
+/// `signals_unavailable` alongside it are what tell the two apart.
 #[test]
-fn a_never_reported_tier_reads_back_as_zero_rather_than_never() {
+fn a_never_ticked_clock_reads_back_as_zero_rather_than_never() {
     let wire = api::LongRunningCommandActivity::from(LrcActivity::default());
 
     assert_eq!(
@@ -170,25 +159,6 @@ fn an_uncollected_process_tier_converts_to_an_absent_submessage() {
 
     assert!(wire.process.is_none());
     assert!(wire.signals_unavailable);
-}
-
-#[test]
-fn a_file_with_no_growth_is_not_filtered_out_of_the_conversion() {
-    let activity = LrcActivity {
-        files: vec![LrcFileActivity {
-            path: "/tmp/build.log".to_string(),
-            size_bytes: 4096,
-            size_delta_bytes: 0,
-            tail: String::new(),
-        }],
-        ..Default::default()
-    };
-
-    let wire = api::LongRunningCommandActivity::from(activity);
-
-    assert_eq!(wire.files.len(), 1);
-    assert_eq!(wire.files[0].size_delta_bytes, 0);
-    assert_eq!(wire.files[0].size_bytes, 4096);
 }
 
 #[test]
