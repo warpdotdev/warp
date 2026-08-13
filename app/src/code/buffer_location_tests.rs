@@ -621,6 +621,101 @@ fn resolve_conflict_updates_content_and_clock() {
     })
 }
 
+/// Regression test for APP-5357: `resolve_conflict` used to call
+/// `Buffer::replace_all`, which discards the whole buffer and rebuilds it
+/// from scratch -- a full-buffer `ContentReplaced` plus a `ContentChanged`
+/// delta spanning the entire file, regardless of how much content actually
+/// changed. This drives the real `resolve_conflict` -> diff -> apply pipeline
+/// end to end (not just a diffing helper in isolation) and asserts on the
+/// actual event/delta produced: for a large buffer where the client's
+/// content differs in only one line, the applied edit must be scoped to
+/// that change, not the whole buffer, and must not emit `ContentReplaced`.
+#[test]
+fn resolve_conflict_applies_scoped_diff_not_full_buffer_replace() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+
+        // 200 fixed-width lines. The client's content differs from the
+        // server's only in the middle line, so a correctly-scoped edit
+        // should touch a tiny fraction of the buffer.
+        let line = |i: usize| format!("line{i:03}\n");
+        let original: String = (0..200).map(line).collect();
+        let client_content: String = (0..200)
+            .map(|i| {
+                if i == 100 {
+                    "CHANGED\n".to_string()
+                } else {
+                    line(i)
+                }
+            })
+            .collect();
+
+        let _buffer_state = gbm(&app).update(&mut app, |gbm, ctx| {
+            let state = gbm.open_server_local("/tmp/test_resolve_scoped.txt".into(), ctx);
+            gbm.populate_buffer_with_read_content(
+                state.file_id,
+                &original,
+                ContentVersion::new(),
+                ContentVersion::new(),
+                true,
+                ctx,
+            );
+            state
+        });
+        let file_id = _buffer_state.file_id;
+
+        // Capture whichever of ContentReplaced / ContentChanged fires from
+        // the upcoming resolve_conflict call, along with the ContentChanged
+        // delta's replaced-range span.
+        let (event_tx, event_rx) = async_channel::unbounded::<(bool, usize)>();
+        gbm(&app).update(&mut app, |_gbm, ctx| {
+            ctx.subscribe_to_model(&_buffer_state.buffer, move |_me, _, event, _ctx| {
+                use warp_editor::content::buffer::BufferEvent;
+                match event {
+                    BufferEvent::ContentReplaced { .. } => {
+                        let _ = event_tx.try_send((true, 0));
+                    }
+                    BufferEvent::ContentChanged { delta, .. } => {
+                        let span =
+                            delta.old_offset.end.as_usize() - delta.old_offset.start.as_usize();
+                        let _ = event_tx.try_send((false, span));
+                    }
+                    _ => {}
+                }
+            });
+        });
+
+        let sv = server_version(&app, file_id);
+        let _ = gbm(&app).update(&mut app, |gbm, ctx| {
+            gbm.resolve_conflict(file_id, sv, ContentVersion::new(), &client_content, ctx)
+        });
+
+        assert_eq!(content(&app, file_id), client_content);
+
+        let mut saw_content_replaced = false;
+        let mut changed_span = None;
+        while let Ok((is_replaced, span)) = event_rx.try_recv() {
+            if is_replaced {
+                saw_content_replaced = true;
+            } else {
+                changed_span = Some(span);
+            }
+        }
+        assert!(
+            !saw_content_replaced,
+            "resolve_conflict should apply a scoped diff, not emit a full-buffer ContentReplaced"
+        );
+        let changed_span =
+            changed_span.expect("resolve_conflict should have emitted a ContentChanged event");
+        assert!(
+            changed_span < original.len() / 2,
+            "expected a scoped edit far smaller than the full buffer ({} chars), got {changed_span} chars",
+            original.len()
+        );
+    })
+}
+
 // ── Echo loop prevention ─────────────────────────────────────────
 
 #[test]

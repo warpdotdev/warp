@@ -15,7 +15,7 @@ use vec1::vec1;
 use warp_core::features::FeatureFlag;
 use warp_core::safe_error;
 use warp_editor::content::buffer::{Buffer, ToBufferCharOffset};
-use warp_editor::content::diff::{TextDiff, text_diff};
+use warp_editor::content::diff::{TextDiff, text_diff, text_diff_sync};
 use warp_editor::content::edit::PreciseDelta;
 use warp_editor::content::version::BufferVersion;
 use warp_util::content_version::ContentVersion;
@@ -1993,7 +1993,17 @@ impl GlobalBufferModel {
     }
 
     /// Resolve a conflict by accepting the client's content.
-    /// Replaces the buffer content, updates the sync clock, and saves to disk.
+    /// Diffs the client's content against the buffer's current content and
+    /// applies only the changed ranges, updates the sync clock, and saves to
+    /// disk.
+    ///
+    /// A sync conflict's client content usually diverges from the server's
+    /// only in the ranges edited during the conflict window -- the two sides
+    /// share a recent common history, unlike e.g. a first-ever file load.
+    /// Diffing instead of a full-buffer replace avoids re-materializing
+    /// styled content (and the buffer's own text storage) for the entire
+    /// file, and preserves anchors/selections in the unchanged ranges. See
+    /// APP-5357.
     #[cfg(feature = "local_fs")]
     pub fn resolve_conflict(
         &mut self,
@@ -2018,8 +2028,14 @@ impl GlobalBufferModel {
 
         let new_version = ContentVersion::new();
         buffer.update(ctx, |buffer, ctx| {
-            buffer.replace_all(client_content, ctx);
-            buffer.set_version(new_version);
+            let old_text = buffer.text().into_string();
+            let diff = text_diff_sync(&old_text, client_content);
+            if diff.is_empty() {
+                buffer.set_version(new_version);
+                return;
+            }
+            let char_edits = diff.to_char_offset_edits(buffer);
+            buffer.insert_at_char_offset_ranges(char_edits, new_version, ctx);
         });
 
         // Save to disk. Note: the buffer content has already been replaced

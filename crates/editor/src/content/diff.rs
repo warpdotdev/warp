@@ -10,6 +10,10 @@ use string_offset::{ByteOffset, CharOffset};
 
 use super::buffer::{Buffer, ToBufferCharOffset};
 
+#[cfg(test)]
+#[path = "diff_tests.rs"]
+mod tests;
+
 /// A computed diff between two strings.
 ///
 /// The edits are represented as byte ranges in the old text and their replacement strings.
@@ -55,22 +59,38 @@ pub async fn text_diff(old_text: &str, new_text: &str) -> TextDiff {
 
     // Only compute line-based diff for now. Zed does more fine-grained word-level diffing for smaller hunks
     // but I don't think it's worth it for our use case.
-    let edits = diff_internal(&input, new_text).await;
+    let diff = Diff::compute(Algorithm::Histogram, &input);
+
+    // Yield here to prevent doing more work if the task is aborted.
+    futures_lite::future::yield_now().await;
+
+    let edits = edits_from_diff(&diff, &input, new_text);
 
     TextDiff { edits }
 }
 
-async fn diff_internal(input: &InternedInput<&str>, new_text: &str) -> Vec<(Range<usize>, String)> {
+/// Synchronous counterpart to [`text_diff`], for callers that need the result
+/// immediately rather than as a cancellable background task (e.g. a one-shot
+/// conflict resolution rather than a per-keystroke or per-file-watcher-event
+/// operation). Computes the exact same diff via the same algorithm; the only
+/// difference from `text_diff` is the absence of cooperative-yield points.
+pub fn text_diff_sync(old_text: &str, new_text: &str) -> TextDiff {
+    let input = InternedInput::new(old_text, new_text);
+    let diff = Diff::compute(Algorithm::Histogram, &input);
+    let edits = edits_from_diff(&diff, &input, new_text);
+    TextDiff { edits }
+}
+
+fn edits_from_diff(
+    diff: &Diff,
+    input: &InternedInput<&str>,
+    new_text: &str,
+) -> Vec<(Range<usize>, String)> {
     let mut old_offset = 0;
     let mut new_offset = 0;
     let mut old_token_ix = 0;
     let mut new_token_ix = 0;
     let mut edits = Vec::new();
-
-    let diff = Diff::compute(Algorithm::Histogram, input);
-
-    // Yield here to prevent doing more work if the task is aborted.
-    futures_lite::future::yield_now().await;
 
     for hunk in diff.hunks() {
         // Calculate byte offsets for unchanged tokens before this hunk
