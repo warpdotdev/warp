@@ -5477,8 +5477,9 @@ mod simplified_wasm_tab_bar {
 ///
 /// Creating a tab group opens the inline name editor and also spawns a terminal. About
 /// a second later that terminal's bootstrap block becomes visible and takes focus, which
-/// blurs the editor while the user is still typing. Blur is treated as confirmation, so
-/// whatever fragment had been typed became the group's name — and was persisted.
+/// blurs the editor while the user is still typing. Blur used to be treated as
+/// confirmation, so whatever fragment had been typed became the group's name — and was
+/// persisted.
 ///
 /// A rename the user never finished must not be committed.
 #[test]
@@ -5502,10 +5503,12 @@ fn test_tab_group_rename_blur_does_not_commit_unfinished_name() {
             workspace.rename_tab_group(group_id, ctx);
 
             // The user gets three characters in before the terminal is ready.
-            workspace.tab_group_rename_editor.update(ctx, |editor, ctx| {
-                editor.clear_buffer_and_reset_undo_stack(ctx);
-                editor.user_insert("Bui", ctx);
-            });
+            workspace
+                .tab_group_rename_editor
+                .update(ctx, |editor, ctx| {
+                    editor.clear_buffer_and_reset_undo_stack(ctx);
+                    editor.user_insert("Bui", ctx);
+                });
 
             // The auto-created terminal takes focus; the editor blurs with no user intent
             // to finish.

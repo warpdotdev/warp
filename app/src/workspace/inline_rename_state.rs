@@ -2,8 +2,10 @@
 //!
 //! Renaming a tab group opens an inline editor *and* spawns a terminal. Roughly a
 //! second later that terminal's bootstrap block becomes visible and asks for focus,
-//! which blurs the editor mid-typing — and since blur is treated as confirmation, the
-//! fragment typed so far is committed and persisted as the group's name (issue #14241).
+//! which blurs the editor mid-typing. Blur used to be treated as confirmation, so the
+//! fragment typed so far became the group's persisted name (issue #14241); blur now
+//! discards the rename, and this singleton keeps the terminal from interrupting it in
+//! the first place.
 //!
 //! `WorkspaceState` already knows a rename is in progress, but it lives on
 //! `WorkspaceView` and the terminal view has no path to it. This singleton is the
