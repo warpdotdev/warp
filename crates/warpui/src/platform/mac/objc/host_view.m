@@ -476,8 +476,13 @@ void warp_marked_text_cleared(WarpHostView *);
         // otherwise swallow them. Ordinary dead-key composition (Option-E then `g`)
         // also runs there with marked text, but its setMarkedText: always carries
         // NSNotFound, so it never sets the flag and keeps appending as before.
+        //
+        // The flag is only trusted while the popup's marked text is still standing.
+        // Dismissing the popup clears that marked text, so a flag that outlived its
+        // popup cannot make the next ordinary keystroke eat the character before it.
         BOOL replacesCommittedText =
-            accentPopupReplacingCommittedText || replacementRange.location != NSNotFound;
+            (accentPopupReplacingCommittedText && [self hasMarkedText]) ||
+            replacementRange.location != NSNotFound;
 
         if (replacesCommittedText) {
             accentPopupReplacingCommittedText = NO;
@@ -545,6 +550,9 @@ void warp_marked_text_cleared(WarpHostView *);
     if (interpretingKeyEvents) {
         imeTouchedMarkedTextDuringInterpret = YES;
     }
+    // The accent popup is gone, whether it committed or was cancelled. Either way it
+    // is no longer offering to replace anything.
+    accentPopupReplacingCommittedText = NO;
     [[markedText mutableString] setString:@""];
     if (self.readyForWarp) {
         warp_update_ime_state(self, NO);

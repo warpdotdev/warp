@@ -200,6 +200,9 @@ pub enum Event {
     /// Handlers should drop the grapheme preceding the caret before inserting `chars`.
     /// The count is fixed at one because the platform layer cannot recover a usable
     /// length — see the comment in `insertText:replacementRange:` in `host_view.m`.
+    ///
+    /// Surfaces that cannot delete backwards need not handle it: an unhandled event
+    /// is redispatched as [`Event::TypedCharacters`], see [`Event::unhandled_fallback`].
     ReplacePrecedingCharacters {
         chars: String,
     },
@@ -256,6 +259,22 @@ impl Event {
             })
         } else {
             None
+        }
+    }
+
+    /// The event a surface should be given instead when it does not handle `self`.
+    ///
+    /// [`Event::ReplacePrecedingCharacters`] only means something to a surface that
+    /// can delete the grapheme before the caret. A focused terminal, the alt screen
+    /// and the code editor cannot, and silently dropping a committed character there
+    /// would be worse than the doubled character the replacement exists to avoid, so
+    /// the commit degrades to the plain append those surfaces have always received.
+    pub fn unhandled_fallback(&self) -> Option<Self> {
+        match self {
+            Event::ReplacePrecedingCharacters { chars } => Some(Event::TypedCharacters {
+                chars: chars.clone(),
+            }),
+            _ => None,
         }
     }
 }
@@ -437,3 +456,7 @@ impl Scale for Event {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "event_tests.rs"]
+mod tests;

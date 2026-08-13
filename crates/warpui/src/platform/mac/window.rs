@@ -1532,9 +1532,19 @@ extern "C-unwind" fn warp_handle_replace_preceding_text(this: &Object, character
     // SAFETY: `characters` is a valid `NSString` of the inserted text.
     let string = unsafe { &*characters.cast::<NSString>() }.to_string();
     let window = unsafe { get_window_state(this) };
-    app::callback_dispatcher()
-        .for_window(&Window(window.clone()))
-        .dispatch_event(Event::ReplacePrecedingCharacters { chars: string });
+    let event = Event::ReplacePrecedingCharacters { chars: string };
+    let window = Window(window.clone());
+    let mut dispatcher = app::callback_dispatcher().for_window(&window);
+    let handled = dispatcher.dispatch_event(event.clone()).handled;
+    if !handled {
+        // Only surfaces that can delete the grapheme before the caret handle this.
+        // A focused terminal, the alt screen or the code editor do not, and dropping
+        // the commit there would be worse than the doubled character this fixes, so
+        // they keep receiving the plain append they always got.
+        if let Some(fallback) = event.unhandled_fallback() {
+            dispatcher.dispatch_event(fallback);
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
