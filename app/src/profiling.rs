@@ -247,15 +247,34 @@ fn ensure_mappings_are_symbolicatable(mappings: &[pprof_util::Mapping]) -> anyho
 /// Returns whether `mappings` are usable for offline symbolication: non-empty, with a mapping for
 /// `current_exe` itself that carries a build-id.  Without both, Sentry (or a human with the
 /// matching dSYM) has nothing to symbolicate the profile against.
+///
+/// Falls back to comparing canonicalized paths when a direct comparison fails: real-macOS testing
+/// showed `std::env::current_exe()` and dyld's reported image path can differ when the executable
+/// is reached through a symlink (e.g. a build cache mounted at another path), even though they
+/// name the same file.
 #[cfg(all(feature = "jemalloc_pprof", any(target_os = "macos", test)))]
 fn mappings_are_symbolicatable(
     mappings: &[pprof_util::Mapping],
     current_exe: &std::path::Path,
 ) -> bool {
-    !mappings.is_empty()
-        && mappings
-            .iter()
-            .any(|mapping| mapping.pathname == current_exe && mapping.build_id.is_some())
+    if mappings.is_empty() {
+        return false;
+    }
+
+    if mappings
+        .iter()
+        .any(|mapping| mapping.pathname == current_exe && mapping.build_id.is_some())
+    {
+        return true;
+    }
+
+    let Ok(canonical_current_exe) = std::fs::canonicalize(current_exe) else {
+        return false;
+    };
+    mappings.iter().any(|mapping| {
+        mapping.build_id.is_some()
+            && std::fs::canonicalize(&mapping.pathname).is_ok_and(|p| p == canonical_current_exe)
+    })
 }
 
 /// Collects the pprof mapping table for the current process on macOS.

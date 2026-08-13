@@ -201,3 +201,23 @@ fn mappings_are_symbolicatable_accepts_a_current_executable_mapping_with_a_build
         Path::new("/bin/warp")
     ));
 }
+
+/// Real macOS testing found that `std::env::current_exe()` and dyld's reported image path can
+/// differ when the executable is reached through a symlink (e.g. a build cache mounted at another
+/// path). This exercises the canonicalized-path fallback that handles that case.
+#[test]
+fn mappings_are_symbolicatable_accepts_a_symlinked_current_exe_path() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let real_exe = dir.path().join("warp-real");
+    std::fs::write(&real_exe, b"not a real binary, just needs to exist").expect("write file");
+    let symlinked_exe = dir.path().join("warp-symlink");
+    std::os::unix::fs::symlink(&real_exe, &symlinked_exe).expect("create symlink");
+
+    // dyld reports the canonical path; `current_exe()` here is the symlink dyld loaded through.
+    let mappings = [mapping(
+        real_exe.to_str().expect("utf8 path"),
+        Some(BuildId(vec![1, 2, 3])),
+    )];
+
+    assert!(mappings_are_symbolicatable(&mappings, &symlinked_exe));
+}
