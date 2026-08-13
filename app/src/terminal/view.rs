@@ -20894,8 +20894,8 @@ impl TerminalView {
             let ai_block = ai_metadata.ai_block_handle.as_ref(ctx);
 
             (!ai_block.is_finished()
-                && !ai_block.is_hidden(ctx)
-                && !ai_block.is_passive_conversation())
+                && !ai_block.is_passive_conversation()
+                && !ai_block.is_hidden(ctx))
             .then_some(&ai_metadata.ai_block_handle)
         })
     }
