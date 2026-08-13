@@ -27,7 +27,7 @@ use ai::skills::ParsedSkill;
 use chrono::{DateTime, Local, TimeDelta};
 use comment::ReviewComment;
 use derivative::Derivative;
-use markdown_parser::{parse_markdown, FormattedTable, FormattedText, FormattedTextInline};
+use markdown_parser::{FormattedTable, FormattedText, FormattedTextInline, parse_markdown};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::ParticipantId;
@@ -37,10 +37,11 @@ use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_editor::render::model::LineCount;
-use warp_multi_agent_api::{diff_hunk as diff_hunk_api, AgentEvent, AgentType};
+use warp_multi_agent_api::{AgentEvent, AgentType, diff_hunk as diff_hunk_api};
 
 pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
 use super::llms::LLMId;
+use crate::TelemetryEvent;
 use crate::ai::block_context::BlockContext;
 use crate::ai::blocklist::block::view_impl::output::are_all_text_sections_empty;
 use crate::ai::skills::SkillDescriptor;
@@ -53,7 +54,6 @@ use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::server_api::{AIApiError, DeserializationError};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shell::ShellType;
-use crate::TelemetryEvent;
 
 /// A server supplied ID for a specific AI generated output.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
@@ -610,13 +610,13 @@ impl AIAgentOutput {
                 }
                 AIAgentOutputMessageType::Action(action) => {
                     // Include action results from the action model if available
-                    if let Some(action_model) = action_model {
-                        if let Some(action_result) = action_model.get_action_result(&action.id) {
-                            result.push(format!("{}", MarkdownActionResult(&action_result.result)));
-                            // Add an extra newline after tool call results for readability
-                            result.push(String::new());
-                            last_was_action = true;
-                        }
+                    if let Some(action_model) = action_model
+                        && let Some(action_result) = action_model.get_action_result(&action.id)
+                    {
+                        result.push(format!("{}", MarkdownActionResult(&action_result.result)));
+                        // Add an extra newline after tool call results for readability
+                        result.push(String::new());
+                        last_was_action = true;
                     }
                 }
                 AIAgentOutputMessageType::TodoOperation(operation) => {
@@ -704,6 +704,7 @@ pub enum RenderableAIError {
     AwsBedrockCredentialsExpiredOrInvalid {
         model_name: String,
     },
+    GeminiEnterpriseCredentialsExpiredOrInvalid,
     /// A transient network failure (lost connection or truncated response stream). Carries its
     /// own complete user-facing copy; `kind` preserves the structured cause (including the raw
     /// API error) so user reports can disambiguate the different causes behind the shared message.
@@ -725,17 +726,21 @@ pub enum RenderableAIError {
         is_user_error: bool,
     },
     /// An agent-issued command caused the shell process to exit, so the run
-    /// cannot continue. Surfaced as a terminal failure (FAILED) rather than a
-    /// user cancellation.
-    AgentExitedShell,
+    /// cannot continue. Surfaced as a terminal failure (FAILED).
+    /// `command` is the (secret-redacted) command that exited the shell.
+    AgentExitedShell {
+        command: String,
+    },
+    /// A cloud-mode startup failure. Carries the raw server error message and
+    /// surfaces it without the generic apology prefix, matching the dedicated
+    /// GUI error card (`render_cloud_mode_error_screen`) which shows the
+    /// message directly.
+    CloudStartupFailed(String),
 }
 
 impl RenderableAIError {
     const TRANSIENT_NETWORK_ERROR_MESSAGE: &'static str =
         "Warp lost connection while receiving the agent response. This is usually temporary.";
-    /// User-facing message shown when an agent-issued command exits the shell.
-    pub const AGENT_EXITED_SHELL_MESSAGE: &'static str =
-        "The shell exited while the agent was running a command, so the run could not continue. Ensure the agent is not asked to run commands or source scripts that can exit the shell.";
     /// Creates a transient network error. `kind` is the structured cause (including the raw API
     /// error where one exists), preserved so user reports can disambiguate the different causes
     /// behind the shared user-facing copy.
@@ -856,6 +861,10 @@ impl From<&Arc<AIApiError>> for RenderableAIError {
                 false,
                 TransientNetworkErrorKind::Api(value.clone()),
             ),
+            AIApiError::GrokSubscriptionTokenRefreshFailed => Self::other(
+                "Grok subscription token could not be refreshed. Please try reconnecting your subscription.",
+                true,
+            ),
             AIApiError::Deserialization(DeserializationError::Json(_))
             | AIApiError::NoContextFound
             | AIApiError::ErrorStatus(_, _)
@@ -898,6 +907,9 @@ impl Display for RenderableAIError {
                     "AWS Bedrock credentials expired or invalid for {model_name}"
                 )
             }
+            Self::GeminiEnterpriseCredentialsExpiredOrInvalid => {
+                write!(f, "Gemini Enterprise credentials expired or invalid")
+            }
             Self::TransientNetworkError { kind, .. } => {
                 write!(
                     f,
@@ -906,7 +918,13 @@ impl Display for RenderableAIError {
                 )
             }
             Self::Other { error_message, .. } => write!(f, "{error_message}"),
-            Self::AgentExitedShell => write!(f, "{}", Self::AGENT_EXITED_SHELL_MESSAGE),
+            Self::AgentExitedShell { command } => write!(
+                f,
+                "The shell exited while the agent was running the command `{command}`, so the run \
+                 could not continue. Ensure the agent is not asked to run commands or source \
+                 scripts that can exit the shell."
+            ),
+            Self::CloudStartupFailed(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -1241,15 +1259,24 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                 }
             },
             AIAgentActionResultType::ReadFiles(result) => match result {
-                ReadFilesResult::Success { files } => {
+                ReadFilesResult::Success {
+                    files,
+                    failed_files,
+                } => {
                     write!(f, "\n\n**Files Read:**\n\n")?;
                     for file in files {
                         writeln!(f, "**{}**", file.file_name)?;
                         let content = &file.content;
-                        if let AnyFileContent::StringContent(text) = content {
-                            if !text.trim().is_empty() {
-                                writeln!(f, "```\n{text}\n```\n")?;
-                            }
+                        if let AnyFileContent::StringContent(text) = content
+                            && !text.trim().is_empty()
+                        {
+                            writeln!(f, "```\n{text}\n```\n")?;
+                        }
+                    }
+                    if !failed_files.is_empty() {
+                        write!(f, "\n**Files Failed:**\n\n")?;
+                        for failed_file in failed_files {
+                            writeln!(f, "- **{}**: {}", failed_file.path, failed_file.message)?;
                         }
                     }
                     Ok(())
@@ -1289,10 +1316,10 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                     for file in files {
                         writeln!(f, "- **{}**", file.file_name)?;
                         let content = &file.content;
-                        if let AnyFileContent::StringContent(text) = content {
-                            if !text.trim().is_empty() {
-                                writeln!(f, "```\n{text}\n```\n")?;
-                            }
+                        if let AnyFileContent::StringContent(text) = content
+                            && !text.trim().is_empty()
+                        {
+                            writeln!(f, "```\n{text}\n```\n")?;
                         }
                     }
                     Ok(())
@@ -1522,6 +1549,12 @@ impl AgentOutputText {
     /// Returns the original responded text with the Markdown format syntax.
     pub fn text(&self) -> &str {
         self.markdown_text.as_str()
+    }
+    /// Returns the cached parsed Markdown, if parsing succeeded.
+    pub fn formatted_text_arc(&self) -> Option<Arc<FormattedText>> {
+        self.formatted_lines
+            .as_ref()
+            .map(FormattedTextWrapper::formatted_text_arc)
     }
 
     /// Note that mutating the returned string will not automatically reparse the text and update `formatted_lines`.
@@ -2242,6 +2275,8 @@ pub enum AIAgentContext {
         name: String,
         /// The repository owner/organization (e.g. "warpdotdev"), if determinable from the remote URL.
         owner: Option<String>,
+        /// The repository host (e.g. "github.com"), if determinable from the remote URL.
+        host: Option<String>,
     },
 
     /// Information about the GitHub pull request associated with the current branch.
@@ -2258,6 +2293,9 @@ pub enum AIAgentContext {
         /// The pull request's base branch.
         #[serde(default)]
         base_branch: String,
+        /// The full URL of the pull request (e.g. "https://github.com/owner/repo/pull/123").
+        #[serde(default)]
+        url: String,
     },
 
     /// List of available skills is provided to the agent during initialization
@@ -2717,11 +2755,6 @@ pub enum AIAgentInput {
         review_comments: AgentReviewCommentBatch,
     },
 
-    FetchReviewComments {
-        repo_path: String,
-        context: Arc<[AIAgentContext]>,
-    },
-
     SummarizeConversation {
         prompt: Option<String>,
         context: Arc<[AIAgentContext]>,
@@ -2850,7 +2883,6 @@ impl Display for AIAgentInput {
             Self::CreateNewProject { .. } => write!(f, "CreateNewProject"),
             Self::CloneRepository { .. } => write!(f, "CloneRepository"),
             Self::CodeReview { .. } => write!(f, "CodeReview"),
-            Self::FetchReviewComments { .. } => write!(f, "FetchReviewComments"),
             Self::SummarizeConversation { .. } => write!(f, "SummarizeConversation"),
             Self::InvokeSkill {
                 skill, user_query, ..
@@ -2898,7 +2930,6 @@ impl AIAgentInput {
             Self::InitProjectRules { display_query, .. }
             | Self::CreateEnvironment { display_query, .. } => display_query.clone(),
             Self::CodeReview { .. } => Some("Address these comments".to_string()),
-            Self::FetchReviewComments { .. } => Some(commands::PR_COMMENTS.name.to_string()),
             Self::InvokeSkill {
                 skill, user_query, ..
             } => {
@@ -2956,6 +2987,14 @@ impl AIAgentInput {
             query = format!("/agent {query}");
         }
         Some(query)
+    }
+
+    /// Returns the raw user query text for the [`Self::UserQuery`] variant.
+    pub fn user_query(&self) -> Option<String> {
+        match self {
+            AIAgentInput::UserQuery { query, .. } => Some(query.clone()),
+            _ => None,
+        }
     }
 
     pub fn user_query_mode(&self) -> Option<UserQueryMode> {
@@ -3027,7 +3066,6 @@ impl AIAgentInput {
             | Self::CreateNewProject { context, .. }
             | Self::CloneRepository { context, .. }
             | Self::CodeReview { context, .. }
-            | Self::FetchReviewComments { context, .. }
             | Self::InvokeSkill { context, .. }
             | Self::StartFromAmbientRunPrompt { context, .. }
             | Self::PassiveSuggestionResult { context, .. } => Some(context),
@@ -3059,7 +3097,6 @@ impl AIAgentInput {
             | Self::CreateNewProject { .. }
             | Self::CloneRepository { .. }
             | Self::CodeReview { .. }
-            | Self::FetchReviewComments { .. }
             | Self::SummarizeConversation { .. }
             | Self::InvokeSkill { .. }
             | Self::StartFromAmbientRunPrompt { .. }
@@ -3081,7 +3118,6 @@ impl AIAgentInput {
             self,
             AIAgentInput::InitProjectRules { .. }
                 | AIAgentInput::CreateEnvironment { .. }
-                | AIAgentInput::FetchReviewComments { .. }
                 | AIAgentInput::InvokeSkill { .. }
         )
     }
@@ -3268,6 +3304,15 @@ impl AIAgentExchange {
     pub fn duration(&self) -> Option<TimeDelta> {
         self.finish_time
             .map(|finish_time| finish_time.signed_duration_since(self.start_time))
+    }
+
+    /// The elapsed wall-clock time since this exchange started. `None` when
+    /// the clock skewed such that `start_time` is in the future.
+    pub fn time_since_start(&self) -> Option<Duration> {
+        Local::now()
+            .signed_duration_since(self.start_time)
+            .to_std()
+            .ok()
     }
 }
 

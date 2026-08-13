@@ -13,6 +13,8 @@ use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
+use warp_core::safe_info;
+use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -20,25 +22,25 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::read_jsonl;
 use super::codex_transcript::{
-    codex_sessions_root, find_session_file, parse_session_meta, rehydrate_codex_transcript,
-    CodexResumeInfo, CodexTranscriptEnvelope,
+    CodexResumeInfo, CodexTranscriptEnvelope, codex_sessions_root, find_session_file,
+    parse_session_meta, rehydrate_codex_transcript,
 };
 use super::json_utils::read_json_file_or_default;
 use super::{
-    write_temp_file, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness,
+    HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, write_temp_file,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
-use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
-use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
 use crate::server::server_api::ServerApi;
+use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::model::block::BlockId;
-use crate::terminal::CLIAgent;
 
 pub(crate) struct CodexHarness;
 
@@ -86,6 +88,9 @@ impl ThirdPartyHarness for CodexHarness {
             // OAuth refresh failures — all five Codex variants share this
             // substring (see upstream session/token messages).
             "could not be refreshed",
+            // Generically check for invalid request errors.
+            // Keep this last so more specific patterns can be matched first.
+            "\"type\": \"invalid_request_error\"",
         ]
     }
 
@@ -148,15 +153,15 @@ impl ThirdPartyHarness for CodexHarness {
         // to the user-turn prompt so codex treats it as immediate intent.
         // Order: resumption_prompt → context → prompt
         let mut parts: Vec<&str> = Vec::new();
-        if let Some(preamble) = resumption_prompt {
-            if !preamble.is_empty() {
-                parts.push(preamble);
-            }
+        if let Some(preamble) = resumption_prompt
+            && !preamble.is_empty()
+        {
+            parts.push(preamble);
         }
-        if let Some(ctx) = context {
-            if !ctx.is_empty() {
-                parts.push(ctx);
-            }
+        if let Some(ctx) = context
+            && !ctx.is_empty()
+        {
+            parts.push(ctx);
         }
         parts.push(prompt);
         let owned_prompt = parts.join("\n\n");
@@ -322,7 +327,7 @@ impl HarnessRunner for CodexHarnessRunner {
                             .create_external_conversation(CODEX_CLI_FORMAT)
                             .await
                             .map_err(|e| {
-                                log::error!("Failed to create external conversation: {e}");
+                                report_error!(&e);
                                 AgentDriverError::ConfigBuildFailed(e)
                             })
                     })
@@ -543,14 +548,51 @@ fn prepare_codex_environment_config(
         third_party_harness_model_config,
         openai_base_url.as_deref(),
     )?;
+    publish_warp_skill_dirs_for_codex(working_dir);
     Ok(())
 }
 
+/// Publish the skills listed in `WARP_SKILL_DIRS`, under their own names, as
+/// symlinks under `<working_dir>/.agents/skills`, so an agent running on
+/// Codex sees the same skills the Oz harness loads from `WARP_SKILL_DIRS`.
+///
+/// Published into the task's own working directory rather than `$HOME` or
+/// `CODEX_HOME`: Codex discovers `.agents/skills` as a REPO-scoped root by
+/// walking up from its starting directory to the repository root (falling
+/// back to just the starting directory itself when no repository is found),
+/// so a task's own working directory is a skill root Codex already searches
+/// on its own. This keeps concurrent tasks (e.g. on a self-hosted
+/// direct-backend worker sharing one host) from publishing into the same
+/// shared home directory. A published skill overrides any existing entry
+/// with the same name (see `skill_dirs_publish::publish_skill`), with the
+/// conflict-resolution behavior depending on whether this run is sandboxed
+/// (see `warp_isolation_platform::detect`). A no-op when `WARP_SKILL_DIRS`
+/// is not configured for this run.
+fn publish_warp_skill_dirs_for_codex(working_dir: &Path) {
+    let source_dirs = super::skill_dirs_publish::warp_skill_source_dirs(working_dir);
+    if source_dirs.is_empty() {
+        return;
+    }
+    let skill_root = working_dir.join(".agents").join("skills");
+    let is_sandbox = warp_isolation_platform::detect().is_some();
+    let published =
+        super::skill_dirs_publish::publish_skill_dirs(&skill_root, &source_dirs, is_sandbox);
+    if published > 0 {
+        safe_info!(
+            safe: ("Published {published} WARP_SKILL_DIRS skill(s) to the Codex skill root"),
+            full: (
+                "Published {published} WARP_SKILL_DIRS skill(s) to Codex skill root {}",
+                skill_root.display()
+            )
+        );
+    }
+}
+
 fn codex_config_dir() -> Result<PathBuf> {
-    if let Ok(dir) = std::env::var(CODEX_HOME_ENV) {
-        if !dir.is_empty() {
-            return Ok(PathBuf::from(dir));
-        }
+    if let Ok(dir) = std::env::var(CODEX_HOME_ENV)
+        && !dir.is_empty()
+    {
+        return Ok(PathBuf::from(dir));
     }
     dirs::home_dir()
         .map(|home| home.join(CODEX_CONFIG_DIR))

@@ -12,11 +12,20 @@ Use the Oz REST API and CLI to:
 * Create and manage the environments in which cloud agents run
 * Provide secrets for cloud agents to use
 
+## Looking up documentation
+
+Prefer current, authoritative sources when answering questions or authoring skills about Oz platform behavior:
+* Start with https://docs.warp.dev/llms.txt to discover the relevant documentation page.
+* Every `docs.warp.dev` page has an agent-readable Markdown version at the same URL with `.md` appended. Fetch that version when reading documentation; for example, https://docs.warp.dev/agents/capabilities/computer-use.md.
+* For CLI commands and flags, also confirm the installed version's behavior with `{{warp_cli_binary_name}} help` or `{{warp_cli_binary_name}} help <subcommand>`.
+
+Treat the examples below as starting points, not the sole source of truth for details that can evolve, such as computer-use artifacts, CLI flags, and API behavior. If they conflict with the live Markdown documentation or CLI help, follow the live source.
+
 ## Command Line
 
 The Oz CLI is installed as `{{warp_cli_binary_name}}`. To get help output, use `{{warp_cli_binary_name}} help` or `{{warp_cli_binary_name}} help <subcommand>`.
 Prefer `--output-format text` to review the response, or `--output-format json` to parse fields with `jq`.
-You can find more information at https://docs.warp.dev/reference/cli.
+You can find more information at https://docs.warp.dev/reference/cli.md.
 
 The most important commands are:
 * `{{warp_cli_binary_name}} agent run-cloud`: Spawn a new cloud agent. You can configure the prompt, model, environment, and other settings.
@@ -69,7 +78,7 @@ Oz has a REST API for starting and inspecting cloud agents.
 
 All API requests require authentication using an API key. The user can generate API keys in their Warp settings, on the `Platform` page (accessible via `{{warp_url_scheme}}://settings/platform`).
 
-You can find the full OpenAPI specification here: https://docs.warp.dev/reference/api-and-sdk
+You can find the API and SDK reference here: https://docs.warp.dev/reference/api-and-sdk.md.
 
 ### TypeScript / JavaScript SDK
 

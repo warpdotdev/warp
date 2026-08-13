@@ -1,8 +1,8 @@
-use self::parse_url_paths::{get_item_data_from_warp_link, WarpWebLink};
+use self::parse_url_paths::{WarpWebLink, get_item_data_from_warp_link};
 use super::*;
+use crate::ChannelState;
 use crate::launch_configs::launch_config::make_mock_single_window_launch_config;
 use crate::linear::{LinearAction, LinearIssueWork};
-use crate::ChannelState;
 
 #[test]
 fn test_find_matching_config() {
@@ -774,6 +774,44 @@ fn test_settings_section_for_simple_subpage() {
     assert!(settings_section_for_simple_subpage("not_a_subpage").is_none());
 }
 
+// -- post-checkout desktop hand-off ------------------------------------------
+
+/// Regression coverage for REV-1952: the confirmation page reports a completed
+/// purchase by riding `checkoutSuccessful=true` on the ordinary desktop
+/// redirect, so onboarding can advance without opening a settings page.
+#[test]
+fn test_url_reports_checkout_success() {
+    let scheme = ChannelState::url_scheme();
+
+    let with_flag = Url::parse(&format!(
+        "{scheme}://auth/desktop_redirect?refresh_token=abc&checkoutSuccessful=true"
+    ))
+    .unwrap();
+    assert!(url_reports_checkout_success(&with_flag));
+
+    let plain_redirect = Url::parse(&format!(
+        "{scheme}://auth/desktop_redirect?refresh_token=abc"
+    ))
+    .unwrap();
+    assert!(!url_reports_checkout_success(&plain_redirect));
+
+    // Only an explicit `true` counts, so an abandoned checkout that reports
+    // failure never advances onboarding.
+    let failed = Url::parse(&format!(
+        "{scheme}://auth/desktop_redirect?checkoutSuccessful=false"
+    ))
+    .unwrap();
+    assert!(!url_reports_checkout_success(&failed));
+
+    // The flag is not tied to the auth host: an older confirmation page can
+    // still send it on the settings deeplink.
+    let on_settings = Url::parse(&format!(
+        "{scheme}://settings/billing_and_usage?checkoutSuccessful=true"
+    ))
+    .unwrap();
+    assert!(url_reports_checkout_success(&on_settings));
+}
+
 // Regression coverage for issue #9005: shell scripts opened via `file://` should run,
 // not open in the editor. Exercised through the pure routing helper to avoid standing
 // up a full `AppContext`.
@@ -786,7 +824,7 @@ fn test_open_file_executable_sh_routes_to_execute() {
     let p = dir.path().join("run.sh");
     std::fs::write(&p, b"#!/bin/sh\n:\n").unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let action = classify_open_file_action(&p);
+    let action = classify_open_file_action(&p, true);
     assert_eq!(action, OpenFileAction::ExecuteInSession);
 }
 
@@ -798,7 +836,7 @@ fn test_open_file_non_executable_sh_routes_to_editor() {
     let p = dir.path().join("view.sh");
     std::fs::write(&p, b"#!/bin/sh\n:\n").unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
-    assert_eq!(classify_open_file_action(&p), OpenFileAction::Editor);
+    assert_eq!(classify_open_file_action(&p, true), OpenFileAction::Editor);
 }
 
 #[test]
@@ -811,7 +849,7 @@ fn test_open_file_executable_bash_zsh_fish_route_to_execute() {
         std::fs::write(&p, b"#!/bin/sh\n:\n").unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(
-            classify_open_file_action(&p),
+            classify_open_file_action(&p, true),
             OpenFileAction::ExecuteInSession,
             "{name} should route to ExecuteInSession",
         );
@@ -819,11 +857,47 @@ fn test_open_file_executable_bash_zsh_fish_route_to_execute() {
 }
 
 #[test]
-fn test_open_file_markdown_unchanged() {
+fn test_open_file_markdown_routes_to_notebook_when_viewer_enabled() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("README.md");
     std::fs::write(&p, b"# hi\n").unwrap();
-    assert_eq!(classify_open_file_action(&p), OpenFileAction::Notebook);
+    assert_eq!(
+        classify_open_file_action(&p, true),
+        OpenFileAction::Notebook
+    );
+}
+
+#[test]
+fn test_open_file_markdown_routes_to_editor_when_viewer_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("README.md");
+    std::fs::write(&p, b"# hi\n").unwrap();
+    assert_eq!(classify_open_file_action(&p, false), OpenFileAction::Editor);
+}
+
+#[test]
+fn test_open_file_ipynb_routes_to_notebook_when_enabled() {
+    // A `.ipynb` opened via `file://` (e.g. "Open with Warp" from Finder) opens
+    // in the notebook viewer, not the raw-JSON code editor.
+    let _flag = crate::features::FeatureFlag::JupyterNotebookRendering.override_enabled(true);
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("analysis.ipynb");
+    std::fs::write(&p, b"{\"nbformat\": 4, \"cells\": []}\n").unwrap();
+    assert_eq!(
+        classify_open_file_action(&p, false),
+        OpenFileAction::Notebook
+    );
+}
+
+#[test]
+fn test_open_file_ipynb_opens_in_editor_when_disabled() {
+    // Without the feature flag, `.ipynb` is not rendered in the notebook viewer
+    // and falls through to the code editor.
+    let _flag = crate::features::FeatureFlag::JupyterNotebookRendering.override_enabled(false);
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("analysis.ipynb");
+    std::fs::write(&p, b"{\"nbformat\": 4, \"cells\": []}\n").unwrap();
+    assert_eq!(classify_open_file_action(&p, true), OpenFileAction::Editor);
 }
 
 #[test]
@@ -832,7 +906,7 @@ fn test_open_file_rust_source_still_opens_in_editor() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("main.rs");
     std::fs::write(&p, b"fn main() {}\n").unwrap();
-    assert_eq!(classify_open_file_action(&p), OpenFileAction::Editor);
+    assert_eq!(classify_open_file_action(&p, true), OpenFileAction::Editor);
 }
 
 #[test]
@@ -868,7 +942,7 @@ fn test_open_file_editor_binary_file_is_rejected() {
 fn test_open_file_directory_routes_to_session() {
     let dir = tempfile::tempdir().unwrap();
     assert_eq!(
-        classify_open_file_action(dir.path()),
+        classify_open_file_action(dir.path(), true),
         OpenFileAction::ExecuteInSession
     );
 }
@@ -884,7 +958,7 @@ fn test_open_file_non_runnable_shebang_routes_to_editor() {
     let p = dir.path().join("noext");
     std::fs::write(&p, b"#!/bin/sh\necho hi\n").unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
-    assert_eq!(classify_open_file_action(&p), OpenFileAction::Editor);
+    assert_eq!(classify_open_file_action(&p, true), OpenFileAction::Editor);
 }
 
 #[test]

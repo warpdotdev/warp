@@ -9,10 +9,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{Result, anyhow, ensure};
 use itertools::Itertools;
 use session_sharing_protocol::common::SessionId;
 use url::Url;
+#[cfg(not(target_family = "wasm"))]
+use warp_errors::report_error;
 use warp_util::path::LineAndColumnArg;
 use warpui::notification::UserNotification;
 use warpui::platform::TerminationMode;
@@ -28,29 +30,30 @@ use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::linear::{LinearAction, LinearIssueWork};
 use crate::root_view::{
-    open_new_window_get_handles, open_new_with_workspace_source, NewWorkspaceSource,
-    OpenLaunchConfigArg,
+    NewWorkspaceSource, OpenLaunchConfigArg, open_new_window_get_handles,
+    open_new_with_workspace_source,
 };
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
 use crate::settings_view::{
-    settings_widget_deeplink_target, OpenTeamsSettingsModalArgs, SettingsSection,
+    OpenTeamsSettingsModalArgs, SettingsSection, settings_widget_deeplink_target,
 };
 use crate::tab_configs::TabConfig;
 use crate::user_config::{load_launch_configs, load_tab_configs, tab_configs_dir};
 use crate::util::openable_file_type::{
-    is_file_openable_in_warp, is_markdown_file, is_runnable_shell_script, starts_with_shebang,
+    is_file_openable_in_warp, is_markdown_file, is_runnable_shell_script,
+    renders_in_warp_notebook_viewer, starts_with_shebang,
 };
 use crate::view_components::DismissibleToast;
 use crate::workspace::auto_handoff::trigger_auto_handoff_to_cloud;
 use crate::workspace::util::PaneViewLocator;
 use crate::workspace::{
-    active_terminal_in_window, AutoCloudHandoffTrigger, ToastStack, Workspace, WorkspaceAction,
-    WorkspaceRegistry,
+    AutoCloudHandoffTrigger, ToastStack, Workspace, WorkspaceAction, WorkspaceRegistry,
+    active_terminal_in_window,
 };
 use crate::{
-    quake_mode_window_id, quake_mode_window_is_open, safe_info, send_telemetry_from_app_ctx,
-    ChannelState, OpenPath,
+    ChannelState, OpenPath, quake_mode_window_id, quake_mode_window_is_open, safe_info,
+    send_telemetry_from_app_ctx,
 };
 
 const DESKTOP_REDIRECT_URI_PATH: &str = "/desktop_redirect";
@@ -79,6 +82,18 @@ pub enum OpenSettingsArgs {
 /// Source query parameter value indicating auth was initiated from cloud agent setup.
 /// Used to skip opening settings page after GitHub auth completes.
 pub const CLOUD_SETUP_SOURCE: &str = "cloud_setup";
+
+/// Query parameter the web checkout confirmation page appends to the desktop
+/// hand-off to report that the purchase went through. It is the shared
+/// convention across every product the web can sell (a subscription plan or a
+/// one-time credit pack), so the client has a single success signal to react to.
+pub const CHECKOUT_SUCCESSFUL_PARAM: &str = "checkoutSuccessful";
+
+/// Whether an incoming deeplink reports a completed web checkout.
+pub fn url_reports_checkout_success(url: &Url) -> bool {
+    url.query_pairs()
+        .any(|(key, value)| key == CHECKOUT_SUCCESSFUL_PARAM && value == "true")
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum UriHost {
@@ -491,7 +506,7 @@ impl UriHost {
                     let result = crate::ai::mcp::TemplatableMCPServerManager::handle(ctx)
                         .update(ctx, |manager, _ctx| manager.handle_oauth_callback(url));
                     if let Err(e) = result {
-                        log::error!("Failed to handle MCP OAuth callback: {e:?}");
+                        report_error!(e.context("Failed to handle MCP OAuth callback"));
                     }
                 }
             }
@@ -1016,13 +1031,18 @@ impl Action {
                     return;
                 };
 
-                if let Some(workspace) = workspaces.pop() {
-                    workspace.update(ctx, |workspace, ctx| {
-                        workspace
-                            .handle_action(&WorkspaceAction::OpenRepository { path: None }, ctx);
-                    });
-                } else {
-                    log::warn!("no workspace views in window {window_id} for open repo action");
+                match workspaces.pop() {
+                    Some(workspace) => {
+                        workspace.update(ctx, |workspace, ctx| {
+                            workspace.handle_action(
+                                &WorkspaceAction::OpenRepository { path: None },
+                                ctx,
+                            );
+                        });
+                    }
+                    _ => {
+                        log::warn!("no workspace views in window {window_id} for open repo action");
+                    }
                 }
             }
             Action::CloudAgentSetup => {
@@ -1041,14 +1061,18 @@ impl Action {
                     return;
                 };
 
-                if let Some(workspace) = workspaces.pop() {
-                    workspace.update(ctx, |workspace, ctx| {
-                        workspace.handle_action(&WorkspaceAction::OpenCloudAgentSetupGuide, ctx);
-                    });
-                } else {
-                    log::warn!(
-                        "no workspace views in window {window_id} for cloud agent setup action"
-                    );
+                match workspaces.pop() {
+                    Some(workspace) => {
+                        workspace.update(ctx, |workspace, ctx| {
+                            workspace
+                                .handle_action(&WorkspaceAction::OpenCloudAgentSetupGuide, ctx);
+                        });
+                    }
+                    _ => {
+                        log::warn!(
+                            "no workspace views in window {window_id} for cloud agent setup action"
+                        );
+                    }
                 }
             }
             Action::NewCloudAgentConversation => {
@@ -1064,14 +1088,17 @@ impl Action {
                     return;
                 };
 
-                if let Some(workspace) = workspaces.pop() {
-                    workspace.update(ctx, |workspace, ctx| {
-                        workspace.handle_action(&WorkspaceAction::AddAmbientAgentTab, ctx);
-                    });
-                } else {
-                    log::warn!(
-                        "no workspace views in window {window_id} for new cloud agent conversation action"
-                    );
+                match workspaces.pop() {
+                    Some(workspace) => {
+                        workspace.update(ctx, |workspace, ctx| {
+                            workspace.handle_action(&WorkspaceAction::AddAmbientAgentTab, ctx);
+                        });
+                    }
+                    _ => {
+                        log::warn!(
+                            "no workspace views in window {window_id} for new cloud agent conversation action"
+                        );
+                    }
                 }
             }
             Action::NewAgentConversation => {
@@ -1143,23 +1170,22 @@ impl Action {
                         .and_then(|window_id| active_terminal_view_id_in_window(window_id, ctx));
                 }
 
-                if let Some(terminal_view_id) = terminal_view_id {
-                    if let Some((window_id, workspace)) =
+                if let Some(terminal_view_id) = terminal_view_id
+                    && let Some((window_id, workspace)) =
                         find_workspace_for_terminal_view(terminal_view_id, ctx)
-                    {
-                        ctx.windows().show_window_and_focus_app(window_id);
-                        workspace.update(ctx, |workspace, ctx| {
-                            workspace.handle_action(
-                                &WorkspaceAction::FocusTerminalViewInWorkspace { terminal_view_id },
-                                ctx,
-                            );
-                        });
-                        // Notify after focusing so Cloud Mode panes can retry in the selected pane.
-                        GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
-                            notifier.notify_auth_completed(ctx);
-                        });
-                        return;
-                    }
+                {
+                    ctx.windows().show_window_and_focus_app(window_id);
+                    workspace.update(ctx, |workspace, ctx| {
+                        workspace.handle_action(
+                            &WorkspaceAction::FocusTerminalViewInWorkspace { terminal_view_id },
+                            ctx,
+                        );
+                    });
+                    // Notify after focusing so Cloud Mode panes can retry in the selected pane.
+                    GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
+                        notifier.notify_auth_completed(ctx);
+                    });
+                    return;
                 }
 
                 GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
@@ -1274,7 +1300,7 @@ fn get_primary_window(
 /// What `open_file` should do with an incoming `file://` URL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpenFileAction {
-    /// Open in the markdown notebook pane.
+    /// Open in the notebook viewer pane (Markdown, or Jupyter when enabled).
     Notebook,
     /// Open in Warp's code/text editor pane.
     Editor,
@@ -1285,8 +1311,16 @@ enum OpenFileAction {
 
 /// Pure routing decision for `open_file`. Extracted so it can be unit-tested without
 /// standing up a full `AppContext`.
-fn classify_open_file_action(path: &Path) -> OpenFileAction {
-    if is_markdown_file(path) {
+///
+/// The Markdown Viewer preference is passed in because macOS can hand Markdown
+/// file URLs to Warp via the file type registration in `Info.plist`. Since Warp
+/// cannot easily update that registration when the user toggles the viewer
+/// preference, the URI handler must check the preference before routing a
+/// Markdown file to the in-Warp notebook viewer. Other notebook viewer formats,
+/// such as Jupyter notebooks, are controlled by their own routing checks.
+fn classify_open_file_action(path: &Path, prefer_markdown_viewer: bool) -> OpenFileAction {
+    if renders_in_warp_notebook_viewer(path) && (!is_markdown_file(path) || prefer_markdown_viewer)
+    {
         OpenFileAction::Notebook
     } else if is_runnable_shell_script(path) {
         OpenFileAction::ExecuteInSession
@@ -1305,7 +1339,8 @@ fn can_open_file_editor_path(path: &Path) -> bool {
 }
 
 /// Handle an incoming `file://` URL.
-/// * Markdown files are opened as notebook panes.
+/// * Markdown files are opened as notebook panes when the viewer preference is enabled.
+/// * Jupyter notebook files are opened as notebook panes when their feature flag is enabled.
 /// * For directories, open a new session at the directory path.
 /// * For other files, open a new session at the parent directory path, then possibly execute the
 ///   file.
@@ -1315,7 +1350,15 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
             .map(|view_id| (window_id, view_id))
     });
 
-    let action = classify_open_file_action(&path);
+    #[cfg(feature = "local_fs")]
+    let prefer_markdown_viewer = {
+        use crate::util::file::external_editor::EditorSettings;
+        *EditorSettings::as_ref(ctx).prefer_markdown_viewer
+    };
+    #[cfg(not(feature = "local_fs"))]
+    let prefer_markdown_viewer = true;
+
+    let action = classify_open_file_action(&path, prefer_markdown_viewer);
 
     if action == OpenFileAction::Notebook {
         if let Some((primary_window_id, root_view_id)) = primary_window_and_view {
@@ -1333,7 +1376,7 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
         #[cfg(feature = "local_fs")]
         {
             use crate::code::editor_management::CodeSource;
-            use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
+            use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
             use crate::util::file::external_editor::EditorSettings;
             use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
 
@@ -1355,13 +1398,13 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
 
             ctx.windows().show_window_and_focus_app(window_id);
 
-            if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-                if let Some(workspace) = workspaces.into_iter().next() {
-                    workspace.update(ctx, |workspace, ctx| {
-                        let source = CodeSource::Finder { path: path.clone() };
-                        workspace.open_file_with_target(path, target, None, source, ctx);
-                    });
-                }
+            if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+                && let Some(workspace) = workspaces.into_iter().next()
+            {
+                workspace.update(ctx, |workspace, ctx| {
+                    let source = CodeSource::Finder { path: path.clone() };
+                    workspace.open_file_with_target(path, target, None, source, ctx);
+                });
             }
         }
     } else {
@@ -1384,10 +1427,10 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
             );
 
             // Run command after session has been added
-            if path.is_file() {
-                if let Some(path_str) = path.to_str() {
-                    execute_file(primary_window_id, path_str, ctx);
-                }
+            if path.is_file()
+                && let Some(path_str) = path.to_str()
+            {
+                execute_file(primary_window_id, path_str, ctx);
             }
         } else {
             let open_path = OpenPath {
@@ -1398,10 +1441,10 @@ fn open_file(window_id: Option<WindowId>, path: PathBuf, ctx: &mut AppContext) {
             // Run command after window has been added
             if path.is_file() {
                 let active_window_id = ctx.windows().active_window();
-                if let Some(primary_window_id) = get_primary_window(active_window_id, ctx) {
-                    if let Some(path_str) = path.to_str() {
-                        execute_file(primary_window_id, path_str, ctx);
-                    }
+                if let Some(primary_window_id) = get_primary_window(active_window_id, ctx)
+                    && let Some(path_str) = path.to_str()
+                {
+                    execute_file(primary_window_id, path_str, ctx);
                 }
             }
         }
@@ -1420,7 +1463,7 @@ fn open_file_editor(
     #[cfg(feature = "local_fs")]
     {
         use crate::code::editor_management::CodeSource;
-        use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
+        use crate::root_view::{NewWorkspaceSource, open_new_with_workspace_source};
         use crate::util::file::external_editor::EditorSettings;
         use crate::util::openable_file_type::resolve_file_target_to_open_in_warp;
 
@@ -1449,17 +1492,17 @@ fn open_file_editor(
 
         ctx.windows().show_window_and_focus_app(window_id);
 
-        if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-            if let Some(workspace) = workspaces.into_iter().next() {
-                workspace.update(ctx, |workspace, ctx| {
-                    let source = CodeSource::Link {
-                        path: path.clone(),
-                        range_start: line_col,
-                        range_end: None,
-                    };
-                    workspace.open_file_with_target(path, target, line_col, source, ctx);
-                });
-            }
+        if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+            && let Some(workspace) = workspaces.into_iter().next()
+        {
+            workspace.update(ctx, |workspace, ctx| {
+                let source = CodeSource::Link {
+                    path: path.clone(),
+                    range_start: line_col,
+                    range_end: None,
+                };
+                workspace.open_file_with_target(path, target, line_col, source, ctx);
+            });
         }
     }
 }

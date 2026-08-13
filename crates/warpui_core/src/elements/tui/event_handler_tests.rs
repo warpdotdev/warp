@@ -2,12 +2,13 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::TuiEventHandler;
+use crate::elements::tui::test_support::with_event_context;
 use crate::elements::tui::{
-    TuiChildView, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPresentationContext,
-    TuiRect,
+    TuiChildView, TuiDispatchEventResult, TuiElement, TuiEvent, TuiPresentationContext,
 };
-use crate::event::KeyEventDetails;
+use crate::event::{KeyEventDetails, KeyState};
 use crate::keymap::Keystroke;
+use crate::platform::keyboard::KeyCode;
 use crate::{App, EntityId, EntityIdMap};
 
 fn key_event(key: &str) -> TuiEvent {
@@ -22,6 +23,13 @@ fn key_event(key: &str) -> TuiEvent {
     }
 }
 
+fn modifier_event(state: KeyState) -> TuiEvent {
+    TuiEvent::ModifierKeyChanged {
+        key_code: KeyCode::ControlLeft,
+        state,
+    }
+}
+
 #[test]
 fn invokes_callback_on_matching_key_and_reports_handled() {
     App::test((), |app| async move {
@@ -33,28 +41,16 @@ fn invokes_callback_on_matching_key_and_reports_handled() {
                     counter.set(counter.get() + 1);
                 });
 
-            let area = TuiRect::new(0, 0, 4, 1);
-            let mut event_ctx = TuiEventContext::default();
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
+            with_event_context(|event_ctx| {
+                let handled = handler.dispatch_event(&key_event("enter"), event_ctx, app_ctx);
+                assert!(handled);
+                assert_eq!(hits.get(), 1);
 
-            let handled = handler.dispatch_event(
-                &key_event("enter"),
-                area,
-                &mut event_ctx,
-                &mut ctx,
-                app_ctx,
-            );
-            assert!(handled);
-            assert_eq!(hits.get(), 1);
-
-            // A non-matching key is left unhandled for ancestors, runs no callback.
-            let handled =
-                handler.dispatch_event(&key_event("esc"), area, &mut event_ctx, &mut ctx, app_ctx);
-            assert!(!handled);
-            assert_eq!(hits.get(), 1);
+                // A non-matching key is left unhandled for ancestors, runs no callback.
+                let handled = handler.dispatch_event(&key_event("esc"), event_ctx, app_ctx);
+                assert!(!handled);
+                assert_eq!(hits.get(), 1);
+            });
         });
     });
 }
@@ -75,18 +71,9 @@ fn child_consumes_the_event_before_the_wrapper() {
                 outer_counter.set(outer_counter.get() + 1)
             });
 
-            let mut event_ctx = TuiEventContext::default();
-            let mut rendered_views = EntityIdMap::default();
-            let mut ctx = TuiLayoutContext {
-                rendered_views: &mut rendered_views,
-            };
-            let handled = outer.dispatch_event(
-                &key_event("enter"),
-                TuiRect::new(0, 0, 1, 1),
-                &mut event_ctx,
-                &mut ctx,
-                app_ctx,
-            );
+            let handled = with_event_context(|event_ctx| {
+                outer.dispatch_event(&key_event("enter"), event_ctx, app_ctx)
+            });
 
             assert!(handled);
             assert_eq!(inner_hits.get(), 1);
@@ -95,6 +82,68 @@ fn child_consumes_the_event_before_the_wrapper() {
     });
 }
 
+#[test]
+fn modifier_callback_controls_propagation() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let hits = Rc::new(Cell::new(0u32));
+            let counter = hits.clone();
+            let mut handler = TuiEventHandler::new(().finish()).on_modifier_key_changed(
+                move |key_code, state, _, _| {
+                    assert_eq!(key_code, KeyCode::ControlLeft);
+                    counter.set(counter.get() + 1);
+                    match state {
+                        KeyState::Pressed => TuiDispatchEventResult::PropagateToParent,
+                        KeyState::Released => TuiDispatchEventResult::StopPropagation,
+                    }
+                },
+            );
+
+            with_event_context(|event_ctx| {
+                assert!(!handler.dispatch_event(
+                    &modifier_event(KeyState::Pressed),
+                    event_ctx,
+                    app_ctx
+                ));
+                assert!(handler.dispatch_event(
+                    &modifier_event(KeyState::Released),
+                    event_ctx,
+                    app_ctx
+                ));
+            });
+            assert_eq!(hits.get(), 2);
+        });
+    });
+}
+
+#[test]
+fn child_consumes_modifier_event_before_wrapper() {
+    App::test((), |app| async move {
+        app.read(|app_ctx| {
+            let inner_hits = Rc::new(Cell::new(0u32));
+            let outer_hits = Rc::new(Cell::new(0u32));
+            let inner_counter = inner_hits.clone();
+            let outer_counter = outer_hits.clone();
+            let inner =
+                TuiEventHandler::new(().finish()).on_modifier_key_changed(move |_, _, _, _| {
+                    inner_counter.set(inner_counter.get() + 1);
+                    TuiDispatchEventResult::StopPropagation
+                });
+            let mut outer =
+                TuiEventHandler::new(inner.finish()).on_modifier_key_changed(move |_, _, _, _| {
+                    outer_counter.set(outer_counter.get() + 1);
+                    TuiDispatchEventResult::StopPropagation
+                });
+
+            let handled = with_event_context(|event_ctx| {
+                outer.dispatch_event(&modifier_event(KeyState::Pressed), event_ctx, app_ctx)
+            });
+            assert!(handled);
+            assert_eq!(inner_hits.get(), 1);
+            assert_eq!(outer_hits.get(), 0);
+        });
+    });
+}
 #[test]
 fn present_recurses_into_the_wrapped_child() {
     let root = EntityId::from_usize(1);

@@ -7,29 +7,30 @@ use pathfinder_geometry::rect::RectF;
 use persistence::model::{
     AgentConversation, AgentConversationData, AgentConversationRecord, ConversationUsageMetadata,
 };
-use repo_metadata::repositories::DetectedRepositories;
-use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
 use session_sharing_protocol::common::SessionId;
 use shared_session::permissions_manager::SessionPermissionsManager;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_server_client::iap::IapManager;
 use warpui::platform::{WindowBounds, WindowStyle};
-use warpui::windowing::state::ApplicationStage;
 use warpui::windowing::WindowManager;
+use warpui::windowing::state::ApplicationStage;
 use warpui::{App, ModelHandle};
 use watcher::HomeDirectoryWatcher;
 
 use super::child_agent::hydration::{
-    decide_remote_child_hydration_action, RemoteChildHydrationAction,
+    RemoteChildHydrationAction, decide_remote_child_hydration_action,
 };
 use super::child_agent::{
-    create_hidden_child_agent_conversation, HiddenChildAgentConversationRequest,
-    HiddenChildAgentTaskContext,
+    HiddenChildAgentConversationRequest, HiddenChildAgentTaskContext,
+    create_hidden_child_agent_conversation,
 };
 use super::*;
+use crate::ai::AIRequestUsageModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
@@ -49,6 +50,7 @@ use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStream
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQueryModel};
+use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -59,7 +61,6 @@ use crate::ai::outline::RepoOutlines;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
-use crate::ai::AIRequestUsageModel;
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::user::TEST_USER_UID;
 use crate::changelog_model::ChangelogModel;
@@ -87,8 +88,8 @@ use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::history::History;
 use crate::terminal::keys::TerminalKeybindings;
-use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::local_tty::TerminalManager;
+use crate::terminal::local_tty::spawner::PtySpawner;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::{
@@ -106,7 +107,7 @@ use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    experiments, AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
+    AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, experiments,
 };
 
 fn initialize_app(app: &mut App) {
@@ -119,6 +120,7 @@ fn initialize_app(app: &mut App) {
         IapManager::new(
             None,
             Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
+            None,
             ctx,
         )
     });
@@ -131,6 +133,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| SystemStats::new());
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(CloudEnvironmentCatalog::new);
     app.add_singleton_model(UserWorkspaces::default_mock);
     app.add_singleton_model(TeamTesterStatus::mock);
     app.add_singleton_model(TeamUpdateManager::mock);
@@ -206,12 +209,13 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|ctx| PersistedWorkspace::new(vec![], HashMap::new(), None, ctx));
     app.add_singleton_model(|_| ProjectContextModel::default());
     app.add_singleton_model(|ctx| crate::ai::agent_tips::AITipModel::new_for_agent_tips(ctx));
-    app.add_singleton_model(|_| RestoredAgentConversations::new(vec![]));
+    app.add_singleton_model(|_| RestoredAgentConversations::new_seeded(vec![]));
     app.add_singleton_model(OneTimeModalModel::new);
     app.add_singleton_model(|_| WorkspaceRegistry::new());
     app.add_singleton_model(UndoCloseStack::new);
     app.add_singleton_model(|_| IgnoredSuggestionsModel::new(vec![]));
     app.add_singleton_model(|_| PricingInfoModel::new());
+    app.add_singleton_model(crate::ai::pricing_promotion::PricingPromotionState::new);
     app.add_singleton_model(AIDocumentModel::new);
     app.add_singleton_model(|_| History::new(vec![]));
     app.add_singleton_model(|_| GitHubAuthNotifier::new());
@@ -296,6 +300,7 @@ fn ambient_agent_task_for_current_user(task_id: AmbientAgentTaskId) -> AmbientAg
         run_time: Some("PT1S".parse().unwrap()),
         status_message: None,
         source: Some(AgentSource::CloudMode),
+        execution_location: None,
         session_id: None,
         session_link: None,
         executor: None,
@@ -349,6 +354,7 @@ fn test_server_conversation_metadata(
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
+            total_provider_cost_in_cents: None,
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
@@ -399,6 +405,7 @@ fn persisted_remote_child_conversation(
             })
             .expect("conversation data should serialize"),
             last_modified_at: Utc::now().naive_utc(),
+            summary: None,
         },
         tasks: vec![warp_multi_agent_api::Task {
             id: Uuid::new_v4().to_string(),
@@ -760,6 +767,7 @@ fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
 
             assert_eq!(panes.pane_count(), initial_tree_pane_count);
             assert_eq!(panes.pane_ids().count(), initial_content_pane_count + 1);
+            assert_eq!(panes.terminal_pane_ids().count(), 2);
             assert_eq!(panes.visible_pane_count(), initial_visible_count);
             assert!(panes.has_pane_id(child_pane_id.into()));
             assert!(!panes.panes.is_pane_in_tree(child_pane_id.into()));
@@ -767,6 +775,15 @@ fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
             // The new child pane should remain off-tree and not affect visible ordering.
             assert_eq!(panes.pane_id_by_index(0), Some(parent_pane_id));
             assert_eq!(panes.pane_id_by_index(1), None);
+            let visible_terminal_views = panes.visible_terminal_views(ctx);
+            assert_eq!(visible_terminal_views.len(), 1);
+            assert_eq!(
+                visible_terminal_views[0].id(),
+                panes
+                    .terminal_view_from_pane_id(parent_pane_id, ctx)
+                    .unwrap()
+                    .id()
+            );
 
             // Creating a hidden child pane should not steal focus or active session.
             assert_eq!(panes.focused_pane_id(ctx), parent_pane_id);
@@ -1081,7 +1098,7 @@ fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() 
 ///   * the hidden child pane must materialize in `child_agent_panes` keyed
 ///     by the placeholder conversation id after parent fullscreen.
 ///
-/// The disk-load construction path (`BlocklistAIHistoryModel::new(_, &conversations)`
+/// The disk-load construction path (`BlocklistAIHistoryModel::new(_, _, &conversations)`
 /// invoking `initialize_historical_conversations`) is covered by
 /// `test_initialize_historical_conversations_eagerly_hydrates_orchestration_children`
 /// in `app/src/ai/blocklist/history_model_tests.rs`. `agent_display_name_from_id`
@@ -1269,13 +1286,14 @@ fn test_create_missing_child_agent_panes_restores_remote_child_from_history_mode
                     .set_parent_for_conversation(child_conversation_id, parent_conversation_id);
             });
             RestoredAgentConversations::handle(ctx).update(ctx, |store, _| {
-                *store =
-                    RestoredAgentConversations::new(vec![persisted_remote_child_conversation(
+                *store = RestoredAgentConversations::new_seeded(vec![
+                    persisted_remote_child_conversation(
                         child_conversation_id,
                         Some(parent_conversation_id),
                         None,
                         task_id,
-                    )]);
+                    ),
+                ]);
             });
 
             panes.restore_missing_child_agent_panes_for_parent(
@@ -1386,6 +1404,91 @@ fn test_ambient_transcript_restore_uses_generic_viewer_when_handoff_disabled() {
             assert_eq!(
                 model.conversation_transcript_viewer_status(),
                 Some(&ConversationTranscriptViewerStatus::ViewingAmbientConversation(task_id))
+            );
+        });
+    });
+}
+
+/// REMOTE-2208: attaching a live execution session to a read-only conversation transcript
+/// viewer is impossible (it is backed by a mock manager with no network), so the attach must
+/// report failure. Reporting success left the caller focused on a transcript with no input box
+/// — the "session opens but the terminal is not interactive" symptom — instead of falling back
+/// to opening a fresh, writable shared-session tab.
+#[test]
+fn attach_execution_session_refuses_read_only_transcript_viewer_pane() {
+    let _handoff = FeatureFlag::HandoffCloudCloud.override_enabled(false);
+    let _setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        let task_id = new_ambient_agent_task_id();
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.load_data_into_conversation_transcript_viewer(
+                cloud_conversation_with_ambient_task(task_id),
+                Some(task_id),
+                ctx,
+            );
+        });
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let terminal_view = panes
+                .active_session_view(ctx)
+                .expect("transcript viewer should have an active terminal view");
+            let pane_id = panes
+                .find_pane_id_for_terminal_view(terminal_view.id(), ctx)
+                .expect("transcript viewer pane should be found");
+            assert!(
+                terminal_view.as_ref(ctx).model.lock().is_read_only(),
+                "precondition: the transcript viewer pane is read-only",
+            );
+
+            assert!(
+                !panes.attach_execution_session_to_ambient_pane(pane_id, SessionId::new(), ctx),
+                "a read-only transcript viewer must not report a successful live-session attach",
+            );
+        });
+    });
+}
+
+/// REMOTE-2208: the read-only state is cleared as part of reattaching, so it must only be
+/// cleared when a join actually starts. A caller that gets `false` opens a fresh pane instead,
+/// and clearing eagerly would leave this pane looking writable while attached to nothing.
+#[test]
+fn attach_execution_session_keeps_read_only_state_when_the_attach_fails() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let terminal_view = panes
+                .active_session_view(ctx)
+                .expect("mock pane group should have an active terminal view");
+            let pane_id = panes
+                .find_pane_id_for_terminal_view(terminal_view.id(), ctx)
+                .expect("active terminal view should have a pane");
+
+            // A plain terminal pane's manager is not a shared-session viewer, so the attach below
+            // fails at the downcast — the same shape as a manager that is already connecting.
+            terminal_view.update(ctx, |view, _| {
+                view.model
+                    .lock()
+                    .set_shared_session_status(SharedSessionStatus::FinishedViewer);
+            });
+            assert!(
+                terminal_view.as_ref(ctx).model.lock().is_read_only(),
+                "precondition: the pane is in a finished, read-only state",
+            );
+
+            assert!(
+                !panes.attach_execution_session_to_ambient_pane(pane_id, SessionId::new(), ctx),
+                "precondition: this attach cannot succeed",
+            );
+            assert!(
+                terminal_view.as_ref(ctx).model.lock().is_read_only(),
+                "a failed attach must leave the pane read-only so the caller's fresh-tab fallback \
+                 is not shadowed by a pane that looks writable but joined nothing",
             );
         });
     });
@@ -1538,9 +1641,11 @@ fn test_entering_remote_parent_agent_view_lazily_restores_local_hidden_child_pan
             let initial_pane_count = panes.pane_count();
             let initial_visible_pane_count = panes.visible_pane_count();
 
-            assert!(!panes
-                .child_agent_panes
-                .contains_key(&local_child_conversation_id));
+            assert!(
+                !panes
+                    .child_agent_panes
+                    .contains_key(&local_child_conversation_id)
+            );
 
             enter_agent_view_for_conversation(
                 panes,
@@ -1618,9 +1723,11 @@ fn test_entering_remote_parent_agent_view_lazily_restores_remote_hidden_child_pa
             let initial_pane_count = panes.pane_count();
             let initial_visible_pane_count = panes.visible_pane_count();
 
-            assert!(!panes
-                .child_agent_panes
-                .contains_key(&remote_child_conversation_id));
+            assert!(
+                !panes
+                    .child_agent_panes
+                    .contains_key(&remote_child_conversation_id)
+            );
 
             enter_agent_view_for_conversation(
                 panes,
@@ -1868,8 +1975,8 @@ fn test_ensure_hidden_child_agent_pane_materializes_missing_child_pane() {
 }
 
 #[test]
-fn test_ensure_hidden_child_agent_pane_materializes_restored_remote_child_linked_by_parent_agent_id(
-) {
+fn test_ensure_hidden_child_agent_pane_materializes_restored_remote_child_linked_by_parent_agent_id()
+ {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -1900,13 +2007,14 @@ fn test_ensure_hidden_child_agent_pane_materializes_restored_remote_child_linked
                     .set_parent_for_conversation(child_conversation_id, parent_conversation_id);
             });
             RestoredAgentConversations::handle(ctx).update(ctx, |store, _| {
-                *store =
-                    RestoredAgentConversations::new(vec![persisted_remote_child_conversation(
+                *store = RestoredAgentConversations::new_seeded(vec![
+                    persisted_remote_child_conversation(
                         child_conversation_id,
                         None,
                         Some(parent_run_id),
                         task_id,
-                    )]);
+                    ),
+                ]);
             });
 
             assert!(!panes.child_agent_panes.contains_key(&child_conversation_id));
@@ -2645,12 +2753,14 @@ fn test_start_shared_session_from_modal() {
             assert_eq!(shared_views[0].id(), terminal_view.id());
 
             let terminal_pane = pane_group.terminal_session_by_pane_index(0).unwrap();
-            assert!(terminal_pane
-                .pane_view()
-                .as_ref(ctx)
-                .header()
-                .as_ref(ctx)
-                .has_shareable_object(ctx));
+            assert!(
+                terminal_pane
+                    .pane_view()
+                    .as_ref(ctx)
+                    .header()
+                    .as_ref(ctx)
+                    .has_shareable_object(ctx)
+            );
         });
     });
 }
@@ -2726,12 +2836,14 @@ fn test_stop_shared_session() {
             let shared_views = manager.shared_views(ctx).collect_vec();
             assert!(shared_views.is_empty());
 
-            assert!(!terminal_pane
-                .pane_view()
-                .as_ref(ctx)
-                .header()
-                .as_ref(ctx)
-                .has_shareable_object(ctx));
+            assert!(
+                !terminal_pane
+                    .pane_view()
+                    .as_ref(ctx)
+                    .header()
+                    .as_ref(ctx)
+                    .has_shareable_object(ctx)
+            );
         });
     });
 }
@@ -2861,11 +2973,13 @@ fn test_terminal_pane_headers() {
 
             for terminal_pane in terminal_panes {
                 let pane_view = terminal_pane.pane_view();
-                assert!(pane_view
-                    .as_ref(ctx)
-                    .header()
-                    .as_ref(ctx)
-                    .is_visible_in_pane_group());
+                assert!(
+                    pane_view
+                        .as_ref(ctx)
+                        .header()
+                        .as_ref(ctx)
+                        .is_visible_in_pane_group()
+                );
             }
         });
 
@@ -2881,11 +2995,13 @@ fn test_terminal_pane_headers() {
             assert_eq!(terminal_panes.len(), 1);
 
             let pane_view = terminal_panes[0].pane_view();
-            assert!(pane_view
-                .as_ref(ctx)
-                .header()
-                .as_ref(ctx)
-                .is_visible_in_pane_group());
+            assert!(
+                pane_view
+                    .as_ref(ctx)
+                    .header()
+                    .as_ref(ctx)
+                    .is_visible_in_pane_group()
+            );
         });
 
         // Create a non-terminal split pane. Terminal pane header remains visible.
@@ -2905,11 +3021,13 @@ fn test_terminal_pane_headers() {
             assert_eq!(terminal_panes.len(), 1);
 
             let pane_view = terminal_panes[0].pane_view();
-            assert!(pane_view
-                .as_ref(ctx)
-                .header()
-                .as_ref(ctx)
-                .is_visible_in_pane_group());
+            assert!(
+                pane_view
+                    .as_ref(ctx)
+                    .header()
+                    .as_ref(ctx)
+                    .is_visible_in_pane_group()
+            );
         });
     });
 }
@@ -3317,4 +3435,91 @@ fn decide_remote_child_hydration_empty_token_falls_back() {
             "empty/whitespace token={empty_token:?} must fall through to Fallback",
         );
     }
+}
+
+/// APP-5243: closing a file pane only hides it while undo-close is available, and the same view is
+/// reattached without reopening its file. Releasing the file on close would therefore leave a
+/// restored pane rendering content that can never update again. The file is released only once the
+/// pane is permanently discarded.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_undo_close_keeps_a_file_pane_watching_its_file() {
+    use warp_files::FileModel;
+
+    let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(FileModel::new);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("notes.md");
+        std::fs::write(&path, "# before").expect("write file");
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let pane = FilePane::new(
+                Some(LocalOrRemotePath::Local(path.clone())),
+                None,
+                None,
+                ctx,
+            );
+            panes.add_pane_with_direction(Direction::Right, pane, true, ctx);
+        });
+
+        let (file_pane_id, file_view) = pane_group.read(&app, |panes, ctx| {
+            panes
+                .file_notebook_panes(ctx)
+                .next()
+                .expect("the file pane should exist")
+        });
+
+        // Let the read settle so the pane is fully loaded and watching.
+        let loaded = file_view.update(&mut app, |view, ctx| {
+            let file_id = view.file_id_for_test().expect("the file should be open");
+            let future_handle = FileModel::as_ref(ctx)
+                .get_future_handle(file_id)
+                .expect("Loading future should be present");
+            ctx.await_spawned_future(future_handle.future_id())
+        });
+        loaded.await;
+
+        // Close the way the pane header's close button does, which is the path that reaches
+        // `BackingView::close` before the pane group hides the pane.
+        file_view.update(&mut app, BackingView::close);
+        pane_group.update(&mut app, |panes, ctx| {
+            assert!(
+                panes.is_pane_hidden_for_close(file_pane_id),
+                "closing should hide the pane for undo rather than discard it"
+            );
+            assert!(
+                panes.restore_closed_pane(file_pane_id, ctx),
+                "the closed pane should be restorable"
+            );
+        });
+
+        app.read(|ctx| {
+            let file_id = file_view
+                .as_ref(ctx)
+                .file_id_for_test()
+                .expect("a restored pane should still hold its file open");
+            assert!(
+                FileModel::as_ref(ctx).file_path(file_id).is_some(),
+                "a restored pane should still be tracked by the file model"
+            );
+        });
+
+        // Permanently discarding the pane does release it.
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.close_pane(file_pane_id, ctx);
+            panes.cleanup_closed_pane(file_pane_id, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                file_view.as_ref(ctx).file_id_for_test().is_none(),
+                "a permanently discarded pane should release its file"
+            );
+        });
+    });
 }

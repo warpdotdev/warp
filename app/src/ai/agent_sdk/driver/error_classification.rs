@@ -1,7 +1,7 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
-use super::terminal::ShareSessionError;
 use super::AgentDriverError;
+use super::terminal::ShareSessionError;
 use crate::ai::blocklist::local_agent_task_sync_model::classify_renderable_error;
 use crate::server::server_api::ai::TaskStatusUpdate;
 
@@ -173,6 +173,16 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
+        // The shell died while an environment setup command was running
+        // (e.g. the command ran `exit`). This is a user-side environment
+        // configuration problem, so classify as FAILED.
+        AgentDriverError::SetupCommandExitedShell { .. } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                error.to_string(),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
         AgentDriverError::InvalidWorkingDirectory { path, .. } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -247,6 +257,13 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             AgentTaskState::Error,
             TaskStatusUpdate::with_error_code(
                 format!("Failed to fetch task secrets: {err}"),
+                PlatformErrorCode::InternalError,
+            ),
+        ),
+        AgentDriverError::TaskMetadataFetchFailed(err) => (
+            AgentTaskState::Error,
+            TaskStatusUpdate::with_error_code(
+                format!("Failed to fetch task metadata: {err}"),
                 PlatformErrorCode::InternalError,
             ),
         ),
@@ -326,13 +343,12 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
-        AgentDriverError::HarnessAuthCheckFailed { harness, detail } => {
+        AgentDriverError::HarnessAuthCheckFailed { harness, .. } => {
             let message = format!(
                 "Harness '{harness}' authentication check failed: login credentials \
                  are invalid or expired. Verify that the authentication secret \
                  configured for this harness is correct."
             );
-            log::error!("Preflight detail for {harness}: {detail}");
             (
                 AgentTaskState::Failed,
                 TaskStatusUpdate::with_error_code(
@@ -352,7 +368,6 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                  This usually means the API key is invalid, out of credits, or the \
                  account is misconfigured."
             );
-            log::error!("Runtime failure for {harness}: pattern={pattern}, excerpt={excerpt}");
             (
                 AgentTaskState::Failed,
                 TaskStatusUpdate::with_error_code(

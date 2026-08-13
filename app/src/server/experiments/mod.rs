@@ -44,6 +44,10 @@ pub enum ServerExperiment {
     PromptSuggestionsViaMaaOutOfBandExperiment,
     OzMultiHarnessControl,
     OzMultiHarnessExperiment,
+    MacosRunnersControl,
+    MacosRunnersExperiment,
+    OnboardingChooseHowToStartControl,
+    OnboardingChooseHowToStartExperiment,
     /// A test-only experiment.
     /// Does not correspond to a real server-side experiment.
     #[cfg(test)]
@@ -128,6 +132,14 @@ impl ServerExperiment {
             }
             Self::OzMultiHarnessExperiment => {
                 FeatureFlag::AgentHarness.set_enabled(true);
+            }
+            Self::MacosRunnersControl | Self::MacosRunnersExperiment => {
+                // Runner availability is gated directly by the experiment arm.
+            }
+            Self::OnboardingChooseHowToStartControl
+            | Self::OnboardingChooseHowToStartExperiment => {
+                // The onboarding offer arm is queried directly at offer entry, so
+                // there is no global flag to flip here.
             }
             #[cfg(test)]
             Self::TestExperiment => {

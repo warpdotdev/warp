@@ -10,13 +10,13 @@ use std::{cmp, mem};
 
 use ai::diff_validation::DiffDelta;
 use itertools::Itertools;
-use languages::{language_by_filename, language_by_local_filename, language_by_name, Language};
+use languages::{Language, language_by_filename, language_by_local_filename, language_by_name};
 use line_ending::LineEnding;
 use num_traits::SaturatingSub;
 use rangemap::{RangeMap, RangeSet};
 use string_offset::CharOffset;
 use syntax_tree::{ColorMap, DecorationStateEvent, SyntaxTreeState};
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 use vim::vim::{
     BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion,
     InsertPosition, LineMotion, MotionType, TextObjectInclusion, TextObjectType, VimOperator,
@@ -45,7 +45,7 @@ use warp_editor::content::version::BufferVersion;
 use warp_editor::decoration::DecorationLayer;
 use warp_editor::editor::TextDecoration;
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
-use warp_editor::multiline::{AnyMultilineString, MultilineString, LF};
+use warp_editor::multiline::{AnyMultilineString, LF, MultilineString};
 use warp_editor::render::model::{
     AutoScrollMode, BlockItem, BlockSpacings, BrokenLinkStyle, CheckBoxStyle, ColumnUnit,
     Decoration, HorizontalRuleStyle, InlineCodeStyle, LineCount, LineDecoration, ParagraphStyles,
@@ -58,15 +58,15 @@ use warpui::elements::{
     AnchorPair, OffsetPositioning, OffsetType, PositionedElementOffsetBounds, PositioningAxis,
     XAxisAnchor, YAxisAnchor,
 };
-use warpui::text::point::Point;
 use warpui::text::TextBuffer;
+use warpui::text::point::Point;
 use warpui::units::{IntoPixels, Pixels};
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
 
 use super::super::DiffResult;
 use super::comments::{EditorCommentsModel, PendingComment, PendingCommentEvent};
 use super::diff::{
-    add_inline_overlay_color, DiffModel, DiffModelEvent, DiffStatus, RenderableDiffHunk,
+    DiffModel, DiffModelEvent, DiffStatus, RenderableDiffHunk, add_inline_overlay_color,
 };
 use super::line::EditorLineLocation;
 use crate::appearance::Appearance;
@@ -305,6 +305,8 @@ pub struct CodeEditorModel {
     hovered_symbol_range: Option<HoverableLink>,
     /// Automatically hide lines outside of the active diff with X context lines.
     hide_lines_outside_of_active_diff: Option<usize>,
+    /// Recalculate hidden lines after a diff for this buffer version or later completes.
+    recalculate_hidden_lines_after_diff: Option<BufferVersion>,
     /// Whether this editor was configured to use lazy layout.
     lazy_layout_enabled: bool,
     /// Whether the editor has completed at least one layout cycle.
@@ -371,10 +373,17 @@ impl CodeEditorModel {
             false, // lazy_layout_enabled: no lazy layout in TUI
             true,  // lazy_layout_initialized: no lazy layout in TUI
             ctx,
-            |_hidden_lines, ctx| {
-                // CharCell layout never consults `RichTextStyles`, so pass a stub.
+            |hidden_lines, ctx| {
+                let hidden_lines = hidden_lines.clone();
+                // CharCell layout consumes the configured tab size; RenderState
+                // retains the remaining styles for API compatibility with pixel layout.
                 ctx.add_model(|ctx| {
-                    RenderState::new_tui(terminal_width, Self::tui_stub_text_styles(), ctx)
+                    RenderState::new_tui(
+                        terminal_width,
+                        Self::tui_stub_text_styles(),
+                        hidden_lines,
+                        ctx,
+                    )
                 })
             },
         )
@@ -387,7 +396,7 @@ impl CodeEditorModel {
     /// and event subscriptions are identical and wired up here.
     ///
     /// `build_render_state` receives the freshly-created `hidden_lines` handle so
-    /// the GUI path can attach it; the TUI path ignores it.
+    /// both paths can attach it to their `RenderState`.
     fn from_content(
         content: ModelHandle<Buffer>,
         show_current_line_highlights: bool,
@@ -457,6 +466,7 @@ impl CodeEditorModel {
             vim_visual_tails: vec![],
             hovered_symbol_range: None,
             hide_lines_outside_of_active_diff: None,
+            recalculate_hidden_lines_after_diff: None,
             lazy_layout_enabled,
             lazy_layout_initialized,
             pending_syntax_tree_bootstrap: false,
@@ -465,10 +475,9 @@ impl CodeEditorModel {
 
     /// A minimal [`RichTextStyles`] for the TUI char-cell editor.
     ///
-    /// `RenderState::new_tui` stores styles only for API compatibility and never
-    /// uses them for char-cell layout, so these values are placeholders. This
-    /// lives here (the caller of `RenderState::new_tui`) rather than in the core
-    /// editor crate so the editor API doesn't carry a TUI-specific stub.
+    /// [`RenderState::new_tui`] consumes the base paragraph's tab size and
+    /// retains the remaining styles for API compatibility. This stub lives here
+    /// so the core editor crate doesn't carry a TUI-specific dependency.
     fn tui_stub_text_styles() -> RichTextStyles {
         use warpui::elements::{Border, Fill};
         use warpui::fonts::{FamilyId, Weight};
@@ -489,7 +498,7 @@ impl CodeEditorModel {
             fixed_width_tab_size,
         };
         RichTextStyles {
-            base_text: paragraph(None),
+            base_text: paragraph(Some(4)),
             code_text: paragraph(Some(4)),
             code_background: Fill::None,
             embedding_background: Fill::None,
@@ -593,8 +602,7 @@ impl CodeEditorModel {
         }
     }
 
-    /// Set hide_lines_outside_of_active_diff. This will automatically set a delay rendering trigger to wait
-    /// for the next diff to be computed.
+    /// Hides lines outside the active diff after the current content's diff computes.
     pub fn hide_lines_outside_of_active_diff(
         &mut self,
         context_lines: usize,
@@ -603,23 +611,36 @@ impl CodeEditorModel {
         let buffer_version = self.buffer_version(ctx);
 
         self.hide_lines_outside_of_active_diff = Some(context_lines);
+        self.request_hidden_lines_recalculation_after_diff(buffer_version);
         self.delay_rendering = Some(DelayRendering::new(DelayRenderingTrigger::DiffUpdate(
             buffer_version,
         )));
     }
+    /// Requests hidden-line recalculation after a diff reaches `buffer_version`.
+    fn request_hidden_lines_recalculation_after_diff(&mut self, buffer_version: BufferVersion) {
+        self.recalculate_hidden_lines_after_diff = Some(
+            self.recalculate_hidden_lines_after_diff
+                .map_or(buffer_version, |pending_version| {
+                    pending_version.max(buffer_version)
+                }),
+        );
+    }
 
     /// We need to set the diff model base to the normalized version of the text. This is because the internal text
     /// representation of the content used for syntax tree highlighting and text rendering uses standard LF.
-    pub fn set_base(&self, base: &str, recompute_diff: bool, ctx: &mut ModelContext<Self>) {
+    pub fn set_base(&mut self, base: &str, recompute_diff: bool, ctx: &mut ModelContext<Self>) {
         let normalized_text = MultilineString::<LF>::apply(base);
         self.diff
             .update(ctx, |diff, _ctx| diff.set_base(normalized_text));
 
         if recompute_diff {
             let buffer_version = self.buffer_version(ctx);
+            if self.hide_lines_outside_of_active_diff.is_some() {
+                self.request_hidden_lines_recalculation_after_diff(buffer_version);
+            }
             let content = self.content().as_ref(ctx).text();
             self.diff.update(ctx, move |diff, ctx| {
-                diff.compute_diff(content, true, buffer_version, ctx)
+                diff.compute_diff(content, buffer_version, ctx)
             });
         }
     }
@@ -666,10 +687,10 @@ impl CodeEditorModel {
     }
 
     pub fn maybe_click_on_hovered_link(&self, offset: &CharOffset, ctx: &mut ModelContext<Self>) {
-        if let Some(link) = self.hovered_symbol_range() {
-            if link.range().contains(offset) {
-                link.trigger_on_click(ctx);
-            }
+        if let Some(link) = self.hovered_symbol_range()
+            && link.range().contains(offset)
+        {
+            link.trigger_on_click(ctx);
         }
     }
 
@@ -1437,7 +1458,8 @@ impl CodeEditorModel {
         }
     }
 
-    /// Re-calculate the hidden range given the active diff state.
+    /// Re-calculate the hidden line ranges given the active diff state. No-op
+    /// unless [`Self::hide_lines_outside_of_active_diff`] enabled hiding.
     fn calculate_hidden_lines(&mut self, ctx: &mut ModelContext<Self>) {
         if let Some(context_line) = self.hide_lines_outside_of_active_diff {
             let line_count = self.line_count(ctx);
@@ -1446,14 +1468,11 @@ impl CodeEditorModel {
             let mut visible_ranges: RangeSet<warp_editor::content::text::LineCount> =
                 RangeSet::new();
 
-            // Add ranges for diffs
+            // Add ranges for diffs. `modified_lines` yields 0-based line
+            // ranges, matching the hidden-range convention.
             for range in self.diff().as_ref(ctx).modified_lines() {
-                // Convert 1-indexed line ranges to 0-indexed
-                let start_line = range.start.saturating_sub(1);
-                let end_line = range.end.saturating_sub(1);
-
-                let context_start = start_line.saturating_sub(context_line);
-                let context_end = end_line + context_line;
+                let context_start = range.start.saturating_sub(context_line);
+                let context_end = range.end + context_line;
 
                 if context_start < context_end {
                     visible_ranges.insert(context_start.into()..context_end.into());
@@ -1476,16 +1495,17 @@ impl CodeEditorModel {
 
     fn handle_diff_model_event(&mut self, event: &DiffModelEvent, ctx: &mut ModelContext<Self>) {
         match event {
-            DiffModelEvent::DiffUpdated {
-                version,
-                should_recalculate_hidden_lines,
-            } => {
+            DiffModelEvent::DiffUpdated { version } => {
                 // If we are hiding lines based on active diffs, there are 3 steps here once the diff is computed:
                 // 1) If we should, recalculate hidden lines based on the updated diff state.
                 // 2) Flush any delayed rendering based on diff update trigger.
                 // 3) If hidden lines are recalculated, rebuild the current layout.
-                if *should_recalculate_hidden_lines {
+                let should_recalculate_hidden_lines = self
+                    .recalculate_hidden_lines_after_diff
+                    .is_some_and(|pending_version| *version >= pending_version);
+                if should_recalculate_hidden_lines {
                     self.calculate_hidden_lines(ctx);
+                    self.recalculate_hidden_lines_after_diff = None;
                 }
 
                 // Do not refresh diff state if there is an active delayed rendering. We should wait until the delayed rendering
@@ -1494,7 +1514,7 @@ impl CodeEditorModel {
                     self.refresh_diff_state(ctx);
                 }
 
-                let will_rebuild_layout = *should_recalculate_hidden_lines
+                let will_rebuild_layout = should_recalculate_hidden_lines
                     && self.hide_lines_outside_of_active_diff.is_some();
 
                 if self
@@ -1604,6 +1624,7 @@ impl CodeEditorModel {
                 }
 
                 if should_recalculate_hidden_lines {
+                    self.request_hidden_lines_recalculation_after_diff(*buffer_version);
                     if let Some(delay_rendering) = &mut self.delay_rendering {
                         delay_rendering.block_until =
                             DelayRenderingTrigger::DiffUpdate(*buffer_version);
@@ -1615,12 +1636,7 @@ impl CodeEditorModel {
                 }
 
                 self.diff.update(ctx, move |diff, ctx| {
-                    diff.compute_diff(
-                        content,
-                        should_recalculate_hidden_lines,
-                        *buffer_version,
-                        ctx,
-                    )
+                    diff.compute_diff(content, *buffer_version, ctx)
                 });
 
                 // If we are delaying rendering, push these updates to the delay rendering state. Otherwise, flush them to diff and rendering model.
@@ -1650,9 +1666,10 @@ impl CodeEditorModel {
                 // On content replacement with active hidden ranges, we should always recalculate hidden lines and delay rendering
                 // since all anchors will all be invalidated.
                 if self.hide_lines_outside_of_active_diff.is_some() {
+                    self.request_hidden_lines_recalculation_after_diff(*buffer_version);
                     let content = self.content().as_ref(ctx).text();
                     self.diff.update(ctx, move |diff, ctx| {
-                        diff.compute_diff(content, true, *buffer_version, ctx)
+                        diff.compute_diff(content, *buffer_version, ctx)
                     });
 
                     if self.delay_rendering.is_none() {
@@ -1859,7 +1876,7 @@ impl CodeEditorModel {
         &self,
         config: &SearchConfig,
         ctx: &AppContext,
-    ) -> anyhow::Result<impl Future<Output = SearchResults>> {
+    ) -> anyhow::Result<impl Future<Output = SearchResults> + use<>> {
         let buffer = self.content().as_ref(ctx);
         let search_future = buffer.search(buffer.prepare_search(config)?);
 
@@ -1918,6 +1935,88 @@ impl CodeEditorModel {
     pub fn cut(&mut self, ctx: &mut ModelContext<Self>) {
         self.copy(ctx);
         self.backspace(ctx);
+    }
+
+    // ── Char-cell (TUI) visual-row kill ──────────────────────────────────────
+
+    /// Deletes from the primary cursor to the end of its soft-wrapped visual
+    /// row, returning the deleted text; `None` when the cursor is already at
+    /// the row end. Char-cell (TUI) mode only — visual rows follow the
+    /// terminal-width wrap math.
+    pub fn kill_to_char_cell_visual_row_end(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<String> {
+        // `cursor_gap` is a 1-indexed gap position (gap 1 sits before the
+        // first character); `text_in_range` / `Delete` use those same
+        // coordinates, so the kill range starts exactly at `cursor_gap`.
+        let cursor_gap = self.primary_cursor_gap(ctx);
+        let cursor_offset = CharOffset::from(cursor_gap.as_usize().saturating_sub(1));
+        let row = self.char_cell_visual_row_range(cursor_offset, ctx)?;
+        if row.end <= cursor_offset {
+            return None;
+        }
+        // `text[i]` lives at gap `i + 1`, so the exclusive end gap is `row.end + 1`.
+        Some(self.delete_range_returning_text(cursor_gap..row.end + 1, ctx))
+    }
+
+    /// Deletes from the start of the primary cursor's soft-wrapped visual row
+    /// up to the cursor, returning the deleted text; `None` when the cursor
+    /// is already at the row start. Char-cell (TUI) mode only.
+    pub fn kill_to_char_cell_visual_row_start(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<String> {
+        let cursor_gap = self.primary_cursor_gap(ctx);
+        let cursor_offset = CharOffset::from(cursor_gap.as_usize().saturating_sub(1));
+        let row = self.char_cell_visual_row_range(cursor_offset, ctx)?;
+        if row.start >= cursor_offset {
+            return None;
+        }
+        Some(self.delete_range_returning_text(row.start + 1..cursor_gap, ctx))
+    }
+
+    /// The primary cursor as a 1-indexed gap offset.
+    fn primary_cursor_gap(&self, ctx: &impl ModelAsRef) -> CharOffset {
+        *self.selection.as_ref(ctx).cursors(ctx).first()
+    }
+
+    /// The soft-wrapped visual row containing 0-based `cursor_offset`, as
+    /// 0-based character offsets; `None` outside char-cell (TUI) mode.
+    fn char_cell_visual_row_range(
+        &self,
+        cursor_offset: CharOffset,
+        ctx: &impl ModelAsRef,
+    ) -> Option<Range<CharOffset>> {
+        let render = self.render_state.as_ref(ctx);
+        Some(render.char_cell()?.visual_row_char_range(cursor_offset))
+    }
+
+    /// Deletes `range` (1-indexed gap offsets) as a user edit, returning the
+    /// deleted text.
+    fn delete_range_returning_text(
+        &mut self,
+        range: Range<CharOffset>,
+        ctx: &mut ModelContext<Self>,
+    ) -> String {
+        let deleted = self
+            .content
+            .as_ref(ctx)
+            .text_in_range(range.clone())
+            .into_string();
+        let selection_model = self.selection_model.clone();
+        self.update_content(
+            |mut content, ctx| {
+                content.apply_edit(
+                    BufferEditAction::Delete(vec1![range]),
+                    EditOrigin::UserInitiated,
+                    selection_model,
+                    ctx,
+                );
+            },
+            ctx,
+        );
+        deleted
     }
 
     pub fn reset_content(&mut self, state: InitialBufferState, ctx: &mut ModelContext<Self>) {
@@ -2044,6 +2143,51 @@ impl CodeEditorModel {
 
     pub fn vim_visual_tails(&self) -> &Vec<CharOffset> {
         &self.vim_visual_tails
+    }
+
+    /// Return the ranges represented by the current Vim visual tails and
+    /// selection heads without consuming the tails.
+    pub fn vim_visual_selection_ranges(
+        &self,
+        motion_type: MotionType,
+        ctx: &AppContext,
+    ) -> Vec<Range<CharOffset>> {
+        let selection_model = self.selection_model.as_ref(ctx);
+        let buffer = self.content().as_ref(ctx);
+
+        selection_model
+            .selection_offsets()
+            .iter()
+            .zip(self.vim_visual_tails.iter())
+            .map(|(selection, visual_tail)| {
+                let mut start = *visual_tail;
+                let mut end = selection.head;
+                if start > end {
+                    mem::swap(&mut start, &mut end);
+                }
+
+                let max_offset = buffer.max_charoffset();
+                if end < max_offset
+                    && (motion_type != MotionType::Linewise
+                        || buffer.char_at(end).is_some_and(|c| c != '\n'))
+                {
+                    end += 1;
+                }
+
+                if motion_type == MotionType::Linewise {
+                    let start_point = start.to_buffer_point(buffer);
+                    start = Point::new(start_point.row, 0).to_buffer_char_offset(buffer);
+
+                    let end_point = end.to_buffer_point(buffer);
+                    if end_point.column != 0 {
+                        end = Point::new(end_point.row, buffer.line_len(end_point.row))
+                            .to_buffer_char_offset(buffer);
+                    }
+                }
+
+                start..end
+            })
+            .collect()
     }
 
     /// Expand the current selection(s) for a visual-mode operation using stored visual tails.
@@ -2305,11 +2449,12 @@ impl CodeEditorModel {
 
         for selection in selections.iter() {
             let start = selection.head;
-            let line_end = buffer.containing_line_end(start);
+            let line_end = buffer
+                .containing_line_end(start)
+                .saturating_sub(&CharOffset::from(1));
 
             // Don't make edits if we don't have space for the entire replacement on the line.
-            // We subtract 1 from the line end to exclude the newline.
-            let remaining = (line_end - 1) - start;
+            let remaining = line_end - start;
             if remaining.as_usize() < char_count as usize {
                 // No replacement; keep cursor as-is
                 new_selections_vec.push(SelectionOffsets {
@@ -2347,6 +2492,53 @@ impl CodeEditorModel {
             if let Ok(new_selections) = vec1::Vec1::try_from_vec(new_selections_vec) {
                 self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
             }
+        }
+    }
+
+    /// Replace text from each cursor through the current line, inserting any
+    /// remainder once the cursor reaches EOL. The resulting cursors sit after
+    /// the replacement text, matching the live cursor position in Vim's `R` mode.
+    pub fn vim_replace_text(&mut self, text: &str, ctx: &mut ModelContext<Self>) {
+        let text_len = CharOffset::from(text.chars().count());
+        if text_len == CharOffset::zero() {
+            return;
+        }
+
+        let buffer = self.content().as_ref(ctx);
+        let selections = self.selection_model.as_ref(ctx).selection_offsets();
+        let mut edits = Vec::with_capacity(selections.len());
+        let mut new_selections = Vec::with_capacity(selections.len());
+        for selection in selections.iter() {
+            let start = selection.head;
+            let line_content_end = buffer
+                .containing_line_end(start)
+                .saturating_sub(&CharOffset::from(1));
+            let replace_len = (line_content_end - start).min(text_len);
+            edits.push((text.to_owned(), start..start + replace_len));
+            let new_pos = start + text_len;
+            new_selections.push(SelectionOffsets {
+                head: new_pos,
+                tail: new_pos,
+            });
+        }
+
+        let Ok(edits) = Vec1::try_from_vec(edits) else {
+            return;
+        };
+        let selection_model = self.selection_model.clone();
+        self.update_content(
+            |mut content, ctx| {
+                content.apply_edit(
+                    BufferEditAction::InsertAtCharOffsetRanges { edits: &edits },
+                    EditOrigin::UserInitiated,
+                    selection_model,
+                    ctx,
+                );
+            },
+            ctx,
+        );
+        if let Ok(new_selections) = Vec1::try_from_vec(new_selections) {
+            self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
         }
     }
 
@@ -2721,15 +2913,18 @@ impl CodeEditorModel {
         let new_selections = current_selections.mapped(|selection| {
             let start_offset = selection.head;
 
-            let end_offset = if let Ok(boundaries) =
-                vim_word_iterator_from_offset(start_offset, buffer, direction, bound, word_type)
-            {
-                boundaries
+            let end_offset = match vim_word_iterator_from_offset(
+                start_offset,
+                buffer,
+                direction,
+                bound,
+                word_type,
+            ) {
+                Ok(boundaries) => boundaries
                     .take(word_count as usize)
                     .last()
-                    .unwrap_or(start_offset)
-            } else {
-                start_offset
+                    .unwrap_or(start_offset),
+                _ => start_offset,
             };
 
             SelectionOffsets {
@@ -2799,9 +2994,38 @@ impl CodeEditorModel {
             }
         }
 
-        let include_newline = *operator != VimOperator::Change;
+        let include_newline = operator.includes_trailing_newline();
         if *motion_type == MotionType::Linewise {
-            self.vim_extend_selection_linewise(include_newline, ctx);
+            self.vim_extend_selection_linewise(
+                include_newline,
+                *operator == VimOperator::Delete,
+                ctx,
+            );
+        }
+    }
+
+    pub fn vim_select_to_line(
+        &mut self,
+        line_number: u32,
+        motion_type: &MotionType,
+        operator: &VimOperator,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let buffer = self.content().as_ref(ctx);
+        let current_selections = self.selection_model.as_ref(ctx).selection_offsets();
+        let target_row = line_number.max(1).min(buffer.max_point().row);
+        let new_selections = current_selections.mapped(|selection| SelectionOffsets {
+            head: Point::new(target_row, 0).to_buffer_char_offset(buffer),
+            tail: selection.head,
+        });
+        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
+
+        if *motion_type == MotionType::Linewise {
+            self.vim_extend_selection_linewise(
+                operator.includes_trailing_newline(),
+                *operator == VimOperator::Delete,
+                ctx,
+            );
         }
     }
 
@@ -2824,50 +3048,54 @@ impl CodeEditorModel {
         let current_selections = selection_model.selection_offsets();
         let new_selections = current_selections.mapped(|selection| {
             let start_offset = selection.head;
-            let (cursor_position, selection_start) = if let Ok(boundaries) =
-                vim_word_iterator_from_offset(start_offset, buffer, *direction, *bound, *word_type)
-            {
-                let mut target_pos = boundaries
-                    .take(word_count as usize)
-                    .last()
-                    .unwrap_or(start_offset);
+            let (cursor_position, selection_start) = match vim_word_iterator_from_offset(
+                start_offset,
+                buffer,
+                *direction,
+                *bound,
+                *word_type,
+            ) {
+                Ok(boundaries) => {
+                    let mut target_pos = boundaries
+                        .take(word_count as usize)
+                        .last()
+                        .unwrap_or(start_offset);
 
-                // Apply vim word boundary quirks and calculate selection boundaries
-                match direction {
-                    Direction::Forward => {
-                        // `de`, unlike other word motions, will include character it lands on
-                        // in the operation.
-                        if *bound == WordBound::End {
-                            target_pos += 1;
-                        } else if *bound == WordBound::Start && word_count == 1 {
-                            // `dw`, cannot traverse a newline unless the count > 1. We have
-                            // to check this range for newlines and cut the range short in that
-                            // case.
-                            let text = buffer.text_in_range(start_offset..target_pos);
-                            if let Some(newline_pos) = text.as_str().find('\n') {
-                                target_pos = start_offset + newline_pos;
-                            }
-                        }
-                        (target_pos, start_offset)
-                    }
-                    Direction::Backward => {
-                        // `db` will traverse *but not delete* a newline if the count is 1 and
-                        // the cursor starts on column zero and the line above is not empty.
-                        let mut actual_start = start_offset;
-                        if *bound == WordBound::Start && word_count == 1 {
-                            if let Ok(mut char_iter) = buffer.chars_rev_at(start_offset) {
-                                if char_iter.next().is_some_and(|c| c == '\n')
-                                    && char_iter.next().is_some_and(|c| c != '\n')
-                                {
-                                    actual_start -= 1;
+                    // Apply vim word boundary quirks and calculate selection boundaries
+                    match direction {
+                        Direction::Forward => {
+                            // `de`, unlike other word motions, will include character it lands on
+                            // in the operation.
+                            if *bound == WordBound::End {
+                                target_pos += 1;
+                            } else if *bound == WordBound::Start && word_count == 1 {
+                                // `dw`, cannot traverse a newline unless the count > 1. We have
+                                // to check this range for newlines and cut the range short in that
+                                // case.
+                                let text = buffer.text_in_range(start_offset..target_pos);
+                                if let Some(newline_pos) = text.as_str().find('\n') {
+                                    target_pos = start_offset + newline_pos;
                                 }
                             }
+                            (target_pos, start_offset)
                         }
-                        (target_pos, actual_start)
+                        Direction::Backward => {
+                            // `db` will traverse *but not delete* a newline if the count is 1 and
+                            // the cursor starts on column zero and the line above is not empty.
+                            let mut actual_start = start_offset;
+                            if *bound == WordBound::Start
+                                && word_count == 1
+                                && let Ok(mut char_iter) = buffer.chars_rev_at(start_offset)
+                                && char_iter.next().is_some_and(|c| c == '\n')
+                                && char_iter.next().is_some_and(|c| c != '\n')
+                            {
+                                actual_start -= 1;
+                            }
+                            (target_pos, actual_start)
+                        }
                     }
                 }
-            } else {
-                (start_offset, start_offset)
+                _ => (start_offset, start_offset),
             };
 
             SelectionOffsets {
@@ -2878,9 +3106,13 @@ impl CodeEditorModel {
 
         self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
 
-        let include_newline = *operator != VimOperator::Change;
+        let include_newline = operator.includes_trailing_newline();
         if *motion_type == MotionType::Linewise {
-            self.vim_extend_selection_linewise(include_newline, ctx);
+            self.vim_extend_selection_linewise(
+                include_newline,
+                *operator == VimOperator::Delete,
+                ctx,
+            );
         }
     }
 
@@ -2913,9 +3145,13 @@ impl CodeEditorModel {
             }
         }
 
-        let include_newline = *operator != VimOperator::Change;
+        let include_newline = operator.includes_trailing_newline();
         if *motion_type == MotionType::Linewise {
-            self.vim_extend_selection_linewise(include_newline, ctx);
+            self.vim_extend_selection_linewise(
+                include_newline,
+                *operator == VimOperator::Delete,
+                ctx,
+            );
         }
     }
 
@@ -2953,9 +3189,13 @@ impl CodeEditorModel {
 
         self.vim_move_to_first_nonwhitespace(true, ctx);
 
-        let include_newline = *operator != VimOperator::Change;
+        let include_newline = operator.includes_trailing_newline();
         if *motion_type == MotionType::Linewise {
-            self.vim_extend_selection_linewise(include_newline, ctx);
+            self.vim_extend_selection_linewise(
+                include_newline,
+                *operator == VimOperator::Delete,
+                ctx,
+            );
         }
     }
 
@@ -2995,18 +3235,51 @@ impl CodeEditorModel {
         self.vim_select_to_buffer_bound(TextDirection::Forwards, ctx);
     }
 
+    pub fn vim_move_to_last_line(&mut self, ctx: &mut ModelContext<Self>) {
+        let has_trailing_empty_line = self.content_string(ctx).into_string().ends_with('\n');
+        let (max_offset, max_row) = {
+            let buffer = self.content().as_ref(ctx);
+            (buffer.max_charoffset(), buffer.max_point().row)
+        };
+        if has_trailing_empty_line {
+            self.vim_set_selections(
+                vec1![SelectionOffsets {
+                    head: max_offset,
+                    tail: max_offset,
+                }],
+                AutoScrollBehavior::Selection,
+                ctx,
+            );
+        } else {
+            self.jump_to_line_column(max_row as usize, None, ctx);
+        }
+    }
+
     pub fn vim_extend_selection_linewise(
         &mut self,
         include_newline: bool,
+        consume_preceding_newline_at_eof: bool,
         ctx: &mut ModelContext<Self>,
     ) {
         let buffer = self.content().as_ref(ctx);
         let selection_model = self.selection_model.as_ref(ctx);
         let current_selections = selection_model.selection_offsets();
+        let max_offset = buffer.max_charoffset();
+        let has_trailing_empty_line = self.content_string(ctx).into_string().ends_with('\n');
 
         let new_selections = current_selections.mapped(|selection| {
             let start_pos = selection.tail.min(selection.head);
             let end_pos = selection.tail.max(selection.head);
+            if include_newline
+                && has_trailing_empty_line
+                && start_pos == max_offset
+                && end_pos == max_offset
+            {
+                return SelectionOffsets {
+                    head: max_offset,
+                    tail: max_offset.saturating_sub(&CharOffset::from(1)),
+                };
+            }
 
             let start_point = start_pos.to_buffer_point(buffer);
             let end_point = end_pos.to_buffer_point(buffer);
@@ -3014,10 +3287,20 @@ impl CodeEditorModel {
             let line_start = Point::new(start_point.row, 0).to_buffer_char_offset(buffer);
             let start_of_end_line = Point::new(end_point.row, 0).to_buffer_char_offset(buffer);
             let line_end = if include_newline {
-                buffer.containing_line_end(start_of_end_line)
+                buffer
+                    .containing_line_end(start_of_end_line)
+                    .min(buffer.max_charoffset())
             } else {
                 // Don't include newline (for change operations)
                 buffer.containing_line_end(start_of_end_line) - 1
+            };
+            let should_consume_preceding_newline = line_end == buffer.max_charoffset()
+                && start_point.row > 1
+                && consume_preceding_newline_at_eof;
+            let line_start = if should_consume_preceding_newline {
+                line_start.saturating_sub(&CharOffset::from(1))
+            } else {
+                line_start
             };
 
             SelectionOffsets {
@@ -3146,8 +3429,12 @@ impl CodeEditorModel {
 
                 self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
                 if let TextObjectType::Paragraph = text_object.object_type {
-                    let include_newline = *op != VimOperator::Change;
-                    self.vim_extend_selection_linewise(include_newline, ctx);
+                    let include_newline = op.includes_trailing_newline();
+                    self.vim_extend_selection_linewise(
+                        include_newline,
+                        *op == VimOperator::Delete,
+                        ctx,
+                    );
                 }
             }
         }
@@ -3202,6 +3489,43 @@ impl CodeEditorModel {
                 }
             } else {
                 selection
+            }
+        });
+
+        self.vim_set_selections(new_selections, AutoScrollBehavior::Selection, ctx);
+    }
+
+    /// Builds the selection used by operator+`%` motions (`d%`, `c%`, `y%`).
+    ///
+    /// `vim_jump_to_matching_bracket(true, ctx)` creates a half-open selection from the cursor to
+    /// the matching bracket offset. Because operator ranges are half-open, that would leave the
+    /// matching bracket char itself outside the deleted/changed/yanked range. Operator motions on
+    /// `%` must include that final char (mirroring Vim), so this extends the selection end by one
+    /// after the jump — the same adjustment the block editor makes in its
+    /// `vim_select_for_matching_bracket`.
+    pub fn vim_select_for_matching_bracket(&mut self, ctx: &mut ModelContext<Self>) {
+        self.vim_jump_to_matching_bracket(true, ctx);
+
+        let max_offset = self.content().as_ref(ctx).max_charoffset();
+        let current_selections = self.selection_model.as_ref(ctx).selection_offsets();
+
+        let new_selections = current_selections.mapped(|selection| {
+            // A cursor-only selection means no matching bracket was found; leave it untouched.
+            if selection.head == selection.tail {
+                return selection;
+            }
+            // The selection end is the larger of head/tail. Extend it by one so the matching
+            // bracket char is included in the operator's (half-open) range.
+            if selection.head > selection.tail {
+                SelectionOffsets {
+                    head: cmp::min(selection.head + 1, max_offset),
+                    tail: selection.tail,
+                }
+            } else {
+                SelectionOffsets {
+                    head: selection.head,
+                    tail: cmp::min(selection.tail + 1, max_offset),
+                }
             }
         });
 

@@ -8,7 +8,7 @@ use warpui_extras::secure_storage::{self, AppContextExt as _};
 use warpui_extras::user_preferences;
 
 use super::{
-    default_mode_for_channel, LocalControlMode, LocalControlModeSetting, LocalControlSettings,
+    LocalControlMode, LocalControlModeSetting, LocalControlSettings, default_mode_for_channel,
 };
 
 #[derive(Default)]

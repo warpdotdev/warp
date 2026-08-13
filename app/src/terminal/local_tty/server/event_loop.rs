@@ -8,8 +8,9 @@ use mio::Interest;
 use parking_lot::Mutex;
 use signal_hook_mio::v1_0::Signals;
 use warp_cli::TerminalServerArgs;
+use warp_errors::report_error;
 
-use super::{api, logging, protocol, RECV_SOCKET_FILENO, SEND_SOCKET_FILENO};
+use super::{RECV_SOCKET_FILENO, SEND_SOCKET_FILENO, api, logging, protocol};
 use crate::terminal::local_tty::server::protocol::NonblockingSocketFd;
 use crate::terminal::local_tty::{self};
 use crate::terminal::platform;
@@ -203,12 +204,14 @@ impl EventLoop {
                                     },
                                     Option::<RawFd>::None,
                                 ) {
-                                    log::error!("Failed to notify host process about terminated children: {err:#}");
+                                    log::error!(
+                                        "Failed to notify host process about terminated children: {err:#}"
+                                    );
                                 }
                             }
                         }
                     }
-                    _ => log::error!("Received event with unexpected token!"),
+                    _ => report_error!("Received event with unexpected token!"),
                 }
             }
 
@@ -229,7 +232,9 @@ impl EventLoop {
             let result = match protocol::try_receive_message(self.recv_socket_fd) {
                 Ok(result) => result,
                 Err(err) => {
-                    log::error!("Encountered unexpected error receiving message from host process: {err:#}.");
+                    log::error!(
+                        "Encountered unexpected error receiving message from host process: {err:#}"
+                    );
                     log::info!("Shutting down terminal server...");
                     return None;
                 }
@@ -257,7 +262,7 @@ impl EventLoop {
                             Ok(pty_spawn_info.result)
                         }
                         Err(err) => {
-                            log::error!("Failed to spawn tty from server: {err:?}");
+                            log::error!("Failed to spawn shell: {err:#}");
                             Err(err)
                         }
                     };
@@ -273,24 +278,30 @@ impl EventLoop {
                         },
                         leader_fd,
                     ) {
-                        log::error!("Encountered unexpected error sending message to host process: {err:#}.");
+                        log::error!(
+                            "Encountered unexpected error sending message to host process: {err:#}"
+                        );
                         log::info!("Shutting down terminal server...");
                         return None;
                     };
 
                     // Close the leader file descriptor now that the host
                     // process is holding a copy of it.
-                    if let Some(leader_fd) = leader_fd {
-                        if let Err(err) = nix::unistd::close(leader_fd) {
-                            log::error!("Failed to close leader fd after sending it back to host process: {err:?}");
-                        }
+                    if let Some(leader_fd) = leader_fd
+                        && let Err(err) = nix::unistd::close(leader_fd)
+                    {
+                        log::warn!(
+                            "Failed to close leader fd after sending it back to host process: {err:#}"
+                        );
                     }
                 }
                 api::Message::KillChildRequest { pid } => {
                     let result = match self.children.remove(&pid) {
                         Some(mut child) => child.kill().and_then(|_| child.wait()),
                         None => {
-                            log::info!("Did not find child shell process with pid {pid}; assuming it has already terminated.");
+                            log::info!(
+                                "Did not find child shell process with pid {pid}; assuming it has already terminated."
+                            );
                             Ok(std::process::ExitStatus::default())
                         }
                     };
@@ -300,22 +311,26 @@ impl EventLoop {
                         api::Message::KillChildResponse { error_msg },
                         Option::<RawFd>::None,
                     ) {
-                        log::error!("Encountered unexpected error sending message to host process: {err:#}.");
+                        log::error!(
+                            "Encountered unexpected error sending message to host process: {err:#}"
+                        );
                         log::info!("Shutting down terminal server...");
                         return None;
                     };
                 }
                 api::Message::SpawnShellResponse { .. } => {
-                    log::error!("Terminal server received unexpected SpawnShellResponse message!");
+                    report_error!(
+                        "Terminal server received unexpected SpawnShellResponse message!"
+                    );
                 }
                 api::Message::KillChildResponse { .. } => {
-                    log::error!("Terminal server received unexpected KillChildResponse message!");
+                    report_error!("Terminal server received unexpected KillChildResponse message!");
                 }
                 api::Message::WriteLogRequest { .. } => {
-                    log::error!("Terminal server received unexpected WriteLogRequest message!");
+                    report_error!("Terminal server received unexpected WriteLogRequest message!");
                 }
                 api::Message::ChildrenTerminatedRequest { .. } => {
-                    log::error!(
+                    report_error!(
                         "Terminal server received unexpected ChildrenTerminatedRequest message!"
                     );
                 }

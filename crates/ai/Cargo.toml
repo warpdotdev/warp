@@ -1,7 +1,7 @@
 [package]
 name = "ai"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish.workspace = true
 license.workspace = true
 
@@ -54,6 +54,7 @@ futures.workspace = true
 generic-array = "0.14.7"
 derivative.workspace = true
 warp_core.workspace = true
+warp_errors.workspace = true
 warp_terminal.workspace = true
 warp_util.workspace = true
 chrono.workspace = true
@@ -81,6 +82,7 @@ notify-debouncer-full.workspace = true
 
 [dev-dependencies]
 filetime = "0.2.25"
+serial_test = "0.8.0"
 tempfile.workspace = true
 virtual-fs.workspace = true
 warp_core = { workspace = true, features = ["test-util"] }

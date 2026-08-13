@@ -3,6 +3,7 @@ pub mod auth;
 pub mod block;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod download;
+pub mod factory;
 pub mod harness_support;
 pub mod integrations;
 pub mod managed_mcp;
@@ -11,6 +12,8 @@ pub mod object;
 pub(crate) mod presigned_upload;
 pub mod referral;
 pub mod team;
+#[cfg(feature = "tui")]
+pub mod tui_onboarding;
 pub mod workspace;
 
 use std::ops::Deref;
@@ -20,11 +23,12 @@ use std::time::Duration;
 
 use ::http::header::CONTENT_LENGTH;
 use ai::AIClient;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use auth::AuthClient;
 use block::BlockClient;
 use channel_versions::ChannelVersions;
 use chrono::{DateTime, FixedOffset};
+use factory::FactoryClient;
 use instant::Instant;
 use managed_mcp::ManagedMcpClient;
 use object::ObjectClient;
@@ -33,10 +37,12 @@ use referral::ReferralsClient;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use team::TeamClient;
+#[cfg(feature = "tui")]
+use tui_onboarding::TuiOnboardingClient;
 use url::Url;
 use warp_core::context_flag::ContextFlag;
-use warp_core::errors::{register_error, AnyhowErrorExt, ErrorExt};
 use warp_core::telemetry::TelemetryEvent;
+use warp_errors::{AnyhowErrorExt, ErrorExt, register_error, report_error};
 use warp_managed_secrets::client::ManagedSecretsClient;
 use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
 use warp_server_client::base_client::{
@@ -60,9 +66,13 @@ use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
 use crate::server::telemetry::TelemetryApi;
 use crate::settings::PrivacySettingsSnapshot;
-use crate::{settings_view, ChannelState};
+use crate::{ChannelState, settings_view};
 
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
+#[derive(Serialize)]
+struct AgentTipShownAnalyticsRequest {
+    tip: String,
+}
 
 /// We use a special error code header `X-Warp-Error-Code` to allow the server to send
 /// more specific error code information, so that the client can discern between different
@@ -179,6 +189,15 @@ pub enum AIApiError {
     /// between chunks, surfacing as a clean EOF.
     #[error("Response stream ended unexpectedly before completion.")]
     UnexpectedEof,
+
+    /// Synthesized client-side when a request that uses the connected Grok
+    /// subscription can't be sent because its expired OAuth token failed to
+    /// refresh. Surfaced as a terminal, user-visible error asking the user to
+    /// reconnect, rather than sending a request that would fail authentication.
+    #[error(
+        "Grok subscription token could not be refreshed. Please try reconnecting your subscription."
+    )]
+    GrokSubscriptionTokenRefreshFailed,
 }
 
 impl From<http_client::ResponseError> for AIApiError {
@@ -320,6 +339,9 @@ impl AIApiError {
                 }
                 true
             }
+            // A failed Grok token refresh is a credential problem the user must
+            // fix by reconnecting, so retrying or resuming won't help.
+            AIApiError::GrokSubscriptionTokenRefreshFailed => false,
             // By default, attempt recovery on error.
             _ => true,
         }
@@ -329,7 +351,10 @@ impl AIApiError {
 impl ErrorExt for AIApiError {
     fn is_actionable(&self) -> bool {
         match self {
-            AIApiError::Deserialization(_) => true,
+            AIApiError::Deserialization(error) => match error {
+                DeserializationError::Json(_) => true,
+                DeserializationError::Transport(error) => error.is_actionable(),
+            },
             AIApiError::Transport(error) => error.is_actionable(),
             AIApiError::Other(error) => error.is_actionable(),
             AIApiError::Stream { source, .. } => source.is_actionable(),
@@ -337,7 +362,8 @@ impl ErrorExt for AIApiError {
             AIApiError::UnexpectedEof => true,
             AIApiError::QuotaLimit { .. }
             | AIApiError::ServerOverloaded
-            | AIApiError::NoContextFound => false,
+            | AIApiError::NoContextFound
+            | AIApiError::GrokSubscriptionTokenRefreshFailed => false,
         }
     }
 }
@@ -434,7 +460,7 @@ impl ServerApi {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     fn new_for_test() -> Self {
         let (tx, _) = async_channel::unbounded();
         let auth_state = Arc::new(AuthState::new_for_test());
@@ -668,12 +694,11 @@ impl ServerApi {
         let response_text = response.text().await.unwrap_or_default();
 
         // Check for AT_CAPACITY error code header.
-        if is_at_capacity {
-            if let Ok(capacity_error) =
+        if is_at_capacity
+            && let Ok(capacity_error) =
                 serde_json::from_str::<CloudAgentCapacityError>(&response_text)
-            {
-                return capacity_error.into();
-            }
+        {
+            return capacity_error.into();
         }
         if status == StatusCode::TOO_MANY_REQUESTS && is_out_of_credits {
             let user_display_message = serde_json::from_str::<OutOfCreditsResponse>(&response_text)
@@ -853,11 +878,16 @@ impl ServerApi {
 
                 let response = request.send().await;
                 if let Err(err) = response {
-                    log::error!("Failed to send POST request to /client/login: {err:?}");
+                    report_error!(
+                        anyhow::Error::new(err)
+                            .context("Failed to send POST request to /client/login")
+                    );
                 }
             }
             Err(err) => {
-                log::error!("Could not retrieve access token for notifying user login: {err:?}");
+                report_error!(
+                    err.context("Could not retrieve access token for notifying user login")
+                );
             }
         }
     }
@@ -875,6 +905,41 @@ impl ServerApi {
         self.telemetry_api
             .send_telemetry_event(user_id, anonymous_id, event, settings_snapshot)
             .await
+    }
+
+    pub async fn send_agent_tip_shown_analytics_event(&self, tip: String) -> Result<()> {
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for API request")?;
+        let url = format!(
+            "{}/analytics/agent-tip-shown",
+            ChannelState::server_root_url()
+        );
+        let mut request = self
+            .base_client
+            .http_client()
+            .post(&url)
+            .json(&AgentTipShownAnalyticsRequest { tip });
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to send API request to {url}"))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            self.observe_iap_challenge(&response);
+            Err(Self::error_from_response(response).await)
+        }
     }
 
     /// Drains all queued [`TelemetryEvent`]s into Rudderstack requests containing the corresponding
@@ -1269,7 +1334,7 @@ impl ServerApiProvider {
     }
 
     /// Constructs a new SeverApiProvider for tests.
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn new_for_test() -> Self {
         let server_api = Arc::new(ServerApi::new_for_test());
         let auth_client = Arc::new(AuthClientImpl::new(server_api.base_client.clone()));
@@ -1304,6 +1369,10 @@ impl ServerApiProvider {
     pub fn get_team_client(&self) -> Arc<dyn TeamClient> {
         self.server_api.clone()
     }
+    #[cfg(feature = "tui")]
+    pub fn get_tui_onboarding_client(&self) -> Arc<dyn TuiOnboardingClient> {
+        self.server_api.clone()
+    }
 
     pub fn get_ai_client(&self) -> Arc<dyn AIClient> {
         self.server_api.clone()
@@ -1323,6 +1392,10 @@ impl ServerApiProvider {
 
     #[cfg_attr(target_family = "wasm", expect(dead_code))]
     pub fn get_managed_mcp_client(&self) -> Arc<dyn ManagedMcpClient> {
+        self.server_api.clone()
+    }
+
+    pub fn get_factory_client(&self) -> Arc<dyn FactoryClient> {
         self.server_api.clone()
     }
 

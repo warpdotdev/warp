@@ -19,10 +19,10 @@ use pathfinder_geometry::vector::Vector2F;
 use privacy_page::{PrivacyPageView, PrivacyPageViewEvent};
 use referrals_page::{ReferralsPageEvent, ReferralsPageView};
 use scripting_page::ScriptingSettingsPageView;
-use settings_file_footer::{render_footer, SettingsFooterKind, SettingsFooterMouseStates};
+use settings_file_footer::{SettingsFooterKind, SettingsFooterMouseStates, render_footer};
 use settings_page::{
-    MatchData, SettingsPage, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle,
-    HEADER_PADDING,
+    HEADER_PADDING, MatchData, SettingsPage, SettingsPageEvent, SettingsPageMeta,
+    SettingsPageViewHandle,
 };
 use show_blocks_view::{ShowBlocksEvent, ShowBlocksView};
 use teams_page::{TeamsPageView, TeamsPageViewEvent};
@@ -39,18 +39,18 @@ use warpui::elements::{
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty,
     EventHandler, Expanded, Fill, Flex, MainAxisSize, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack,
-    Text,
+    Text, Wrap,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::{ContextPredicate, EnabledPredicate, FixedBinding};
 use warpui::{
-    id, Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
-    UpdateView as _, View, ViewContext, ViewHandle,
+    Action, AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView,
+    UpdateView as _, View, ViewContext, ViewHandle, id,
 };
 
 use self::telemetry::SettingsTelemetryEvent;
 use crate::ai::custom_model_routers::CustomModelRouter;
-use crate::ai::execution_profiles::profiles::ClientProfileId;
+use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::appearance::Appearance;
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
@@ -64,12 +64,13 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::MCPServerCollectionPaneEntrypoint;
 use crate::settings::{AISettings, BlockVisibilitySettings, SettingsFileError};
 use crate::settings_view::mcp_servers_page::{MCPServersSettingsPage, MCPServersSettingsPageEvent};
-use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::SizeInfo;
+use crate::terminal::model::blockgrid::BlockGrid;
 use crate::ui_components::icons;
-use crate::util::bindings::{keybinding_name_to_display_string, BindingGroup, CustomAction};
+use crate::util::bindings::{BindingGroup, CustomAction, keybinding_name_to_display_string};
 use crate::view_components::ToastFlavor;
 use crate::workspace::WorkspaceAction;
+use crate::workspaces::workspace::{BillingMetadata, CustomerType};
 use crate::{GlobalResourceHandlesProvider, TelemetryEvent};
 
 mod about_page;
@@ -125,8 +126,8 @@ pub use features_page::FeaturesPageAction;
 pub use main_page::handle_experiment_change;
 pub use privacy_page::PrivacyPageAction;
 pub use settings_page::{
-    render_body_item_label, render_info_icon, render_input_list, render_separator, AdditionalInfo,
-    InputListItem, LocalOnlyIconState, ToggleState,
+    AdditionalInfo, InputListItem, LocalOnlyIconState, ToggleState, render_body_item_label,
+    render_info_icon, render_input_list, render_separator,
 };
 pub use teams_page::{OpenTeamsSettingsModalArgs, TeamsInviteOption};
 
@@ -138,7 +139,7 @@ const SIDEBAR_WIDTH_DEFAULT: f32 = 200.;
 /// Wider sidebar used when the settings-file footer is enabled. Sized to
 /// match Figma's settings nav rail (223px alert + 12px horizontal padding
 /// on each side + 1px right border), giving the error-alert footer enough
-/// room to render its "Open file" and "Fix with Oz" buttons side-by-side
+/// room to render its "Open file" and "Fix with Warp Agent" buttons side-by-side
 /// with the designed 24px indent and 8px internal padding.
 const SIDEBAR_WIDTH_WITH_FOOTER: f32 = 248.;
 
@@ -158,6 +159,32 @@ fn sidebar_width() -> f32 {
 const SECTION_BORDER_WIDTH: f32 = 1.;
 
 const POSITION_ID: &str = "settings_pane";
+
+struct PlanHeaderPresentation {
+    badge_label: Option<String>,
+    show_personal_upgrade: bool,
+}
+
+fn plan_header_presentation(
+    billing_metadata: Option<&BillingMetadata>,
+    has_team: bool,
+    is_anonymous: bool,
+) -> PlanHeaderPresentation {
+    let badge_label = if is_anonymous || billing_metadata.is_none() {
+        Some("Free".to_string())
+    } else {
+        billing_metadata
+            .filter(|billing_metadata| billing_metadata.customer_type != CustomerType::Unknown)
+            .map(|billing_metadata| billing_metadata.customer_type.to_display_string())
+    };
+
+    PlanHeaderPresentation {
+        badge_label,
+        show_personal_upgrade: is_anonymous
+            || (!has_team
+                && billing_metadata.is_none_or(BillingMetadata::can_upgrade_to_build_plan)),
+    }
+}
 
 pub(super) fn editor_text_colors(appearance: &Appearance) -> TextColors {
     let theme = appearance.theme();
@@ -186,7 +213,8 @@ pub(super) fn render_beta_chip(appearance: &Appearance) -> Box<dyn Element> {
     .finish()
 }
 
-/// Renders a horizontal row of pill-shaped chips for model labels.
+/// Renders a wrapping row of pill-shaped chips for model labels, which flow
+/// onto additional lines instead of overflowing the container horizontally.
 /// Used by custom inference endpoint cards and the remove confirmation dialog.
 pub(super) fn render_model_chips(
     labels: impl IntoIterator<Item = String>,
@@ -209,7 +237,7 @@ pub(super) fn render_model_chips(
         ..Default::default()
     };
 
-    let mut chips = Flex::row().with_spacing(8.);
+    let mut chips = Wrap::row().with_spacing(8.).with_run_spacing(8.);
     for label in labels {
         chips.add_child(Chip::new(label, chip_style).build().finish());
     }
@@ -232,7 +260,7 @@ pub enum SettingsViewEvent {
     OpenMCPServerCollection,
     OpenCustomRouterEditor(Option<CustomModelRouter>),
     OpenCustomRouterFile(PathBuf),
-    OpenExecutionProfileEditor(ClientProfileId),
+    OpenExecutionProfileEditor(ExecutionProfileId),
     OpenLspLogs {
         log_path: PathBuf,
     },
@@ -524,6 +552,7 @@ pub mod flags {
         "Use_Latest_User_Prompt_As_Conversation_Title_In_Tab_Names";
     pub const ALT_SCREEN_PADDING_FLAG: &str = "Alt_Screen_Padding";
     pub const SESSION_CONFIG_TAB_CONFIG_CHIP_OPEN: &str = "Session_Config_Tab_Config_Chip_Open";
+    pub const FEATURE_INTRO_MODAL_OPEN: &str = "Feature_Intro_Modal_Open";
     pub const FOCUS_PANES_ON_HOVER_CONTEXT_FLAG: &str = "Focus_Panes_On_Hover";
     pub const HIDE_WORKSPACE_DECORATIONS_CONTEXT_FLAG: &str = "Hide_Workspace_Decorations";
     pub const ALIAS_EXPANSION_FLAG: &str = "Alias_Expansion_Enabled";
@@ -578,6 +607,8 @@ pub mod flags {
     pub const SHARED_BLOCK_TITLE_GENERATION_FLAG: &str = "Shared_Block_Title_Generation";
     pub const GIT_OPERATIONS_AUTOGEN_FLAG: &str = "Git_Operations_Autogen";
     pub const INCLUDE_AGENT_COMMANDS_IN_HISTORY_FLAG: &str = "Include_Agent_Commands_In_History";
+    pub const AUTO_APPROVE_BYPASSES_COMMAND_DENYLIST_FLAG: &str =
+        "Auto_Approve_Bypasses_Command_Denylist";
     pub const AI_RULES_FLAG: &str = "AI_Rules";
     pub const SUGGESTED_RULES_FLAG: &str = "Suggested_Rules";
     pub const WARP_DRIVE_CONTEXT_FLAG: &str = "Warp_Drive_Context";
@@ -1088,7 +1119,7 @@ fn next_stop_index(current: usize, len: usize, direction: CycleDirection) -> usi
 }
 
 macro_rules! update_page {
-    ($handle:expr, $update:expr, $ctx:expr) => {
+    ($handle:expr_2021, $update:expr_2021, $ctx:expr_2021) => {
         match $handle {
             SettingsPageViewHandle::Main(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Appearance(handle) => $ctx.update_view(handle, $update),
@@ -1390,10 +1421,10 @@ impl SettingsView {
         // Auto-expand the umbrella if the initial page is one of its subpages.
         if initial_page.is_subpage() {
             for item in &mut nav_items {
-                if let SettingsNavItem::Umbrella(umbrella) = item {
-                    if umbrella.contains(initial_page) {
-                        umbrella.expanded = true;
-                    }
+                if let SettingsNavItem::Umbrella(umbrella) = item
+                    && umbrella.contains(initial_page)
+                {
+                    umbrella.expanded = true;
                 }
             }
         }
@@ -1478,10 +1509,10 @@ impl SettingsView {
                 if is_search_active {
                     // Save umbrella expanded state before search modifies it.
                     for item in &mut self.nav_items {
-                        if let SettingsNavItem::Umbrella(umbrella) = item {
-                            if umbrella.pre_search_expanded.is_none() {
-                                umbrella.pre_search_expanded = Some(umbrella.expanded);
-                            }
+                        if let SettingsNavItem::Umbrella(umbrella) = item
+                            && umbrella.pre_search_expanded.is_none()
+                        {
+                            umbrella.pre_search_expanded = Some(umbrella.expanded);
                         }
                     }
 
@@ -1519,10 +1550,10 @@ impl SettingsView {
                 } else {
                     // Search cleared: restore umbrella expanded state.
                     for item in &mut self.nav_items {
-                        if let SettingsNavItem::Umbrella(umbrella) = item {
-                            if let Some(saved) = umbrella.pre_search_expanded.take() {
-                                umbrella.expanded = saved;
-                            }
+                        if let SettingsNavItem::Umbrella(umbrella) = item
+                            && let Some(saved) = umbrella.pre_search_expanded.take()
+                        {
+                            umbrella.expanded = saved;
                         }
                     }
                     self.subpage_filter.clear();
@@ -1556,19 +1587,22 @@ impl SettingsView {
                 // Restore the active subpage after filtering.
                 if is_search_active {
                     let current = self.current_settings_page;
-                    if current.is_ai_subpage() && current != SettingsSection::AgentMCPServers {
-                        if let Some(subpage) = AISubpage::from_section(current) {
-                            self.ai_page_handle.update(ctx, |view, ctx| {
-                                view.set_active_subpage(Some(subpage), ctx);
-                            });
-                        }
+                    if current.is_ai_subpage()
+                        && current != SettingsSection::AgentMCPServers
+                        && let Some(subpage) = AISubpage::from_section(current)
+                    {
+                        self.ai_page_handle.update(ctx, |view, ctx| {
+                            view.set_active_subpage(Some(subpage), ctx);
+                            view.update_filter(&search_query, ctx);
+                        });
                     }
-                    if current.is_code_subpage() {
-                        if let Some(subpage) = CodeSubpage::from_section(current) {
-                            self.code_page_handle.update(ctx, |view, ctx| {
-                                view.set_active_subpage(Some(subpage), ctx);
-                            });
-                        }
+                    if current.is_code_subpage()
+                        && let Some(subpage) = CodeSubpage::from_section(current)
+                    {
+                        self.code_page_handle.update(ctx, |view, ctx| {
+                            view.set_active_subpage(Some(subpage), ctx);
+                            view.update_filter(&search_query, ctx);
+                        });
                     }
                 }
 
@@ -1649,6 +1683,11 @@ impl SettingsView {
                             false, /* allow_steal_focus */
                             ctx,
                         );
+                        // The navigation above rebuilt the newly-selected
+                        // subpage's PageType via set_active_subpage, resetting
+                        // its widget filter to default. Reapply the active
+                        // search query so only matching widgets render.
+                        self.reapply_search_filter_to_active_subpage(&search_query, ctx);
                     }
                 }
                 ctx.notify();
@@ -1900,12 +1939,12 @@ impl SettingsView {
     pub fn search_for_keybinding(&mut self, keybinding_name: &str, ctx: &mut ViewContext<Self>) {
         self.set_and_refresh_current_page(SettingsSection::Keybindings, ctx);
 
-        if let Some(settings_page) = self.current_settings_page() {
-            if let SettingsPageViewHandle::Keybindings(view_handle) = &settings_page.view_handle {
-                view_handle.update(ctx, |view, ctx| {
-                    view.search_for_binding(keybinding_name, ctx);
-                })
-            }
+        if let Some(settings_page) = self.current_settings_page()
+            && let SettingsPageViewHandle::Keybindings(view_handle) = &settings_page.view_handle
+        {
+            view_handle.update(ctx, |view, ctx| {
+                view.search_for_binding(keybinding_name, ctx);
+            })
         }
     }
 
@@ -1958,7 +1997,9 @@ impl SettingsView {
                 ctx.emit(SettingsViewEvent::OpenCustomRouterFile(path.clone()));
             }
             AISettingsPageEvent::OpenExecutionProfileEditor(profile_id) => {
-                ctx.emit(SettingsViewEvent::OpenExecutionProfileEditor(*profile_id));
+                ctx.emit(SettingsViewEvent::OpenExecutionProfileEditor(
+                    profile_id.clone(),
+                ));
             }
             AISettingsPageEvent::SignupAnonymousUser => {
                 ctx.emit(SettingsViewEvent::SignupAnonymousUser)
@@ -2080,10 +2121,10 @@ impl SettingsView {
 
             // Auto-expand the umbrella containing this subpage.
             for item in &mut self.nav_items {
-                if let SettingsNavItem::Umbrella(umbrella) = item {
-                    if umbrella.contains(section) {
-                        umbrella.expanded = true;
-                    }
+                if let SettingsNavItem::Umbrella(umbrella) = item
+                    && umbrella.contains(section)
+                {
+                    umbrella.expanded = true;
                 }
             }
         }
@@ -2148,12 +2189,12 @@ impl SettingsView {
         email: Option<&String>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(team_page) = self.settings_page(SettingsSection::Teams) {
-            if let SettingsPageViewHandle::Teams(view) = &team_page.view_handle {
-                view.update(ctx, |view, ctx| {
-                    view.open_team_members(email, ctx);
-                })
-            }
+        if let Some(team_page) = self.settings_page(SettingsSection::Teams)
+            && let SettingsPageViewHandle::Teams(view) = &team_page.view_handle
+        {
+            view.update(ctx, |view, ctx| {
+                view.open_team_members(email, ctx);
+            })
         }
     }
 
@@ -2167,15 +2208,15 @@ impl SettingsView {
     ) {
         // Navigate to the AgentMCPServers subpage (under the Agents umbrella).
         self.set_and_refresh_current_page(SettingsSection::AgentMCPServers, ctx);
-        if let Some(mcp_page) = self.settings_page(SettingsSection::MCPServers) {
-            if let SettingsPageViewHandle::MCPServers(view) = &mcp_page.view_handle {
-                view.update(ctx, |view, ctx| {
-                    view.update_page(page, ctx);
-                    if let Some(title) = autoinstall_gallery_title {
-                        view.autoinstall_from_gallery(title, ctx);
-                    }
-                })
-            }
+        if let Some(mcp_page) = self.settings_page(SettingsSection::MCPServers)
+            && let SettingsPageViewHandle::MCPServers(view) = &mcp_page.view_handle
+        {
+            view.update(ctx, |view, ctx| {
+                view.update_page(page, ctx);
+                if let Some(title) = autoinstall_gallery_title {
+                    view.autoinstall_from_gallery(title, ctx);
+                }
+            })
         }
     }
 
@@ -2185,12 +2226,12 @@ impl SettingsView {
         ps1_grid_info: Option<(BlockGrid, SizeInfo)>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(appearance_page) = self.settings_page(SettingsSection::Appearance) {
-            if let SettingsPageViewHandle::Appearance(view) = &appearance_page.view_handle {
-                view.update(ctx, |view, ctx| {
-                    view.set_ps1_info(ps1_grid_info, ctx);
-                })
-            }
+        if let Some(appearance_page) = self.settings_page(SettingsSection::Appearance)
+            && let SettingsPageViewHandle::Appearance(view) = &appearance_page.view_handle
+        {
+            view.update(ctx, |view, ctx| {
+                view.set_ps1_info(ps1_grid_info, ctx);
+            })
         }
     }
 
@@ -2206,12 +2247,12 @@ impl SettingsView {
     }
 
     pub fn refresh_preferred_graphics_backend_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
-        if let Some(features_page) = self.settings_page(SettingsSection::Features) {
-            if let SettingsPageViewHandle::Features(view) = &features_page.view_handle {
-                view.update(ctx, |view, ctx| {
-                    view.refresh_preferred_graphics_backend_dropdown(ctx);
-                });
-            }
+        if let Some(features_page) = self.settings_page(SettingsSection::Features)
+            && let SettingsPageViewHandle::Features(view) = &features_page.view_handle
+        {
+            view.update(ctx, |view, ctx| {
+                view.refresh_preferred_graphics_backend_dropdown(ctx);
+            });
         }
     }
 
@@ -2239,8 +2280,31 @@ impl SettingsView {
         }
     }
 
+    /// Reapply the active search query to the currently-selected AI/Code subpage.
+    fn reapply_search_filter_to_active_subpage(
+        &mut self,
+        query: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let current = self.current_settings_page;
+        if current.is_ai_subpage()
+            && current != SettingsSection::AgentMCPServers
+            && AISubpage::from_section(current).is_some()
+        {
+            self.ai_page_handle.update(ctx, |view, ctx| {
+                view.update_filter(query, ctx);
+            });
+        }
+        if current.is_code_subpage() && CodeSubpage::from_section(current).is_some() {
+            self.code_page_handle.update(ctx, |view, ctx| {
+                view.update_filter(query, ctx);
+            });
+        }
+    }
+
     fn cycle_pages(&mut self, direction: CycleDirection, ctx: &mut ViewContext<Self>) {
-        let is_search_active = !self.search_editor.as_ref(ctx).buffer_text(ctx).is_empty();
+        let search_query = self.search_editor.as_ref(ctx).buffer_text(ctx);
+        let is_search_active = !search_query.is_empty();
 
         // Build nav stops from the current sidebar state. A collapsed umbrella
         // is represented as a single stop (rather than being skipped) so that
@@ -2281,6 +2345,9 @@ impl SettingsView {
         };
 
         self.set_and_refresh_current_page_internal(target_section, false, false, ctx);
+        if is_search_active {
+            self.reapply_search_filter_to_active_subpage(&search_query, ctx);
+        }
     }
 
     fn input_tab(&mut self, ctx: &mut ViewContext<Self>) {
@@ -2686,7 +2753,14 @@ impl TypedActionView for SettingsView {
     fn handle_action(&mut self, action: &SettingsAction, ctx: &mut ViewContext<Self>) {
         match action {
             SettingsAction::SelectAndRefresh(section) => {
+                let search_query = self.search_editor.as_ref(ctx).buffer_text(ctx);
+                let is_search_active = !search_query.is_empty();
+
                 self.set_and_refresh_current_page_internal(*section, false, true, ctx);
+
+                if is_search_active {
+                    self.reapply_search_filter_to_active_subpage(&search_query, ctx);
+                }
 
                 if *section == SettingsSection::MCPServers {
                     send_telemetry_from_ctx!(
@@ -2706,75 +2780,75 @@ impl TypedActionView for SettingsView {
                 }
             }
             SettingsAction::MainPageToggle(main_page_action) => {
-                if let Some(main_page) = self.settings_page(SettingsSection::Account) {
-                    if let SettingsPageViewHandle::Main(view) = &main_page.view_handle {
-                        view.update(ctx, |view, ctx| {
-                            view.handle_action(main_page_action, ctx);
-                        })
-                    }
+                if let Some(main_page) = self.settings_page(SettingsSection::Account)
+                    && let SettingsPageViewHandle::Main(view) = &main_page.view_handle
+                {
+                    view.update(ctx, |view, ctx| {
+                        view.handle_action(main_page_action, ctx);
+                    })
                 }
             }
             SettingsAction::AppearancePageToggle(appearance_action) => {
-                if let Some(appearance_page) = self.settings_page(SettingsSection::Appearance) {
-                    if let SettingsPageViewHandle::Appearance(view) = &appearance_page.view_handle {
-                        view.update(ctx, |view, ctx| {
-                            view.handle_action(appearance_action, ctx);
-                        })
-                    }
+                if let Some(appearance_page) = self.settings_page(SettingsSection::Appearance)
+                    && let SettingsPageViewHandle::Appearance(view) = &appearance_page.view_handle
+                {
+                    view.update(ctx, |view, ctx| {
+                        view.handle_action(appearance_action, ctx);
+                    })
                 }
             }
             SettingsAction::FeaturesPageToggle(feature_action) => {
-                if let Some(features_page) = self.settings_page(SettingsSection::Features) {
-                    if let SettingsPageViewHandle::Features(view) = &features_page.view_handle {
-                        view.update(ctx, |view, ctx| {
-                            view.handle_action(feature_action, ctx);
-                        })
-                    }
+                if let Some(features_page) = self.settings_page(SettingsSection::Features)
+                    && let SettingsPageViewHandle::Features(view) = &features_page.view_handle
+                {
+                    view.update(ctx, |view, ctx| {
+                        view.handle_action(feature_action, ctx);
+                    })
                 }
             }
             SettingsAction::PrivacyPageToggle(privacy_action) => {
-                if let Some(privacy_page) = self.settings_page(SettingsSection::Privacy) {
-                    if let SettingsPageViewHandle::Privacy(view) = &privacy_page.view_handle {
-                        view.update(ctx, |view, ctx| {
-                            view.handle_action(privacy_action, ctx);
-                        })
-                    }
+                if let Some(privacy_page) = self.settings_page(SettingsSection::Privacy)
+                    && let SettingsPageViewHandle::Privacy(view) = &privacy_page.view_handle
+                {
+                    view.update(ctx, |view, ctx| {
+                        view.handle_action(privacy_action, ctx);
+                    })
                 }
             }
             SettingsAction::AI(ai_action) => {
-                if let Some(ai_page) = self.settings_page(SettingsSection::AI) {
-                    if let SettingsPageViewHandle::AI(view) = &ai_page.view_handle {
-                        view.update(ctx, |view, ctx| {
-                            view.handle_action(ai_action, ctx);
-                        })
-                    }
+                if let Some(ai_page) = self.settings_page(SettingsSection::AI)
+                    && let SettingsPageViewHandle::AI(view) = &ai_page.view_handle
+                {
+                    view.update(ctx, |view, ctx| {
+                        view.handle_action(ai_action, ctx);
+                    })
                 }
             }
             SettingsAction::Code(code_action) => {
-                if let Some(code_page) = self.settings_page(SettingsSection::Code) {
-                    if let SettingsPageViewHandle::Code(view) = &code_page.view_handle {
-                        view.update(ctx, |view, ctx| {
-                            view.handle_action(code_action, ctx);
-                        })
-                    }
+                if let Some(code_page) = self.settings_page(SettingsSection::Code)
+                    && let SettingsPageViewHandle::Code(view) = &code_page.view_handle
+                {
+                    view.update(ctx, |view, ctx| {
+                        view.handle_action(code_action, ctx);
+                    })
                 }
             }
             SettingsAction::WarpDrive(warp_drive_action) => {
-                if let Some(warp_drive_page) = self.settings_page(SettingsSection::WarpDrive) {
-                    if let SettingsPageViewHandle::WarpDrive(view) = &warp_drive_page.view_handle {
-                        view.update(ctx, |view, ctx| {
-                            view.handle_action(warp_drive_action, ctx);
-                        })
-                    }
+                if let Some(warp_drive_page) = self.settings_page(SettingsSection::WarpDrive)
+                    && let SettingsPageViewHandle::WarpDrive(view) = &warp_drive_page.view_handle
+                {
+                    view.update(ctx, |view, ctx| {
+                        view.handle_action(warp_drive_action, ctx);
+                    })
                 }
             }
             SettingsAction::WarpifyPageToggle(warpify_action) => {
-                if let Some(warpify_page) = self.settings_page(SettingsSection::Warpify) {
-                    if let SettingsPageViewHandle::Warpify(view) = &warpify_page.view_handle {
-                        view.update(ctx, |view, ctx| {
-                            view.handle_action(warpify_action, ctx);
-                        })
-                    }
+                if let Some(warpify_page) = self.settings_page(SettingsSection::Warpify)
+                    && let SettingsPageViewHandle::Warpify(view) = &warpify_page.view_handle
+                {
+                    view.update(ctx, |view, ctx| {
+                        view.handle_action(warpify_action, ctx);
+                    })
                 }
             }
             SettingsAction::Tab => self.input_tab(ctx),

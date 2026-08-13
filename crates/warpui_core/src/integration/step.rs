@@ -5,12 +5,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use instant::Instant;
+use warp_errors::report_error;
 
-use super::{action_log, overlay, TestSetupUtils};
+use super::{TestSetupUtils, action_log, overlay};
+use crate::r#async::Timer;
 use crate::event::{Event, KeyEventDetails};
 use crate::keymap::{Keystroke, PerPlatformKeystroke};
 use crate::platform::{OperatingSystem, Window};
-use crate::r#async::Timer;
 use crate::{App, WindowId};
 
 const MAX_WAKEUPS_PER_SECOND: u64 = 60;
@@ -655,26 +656,24 @@ pub(super) async fn run_step(
                 record_overlay_event_for_event(&event, step_data_map);
                 let dispatch_result =
                     app.update(|ctx| (window.callbacks().event_callback)(event.clone(), ctx));
-                if !dispatch_result.handled {
-                    if let Event::KeyDown {
+                if !dispatch_result.handled
+                    && let Event::KeyDown {
                         chars,
                         is_composing,
                         ..
                     } = event
-                    {
-                        if !is_composing {
-                            // The input system expects a TypedCharacters event to follow keydown
-                            // in order to update the editor's input unless is_composing is set
-                            app.update(|ctx| {
-                                (window.callbacks().event_callback)(
-                                    Event::TypedCharacters {
-                                        chars: chars.clone(),
-                                    },
-                                    ctx,
-                                )
-                            });
-                        }
-                    }
+                    && !is_composing
+                {
+                    // The input system expects a TypedCharacters event to follow keydown
+                    // in order to update the editor's input unless is_composing is set
+                    app.update(|ctx| {
+                        (window.callbacks().event_callback)(
+                            Event::TypedCharacters {
+                                chars: chars.clone(),
+                            },
+                            ctx,
+                        )
+                    });
                 }
             }
             IntegrationTestEvent::WithSavedPosition(_, mouse_event)
@@ -700,10 +699,9 @@ pub(super) async fn run_step(
                 // are experimental and we await in the failure case.
                 if bounds.is_none() {
                     if let Some(pause) = step.pause_on_failure {
-                        log::error!(
-                            "Test step '{}' failed to find saved position {}, pausing...",
-                            step.name,
-                            position_id
+                        report_error!(
+                            "Test step failed to find saved position, pausing",
+                            extra: { "step" => %step.name, "position" => %position_id }
                         );
                         Timer::at(Instant::now() + pause).await;
                     }
@@ -897,10 +895,12 @@ pub(super) async fn run_step(
         if let Some(mut final_assertion) = step.on_failure_handler.take() {
             // Log the timed-out assertion's failure message before running the final assertion
             if let Some(AssertionOutcome::Failure { message, .. }) = &last_failure {
-                log::error!(
-                    "Assertion '{}' timed out with message: {}",
-                    last_assertion_name.unwrap_or("unknown"),
-                    message
+                report_error!(
+                    "Assertion timed out",
+                    extra: {
+                        "assertion" => %last_assertion_name.unwrap_or("unknown"),
+                        "message" => %message
+                    }
                 );
             }
             let res = match &mut final_assertion.callback {
@@ -951,29 +951,27 @@ pub(super) async fn run_step(
 
         // We only get this far in the case of a test failure.
         let last_failure = last_failure.expect("last_failure should be set");
-        if let Some(msg) = last_failure.as_failure_message().map(str::to_owned) {
-            if let Some(log) = action_log::get_action_log_mut(step_data_map) {
-                let name = last_assertion_name.unwrap_or("unknown");
-                log.record(format!("Assertion failed: {name}: {msg}"));
-            }
+        if let Some(msg) = last_failure.as_failure_message().map(str::to_owned)
+            && let Some(log) = action_log::get_action_log_mut(step_data_map)
+        {
+            let name = last_assertion_name.unwrap_or("unknown");
+            log.record(format!("Assertion failed: {name}: {msg}"));
         }
         if let Some(pause) = step.pause_on_failure {
             let AssertionOutcome::Failure { message, .. } = &last_failure else {
                 panic!("last_failure should be a failure assertion");
             };
-            log::error!(
-                "Test step '{}' failed with error '{}', pausing...",
-                step.name,
-                message
+            report_error!(
+                "Test step failed, pausing",
+                extra: { "step" => %step.name, "message" => %message }
             );
             Timer::at(Instant::now() + pause).await;
         }
         // Mostly logging to get a timestamp - the test driver will panic right
         // after this.
-        log::error!(
-            "Test step '{}' failed on '{}'",
-            step.name,
-            last_assertion_name.unwrap_or("unknown")
+        report_error!(
+            "Test step failed",
+            extra: { "step" => %step.name, "assertion" => %last_assertion_name.unwrap_or("unknown") }
         );
         return last_failure;
     }

@@ -194,14 +194,6 @@ pub(super) fn convert_input(
                     )),
                 });
             }
-            AIAgentInput::FetchReviewComments { repo_path, context } => {
-                return Ok(api::request::Input {
-                    context: Some(convert_context(context.as_ref())),
-                    r#type: Some(api::request::input::Type::FetchReviewComments(
-                        api::request::input::FetchReviewComments { repo_path },
-                    )),
-                });
-            }
             AIAgentInput::SummarizeConversation { prompt, context } => {
                 return Ok(api::request::Input {
                     context: Some(convert_context(context.as_ref())),
@@ -444,7 +436,6 @@ fn convert_input_to_user_input(
         AIAgentInput::ResumeConversation { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::InitProjectRules { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::CodeReview { .. } => Err(ConvertToAPITypeError::Ignore),
-        AIAgentInput::FetchReviewComments { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::CreateEnvironment { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::InvokeSkill { .. } => Err(ConvertToAPITypeError::Ignore),
         invalid_input => Err(anyhow!(
@@ -692,9 +683,6 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
             AIAgentActionResultType::FetchConversation(fetch_conversation_result) => {
                 Some(fetch_conversation_result.try_into()?)
             }
-            AIAgentActionResultType::StartAgent(start_agent_result) => {
-                Some(start_agent_result.into())
-            }
             AIAgentActionResultType::SendMessageToAgent(send_message_result) => {
                 Some(send_message_result.into())
             }
@@ -813,12 +801,13 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                 api_git_context.head = head;
                 api_git_context.branch = branch.unwrap_or_default();
             }
-            AIAgentContext::Repository { name, owner } => {
+            AIAgentContext::Repository { name, owner, host } => {
                 let api_git_context =
                     git_context.get_or_insert_with(api::input_context::Git::default);
                 api_git_context.repository = Some(api::input_context::git::Repository {
                     name,
                     owner: owner.unwrap_or_default(),
+                    host: host.unwrap_or_default(),
                 });
             }
             AIAgentContext::PullRequest {
@@ -826,6 +815,7 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                 state,
                 draft,
                 base_branch,
+                url,
             } => {
                 if number <= 0 {
                     continue;
@@ -837,6 +827,7 @@ fn convert_context(context: &[AIAgentContext]) -> api::InputContext {
                     number,
                     state: state as i32,
                     base_branch,
+                    url,
                 };
                 let api_git_context =
                     git_context.get_or_insert_with(api::input_context::Git::default);

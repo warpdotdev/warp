@@ -130,62 +130,62 @@ impl SimpleLogger {
                         let _ = log_file.flush().await;
                         written_bytes = written_bytes.saturating_add(bytes.len() as u64);
 
-                        if let Some(config) = rotation {
-                            if written_bytes >= config.max_file_size_bytes {
-                                // Drop the active file handle before renaming so platforms
-                                // that disallow renaming an open file (notably Windows)
-                                // succeed, and so the subsequent reopen receives a fresh
-                                // inode.
-                                drop(log_file);
-                                let rotation_failed =
-                                    match perform_rotation(&log_path, config.max_rotation).await {
-                                        Ok(()) => false,
-                                        Err(e) => {
-                                            // The only path through `perform_rotation` that
-                                            // surfaces an error is step 3's rename of the
-                                            // active file. That rename only runs when the
-                                            // active file exists, so on Err the original
-                                            // content is still on disk at `log_path`. Open
-                                            // in append mode rather than truncating so we
-                                            // don't destroy the log data rotation was meant
-                                            // to preserve.
-                                            log::warn!(
-                                                "SimpleLogger: rotation failed for {:?}: {e}; \
+                        if let Some(config) = rotation
+                            && written_bytes >= config.max_file_size_bytes
+                        {
+                            // Drop the active file handle before renaming so platforms
+                            // that disallow renaming an open file (notably Windows)
+                            // succeed, and so the subsequent reopen receives a fresh
+                            // inode.
+                            drop(log_file);
+                            let rotation_failed =
+                                match perform_rotation(&log_path, config.max_rotation).await {
+                                    Ok(()) => false,
+                                    Err(e) => {
+                                        // The only path through `perform_rotation` that
+                                        // surfaces an error is step 3's rename of the
+                                        // active file. That rename only runs when the
+                                        // active file exists, so on Err the original
+                                        // content is still on disk at `log_path`. Open
+                                        // in append mode rather than truncating so we
+                                        // don't destroy the log data rotation was meant
+                                        // to preserve.
+                                        log::warn!(
+                                            "SimpleLogger: rotation failed for {:?}: {e}; \
                                              preserving existing log content and continuing \
                                              in append mode",
-                                                &log_path,
-                                            );
-                                            true
-                                        }
-                                    };
-                                let reopen = if rotation_failed {
-                                    open_append(&log_path).await
-                                } else {
-                                    open_truncated(&log_path).await
-                                };
-                                log_file = match reopen {
-                                    Ok(f) => f,
-                                    Err(e) => {
-                                        log::warn!(
-                                            "SimpleLogger: failed to reopen {:?} after \
-                                             rotation: {e}",
                                             &log_path,
                                         );
-                                        return;
+                                        true
                                     }
                                 };
-                                // Seed the counter from the file's current size so the
-                                // next rotation threshold check stays meaningful even
-                                // after the preserve-on-failure path.
-                                written_bytes = if rotation_failed {
-                                    async_fs::metadata(&log_path)
-                                        .await
-                                        .map(|m| m.len())
-                                        .unwrap_or(0)
-                                } else {
-                                    0
-                                };
-                            }
+                            let reopen = if rotation_failed {
+                                open_append(&log_path).await
+                            } else {
+                                open_truncated(&log_path).await
+                            };
+                            log_file = match reopen {
+                                Ok(f) => f,
+                                Err(e) => {
+                                    log::warn!(
+                                        "SimpleLogger: failed to reopen {:?} after \
+                                             rotation: {e}",
+                                        &log_path,
+                                    );
+                                    return;
+                                }
+                            };
+                            // Seed the counter from the file's current size so the
+                            // next rotation threshold check stays meaningful even
+                            // after the preserve-on-failure path.
+                            written_bytes = if rotation_failed {
+                                async_fs::metadata(&log_path)
+                                    .await
+                                    .map(|m| m.len())
+                                    .unwrap_or(0)
+                            } else {
+                                0
+                            };
                         }
                     }
                     Err(e) => {
@@ -274,13 +274,13 @@ pub(crate) async fn perform_rotation(
     // Tolerate ENOENT silently: it just means we haven't accumulated enough
     // rotations yet.
     let oldest = path_with_suffix(base_path, max_rotation);
-    if let Err(e) = async_fs::remove_file(&oldest).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            log::debug!(
-                "SimpleLogger: could not remove oldest rotation {:?}: {e}",
-                oldest
-            );
-        }
+    if let Err(e) = async_fs::remove_file(&oldest).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        log::debug!(
+            "SimpleLogger: could not remove oldest rotation {:?}: {e}",
+            oldest
+        );
     }
 
     // Step 2 — shift every existing `.N` up by one, going from oldest to
@@ -288,10 +288,10 @@ pub(crate) async fn perform_rotation(
     for n in (1..max_rotation).rev() {
         let src = path_with_suffix(base_path, n);
         let dst = path_with_suffix(base_path, n + 1);
-        if let Err(e) = async_fs::rename(&src, &dst).await {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                log::debug!("SimpleLogger: could not rotate {:?} -> {:?}: {e}", src, dst,);
-            }
+        if let Err(e) = async_fs::rename(&src, &dst).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            log::debug!("SimpleLogger: could not rotate {:?} -> {:?}: {e}", src, dst,);
         }
     }
 

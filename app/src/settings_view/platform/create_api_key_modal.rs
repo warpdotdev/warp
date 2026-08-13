@@ -2,6 +2,7 @@ use chrono::Utc;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_error;
 use warp_server_client::auth::AgentIdentity;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -148,7 +149,7 @@ impl CreateApiKeyModal {
         let font_family = Appearance::as_ref(ctx).ui_font_family();
 
         let has_team = FeatureFlag::TeamApiKeys.is_enabled()
-            && UserWorkspaces::as_ref(ctx).current_team_uid().is_some();
+            && UserWorkspaces::as_ref(ctx).team_for_view(ctx).is_some();
         let has_named_agents = FeatureFlag::NamedAgents.is_enabled();
 
         let name_editor = ctx.add_typed_action_view(|ctx| {
@@ -294,7 +295,7 @@ impl CreateApiKeyModal {
                         me.populate_agent_dropdown(ctx);
                     }
                     Err(err) => {
-                        log::error!("Failed to load agent identities: {err}");
+                        report_error!(err.context("Failed to load agent identities"));
                         ctx.emit(CreateApiKeyModalEvent::Error {
                             message: "Failed to load agents. Please close and try again."
                                 .to_string(),
@@ -376,14 +377,13 @@ impl CreateApiKeyModal {
 
         let team_id = if selected_type == ApiKeyType::Team {
             let workspaces = UserWorkspaces::as_ref(ctx);
-            match workspaces.current_team_uid() {
-                Some(uid) => Some(cynic::Id::new(uid.uid())),
+            match workspaces.team_for_view(ctx) {
+                Some(team) => Some(cynic::Id::new(team.uid.uid())),
                 None => {
                     self.request_state = RequestState::Idle;
                     ctx.emit(CreateApiKeyModalEvent::Error {
-                        message:
-                            "Unable to create a team API key because there is no current team."
-                                .to_string(),
+                        message: "Unable to create a team API key because this window has no team."
+                            .to_string(),
                     });
                     ctx.notify();
                     return;
@@ -445,7 +445,7 @@ impl CreateApiKeyModal {
 
     fn update_has_team(&mut self, ctx: &mut ViewContext<Self>) {
         let new_has_team = FeatureFlag::TeamApiKeys.is_enabled()
-            && UserWorkspaces::as_ref(ctx).current_team_uid().is_some();
+            && UserWorkspaces::as_ref(ctx).team_for_view(ctx).is_some();
         let new_has_named_agents = FeatureFlag::NamedAgents.is_enabled();
 
         if new_has_team != self.has_team || new_has_named_agents != self.has_named_agents {

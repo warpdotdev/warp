@@ -18,6 +18,7 @@ use warp_cli::{
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
 use warp_graphql::mutations::create_managed_mcp_client_config::{
     CreateManagedMcpClientConfigOutput, ManagedMcpTransportKind,
 };
@@ -27,21 +28,27 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    build_secret_env_vars, AgentDriver, AgentDriverError, IdleTimeoutSender,
+    AgentDriver, AgentDriverError, CLIAgentSessionStatus, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
     OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    PlatformErrorCode, SDKConversationOutputStatus, build_secret_env_vars,
+    idle_window_for_cli_session_status, idle_window_for_terminal_status,
+    setup_failure_status_update, terminal_status_log_outcome,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
-    AIAgentOutputMessage, ArtifactCreatedData, MessageId, UploadArtifactResult,
+    AIAgentOutputMessage, ArtifactCreatedData, CancellationReason, MessageId, RenderableAIError,
+    UploadArtifactResult,
 };
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
-use crate::ai::mcp::parsing::normalize_mcp_json;
 use crate::ai::mcp::JSONTransportType;
+use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
+use crate::ai::mcp::parsing::normalize_mcp_json;
 use crate::ai::skills::SkillManager;
+use crate::auth::credentials::Credentials;
 use crate::server::server_api::managed_mcp::MockManagedMcpClient;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
@@ -188,7 +195,7 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
     mock.expect_create_managed_mcp_client_config()
         .times(1)
         .returning(move |requested_uid| {
-            assert_eq!(requested_uid, uuid);
+            assert_eq!(requested_uid, uuid.to_string());
             Ok(managed_client_config_output(config_json))
         });
 
@@ -201,6 +208,99 @@ fn managed_resolver_non_local_uuid_calls_managed_client() {
 
     assert!(resolved.local_uuids.is_empty());
     assert_eq!(resolved.ephemeral_installations.len(), 1);
+}
+
+#[test]
+fn well_known_spec_resolves_via_managed_client() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let config_json = r#"{"mcpServers":{"linear":{"url":"https://app.warp.dev/mcp/integration-proxy/linear","headers":{"Authorization":"Bearer tok"}}}}"#;
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(move |requested_uid| {
+            assert_eq!(requested_uid, "linear");
+            Ok(managed_client_config_output(config_json))
+        });
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::WellKnown("linear".to_string())],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert!(resolved.local_uuids.is_empty());
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+}
+
+#[test]
+fn well_known_resolution_failure_skips_server() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(1)
+        .returning(|_| Err(anyhow::anyhow!("Linear is not connected for this team")));
+
+    // Well-known references are server-injected and best-effort: a failure must
+    // skip the server, not fail run setup.
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::WellKnown("linear".to_string())],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert!(resolved.local_uuids.is_empty());
+    assert!(resolved.ephemeral_installations.is_empty());
+}
+
+#[test]
+fn well_known_resolution_failure_does_not_drop_other_specs() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(true);
+    let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let config_json =
+        r#"{"mcpServers":{"GitHub MCP":{"command":"npx","env":{"API_TOKEN":"{{API_TOKEN}}"}}}}"#;
+    let mut mock = MockManagedMcpClient::new();
+    mock.expect_create_managed_mcp_client_config()
+        .times(2)
+        .returning(move |requested_uid| {
+            if requested_uid == "linear" {
+                Err(anyhow::anyhow!("Linear is not connected for this team"))
+            } else {
+                assert_eq!(requested_uid, uuid.to_string());
+                Ok(managed_client_config_output(config_json))
+            }
+        });
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[
+            MCPSpec::WellKnown("linear".to_string()),
+            MCPSpec::Uuid(uuid),
+        ],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert_eq!(resolved.ephemeral_installations.len(), 1);
+}
+
+#[test]
+fn well_known_spec_is_skipped_when_flag_disabled() {
+    let _flag = FeatureFlag::WellKnownMcpIds.override_enabled(false);
+    // The managed client must not be called for well-known specs when the
+    // feature is disabled (e.g. a persisted config from a dogfood build).
+    let mock = MockManagedMcpClient::new();
+
+    let resolved = block_on(AgentDriver::resolve_mcp_specs_with_local_uuids(
+        &[MCPSpec::WellKnown("linear".to_string())],
+        &HashSet::new(),
+        Arc::new(mock),
+    ))
+    .unwrap();
+
+    assert!(resolved.local_uuids.is_empty());
+    assert!(resolved.ephemeral_installations.is_empty());
 }
 
 #[test]
@@ -343,6 +443,59 @@ fn managed_command_config_missing_secret_leaves_placeholder() {
     }
 }
 
+// ── Built-in Factory MCP injection tests ────────────────────────────────────
+
+fn api_key_credentials() -> Credentials {
+    Credentials::ApiKey {
+        key: "wk-test-key".to_string(),
+        owner_type: None,
+    }
+}
+
+#[test]
+fn builtin_factory_mcp_attaches_with_api_key_credentials() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+
+    let installation =
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
+            .expect("built-in Factory MCP should attach when eligible");
+
+    assert_eq!(installation.uuid(), FACTORY_MCP_INSTALLATION_UUID);
+    assert_eq!(
+        installation.templatable_mcp_server().name,
+        FACTORY_MCP_SERVER_NAME
+    );
+}
+
+#[test]
+fn builtin_factory_mcp_skipped_when_flag_disabled() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(false);
+
+    assert!(
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
+            .is_none()
+    );
+}
+
+#[test]
+fn builtin_factory_mcp_skipped_without_credentials() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+
+    assert!(AgentDriver::builtin_factory_mcp_for_run(None, &HashSet::new()).is_none());
+}
+
+#[test]
+fn builtin_factory_mcp_skipped_on_name_collision() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+    // A user-configured server named `warp-factory` wins over the built-in.
+    let taken_server_names = HashSet::from([FACTORY_MCP_SERVER_NAME.to_string()]);
+
+    assert!(
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &taken_server_names)
+            .is_none()
+    );
+}
+
 #[test]
 fn managed_resolution_failure_includes_uid_and_message() {
     let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
@@ -482,6 +635,197 @@ fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_
     assert_eq!(rx.try_recv().unwrap(), None);
 }
 
+// ── Terminal-status idle window routing ──────────────────────────────────────────
+
+fn error_status() -> SDKConversationOutputStatus {
+    SDKConversationOutputStatus::Error {
+        error: RenderableAIError::InternalWarpError,
+    }
+}
+
+#[test]
+fn terminal_error_defers_by_idle_on_fail() {
+    // The agent process is the shared-session sharer, so a failed run must be able to outlive
+    // its own failure for the session to stay attachable while the sandbox is retained.
+    let window =
+        idle_window_for_terminal_status(&error_status(), None, Some(Duration::from_secs(15 * 60)));
+
+    assert_eq!(window, Some(Duration::from_secs(15 * 60)));
+}
+
+#[test]
+fn terminal_error_exits_immediately_without_idle_on_fail() {
+    let window =
+        idle_window_for_terminal_status(&error_status(), Some(Duration::from_secs(45 * 60)), None);
+
+    assert_eq!(
+        window, None,
+        "--idle-on-complete must not act as a fallback for a terminal error"
+    );
+}
+
+#[test]
+fn non_error_completion_defers_by_idle_on_complete() {
+    // The failure window must not leak into the success/blocked/cancelled lifecycle.
+    let cases = [
+        ("success", SDKConversationOutputStatus::Success),
+        (
+            "blocked",
+            SDKConversationOutputStatus::Blocked {
+                blocked_action: "approve".to_string(),
+            },
+        ),
+        (
+            "cancelled",
+            SDKConversationOutputStatus::Cancelled {
+                reason: CancellationReason::ManuallyCancelled,
+            },
+        ),
+    ];
+
+    for (label, status) in cases {
+        let window = idle_window_for_terminal_status(
+            &status,
+            Some(Duration::from_secs(45 * 60)),
+            Some(Duration::from_secs(15 * 60)),
+        );
+
+        assert_eq!(
+            window,
+            Some(Duration::from_secs(45 * 60)),
+            "unexpected window for {label}"
+        );
+    }
+}
+
+#[test]
+fn setup_failure_is_reported_as_an_environment_setup_failure() {
+    // Not just a label: `TaskStatusMessage::is_environment_setup_failure` matches this variant
+    // alone, and the cloud-continuation resolver uses it to decide that a setup failure with no
+    // conversation gets a tombstone with no continue CTA. A generic code silently reroutes those
+    // runs into continuation handling that has nothing to continue.
+    let status = setup_failure_status_update("Environment setup failed: bad command".to_string());
+
+    assert_eq!(
+        status.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+}
+
+#[test]
+fn debug_window_refresh_uses_the_most_recently_armed_outcome() {
+    // A run can fail, be resumed, and fail again. The refresh subscription is installed once and
+    // outlives each individual failure, so refreshing must reschedule the *current* outcome; an
+    // outcome captured at first arm would exit the run reporting the earlier failure.
+    let (tx, rx) = oneshot::channel::<SDKConversationOutputStatus>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+
+    idle_timeout.arm_refreshable(Duration::from_secs(15 * 60), error_status());
+    idle_timeout.arm_refreshable(
+        Duration::ZERO,
+        SDKConversationOutputStatus::Blocked {
+            blocked_action: "second failure".to_string(),
+        },
+    );
+
+    assert_eq!(
+        idle_timeout.refresh(),
+        Some(Duration::ZERO),
+        "refresh should reschedule using the window most recently armed"
+    );
+
+    // Awaited rather than polled: the reschedule completes on a timer task, so a `try_recv` here
+    // races it and only passes when the machine is idle.
+    let blocked_action = match block_on(rx) {
+        Ok(SDKConversationOutputStatus::Blocked { blocked_action }) => Some(blocked_action),
+        _ => None,
+    };
+    assert_eq!(
+        blocked_action.as_deref(),
+        Some("second failure"),
+        "refresh rescheduled a stale outcome instead of the most recent failure"
+    );
+}
+
+#[test]
+fn debug_window_refresh_is_inert_before_anything_is_armed() {
+    let (tx, _rx) = oneshot::channel::<SDKConversationOutputStatus>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+
+    assert_eq!(idle_timeout.refresh(), None);
+}
+
+#[test]
+fn cancelling_the_idle_timeout_stops_a_later_refresh_from_resurrecting_it() {
+    // A follow-up cancels the pending exit, but the viewer-input subscription outlives that
+    // cancellation. Without clearing the armed outcome, typing in the session afterwards would
+    // reschedule the old failure and exit the run mid-follow-up.
+    let (tx, mut rx) = oneshot::channel::<SDKConversationOutputStatus>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+
+    // Long enough that the armed timer cannot fire before the cancellation below, which would
+    // otherwise make this race under load rather than test the cancellation.
+    idle_timeout.arm_refreshable(Duration::from_secs(60), error_status());
+    idle_timeout.cancel_idle_timeout();
+
+    assert_eq!(
+        idle_timeout.refresh(),
+        None,
+        "a cancelled debug window must not be refreshable"
+    );
+    assert!(
+        matches!(rx.try_recv(), Ok(None)),
+        "the run must not have been ended by the cancelled window"
+    );
+}
+
+#[test]
+fn failed_cli_harness_session_defers_by_idle_on_fail() {
+    // The flag lives on `warp agent run`, so it has to behave the same whichever harness the run
+    // uses; a failed CLI session is the same "process is the session sharer" situation.
+    let idle_on_complete = Some(Duration::from_secs(45 * 60));
+    let idle_on_fail = Some(Duration::from_secs(15 * 60));
+
+    let failed = CLIAgentSessionStatus::Failed {
+        error_type: None,
+        message: Some("boom".to_string()),
+    };
+    assert_eq!(
+        idle_window_for_cli_session_status(&failed, idle_on_complete, idle_on_fail),
+        idle_on_fail
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(&failed, idle_on_complete, None),
+        None,
+        "--idle-on-complete must not act as a fallback for a failed CLI session"
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(
+            &CLIAgentSessionStatus::Success,
+            idle_on_complete,
+            idle_on_fail
+        ),
+        idle_on_complete
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(
+            &CLIAgentSessionStatus::InProgress,
+            idle_on_complete,
+            idle_on_fail
+        ),
+        None
+    );
+}
+
+#[test]
+fn terminal_status_log_outcome_labels_are_low_cardinality() {
+    assert_eq!(
+        terminal_status_log_outcome(&SDKConversationOutputStatus::Success),
+        "non_error_completion"
+    );
+    assert_eq!(terminal_status_log_outcome(&error_status()), "error");
+}
+
 #[test]
 fn task_env_vars_include_parent_run_id_when_present() {
     let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
@@ -510,9 +854,11 @@ fn task_env_vars_include_parent_run_id_when_present() {
         )),
         Some(&OsString::from("1"))
     );
-    assert!(env_vars
-        .get(&OsString::from(OZ_CLI_ENV))
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        env_vars
+            .get(&OsString::from(OZ_CLI_ENV))
+            .is_some_and(|value| !value.is_empty())
+    );
 
     let server_root_url = ChannelState::server_root_url().into_owned();
     if overrides_allowed && !server_root_url.is_empty() {
@@ -541,8 +887,10 @@ fn task_env_vars_include_parent_run_id_when_present() {
                 Some(&OsString::from(url.into_owned()))
             ),
             _ => {
-                assert!(!env_vars
-                    .contains_key(&OsString::from(SESSION_SHARING_SERVER_URL_OVERRIDE_ENV)))
+                assert!(
+                    !env_vars
+                        .contains_key(&OsString::from(SESSION_SHARING_SERVER_URL_OVERRIDE_ENV))
+                )
             }
         }
     } else {
@@ -599,12 +947,16 @@ fn task_env_vars_enable_external_parent_listener_for_claude_runs_without_parent_
 #[serial_test::serial]
 fn task_env_vars_propagate_message_listener_state_root_with_legacy_alias() {
     let task_id: AmbientAgentTaskId = "550e8400-e29b-41d4-a716-446655440003".parse().unwrap();
-    std::env::set_var(
-        OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
-        "/tmp/message-listener-root",
-    );
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe {
+        std::env::set_var(
+            OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+            "/tmp/message-listener-root",
+        )
+    };
     let env_vars = task_env_vars(Some(&task_id), None, Harness::Claude);
-    std::env::remove_var(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV) };
 
     assert_eq!(
         env_vars.get(&OsString::from(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV)),
@@ -697,7 +1049,8 @@ fn json_format_input_omits_filepath_and_description_for_proto_upload_result() {
 #[test]
 #[serial_test::serial]
 fn raw_value_only_writes_under_secret_name() {
-    std::env::remove_var("MY_SECRET");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("MY_SECRET") };
     let secrets = HashMap::from([(
         "MY_SECRET".to_string(),
         ManagedSecretValue::raw_value("s3cret"),
@@ -713,7 +1066,8 @@ fn raw_value_only_writes_under_secret_name() {
 #[test]
 #[serial_test::serial]
 fn anthropic_api_key_writes_anthropic_env_var() {
-    std::env::remove_var("ANTHROPIC_API_KEY");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
     let secrets = HashMap::from([(
         "my-custom-name".to_string(),
         ManagedSecretValue::anthropic_api_key("sk-ant-test-key"),
@@ -728,7 +1082,8 @@ fn anthropic_api_key_writes_anthropic_env_var() {
 #[test]
 #[serial_test::serial]
 fn typed_secret_overrides_raw_value_with_same_env_name() {
-    std::env::remove_var("ANTHROPIC_API_KEY");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
     let typed_key = "sk-ant-typed-key-abcdef";
     let raw_key = "sk-ant-raw-key-ghijkl";
     let secrets = HashMap::from([
@@ -755,9 +1110,12 @@ fn typed_secret_overrides_raw_value_with_same_env_name() {
 #[test]
 #[serial_test::serial]
 fn bedrock_api_key_writes_all_bedrock_env_vars() {
-    std::env::remove_var("AWS_BEARER_TOKEN_BEDROCK");
-    std::env::remove_var("CLAUDE_CODE_USE_BEDROCK");
-    std::env::remove_var("AWS_REGION");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_BEARER_TOKEN_BEDROCK") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CODE_USE_BEDROCK") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_REGION") };
     let secrets = HashMap::from([
         (
             "bedrock-secret".to_string(),
@@ -787,11 +1145,16 @@ fn bedrock_api_key_writes_all_bedrock_env_vars() {
 #[test]
 #[serial_test::serial]
 fn bedrock_access_key_writes_all_aws_env_vars() {
-    std::env::remove_var("AWS_ACCESS_KEY_ID");
-    std::env::remove_var("AWS_SECRET_ACCESS_KEY");
-    std::env::remove_var("AWS_SESSION_TOKEN");
-    std::env::remove_var("CLAUDE_CODE_USE_BEDROCK");
-    std::env::remove_var("AWS_REGION");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_ACCESS_KEY_ID") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_SECRET_ACCESS_KEY") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_SESSION_TOKEN") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CODE_USE_BEDROCK") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_REGION") };
     let secrets = HashMap::from([(
         "bedrock-access".to_string(),
         ManagedSecretValue::anthropic_bedrock_access_key(
@@ -827,7 +1190,8 @@ fn bedrock_access_key_writes_all_aws_env_vars() {
 #[test]
 #[serial_test::serial]
 fn raw_value_skipped_when_process_env_already_set() {
-    std::env::set_var("WORKER_TOKEN", "injected-value");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("WORKER_TOKEN", "injected-value") };
     let secrets = HashMap::from([(
         "WORKER_TOKEN".to_string(),
         ManagedSecretValue::raw_value("managed-value"),
@@ -836,13 +1200,15 @@ fn raw_value_skipped_when_process_env_already_set() {
     // The worker-injected env var wins; env_vars should NOT contain it
     // because the child inherits the process env directly.
     assert!(!env_vars.contains_key(&OsString::from("WORKER_TOKEN")));
-    std::env::remove_var("WORKER_TOKEN");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("WORKER_TOKEN") };
 }
 
 #[test]
 #[serial_test::serial]
 fn worker_injected_env_wins_over_typed_secret() {
-    std::env::set_var("ANTHROPIC_API_KEY", "worker-key");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("ANTHROPIC_API_KEY", "worker-key") };
     let secrets = HashMap::from([(
         "my-auth".to_string(),
         ManagedSecretValue::anthropic_api_key("managed-key"),
@@ -851,7 +1217,8 @@ fn worker_injected_env_wins_over_typed_secret() {
     // The typed secret should be skipped entirely; the child inherits
     // ANTHROPIC_API_KEY from the process env.
     assert!(!env_vars.contains_key(&OsString::from("ANTHROPIC_API_KEY")));
-    std::env::remove_var("ANTHROPIC_API_KEY");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
 }
 
 #[test]
@@ -859,9 +1226,12 @@ fn worker_injected_env_wins_over_typed_secret() {
 fn worker_injected_env_skips_entire_bedrock_secret() {
     // Only AWS_REGION is worker-injected; the entire Bedrock secret should
     // be atomically skipped — no partial insertion.
-    std::env::set_var("AWS_REGION", "us-east-1");
-    std::env::remove_var("AWS_BEARER_TOKEN_BEDROCK");
-    std::env::remove_var("CLAUDE_CODE_USE_BEDROCK");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("AWS_REGION", "us-east-1") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_BEARER_TOKEN_BEDROCK") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("CLAUDE_CODE_USE_BEDROCK") };
     let secrets = HashMap::from([(
         "bedrock-secret".to_string(),
         ManagedSecretValue::anthropic_bedrock_api_key("token-456", "eu-central-1"),
@@ -873,7 +1243,8 @@ fn worker_injected_env_skips_entire_bedrock_secret() {
     );
     assert!(!env_vars.contains_key(&OsString::from("CLAUDE_CODE_USE_BEDROCK")));
     assert!(!env_vars.contains_key(&OsString::from("AWS_REGION")));
-    std::env::remove_var("AWS_REGION");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("AWS_REGION") };
 }
 
 // ── Skill-loading integration test ───────────────────────────────────────────
@@ -924,12 +1295,10 @@ fn split_loading_env_loads_all_global_loads_subset() {
                     if let RepoMetadataEvent::RepositoryUpdated {
                         id: RepositoryIdentifier::Local(path),
                     } = event
+                        && *path == env_repo_for_event
+                        && let Some(tx) = tx_cell.borrow_mut().take()
                     {
-                        if *path == env_repo_for_event {
-                            if let Some(tx) = tx_cell.borrow_mut().take() {
-                                let _ = tx.send(());
-                            }
-                        }
+                        let _ = tx.send(());
                     }
                 },
             );
@@ -1047,12 +1416,10 @@ fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
                     if let RepoMetadataEvent::RepositoryUpdated {
                         id: RepositoryIdentifier::Local(path),
                     } = event
+                        && *path == shared_repo_for_event
+                        && let Some(tx) = tx_cell.borrow_mut().take()
                     {
-                        if *path == shared_repo_for_event {
-                            if let Some(tx) = tx_cell.borrow_mut().take() {
-                                let _ = tx.send(());
-                            }
-                        }
+                        let _ = tx.send(());
                     }
                 },
             );
@@ -1137,13 +1504,171 @@ fn write_skill_file(repo: &Path, name: &str) {
     fs::write(skill_dir.join("SKILL.md"), format!("Skill: {name}.")).unwrap();
 }
 
+/// Write a minimal SKILL.md at `{skills_dir}/{name}/SKILL.md`.
+/// This is the flat layout expected by `WARP_SKILL_DIRS` (no `.agents/skills` wrapper).
+fn write_flat_skill(skills_dir: &Path, name: &str) {
+    let skill_dir = skills_dir.join(name);
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: Skill {name}.\n---\n\n# {name}\n"),
+    )
+    .unwrap();
+}
+
+/// Verifies that `load_skills_dirs` reads skills from the `WARP_SKILL_DIRS` environment
+/// variable and registers them in the personal (home) bucket so they are always in scope,
+/// regardless of the current working directory.
+#[test]
+#[serial_test::serial]
+fn warp_skill_dirs_env_loads_skills_as_home_tier() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+
+        // Create two separate flat skills directories (no .agents/skills prefix).
+        let skills_dir_a = working_dir.join("extra-skills-a");
+        let skills_dir_b = working_dir.join("extra-skills-b");
+        write_flat_skill(&skills_dir_a, "env-skill-a1");
+        write_flat_skill(&skills_dir_a, "env-skill-a2");
+        write_flat_skill(&skills_dir_b, "env-skill-b1");
+
+        // Point WARP_SKILL_DIRS at both directories.
+        let skills_dirs_value = format!("{},{}", skills_dir_a.display(), skills_dir_b.display());
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("WARP_SKILL_DIRS", &skills_dirs_value) };
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    AgentDriver::load_skills_dirs(&spawner).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
+
+        // Skills from WARP_SKILL_DIRS are home-tier, so they appear for any working directory.
+        // Use None cwd — home skills are included regardless of is_cloud_environment.
+        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            skill_names.contains(&"env-skill-a1".to_string()),
+            "'env-skill-a1' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"env-skill-a2".to_string()),
+            "'env-skill-a2' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
+        );
+        assert!(
+            skill_names.contains(&"env-skill-b1".to_string()),
+            "'env-skill-b1' from WARP_SKILL_DIRS should be loaded; got: {skill_names:?}"
+        );
+
+        // Verify the skills have Home scope (personal tier).
+        let scope_check = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            use ai::skills::SkillScope;
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .filter(|s| s.name.starts_with("env-skill-"))
+                .all(|s| s.scope == SkillScope::Home)
+        });
+        assert!(
+            scope_check,
+            "all WARP_SKILL_DIRS skills must have SkillScope::Home"
+        );
+    });
+}
+
+/// Verifies that relative `WARP_SKILL_DIRS` entries are resolved against the driver's
+/// working directory rather than the process's current working directory (which
+/// `prepare_environment` may have changed).
+#[test]
+#[serial_test::serial]
+fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+
+        // Create a flat skills directory inside the working dir and reference it by
+        // relative path only. No `rel-skills` directory exists under the process cwd,
+        // so this only loads if resolution is anchored at the driver's working dir.
+        write_flat_skill(&working_dir.join("rel-skills"), "env-skill-rel");
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("WARP_SKILL_DIRS", "rel-skills") };
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir.clone(), terminal_driver, ctx)
+        });
+
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    AgentDriver::load_skills_dirs(&spawner).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
+
+        let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            skill_names.contains(&"env-skill-rel".to_string()),
+            "'env-skill-rel' should load via a relative WARP_SKILL_DIRS entry resolved against the driver's working dir; got: {skill_names:?}"
+        );
+    });
+}
+
 #[test]
 #[serial_test::serial]
 fn openai_api_key_exports_only_api_key_not_base_url() {
     // The OpenAI typed secret should only export OPENAI_API_KEY as an env var.
     // base_url is piped through the structured secret to the harness instead.
-    std::env::remove_var("OPENAI_API_KEY");
-    std::env::remove_var("OPENAI_BASE_URL");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("OPENAI_API_KEY") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("OPENAI_BASE_URL") };
     let secrets = HashMap::from([(
         "openai-key".to_string(),
         ManagedSecretValue::openai_api_key(

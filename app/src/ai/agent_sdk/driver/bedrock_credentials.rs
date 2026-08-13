@@ -22,6 +22,7 @@ use super::AgentDriver;
 use crate::ai::aws_credentials::{
     aws_role_session_name, sts_client, AWS_BEDROCK_STS_AUDIENCE, BEDROCK_IDENTITY_TOKEN_DURATION,
 };
+use warp_errors::report_error;
 
 /// How long to wait between Bedrock credential refresh attempts — well ahead of the
 /// 1-hour STS temporary credential expiry, matching the approach used for git credentials.
@@ -71,14 +72,7 @@ async fn try_refresh(
         .web_identity_token(&token.token)
         .send()
         .await
-        .map_err(|err| {
-            log::error!("Bedrock OIDC refresh: STS AssumeRoleWithWebIdentity error: {err:#?}");
-            let detail = err
-                .as_service_error()
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| err.to_string());
-            anyhow::anyhow!("STS AssumeRoleWithWebIdentity failed: {detail}")
-        })?
+        .context("STS AssumeRoleWithWebIdentity failed")?
         .credentials
         .context("STS response did not include credentials")?;
 
@@ -157,11 +151,10 @@ pub(crate) async fn refresh_loop(
                     attempt += 1;
                 }
                 Err(e) => {
-                    log::warn!(
-                        "Bedrock credentials refresh failed after {} attempts: {e:#}; \
-                         credentials may expire before next refresh cycle",
-                        attempt + 1
-                    );
+                    report_error!(e.context(
+                        "Bedrock OIDC credential refresh failed after all retries; \
+                         credentials may expire before the next refresh cycle"
+                    ));
                     break;
                 }
             }

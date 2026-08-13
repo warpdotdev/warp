@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::mpsc::{SendError, SyncSender};
 use std::sync::Arc;
+use std::sync::mpsc::{SendError, SyncSender};
 use std::thread::JoinHandle;
 
 use anyhow::Context as _;
@@ -16,6 +16,7 @@ use parking_lot::{FairMutex, Mutex};
 use pathfinder_geometry::vector::Vector2F;
 use settings::Setting as _;
 use warp_core::SessionId;
+use warp_errors::report_error;
 use warpui::r#async::executor::Background;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, ViewHandle};
 
@@ -26,11 +27,11 @@ use super::terminal_attributes::TerminalAttributesPoller;
 use super::{mio_channel, recorder};
 use crate::ai::aws_credentials::AwsCredentialRefresher as _;
 use crate::ai::blocklist::SerializedBlockListItem;
-use crate::auth::auth_state::AuthState;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_state::AuthState;
 use crate::banner::BannerState;
-use crate::context_chips::prompt::Prompt;
 use crate::context_chips::ContextChipKind;
+use crate::context_chips::prompt::Prompt;
 use crate::features::FeatureFlag;
 use crate::persistence::ModelEvent;
 use crate::send_telemetry_on_executor;
@@ -48,11 +49,12 @@ use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::model::terminal_model::ExitReason;
 #[cfg(unix)]
 use crate::terminal::model_events::ModelEvent as TerminalModelEvent;
-use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::model_events::{ModelEventDispatcher, SshRemoteServerSupport};
 use crate::terminal::session_settings::{SessionSettings, ToolbarChipSelection};
 use crate::terminal::shared_session::sharer::network::Network;
 use crate::terminal::shared_session::{IsSharedSessionCreator, SharedSessionStatus};
 use crate::terminal::shell::ShellName;
+use crate::terminal::terminal_manager::BlockSpacing;
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
@@ -60,8 +62,8 @@ use crate::terminal::writeable_pty::terminal_manager_util::{
 };
 use crate::terminal::writeable_pty::{self, Message, PtyIntentEvent, TerminalSurface};
 use crate::terminal::{
-    terminal_manager, ShellLaunchData, ShellLaunchState, SizeInfo,
-    TerminalManager as TerminalManagerTrait, TerminalModel, PTY_READS_BROADCAST_CHANNEL_SIZE,
+    PTY_READS_BROADCAST_CHANNEL_SIZE, ShellLaunchData, ShellLaunchState, SizeInfo,
+    TerminalManager as TerminalManagerTrait, TerminalModel, terminal_manager,
 };
 
 type PtyController = writeable_pty::PtyController<mio_channel::Sender<Message>>;
@@ -120,6 +122,34 @@ pub struct TerminalSurfaceInit {
     pub colors: ColorList,
     pub inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
 }
+
+#[cfg(any(test, all(feature = "tui", feature = "test-util")))]
+impl TerminalSurfaceInit {
+    /// Creates mock terminal surface inputs without spawning a PTY.
+    pub fn new_for_test(ctx: &mut AppContext) -> Self {
+        let (_wakeups_tx, wakeups_rx) = async_channel::unbounded();
+        let (_events_tx, events_rx) = async_channel::unbounded();
+        let (pty_reads_tx, pty_reads_rx) =
+            async_broadcast::broadcast(PTY_READS_BROADCAST_CHANNEL_SIZE);
+        drop(pty_reads_tx);
+        let sessions = ctx.add_model(|_| Sessions::new_for_test());
+        let model_events =
+            ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
+        let model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+        let colors = model.lock().colors();
+        let size_info = model.lock().block_list().size().to_owned();
+        Self {
+            wakeups_rx,
+            model_events,
+            model,
+            sessions,
+            size_info,
+            colors,
+            inactive_pty_reads_rx: pty_reads_rx.deactivate(),
+        }
+    }
+}
+
 /// A newly constructed terminal surface and its manager post-wiring callback.
 pub struct TerminalSurfaceResult<S, PostWire> {
     pub surface: ViewHandle<S>,
@@ -194,6 +224,8 @@ impl<S> TerminalManager<S> {
             initial_size,
             model_event_sender,
             chosen_shell,
+            BlockSpacing::for_gui(ctx),
+            SshRemoteServerSupport::Enabled,
             ctx,
             create_surface,
             |manager| Box::new(manager),
@@ -201,6 +233,7 @@ impl<S> TerminalManager<S> {
     }
 
     /// Creates a local terminal manager for a TUI-owned terminal surface.
+    /// `block_spacing` is the TUI frontend's spacing baked into block heights.
     #[allow(clippy::too_many_arguments)]
     pub fn create_tui_model<PostWire>(
         startup_directory: Option<PathBuf>,
@@ -211,6 +244,7 @@ impl<S> TerminalManager<S> {
         initial_size: Vector2F,
         model_event_sender: Option<SyncSender<ModelEvent>>,
         chosen_shell: Option<AvailableShell>,
+        block_spacing: BlockSpacing,
         ctx: &mut AppContext,
         create_surface: impl FnOnce(
             TerminalSurfaceInit,
@@ -231,6 +265,8 @@ impl<S> TerminalManager<S> {
             initial_size,
             model_event_sender,
             chosen_shell,
+            block_spacing,
+            SshRemoteServerSupport::Disabled,
             ctx,
             create_surface,
             |manager| Box::new(TuiTerminalManager(manager)),
@@ -248,6 +284,8 @@ impl<S> TerminalManager<S> {
         initial_size: Vector2F,
         model_event_sender: Option<SyncSender<ModelEvent>>,
         chosen_shell: Option<AvailableShell>,
+        block_spacing: BlockSpacing,
+        ssh_remote_server_support: SshRemoteServerSupport,
         ctx: &mut AppContext,
         create_surface: impl FnOnce(
             TerminalSurfaceInit,
@@ -277,8 +315,14 @@ impl<S> TerminalManager<S> {
         // Initialize the sessions model.
         let sessions = ctx.add_model(|ctx| Sessions::new(executor_command_tx.clone(), ctx));
 
-        let model_events =
-            ctx.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
+        let model_events = ctx.add_model(|ctx| {
+            ModelEventDispatcher::new_with_ssh_remote_server_support(
+                events_rx,
+                sessions.clone(),
+                ssh_remote_server_support,
+                ctx,
+            )
+        });
 
         // Have ApiKeyManager subscribe to block completion events for AWS credential refresh
         ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -311,6 +355,7 @@ impl<S> TerminalManager<S> {
                     .map(|wsl_name_or_shell_starter| wsl_name_or_shell_starter.name())
                     .unwrap_or(ShellName::LessDescriptive("Shell".to_owned())),
             },
+            block_spacing,
             ctx,
         );
         let colors = model.colors();
@@ -468,12 +513,18 @@ impl<S> TerminalManager<S> {
             log::info!("Failed to send Shutdown {e:?}");
         }
 
-        if let Some(join_handle) = self.event_loop_handle.take() {
-            if let Err(e) = join_handle.join() {
-                log::error!("Failed to join event loop handle {e:?}");
+        match self.event_loop_handle.take() {
+            Some(join_handle) => {
+                if let Err(e) = join_handle.join() {
+                    report_error!(
+                        "Failed to join event loop handle",
+                        extra: { "error" => ?e }
+                    );
+                }
             }
-        } else {
-            log::error!("No event loop handle to join when dropping terminal manager.")
+            _ => {
+                log::warn!("No event loop handle to join when dropping terminal manager.");
+            }
         }
 
         self.inactive_pty_reads_rx.close();
@@ -512,7 +563,7 @@ fn on_shell_determined<S: TerminalSurface>(
     let shell_starter = match shell_starter {
         Some(shell_starter) => shell_starter,
         None => {
-            log::error!("Could not compute fallback shell");
+            report_error!("Could not compute fallback shell");
             manager.view.update(ctx, |surface, ctx| {
                 surface.on_pty_spawn_failed(
                     anyhow::Error::msg("Could not find a fallback shell. If you have PowerShell or WSL installed, please file an issue."),
@@ -613,7 +664,7 @@ fn on_shell_determined<S: TerminalSurface>(
         }) {
         Ok(pty) => pty,
         Err(err) => {
-            log::error!("Failed to spawn pty: {err:#}");
+            report_error!(&err);
             manager.view.update(ctx, |surface, ctx| {
                 surface.on_pty_spawn_failed(err, ctx);
             });

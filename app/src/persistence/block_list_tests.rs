@@ -5,12 +5,15 @@
 
 use std::sync::Arc;
 
-use chrono::Local;
+use chrono::{DateTime, Duration, Local};
 use diesel::sqlite::SqliteConnection;
 use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl};
 use diesel_migrations::MigrationHarness;
 
-use super::upsert_ai_query_with_limit;
+use super::{
+    process_ai_queries_for_nld_history_match, process_ai_queries_for_uparrow_prompt,
+    read_recent_ai_queries, upsert_ai_query_with_limit,
+};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentExchangeId, AIAgentInput, UserQueryMode};
 use crate::ai::blocklist::{AIQueryHistoryOutputStatus, PersistedAIInput, PersistedAIInputType};
@@ -43,6 +46,16 @@ fn make_query(text: &str) -> Arc<PersistedAIInput> {
     })
 }
 
+/// Clones `query` with an explicit `start_ts` so ordering-sensitive tests are deterministic
+/// (the NLD reader orders by `start_ts`, which `make_query`'s `Local::now()` cannot guarantee
+/// across rapid inserts).
+fn with_start_ts(query: Arc<PersistedAIInput>, start_ts: DateTime<Local>) -> Arc<PersistedAIInput> {
+    Arc::new(PersistedAIInput {
+        start_ts,
+        ..(*query).clone()
+    })
+}
+
 fn ai_query_count(conn: &mut SqliteConnection) -> i64 {
     use crate::persistence::schema::ai_queries::dsl::ai_queries;
     ai_queries
@@ -68,6 +81,13 @@ fn input_json_for_exchange(conn: &mut SqliteConnection, exchange: &str) -> Strin
         .select(input)
         .first::<String>(conn)
         .expect("row for exchange should exist")
+}
+
+/// Returns the text of the first query input on a [`PersistedAIInput`].
+fn first_query_text(query: &PersistedAIInput) -> &str {
+    match query.inputs.first().expect("query should have an input") {
+        PersistedAIInputType::Query { text, .. } => text,
+    }
 }
 
 #[test]
@@ -155,6 +175,65 @@ fn upsert_ai_query_updates_existing_exchange_without_evicting() {
         input_json.contains("first-updated"),
         "existing row should have been updated in place, got: {input_json}"
     );
+}
+
+/// Builds a [`PersistedAIInput`] whose inputs serialize to `[]`, mirroring legacy rows
+/// written before empty inputs were skipped at write time.
+fn make_empty_input_query() -> Arc<PersistedAIInput> {
+    Arc::new(PersistedAIInput {
+        inputs: vec![],
+        ..(*make_query("unused")).clone()
+    })
+}
+
+#[test]
+fn process_ai_queries_for_nld_history_match_filters_empty_and_whitespace_inputs_oldest_first() {
+    let mut conn = test_connection();
+
+    // Explicit, strictly increasing timestamps keep the `start_ts`-ordered read deterministic.
+    let t0 = Local::now();
+    for query in [
+        with_start_ts(make_query("older prompt"), t0),
+        with_start_ts(make_query("   "), t0 + Duration::seconds(1)),
+        with_start_ts(make_empty_input_query(), t0 + Duration::seconds(2)),
+        with_start_ts(make_query("newer prompt"), t0 + Duration::seconds(3)),
+    ] {
+        upsert_ai_query_with_limit(&mut conn, query, 10).expect("upsert should succeed");
+    }
+
+    let recent_ai_queries = read_recent_ai_queries(&mut conn).expect("read should succeed");
+    let prompts = process_ai_queries_for_nld_history_match(&recent_ai_queries);
+    let texts: Vec<&str> = prompts.iter().map(|(text, _)| text.as_str()).collect();
+    // `[]` and whitespace-only rows are dropped; the rest come back oldest-first.
+    assert_eq!(texts, vec!["older prompt", "newer prompt"]);
+}
+
+#[test]
+fn process_ai_queries_for_uparrow_prompt_keeps_newest_capped_oldest_first() {
+    // Build 150 oldest-first queries; only the newest 100 should survive, order preserved.
+    let queries: Vec<PersistedAIInput> = (0..150)
+        .map(|i| (*make_query(&format!("q{i}"))).clone())
+        .collect();
+
+    let kept = process_ai_queries_for_uparrow_prompt(queries);
+
+    assert_eq!(kept.len(), 100);
+    // The newest 100 (q50..=q149) survive, still oldest-first.
+    assert_eq!(first_query_text(&kept[0]), "q50");
+    assert_eq!(first_query_text(&kept[99]), "q149");
+}
+
+#[test]
+fn process_ai_queries_for_uparrow_prompt_keeps_all_when_under_cap() {
+    // Fewer than the cap: everything is kept, order preserved.
+    let queries: Vec<PersistedAIInput> = (0..3)
+        .map(|i| (*make_query(&format!("q{i}"))).clone())
+        .collect();
+
+    let kept = process_ai_queries_for_uparrow_prompt(queries);
+
+    let texts: Vec<&str> = kept.iter().map(first_query_text).collect();
+    assert_eq!(texts, vec!["q0", "q1", "q2"]);
 }
 
 #[test]

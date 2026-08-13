@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use warp_core::SessionId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
@@ -8,10 +9,10 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
 use super::{Session, SessionType, Sessions};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::terminal::ShellLaunchData;
 use crate::terminal::model::session::SessionsEvent;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
-use crate::terminal::ShellLaunchData;
 
 pub struct ActiveSession {
     model_event_dispatcher: ModelHandle<ModelEventDispatcher>,
@@ -41,21 +42,20 @@ impl ActiveSession {
                 ),
                 _ => None,
             };
-            if let Some(new_pwd) = new_pwd {
-                if me.current_working_directory != new_pwd {
-                    me.current_working_directory = new_pwd;
-                    ctx.emit(ActiveSessionEvent::UpdatedPwd);
-                }
+            if let Some(new_pwd) = new_pwd
+                && me.current_working_directory != new_pwd
+            {
+                me.current_working_directory = new_pwd;
+                ctx.emit(ActiveSessionEvent::UpdatedPwd);
             }
         });
 
         ctx.subscribe_to_model(&sessions, |me, _, event, ctx| {
-            if let SessionsEvent::SessionBootstrapped(bootstrap_event) = event {
-                if Some(bootstrap_event.session_id)
+            if let SessionsEvent::SessionBootstrapped(bootstrap_event) = event
+                && Some(bootstrap_event.session_id)
                     == me.model_event_dispatcher.as_ref(ctx).active_session_id()
-                {
-                    ctx.emit(ActiveSessionEvent::Bootstrapped);
-                }
+            {
+                ctx.emit(ActiveSessionEvent::Bootstrapped);
             }
         });
 
@@ -67,10 +67,12 @@ impl ActiveSession {
     }
 
     pub fn session(&self, app: &AppContext) -> Option<Arc<Session>> {
-        self.model_event_dispatcher
-            .as_ref(app)
-            .active_session_id()
+        self.session_id(app)
             .and_then(|session_id| self.sessions.as_ref(app).get(session_id))
+    }
+
+    pub fn session_id(&self, app: &AppContext) -> Option<SessionId> {
+        self.model_event_dispatcher.as_ref(app).active_session_id()
     }
 
     pub fn session_type(&self, app: &AppContext) -> Option<SessionType> {

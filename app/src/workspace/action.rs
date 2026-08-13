@@ -17,22 +17,22 @@ use super::tab_settings::{
     VerticalTabsTabItemMode, VerticalTabsViewMode,
 };
 use super::view::{OnboardingTutorial, WorkspaceBanner};
+use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::agent::api::ServerConversationToken;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::conversation::AIAgentHarness;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::PendingAttachment;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::auth::auth_manager::LoginGatedFeature;
-use crate::drive::items::WarpDriveItemId;
 use crate::drive::CloudObjectTypeAndId;
+use crate::drive::items::WarpDriveItemId;
 use crate::palette::PaletteMode;
 use crate::pane_group::PaneGroup;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::search;
-use crate::server::ids::SyncId;
+use crate::server::ids::{ServerId, SyncId};
 use crate::server::telemetry::{
     AddTabWithShellSource, AgentModeEntrypoint, PaletteSource, SharingDialogSource,
 };
@@ -44,8 +44,8 @@ use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
-use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::PaneViewLocator;
+use crate::workspace::tab_group::TabGroupId;
 
 /// This enum determines how the search query is initialized when opening command search.
 #[derive(Clone, Default, Debug)]
@@ -146,6 +146,7 @@ pub enum WorkspaceAction {
     /// (see #9351). The context-menu path keeps using `RenamePane(locator)`.
     RenameActivePane,
     SetActiveTabName(String),
+    CycleActiveTabColor,
     /// Sets the manual color override for the active tab.
     ///
     /// - `Color(_)` — apply that color.
@@ -408,6 +409,10 @@ pub enum WorkspaceAction {
     /// Closes the focused panel. This happens as an explicit action from the user.
     ClosePanel,
     CopyTextToClipboard(String),
+    /// Copies a path to the clipboard based on the focused pane: the open file's display path
+    /// if the focused pane is the rendered file viewer (`FilePane`), otherwise the focused
+    /// terminal session's working directory. No-op if neither yields a path.
+    CopyCurrentPath,
     /// An action only registered in dev and local builds, which writes the user's current access
     /// token to the system clipboard to aid debugging and development.
     CopyAccessTokenToClipboard,
@@ -740,6 +745,18 @@ pub enum WorkspaceAction {
     /// Reset the orchestration launch modal dismissed state (for debugging)
     #[cfg(debug_assertions)]
     ResetOrchestrationLaunchModalState,
+    /// Open the Warp Agent CLI Launch Modal (for debugging)
+    #[cfg(debug_assertions)]
+    OpenAgentCliLaunchModal,
+    /// Reset the Warp Agent CLI launch modal dismissed state (for debugging)
+    #[cfg(debug_assertions)]
+    ResetAgentCliLaunchModalState,
+    /// Open the Feature Intro Modal (for debugging)
+    #[cfg(debug_assertions)]
+    OpenFeatureIntroModal,
+    /// Reset the feature intro seen state (for debugging)
+    #[cfg(debug_assertions)]
+    ResetFeatureIntroModalState,
     /// Open the auto-handoff sleep modal (for debugging)
     #[cfg(debug_assertions)]
     OpenAutoHandoffSleepModal,
@@ -817,6 +834,8 @@ pub enum WorkspaceAction {
     StartAgentOnboardingTutorial(OnboardingTutorial),
     ShowSessionConfigModal,
     DismissSessionConfigTabConfigChip,
+    /// Dismiss the non-blocking feature-intro popover without requiring it to hold focus.
+    DismissFeatureIntroModal,
     /// Start the HOA onboarding flow (for debugging)
     #[cfg(debug_assertions)]
     ShowHoaOnboardingFlow,
@@ -863,6 +882,12 @@ pub enum WorkspaceAction {
     /// Opens (or focuses) the in-app network log pane as a right-split of the
     /// active pane group. Gated on `ContextFlag::NetworkLogConsole`.
     OpenNetworkLogPane,
+    /// Opens or focuses a window scoped to the specified team.
+    OpenNewWindowForTeam {
+        team_uid: ServerId,
+    },
+    /// Shows (toggles) the team-switcher dropdown menu in the title bar.
+    ShowTeamSwitcherMenu,
 }
 
 impl From<&WorkspaceAction> for LoginGatedFeature {
@@ -926,6 +951,7 @@ impl WorkspaceAction {
             | RenameActiveTab
             | RenameActivePane
             | SetActiveTabName(_)
+            | CycleActiveTabColor
             | SetActiveTabColor(_)
             | CloseTab(_)
             | CloseActiveTab
@@ -1077,6 +1103,7 @@ impl WorkspaceAction {
             | ToggleVerticalTabsShowDetailsOnHover
             | ToggleWelcomeTips
             | CopyTextToClipboard(_)
+            | CopyCurrentPath
             | CopyAccessTokenToClipboard
             | OpenTabConfigRepoPicker { .. }
             | OpenNewWorktreeModal
@@ -1169,6 +1196,7 @@ impl WorkspaceAction {
             | StartAgentOnboardingTutorial(_)
             | ShowSessionConfigModal
             | DismissSessionConfigTabConfigChip
+            | DismissFeatureIntroModal
             | SaveCurrentTabAsNewConfig(_)
             | SyncTrafficLights
             | OpenTabConfigErrorFile { .. }
@@ -1182,7 +1210,9 @@ impl WorkspaceAction {
             | ShowHandoffEnvironmentCreationModal
             | ShowCloudModeV2EnvironmentCreationModal
             | OpenCreateAuthSecretModal { .. }
-            | OpenNetworkLogPane => false,
+            | OpenNetworkLogPane
+            | OpenNewWindowForTeam { .. }
+            | ShowTeamSwitcherMenu => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,
             #[cfg(target_family = "wasm")]
@@ -1197,6 +1227,10 @@ impl WorkspaceAction {
             | ResetOpenWarpLaunchModalState
             | OpenOrchestrationLaunchModal
             | ResetOrchestrationLaunchModalState
+            | OpenAgentCliLaunchModal
+            | ResetAgentCliLaunchModalState
+            | OpenFeatureIntroModal
+            | ResetFeatureIntroModalState
             | OpenAutoHandoffSleepModal
             | ResetAutoHandoffSleepModalState
             | TriggerAutoHandoffToCloud

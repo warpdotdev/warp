@@ -17,6 +17,7 @@ use warp_completer::completer::{CommandExitStatus, CommandOutput};
 #[cfg(windows)]
 use warp_core::paths::base_config_dir;
 use warp_core::platform::SessionPlatform;
+use warp_errors::report_error;
 use warp_util::path::{
     convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
 };
@@ -323,10 +324,12 @@ impl ShellType {
             }
             #[cfg(windows)]
             ShellType::PowerShell => {
-                vec![base_config_dir()
-                    .join("Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt")
-                    .display()
-                    .to_string()]
+                vec![
+                    base_config_dir()
+                        .join("Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt")
+                        .display()
+                        .to_string(),
+                ]
             }
         }
     }
@@ -934,15 +937,13 @@ impl From<ShellLaunchData> for SessionPlatform {
 /// Unescape the key and value for an alias, returning None if either fails
 fn unescape_alias_key_value(key: &str, value: &str) -> Option<(SmolStr, String)> {
     let key = unescape_quotes(key)
-        .map_err(|e| {
-            log::error!("Unable to unescape key for alias: {e}");
-            e
+        .inspect_err(|e| {
+            report_error!(e);
         })
         .ok()?;
     let value = unescape_quotes(value)
-        .map_err(|e| {
-            log::error!("Unable to unescape value for alias: {e}");
-            e
+        .inspect_err(|e| {
+            report_error!(e);
         })
         .ok()?;
     Some((key.into(), value))

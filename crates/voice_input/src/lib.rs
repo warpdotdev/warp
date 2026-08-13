@@ -2,6 +2,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context as _;
 use base64::Engine;
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Sample, StreamConfig};
@@ -11,6 +12,8 @@ use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use thiserror::Error;
+use warp_errors::report_error;
+use warpui_core::r#async::SpawnedFutureHandle;
 use warpui_core::event::KeyState;
 use warpui_core::platform::MicrophoneAccessState;
 use warpui_core::{Entity, ModelContext, SingletonEntity};
@@ -22,10 +25,85 @@ const NUM_CHANNELS: u16 = 1;
 const TARGET_SAMPLE_RATE: f32 = 16000.0;
 const STREAM_TIMEOUT: Duration = Duration::from_secs(60 * 6);
 
+/// Surface-independent voice-input lifecycle state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum VoiceInputLifecycleState {
+    #[default]
+    Idle,
+    Listening,
+    Transcribing,
+}
+
+/// Lifecycle shared by voice-input surfaces.
+///
+/// Surfaces retain ownership of presentation, telemetry, async handles, and
+/// transcription destinations. This type centralizes valid state transitions;
+/// surfaces abort their owned handles before cancelling or replacing a session.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VoiceInputLifecycle {
+    state: VoiceInputLifecycleState,
+}
+
+impl VoiceInputLifecycle {
+    pub fn state(&self) -> VoiceInputLifecycleState {
+        self.state
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.state != VoiceInputLifecycleState::Idle
+    }
+
+    /// Starts listening when idle.
+    pub fn start(&mut self) -> bool {
+        if self.is_active() {
+            return false;
+        }
+        self.state = VoiceInputLifecycleState::Listening;
+        true
+    }
+
+    /// Advances listening to transcription.
+    pub fn begin_transcribing(&mut self) -> bool {
+        if self.state != VoiceInputLifecycleState::Listening {
+            return false;
+        }
+        self.state = VoiceInputLifecycleState::Transcribing;
+        true
+    }
+
+    /// Completes the active transcription.
+    pub fn complete(&mut self) -> bool {
+        if self.state != VoiceInputLifecycleState::Transcribing {
+            return false;
+        }
+        self.state = VoiceInputLifecycleState::Idle;
+        true
+    }
+
+    /// Fails the active session.
+    pub fn fail(&mut self) -> bool {
+        if !self.is_active() {
+            return false;
+        }
+        self.state = VoiceInputLifecycleState::Idle;
+        true
+    }
+
+    /// Cancels the current session.
+    pub fn cancel(&mut self) -> bool {
+        if !self.is_active() {
+            return false;
+        }
+        self.state = VoiceInputLifecycleState::Idle;
+        true
+    }
+}
+
 pub struct VoiceInput {
     state: VoiceInputState,
     pub should_suppress_new_feature_popup: bool,
     voice_session_start: Option<instant::Instant>,
+    wav_conversion_handle: Option<SpawnedFutureHandle>,
 }
 
 #[derive(Default)]
@@ -109,6 +187,7 @@ impl VoiceInput {
             state: VoiceInputState::Idle,
             should_suppress_new_feature_popup: false,
             voice_session_start: None,
+            wav_conversion_handle: None,
         }
     }
 
@@ -138,7 +217,7 @@ impl VoiceInput {
         ctx: &mut ModelContext<Self>,
         source: VoiceInputToggledFrom,
     ) -> Result<VoiceSession, StartListeningError> {
-        if self.is_listening() {
+        if self.is_active() {
             log::debug!("Already listening, not starting again");
             return Err(StartListeningError::AlreadyRunning);
         }
@@ -154,10 +233,13 @@ impl VoiceInput {
             return Err(anyhow::anyhow!("No default input device found").into());
         };
 
-        let config = input_device.default_input_config().map_err(|e| {
-            log::error!("Failed to get default input config: {e}");
-            StartListeningError::Other(anyhow::anyhow!("Failed to get default input config: {}", e))
-        })?;
+        let config = input_device
+            .default_input_config()
+            .context("Failed to get default input config")
+            .map_err(|e| {
+                report_error!(&e);
+                StartListeningError::Other(e)
+            })?;
 
         // Kind of annoying that we need to check this here, but cpal will actually still create an audio
         // stream of empty frames even if the user denies access on MacOS.
@@ -231,7 +313,9 @@ impl VoiceInput {
                         log::debug!("Error in voice input stream (suppressed repeat): {err}");
                     } else {
                         has_logged_stream_error = true;
-                        log::error!("Error in voice input stream: {err}");
+                        report_error!(
+                            anyhow::Error::new(err).context("Error in voice input stream")
+                        );
                     }
                 },
                 Some(STREAM_TIMEOUT),
@@ -272,6 +356,9 @@ impl VoiceInput {
         if active {
             self.state = VoiceInputState::Transcribing;
         } else {
+            if let Some(handle) = self.wav_conversion_handle.take() {
+                handle.abort();
+            }
             self.state = VoiceInputState::Idle;
         }
     }
@@ -301,9 +388,10 @@ impl VoiceInput {
             let result_tx = result_tx.take();
 
             // Spawn WAV conversion and send result through channel
-            let _ = ctx.spawn(
+            self.wav_conversion_handle = Some(ctx.spawn(
                 Self::convert_to_wav(resampled.clone()),
                 move |me, wav_result, _ctx| {
+                    me.wav_conversion_handle = None;
                     if let Some(tx) = result_tx {
                         let result = match wav_result {
                             Ok(wav_base64) => VoiceSessionResult::Audio {
@@ -311,7 +399,7 @@ impl VoiceInput {
                                 session_duration_ms,
                             },
                             Err(e) => {
-                                log::error!("Failed to convert to WAV: {e}");
+                                report_error!(e.context("Failed to convert to WAV"));
                                 VoiceSessionResult::Aborted {
                                     session_duration_ms: Some(session_duration_ms),
                                 }
@@ -322,7 +410,7 @@ impl VoiceInput {
                     // Move to Idle after sending result
                     me.state = VoiceInputState::Idle;
                 },
-            );
+            ));
 
             // Move to Transcribing state while conversion is happening
             self.state = VoiceInputState::Transcribing;
@@ -381,7 +469,7 @@ impl VoiceInput {
             async move {
                 if let Err(e) = Self::resample_audio_frame(resampler, resampled, input_buffer).await
                 {
-                    log::error!("Failed to resample audio frame: {e}");
+                    report_error!(e.context("Failed to resample audio frame"));
                 }
             },
             |_, _, _| {},
@@ -432,3 +520,7 @@ impl Entity for VoiceInput {
 }
 
 impl SingletonEntity for VoiceInput {}
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;

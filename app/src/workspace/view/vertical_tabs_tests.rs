@@ -2,24 +2,25 @@ use std::path::PathBuf;
 
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
-use warpui::elements::PositionedElementOffsetBounds;
 use warpui::EntityId;
+use warpui::elements::PositionedElementOffsetBounds;
 
 use super::{
-    branch_label_display, coalesce_summary_branch_entries, code_detail_kind_label,
-    compact_branch_subtitle_display, detail_sidecar_width_and_bounds,
+    AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons, TerminalAgentText,
+    TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
+    VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
+    VerticalTabsSummaryPrimaryLabel, branch_label_display, coalesce_summary_branch_entries,
+    code_detail_kind_label, compact_branch_subtitle_display, detail_sidecar_width_and_bounds,
     detail_target_for_hovered_row, non_terminal_search_text_fragments,
     pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
     push_normalized_unique_summary_label, search_fragments_contain_query,
     select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
+    should_show_tab_group_header, shows_synced_inputs_indicator,
     sort_summary_primary_labels_status_first, summary_overflow_count,
     summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
     terminal_pull_request_badge_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
-    vtab_diff_stats_text, AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons,
-    TerminalAgentText, TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
-    VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
-    VerticalTabsSummaryPrimaryLabel,
+    vtab_diff_stats_text,
 };
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::context_chips::display_chip::GitLineChanges;
@@ -153,8 +154,8 @@ fn summary_pane_kind_icons_distinguish_ambient_claude_from_local_claude() {
 #[test]
 fn preferred_agent_tab_titles_default_to_title_like_text() {
     let agent_text = TerminalAgentText {
-        conversation_display_title: Some("Generated Oz title".to_string()),
-        conversation_latest_user_prompt: Some("Latest Oz prompt".to_string()),
+        conversation_display_title: Some("Generated Warp Agent title".to_string()),
+        conversation_latest_user_prompt: Some("Latest Warp Agent prompt".to_string()),
         cli_agent_title: Some("CLI summary".to_string()),
         cli_agent_latest_user_prompt: Some("Latest CLI prompt".to_string()),
         is_oz_agent: true,
@@ -164,7 +165,7 @@ fn preferred_agent_tab_titles_default_to_title_like_text() {
     assert_eq!(
         preferred_agent_tab_titles(&agent_text, AgentTabTextPreference::ConversationTitle),
         (
-            Some("Generated Oz title".to_string()),
+            Some("Generated Warp Agent title".to_string()),
             Some("CLI summary".to_string())
         )
     );
@@ -223,8 +224,8 @@ fn terminal_primary_line_uses_terminal_title_when_disabled_cli_has_only_prompt()
 #[test]
 fn preferred_agent_tab_titles_use_latest_prompt_when_enabled() {
     let agent_text = TerminalAgentText {
-        conversation_display_title: Some("Generated Oz title".to_string()),
-        conversation_latest_user_prompt: Some("Latest Oz prompt".to_string()),
+        conversation_display_title: Some("Generated Warp Agent title".to_string()),
+        conversation_latest_user_prompt: Some("Latest Warp Agent prompt".to_string()),
         cli_agent_title: Some("CLI summary".to_string()),
         cli_agent_latest_user_prompt: Some("Latest CLI prompt".to_string()),
         is_oz_agent: true,
@@ -234,7 +235,7 @@ fn preferred_agent_tab_titles_use_latest_prompt_when_enabled() {
     assert_eq!(
         preferred_agent_tab_titles(&agent_text, AgentTabTextPreference::LatestUserPrompt),
         (
-            Some("Latest Oz prompt".to_string()),
+            Some("Latest Warp Agent prompt".to_string()),
             Some("Latest CLI prompt".to_string())
         )
     );
@@ -295,7 +296,7 @@ fn terminal_primary_line_uses_cli_prompt_when_enabled_cli_is_long_running() {
 #[test]
 fn preferred_agent_tab_titles_fall_back_when_preferred_text_is_missing() {
     let agent_text = TerminalAgentText {
-        conversation_display_title: Some("Generated Oz title".to_string()),
+        conversation_display_title: Some("Generated Warp Agent title".to_string()),
         conversation_latest_user_prompt: None,
         cli_agent_title: None,
         cli_agent_latest_user_prompt: Some("Latest CLI prompt".to_string()),
@@ -306,7 +307,7 @@ fn preferred_agent_tab_titles_fall_back_when_preferred_text_is_missing() {
     assert_eq!(
         preferred_agent_tab_titles(&agent_text, AgentTabTextPreference::LatestUserPrompt),
         (
-            Some("Generated Oz title".to_string()),
+            Some("Generated Warp Agent title".to_string()),
             Some("Latest CLI prompt".to_string())
         )
     );
@@ -634,6 +635,62 @@ fn tabs_granularity_does_not_use_outer_group_container() {
     assert!(!uses_outer_group_container(
         VerticalTabsDisplayGranularity::Tabs
     ));
+}
+
+// Regression coverage for #9098 ("Tab names not rendered in tab bar, only
+// first tab shows name"). The header gate previously read `has_custom_title
+// || is_being_renamed`, which collapsed to `false` for every tab without a
+// user-set rename — leaving multi-pane tabs with auto-generated names
+// looking like they had no tab label at all. The new gate keeps the existing
+// triggers and adds "any multi-pane tab", so every multi-pane group has a
+// stable tab-level identifier in `Panes` granularity.
+#[test]
+fn tab_group_header_shows_for_custom_title() {
+    assert!(should_show_tab_group_header(true, false, 1));
+    assert!(should_show_tab_group_header(true, false, 3));
+}
+
+#[test]
+fn tab_group_header_shows_while_renaming() {
+    // The inline rename editor must always be reachable, even on
+    // single-pane tabs with no prior custom title.
+    assert!(should_show_tab_group_header(false, true, 1));
+}
+
+#[test]
+fn tab_group_header_shows_for_multi_pane_tabs_without_custom_title() {
+    // The #9098 case: an auto-named multi-pane tab. Each row only shows the
+    // per-pane title (e.g. `travelplan` + `main`), so without a group header
+    // there is no way to tell two such tabs apart in the sidebar.
+    assert!(should_show_tab_group_header(false, false, 2));
+    assert!(should_show_tab_group_header(false, false, 5));
+}
+
+#[test]
+fn tab_group_header_hidden_for_single_pane_without_custom_title() {
+    // Single-pane groups already surface the pane title in their only row.
+    // Rendering the same string again as a header would duplicate it
+    // immediately above itself, so the gate stays closed in this shape.
+    assert!(!should_show_tab_group_header(false, false, 1));
+    // Defensive: `0` should not crash or accidentally render a header for
+    // an empty group (this shape shouldn't reach the renderer in practice,
+    // but the helper is total and stays closed).
+    assert!(!should_show_tab_group_header(false, false, 0));
+}
+
+#[test]
+fn tab_group_header_distinguishes_two_auto_named_multi_pane_tabs() {
+    // Models the screenshot in #9098: tab 1 has a custom title
+    // ("Humanfigure"), tabs 2 and 3 are auto-named multi-pane groups
+    // ("travelplan + main", "deponti + release/development"). Before the
+    // fix only tab 1 showed a header; after the fix every multi-pane tab
+    // gets one so the user can tell them apart at a glance.
+    let renders_header: Vec<bool> = vec![
+        should_show_tab_group_header(true, false, 2),  // tab 1
+        should_show_tab_group_header(false, false, 2), // tab 2
+        should_show_tab_group_header(false, false, 2), // tab 3
+    ];
+    assert_eq!(renders_header, vec![true, true, true]);
 }
 
 #[test]
@@ -1091,6 +1148,26 @@ fn sort_summary_primary_labels_moves_status_first_and_preserves_order() {
 }
 
 #[test]
+fn synced_inputs_indicator_shows_on_synced_terminal_rows() {
+    assert!(shows_synced_inputs_indicator(true, true, true));
+}
+
+#[test]
+fn synced_inputs_indicator_hidden_when_tab_is_not_synced() {
+    assert!(!shows_synced_inputs_indicator(true, false, true));
+}
+
+#[test]
+fn synced_inputs_indicator_respects_tab_indicators_setting() {
+    assert!(!shows_synced_inputs_indicator(true, true, false));
+}
+
+#[test]
+fn synced_inputs_indicator_hidden_on_non_terminal_rows() {
+    assert!(!shows_synced_inputs_indicator(false, true, true));
+}
+
+#[test]
 fn summary_search_fragments_include_hidden_overflow_values() {
     let summary = VerticalTabsSummaryData {
         primary_labels: vec![
@@ -1098,7 +1175,7 @@ fn summary_search_fragments_include_hidden_overflow_values() {
                 text: "Claude".to_string(),
                 status: Some(ConversationStatus::InProgress),
             },
-            label("Oz"),
+            label("Warp Agent"),
             label("cargo"),
             label("code review"),
             label("hidden work"),

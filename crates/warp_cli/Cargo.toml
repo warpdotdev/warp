@@ -34,8 +34,8 @@ cfg_aliases.workspace = true
 [features]
 plugin_host = []
 integration_tests = []
-api_key_authentication = []
 
 
 [dev-dependencies]
 serial_test = "0.8.0"
+warp_core = { workspace = true, features = ["test-util"] }

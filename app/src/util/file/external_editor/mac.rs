@@ -3,11 +3,12 @@ use std::path::Path;
 
 use command::r#async::Command;
 use instant::Instant;
-use objc2::rc::{autoreleasepool, Retained};
+use objc2::rc::{Retained, autoreleasepool};
 use objc2_app_kit::NSWorkspace;
 use objc2_foundation::{NSBundle, NSString, NSURL};
-use warp_core::channel::ChannelState;
 use warp_core::AppId;
+use warp_core::channel::ChannelState;
+use warp_errors::report_error;
 use warpui::ApplicationBundleInfo;
 
 use super::*;
@@ -279,7 +280,9 @@ impl<'a> Editor {
                                 );
                             }
                             Err(err) => {
-                                log::error!("unable to await process {err:?}");
+                                report_error!(
+                                    anyhow::Error::new(err).context("unable to await process")
+                                );
                             }
                         };
                     })
@@ -288,7 +291,10 @@ impl<'a> Editor {
                 true
             }
             Err(e) => {
-                log::error!("Error launching {self:?} {e:?}");
+                report_error!(
+                    anyhow::Error::new(e).context("Error launching editor"),
+                    extra: { "editor" => ?self }
+                );
                 false
             }
         }
@@ -333,10 +339,10 @@ pub fn open_file_path_with_line_and_col(
                 .and_then(Editor::new_from_identifier)
         };
 
-        if let Some(editor) = editor {
-            if editor.open(line_column_number, full_path, ctx) {
-                return;
-            }
+        if let Some(editor) = editor
+            && editor.open(line_column_number, full_path, ctx)
+        {
+            return;
         }
 
         // NSWorkspace's default-app routing can hand files to a sibling

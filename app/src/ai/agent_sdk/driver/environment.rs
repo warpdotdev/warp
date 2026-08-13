@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -17,10 +17,12 @@ use warp_core::{safe_info, safe_warn};
 use warpui::r#async::FutureExt;
 use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 
-use super::terminal::TerminalDriver;
 use super::AgentDriverError;
+#[cfg(feature = "local_fs")]
+use super::cache_setup;
+use super::terminal::TerminalDriver;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
-use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
+use crate::ai::cloud_environments::{CodeForge, SourceRepo};
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
 
@@ -32,10 +34,23 @@ pub enum PrepareEnvironmentError {
     InvalidRuntimeState,
     #[error("Failed to clone {repo_name}")]
     CloneRepo { repo_name: String },
+    #[error("Failed to check out {checkout_ref} in {repo_name}")]
+    CheckoutFailed {
+        repo_name: String,
+        checkout_ref: String,
+    },
     #[error("Failed to run setup command: {command}")]
     SetupCommand { command: String },
     #[error("Failed to change directory into {repo_name}")]
     ChangeDirectory { repo_name: String },
+    #[error(
+        "Repositories {first_owner}/{repo_name} and {second_owner}/{repo_name} share a clone directory name"
+    )]
+    CloneDirectoryCollision {
+        repo_name: String,
+        first_owner: String,
+        second_owner: String,
+    },
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
 }
@@ -52,19 +67,17 @@ pub enum PrepareEnvironmentError {
 /// caller rather than a path-prefix inference, so non-sandbox callers that
 /// happen to pass a path like `/home/agent/...` don't silently flip into
 /// sandbox-only mode.
-pub fn prepare_environment(
-    environment: AmbientAgentEnvironment,
+pub(crate) fn prepare_environment(
+    source_repos: Vec<SourceRepo>,
+    setup_commands: Vec<String>,
     working_dir: PathBuf,
     is_sandbox: bool,
     harness: Harness,
     setup_events: SetupClientEventReporter,
     ctx: &mut ModelContext<TerminalDriver>,
-) -> impl Future<Output = Result<(), PrepareEnvironmentError>> {
+) -> impl Future<Output = Result<(), PrepareEnvironmentError>> + use<> {
     let spawner = ctx.spawner();
     async move {
-        let source_repos = environment.effective_repos();
-        let setup_commands = environment.setup_commands;
-
         // Only index the codebase for the Oz harness; third-party harnesses (e.g. Claude)
         // have their own methods for navigating a codebase.
         let should_index_codebase = harness == Harness::Oz;
@@ -97,6 +110,87 @@ pub fn prepare_environment(
 
         result
     }
+}
+
+/// Merge environment repositories with task-level repositories, preserving
+/// environment order and de-duplicating by forge plus case-insensitive owner
+/// and repository names.
+pub(super) fn merge_repos_deduped(
+    environment_repos: Vec<SourceRepo>,
+    additional_repos: Vec<SourceRepo>,
+) -> Result<Vec<SourceRepo>, PrepareEnvironmentError> {
+    let mut seen = HashSet::new();
+    let mut names = HashMap::<String, (String, CodeForge)>::new();
+    let mut merged = Vec::with_capacity(environment_repos.len() + additional_repos.len());
+
+    for repo in environment_repos.into_iter().chain(additional_repos) {
+        let forge = repo.code_forge.unwrap_or_default();
+        let key = (forge, repo.owner.to_lowercase(), repo.repo.to_lowercase());
+        if !seen.insert(key) {
+            continue;
+        }
+
+        if let Some((owner, existing_forge)) =
+            names.insert(repo.repo.clone(), (repo.owner.clone(), forge))
+            && (owner != repo.owner || existing_forge != forge)
+        {
+            return Err(PrepareEnvironmentError::CloneDirectoryCollision {
+                repo_name: repo.repo,
+                first_owner: owner,
+                second_owner: repo.owner,
+            });
+        }
+
+        merged.push(repo);
+    }
+
+    Ok(merged)
+}
+
+/// Environment variable carrying the authenticated remote URL of a Factory's
+/// definition repository. Dispatch attaches it only to runs that execute as a
+/// Factory agent whose Factory definition lives in a Warp-managed repository.
+const FACTORY_REPO_CLONE_URL_ENV_VAR: &str = "WARP_FACTORY_REPO_CLONE_URL";
+
+/// Environment variable carrying the directory, relative to the working
+/// directory, that the Factory definition repository is cloned into.
+const FACTORY_REPO_DIR_ENV_VAR: &str = "WARP_FACTORY_REPO_DIR";
+
+/// Prepends the setup command that clones a Factory's definition repository
+/// when the dispatch attached the clone variables to this run, so the checkout
+/// exists before user-declared setup commands run.
+pub(super) fn prepend_factory_definition_clone(setup_commands: &mut Vec<String>) {
+    let clone_url = std::env::var(FACTORY_REPO_CLONE_URL_ENV_VAR).unwrap_or_default();
+    let clone_dir = std::env::var(FACTORY_REPO_DIR_ENV_VAR).unwrap_or_default();
+    prepend_factory_definition_clone_for_values(&clone_url, &clone_dir, setup_commands);
+}
+
+fn prepend_factory_definition_clone_for_values(
+    clone_url: &str,
+    clone_dir: &str,
+    setup_commands: &mut Vec<String>,
+) {
+    if clone_url.trim().is_empty() || clone_dir.trim().is_empty() {
+        return;
+    }
+    // Environments provisioned before run-scoped cloning still persist their
+    // own copy of the clone command; leave that copy in charge rather than
+    // attempting the checkout twice.
+    if setup_commands
+        .iter()
+        .any(|command| command.contains(FACTORY_REPO_CLONE_URL_ENV_VAR))
+    {
+        return;
+    }
+    // The command expands the variables in the session shell instead of
+    // inlining their values so the credential-bearing URL never appears in
+    // command text. There is deliberately no existence guard: a bare clone
+    // into an already-present target directory fails, which is treated as a
+    // fatal setup-command error upstream.
+    setup_commands.insert(
+        0,
+        format!("git clone \"${FACTORY_REPO_CLONE_URL_ENV_VAR}\" \"${FACTORY_REPO_DIR_ENV_VAR}\""),
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -154,6 +248,22 @@ async fn prepare_environment_impl(
                 codebase_context_receivers,
             );
         }
+    }
+
+    #[cfg(feature = "local_fs")]
+    if let Some(cache_root) = cache_setup::enabled_cache_root() {
+        log::info!("Configuring build cache");
+        let result = setup_events
+            .record_result(
+                SetupStep::CacheSetup,
+                cache_setup::setup_caches(cache_root, source_repos, working_dir, spawner),
+            )
+            .await;
+        if let Err(error) = result {
+            log::warn!("Build cache setup degraded; continuing environment preparation: {error}");
+        }
+    } else {
+        log::info!("Build cache not available");
     }
 
     let has_setup_commands = !setup_commands.is_empty();
@@ -252,6 +362,9 @@ fn record_codebase_indexing(
             log::warn!(
                 "Timed out waiting for codebase index sync; continuing without guaranteed codebase context",
             );
+            tracing::warn!(
+                "Timed out waiting for codebase index sync; continuing without guaranteed codebase context",
+            );
         }
         let _ = spawner
             .spawn(|_, ctx| {
@@ -275,12 +388,20 @@ clone_repo() {
   repo_name="$1"
   repo_url="$2"
   target="$3"
+  checkout_ref="$4"
   if [ -d "$target" ]; then
     printf '%s\n' "Repository directory $target already exists, skipping clone..."
-    return 0
+  else
+    printf '%s\n' "Cloning repository $repo_name..."
+    git clone --filter=tree:0 "$repo_url" "$target" || return 1
   fi
-  printf '%s\n' "Cloning repository $repo_name..."
-  git clone --filter=tree:0 "$repo_url" "$target"
+  # Pin after clone or reuse: a reused directory may still be on an old ref.
+  if [ -n "$checkout_ref" ]; then
+    printf '%s\n' "Checking out $checkout_ref in $repo_name..."
+    # Fetch leaves the object in FETCH_HEAD; check that out detached so we
+    # never prefer a stale local branch with the same name.
+    git -C "$target" fetch --filter=tree:0 origin "$checkout_ref" && git -C "$target" checkout --detach FETCH_HEAD
+  fi
 }
 "#,
     );
@@ -292,10 +413,14 @@ clone_repo() {
         let escaped_repo_name = shell_escape_single_quotes(&repo_name, ShellType::Bash);
         let escaped_repo_url = shell_escape_single_quotes(&repo_url, ShellType::Bash);
         let escaped_target = shell_escape_single_quotes(&repo.repo, ShellType::Bash);
+        let escaped_checkout_ref = shell_escape_single_quotes(
+            repo.checkout_ref.as_deref().unwrap_or_default(),
+            ShellType::Bash,
+        );
         let log_var = format!("log_file_{index}");
         script.push_str(&format!(
             "{log_var}=\"$tmp_dir/repo-{index}.log\"\n\
-             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' >\"${log_var}\" 2>&1 &\n"
+             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' '{escaped_checkout_ref}' >\"${log_var}\" 2>&1 &\n"
         ));
         script.push_str("pids=\"$pids $!\"\n");
         log_outputs.push_str(&format!(
@@ -431,7 +556,68 @@ pub(super) async fn clone_repo(
         );
     }
 
+    // Pin after clone or reuse when a ref was requested. A reused directory may
+    // still be on an old default-branch tip, and a fresh partial clone only
+    // fetched the default branch — fetch the ref, then detach to FETCH_HEAD.
+    // When checkout_ref is unset, leave an existing directory untouched.
+    if let Some(command) = checkout_command_for(repo, working_dir, shell_type) {
+        let checkout_ref = repo.checkout_ref.as_deref().unwrap_or_default();
+        safe_info!(
+            safe: ("Checking out pinned ref for repository"),
+            full: ("Checking out {checkout_ref} for {repo_name}")
+        );
+        let exit_code = execute_command(command, spawner).await?;
+        checkout_result(&repo_name, checkout_ref, exit_code)?;
+
+        safe_info!(
+            safe: ("Successfully checked out pinned ref"),
+            full: ("Successfully checked out {checkout_ref} for {repo_name}")
+        );
+    }
+
     Ok(())
+}
+
+/// Build the `git fetch` + `git checkout` command that pins `repo`'s clone at
+/// its `checkout_ref`, or `None` when the repo has no ref to pin.
+///
+/// A partial clone (`--filter=tree:0`) only fetches the default branch, so an
+/// arbitrary ref (commit SHA, branch, or tag) may not be present yet: fetch it
+/// first, then check out the resulting `FETCH_HEAD` detached. Checking out the
+/// original ref name can prefer a stale local branch or fail when the object
+/// only landed in `FETCH_HEAD`. Detached HEAD is expected and fine — trials
+/// never merge.
+fn checkout_command_for(
+    repo: &SourceRepo,
+    working_dir: &Path,
+    shell_type: ShellType,
+) -> Option<String> {
+    let checkout_ref = repo.checkout_ref.as_deref()?;
+    let repo_dir = working_dir.join(&repo.repo);
+    let escaped_dir = shell_escape_single_quotes(&repo_dir.to_string_lossy(), shell_type);
+    let escaped_ref = shell_escape_single_quotes(checkout_ref, shell_type);
+    Some(format!(
+        "git -C '{escaped_dir}' fetch --filter=tree:0 origin '{escaped_ref}' && \
+         git -C '{escaped_dir}' checkout --detach FETCH_HEAD"
+    ))
+}
+
+/// Map a checkout command's exit code onto the environment-prep result,
+/// surfacing a non-zero exit (fetch or checkout failing) as `CheckoutFailed`
+/// rather than silently leaving the clone on the default branch.
+fn checkout_result(
+    repo_name: &str,
+    checkout_ref: &str,
+    exit_code: ExitCode,
+) -> Result<(), PrepareEnvironmentError> {
+    if exit_code == 0.into() {
+        Ok(())
+    } else {
+        Err(PrepareEnvironmentError::CheckoutFailed {
+            repo_name: repo_name.to_string(),
+            checkout_ref: checkout_ref.to_string(),
+        })
+    }
 }
 
 /// Register a cloned source repository with `DetectedRepositories` so that the

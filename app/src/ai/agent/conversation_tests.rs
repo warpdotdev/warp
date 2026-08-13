@@ -1,20 +1,21 @@
 use std::collections::HashMap;
 
-use ai::api_keys::ApiKeyManager;
+use ai::api_keys::{ApiKeyManager, CustomEndpointParams, CustomEndpointSchema};
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    artifact_from_fork_proto, footer_model_token_usage, AIConversation,
-    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus, RestoreConversationError,
+    AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
+    ConversationUsageTotals, RecordingSpanStatus, RestoreConversationError,
+    artifact_from_fork_proto, footer_model_token_usage,
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::llms::LLMPreferences;
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::network::NetworkStatus;
-use crate::persistence::model::AgentConversationData;
+use crate::persistence::model::{AgentConversationData, ConversationUsageMetadata};
 use crate::server::server_api::ServerApiProvider;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -33,6 +34,31 @@ fn restored_conversation(conversation_data: Option<AgentConversationData>) -> AI
         conversation_data,
     )
     .unwrap()
+}
+
+fn conversation_data_with_provider_cost(
+    total_provider_cost_in_cents: Option<f32>,
+) -> AgentConversationData {
+    AgentConversationData {
+        server_conversation_token: None,
+        conversation_usage_metadata: Some(ConversationUsageMetadata {
+            total_provider_cost_in_cents,
+            ..Default::default()
+        }),
+        reverted_action_ids: None,
+        forked_from_server_conversation_token: None,
+        artifacts_json: None,
+        parent_agent_id: None,
+        agent_name: None,
+        orchestration_harness_type: None,
+        parent_conversation_id: None,
+        is_remote_child: false,
+        root_task_is_optimistic: None,
+        run_id: None,
+        autoexecute_override: None,
+        last_event_sequence: None,
+        pinned: false,
+    }
 }
 
 fn restored_conversation_with_root_description(description: &str) -> AIConversation {
@@ -68,6 +94,146 @@ fn user_query_message(id: &str, request_id: &str, query: &str) -> api::Message {
         request_id: request_id.to_string(),
         timestamp: None,
     }
+}
+
+fn tool_call_message(
+    id: &str,
+    request_id: &str,
+    tool_call_id: &str,
+    tool: api::message::tool_call::Tool,
+) -> api::Message {
+    api::Message {
+        fetched_memories: vec![],
+        id: id.to_string(),
+        task_id: "root-task".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+            tool_call_id: tool_call_id.to_string(),
+            tool: Some(tool),
+        })),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+fn tool_call_result_message(
+    id: &str,
+    request_id: &str,
+    tool_call_id: &str,
+    result: api::message::tool_call_result::Result,
+) -> api::Message {
+    api::Message {
+        fetched_memories: vec![],
+        id: id.to_string(),
+        task_id: "root-task".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::ToolCallResult(
+            api::message::ToolCallResult {
+                tool_call_id: tool_call_id.to_string(),
+                context: None,
+                result: Some(result),
+            },
+        )),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+fn start_recording_tool_call() -> api::message::tool_call::Tool {
+    api::message::tool_call::Tool::StartRecording(api::message::tool_call::StartRecording {
+        description: String::new(),
+        frame_rate: 15,
+        limits: None,
+        summary: String::new(),
+        playback_speed_multiplier: 0,
+        target: None,
+    })
+}
+
+fn start_recording_success_result(recording_id: &str) -> api::message::tool_call_result::Result {
+    api::message::tool_call_result::Result::StartRecording(api::StartRecordingResult {
+        result: Some(api::start_recording_result::Result::Success(
+            api::start_recording_result::Success {
+                recording_id: recording_id.to_string(),
+                started_at: None,
+                settings: Some(api::start_recording_result::CaptureSettings {
+                    width_px: 1280,
+                    height_px: 720,
+                }),
+            },
+        )),
+    })
+}
+
+fn start_recording_error_result(message: &str) -> api::message::tool_call_result::Result {
+    api::message::tool_call_result::Result::StartRecording(api::StartRecordingResult {
+        result: Some(api::start_recording_result::Result::Error(
+            api::start_recording_result::Error {
+                message: message.to_string(),
+            },
+        )),
+    })
+}
+
+fn use_computer_tool_call(summary: &str) -> api::message::tool_call::Tool {
+    api::message::tool_call::Tool::UseComputer(api::message::tool_call::UseComputer {
+        actions: vec![],
+        post_actions_screenshot_params: None,
+        action_summary: summary.to_string(),
+    })
+}
+
+fn stop_recording_tool_call(recording_id: &str) -> api::message::tool_call::Tool {
+    api::message::tool_call::Tool::StopRecording(api::message::tool_call::StopRecording {
+        recording_id: recording_id.to_string(),
+        discard: false,
+    })
+}
+
+fn stop_recording_success_result(artifact_uid: &str) -> api::message::tool_call_result::Result {
+    api::message::tool_call_result::Result::StopRecording(api::StopRecordingResult {
+        result: Some(api::stop_recording_result::Result::Success(
+            api::stop_recording_result::Success {
+                artifact_uid: artifact_uid.to_string(),
+                duration: Some(prost_types::Duration {
+                    seconds: 2,
+                    nanos: 0,
+                }),
+                width_px: 1280,
+                height_px: 720,
+                size_bytes: 42,
+                completion_status: api::stop_recording_result::CompletionStatus::Complete as i32,
+                termination_reason: "Stopped by agent".to_string(),
+            },
+        )),
+    })
+}
+
+fn stop_recording_error_result(message: &str) -> api::message::tool_call_result::Result {
+    api::message::tool_call_result::Result::StopRecording(api::StopRecordingResult {
+        result: Some(api::stop_recording_result::Result::Error(
+            api::stop_recording_result::Error {
+                message: message.to_string(),
+            },
+        )),
+    })
+}
+fn restored_conversation_with_messages(messages: Vec<api::Message>) -> AIConversation {
+    AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![api::Task {
+            id: "root-task".to_string(),
+            messages,
+            dependencies: None,
+            description: String::new(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+        None,
+    )
+    .unwrap()
 }
 
 fn agent_output_message(id: &str, request_id: &str) -> api::Message {
@@ -188,6 +354,170 @@ fn title_falls_back_to_initial_query_when_root_description_is_empty() {
 }
 
 #[test]
+fn recording_span_closes_on_matching_stop_result() {
+    let conversation = restored_conversation_with_messages(vec![
+        tool_call_message("start-call", "req-1", "start", start_recording_tool_call()),
+        tool_call_message(
+            "use-call",
+            "req-1",
+            "use",
+            use_computer_tool_call("Click button"),
+        ),
+        tool_call_message(
+            "stop-call",
+            "req-1",
+            "stop",
+            stop_recording_tool_call("rec-1"),
+        ),
+        tool_call_result_message(
+            "start-result",
+            "req-2",
+            "start",
+            start_recording_success_result("rec-1"),
+        ),
+        tool_call_result_message(
+            "stop-result",
+            "req-2",
+            "stop",
+            stop_recording_success_result("artifact-1"),
+        ),
+    ]);
+
+    let span = conversation
+        .recording_span_for_action(&"use".to_string().into(), None)
+        .expect("use action should be inside a recording span");
+
+    assert_eq!(span.recording_id, "rec-1");
+    assert_eq!(span.status, RecordingSpanStatus::Captured);
+}
+
+#[test]
+fn recording_span_stays_open_without_stop_result() {
+    let conversation = restored_conversation_with_messages(vec![
+        tool_call_message("start-call", "req-1", "start", start_recording_tool_call()),
+        tool_call_message(
+            "use-call",
+            "req-1",
+            "use",
+            use_computer_tool_call("Click button"),
+        ),
+        tool_call_result_message(
+            "start-result",
+            "req-2",
+            "start",
+            start_recording_success_result("rec-1"),
+        ),
+    ]);
+
+    let span = conversation
+        .recording_span_for_action(&"use".to_string().into(), None)
+        .expect("use action should be inside an open recording span");
+
+    assert_eq!(span.recording_id, "rec-1");
+    assert_eq!(span.status, RecordingSpanStatus::Active);
+}
+
+#[test]
+fn recording_span_ignores_failed_start() {
+    let conversation = restored_conversation_with_messages(vec![
+        tool_call_message("start-call", "req-1", "start", start_recording_tool_call()),
+        tool_call_message(
+            "use-call",
+            "req-1",
+            "use",
+            use_computer_tool_call("Click button"),
+        ),
+        tool_call_result_message(
+            "start-result",
+            "req-2",
+            "start",
+            start_recording_error_result("unsupported"),
+        ),
+    ]);
+
+    assert!(
+        conversation
+            .recording_span_for_action(&"use".to_string().into(), None)
+            .is_none()
+    );
+}
+
+#[test]
+fn recording_span_ignores_mismatched_stop_id() {
+    let conversation = restored_conversation_with_messages(vec![
+        tool_call_message("start-call", "req-1", "start", start_recording_tool_call()),
+        tool_call_message(
+            "use-call",
+            "req-1",
+            "use",
+            use_computer_tool_call("Click button"),
+        ),
+        tool_call_message(
+            "stop-call",
+            "req-1",
+            "stop",
+            stop_recording_tool_call("other"),
+        ),
+        tool_call_result_message(
+            "start-result",
+            "req-2",
+            "start",
+            start_recording_success_result("rec-1"),
+        ),
+        tool_call_result_message(
+            "stop-result",
+            "req-2",
+            "stop",
+            stop_recording_success_result("artifact-1"),
+        ),
+    ]);
+
+    let span = conversation
+        .recording_span_for_action(&"use".to_string().into(), None)
+        .expect("mismatched stop should not close the span");
+
+    assert_eq!(span.recording_id, "rec-1");
+    assert_eq!(span.status, RecordingSpanStatus::Active);
+}
+
+#[test]
+fn recording_span_clears_when_stop_errors() {
+    let conversation = restored_conversation_with_messages(vec![
+        tool_call_message("start-call", "req-1", "start", start_recording_tool_call()),
+        tool_call_message(
+            "use-call",
+            "req-1",
+            "use",
+            use_computer_tool_call("Click button"),
+        ),
+        tool_call_message(
+            "stop-call",
+            "req-1",
+            "stop",
+            stop_recording_tool_call("rec-1"),
+        ),
+        tool_call_result_message(
+            "start-result",
+            "req-2",
+            "start",
+            start_recording_success_result("rec-1"),
+        ),
+        tool_call_result_message(
+            "stop-result",
+            "req-2",
+            "stop",
+            stop_recording_error_result("upload failed"),
+        ),
+    ]);
+
+    assert!(
+        conversation
+            .recording_span_for_action(&"use".to_string().into(), None)
+            .is_none()
+    );
+}
+
+#[test]
 fn reassign_exchange_ids_keeps_exchange_lookup_consistent() {
     let mut conversation = restored_conversation_with_queries(&["one", "two"]);
 
@@ -203,7 +533,7 @@ fn reassign_exchange_ids_keeps_exchange_lookup_consistent() {
 
     // Reassigning regenerates ids without changing the exchange count, so
     // `modify_task` does not rebuild the index; correctness relies on the
-    // explicit `rebuild_exchange_id_index()` call. The stale ids must be gone.
+    // explicit `rebuild_exchange_index()` call. The stale ids must be gone.
     for id in &old_ids {
         assert!(conversation.exchange_with_id(*id).is_none());
     }
@@ -290,6 +620,137 @@ fn restored_conversation_with_empty_task_list_creates_in_progress_optimistic_roo
     assert_eq!(conversation.status(), &ConversationStatus::InProgress);
     assert!(conversation.status_error_message().is_none());
 }
+#[test]
+fn restored_conversation_seeds_known_provider_cost_baseline() {
+    let conversation = restored_conversation(Some(conversation_data_with_provider_cost(Some(3.2))));
+    let totals = conversation.usage_totals();
+
+    assert_eq!(totals.cost_in_cents, Some(3.2));
+    assert!(totals.has_usage);
+}
+#[test]
+fn empty_task_restore_seeds_known_provider_cost_baseline() {
+    let conversation = AIConversation::new_restored_synthesizing_on_empty(
+        AIConversationId::new(),
+        vec![],
+        Some(conversation_data_with_provider_cost(Some(3.2))),
+    )
+    .expect("empty-task restore should synthesize a root");
+
+    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
+    assert!(conversation.usage_totals().has_usage);
+}
+
+/// APP-4952 regression: the ticket's confirmed failing sequence. A restored
+/// conversation with a known 3.2¢ server baseline plus a 1.2¢ follow-up must
+/// display 4.4¢ — never 0.0¢ (dropped baseline) or 1.2¢ (increment only).
+/// Covers both the strict and the lenient restore constructor.
+#[test]
+fn restored_usage_totals_preserve_server_provider_cost_and_add_follow_up() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let strict_restore =
+            restored_conversation(Some(conversation_data_with_provider_cost(Some(3.2))));
+        let lenient_restore = AIConversation::new_restored_synthesizing_on_empty(
+            AIConversationId::new(),
+            vec![],
+            Some(conversation_data_with_provider_cost(Some(3.2))),
+        )
+        .expect("empty-task restore should synthesize a root");
+
+        for mut conversation in [strict_restore, lenient_restore] {
+            app.read(|ctx| {
+                conversation
+                    .update_cost_and_usage_for_request(
+                        None,
+                        vec![stream_token_usage("model-a", 10, 2, 1.2)],
+                        Some(credits_usage_metadata(1.0, 0.0)),
+                        false,
+                        ctx,
+                    )
+                    .expect("follow-up usage should update");
+            });
+
+            let totals = conversation.usage_totals();
+            let cost = totals
+                .cost_in_cents
+                .expect("a restored known baseline stays known");
+            assert!(
+                (cost - 4.4).abs() < 1e-6,
+                "3.2¢ baseline + 1.2¢ follow-up must total 4.4¢, got {cost}"
+            );
+            assert!(totals.has_usage);
+        }
+    });
+}
+
+/// A restored conversation whose persisted metadata shows no usage evidence
+/// must keep the footer's usage entry hidden — local persistence always
+/// writes a metadata blob, so presence alone is not usage.
+#[test]
+fn restored_zero_usage_metadata_keeps_footer_usage_hidden() {
+    let conversation = restored_conversation(Some(conversation_data_with_provider_cost(None)));
+
+    let totals = conversation.usage_totals();
+    assert!(!totals.has_usage);
+    assert_eq!(totals.cost_in_cents, None);
+}
+
+/// A present provider cost is affirmative evidence even at 0.0: the server
+/// only records a cost once a turn completed accounting, so a restored
+/// known-zero baseline must surface the footer as a truthful $0.00 rather
+/// than staying hidden or reading as unknown.
+#[test]
+fn restored_known_zero_cost_marks_usage_with_known_zero_baseline() {
+    let conversation = restored_conversation(Some(conversation_data_with_provider_cost(Some(0.0))));
+
+    let totals = conversation.usage_totals();
+    assert!(totals.has_usage);
+    assert_eq!(totals.cost_in_cents, Some(0.0));
+}
+
+#[test]
+fn restored_metadata_with_credits_marks_usage_even_without_provider_cost() {
+    let conversation = restored_conversation(Some(AgentConversationData {
+        conversation_usage_metadata: Some(ConversationUsageMetadata {
+            credits_spent: 2.5,
+            ..Default::default()
+        }),
+        ..conversation_data_with_provider_cost(None)
+    }));
+
+    let totals = conversation.usage_totals();
+    assert!(totals.has_usage);
+    assert_eq!(totals.cost_in_cents, None);
+}
+
+#[test]
+fn restored_legacy_conversation_keeps_provider_cost_unavailable_after_follow_up() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation =
+            restored_conversation(Some(conversation_data_with_provider_cost(None)));
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    None,
+                    vec![stream_token_usage("legacy-model", 10, 2, 1.5)],
+                    Some(credits_usage_metadata(1.0, 0.0)),
+                    false,
+                    ctx,
+                )
+                .expect("follow-up usage should update");
+        });
+
+        let totals = conversation.usage_totals();
+        assert_eq!(totals.cost_in_cents, None);
+        assert!(totals.has_usage);
+    });
+}
 
 #[test]
 fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
@@ -297,14 +758,17 @@ fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
         initialize_custom_endpoint_usage_test_app(&mut app);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             manager.add_custom_endpoint(
-                "Endpoint".to_string(),
-                "https://custom.example".to_string(),
-                "key".to_string(),
-                vec![(
-                    "raw-model".to_string(),
-                    Some("Friendly alias".to_string()),
-                    Some("config-key".to_string()),
-                )],
+                CustomEndpointParams {
+                    name: "Endpoint".to_string(),
+                    url: "https://custom.example".to_string(),
+                    api_key: "key".to_string(),
+                    models: vec![(
+                        "raw-model".to_string(),
+                        Some("Friendly alias".to_string()),
+                        Some("config-key".to_string()),
+                    )],
+                    schema: CustomEndpointSchema::default(),
+                },
                 ctx,
             );
         });
@@ -374,6 +838,95 @@ fn update_cost_and_usage_uses_fallback_label_for_unknown_custom_endpoint() {
     });
 }
 
+fn stream_token_usage(
+    model_id: &str,
+    total_input: u32,
+    output: u32,
+    cost_in_cents: f32,
+) -> api::response_event::stream_finished::TokenUsage {
+    api::response_event::stream_finished::TokenUsage {
+        model_id: model_id.to_string(),
+        total_input,
+        output,
+        input_cache_read: 0,
+        input_cache_write: 0,
+        cost_in_cents,
+    }
+}
+
+#[allow(deprecated)]
+fn credits_usage_metadata(
+    credits_spent: f32,
+    platform_credits_spent: f32,
+) -> api::response_event::stream_finished::ConversationUsageMetadata {
+    api::response_event::stream_finished::ConversationUsageMetadata {
+        context_window_usage: 0.0,
+        credits_spent,
+        platform_credits_spent,
+        summarized: false,
+        token_usage: vec![],
+        tool_usage_metadata: None,
+        total_input_tokens: 0,
+        warp_token_usage: HashMap::new(),
+        byok_token_usage: HashMap::new(),
+        context_window_segments: Vec::new(),
+        custom_endpoint_token_usage: HashMap::new(),
+    }
+}
+
+#[test]
+fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        assert_eq!(
+            conversation.usage_totals(),
+            ConversationUsageTotals {
+                credits_spent: 0.0,
+                cost_in_cents: Some(0.0),
+                has_usage: false,
+            }
+        );
+
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    None,
+                    vec![stream_token_usage("model-a", 100, 20, 1.5)],
+                    Some(credits_usage_metadata(2.0, 0.5)),
+                    false,
+                    ctx,
+                )
+                .expect("usage should update");
+            // The server's usage metadata is cumulative per conversation: the
+            // newest snapshot replaces the previous credits rather than
+            // summing, while provider cost accumulates per request.
+            conversation
+                .update_cost_and_usage_for_request(
+                    None,
+                    vec![stream_token_usage("model-a", 50, 10, 1.2)],
+                    Some(credits_usage_metadata(3.0, 0.5)),
+                    false,
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+
+        let totals = conversation.usage_totals();
+        assert!((totals.credits_spent - 3.5).abs() < 1e-6);
+        assert!(
+            (totals
+                .cost_in_cents
+                .expect("new conversation cost is known")
+                - 2.7)
+                .abs()
+                < 1e-6
+        );
+    });
+}
+
 #[allow(deprecated)]
 #[test]
 fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_labeled_models() {
@@ -381,14 +934,17 @@ fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_label
         initialize_custom_endpoint_usage_test_app(&mut app);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             manager.add_custom_endpoint(
-                "Endpoint".to_string(),
-                "https://custom.example".to_string(),
-                "key".to_string(),
-                vec![(
-                    "raw-model".to_string(),
-                    Some("Resolved custom".to_string()),
-                    Some("config-key".to_string()),
-                )],
+                CustomEndpointParams {
+                    name: "Endpoint".to_string(),
+                    url: "https://custom.example".to_string(),
+                    api_key: "key".to_string(),
+                    models: vec![(
+                        "raw-model".to_string(),
+                        Some("Resolved custom".to_string()),
+                        Some("config-key".to_string()),
+                    )],
+                    schema: CustomEndpointSchema::default(),
+                },
                 ctx,
             );
         });
@@ -735,10 +1291,12 @@ fn is_done_only_includes_success_error_cancelled() {
     assert!(ConversationStatus::Cancelled.is_done());
 
     assert!(!ConversationStatus::InProgress.is_done());
-    assert!(!ConversationStatus::Blocked {
-        blocked_action: "approve".to_string()
-    }
-    .is_done());
+    assert!(
+        !ConversationStatus::Blocked {
+            blocked_action: "approve".to_string()
+        }
+        .is_done()
+    );
     assert!(!ConversationStatus::WaitingForEvents.is_done());
 }
 
@@ -751,10 +1309,12 @@ fn is_waiting_for_events_returns_true_only_for_waiting_for_events_variant() {
     assert!(!ConversationStatus::Success.is_waiting_for_events());
     assert!(!ConversationStatus::Error.is_waiting_for_events());
     assert!(!ConversationStatus::Cancelled.is_waiting_for_events());
-    assert!(!ConversationStatus::Blocked {
-        blocked_action: "approve".to_string()
-    }
-    .is_waiting_for_events());
+    assert!(
+        !ConversationStatus::Blocked {
+            blocked_action: "approve".to_string()
+        }
+        .is_waiting_for_events()
+    );
 }
 
 /// A conversation that was yielded via `wait_for_events` at shutdown

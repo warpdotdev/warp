@@ -13,6 +13,7 @@ diesel::table! {
         conversation_id -> Text,
         conversation_data -> Text,
         last_modified_at -> Timestamp,
+        summary -> Nullable<Text>,
     }
 }
 
@@ -452,6 +453,7 @@ diesel::table! {
         agent_management_filters -> Nullable<Text>,
         left_panel_open -> Nullable<Bool>,
         vertical_tabs_panel_open -> Nullable<Bool>,
+        team_uid -> Nullable<Text>,
     }
 }
 

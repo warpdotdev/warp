@@ -18,8 +18,8 @@ use warpui::{
     ViewHandle,
 };
 
-use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::Revision;
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::editor::{
     EditorOptions, EditorView, Event, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
     TextOptions,
@@ -191,6 +191,7 @@ impl EnumCreationDialog {
                         PropagateAndNoOpNavigationKeys::Always,
                     soft_wrap: true,
                     placeholder_soft_wrap: true,
+                    supports_vim_mode: true,
                     ..Default::default()
                 };
 

@@ -3,13 +3,15 @@
 use std::collections::HashSet;
 
 use anyhow::Context;
+use onboarding::ChooseHowToStartExperimentArm;
 #[cfg(test)]
 pub use tests::TestModel;
+use warp_errors::report_if_error;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use super::ServerExperiment;
+use crate::GlobalResourceHandlesProvider;
 use crate::persistence::ModelEvent;
-use crate::{report_if_error, GlobalResourceHandlesProvider};
 
 /// A global model for maintaining server-side experiment state.
 pub struct ServerExperiments {
@@ -55,6 +57,24 @@ impl ServerExperiments {
         self.latest.contains(experiment)
     }
 
+    /// The user's arm in the onboarding "Choose how to start" option-count
+    /// experiment.
+    ///
+    /// Ineligible users receive neither arm; malformed state carrying both
+    /// fails closed rather than guessing. Both cases resolve to `Unassigned`,
+    /// which renders the safe two-option layout.
+    pub fn choose_how_to_start_experiment_arm(&self) -> ChooseHowToStartExperimentArm {
+        let control =
+            self.is_experiment_enabled(&ServerExperiment::OnboardingChooseHowToStartControl);
+        let experiment =
+            self.is_experiment_enabled(&ServerExperiment::OnboardingChooseHowToStartExperiment);
+        match (control, experiment) {
+            (true, false) => ChooseHowToStartExperimentArm::Control,
+            (false, true) => ChooseHowToStartExperimentArm::Experiment,
+            _ => ChooseHowToStartExperimentArm::Unassigned,
+        }
+    }
+
     /// Saves the latest experiment state in-memory and to the local cache.
     fn cache_latest_state(
         &mut self,
@@ -71,9 +91,11 @@ impl ServerExperiments {
             let event = ModelEvent::SaveExperiments {
                 experiments: self.latest.iter().copied().collect(),
             };
-            report_if_error!(model_event_sender
-                .send(event)
-                .context("Unable to save experiments to sqlite"));
+            report_if_error!(
+                model_event_sender
+                    .send(event)
+                    .context("Unable to save experiments to sqlite")
+            );
         }
     }
 }

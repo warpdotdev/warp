@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{JsonModel, JsonSerializer};
 
 /// Source-control provider hosting an environment's repositories.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum CodeForge {
     #[default]
     #[serde(rename = "GITHUB")]
@@ -68,6 +68,11 @@ pub struct SourceRepo {
     pub code_forge: Option<CodeForge>,
     pub owner: String,
     pub repo: String,
+    /// Ref to check out after cloning this repository (commit SHA, branch, or
+    /// tag). Absent leaves the clone on the default branch. Benchmark trials
+    /// use it to start from a pinned base commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout_ref: Option<String>,
 }
 
 impl SourceRepo {
@@ -76,14 +81,21 @@ impl SourceRepo {
             code_forge: Some(code_forge),
             owner,
             repo,
+            checkout_ref: None,
         }
     }
     pub fn with_default_code_forge(&self, code_forge: CodeForge) -> Self {
-        Self::new(
-            self.code_forge.unwrap_or(code_forge),
-            self.owner.clone(),
-            self.repo.clone(),
-        )
+        Self {
+            code_forge: Some(self.code_forge.unwrap_or(code_forge)),
+            owner: self.owner.clone(),
+            repo: self.repo.clone(),
+            checkout_ref: self.checkout_ref.clone(),
+        }
+    }
+    /// Returns a copy of this repository pinned to `checkout_ref`.
+    pub fn with_checkout_ref(mut self, checkout_ref: Option<String>) -> Self {
+        self.checkout_ref = checkout_ref;
+        self
     }
 
     pub fn https_clone_url(&self) -> String {
@@ -181,9 +193,13 @@ pub struct AmbientAgentEnvironment {
     /// `github_repos`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_repos: Option<Vec<SourceRepo>>,
-    /// Base image specification
-    #[serde(flatten)]
-    pub base_image: BaseImage,
+    /// Base image specification.
+    ///
+    /// Absent when the environment does not pin a base image. The server may
+    /// omit the docker image, so the client must not fail to deserialize an
+    /// environment that lacks one.
+    #[serde(flatten, default, skip_serializing_if = "Option::is_none")]
+    pub base_image: Option<BaseImage>,
     /// List of setup commands to run after cloning
     #[serde(default)]
     pub setup_commands: Vec<String>,
@@ -196,6 +212,9 @@ pub struct AmbientAgentEnvironment {
     ///   - `Some([...])`: these specific secrets are the default
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Vec<EnvironmentSecretRef>>,
+    /// Runner supplying compute for runs that do not name one themselves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_runner_uid: Option<String>,
 }
 
 impl AmbientAgentEnvironment {
@@ -212,10 +231,11 @@ impl AmbientAgentEnvironment {
             code_forge: None,
             github_repos,
             source_repos: None,
-            base_image: BaseImage::DockerImage(docker_image),
+            base_image: Some(BaseImage::DockerImage(docker_image)),
             setup_commands,
             providers: ProvidersConfig::default(),
             secrets: None,
+            default_runner_uid: None,
         }
     }
 
@@ -223,6 +243,15 @@ impl AmbientAgentEnvironment {
     /// for legacy environments.
     pub fn effective_code_forge(&self) -> CodeForge {
         self.code_forge.unwrap_or_default()
+    }
+
+    /// Display string for this environment's base image, empty when the
+    /// environment does not pin a base image.
+    pub fn base_image_display(&self) -> String {
+        self.base_image
+            .as_ref()
+            .map(|image| image.to_string())
+            .unwrap_or_default()
     }
 
     /// Returns the authoritative provider-neutral repository list.

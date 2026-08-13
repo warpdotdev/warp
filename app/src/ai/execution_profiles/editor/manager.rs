@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WindowId};
 
-use crate::ai::execution_profiles::profiles::ClientProfileId;
-use crate::pane_group::{ExecutionProfileEditorPane, PaneContent};
 use crate::PaneViewLocator;
+use crate::ai::execution_profiles::ExecutionProfileId;
+use crate::pane_group::{ExecutionProfileEditorPane, PaneContent};
 
 /// Manages execution profile editor panes across different windows and profiles.
 ///
@@ -14,7 +14,7 @@ use crate::PaneViewLocator;
 /// including the locator information needed to find and reference specific panes within their pane groups.
 #[derive(Default)]
 pub struct ExecutionProfileEditorManager {
-    panes: HashMap<WindowId, HashMap<ClientProfileId, ExecutionProfileEditorPaneData>>,
+    panes: HashMap<WindowId, HashMap<ExecutionProfileId, ExecutionProfileEditorPaneData>>,
 }
 
 #[derive(Clone, Copy)]
@@ -26,11 +26,11 @@ impl ExecutionProfileEditorManager {
     pub fn find_pane(
         &self,
         window_id: WindowId,
-        profile_id: ClientProfileId,
+        profile_id: &ExecutionProfileId,
     ) -> Option<PaneViewLocator> {
         self.panes
             .get(&window_id)
-            .and_then(|m| m.get(&profile_id))
+            .and_then(|m| m.get(profile_id))
             .map(|d| d.locator)
     }
 
@@ -39,7 +39,7 @@ impl ExecutionProfileEditorManager {
         pane: &ExecutionProfileEditorPane,
         pane_group_id: EntityId,
         window_id: WindowId,
-        profile_id: ClientProfileId,
+        profile_id: ExecutionProfileId,
         _ctx: &mut ModelContext<Self>,
     ) {
         let locator = PaneViewLocator {
@@ -52,7 +52,7 @@ impl ExecutionProfileEditorManager {
             .insert(profile_id, ExecutionProfileEditorPaneData { locator });
     }
 
-    pub fn deregister_pane(&mut self, window_id: &WindowId, profile_id: &ClientProfileId) {
+    pub fn deregister_pane(&mut self, window_id: &WindowId, profile_id: &ExecutionProfileId) {
         if let Some(map) = self.panes.get_mut(window_id) {
             map.remove(profile_id);
             if map.is_empty() {

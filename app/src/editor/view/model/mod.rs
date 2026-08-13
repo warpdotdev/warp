@@ -25,7 +25,7 @@ pub use selections::{
     SelectionMode,
 };
 use string_offset::{ByteOffset, CharOffset};
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 use vim::vim::{
     BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion, LineMotion,
     MotionType, TextObjectInclusion, TextObjectType, VimOperator, WordBound, WordMotion,
@@ -35,15 +35,16 @@ use vim::{
     vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket, vim_inner_block,
     vim_inner_paragraph, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
 };
+use warp_errors::report_error;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
+use warpui::text::TextBuffer;
 use warpui::text::point::Point;
 use warpui::text::word_boundaries::WordBoundariesPolicy;
-use warpui::text::TextBuffer;
 use warpui::text_layout::TextStyle;
 use warpui::{AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity};
 
 use self::buffer::Peer;
-use super::{movement, PlainTextEditorViewAction, SelectionInsertion, ValidInputType};
+use super::{PlainTextEditorViewAction, SelectionInsertion, ValidInputType, movement};
 use crate::editor::RangeExt;
 use crate::vim_registers::VimRegisters;
 
@@ -771,10 +772,8 @@ impl EditorModel {
             });
         }
 
-        if can_select {
-            if let Some(change_selection) = edit.change_selections_callback {
-                change_selection(self, ctx);
-            }
+        if can_select && let Some(change_selection) = edit.change_selections_callback {
+            change_selection(self, ctx);
         }
 
         if let Some(before_buffer_edit) = edit.before_buffer_edit_callback {
@@ -782,19 +781,16 @@ impl EditorModel {
         }
 
         let prev_state = self.consecutive_autocomplete_insertion_edits_counter;
-        if can_edit {
-            if let Some(update_buffer) = edit.update_buffer {
-                (update_buffer.callback)(self, ctx);
-            }
+        if can_edit && let Some(update_buffer) = edit.update_buffer {
+            (update_buffer.callback)(self, ctx);
         }
         let next_state = self.consecutive_autocomplete_insertion_edits_counter;
 
-        if can_select {
-            if let Some(post_buffer_edit_change_selection) =
+        if can_select
+            && let Some(post_buffer_edit_change_selection) =
                 edit.post_buffer_edit_change_selections_callback
-            {
-                post_buffer_edit_change_selection(self, ctx);
-            }
+        {
+            post_buffer_edit_change_selection(self, ctx);
         }
 
         // Only emit a11y content for pure selection changes because edits
@@ -1041,7 +1037,7 @@ impl EditorModel {
         if let Some((start, end)) = start.ok().zip(end.ok()) {
             self.buffer_handle().update(ctx, |buffer, ctx| {
                 if let Err(error) = buffer.indent(start.row..end.row + 1, ctx) {
-                    log::error!("error indenting text: {error}");
+                    report_error!(error.context("error indenting text"));
                 }
             });
         }
@@ -1062,7 +1058,7 @@ impl EditorModel {
                 .collect::<Vec<_>>();
 
             if let Err(error) = buffer.unindent(row_ranges, ctx) {
-                log::error!("error unindenting text: {error}");
+                report_error!(error.context("error unindenting text"));
             };
         });
     }
@@ -1097,7 +1093,7 @@ impl EditorModel {
     {
         self.buffer_handle().update(ctx, |buffer, ctx| {
             if let Err(e) = buffer.update_styles(old_ranges, text_style_operation, ctx) {
-                log::error!("Error with updating styles: {e:?}")
+                report_error!(e.context("Error with updating styles"))
             }
         });
     }
@@ -1187,7 +1183,7 @@ impl EditorModel {
                 self.buffer_handle().update(ctx, |buffer, ctx| {
                     if let Err(error) = buffer.edit(offset_ranges.iter().cloned(), *completion, ctx)
                     {
-                        log::error!("error inserting text: {error}");
+                        report_error!(error.context("error inserting text"));
                     };
                 });
                 self.consecutive_autocomplete_insertion_edits_counter += 1;
@@ -1220,7 +1216,7 @@ impl EditorModel {
                 Text::new(text, text_style),
                 ctx,
             ) {
-                log::error!("error inserting text: {error}");
+                report_error!(error.context("error inserting text"));
             };
         });
 
@@ -1358,7 +1354,7 @@ impl EditorModel {
                     Text::new(styled_text.text(), Some(styled_text.text_style())),
                     ctx,
                 ) {
-                    log::error!("error inserting text: {error}");
+                    report_error!(error.context("error inserting text"));
                 };
                 text_added_offset += styled_text.text().chars().count();
             }
@@ -1378,18 +1374,16 @@ impl EditorModel {
                 // Handle the error to convert saved selection offsets to editor anchors gracefully
                 // as the restored buffer state might not match exactly to the saved snapshot.
                 let Some(end) = buffer.anchor_before(range.end).ok() else {
-                    log::error!(
-                        "error restoring snapshot with selection end {} on text with max range {}",
-                        range.end,
-                        text_added_offset
+                    report_error!(
+                        "error restoring snapshot: selection end is past text max range",
+                        extra: { "selection_end" => %range.end, "max_range" => %text_added_offset }
                     );
                     return None;
                 };
                 let Some(start) = buffer.anchor_before(range.start).ok() else {
-                    log::error!(
-                        "error restoring snapshot with selection start {} on text with max range {}",
-                        range.start,
-                        text_added_offset
+                    report_error!(
+                        "error restoring snapshot: selection start is past text max range",
+                        extra: { "selection_start" => %range.start, "max_range" => %text_added_offset }
                     );
                     return None;
                 };
@@ -2048,7 +2042,7 @@ impl EditorModel {
     pub fn clear_buffer(&mut self, ctx: &mut ModelContext<Self>) {
         self.buffer_handle().update(ctx, |buffer, ctx| {
             if let Err(error) = buffer.edit(Some(0.into()..buffer.len()), "", ctx) {
-                log::error!("error clearing text: {error}");
+                report_error!(error.context("error clearing text"));
             };
         });
         self.clear_selections(ctx);
@@ -2065,7 +2059,7 @@ impl EditorModel {
     ) {
         self.buffer_handle().update(ctx, |buffer, ctx| {
             if let Err(error) = buffer.edit(Some(0.into()..n), text, ctx) {
-                log::error!("error replacing first n chars: {error}");
+                report_error!(error.context("error replacing first n chars"));
             };
         });
     }
@@ -2083,7 +2077,7 @@ impl EditorModel {
             let len = buffer.len();
             let start = len.saturating_sub(&n);
             if let Err(error) = buffer.edit(Some(start..len), text, ctx) {
-                log::error!("error replacing last n chars: {error}");
+                report_error!(error.context("error replacing last n chars"));
             };
         });
     }
@@ -2381,64 +2375,62 @@ impl EditorModel {
         let buffer = self.buffer(ctx);
         let mut new_selections = self.selections(ctx).clone();
         new_selections.iter_mut().for_each(|selection| {
-            if let Ok(initial_offset) = selection.end().to_char_offset(buffer) {
-                if let Ok(boundaries) = vim_word_iterator_from_offset(
+            if let Ok(initial_offset) = selection.end().to_char_offset(buffer)
+                && let Ok(boundaries) = vim_word_iterator_from_offset(
                     initial_offset,
                     buffer,
                     *direction,
                     *bound,
                     *word_type,
-                ) {
-                    let mut word_boundary = boundaries
-                        .take(word_count as usize)
-                        .last()
-                        .unwrap_or(initial_offset);
-                    let (new_start, new_end) = match direction {
-                        // Account for vim word motion quirks across newlines.
-                        Direction::Forward => {
-                            // `de`, unlike other word motions, will include character it lands on
-                            // in the operation.
-                            if *bound == WordBound::End {
-                                if let Ok(point) = (word_boundary + 1).to_char_offset(buffer) {
-                                    word_boundary = point;
-                                }
-                            } else if *bound == WordBound::Start && word_count == 1 {
-                                // `dw`, can not traverse a newline unless the count > 1. We have
-                                // to check this range for newlines and cut the range short in that
-                                // case.
-                                if let Ok(mut text) =
-                                    buffer.chars_for_range(initial_offset..word_boundary)
-                                {
-                                    if let Some((i, _)) = text.find_position(|c| *c == '\n') {
-                                        word_boundary = initial_offset + i;
-                                    }
-                                }
+                )
+            {
+                let mut word_boundary = boundaries
+                    .take(word_count as usize)
+                    .last()
+                    .unwrap_or(initial_offset);
+                let (new_start, new_end) = match direction {
+                    // Account for vim word motion quirks across newlines.
+                    Direction::Forward => {
+                        // `de`, unlike other word motions, will include character it lands on
+                        // in the operation.
+                        if *bound == WordBound::End {
+                            if let Ok(point) = (word_boundary + 1).to_char_offset(buffer) {
+                                word_boundary = point;
                             }
-                            (initial_offset, word_boundary)
-                        }
-                        Direction::Backward => {
-                            // `db` will traverse *but not delete* a newline if the count is 1 and
-                            // the cursor starts on column zero and the line above is not empty.
-                            let mut end = initial_offset;
-                            if *bound == WordBound::Start && word_count == 1 {
-                                if let Ok(mut char_iter) = buffer.chars_rev_at(initial_offset) {
-                                    if char_iter.next().is_some_and(|c| c == '\n')
-                                        && char_iter.next().is_some_and(|c| c != '\n')
-                                    {
-                                        end -= 1;
-                                    }
-                                }
+                        } else if *bound == WordBound::Start && word_count == 1 {
+                            // `dw`, can not traverse a newline unless the count > 1. We have
+                            // to check this range for newlines and cut the range short in that
+                            // case.
+                            if let Ok(mut text) =
+                                buffer.chars_for_range(initial_offset..word_boundary)
+                                && let Some((i, _)) = text.find_position(|c| *c == '\n')
+                            {
+                                word_boundary = initial_offset + i;
                             }
-                            (word_boundary, end)
                         }
-                    };
+                        (initial_offset, word_boundary)
+                    }
+                    Direction::Backward => {
+                        // `db` will traverse *but not delete* a newline if the count is 1 and
+                        // the cursor starts on column zero and the line above is not empty.
+                        let mut end = initial_offset;
+                        if *bound == WordBound::Start
+                            && word_count == 1
+                            && let Ok(mut char_iter) = buffer.chars_rev_at(initial_offset)
+                            && char_iter.next().is_some_and(|c| c == '\n')
+                            && char_iter.next().is_some_and(|c| c != '\n')
+                        {
+                            end -= 1;
+                        }
+                        (word_boundary, end)
+                    }
+                };
 
-                    if let Ok(anchor_start) = buffer.anchor_before(new_start) {
-                        selection.set_start(anchor_start);
-                    }
-                    if let Ok(anchor_end) = buffer.anchor_before(new_end) {
-                        selection.set_end(anchor_end);
-                    }
+                if let Ok(anchor_start) = buffer.anchor_before(new_start) {
+                    selection.set_start(anchor_start);
+                }
+                if let Ok(anchor_end) = buffer.anchor_before(new_end) {
+                    selection.set_end(anchor_end);
                 }
             }
         });
@@ -2453,7 +2445,7 @@ impl EditorModel {
         operand_count: u32,
         ctx: &mut ModelContext<Self>,
     ) {
-        let include_newline = *operator != VimOperator::Change;
+        let include_newline = operator.includes_trailing_newline();
         match motion {
             CharacterMotion::Down => {
                 self.extend_selection_below(operand_count, ctx);
@@ -2534,7 +2526,7 @@ impl EditorModel {
         operand_count: u32,
         ctx: &mut ModelContext<Self>,
     ) {
-        let include_newline = *operator != VimOperator::Change;
+        let include_newline = operator.includes_trailing_newline();
         match motion {
             FirstNonWhitespaceMotion::Down => {
                 self.extend_selection_below(operand_count, ctx);
@@ -2625,7 +2617,7 @@ impl EditorModel {
         };
         let _ = self.select_ranges_by_offset(new_selections, ctx);
         if let TextObjectType::Paragraph = object_type {
-            let include_newline = *operator != VimOperator::Change;
+            let include_newline = operator.includes_trailing_newline();
             self.extend_selection_linewise(include_newline, ctx);
         }
     }
@@ -3089,7 +3081,7 @@ impl EditorModel {
                 before_cursor_text,
                 ctx,
             ) {
-                log::error!("error inserting text: {error}");
+                report_error!(error.context("error inserting text"));
             };
 
             // Inserting the autocompleted characters. Because the buffer has
@@ -3104,7 +3096,7 @@ impl EditorModel {
                 after_cursor_text,
                 ctx,
             ) {
-                log::error!("error inserting text: {error}");
+                report_error!(error.context("error inserting text"));
             };
         });
 
@@ -3196,14 +3188,14 @@ impl EditorModel {
                 }
 
             // If that's not possible, attempt to select the newline before the line text.
-            } else if start_newline {
-                if let Ok(point) = start.saturating_sub(&1.into()).to_point(buffer) {
-                    selection.set_start(
-                        buffer
-                            .anchor_before(point)
-                            .expect("valid point should be valid anchor"),
-                    );
-                }
+            } else if start_newline
+                && let Ok(point) = start.saturating_sub(&1.into()).to_point(buffer)
+            {
+                selection.set_start(
+                    buffer
+                        .anchor_before(point)
+                        .expect("valid point should be valid anchor"),
+                );
             }
         });
         self.change_selections(new_selections, ctx);

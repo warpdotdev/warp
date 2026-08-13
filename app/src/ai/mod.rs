@@ -24,10 +24,13 @@ pub(crate) mod blocklist;
 pub(crate) mod codebase_auto_indexing;
 pub mod control_code_parser;
 pub(crate) mod conversation_details_panel;
+#[cfg(feature = "local_fs")]
+pub(crate) mod conversation_export;
 pub(crate) mod conversation_navigation;
 pub(crate) mod conversation_rename;
 pub(crate) mod conversation_status_ui;
 pub(crate) mod conversation_utils;
+pub mod credit_availability;
 pub(crate) mod custom_model_router_editor;
 pub(crate) mod custom_model_routers;
 pub(crate) mod document;
@@ -40,16 +43,22 @@ pub(crate) mod llms;
 pub(crate) mod local_harness_setup;
 pub(crate) mod metadata_project_rules;
 pub mod onboarding;
+pub(crate) mod orchestration;
 pub(crate) mod persisted_workspace;
 pub(crate) mod predict;
+pub(crate) mod pricing_promotion;
 #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
 pub(crate) mod remote_agent_context;
 pub(crate) mod remote_context_files;
 pub mod request_usage_model;
 pub(crate) mod restored_conversations;
+pub(crate) mod runner_display;
 pub(crate) mod skills;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod tui_api_keys;
 pub(crate) mod voice;
 pub use agent_tips::*;
+pub use credit_availability::*;
 pub use request_usage_model::*;
 use warpui::AppContext;
 #[cfg(not(target_family = "wasm"))]

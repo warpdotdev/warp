@@ -17,7 +17,13 @@ use crate::ai::blocklist::InputConfig;
 pub enum CLIAgentSessionStatus {
     InProgress,
     Success,
-    Blocked { message: Option<String> },
+    Failed {
+        error_type: Option<String>,
+        message: Option<String>,
+    },
+    Blocked {
+        message: Option<String>,
+    },
 }
 
 impl CLIAgentSessionStatus {
@@ -26,6 +32,7 @@ impl CLIAgentSessionStatus {
         match self {
             CLIAgentSessionStatus::InProgress => ConversationStatus::InProgress,
             CLIAgentSessionStatus::Success => ConversationStatus::Success,
+            CLIAgentSessionStatus::Failed { .. } => ConversationStatus::Error,
             CLIAgentSessionStatus::Blocked { message } => ConversationStatus::Blocked {
                 blocked_action: message.clone().unwrap_or_default(),
             },
@@ -205,6 +212,15 @@ impl CLIAgentSession {
                 self.session_context.response = event.payload.response.clone();
                 self.clear_permission_scoped_state();
                 CLIAgentSessionStatus::Success
+            }
+            CLIAgentEventType::StopFailure => {
+                self.session_context.query = event.payload.query.clone();
+                self.session_context.response = event.payload.response.clone();
+                self.clear_permission_scoped_state();
+                CLIAgentSessionStatus::Failed {
+                    error_type: event.payload.error_type.clone(),
+                    message: event.payload.response.clone(),
+                }
             }
             CLIAgentEventType::PermissionRequest => {
                 self.session_context.summary = event.payload.summary.clone();
