@@ -117,6 +117,7 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
                 subjectType
                 subjectUid
                 subjectDisplayName
+                attributedTeamUid
                 costType
                 usageBucket
                 usageSource

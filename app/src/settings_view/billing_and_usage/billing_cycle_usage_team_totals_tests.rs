@@ -1,4 +1,5 @@
 use super::{TeamTotalCardSummary, build_team_total_card_summaries};
+use crate::settings_view::billing_and_usage::billing_cycle_usage_common::filter_entries_by_attributed_team;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource, BillingCycleUsageEntry, UsageVisibility, UsageVisibilityGranularity,
@@ -13,11 +14,24 @@ fn entry(
         subject_type: AiCreditsUsageAndCostSubjectType::User,
         subject_uid: Some("u".to_string()),
         subject_display_name: None,
+        attributed_team_uid: None,
         cost_type: AiCreditsUsageAndCostType::BaseLimit,
         usage_bucket: AiCreditsUsageBucket::Ai,
         usage_source,
         credits_used,
         cost_cents,
+    }
+}
+
+fn entry_for_team(
+    attributed_team_uid: &str,
+    usage_source: AiCreditsUsageSource,
+    credits_used: i32,
+    cost_cents: i32,
+) -> BillingCycleUsageEntry {
+    BillingCycleUsageEntry {
+        attributed_team_uid: Some(attributed_team_uid.to_string()),
+        ..entry(usage_source, credits_used, cost_cents)
     }
 }
 
@@ -69,6 +83,28 @@ fn per_user_totals_visibility_yields_overall_card_only() {
         &visibility(UsageVisibilityGranularity::PerUserTotals),
     );
     assert_eq!(titles(&summaries), vec!["Overall usage"]);
+}
+
+#[test]
+fn team_totals_only_reflect_the_currently_viewed_team_after_filtering() {
+    // Regression: team totals must be computed from entries already scoped
+    // to the team being viewed (team A), not the whole workspace's usage
+    // (which would include team B's spend too).
+    let entries = vec![
+        entry_for_team("team-a", AiCreditsUsageSource::Local, 30, 10),
+        entry_for_team("team-b", AiCreditsUsageSource::Local, 500, 500),
+        entry_for_team("team-a", AiCreditsUsageSource::Cloud, 70, 25),
+    ];
+
+    let filtered = filter_entries_by_attributed_team(&entries, "team-a");
+    let summaries = build_team_total_card_summaries(
+        &filtered,
+        &visibility(UsageVisibilityGranularity::FullBreakdown),
+    );
+
+    assert_eq!(summaries[0].title, "Overall usage");
+    assert_eq!(summaries[0].total_credits, 30 + 70);
+    assert_eq!(summaries[0].total_cost_cents, 10 + 25);
 }
 
 #[test]

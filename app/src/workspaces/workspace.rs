@@ -602,6 +602,12 @@ pub struct BillingCycleUsageEntry {
     pub subject_type: AiCreditsUsageAndCostSubjectType,
     pub subject_uid: Option<String>,
     pub subject_display_name: Option<String>,
+    /// The team this entry's usage is attributed to. `None` for usage
+    /// predating per-team attribution (or truly unassigned usage). A
+    /// workspace-scoped `billingCycleUsageHistory` query returns entries for
+    /// every team in the workspace, so a team-scoped view must filter on
+    /// this field to avoid leaking other teams' member usage.
+    pub attributed_team_uid: Option<String>,
     pub cost_type: AiCreditsUsageAndCostType,
     pub usage_bucket: AiCreditsUsageBucket,
     pub usage_source: AiCreditsUsageSource,

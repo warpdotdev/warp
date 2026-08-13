@@ -1,5 +1,6 @@
 use super::{
-    BarSegment, aggregate_segments, filter_legacy_buckets, has_non_viewer_data, legend_cost_types,
+    BarSegment, aggregate_segments, filter_entries_by_attributed_team, filter_legacy_buckets,
+    has_non_viewer_data, legend_cost_types,
 };
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
@@ -22,11 +23,31 @@ fn entry(
         subject_type,
         subject_uid: subject_uid.map(|s| s.to_string()),
         subject_display_name: None,
+        attributed_team_uid: None,
         cost_type,
         usage_bucket,
         usage_source,
         credits_used,
         cost_cents,
+    }
+}
+
+fn entry_with_team(
+    attributed_team_uid: Option<&str>,
+    credits_used: i32,
+    cost_cents: i32,
+) -> BillingCycleUsageEntry {
+    BillingCycleUsageEntry {
+        attributed_team_uid: attributed_team_uid.map(|s| s.to_string()),
+        ..entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            credits_used,
+            cost_cents,
+        )
     }
 }
 
@@ -342,6 +363,30 @@ fn legend_cost_types_includes_used_buckets_in_display_order() {
         ],
         "used buckets should render in canonical order, not input order"
     );
+}
+
+#[test]
+fn filter_entries_by_attributed_team_drops_other_teams_and_unassigned_entries() {
+    // Regression: `billingCycleUsageHistory` is workspace-scoped and returns
+    // every team's usage. An admin viewing team A must not see team B's (or
+    // unassigned) entries.
+    let entries = vec![
+        entry_with_team(Some("team-a"), 10, 5),
+        entry_with_team(Some("team-b"), 999, 999),
+        entry_with_team(None, 999, 999),
+    ];
+
+    let filtered = filter_entries_by_attributed_team(&entries, "team-a");
+
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].credits_used, 10);
+    assert_eq!(filtered[0].cost_cents, 5);
+}
+
+#[test]
+fn filter_entries_by_attributed_team_returns_empty_when_no_match() {
+    let entries = vec![entry_with_team(Some("team-b"), 999, 999)];
+    assert!(filter_entries_by_attributed_team(&entries, "team-a").is_empty());
 }
 
 #[test]
