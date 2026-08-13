@@ -1,6 +1,8 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
-use pathfinder_geometry::vector::Vector2F;
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use unindent::Unindent;
 use vim::vim::{MotionType, VimMode};
 use warp_core::features::FeatureFlag;
@@ -15,10 +17,13 @@ use warpui::keymap::Keystroke;
 use warpui::platform::WindowStyle;
 use warpui::text::point::Point;
 use warpui::units::IntoPixels;
-use warpui::{App, SingletonEntity, TypedActionView, UpdateModel, ViewHandle};
+use warpui::{
+    App, Presenter, SingletonEntity, TypedActionView, UpdateModel, ViewHandle, WindowInvalidation,
+};
 
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::code::editor::find::view::FIND_QUERY_FIELD_POSITION_ID;
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction};
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::server::server_api::team::MockTeamClient;
@@ -2123,5 +2128,109 @@ fn test_vim_indent_dot_repeat_repeats_last_indent() {
         vim_user_insert(&editor, ".", &mut app);
         assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2\n    line 3");
         assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_enter_in_find_bar_returns_focus_and_click_reenables_editing() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        let editor = add_code_editor("hello world", &mut app);
+        let find_bar = editor
+            .read(&app, |view, _ctx| view.find_bar.clone())
+            .expect("code editor should have a find bar");
+
+        editor.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::ShowFindBar, ctx);
+        });
+
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.set_find_query(ctx, "hello");
+        });
+        assert!(find_bar.read(&app, |find_bar, ctx| find_bar.is_find_input_editable(ctx)));
+
+        // Pressing Enter in Vim mode should move focus to the main editor, and leave the query
+        // field non-editable but still clickable (regression test for the Find in File focus bug).
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.simulate_find_editor_enter(ctx);
+        });
+
+        assert!(
+            !find_bar.read(&app, |find_bar, ctx| find_bar.is_find_input_editable(ctx)),
+            "query field should no longer be directly editable after Vim Enter"
+        );
+        assert!(
+            app.read(|ctx| editor.is_focused(ctx)),
+            "focus should move to the main editor after Vim Enter"
+        );
+
+        // With the find bar still open but its query field inactive, Vim input dispatched to the
+        // main editor (CodeEditorViewAction::VimUserTyped) must actually reach the editor rather
+        // than being silently swallowed by the `is_find_input_editable` routing guard in
+        // `handle_action`. This is the highest-risk behavior in this change: if the guard's sense
+        // were flipped, or `is_find_input_editable` didn't reflect the new `Selectable` state, Vim
+        // input would either leak into the (inactive) find field or stop reaching the editor.
+        let before_cursor = cursor_position(&editor, &app);
+        editor.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &CodeEditorViewAction::VimUserTyped(UserInput::new("l")),
+                ctx,
+            );
+        });
+        assert_eq!(
+            cursor_position(&editor, &app),
+            (before_cursor.0, before_cursor.1 + 1),
+            "Vim input should move the main editor's cursor while the find bar's query field is inactive"
+        );
+        assert_eq!(
+            find_bar.read(&app, |find_bar, ctx| find_bar.find_query(ctx)),
+            "hello",
+            "the find query text should be unaffected by Vim input routed to the main editor"
+        );
+
+        // Render the window and dispatch a real mouse click through EditorElement::mouse_down (the
+        // exact code path that rejected clicks before this fix), to prove the query field can be
+        // reactivated by a genuine pointer click rather than by directly invoking an action.
+        let window_id = app.read(|ctx| editor.window_id(ctx));
+        let view_ids = app.read(|ctx| ctx.view_ids_for_window(window_id));
+        let invalidation = WindowInvalidation {
+            updated: view_ids.into_iter().collect(),
+            ..Default::default()
+        };
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        app.update(|ctx| {
+            presenter.borrow_mut().invalidate(invalidation, ctx);
+            presenter
+                .borrow_mut()
+                .build_scene(vec2f(1200., 800.), 1., None, ctx);
+        });
+
+        let field_rect = presenter
+            .borrow()
+            .position_cache()
+            .get_position(FIND_QUERY_FIELD_POSITION_ID)
+            .expect("find query field position should be recorded after rendering");
+        let click_position = field_rect.origin() + vec2f(4., field_rect.size().y() / 2.);
+
+        app.update(|ctx| {
+            ctx.simulate_window_event(
+                warpui::Event::LeftMouseDown {
+                    position: click_position,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                window_id,
+                presenter.clone(),
+            );
+        });
+
+        assert!(
+            find_bar.read(&app, |find_bar, ctx| find_bar.is_find_input_editable(ctx)),
+            "a real mouse click on the query field should make it editable again"
+        );
     });
 }

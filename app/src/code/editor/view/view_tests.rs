@@ -87,3 +87,33 @@ fn test_interaction_state_prevents_editing() {
         assert_eq!(text.as_str(), "abc");
     });
 }
+
+#[test]
+fn test_non_vim_enter_in_find_bar_keeps_focus() {
+    App::test((), |mut app| async move {
+        let (_window, editor_view) = initialize_editor(&mut app);
+
+        let find_bar = editor_view
+            .read(&app, |view, _ctx| view.find_bar.clone())
+            .expect("code editor should have a find bar");
+
+        editor_view.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::ShowFindBar, ctx);
+        });
+
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.set_find_query(ctx, "abc");
+        });
+
+        // Without Vim mode enabled, pressing Enter in the query field should just cycle to the
+        // next match and keep focus (and editability) in the query field.
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.simulate_find_editor_enter(ctx);
+        });
+
+        assert!(
+            find_bar.read(&app, |find_bar, ctx| find_bar.is_find_input_editable(ctx)),
+            "non-Vim Enter should keep the query field editable"
+        );
+    });
+}

@@ -53,6 +53,9 @@ pub const CASE_SENSITIVE_TOOLTIP: &str = "Case sensitive search";
 pub const PRESERVE_CASE_TOOLTIP: &str = "Preserve case";
 pub const FIND_PLACEHOLDER_TEXT: &str = "Find";
 pub const REPLACE_PLACEHOLDER_TEXT: &str = "Replace";
+/// `SavePosition` id for the find query field, so tests can look up its rendered screen position
+/// and drive a real mouse click through it (see `EditorElement::mouse_down`).
+pub const FIND_QUERY_FIELD_POSITION_ID: &str = "find_editor_query_field";
 
 #[derive(Default)]
 struct ButtonMouseStates {
@@ -269,12 +272,16 @@ impl CodeEditorFind {
     }
 
     /// Enable or disable the find input editor's interactivity.
+    ///
+    /// When disabled, the field is set to `Selectable` rather than `Disabled` so that it remains
+    /// clickable: a click still focuses it (see the `EditorEvent::Focused` handling below), which
+    /// restores `Editable` and lets the user resume editing the query.
     pub fn set_find_input_editable(&self, ctx: &mut ViewContext<Self>, is_editable: bool) {
         self.find_editor.update(ctx, |editor, ctx| {
             let state = if is_editable {
                 InteractionState::Editable
             } else {
-                InteractionState::Disabled
+                InteractionState::Selectable
             };
             editor.set_interaction_state(state, ctx);
         });
@@ -293,6 +300,14 @@ impl CodeEditorFind {
                 self.emit_result_a11y_content(ctx);
                 ctx.notify();
             }
+            EditorEvent::Focused => {
+                // A click focuses the query editor even while it's `Selectable` (e.g. after Vim
+                // Enter moved focus to the main editor). Restore `Editable` so the click can
+                // resume editing the query, instead of requiring the user to reopen Find.
+                self.find_editor.update(ctx, |editor, ctx| {
+                    editor.set_interaction_state(InteractionState::Editable, ctx);
+                });
+            }
             EditorEvent::Enter => {
                 let vim_enabled = FeatureFlag::VimCodeEditor.is_enabled()
                     && AppEditorSettings::as_ref(ctx).vim_mode_enabled();
@@ -300,10 +315,12 @@ impl CodeEditorFind {
                 if !vim_enabled {
                     self.focus_next_match(FindDirection::Down, ctx);
                 } else {
-                    // Vim: treat "enter" as ending the search query entry and shift focus back to the editor
+                    // Vim: treat "enter" as ending the search query entry and shift focus back to
+                    // the editor. Use `Selectable` rather than `Disabled` so the field stays
+                    // clickable; see `EditorEvent::Focused` above.
                     self.find_editor.update(ctx, |editor, ctx| {
                         editor.clear_selections(ctx);
-                        editor.set_interaction_state(InteractionState::Disabled, ctx);
+                        editor.set_interaction_state(InteractionState::Selectable, ctx);
                     });
                     ctx.emit(Event::VimEnterAndFocusEditor);
                 }
@@ -326,6 +343,22 @@ impl CodeEditorFind {
             }
             _ => {}
         }
+    }
+
+    /// Test-only helper that simulates pressing Enter in the find query field, exactly as the
+    /// real `EditorElement` keyboard handling would dispatch it.
+    #[cfg(test)]
+    pub(crate) fn simulate_find_editor_enter(&self, ctx: &mut ViewContext<Self>) {
+        self.find_editor.update(ctx, |editor, ctx| {
+            editor.handle_action(&crate::editor::EditorAction::Enter, ctx);
+        });
+    }
+
+    /// Returns the current text of the find query field. Test-only: production code reads the
+    /// query via `Event::Update`/`Event::Edited` instead of polling this directly.
+    #[cfg(test)]
+    pub(crate) fn find_query(&self, ctx: &AppContext) -> String {
+        self.find_editor.as_ref(ctx).buffer_text(ctx)
     }
 
     fn handle_replace_editor_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
@@ -771,7 +804,14 @@ impl CodeEditorFind {
                 Shrinkable::new(
                     1.,
                     ConstrainedBox::new(
-                        Clipped::new(ChildView::new(&self.find_editor).finish()).finish(),
+                        Clipped::new(
+                            SavePosition::new(
+                                ChildView::new(&self.find_editor).finish(),
+                                FIND_QUERY_FIELD_POSITION_ID,
+                            )
+                            .finish(),
+                        )
+                        .finish(),
                     )
                     .with_height(editor_height)
                     .finish(),
