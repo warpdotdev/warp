@@ -197,6 +197,21 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
         .collect()
 }
 
+/// Filters `entries` down to those attributed to `team_uid`, dropping
+/// entries with no attribution. Mirrors the web admin panel's
+/// `filterEntriesByAttributedTeam` (strict equality; unattributed entries are
+/// excluded rather than falling back to some default team).
+pub fn filter_entries_by_attributed_team(
+    entries: &[BillingCycleUsageEntry],
+    team_uid: &str,
+) -> Vec<BillingCycleUsageEntry> {
+    entries
+        .iter()
+        .filter(|e| e.attributed_team_uid.as_deref() == Some(team_uid))
+        .cloned()
+        .collect()
+}
+
 /// Cost-type buckets to surface in the usage legend, in display order.
 ///
 /// Mirrors the buckets the stacked bars actually render: legacy buckets are

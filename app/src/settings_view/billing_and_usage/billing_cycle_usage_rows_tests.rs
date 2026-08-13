@@ -1,4 +1,4 @@
-use super::{MemberUsageRow, SourceFilter};
+use super::{MemberUsageRow, SourceFilter, UsageRosterMember};
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource, BillingCycleUsageEntry,
@@ -23,6 +23,7 @@ fn entry(
         usage_source,
         credits_used,
         cost_cents,
+        attributed_team_uid: None,
     }
 }
 
@@ -109,6 +110,42 @@ fn build_own_usage_row_local_filter_drops_cloud_entries() {
         SourceFilter::Local,
     );
     assert_eq!(row.total_credits, 10);
+}
+
+#[test]
+fn for_each_member_only_produces_rows_for_the_provided_roster() {
+    // Regression: per-member rows must be scoped to whatever roster is
+    // passed in (e.g. a team's own members), not some broader workspace
+    // roster, so members of other teams never surface as zero-usage rows.
+    let roster = vec![UsageRosterMember {
+        uid: VIEWER_UID.to_string(),
+        email: "viewer@example.com".to_string(),
+    }];
+    let entries = vec![entry(
+        AiCreditsUsageAndCostSubjectType::User,
+        Some(VIEWER_UID),
+        AiCreditsUsageSource::Local,
+        10,
+        0,
+    )];
+
+    let rows = MemberUsageRow::for_each_member(&entries, &roster, SourceFilter::All);
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].subject_uid.as_deref(), Some(VIEWER_UID));
+}
+
+#[test]
+fn for_each_member_includes_zero_usage_roster_members() {
+    let roster = vec![UsageRosterMember {
+        uid: VIEWER_UID.to_string(),
+        email: "viewer@example.com".to_string(),
+    }];
+
+    let rows = MemberUsageRow::for_each_member(&[], &roster, SourceFilter::All);
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].total_credits, 0);
 }
 
 #[test]

@@ -21,11 +21,12 @@ use crate::auth::{AuthManager, AuthStateProvider};
 use crate::menu::{self, Menu, MenuItem, MenuItemFields};
 use crate::settings_view::admin_actions::AdminActions;
 use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
-    BillingUsageMouseStates, filter_legacy_buckets, has_non_viewer_data, legend_cost_types,
+    BillingUsageMouseStates, filter_entries_by_attributed_team, filter_legacy_buckets,
+    has_non_viewer_data, legend_cost_types,
 };
 use crate::settings_view::billing_and_usage::billing_cycle_usage_rows::{
-    SourceFilter, has_cloud_usage, render_own_usage_solo_row, render_own_usage_with_workspace_row,
-    render_rows,
+    SourceFilter, UsageRosterMember, has_cloud_usage, render_own_usage_solo_row,
+    render_own_usage_with_workspace_row, render_rows,
 };
 use crate::settings_view::billing_and_usage::billing_cycle_usage_team_totals::render_team_totals_block;
 use crate::settings_view::billing_and_usage_page_v2::{
@@ -33,11 +34,12 @@ use crate::settings_view::billing_and_usage_page_v2::{
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
 use crate::ui_components::icons::Icon;
+use crate::workspaces::team::Team;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
-    AiCreditsUsageAndCostType, BillingCycleUsageSummary, MaxPriorCycles, UsageVisibility,
-    UsageVisibilityGranularity, Workspace,
+    AiCreditsUsageAndCostType, BillingCycleUsageEntry, BillingCycleUsageSummary, MaxPriorCycles,
+    UsageVisibility, UsageVisibilityGranularity, Workspace,
 };
 
 const HEADER_FONT_SIZE: f32 = 16.;
@@ -273,15 +275,31 @@ impl BillingCycleUsageSectionView {
     ) -> Box<dyn Element> {
         let is_admin = self.viewer_is_team_admin(app);
         let visibility = workspace.resolve_usage_visibility(is_admin);
+        let team = UserWorkspaces::as_ref(app).team_for_view_handle(&self.self_handle, app);
 
-        let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-        column.add_child(self.render_header(Some(workspace), &visibility, appearance, app));
-
-        let entries = filter_legacy_buckets(
+        let legacy_filtered_entries = filter_legacy_buckets(
             self.current_summary(workspace)
                 .map(|summary| summary.entries.as_slice())
                 .unwrap_or_default(),
         );
+        // Scope usage to the window's current team so an admin looking at
+        // Team A never sees Team B's members' usage folded into the
+        // legend, totals, or rows. Per the backend invariant `VIS !=
+        // OwnOnly => viewer is admin` (see `viewer_is_team_admin`), reaching
+        // this branch guarantees a team is bound to the window;
+        // `prepare_team_usage_data` fails closed to empty data if that
+        // invariant is ever violated.
+        let TeamUsageData { entries, roster } =
+            prepare_team_usage_data(&legacy_filtered_entries, team);
+
+        let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        column.add_child(self.render_header(
+            Some(workspace),
+            &visibility,
+            Some(&entries),
+            appearance,
+            app,
+        ));
 
         let is_source_filter_shown = visibility.granularity
             == UsageVisibilityGranularity::FullBreakdown
@@ -309,7 +327,7 @@ impl BillingCycleUsageSectionView {
 
         column.add_child(
             Container::new(render_rows(
-                workspace,
+                &roster,
                 &entries,
                 &visibility,
                 source_filter,
@@ -341,7 +359,13 @@ impl BillingCycleUsageSectionView {
         );
 
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-        column.add_child(self.render_header(Some(workspace), &visibility, appearance, app));
+        column.add_child(self.render_header(
+            Some(workspace),
+            &visibility,
+            Some(&entries),
+            appearance,
+            app,
+        ));
         column.add_child(
             Container::new(render_own_usage_with_workspace_row(
                 &entries,
@@ -364,7 +388,13 @@ impl BillingCycleUsageSectionView {
     // So we "fake" a row and source data from the AIRequestUsageModel instead
     fn render_own_usage_solo(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-        column.add_child(self.render_header(None, &UsageVisibility::default(), appearance, app));
+        column.add_child(self.render_header(
+            None,
+            &UsageVisibility::default(),
+            None,
+            appearance,
+            app,
+        ));
         column.add_child(
             Container::new(render_own_usage_solo_row(
                 &self.row_mouse_states,
@@ -383,6 +413,7 @@ impl BillingCycleUsageSectionView {
         &self,
         workspace: Option<&Workspace>,
         visibility: &UsageVisibility,
+        legend_entries: Option<&[BillingCycleUsageEntry]>,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -428,7 +459,7 @@ impl BillingCycleUsageSectionView {
         column.add_child(row.finish());
 
         let resets_text = self.render_resets_label(appearance, app);
-        let legend = workspace.and_then(|workspace| self.render_legend(workspace, appearance));
+        let legend = legend_entries.and_then(|entries| self.render_legend(entries, appearance));
         if resets_text.is_some() || legend.is_some() {
             let mut secondary_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -558,14 +589,13 @@ impl BillingCycleUsageSectionView {
 
     fn render_legend(
         &self,
-        workspace: &Workspace,
+        entries: &[BillingCycleUsageEntry],
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let summary = self.current_summary(workspace)?;
         // Only list buckets that actually contribute to the stacked bars: drop
         // legacy buckets and cost types with no usage, so the legend never
         // shows a bucket (e.g. "Base") that has zero credits in the data.
-        let present_buckets = legend_cost_types(&summary.entries);
+        let present_buckets = legend_cost_types(entries);
         if present_buckets.is_empty() {
             return None;
         }
@@ -812,6 +842,47 @@ fn render_aggregate_legend_tooltip(appearance: &Appearance) -> Box<dyn Element> 
                 .with_offset(vec2f(0., 4.)),
         )
         .finish()
+}
+
+/// Team-scoped usage data ready for rendering: `entries` filtered to the
+/// current team (by `attributed_team_uid`) plus that team's member roster.
+/// Every downstream consumer — the legend, the team totals, and the
+/// per-member rows — is fed from this single prepared value, so a future
+/// change can't accidentally wire one of them to unfiltered data.
+struct TeamUsageData {
+    entries: Vec<BillingCycleUsageEntry>,
+    roster: Vec<UsageRosterMember>,
+}
+
+/// Builds [`TeamUsageData`] from `entries` (already period-selected and
+/// legacy-bucket-filtered) and the window's resolved current `team`.
+///
+/// Fails closed to empty entries and an empty roster when `team` is `None`,
+/// rather than falling back to the unfiltered/workspace-wide data — this
+/// should be unreachable in practice (see the invariant note on
+/// `render_team_usage`), but failing closed here means a violation of that
+/// invariant hides data instead of leaking another team's usage.
+fn prepare_team_usage_data(
+    entries: &[BillingCycleUsageEntry],
+    team: Option<&Team>,
+) -> TeamUsageData {
+    let Some(team) = team else {
+        return TeamUsageData {
+            entries: Vec::new(),
+            roster: Vec::new(),
+        };
+    };
+    TeamUsageData {
+        entries: filter_entries_by_attributed_team(entries, &team.uid.to_string()),
+        roster: team
+            .members
+            .iter()
+            .map(|member| UsageRosterMember {
+                uid: member.uid.as_str().to_string(),
+                email: member.email.clone(),
+            })
+            .collect(),
+    }
 }
 
 fn format_period_range(start: DateTime<Utc>, end: DateTime<Utc>) -> String {

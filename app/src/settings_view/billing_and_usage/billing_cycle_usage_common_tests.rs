@@ -1,5 +1,6 @@
 use super::{
-    BarSegment, aggregate_segments, filter_legacy_buckets, has_non_viewer_data, legend_cost_types,
+    BarSegment, aggregate_segments, filter_entries_by_attributed_team, filter_legacy_buckets,
+    has_non_viewer_data, legend_cost_types,
 };
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
@@ -27,6 +28,22 @@ fn entry(
         usage_source,
         credits_used,
         cost_cents,
+        attributed_team_uid: None,
+    }
+}
+
+fn entry_with_team(team_uid: Option<&str>, credits_used: i32) -> BillingCycleUsageEntry {
+    BillingCycleUsageEntry {
+        attributed_team_uid: team_uid.map(|s| s.to_string()),
+        ..entry(
+            AiCreditsUsageAndCostSubjectType::User,
+            Some(VIEWER_UID),
+            AiCreditsUsageAndCostType::BaseLimit,
+            AiCreditsUsageBucket::Ai,
+            AiCreditsUsageSource::Local,
+            credits_used,
+            0,
+        )
     }
 }
 
@@ -200,6 +217,31 @@ fn filter_legacy_buckets_drops_voice_and_suggested_code_diffs_in_input_order() {
         ],
         "expected Voice + SuggestedCodeDiffs dropped while preserving the rest in input order"
     );
+}
+
+#[test]
+fn filter_entries_by_attributed_team_keeps_only_the_matching_team() {
+    // Regression: an admin viewing Team A's usage must not see Team B's
+    // members' usage, nor unattributed (null) entries, folded in.
+    let entries = vec![
+        entry_with_team(Some("team-a"), 10),
+        entry_with_team(Some("team-b"), 20),
+        entry_with_team(None, 30),
+    ];
+
+    let filtered = filter_entries_by_attributed_team(&entries, "team-a");
+
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].credits_used, 10);
+}
+
+#[test]
+fn filter_entries_by_attributed_team_returns_empty_when_no_match() {
+    let entries = vec![
+        entry_with_team(Some("team-b"), 20),
+        entry_with_team(None, 30),
+    ];
+    assert!(filter_entries_by_attributed_team(&entries, "team-a").is_empty());
 }
 
 #[test]

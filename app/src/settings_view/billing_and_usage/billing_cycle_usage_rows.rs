@@ -27,7 +27,6 @@ use crate::ui_components::icons::Icon;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource, BillingCycleUsageEntry, UsageVisibility, UsageVisibilityGranularity,
-    Workspace, WorkspaceMember,
 };
 
 const BAR_HEIGHT: f32 = 8.;
@@ -98,6 +97,14 @@ struct GroupedSubjectUsage {
     subject_type: AiCreditsUsageAndCostSubjectType,
     display_name: String,
     entries: Vec<BillingCycleUsageEntry>,
+}
+
+/// Minimal member identity needed to build a per-member usage row, decoupled
+/// from the concrete roster type (`Team::members` vs. `Workspace::members`)
+/// so callers can scope the roster to whichever is appropriate for the view.
+pub struct UsageRosterMember {
+    pub uid: String,
+    pub email: String,
 }
 
 impl MemberUsageRow {
@@ -182,12 +189,12 @@ impl MemberUsageRow {
     }
 
     /// Per-member rows for `PerUserTotals` / `FullBreakdown` visibility.
-    /// Iterates the workspace member list so zero-usage members still
-    /// get a row. Service accounts and other non-member subjects surface
-    /// as extra rows at the bottom, sorted by total credits desc.
+    /// Iterates `members` so zero-usage members still get a row. Service
+    /// accounts and other non-member subjects surface as extra rows at the
+    /// bottom, sorted by total credits desc.
     fn for_each_member(
         entries: &[BillingCycleUsageEntry],
-        members: &[WorkspaceMember],
+        members: &[UsageRosterMember],
         source_filter: SourceFilter,
     ) -> Vec<Self> {
         // Group entries by subject for joining against the member list below.
@@ -222,13 +229,13 @@ impl MemberUsageRow {
 
         let mut rows: Vec<Self> = Vec::with_capacity(members.len());
 
-        // One row per workspace member, including zero-usage members.
+        // One row per roster member, including zero-usage members.
         let mut seen_keys: std::collections::HashSet<String> = Default::default();
         for member in members {
             let key = format!(
                 "{:?}:{}",
                 AiCreditsUsageAndCostSubjectType::User,
-                member.uid.as_str()
+                member.uid
             );
             seen_keys.insert(key.clone());
 
@@ -240,7 +247,7 @@ impl MemberUsageRow {
             rows.push(Self {
                 subject_type: AiCreditsUsageAndCostSubjectType::User,
                 subject_key: key,
-                subject_uid: Some(member.uid.as_str().to_string()),
+                subject_uid: Some(member.uid.clone()),
                 display_name: member.email.clone(),
                 total_credits,
                 total_cost_cents,
@@ -283,7 +290,7 @@ impl MemberUsageRow {
 }
 
 fn build_rows(
-    workspace: &Workspace,
+    members: &[UsageRosterMember],
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
     source_filter: SourceFilter,
@@ -312,7 +319,7 @@ fn build_rows(
             rows
         }
         UsageVisibilityGranularity::PerUserTotals | UsageVisibilityGranularity::FullBreakdown => {
-            MemberUsageRow::for_each_member(entries, &workspace.members, source_filter)
+            MemberUsageRow::for_each_member(entries, members, source_filter)
         }
     };
 
@@ -752,7 +759,7 @@ pub fn render_own_usage_solo_row(
 
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows(
-    workspace: &Workspace,
+    members: &[UsageRosterMember],
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
     source_filter: SourceFilter,
@@ -761,7 +768,7 @@ pub fn render_rows(
     app: &AppContext,
     on_filter_change: FilterChangeFn,
 ) -> Box<dyn Element> {
-    let rows = build_rows(workspace, entries, visibility, source_filter, app);
+    let rows = build_rows(members, entries, visibility, source_filter, app);
 
     let mut column = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
