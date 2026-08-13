@@ -822,12 +822,14 @@ impl TypedActionView for CodeEditorView {
         match action {
             UserTyped(content) => self.user_insert(content, ctx),
             VimUserTyped(content) => {
-                // Don't handle vim input when the find input is active
+                // Don't handle vim input when either of the find bar's text inputs (find or
+                // replace) has keyboard focus.
                 let allow_vim = match &self.find_bar {
                     Some(find_bar) => {
                         let open = find_bar.as_ref(ctx).is_open();
-                        let editable = find_bar.as_ref(ctx).is_find_input_editable(ctx);
-                        !(open && editable)
+                        let find_bar_input_focused =
+                            find_bar.as_ref(ctx).is_find_bar_text_input_focused(ctx);
+                        !(open && find_bar_input_focused)
                     }
                     None => true,
                 };

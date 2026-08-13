@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use pathfinder_geometry::vector::Vector2F;
 use unindent::Unindent;
-use vim::vim::{MotionType, VimMode};
+use vim::vim::{Direction, MotionType, VimHandler, VimMode};
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
 use warp_core::ui::appearance::Appearance;
@@ -19,6 +19,7 @@ use warpui::{App, SingletonEntity, TypedActionView, UpdateModel, ViewHandle};
 
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::code::editor::find::view::FindAction;
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction};
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::server::server_api::team::MockTeamClient;
@@ -174,6 +175,166 @@ fn scroll_top(editor: &ViewHandle<CodeEditorView>, app: &App) -> f32 {
             .scroll_top()
             .as_f32()
     })
+}
+
+#[test]
+fn test_vim_find_enter_keeps_find_input_clickable() {
+    // Regression test for the "Find in File" focus bug: after pressing Enter in the find
+    // input while vim mode is on, the input must stay focusable (and thus clickable), even
+    // though keyboard focus itself moves to the buffer.
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        let editor = add_code_editor("hello world\nhello again", &mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::ShowFindBar, ctx);
+        });
+
+        let find_bar = editor
+            .read(&app, |view, _| view.find_bar.clone())
+            .expect("find bar should be enabled");
+
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.set_find_query(ctx, "hello");
+        });
+        assert!(find_bar.read(&app, |find_bar, ctx| {
+            find_bar.is_find_bar_text_input_focused(ctx)
+        }));
+
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.simulate_enter_for_test(ctx);
+        });
+
+        assert!(find_bar.read(&app, |find_bar, _ctx| find_bar.is_open()));
+        assert!(
+            !find_bar.read(&app, |find_bar, ctx| find_bar
+                .is_find_bar_text_input_focused(ctx)),
+            "vim Enter should move keyboard focus away from the find input"
+        );
+        assert!(
+            find_bar.read(&app, |find_bar, ctx| find_bar
+                .find_input_can_be_focused_for_test(ctx)),
+            "find input must remain focusable (clickable) after vim Enter"
+        );
+    });
+}
+
+#[test]
+fn test_non_vim_find_enter_keeps_focus_in_find_input() {
+    // The non-vim Enter behavior (navigate to next match, keep focus in the find input) must
+    // be unaffected by the vim-specific fix above.
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        app.update_model(
+            &AppEditorSettings::handle(&app),
+            |settings: &mut AppEditorSettings, ctx| {
+                settings.vim_mode.set_value(false, ctx).unwrap();
+            },
+        );
+
+        let editor = add_code_editor("hello world\nhello again", &mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::ShowFindBar, ctx);
+        });
+
+        let find_bar = editor
+            .read(&app, |view, _| view.find_bar.clone())
+            .expect("find bar should be enabled");
+
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.set_find_query(ctx, "hello");
+        });
+        assert!(find_bar.read(&app, |find_bar, ctx| {
+            find_bar.is_find_bar_text_input_focused(ctx)
+        }));
+
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.simulate_enter_for_test(ctx);
+        });
+
+        assert!(
+            find_bar.read(&app, |find_bar, ctx| find_bar
+                .is_find_bar_text_input_focused(ctx)),
+            "non-vim Enter should keep focus in the find input"
+        );
+        assert!(find_bar.read(&app, |find_bar, ctx| {
+            find_bar.find_input_can_be_focused_for_test(ctx)
+        }));
+    });
+}
+
+#[test]
+fn test_vim_search_word_at_cursor_leaves_buffer_receiving_keystrokes() {
+    // Guards against a regression where routing vim key-swallowing off of focus (instead of
+    // the find input's editable/disabled state) could cause the find bar to swallow vim
+    // keystrokes even when its input was never focused (e.g. the `*`/`#` "search word under
+    // cursor" flow, which opens the find bar without focusing it).
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        let editor = add_code_editor("hello world", &mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.search_word_at_cursor(&Direction::Forward, ctx);
+        });
+
+        let find_bar = editor
+            .read(&app, |view, _| view.find_bar.clone())
+            .expect("find bar should be enabled");
+
+        assert!(find_bar.read(&app, |find_bar, _ctx| find_bar.is_open()));
+        assert!(!find_bar.read(&app, |find_bar, ctx| {
+            find_bar.is_find_bar_text_input_focused(ctx)
+        }));
+
+        // Since the find input never had focus, vim keystrokes must still reach the buffer.
+        vim_user_insert(&editor, "i", &mut app);
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Insert));
+    });
+}
+
+#[test]
+fn test_vim_focused_replace_input_blocks_vim_input_to_buffer() {
+    // Regression test: the vim key-swallowing predicate must cover the replace input too, not
+    // just the find input. When Replace is expanded and the user focuses the replace field
+    // (e.g. via Tab or a click), the find input becomes unfocused while the find bar still owns
+    // keyboard input, so vim keystrokes must not leak through to the code buffer.
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        let editor = add_code_editor("hello world", &mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::ShowFindBar, ctx);
+        });
+
+        let find_bar = editor
+            .read(&app, |view, _| view.find_bar.clone())
+            .expect("find bar should be enabled");
+
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.handle_action(&FindAction::ToggleReplaceOpen, ctx);
+            find_bar.focus_replace_input_for_test(ctx);
+        });
+
+        assert!(
+            find_bar.read(&app, |find_bar, ctx| find_bar
+                .is_find_bar_text_input_focused(ctx)),
+            "the find bar should still be considered to own keyboard input via the replace field"
+        );
+
+        // Typing while the replace field is focused must not reach the code buffer's vim state.
+        vim_user_insert(&editor, "i", &mut app);
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
 }
 
 #[test]
