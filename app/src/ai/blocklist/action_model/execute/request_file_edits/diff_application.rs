@@ -10,7 +10,7 @@ use ai::diff_validation::{
     AIRequestedCodeDiff, DiffDelta, DiffMatchFailures, DiffType, ParsedDiff, SearchAndReplace,
     V4AHunk, fuzzy_match_diffs, fuzzy_match_v4a_diffs,
 };
-use itertools::Itertools;
+use itertools::Itertools as _;
 use vec1::Vec1;
 use warpui::r#async::executor::Background;
 
@@ -97,25 +97,50 @@ impl DiffApplicationError {
                 file,
                 match_failures,
             } => {
-                use std::fmt::Write;
-                let mut message = String::new();
+                let mut parts = Vec::new();
                 if match_failures.fuzzy_match_failures > 0 {
-                    let _ = write!(message, "Could not apply all diffs to {file}.");
+                    let n = match_failures.fuzzy_match_failures;
+                    parts.push(format!(
+                        "{n} search block{} did not match any line in {file} — \
+                         either the content has changed or the search spans only part of a line \
+                         in which case the surrounding context is not unique enough. \
+                         Re-read the file and use a search string that corresponds to a \
+                         complete, unique line or provide more context to disambiguate.",
+                        if n == 1 { "" } else { "s" }
+                    ));
                 }
-
+                if match_failures.ambiguous_substring_matches > 0 {
+                    let n = match_failures.ambiguous_substring_matches;
+                    parts.push(format!(
+                        "{n} search block{} found in multiple locations in {file} — \
+                         include more surrounding context in the search string so it \
+                         uniquely identifies the target.",
+                        if n == 1 { "" } else { "s" }
+                    ));
+                }
                 if match_failures.noop_deltas > 0 {
-                    if !message.is_empty() {
-                        message.push(' ');
-                    }
-                    let _ = write!(message, "The changes to {file} were already made.");
+                    let n = match_failures.noop_deltas;
+                    parts.push(format!(
+                        "{n} change{} to {file} {} already been applied.",
+                        if n == 1 { "" } else { "s" },
+                        if n == 1 { "has" } else { "have" }
+                    ));
                 }
-                message
+                if parts.is_empty() {
+                    // Fallback (should not happen in practice)
+                    format!("Could not apply all diffs to {file}.")
+                } else {
+                    parts.join(" ")
+                }
             }
             DiffApplicationError::MissingFile { file } => {
                 format!("{file} does not exist. Is the path correct?")
             }
             DiffApplicationError::AlreadyExists { file } => {
-                format!("Could not create {file} because it already exists.")
+                format!(
+                    "Could not create {file} because it already exists. \
+                     Use search-and-replace or an update operation to modify the existing file."
+                )
             }
             DiffApplicationError::ReadFailed { file, .. } => {
                 format!("Could not read {file}")
@@ -137,18 +162,36 @@ impl DiffApplicationError {
     }
 
     /// Format a list of errors for inclusion in the agent conversation.
-    pub fn error_for_conversation(errors: &Vec1<DiffApplicationError>) -> String {
+    pub fn errors_to_conversation_message(errors: &[DiffApplicationError]) -> String {
         if errors.len() == 1 {
-            errors.first().to_conversation_message()
+            errors[0].to_conversation_message()
         } else {
             errors
                 .iter()
-                .format_with("\n", |err, f| {
-                    f(&format_args!("* {}", err.to_conversation_message()))
-                })
-                .to_string()
+                .map(|err| format!("* {}", err.to_conversation_message()))
+                .join("\n")
         }
     }
+}
+
+/// Format a non-empty list of diff-application errors for inclusion in the agent conversation.
+pub(crate) fn errors_to_conversation_message(errors: &Vec1<DiffApplicationError>) -> String {
+    DiffApplicationError::errors_to_conversation_message(errors.as_slice())
+}
+
+/// The outcome of [`apply_edits`], carrying the diffs that were successfully processed
+/// (ready to present to the user) alongside any per-file errors.
+///
+/// Splitting the result this way enables *partial success*: when a multi-file batch
+/// has some files that match and others that do not, the caller can still present the
+/// matched hunks to the user while reporting the failures back to the model so it can
+/// retry only the affected files.
+pub(crate) struct ApplyEditsOutcome {
+    /// Diffs from files where every hunk was applied successfully, ready to present
+    /// to the user for acceptance/rejection. Files that had any error are excluded.
+    pub applied_diffs: Vec<AIRequestedCodeDiff>,
+    /// Per-file errors for files where at least one hunk could not be applied.
+    pub errors: Vec<DiffApplicationError>,
 }
 
 /// Given a list of suggested edits from the server API, parse it into applicable diffs to be shown
@@ -158,6 +201,8 @@ impl DiffApplicationError {
 /// * Created files are expected to not already exist
 ///
 /// Errors are reported as telemetry, and also returned for display.
+/// On a multi-file batch, successfully-applied files are returned in [`ApplyEditsOutcome::applied_diffs`]
+/// even when some other files in the batch produced errors.
 pub(crate) async fn apply_edits<F, Fut>(
     edits: Vec<FileEdit>,
     session_context: &SessionContext,
@@ -166,7 +211,7 @@ pub(crate) async fn apply_edits<F, Fut>(
     auth_state: Arc<AuthState>,
     passive_diff: bool,
     read_file: F,
-) -> Result<Vec<AIRequestedCodeDiff>, Vec1<DiffApplicationError>>
+) -> ApplyEditsOutcome
 where
     F: Fn(String) -> Fut,
     Fut: Future<Output = FileReadResult>,
@@ -238,9 +283,61 @@ where
         );
     }
 
-    match Vec1::try_from_vec(result.errors) {
-        Ok(errors) => Err(errors),
-        Err(vec1::Size0Error) => Ok(result.diffs),
+    // Collect the file names that had any error, so we can exclude their
+    // (possibly partially-matched) diffs from `applied_diffs`.  Presenting a
+    // diff for a file that also has a reported error would be misleading — the
+    // model would see a partial apply while the error message says nothing was
+    // applied.  Only fully-successful files go into `applied_diffs`.
+    let mut failed_file_names: HashSet<&str> = result
+        .errors
+        .iter()
+        .filter_map(|e| match e {
+            DiffApplicationError::UnmatchedDiffs { file, .. }
+            | DiffApplicationError::MissingFile { file }
+            | DiffApplicationError::AlreadyExists { file }
+            | DiffApplicationError::ReadFailed { file, .. }
+            | DiffApplicationError::MultipleFileCreation { file }
+            | DiffApplicationError::MultipleFileRenames { file }
+            | DiffApplicationError::MutatedDeletedFile { file } => Some(file.as_str()),
+            DiffApplicationError::EmptyDiff
+            | DiffApplicationError::RemoteFileOperationsUnsupported => None,
+        })
+        .collect();
+
+    // Expand to cover both ends of any V4A rename-to-existing-target pair.
+    // If either the source (Delete) or the target (Update) path has an error
+    // from another operation in the batch, excluding only the erroring half
+    // would leave a half-applied rename (e.g. the source is deleted but the
+    // target write is dropped, losing content). Excluding the whole pair keeps
+    // the rename atomic.
+    //
+    // Iterate to a fixed point so chained renames are handled correctly:
+    // if a → b and b → c, an error on a must exclude b, which in turn must
+    // exclude c. A single pass would miss the transitive exclusion.
+    loop {
+        let prev_len = failed_file_names.len();
+        for (source, target) in &result.rename_pairs {
+            if failed_file_names.contains(source.as_str())
+                || failed_file_names.contains(target.as_str())
+            {
+                failed_file_names.insert(source.as_str());
+                failed_file_names.insert(target.as_str());
+            }
+        }
+        if failed_file_names.len() == prev_len {
+            break; // set is stable — no new exclusions in this pass
+        }
+    }
+
+    let applied_diffs = result
+        .diffs
+        .into_iter()
+        .filter(|diff| !failed_file_names.contains(diff.file_name.as_str()))
+        .collect();
+
+    ApplyEditsOutcome {
+        applied_diffs,
+        errors: result.errors,
     }
 }
 
@@ -263,6 +360,12 @@ struct DiffResult {
     errors: Vec<DiffApplicationError>,
     /// All warnings that occurred while applying diffs.
     warnings: Vec<DiffWarning>,
+    /// Source/target pairs from successful V4A rename-to-existing-target operations.
+    /// Each entry is (source_path, target_path). When either path in a pair has an
+    /// error from another operation in the same batch, both halves must be excluded
+    /// from `applied_diffs` together to avoid presenting a half-applied rename (e.g.
+    /// the source deletion without the target update).
+    rename_pairs: Vec<(String, String)>,
 }
 
 /// You generally want to use `apply_edits`, however, if you don't want to report telemetry or be as
@@ -787,7 +890,13 @@ async fn apply_v4a_update<F, Fut>(
             new_deltas.extend(source_deltas);
         }
 
-        // Create deletion diff for source file A
+        // Create deletion diff for source file A and update diff for target B.
+        // Record the pair so the partial-success filter can exclude both if either
+        // path has an error from another operation in this batch.
+        result
+            .rename_pairs
+            .push((file_path.clone(), rename_target.clone()));
+
         result.diffs.push(AIRequestedCodeDiff {
             file_name: file_path.clone(),
             diff_type: DiffType::deletion(source_num_lines),

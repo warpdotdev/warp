@@ -80,6 +80,7 @@ fn accept_resolves_with_computed_diffs_once_saves_complete() {
             deleted_files,
             lines_added,
             lines_removed,
+            ..
         } = future.await
         else {
             panic!("expected accept to succeed");

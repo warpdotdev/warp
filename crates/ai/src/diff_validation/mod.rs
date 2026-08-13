@@ -149,13 +149,16 @@ impl AIRequestedCodeDiff {
                 fuzzy_match_failures,
                 noop_deltas,
                 missing_line_numbers: _,
+                ambiguous_substring_matches,
             }) => {
                 let update_deltas_empty = match &self.diff_type {
                     DiffType::Update { deltas, .. } => deltas.is_empty(),
                     DiffType::Create { .. } | DiffType::Delete { .. } => false,
                 };
 
-                *fuzzy_match_failures > 0 || (*noop_deltas > 0 && update_deltas_empty)
+                *fuzzy_match_failures > 0
+                    || *ambiguous_substring_matches > 0
+                    || (*noop_deltas > 0 && update_deltas_empty)
             }
             None => false,
         }
@@ -331,6 +334,116 @@ pub struct DiffMatchFailures {
     pub noop_deltas: u8,
     /// Search blocks that are missing line numbers.
     pub missing_line_numbers: u8,
+    /// Search blocks that appear in more than one location as a raw substring
+    /// (ambiguous — a unique match could not be determined).
+    #[serde(default)]
+    pub ambiguous_substring_matches: u8,
+}
+
+/// The minimum number of **Unicode characters** a search string must contain to
+/// be eligible for the substring-match tier.  Short searches (e.g. a single
+/// ASCII letter or a few CJK ideographs) are overwhelmingly likely to produce
+/// false positives even when they appear only once, so we follow the same
+/// philosophy as the prefix-tail rescue (which requires a line-number hint) and
+/// simply reject them.  Counted with `str::chars().count()` so that multi-byte
+/// code-points (CJK, emoji, …) are each counted as one character.
+const MIN_SUBSTRING_SEARCH_LEN: usize = 10;
+
+/// Attempts to match `search` as a unique raw substring within a single file line.
+///
+/// This is the last-resort tier after all line-based matchers have failed. It handles
+/// the case where the model produced a search string that is a **sub-line fragment** of a
+/// long prose or Markdown line — a string that starts and/or ends mid-line and therefore
+/// cannot match any whole-line window. Python's `str.replace()` with a
+/// `text.count(old) == 1` guard is functionally equivalent to this tier.
+///
+/// # Guards
+/// 1. **Degenerate-search rejection** — searches with fewer than
+///    [`MIN_SUBSTRING_SEARCH_LEN`] Unicode characters, or consisting solely of
+///    whitespace, are rejected immediately (they match too broadly to be safe).
+/// 2. **Uniqueness** — the search must occur exactly once across the entire file
+///    content (same semantics as Python's `text.count(old) == 1` guard).
+/// 3. **Line-range preference** (when `line_range` is `Some`) — if the hint
+///    is within the file and the unique occurrence falls on or adjacent to
+///    (±1 line) the hinted position, that is the preferred match.  If the
+///    occurrence is farther away (e.g. because a large rewrite shifted the
+///    content), the unique file-wide match is still accepted as a fallback —
+///    uniqueness is the primary safety guard.  The hint is only used for
+///    logging to distinguish the two paths.
+///
+/// # Returns
+/// - `Ok((delta, is_noop))` when guards 1 and 2 pass and the search occurs exactly once.
+/// - `Err(count)` when the search occurs in more than one location (ambiguous).
+/// - `None` when the search does not appear anywhere or is degenerate.
+fn try_substring_match_delta(
+    search: &str,
+    replace: &str,
+    target_lines: &[&str],
+    line_range: Option<Range<usize>>,
+) -> Option<Result<(DiffDelta, bool), usize>> {
+    // Guard 1: reject degenerate searches (count Unicode characters, not bytes,
+    // so that multi-byte code-points are each counted as one character).
+    if search.chars().count() < MIN_SUBSTRING_SEARCH_LEN || search.trim().is_empty() {
+        return None;
+    }
+
+    // Collect the total number of occurrences across all lines and, if exactly
+    // one, record which line it is on.
+    let mut total_occurrences: usize = 0;
+    let mut matched_at: Option<(usize, &str)> = None;
+
+    for (i, &line) in target_lines.iter().enumerate() {
+        let occurrences = line.matches(search).count();
+        if occurrences == 0 {
+            continue;
+        }
+        total_occurrences += occurrences;
+        if total_occurrences > 1 {
+            // Guard 2 failed: ambiguous. Report the running total (may under-count
+            // if the fragment appears many times, but the caller only needs to know
+            // it is >1).
+            return Some(Err(total_occurrences));
+        }
+        matched_at = Some((i, line));
+    }
+
+    let (line_idx, file_line) = matched_at?;
+    let match_line_1indexed = line_idx + 1;
+
+    // Guard 3 (preference, not hard gate): log whether the match landed near the
+    // hinted line or was found farther away via the file-wide fallback path.  A
+    // large in-bounds rewrite can shift content away from the stale hint, and
+    // uniqueness alone is sufficient to accept the result in either case.
+    if let Some(Range { start, .. }) = &line_range {
+        let hinted_line = *start; // 1-indexed
+        if match_line_1indexed.abs_diff(hinted_line) <= 1 {
+            log::debug!(
+                "Substring-match: unique occurrence at line {} \
+                 matched within the hinted window (hint: {})",
+                match_line_1indexed,
+                hinted_line
+            );
+        } else {
+            log::debug!(
+                "Substring-match: unique occurrence at line {} \
+                 accepted via file-wide fallback (hint was {})",
+                match_line_1indexed,
+                hinted_line
+            );
+        }
+    }
+
+    // All guards passed — splice the replacement into the containing line.
+    let new_line = file_line.replacen(search, replace, 1);
+    let is_noop = new_line == file_line;
+
+    Some(Ok((
+        DiffDelta {
+            replacement_line_range: match_line_1indexed..match_line_1indexed + 1,
+            insertion: new_line,
+        },
+        is_noop,
+    )))
 }
 
 /// Fix two common issues with responses from the models that request code actions:
@@ -362,6 +475,7 @@ pub fn fuzzy_match_diffs(
     let update_deltas_empty = deltas.is_empty();
     let failures = if failures.fuzzy_match_failures > 0
         || failures.missing_line_numbers > 0
+        || failures.ambiguous_substring_matches > 0
         || (failures.noop_deltas > 0 && update_deltas_empty)
     {
         Some(failures)
@@ -513,7 +627,9 @@ fn fuzzy_match_file_diffs(
         // Find similar sections in the file content using the matching strategies.
         let fuzzy_match_line_numbers = if line_range == Some(0..0) {
             // An empty line range indicates prepending to the file.
-            line_range
+            // Clone instead of move so line_range remains accessible in the
+            // None branch below (for the substring-match proximity guard).
+            line_range.clone()
         } else {
             line_range = line_range.filter(|range| {
                 log::debug!("Parsed line range: {range:?}");
@@ -623,7 +739,50 @@ fn fuzzy_match_file_diffs(
                 });
             }
             None => {
-                failures.fuzzy_match_failures += 1;
+                // All line-based tiers failed.  Try a last-resort substring-match tier:
+                // if the search occurs as a raw substring exactly ONCE in the entire
+                // file (never spanning a line boundary), apply the replacement there.
+                // This handles sub-line fragment searches produced by the model from
+                // long prose/Markdown lines.  The uniqueness guard (exactly 1 occurrence)
+                // mirrors Python's `text.count(old) != 1` guard.
+                // Pass the post-filter line_range so the proximity guard applies
+                // only when the hint fell within the file's actual line count.
+                // When the hint was out of bounds the filter set this to None,
+                // and the tier falls back to pure uniqueness.
+                // Note: the `line_range == Some(0..0)` branch above moves
+                // `line_range`, but that branch always produces Some(0..0) and
+                // never reaches this arm, so `line_range` is still accessible.
+                match try_substring_match_delta(
+                    &search,
+                    &diff.replace,
+                    &target_lines,
+                    line_range.clone(),
+                ) {
+                    Some(Ok((delta, is_noop))) => {
+                        if is_noop {
+                            log::info!(
+                                "Ignoring substring-match diff: \
+                                 replacement is identical to the matched fragment"
+                            );
+                            failures.noop_deltas += 1;
+                        } else {
+                            log::info!(
+                                "Matched search string as unique sub-line fragment \
+                                 via substring tier"
+                            );
+                            deltas.push(delta);
+                        }
+                    }
+                    Some(Err(n)) => {
+                        log::warn!(
+                            "Substring-match ambiguous: fragment found in {n} or more locations"
+                        );
+                        failures.ambiguous_substring_matches += 1;
+                    }
+                    None => {
+                        failures.fuzzy_match_failures += 1;
+                    }
+                }
             }
         }
     }

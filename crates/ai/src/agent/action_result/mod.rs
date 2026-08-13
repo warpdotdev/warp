@@ -663,6 +663,13 @@ pub enum RequestFileEditsResult {
         deleted_files: Vec<String>,
         lines_added: usize,
         lines_removed: usize,
+        /// Names of files whose hunks could not be applied in a partial-success
+        /// batch, with a short reason for each.  `None` when every requested
+        /// file was fully applied.  Stored here rather than appended to `diff`
+        /// because `diff` is a legacy field zeroed on conversation reload
+        /// (`convert_conversation.rs`) and rendered inside a diff fence by the
+        /// driver output formatter.
+        partial_errors: Option<String>,
     },
     Cancelled,
     /// Diff application failed.
@@ -709,13 +716,22 @@ impl Display for RequestFileEditsResult {
             RequestFileEditsResult::Success {
                 diff,
                 updated_files,
+                partial_errors,
                 ..
             } => {
                 write!(
                     f,
                     "File edits completed:\n\tDiff:\n{diff}\n\tUpdatedFiles: [{}]",
                     updated_files.iter().format(", ")
-                )
+                )?;
+                if let Some(errors) = partial_errors {
+                    write!(
+                        f,
+                        "\n\nNote: the following files could not be edited \
+                         (please retry only those):\n{errors}"
+                    )?;
+                }
+                Ok(())
             }
             RequestFileEditsResult::Cancelled => write!(f, "File edits cancelled"),
             RequestFileEditsResult::DiffApplicationFailed { error } => {

@@ -5,10 +5,9 @@ mod telemetry;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use ai::diff_validation::AIRequestedCodeDiff;
 use apply_diff_model::ApplyDiffModel;
-use diff_application::DiffApplicationError;
-pub(crate) use diff_application::{FileReadResult, apply_edits};
+pub(crate) use diff_application::{ApplyEditsOutcome, FileReadResult, apply_edits};
+use diff_application::{DiffApplicationError, errors_to_conversation_message};
 use futures::FutureExt;
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
@@ -43,8 +42,12 @@ pub struct RequestFileEditsExecutor {
     apply_diff_model: ModelHandle<ApplyDiffModel>,
     /// The registered diff storage surface for each pending action.
     diff_storages: HashMap<AIAgentActionId, Box<dyn RegisteredDiffStorage>>,
-    /// Set of action IDs where diff application failed.
+    /// Set of action IDs where diff application failed completely (no diffs were applied).
     diff_application_failures: HashMap<AIAgentActionId, Vec1<DiffApplicationError>>,
+    /// Error message for actions where some files applied successfully but others failed.
+    /// Unlike `diff_application_failures`, storage has been seeded with the successful
+    /// diffs; this message is appended to the result after the user accepts them.
+    diff_application_partial_errors: HashMap<AIAgentActionId, String>,
     terminal_view_id: EntityId,
 }
 
@@ -60,6 +63,7 @@ impl RequestFileEditsExecutor {
             apply_diff_model,
             diff_storages: HashMap::new(),
             diff_application_failures: HashMap::new(),
+            diff_application_partial_errors: HashMap::new(),
             terminal_view_id,
         }
     }
@@ -102,6 +106,9 @@ impl RequestFileEditsExecutor {
         // from the LLM.
         // If we don't do this, a failed diff application will block execution of the entire AI conversation
         // without any possibility of recovery.
+        //
+        // Note: partial-success batches are NOT auto-executed here — they contain successful diffs
+        // that still need to go through the normal `can_write_files` / user-acceptance gate.
         if self
             .diff_application_failures
             .contains_key(&input.action.id)
@@ -130,6 +137,7 @@ impl RequestFileEditsExecutor {
     pub(super) fn discard_pending(&mut self, action_id: &AIAgentActionId) {
         self.diff_storages.remove(action_id);
         self.diff_application_failures.remove(action_id);
+        self.diff_application_partial_errors.remove(action_id);
     }
 
     pub(super) fn execute(
@@ -150,11 +158,12 @@ impl RequestFileEditsExecutor {
             return ActionExecution::InvalidAction;
         };
 
-        // If diff application failed, early exit.
+        // If diff application failed completely (no files were applied), early exit so the
+        // model receives the error immediately without waiting for user interaction.
         if let Some(errors) = self.diff_application_failures.remove(id) {
             return ActionExecution::Sync(AIAgentActionResultType::RequestFileEdits(
                 RequestFileEditsResult::DiffApplicationFailed {
-                    error: DiffApplicationError::error_for_conversation(&errors),
+                    error: errors_to_conversation_message(&errors),
                 },
             ));
         }
@@ -167,6 +176,10 @@ impl RequestFileEditsExecutor {
             return ActionExecution::NotReady;
         };
         let result_future = storage.accept_and_save(ctx);
+
+        // Capture partial errors so we can append them to the result after the successful
+        // diffs have been accepted by the user.
+        let partial_error_msg = self.diff_application_partial_errors.remove(id);
 
         let identifiers = self
             .generate_ai_identifiers(&input.conversation_id, id, ctx)
@@ -199,6 +212,36 @@ impl RequestFileEditsExecutor {
                     ctx
                 );
             }
+
+            // For a partial-success batch: some files were applied (shown to the user above)
+            // but others failed. Surface the partial-failure notice through the dedicated
+            // `partial_errors` field on Success rather than appending it to `diff`. The
+            // `diff` field is a legacy field that is zeroed on conversation reload and is
+            // rendered inside a ```diff fence by the driver output formatter; `partial_errors`
+            // survives the round-trip and is displayed as plain prose by the Display impl.
+            // When accept_and_save returned non-Success (e.g. Cancelled), fall through.
+            if let Some(error_msg) = partial_error_msg
+                && let RequestFileEditsResult::Success {
+                    diff,
+                    updated_files,
+                    deleted_files,
+                    lines_added,
+                    lines_removed,
+                    ..
+                } = result
+            {
+                return AIAgentActionResultType::RequestFileEdits(
+                    RequestFileEditsResult::Success {
+                        diff,
+                        updated_files,
+                        deleted_files,
+                        lines_added,
+                        lines_removed,
+                        partial_errors: Some(error_msg),
+                    },
+                );
+            }
+
             AIAgentActionResultType::RequestFileEdits(result)
         })
     }
@@ -247,11 +290,11 @@ impl RequestFileEditsExecutor {
 
         ctx.spawn(
             async move {
-                let applied_diffs = apply_future.await;
-                (applied_diffs, id, tx)
+                let outcome = apply_future.await;
+                (outcome, id, tx)
             },
-            |me, (diffs, id, tx), ctx| {
-                me.on_diffs_applied(diffs, id, tx, ctx);
+            |me, (outcome, id, tx), ctx| {
+                me.on_diffs_applied(outcome, id, tx, ctx);
             },
         );
 
@@ -263,7 +306,7 @@ impl RequestFileEditsExecutor {
 
     fn on_diffs_applied(
         &mut self,
-        applied_diffs: Result<Vec<AIRequestedCodeDiff>, Vec1<DiffApplicationError>>,
+        outcome: ApplyEditsOutcome,
         id: AIAgentActionId,
         tx: oneshot::Sender<()>,
         ctx: &mut ModelContext<Self>,
@@ -278,24 +321,49 @@ impl RequestFileEditsExecutor {
             return;
         };
 
-        let applied_diffs = match applied_diffs {
-            Ok(diffs) if !diffs.is_empty() => diffs,
-            Ok(_) => {
-                // We didn't generate any diffs--consider this a failure.
-                log::warn!("No diffs generated");
+        let ApplyEditsOutcome {
+            applied_diffs,
+            errors,
+        } = outcome;
+
+        if applied_diffs.is_empty() && errors.is_empty() {
+            // We didn't generate any diffs and had no errors--consider this a failure.
+            log::warn!("No diffs generated");
+            self.diff_application_failures
+                .insert(id, vec1![DiffApplicationError::EmptyDiff]);
+            return;
+        }
+
+        if applied_diffs.is_empty() {
+            // Every file in the batch failed; report all errors immediately.
+            let Some(errors_nonempty) = Vec1::try_from_vec(errors).ok() else {
+                // Should not happen given the check above, but be safe.
                 self.diff_application_failures
                     .insert(id, vec1![DiffApplicationError::EmptyDiff]);
                 return;
-            }
-            Err(err) => {
-                safe_warn!(
-                    safe: ("Failed to generate diffs"),
-                    full: ("Failed to generate diffs {err:?}")
-                );
-                self.diff_application_failures.insert(id, err);
-                return;
-            }
-        };
+            };
+            safe_warn!(
+                safe: ("Failed to generate diffs"),
+                full: ("Failed to generate diffs {errors_nonempty:?}")
+            );
+            self.diff_application_failures.insert(id, errors_nonempty);
+            return;
+        }
+
+        // At least some files applied successfully. If there were also errors
+        // (partial-success batch), build a combined message so the model knows
+        // which files succeeded and which to retry.
+        if !errors.is_empty() {
+            let succeeded_names: Vec<&str> =
+                applied_diffs.iter().map(|d| d.file_name.as_str()).collect();
+            let success_prefix = format!(
+                "Applied edits to {} successfully. ",
+                succeeded_names.join(", ")
+            );
+            let error_details = DiffApplicationError::errors_to_conversation_message(&errors);
+            self.diff_application_partial_errors
+                .insert(id.clone(), format!("{success_prefix}{error_details}"));
+        }
 
         let current_working_directory = self
             .active_session

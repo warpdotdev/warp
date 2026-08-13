@@ -8,13 +8,13 @@
 //! - **Local**: calls [`apply_edits`] with a `std::fs`-backed closure.
 //! - **Remote**: calls [`apply_edits`] with a [`RemoteServerClient`]-backed closure.
 
-use ai::diff_validation::AIRequestedCodeDiff;
 use futures::FutureExt;
-use vec1::Vec1;
 use warpui::r#async::BoxFuture;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
-use super::diff_application::{DiffApplicationError, FileReadResult, apply_edits};
+use super::diff_application::{
+    ApplyEditsOutcome, DiffApplicationError, FileReadResult, apply_edits,
+};
 use crate::ai::agent::{AIIdentifiers, FileEdit};
 use crate::ai::blocklist::SessionContext;
 use crate::auth::AuthStateProvider;
@@ -44,7 +44,7 @@ impl ApplyDiffModel {
         ai_identifiers: &AIIdentifiers,
         passive_diff: bool,
         ctx: &mut ModelContext<Self>,
-    ) -> BoxFuture<'static, Result<Vec<AIRequestedCodeDiff>, Vec1<DiffApplicationError>>> {
+    ) -> BoxFuture<'static, ApplyEditsOutcome> {
         let session_context = SessionContext::from_session(self.active_session.as_ref(ctx), ctx);
         let background_executor = ctx.background_executor();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
@@ -73,9 +73,10 @@ impl ApplyDiffModel {
                         )
                         .await
                     }
-                    None => Err(vec1::vec1![
-                        DiffApplicationError::RemoteFileOperationsUnsupported
-                    ]),
+                    None => ApplyEditsOutcome {
+                        applied_diffs: Vec::new(),
+                        errors: vec![DiffApplicationError::RemoteFileOperationsUnsupported],
+                    },
                 }
             } else {
                 apply_edits(
