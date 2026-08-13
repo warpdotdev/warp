@@ -1120,6 +1120,41 @@ fn test_fold_nearest_bracket_block_and_unfold() {
     });
 }
 
+#[test]
+fn manual_fold_stays_hidden_after_edit() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let editor = mock_model(
+            &mut app,
+            "fn main() {\n    let x = 1;\n}\n",
+            ContentVersion::new(),
+        );
+        layout_model(&mut app, &editor).await;
+
+        editor.update(&mut app, |editor, ctx| {
+            editor.cursor_at(CharOffset::from(18), ctx);
+            editor.fold(ctx);
+            editor.cursor_at(CharOffset::from(1), ctx);
+            editor.insert("// ", EditOrigin::UserTyped, ctx);
+        });
+
+        editor.read(&app, |editor, ctx| {
+            let buffer = editor.content.as_ref(ctx);
+            assert_eq!(
+                editor
+                    .hidden_ranges(ctx)
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                vec![
+                    buffer.line_start(ContentLineCount::from(2))
+                        ..buffer.line_start(ContentLineCount::from(3))
+                ]
+            );
+        });
+    });
+}
+
 /// The TUI diff pipeline: `new_tui` + seed + `apply_diffs` +
 /// `hide_lines_outside_of_active_diff` + `expand_diffs` must land removed-line
 /// ghosts in `CharCellState` and hidden line ranges in the render state, even
