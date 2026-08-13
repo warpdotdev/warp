@@ -2,6 +2,7 @@ use warpui::AppContext;
 
 use crate::channel::ChannelState;
 use crate::server::ids::ServerId;
+use crate::workspaces::workspace::Workspace;
 
 /// Shared admin panel actions and utilities for settings views
 pub struct AdminActions;
@@ -25,6 +26,19 @@ impl AdminActions {
     pub fn open_workspace_admin_panel(ctx: &mut AppContext) {
         let url = Self::admin_panel_link_for_workspace();
         ctx.open_url(&url);
+    }
+
+    /// Whether an admin panel entry point should open the workspace-scoped panel
+    /// instead of a team-scoped one. Workspace admins are only routed there once
+    /// their plan has native workspaces enabled.
+    pub fn should_use_workspace_admin_panel(
+        workspace: Option<&Workspace>,
+        current_user_email: &str,
+    ) -> bool {
+        workspace.is_some_and(|workspace| {
+            workspace.is_workspace_admin(current_user_email)
+                && workspace.is_native_workspaces_enabled()
+        })
     }
 
     /// Open the support email link

@@ -183,6 +183,7 @@ pub enum TeamsPageAction {
     OpenAdminPanel {
         team_uid: ServerId,
     },
+    OpenWorkspaceAdminPanel,
     ContactSupport,
     ContactSales,
     /// This action is for toggling the discoverability checkbox before a team is created.
@@ -228,6 +229,7 @@ impl TeamsPageAction {
                 | GenerateUpgradeLink { .. }
                 | GenerateStripeBillingPortalLink { .. }
                 | OpenAdminPanel { .. }
+                | OpenWorkspaceAdminPanel
                 | ContactSupport
                 | ContactSales
                 | ToggleTeamDiscoverabilityBeforeCreation
@@ -251,7 +253,7 @@ impl From<&TeamsPageAction> for LoginGatedFeature {
             SendEmailInvites { .. } => "Send Email Invites",
             GenerateUpgradeLink { .. } => "Generate Upgrade Link",
             GenerateStripeBillingPortalLink { .. } => "Generate Stripe Billing Portal Link",
-            OpenAdminPanel { .. } => "Open Admin Panel",
+            OpenAdminPanel { .. } | OpenWorkspaceAdminPanel => "Open Admin Panel",
             ContactSupport => "Contact Support",
             ContactSales => "Contact Sales",
             ToggleTeamDiscoverability { .. } | ToggleTeamDiscoverabilityBeforeCreation => {
@@ -586,6 +588,9 @@ impl TypedActionView for TeamsPageView {
             }
             TeamsPageAction::OpenAdminPanel { team_uid } => {
                 AdminActions::open_admin_panel(*team_uid, ctx);
+            }
+            TeamsPageAction::OpenWorkspaceAdminPanel => {
+                AdminActions::open_workspace_admin_panel(ctx);
             }
             TeamsPageAction::ContactSupport => {
                 AdminActions::contact_support(ctx);
@@ -2251,9 +2256,14 @@ impl TeamsWidget {
             .set_padding(Coords::uniform(0.).top(4.).right(5.));
 
         // 1) Team name header
+        let use_workspace_admin_panel = AdminActions::should_use_workspace_admin_panel(
+            UserWorkspaces::as_ref(app).current_workspace(),
+            &current_user_email,
+        );
         main_content.add_child(self.render_header(
             has_admin_permissions,
             team_metadata,
+            use_workspace_admin_panel,
             view,
             appearance,
         ));
@@ -2373,6 +2383,7 @@ impl TeamsWidget {
         &self,
         has_admin_permissions: bool,
         team: &Team,
+        use_workspace_admin_panel: bool,
         view: &TeamsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -2439,7 +2450,11 @@ impl TeamsWidget {
 
         // Upgrade / billing links
         if has_admin_permissions {
-            team_name_header.add_child(self.render_billing_links(team, appearance));
+            team_name_header.add_child(self.render_billing_links(
+                team,
+                use_workspace_admin_panel,
+                appearance,
+            ));
         }
 
         team_name_header.finish()
@@ -2504,6 +2519,7 @@ impl TeamsWidget {
     fn render_admin_panel_button(
         &self,
         team_uid: ServerId,
+        use_workspace_admin_panel: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         appearance
@@ -2525,12 +2541,21 @@ impl TeamsWidget {
             )
             .build()
             .on_click(move |ctx, _, _| {
-                ctx.dispatch_typed_action(TeamsPageAction::OpenAdminPanel { team_uid });
+                if use_workspace_admin_panel {
+                    ctx.dispatch_typed_action(TeamsPageAction::OpenWorkspaceAdminPanel);
+                } else {
+                    ctx.dispatch_typed_action(TeamsPageAction::OpenAdminPanel { team_uid });
+                }
             })
             .finish()
     }
 
-    fn render_billing_links(&self, team: &Team, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_billing_links(
+        &self,
+        team: &Team,
+        use_workspace_admin_panel: bool,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let mut billing_links = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::End)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -2578,9 +2603,13 @@ impl TeamsWidget {
         }
 
         billing_links.add_child(
-            Container::new(self.render_admin_panel_button(team_uid, appearance))
-                .with_margin_left(12.)
-                .finish(),
+            Container::new(self.render_admin_panel_button(
+                team_uid,
+                use_workspace_admin_panel,
+                appearance,
+            ))
+            .with_margin_left(12.)
+            .finish(),
         );
 
         billing_links.finish()
@@ -4447,6 +4476,21 @@ impl SettingsWidget for TeamsWidget {
 
         stack.finish()
     }
+}
+
+#[cfg(test)]
+#[test]
+pub fn test_workspace_admin_panel_action_is_login_gated_like_the_team_one() {
+    let team_scoped = TeamsPageAction::OpenAdminPanel {
+        team_uid: ServerId::from(1),
+    };
+    let workspace_scoped = TeamsPageAction::OpenWorkspaceAdminPanel;
+
+    assert!(workspace_scoped.blocked_for_anonymous_user());
+
+    let team_scoped_feature: LoginGatedFeature = (&team_scoped).into();
+    let workspace_scoped_feature: LoginGatedFeature = (&workspace_scoped).into();
+    assert_eq!(workspace_scoped_feature, team_scoped_feature);
 }
 
 #[cfg(test)]
