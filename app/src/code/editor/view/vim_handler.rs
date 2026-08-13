@@ -528,7 +528,8 @@ impl VimHandler for CodeEditorView {
             find_bar.update(ctx, |find_bar, ctx| {
                 find_bar.set_find_query(ctx, &word);
                 find_bar.set_open(true);
-                // Disable the find input; the search is already defined.
+                // The search is already defined, so make the find input non-editable (but still
+                // clickable, so the user can click it to edit the query again).
                 find_bar.set_find_input_editable(ctx, false);
             });
 

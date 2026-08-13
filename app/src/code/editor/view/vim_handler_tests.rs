@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use pathfinder_geometry::vector::Vector2F;
 use unindent::Unindent;
-use vim::vim::{MotionType, VimMode};
+use vim::vim::{Direction, MotionType, VimHandler, VimMode};
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
 use warp_core::ui::appearance::Appearance;
@@ -20,6 +20,7 @@ use warpui::{App, SingletonEntity, TypedActionView, UpdateModel, ViewHandle};
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction};
+use crate::editor::{EditorAction, InteractionState};
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
@@ -2123,5 +2124,132 @@ fn test_vim_indent_dot_repeat_repeats_last_indent() {
         vim_user_insert(&editor, ".", &mut app);
         assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2\n    line 3");
         assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_enter_leaves_find_input_clickable() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("hello world", &mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::ShowFindBar, ctx);
+        });
+        let find_bar = editor
+            .read(&app, |view, _ctx| view.find_bar.clone())
+            .expect("find bar should exist");
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.set_find_query(ctx, "hello");
+        });
+        let find_editor = find_bar.read(&app, |find_bar, _ctx| find_bar.find_editor_for_test());
+
+        // Commit the query with Enter, as vim mode does: focus returns to the main editor and
+        // the field becomes non-editable.
+        find_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(&EditorAction::Enter, ctx);
+        });
+
+        find_bar.read(&app, |find_bar, ctx| {
+            assert!(find_bar.is_open());
+            assert!(!find_bar.is_find_input_editable(ctx));
+        });
+        find_editor.read(&app, |editor, ctx| {
+            // `Selectable` (not `Disabled`) is what keeps the field clickable: `can_select`
+            // being true is exactly what lets `EditorElement::mouse_down` dispatch
+            // `EditorAction::Focus` on a click.
+            assert_eq!(editor.interaction_state(ctx), InteractionState::Selectable);
+            assert!(editor.can_select(ctx));
+            assert!(!editor.can_edit(ctx));
+        });
+
+        // Simulate the click by dispatching the same action `mouse_down` would.
+        find_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(&EditorAction::Focus, ctx);
+        });
+
+        find_editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.interaction_state(ctx), InteractionState::Editable);
+            assert!(editor.can_edit(ctx));
+        });
+        find_bar.read(&app, |find_bar, ctx| {
+            assert!(find_bar.is_find_input_editable(ctx));
+        });
+    });
+}
+
+#[test]
+fn test_vim_word_search_leaves_find_input_clickable() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        // Cursor starts at the buffer start, i.e. on "hello".
+        let editor = add_code_editor("hello world", &mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.search_word_at_cursor(&Direction::Forward, ctx);
+        });
+
+        let find_bar = editor
+            .read(&app, |view, _ctx| view.find_bar.clone())
+            .expect("find bar should exist");
+        find_bar.read(&app, |find_bar, ctx| {
+            assert!(find_bar.is_open());
+            assert!(!find_bar.is_find_input_editable(ctx));
+        });
+
+        let find_editor = find_bar.read(&app, |find_bar, _ctx| find_bar.find_editor_for_test());
+        find_editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.interaction_state(ctx), InteractionState::Selectable);
+            assert!(editor.can_select(ctx));
+        });
+
+        // A click restores editability, same as after a vim Enter commit.
+        find_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(&EditorAction::Focus, ctx);
+        });
+
+        find_editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.interaction_state(ctx), InteractionState::Editable);
+        });
+    });
+}
+
+#[test]
+fn test_non_vim_enter_keeps_find_input_editable_and_focused() {
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        // Non-vim behavior should be unaffected by the click-to-focus fix: Enter advances to
+        // the next match and keeps focus in the field.
+        app.update_model(
+            &AppEditorSettings::handle(&app),
+            |settings: &mut AppEditorSettings, ctx| {
+                settings.vim_mode.set_value(false, ctx).unwrap();
+            },
+        );
+
+        let editor = add_code_editor("hello world hello", &mut app);
+        editor.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::ShowFindBar, ctx);
+        });
+        let find_bar = editor
+            .read(&app, |view, _ctx| view.find_bar.clone())
+            .expect("find bar should exist");
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.set_find_query(ctx, "hello");
+        });
+        let find_editor = find_bar.read(&app, |find_bar, _ctx| find_bar.find_editor_for_test());
+
+        find_editor.update(&mut app, |editor, ctx| {
+            editor.handle_action(&EditorAction::Enter, ctx);
+        });
+
+        find_editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.interaction_state(ctx), InteractionState::Editable);
+            assert!(editor.is_focused());
+        });
     });
 }

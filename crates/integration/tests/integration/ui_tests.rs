@@ -346,6 +346,10 @@ integration_tests! {
     test_code_editor_line_numbers_default_to_absolute,
     test_code_editor_relative_line_numbers_follow_cursor,
 
+    // Find in File click-to-focus tests
+    test_vim_enter_leaves_find_query_editor_clickable,
+    test_vim_word_search_leaves_find_query_editor_clickable,
+
     // AI document tests
     test_copy_ai_document_as_markdown_from_overflow_menu,
 

@@ -2466,6 +2466,13 @@ pub fn code_text_styles(
 
 #[cfg(feature = "integration_tests")]
 impl CodeEditorView {
+    /// Returns a handle to the code editor's find bar, if it supports find/replace, for tests
+    /// that need to drive or inspect its state (e.g. clicking the query field to verify it
+    /// regains focus after a Vim commit).
+    pub fn find_bar_for_test(&self) -> Option<ViewHandle<Find>> {
+        self.find_bar.clone()
+    }
+
     pub fn open_goto_line_for_test(&mut self, ctx: &mut ViewContext<Self>) {
         self.show_goto_line(ctx);
     }

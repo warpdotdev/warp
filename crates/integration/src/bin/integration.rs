@@ -472,6 +472,10 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_code_editor_line_numbers_default_to_absolute);
     register_test!(test_code_editor_relative_line_numbers_follow_cursor);
 
+    // Find in File click-to-focus tests
+    register_test!(test_vim_enter_leaves_find_query_editor_clickable);
+    register_test!(test_vim_word_search_leaves_find_query_editor_clickable);
+
     // AI document tests
     register_test!(test_copy_ai_document_as_markdown_from_overflow_menu);
 
