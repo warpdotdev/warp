@@ -68,7 +68,7 @@ fn test_non_workspace_admin_keeps_team_panel() {
         MEMBER_EMAIL,
     ));
 
-    // A team admin who isn't a member of the workspace roster at all.
+    // A viewer absent from the workspace roster.
     assert!(!AdminActions::should_use_workspace_admin_panel(
         Some(&workspace(MembershipRole::Owner, true)),
         "someone-else@warp.dev",
