@@ -9,6 +9,7 @@ use std::sync::mpsc::SyncSender;
 
 use instant::Instant;
 use itertools::Itertools;
+use warpui::r#async::SpawnedFutureHandle;
 use lazy_static::lazy_static;
 use markdown_parser::FormattedTextFragment;
 use parking_lot::FairMutex;
@@ -998,36 +999,39 @@ pub struct PaneGroup {
 
 /// A cloud orchestration parent whose direct children (per the server's
 /// `?ancestor_run_id=` listing) have not yet all materialized as local child
-/// conversations.
+/// conversations, or whose parent run isn't yet confirmed terminal (so more
+/// children could still appear).
 struct PendingParentChildSeed {
     parent_conversation_id: AIConversationId,
     /// Direct children reported by the last successful ancestor-list fetch,
     /// excluding the parent itself. `None` until the first successful fetch
-    /// completes. This is a one-shot catch-up seed, not a live poller (SSE
-    /// covers children spawned afterward), so once populated,
-    /// `process_pending_parent_child_seeds` re-drives reuse this list instead
-    /// of re-issuing the `?ancestor_run_id=` request — all that's left to
-    /// wait on is each child's own task-cache resolution.
+    /// completes.
     known_child_task_ids: Option<Vec<AmbientAgentTaskId>>,
-    /// Coalescing/backoff state for the ancestor-list fetch itself.
-    fetch_state: ParentChildSeedFetchState,
-}
-
-/// Mirrors `AgentConversationsModel`'s per-task fetch-state guard so a given
-/// parent never has more than one `?ancestor_run_id=` request in flight, and
-/// a failed fetch backs off before the next `TasksUpdated` re-drive retries
-/// it.
-#[derive(Debug, Clone, Copy)]
-enum ParentChildSeedFetchState {
-    /// No fetch is running and none has failed recently.
-    Idle,
-    /// A fetch is currently outstanding.
-    InFlight,
-    /// The fetch failed with a transient error; back off briefly before
-    /// retrying. A permanent (non-transient) failure instead removes the
-    /// pending entry entirely (see `finish_seed_child_conversations_from_task`),
-    /// since retrying blindly can't succeed until something external changes.
-    TransientlyFailed { at: Instant },
+    /// Whether the last successful fetch found the parent's own task record
+    /// (which the ancestor-list endpoint is documented to include) already
+    /// in a terminal run state. While `false`, re-drives keep re-listing on
+    /// a bounded cadence instead of only reacting to `TasksUpdated`, since
+    /// this passive/restore path has no SSE coverage for children spawned
+    /// after the last snapshot (unlike the live viewer's ancestor stream).
+    parent_confirmed_terminal: bool,
+    /// True while an ancestor-list fetch for this parent is outstanding.
+    fetch_in_flight: bool,
+    /// When the most recent fetch attempt (successful or not) was
+    /// dispatched. Throttles `spawn_ancestor_list_fetch_if_needed` to at
+    /// most one dispatch per `PENDING_PARENT_CHILD_SEED_REPOLL_INTERVAL`,
+    /// regardless of how often `TasksUpdated` or the self-scheduled repoll
+    /// timer re-drive this parent.
+    last_fetch_attempt_at: Option<Instant>,
+    /// Consecutive successful fetches whose response didn't include the
+    /// parent's own task record. Bounds giving up on a parent that can
+    /// never be confirmed terminal (e.g. an ACL edge case, or an older
+    /// server that doesn't echo the parent back), so this can never repeat
+    /// forever. Reset to 0 by any response that does include the parent's
+    /// record, regardless of whether it's terminal yet — an ordinary
+    /// long-running parent is not bounded by this counter.
+    consecutive_parent_record_misses: u32,
+    /// Handle for the currently scheduled repoll timer, if any.
+    repoll_handle: Option<SpawnedFutureHandle>,
 }
 
 /// Origin metadata for a split-off child agent tab; used to re-adopt the
@@ -4707,12 +4711,21 @@ impl PaneGroup {
             self.discard_pane(child_pane_id, ctx);
         }
         // Drop any pending parent seed associated with the view being removed
-        // so the re-drive subscription doesn't fire for a closed pane.
-        self.pending_parent_child_seeds.retain(|_, seed| {
-            BlocklistAIHistoryModel::as_ref(ctx)
-                .terminal_surface_id_for_conversation(&seed.parent_conversation_id)
-                .is_some_and(|tv_id| tv_id != parent_terminal_view_id)
-        });
+        // so the re-drive subscription (and any scheduled repoll timer)
+        // doesn't fire for a closed pane.
+        let parent_task_ids_to_remove: Vec<AmbientAgentTaskId> = self
+            .pending_parent_child_seeds
+            .iter()
+            .filter(|(_, seed)| {
+                BlocklistAIHistoryModel::as_ref(ctx)
+                    .terminal_surface_id_for_conversation(&seed.parent_conversation_id)
+                    .is_some_and(|tv_id| tv_id == parent_terminal_view_id)
+            })
+            .map(|(parent_task_id, _)| *parent_task_id)
+            .collect();
+        for parent_task_id in parent_task_ids_to_remove {
+            self.remove_pending_parent_child_seed(parent_task_id);
+        }
     }
 
     /// Permanently discards the pane backing a child agent conversation.
