@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable, MainAxisAlignment,
@@ -294,6 +295,25 @@ pub fn format_credits(credits: f32) -> String {
     } else {
         format!("{credits:.1} credits")
     }
+}
+
+/// Formats a credit count together with its real dollar cost, e.g.
+/// `"20 credits ($0.36)"`, gated by `FeatureFlag::PricingTransparency`.
+///
+/// When the flag is disabled, returns exactly [`format_credits`] with no
+/// dollar suffix, so flag-off output stays byte-identical to today's. When
+/// the flag is enabled but `cost_in_cents` is `None` (no cost baseline is
+/// available for this figure — never coerced to zero), the dollar figure is
+/// gracefully omitted rather than showing "$0.00".
+pub fn format_credits_with_cost(credits: f32, cost_in_cents: Option<f32>) -> String {
+    let credits_text = format_credits(credits);
+    if !FeatureFlag::PricingTransparency.is_enabled() {
+        return credits_text;
+    }
+    let Some(cost_in_cents) = cost_in_cents else {
+        return credits_text;
+    };
+    format!("{credits_text} (${:.2})", cost_in_cents / 100.0)
 }
 
 /// Renders a secondary button with an MCP/skill provider icon and a text label.

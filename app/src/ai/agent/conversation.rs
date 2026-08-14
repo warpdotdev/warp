@@ -790,6 +790,18 @@ impl AIConversation {
         self.conversation_usage_metadata.platform_credits_spent = 0.0;
     }
 
+    /// Test-only helper that sets (or clears) the conversation's dollar-cost
+    /// baseline directly, mirroring what `set_server_metadata` would derive
+    /// from a real snapshot. Used by unit tests that exercise downstream
+    /// cost-aware logic (e.g. the orchestration credit rollup's dollar
+    /// figure) without wiring up a full server metadata snapshot.
+    #[cfg(test)]
+    pub(crate) fn set_cost_in_cents_for_test(&mut self, cost_in_cents: Option<f32>) {
+        self.total_provider_cost_in_cents = cost_in_cents;
+        self.conversation_usage_metadata
+            .total_provider_cost_in_cents = cost_in_cents;
+    }
+
     /// Test-only helper that simulates the root-task upgrade performed by the
     /// `Action::CreateTask` branch of `apply_client_action` when the server
     /// confirms the root for a newly started conversation. Replaces the
