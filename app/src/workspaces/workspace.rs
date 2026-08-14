@@ -54,6 +54,11 @@ pub struct Workspace {
     pub is_eligible_for_discovery: bool,
     pub members: Vec<WorkspaceMember>,
     pub total_requests_used_since_last_refresh: i32,
+    /// Whether workspace member roles are managed independently from team roles for
+    /// this workspace, i.e. native workspaces are enabled for the workspace AND the
+    /// server-wide workspace role sync detachment feature is on. This is the
+    /// server-computed source of truth; see [`Workspace::is_workspace_role_detachment_enabled`].
+    pub native_workspaces_role_detachment_enabled: bool,
 }
 
 impl Workspace {
@@ -81,6 +86,9 @@ impl Workspace {
             is_eligible_for_discovery: false,
             members: Default::default(),
             total_requests_used_since_last_refresh: 0,
+            // Conservative default: treat cached workspaces as not detached until a
+            // live fetch confirms otherwise, matching prod's default today.
+            native_workspaces_role_detachment_enabled: false,
         }
     }
 
@@ -102,6 +110,15 @@ impl Workspace {
 
     pub fn is_native_workspaces_admin(&self, user_email: &str) -> bool {
         self.is_workspace_admin(user_email) && self.is_native_workspaces_enabled()
+    }
+    /// Whether workspace member roles are actually managed independently from team
+    /// roles for this workspace, i.e. native workspaces are enabled AND the
+    /// server-wide workspace role sync detachment feature is on. When false, a
+    /// member's workspace role is just a mirror of their team role (see
+    /// `applyTeamMemberRole` in warp-server's `logic/team.go`), so callers must not
+    /// treat it as an independently-set workspace admin/owner role.
+    pub fn is_workspace_role_detachment_enabled(&self) -> bool {
+        self.native_workspaces_role_detachment_enabled
     }
 
     pub fn resolve_usage_visibility(&self, is_admin: bool) -> UsageVisibility {

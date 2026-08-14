@@ -1382,6 +1382,8 @@ impl From<GqlWorkspace> for Workspace {
                 .collect(),
             total_requests_used_since_last_refresh: gql_workspace
                 .total_requests_used_since_last_refresh,
+            native_workspaces_role_detachment_enabled: gql_workspace
+                .native_workspaces_role_detachment_enabled,
         }
     }
 }

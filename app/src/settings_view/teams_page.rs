@@ -1739,11 +1739,12 @@ impl TeamsPageView {
     /// `workspace` is the current workspace, when known. A workspace admin gets
     /// the same team-admin powers a team admin has, and a member's workspace
     /// role supersedes their team role's chip. This is only derived when
-    /// `workspace.is_native_workspaces_enabled()`: on plans without native
-    /// workspaces, team and workspace roles are always mirrored 1:1, so a team
-    /// admin's workspace role would trivially equal Admin too, and deriving
-    /// from it here would be a no-op that could misclassify a synced team
-    /// admin as workspace-admin-derived.
+    /// `workspace.is_workspace_role_detachment_enabled()`: native workspaces
+    /// enabled alone is not enough, since workspace roles are still mirrored
+    /// 1:1 from team roles until the server's workspace role sync detachment
+    /// is also on (see `Workspace::is_workspace_role_detachment_enabled`).
+    /// Deriving from a merely-native, still-synced workspace would misclassify
+    /// every mirrored team admin/owner as workspace-admin-derived.
     fn team_to_item_list(
         team: &Team,
         current_user_email: &str,
@@ -1751,7 +1752,7 @@ impl TeamsPageView {
     ) -> Vec<Item> {
         let mut combined = Vec::new();
         let workspace_roles_are_independent =
-            workspace.is_some_and(Workspace::is_native_workspaces_enabled);
+            workspace.is_some_and(Workspace::is_workspace_role_detachment_enabled);
         let current_user_has_admin_permissions = team.has_admin_permissions(current_user_email)
             || (workspace_roles_are_independent
                 && workspace

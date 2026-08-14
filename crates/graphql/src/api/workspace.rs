@@ -16,6 +16,7 @@ pub struct Workspace {
     pub pending_email_invites: Vec<EmailInvite>,
     pub invite_link_domain_restrictions: Vec<InviteLinkDomainRestriction>,
     pub is_eligible_for_discovery: bool,
+    pub native_workspaces_role_detachment_enabled: bool,
     pub feature_model_choice: FeatureModelChoice,
     pub total_requests_used_since_last_refresh: i32,
 }

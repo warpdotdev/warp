@@ -1,7 +1,7 @@
 use super::*;
 use crate::workspaces::team::TeamMember;
 use crate::workspaces::workspace::{
-    MultiAdminPolicy, NativeWorkspacesPolicy, Tier, WorkspaceMember, WorkspaceMemberUsageInfo,
+    MultiAdminPolicy, Tier, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 fn team_with_members(members: Vec<TeamMember>) -> Team {
@@ -41,24 +41,24 @@ fn workspace_member(uid: UserUid, email: &str, role: MembershipRole) -> Workspac
     }
 }
 
+/// `role_detachment_enabled` mirrors the server-computed
+/// `nativeWorkspacesRoleDetachmentEnabled` GraphQL field, which is already the
+/// combination of native workspaces being enabled for the workspace AND the
+/// server-wide workspace role sync detachment feature being on (see
+/// `Workspace::is_workspace_role_detachment_enabled`). Passing `false` here
+/// exercises the exact state prod is in today: native workspaces can be
+/// enabled for a workspace while roles are still synced 1:1, so the derived
+/// field is `false`.
 fn workspace_with_members(
     members: Vec<WorkspaceMember>,
-    native_workspaces_enabled: bool,
+    role_detachment_enabled: bool,
 ) -> Workspace {
     Workspace {
         uid: "workspace_uid123456789".to_string().into(),
         name: "Workspace".to_string(),
         stripe_customer_id: None,
         teams: Vec::new(),
-        billing_metadata: BillingMetadata {
-            tier: Tier {
-                native_workspaces_policy: Some(NativeWorkspacesPolicy {
-                    enabled: native_workspaces_enabled,
-                }),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
+        billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
         billing_cycle_usage: None,
         has_billing_history: false,
@@ -69,6 +69,7 @@ fn workspace_with_members(
         is_eligible_for_discovery: false,
         members,
         total_requests_used_since_last_refresh: 0,
+        native_workspaces_role_detachment_enabled: role_detachment_enabled,
     }
 }
 
@@ -80,7 +81,7 @@ fn item_for<'a>(items: &'a [Item], email: &str) -> &'a Item {
 }
 
 #[test]
-fn workspace_admin_badge_supersedes_team_owner_chip_when_native_workspaces_enabled() {
+fn workspace_admin_badge_supersedes_team_owner_chip_when_roles_are_detached() {
     let owner_uid = UserUid::new("owner");
     let team = team_with_members(vec![TeamMember {
         uid: owner_uid,
@@ -126,7 +127,7 @@ fn workspace_owner_badge_shown_for_workspace_owner_role() {
 }
 
 #[test]
-fn workspace_admin_viewer_gets_team_admin_powers_when_native_workspaces_enabled() {
+fn workspace_admin_viewer_gets_team_admin_powers_when_roles_are_detached() {
     let admin_uid = UserUid::new("admin");
     let target_uid = UserUid::new("target");
     let team = team_with_members(vec![
@@ -169,12 +170,13 @@ fn workspace_admin_viewer_gets_team_admin_powers_when_native_workspaces_enabled(
     );
 }
 
-/// While roles are still synced (no native workspaces), a workspace admin who
-/// is not a team admin gets no extra powers and no badge: behavior must stay
-/// unchanged from before this feature, since team and workspace roles are
-/// mirrored 1:1 in this mode.
+/// This is prod's state today: native workspaces can be enabled for a
+/// workspace, but the server-wide workspace role sync detachment feature is
+/// off, so roles are still mirrored 1:1 and the server reports
+/// `nativeWorkspacesRoleDetachmentEnabled: false`. A workspace admin who is
+/// not a team admin must get no extra powers and no badge in this state.
 #[test]
-fn workspace_admin_has_no_effect_when_native_workspaces_disabled() {
+fn workspace_admin_has_no_effect_when_roles_are_still_synced() {
     let admin_uid = UserUid::new("admin");
     let target_uid = UserUid::new("target");
     let team = team_with_members(vec![
@@ -209,7 +211,7 @@ fn workspace_admin_has_no_effect_when_native_workspaces_disabled() {
 }
 
 /// A pure team admin's badge and powers are unaffected by this feature,
-/// whether or not native workspaces / an independent workspace role exist.
+/// whether or not the workspace / an independent workspace role exist.
 #[test]
 fn pure_team_admin_is_unaffected() {
     let admin_uid = UserUid::new("admin");

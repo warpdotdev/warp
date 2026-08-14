@@ -4736,6 +4736,15 @@ type Workspace {
   memberSpendLimits: [MemberSpendLimit!]
   members: [WorkspaceMember!]!
   name: String!
+
+  """
+  Whether workspace member roles are managed independently from team roles for this
+  workspace, i.e. native workspaces are enabled for the workspace AND the server-wide
+  workspace role sync detachment feature is on. When false, workspace and team roles
+  are still mirrored 1:1, so an independent workspace role must not be treated as
+  authoritative.
+  """
+  nativeWorkspacesRoleDetachmentEnabled: Boolean!
   pendingEmailInvites: [EmailInvite!]!
 
   """

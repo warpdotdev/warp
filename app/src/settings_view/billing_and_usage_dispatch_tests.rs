@@ -20,6 +20,7 @@ fn workspace_with_customer_type(customer_type: CustomerType) -> Workspace {
         is_eligible_for_discovery: false,
         members: vec![],
         total_requests_used_since_last_refresh: 0,
+        native_workspaces_role_detachment_enabled: false,
     }
 }
 
