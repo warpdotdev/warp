@@ -102,9 +102,6 @@ impl Workspace {
             .is_some_and(|policy| policy.enabled)
     }
 
-    /// Whether the user is a workspace admin on a plan with native workspaces
-    /// enabled, and so manages the workspace through the workspace-scoped
-    /// admin panel rather than a team-scoped one.
     pub fn is_native_workspaces_admin(&self, user_email: &str) -> bool {
         self.is_workspace_admin(user_email) && self.is_native_workspaces_enabled()
     }

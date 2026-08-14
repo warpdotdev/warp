@@ -53,12 +53,9 @@ fn workspace_with_member(role: MembershipRole, native_workspaces_enabled: bool) 
 
 #[test]
 fn native_workspaces_admin_requires_admin_role_and_enabled_policy() {
-    // (workspace role, native workspaces enabled, viewer email, is native workspaces admin)
     let cases = [
         (MembershipRole::Admin, true, MEMBER_EMAIL, true),
         (MembershipRole::Owner, true, MEMBER_EMAIL, true),
-        // An admin on a plan without native workspaces, a non-admin member, and
-        // a viewer absent from the roster are all excluded.
         (MembershipRole::Owner, false, MEMBER_EMAIL, false),
         (MembershipRole::User, true, MEMBER_EMAIL, false),
         (MembershipRole::Owner, true, "someone-else@warp.dev", false),
