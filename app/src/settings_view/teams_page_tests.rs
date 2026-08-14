@@ -1,6 +1,9 @@
 use super::*;
 use crate::workspaces::team::TeamMember;
-use crate::workspaces::workspace::{EmailInvite, MultiAdminPolicy, Tier};
+use crate::workspaces::workspace::{
+    EmailInvite, MultiAdminPolicy, NativeWorkspacesPolicy, Tier, WorkspaceMember,
+    WorkspaceMemberUsageInfo,
+};
 
 fn member(email: &str, role: MembershipRole) -> TeamMember {
     TeamMember {
@@ -35,6 +38,34 @@ fn team_with_members(members: Vec<TeamMember>, multi_admin_enabled: bool) -> Tea
     }
 }
 
+fn workspace_with_member(
+    email: &str,
+    role: MembershipRole,
+    native_workspaces_enabled: bool,
+) -> Workspace {
+    let mut workspace =
+        Workspace::from_local_cache(ServerId::from(2).into(), "Test Workspace".to_string(), None);
+    workspace.billing_metadata.tier.native_workspaces_policy = Some(NativeWorkspacesPolicy {
+        enabled: native_workspaces_enabled,
+    });
+    workspace.members.push(WorkspaceMember {
+        uid: UserUid::new(email),
+        email: email.to_string(),
+        role,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: true,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    });
+    workspace
+}
+
+fn admin_workspace(email: &str) -> Workspace {
+    workspace_with_member(email, MembershipRole::Admin, true)
+}
+
 /// Returns the action labels rendered for the item with the given `text` (a
 /// member email or pending-invite email), in the order they were pushed.
 fn action_labels(items: &[Item], text: &str) -> Vec<String> {
@@ -50,7 +81,7 @@ const ADMIN_EMAIL: &str = "admin@example.com";
 const MEMBER_EMAIL: &str = "member@example.com";
 
 #[test]
-fn owner_can_transfer_promote_and_remove_regardless_of_workspace_admin_flag() {
+fn owner_can_transfer_promote_and_remove_without_workspace_admin_role() {
     let team = team_with_members(
         vec![
             member(OWNER_EMAIL, MembershipRole::Owner),
@@ -58,8 +89,9 @@ fn owner_can_transfer_promote_and_remove_regardless_of_workspace_admin_flag() {
         ],
         true,
     );
+    let workspace = workspace_with_member(OWNER_EMAIL, MembershipRole::User, true);
 
-    let items = TeamsPageView::team_to_item_list(&team, OWNER_EMAIL, false);
+    let items = TeamsPageView::team_to_item_list(&team, OWNER_EMAIL, &workspace);
 
     assert_eq!(
         action_labels(&items, MEMBER_EMAIL),
@@ -68,7 +100,7 @@ fn owner_can_transfer_promote_and_remove_regardless_of_workspace_admin_flag() {
 }
 
 #[test]
-fn team_admin_can_promote_and_remove_without_workspace_admin_flag() {
+fn team_admin_can_promote_and_remove_without_workspace_admin_role() {
     let team = team_with_members(
         vec![
             member(ADMIN_EMAIL, MembershipRole::Admin),
@@ -76,8 +108,9 @@ fn team_admin_can_promote_and_remove_without_workspace_admin_flag() {
         ],
         true,
     );
+    let workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::User, true);
 
-    let items = TeamsPageView::team_to_item_list(&team, ADMIN_EMAIL, false);
+    let items = TeamsPageView::team_to_item_list(&team, ADMIN_EMAIL, &workspace);
 
     // No "Transfer ownership" -- that stays owner-only.
     assert_eq!(
@@ -87,7 +120,7 @@ fn team_admin_can_promote_and_remove_without_workspace_admin_flag() {
 }
 
 #[test]
-fn plain_member_without_workspace_admin_gets_no_member_actions() {
+fn non_admin_workspace_member_gets_no_member_actions() {
     let team = team_with_members(
         vec![
             member(MEMBER_EMAIL, MembershipRole::User),
@@ -95,8 +128,9 @@ fn plain_member_without_workspace_admin_gets_no_member_actions() {
         ],
         true,
     );
+    let workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
 
-    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, false);
+    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
 
     assert!(action_labels(&items, "other@example.com").is_empty());
 }
@@ -111,8 +145,9 @@ fn workspace_admin_without_team_role_can_promote_demote_and_remove() {
         ],
         true,
     );
+    let workspace = admin_workspace(MEMBER_EMAIL);
 
-    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, true);
+    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
 
     assert_eq!(
         action_labels(&items, "regular@example.com"),
@@ -125,6 +160,23 @@ fn workspace_admin_without_team_role_can_promote_demote_and_remove() {
 }
 
 #[test]
+fn workspace_admin_without_native_workspaces_policy_gets_no_member_actions() {
+    let team = team_with_members(
+        vec![
+            member(MEMBER_EMAIL, MembershipRole::User),
+            member("other@example.com", MembershipRole::User),
+        ],
+        true,
+    );
+    let workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::Admin, false);
+
+    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
+
+    // The override only applies to admins of native workspaces.
+    assert!(action_labels(&items, "other@example.com").is_empty());
+}
+
+#[test]
 fn workspace_admin_cannot_transfer_ownership() {
     let team = team_with_members(
         vec![
@@ -133,8 +185,9 @@ fn workspace_admin_cannot_transfer_ownership() {
         ],
         true,
     );
+    let workspace = admin_workspace(MEMBER_EMAIL);
 
-    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, true);
+    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
 
     // Ownership transfer stays gated on team-owner permissions only.
     assert!(action_labels(&items, OWNER_EMAIL).is_empty());
@@ -149,8 +202,9 @@ fn workspace_admin_without_multi_admin_plan_can_remove_but_not_promote() {
         ],
         false,
     );
+    let workspace = admin_workspace(MEMBER_EMAIL);
 
-    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, true);
+    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
 
     // The multi-admin plan gate on promote/demote is unaffected by the
     // workspace-admin override.
@@ -169,21 +223,23 @@ fn current_user_gets_no_actions_against_their_own_row_as_workspace_admin() {
         ],
         true,
     );
+    let workspace = admin_workspace(MEMBER_EMAIL);
 
-    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, true);
+    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
 
     assert!(action_labels(&items, MEMBER_EMAIL).is_empty());
 }
 
 #[test]
-fn workspace_admin_flag_does_not_grant_pending_invite_cancellation() {
+fn workspace_admin_does_not_get_pending_invite_cancellation() {
     let mut team = team_with_members(vec![member(MEMBER_EMAIL, MembershipRole::User)], true);
     team.pending_email_invites.push(EmailInvite {
         invitee_email: "invitee@example.com".to_string(),
         expired: false,
     });
+    let workspace = admin_workspace(MEMBER_EMAIL);
 
-    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, true);
+    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
 
     // Cancelling a pending invite remains gated on team-admin permissions;
     // it's out of scope for the workspace-admin override.
