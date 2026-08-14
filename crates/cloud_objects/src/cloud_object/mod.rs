@@ -660,7 +660,7 @@ impl CloudObjectMetadata {
     /// there are conflicts, so callers should check for conflicts before calling
     /// this.
     pub fn update_revision_from_server(&mut self, server_metadata: &ServerMetadata) {
-        self.revision = Some(server_metadata.revision.clone());
+        self.revision = Some(server_metadata.revision);
         self.last_editor_uid = server_metadata.last_editor_uid.clone();
     }
 
