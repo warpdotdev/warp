@@ -16,7 +16,7 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    ChildView, Container, Element, Fill, Flex, HyperlinkUrl, MouseStateHandle, ParentElement,
+    ChildView, Container, Element, Fill, Flex, MouseStateHandle, ParentElement,
 };
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
@@ -32,18 +32,11 @@ use crate::appearance::Appearance;
 use crate::editor::{EditorView, InteractionState};
 
 /// Whether MCP servers are surfaced in the UI at all.
-///
-/// Both the Warp Agent page's MCP section and the Profiles page's MCP
-/// permission controls key off this, so it lives here rather than on either
-/// page's widgets.
 pub fn should_show_mcp_servers() -> bool {
     FeatureFlag::McpServer.is_enabled() && ContextFlag::ShowMCPServers.is_enabled()
 }
 
 /// Enables or disables an editor embedded in a settings row.
-///
-/// Several pages under the Agents umbrella gate their text inputs on a
-/// setting, so this is generic over the owning view.
 pub fn update_editor_interaction_state<V: View>(
     editor: ViewHandle<EditorView>,
     is_enabled: bool,
@@ -58,15 +51,6 @@ pub fn update_editor_interaction_state<V: View>(
         editor.set_interaction_state(interaction_state, ctx);
         ctx.notify();
     })
-}
-
-/// Opens a documentation link from a settings description.
-///
-/// Every page under the Agents umbrella renders descriptions containing links,
-/// so each needs its own hyperlink action variant; they all resolve to this.
-pub fn open_hyperlink<V: View>(hyperlink: &HyperlinkUrl, ctx: &mut ViewContext<V>) {
-    ctx.notify();
-    ctx.open_url(&hyperlink.url);
 }
 
 /// The "Toolbar layout" chip editor. Shared by the Warp Agent toolbar and the

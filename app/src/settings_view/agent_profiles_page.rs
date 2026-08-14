@@ -32,8 +32,8 @@ use warpui::{
 };
 
 use super::ai_shared::{
-    open_hyperlink, render_ai_setting_description, render_ai_setting_label,
-    render_ai_setting_toggle, should_show_mcp_servers, styles, update_editor_interaction_state,
+    render_ai_setting_description, render_ai_setting_label, render_ai_setting_toggle,
+    should_show_mcp_servers, styles, update_editor_interaction_state,
 };
 use super::execution_profile_view::{ExecutionProfileView, ExecutionProfileViewEvent};
 use super::settings_page::{
@@ -1498,7 +1498,8 @@ impl TypedActionView for AgentProfilesPageView {
                 ctx.notify();
             }
             AgentProfilesPageAction::HyperlinkClick(hyperlink) => {
-                open_hyperlink(hyperlink, ctx);
+                ctx.notify();
+                ctx.open_url(&hyperlink.url);
             }
             AgentProfilesPageAction::AttemptLoginGatedUpgrade => {
                 AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {

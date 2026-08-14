@@ -16,9 +16,7 @@ use warpui::{
     Action, AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle, id,
 };
 
-use super::ai_shared::{
-    open_hyperlink, render_ai_setting_description, render_ai_setting_toggle, styles,
-};
+use super::ai_shared::{render_ai_setting_description, render_ai_setting_toggle, styles};
 use super::settings_page::{
     CONTENT_FONT_SIZE, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
     SettingsWidget, render_full_pane_width_ai_button,
@@ -118,7 +116,10 @@ impl TypedActionView for KnowledgePageView {
             KnowledgePageAction::OpenAIFactCollection => {
                 ctx.emit(KnowledgePageEvent::OpenAIFactCollection)
             }
-            KnowledgePageAction::HyperlinkClick(hyperlink) => open_hyperlink(hyperlink, ctx),
+            KnowledgePageAction::HyperlinkClick(hyperlink) => {
+                ctx.notify();
+                ctx.open_url(&hyperlink.url);
+            }
         }
     }
 }

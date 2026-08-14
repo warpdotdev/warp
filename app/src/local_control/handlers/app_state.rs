@@ -680,11 +680,6 @@ fn surface_settings_open(
     )
 }
 
-/// Resolves the `--page` argument of `surface.settings.open`.
-///
-/// The accepted vocabulary is [`SettingsSection::from_slug`], a stable
-/// identifier that is deliberately decoupled from the sidebar labels so that
-/// UI copy changes cannot break this CLI contract.
 fn settings_section(page: String) -> Result<SettingsSection, ControlError> {
     let section = SettingsSection::from_slug(&page).ok_or_else(|| {
         ControlError::new(
@@ -692,8 +687,6 @@ fn settings_section(page: String) -> Result<SettingsSection, ControlError> {
             format!("surface.settings.open cannot resolve settings page {page:?}"),
         )
     })?;
-    // Warp Drive settings are reached through `surface.warp-drive.open` instead, so this guard is
-    // intentional rather than an oversight.
     if section == SettingsSection::WarpDrive {
         return Err(ControlError::new(
             ErrorCode::UnsupportedAction,

@@ -1372,8 +1372,6 @@ fn save_pane_state(
 
             let settings_pane = model::NewSettingsPane {
                 id,
-                // Persist the stable slug, not the user-facing display label,
-                // so renaming a sidebar row cannot break session restore.
                 current_page: current_page.slug().to_owned(),
             };
 
