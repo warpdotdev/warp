@@ -1447,9 +1447,7 @@ fn test_sync_queue_generic_string_object_update_depends_on_pending_create() {
                 &HashSet::<QueueDependency>::new()
             );
             let queued_revision = sync_queue.queue().iter().find_map(|(_, item)| match item {
-                QueueItem::UpdateAIFact { id, revision, .. } if *id == server_id => {
-                    Some(*revision)
-                }
+                QueueItem::UpdateAIFact { id, revision, .. } if *id == server_id => Some(*revision),
                 _ => None,
             });
             assert_eq!(queued_revision, Some(Some(revision_after_update)));
