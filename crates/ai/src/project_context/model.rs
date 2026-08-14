@@ -476,10 +476,6 @@ impl ProjectContextModel {
     ) {
         self.rule_refresh_generations.remove(repo_id);
         self.rule_refresh_pending.remove(repo_id);
-        // `rule_refresh_in_flight` is deliberately left untouched: its read may still be running
-        // in the background and cannot be cancelled, so leaving the entry in place makes any
-        // refresh request that arrives before it completes coalesce (via `rule_refresh_pending`)
-        // instead of racing a second, overlapping read for a repository that was just removed.
         let Some(project_root) = repo_id.to_local_or_remote_path() else {
             return;
         };
