@@ -1100,6 +1100,7 @@ fn sessionless_parents_are_filtered_from_chips_and_marked_non_navigable() {
                     "claude-mid".to_owned(),
                     root_id,
                     Some(Harness::Claude),
+                    false,
                     ctx,
                 )
             })
