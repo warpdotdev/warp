@@ -9,7 +9,6 @@ use std::sync::mpsc::SyncSender;
 
 use instant::Instant;
 use itertools::Itertools;
-use warpui::r#async::SpawnedFutureHandle;
 use lazy_static::lazy_static;
 use markdown_parser::FormattedTextFragment;
 use parking_lot::FairMutex;
@@ -33,6 +32,7 @@ use warp_terminal::shell::{ShellName, ShellType};
 use warp_util::path::LineAndColumnArg;
 use warp_util::path::convert_wsl_to_windows_host_path;
 use warp_util::remote_path::RemotePath;
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::elements::{
     ChildView, Clipped, CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Flex,
     MainAxisSize, ParentElement, Shrinkable, Stack,

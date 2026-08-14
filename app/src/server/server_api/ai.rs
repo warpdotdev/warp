@@ -880,7 +880,6 @@ pub(crate) fn build_rename_conversation_url(conversation_id: &str) -> String {
 
 struct ListRunsResponse {
     runs: Vec<AmbientAgentTask>,
-    page_info: TaskListPageInfo,
 }
 
 impl<'de> serde::Deserialize<'de> for ListRunsResponse {
@@ -889,18 +888,8 @@ impl<'de> serde::Deserialize<'de> for ListRunsResponse {
         D: serde::Deserializer<'de>,
     {
         #[derive(serde::Deserialize)]
-        struct RawPageInfo {
-            #[serde(default)]
-            has_next_page: bool,
-            #[serde(default)]
-            next_cursor: Option<String>,
-        }
-
-        #[derive(serde::Deserialize)]
         struct RawResponse {
             runs: Vec<serde_json::Value>,
-            #[serde(default)]
-            page_info: Option<RawPageInfo>,
         }
 
         let raw = RawResponse::deserialize(deserializer)?;
@@ -916,26 +905,8 @@ impl<'de> serde::Deserialize<'de> for ListRunsResponse {
             }
         }
 
-        let page_info = raw
-            .page_info
-            .map(|raw| TaskListPageInfo {
-                has_next_page: raw.has_next_page,
-                next_cursor: raw.next_cursor,
-            })
-            .unwrap_or_default();
-
-        Ok(ListRunsResponse { runs, page_info })
+        Ok(ListRunsResponse { runs })
     }
-}
-
-/// Pagination metadata from a `GET /agent/runs` list response's `page_info`
-/// object (`has_next_page` / `next_cursor`). `next_cursor` is opaque:
-/// callers that need more than one page must pass it back unmodified as
-/// [`TaskListFilter::cursor`].
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct TaskListPageInfo {
-    pub has_next_page: bool,
-    pub next_cursor: Option<String>,
 }
 
 /// Source information for an agent skill.
@@ -1298,16 +1269,6 @@ pub trait AIClient: 'static + Send + Sync {
         limit: i32,
         filter: TaskListFilter,
     ) -> anyhow::Result<Vec<AmbientAgentTask>, anyhow::Error>;
-
-    /// Like `list_ambient_agent_tasks`, but also returns the page-info
-    /// cursor so a caller that needs every matching task (not just the
-    /// first page) can paginate. `list_ambient_agent_tasks` is left as-is
-    /// since its other callers only ever consume the first page.
-    async fn list_ambient_agent_tasks_page(
-        &self,
-        limit: i32,
-        filter: TaskListFilter,
-    ) -> anyhow::Result<(Vec<AmbientAgentTask>, TaskListPageInfo), anyhow::Error>;
 
     /// List agent runs and return the raw server JSON response.
     async fn list_agent_runs_raw(
@@ -2272,16 +2233,6 @@ impl AIClient for ServerApi {
         let url = build_list_agent_runs_url(limit, &filter);
         let response: ListRunsResponse = self.get_public_api(&url).await?;
         Ok(response.runs)
-    }
-
-    async fn list_ambient_agent_tasks_page(
-        &self,
-        limit: i32,
-        filter: TaskListFilter,
-    ) -> anyhow::Result<(Vec<AmbientAgentTask>, TaskListPageInfo), anyhow::Error> {
-        let url = build_list_agent_runs_url(limit, &filter);
-        let response: ListRunsResponse = self.get_public_api(&url).await?;
-        Ok((response.runs, response.page_info))
     }
 
     async fn list_agent_runs_raw(

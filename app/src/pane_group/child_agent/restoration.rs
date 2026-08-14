@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use instant::Instant;
@@ -26,22 +25,18 @@ use crate::pane_group::{
 };
 use crate::server::retry_strategies::is_transient_http_error;
 use crate::server::server_api::ServerApiProvider;
-use crate::server::server_api::ai::{AIClient, TaskListFilter};
+use crate::server::server_api::ai::TaskListFilter;
 use crate::terminal::shared_session::IsSharedSessionCreator;
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
 };
 
-/// Max direct children fetched per page of an ancestor-list restore seed.
-/// The server caps at 100 regardless, matching the Observer-side ancestor
-/// seed fetch.
+/// Max direct children fetched per ancestor-list restore seed. The server
+/// caps at 100 regardless, matching the Observer-side ancestor seed fetch.
+/// A parent with more than this many direct children only has its first
+/// page discovered by this path today — tracked separately, since it's not
+/// the reported issue and pagination is a clean, independent follow-up.
 const RESTORE_CHILD_SEED_FETCH_LIMIT: i32 = 100;
-
-/// Maximum number of pages fetched per ancestor-list attempt. Bounds a
-/// pathological cursor chain (e.g. a server bug that never signals the last
-/// page) so a single attempt can't loop forever; a parent with more direct
-/// children than this fits in is not a realistic case in practice.
-const MAX_ANCESTOR_LIST_PAGES: usize = 50;
 
 /// Cadence for the self-scheduled re-drive timer that guarantees eventual
 /// forward progress for a pending parent even when nothing else emits
@@ -57,35 +52,6 @@ const PENDING_PARENT_CHILD_SEED_REPOLL_INTERVAL: Duration = Duration::from_secs(
 /// successful ancestor-list response (see
 /// `PendingParentChildSeed::consecutive_parent_record_misses`).
 const MAX_CONSECUTIVE_PARENT_RECORD_MISSES: u32 = 5;
-
-/// Fetches every page of the `?ancestor_run_id={parent_task_id}` listing
-/// (the server caps each page at `RESTORE_CHILD_SEED_FETCH_LIMIT`),
-/// returning the concatenated task list — the parent's own record included,
-/// per the endpoint's documented contract — or the first error encountered.
-async fn fetch_all_ancestor_list_pages(
-    ai_client: Arc<dyn AIClient>,
-    parent_task_id: AmbientAgentTaskId,
-) -> anyhow::Result<Vec<AmbientAgentTask>> {
-    let mut all_tasks = Vec::new();
-    let mut cursor = None;
-    for _ in 0..MAX_ANCESTOR_LIST_PAGES {
-        let filter = TaskListFilter {
-            ancestor_run_id: Some(parent_task_id.to_string()),
-            cursor,
-            ..TaskListFilter::default()
-        };
-        let (tasks, page_info) = ai_client
-            .list_ambient_agent_tasks_page(RESTORE_CHILD_SEED_FETCH_LIMIT, filter)
-            .await?;
-        let got_full_page = tasks.len() as i32 == RESTORE_CHILD_SEED_FETCH_LIMIT;
-        all_tasks.extend(tasks);
-        if !got_full_page || !page_info.has_next_page || page_info.next_cursor.is_none() {
-            break;
-        }
-        cursor = page_info.next_cursor;
-    }
-    Ok(all_tasks)
-}
 
 impl PaneGroup {
     /// Lazily restores hidden child panes for the given parent conversation.
@@ -245,8 +211,16 @@ impl PaneGroup {
         }
 
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let filter = TaskListFilter {
+            ancestor_run_id: Some(parent_task_id.to_string()),
+            ..TaskListFilter::default()
+        };
         ctx.spawn(
-            async move { fetch_all_ancestor_list_pages(ai_client, parent_task_id).await },
+            async move {
+                ai_client
+                    .list_ambient_agent_tasks(RESTORE_CHILD_SEED_FETCH_LIMIT, filter)
+                    .await
+            },
             move |me, result, ctx| {
                 if let Some(seed) = me.pending_parent_child_seeds.get_mut(&parent_task_id) {
                     seed.fetch_in_flight = false;
@@ -475,7 +449,10 @@ impl PaneGroup {
         if !seed.parent_confirmed_terminal {
             self.spawn_ancestor_list_fetch_if_needed(parent_task_id, ctx);
         }
-        if !self.pending_parent_child_seeds.contains_key(&parent_task_id) {
+        if !self
+            .pending_parent_child_seeds
+            .contains_key(&parent_task_id)
+        {
             return;
         }
         let Some(terminal_surface_id) = BlocklistAIHistoryModel::as_ref(ctx)
@@ -503,7 +480,10 @@ impl PaneGroup {
         parent_task_id: AmbientAgentTaskId,
         ctx: &mut ViewContext<Self>,
     ) {
-        if self.pending_parent_child_seeds.contains_key(&parent_task_id) {
+        if self
+            .pending_parent_child_seeds
+            .contains_key(&parent_task_id)
+        {
             self.schedule_pending_parent_child_seed_repoll(parent_task_id, ctx);
         }
     }
