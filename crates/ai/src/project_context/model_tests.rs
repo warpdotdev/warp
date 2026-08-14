@@ -653,3 +653,54 @@ fn test_remote_global_rules_only_layer_for_matching_remote_host() {
         ["local_global", "remote_project"]
     );
 }
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_superseding_refresh_aborts_previous_in_flight_task() {
+    use repo_metadata::repositories::DetectedRepositories;
+    use warpui_core::App;
+
+    fn noop_content_reader(
+        _paths: Vec<LocalOrRemotePath>,
+        _ctx: &AppContext,
+    ) -> BoxFuture<'static, anyhow::Result<ProjectRuleContents>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        let model = app.add_model(|_| ProjectContextModel::default());
+        let repo_id = RepositoryIdentifier::Local(StandardizedPath::try_new("/repo").unwrap());
+
+        // A burst of superseding refreshes (e.g. from a burst of standing-query updates during
+        // repo indexing) must abort each prior in-flight refresh instead of letting it keep
+        // running, so at most one refresh task is ever in flight per repo.
+        let first_handle = model.update(&mut app, |model, ctx| {
+            model.refresh_project_rules_for_repo(repo_id.clone(), noop_content_reader, ctx);
+            model
+                .rule_refresh_abort_handles
+                .get(&repo_id)
+                .expect("refresh should record an abort handle")
+                .clone()
+        });
+        assert!(!first_handle.is_aborted());
+
+        model.update(&mut app, |model, ctx| {
+            model.refresh_project_rules_for_repo(repo_id.clone(), noop_content_reader, ctx);
+        });
+        assert!(
+            first_handle.is_aborted(),
+            "a superseding refresh should abort the previous in-flight refresh task"
+        );
+
+        let second_handle = model.read(&app, |model, _ctx| {
+            model
+                .rule_refresh_abort_handles
+                .get(&repo_id)
+                .expect("second refresh should record its own abort handle")
+                .clone()
+        });
+        assert!(!second_handle.is_aborted());
+    });
+}

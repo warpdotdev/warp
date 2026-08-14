@@ -11,6 +11,7 @@ use super::GlobalRules;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
+        use futures::stream::AbortHandle;
         use repo_metadata::{
             RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier, StandingQueryContent,
         };
@@ -209,6 +210,12 @@ pub struct ProjectContextModel {
     rule_refresh_generations: HashMap<RepositoryIdentifier, u64>,
     #[cfg(feature = "local_fs")]
     next_rule_refresh_generation: u64,
+    /// Abort handle for the in-flight refresh task per repository, if any. Superseding a
+    /// refresh aborts the previous task instead of letting it run to completion, so a burst of
+    /// standing-query updates for one repo (e.g. during initial indexing) can't pile up
+    /// concurrent uncancelled file reads.
+    #[cfg(feature = "local_fs")]
+    rule_refresh_abort_handles: HashMap<RepositoryIdentifier, AbortHandle>,
     /// File-based global rules and their local watcher state. Kept separate
     /// from `path_to_rules`, which is project-scoped.
     pub(super) global_rules: GlobalRules,
@@ -370,6 +377,12 @@ impl ProjectContextModel {
         if repo_id.to_local_or_remote_path().is_none() {
             return;
         };
+        // A new refresh supersedes any refresh already in flight for this repo. Abort it
+        // rather than letting it run to completion so concurrent file reads and their
+        // allocations don't pile up during a burst of standing-query updates.
+        if let Some(abort_handle) = self.rule_refresh_abort_handles.remove(&repo_id) {
+            abort_handle.abort();
+        }
         let rule_paths = standing_project_rule_paths(
             &repo_id,
             RepoMetadataModel::as_ref(ctx)
@@ -384,7 +397,7 @@ impl ProjectContextModel {
         self.rule_refresh_generations
             .insert(repo_id.clone(), refresh_generation);
         let repo_id_for_result = repo_id.clone();
-        ctx.spawn(read_rule_contents, move |me, result, ctx| {
+        let refresh_handle = ctx.spawn(read_rule_contents, move |me, result, ctx| {
             if me.rule_refresh_generations.get(&repo_id_for_result) != Some(&refresh_generation) {
                 return;
             }
@@ -404,6 +417,8 @@ impl ProjectContextModel {
                 Err(error) => log::warn!("Failed to read project rules: {error}"),
             }
         });
+        self.rule_refresh_abort_handles
+            .insert(repo_id, refresh_handle.abort_handle());
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
@@ -427,6 +442,9 @@ impl ProjectContextModel {
         ctx: &mut ModelContext<Self>,
     ) {
         self.rule_refresh_generations.remove(repo_id);
+        if let Some(abort_handle) = self.rule_refresh_abort_handles.remove(repo_id) {
+            abort_handle.abort();
+        }
         let Some(project_root) = repo_id.to_local_or_remote_path() else {
             return;
         };
