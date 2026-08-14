@@ -136,6 +136,12 @@ pub(crate) fn render_warping_indicator_row(
 /// once the response finishes: the resting glyph, the response's wall-to-wall
 /// duration, and the credits it spent (omitted until any are reported). The
 /// row is static — no animation, no repaint scheduling.
+///
+/// No dollar-cost suffix is added here: `block_credits` is a per-last-block
+/// delta (`credits_spent_for_last_block`), and only the conversation's
+/// *cumulative* dollar cost (`totalProviderCostInCents`) is available
+/// client-side today — there's no equivalent last-block cost delta to pair
+/// with it without the per-category cost breakdown work tracked separately.
 pub(crate) fn render_response_summary(
     duration: Duration,
     block_credits: Option<f32>,

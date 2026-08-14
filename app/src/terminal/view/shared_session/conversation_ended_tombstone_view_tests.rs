@@ -4,7 +4,7 @@ use super::TombstoneDisplayData;
 use crate::ai::ambient_agents::task::{RequestUsage, TaskPrincipalInfo, TaskStatusMessage};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
 use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::format_credits;
+use crate::ai::blocklist::view_util::format_credits;
 
 const INFERENCE_COST: f64 = 1.5;
 const COMPUTE_COST: f64 = 3.0;

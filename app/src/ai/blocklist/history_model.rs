@@ -80,6 +80,11 @@ pub struct AIConversationMetadata {
 
     pub credits_spent: Option<f32>,
 
+    /// Server-authoritative cumulative provider cost in US cents. `None`
+    /// means the server did not provide a cost baseline (e.g. a legacy
+    /// conversation) and must not be treated as numeric zero.
+    pub total_provider_cost_in_cents: Option<f32>,
+
     pub server_conversation_token: Option<ServerConversationToken>,
 
     /// Whether the full conversation data exists in the local database.
@@ -130,6 +135,7 @@ impl From<&AIConversation> for AIConversationMetadata {
             last_modified_at,
             initial_working_directory: conversation.initial_working_directory(),
             credits_spent: Some(conversation.credits_spent()),
+            total_provider_cost_in_cents: conversation.usage_totals().cost_in_cents,
             server_conversation_token,
             has_local_data: true,
             has_cloud_data,
@@ -158,6 +164,9 @@ impl AIConversationMetadata {
             server_conversation_metadata.usage.credits_spent
                 + server_conversation_metadata.usage.platform_credits_spent,
         );
+        let total_provider_cost_in_cents = server_conversation_metadata
+            .usage
+            .total_provider_cost_in_cents;
         let server_conversation_token = Some(
             server_conversation_metadata
                 .server_conversation_token
@@ -175,6 +184,7 @@ impl AIConversationMetadata {
             last_modified_at,
             initial_working_directory,
             credits_spent,
+            total_provider_cost_in_cents,
             server_conversation_token,
             has_local_data: false,
             has_cloud_data: true, // Server metadata implies cloud data exists

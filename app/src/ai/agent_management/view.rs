@@ -55,7 +55,7 @@ use crate::ai::agent_management::telemetry::{
 };
 use crate::ai::ambient_agents::{AgentSource, cancel_task_with_toast};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
-use crate::ai::blocklist::format_credits;
+use crate::ai::blocklist::format_credits_with_cost;
 use crate::ai::conversation_details_panel::{
     ConversationDetailsData, ConversationDetailsPanel, ConversationDetailsPanelEvent,
 };
@@ -1838,8 +1838,10 @@ impl AgentManagementView {
             metadata_parts.push(format!("Run time: {run_time}"));
         }
 
-        if let Some(usage) = entry.display.request_usage.map(format_credits) {
-            metadata_parts.push(format!("Credits used: {usage}"));
+        if let Some(usage) = entry.display.request_usage {
+            let usage_text =
+                format_credits_with_cost(usage, entry.display.request_usage_cost_in_cents);
+            metadata_parts.push(format!("Credits used: {usage_text}"));
         }
 
         Text::new(metadata_parts.join(" • "), font_family, font_size)

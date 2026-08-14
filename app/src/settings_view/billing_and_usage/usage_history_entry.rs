@@ -9,7 +9,7 @@ use warpui::elements::{
 use warpui::platform::Cursor;
 use warpui::{AppContext, Element, View};
 
-use crate::ai::blocklist::format_credits;
+use crate::ai::blocklist::format_credits_with_cost;
 use crate::ai::blocklist::usage::conversation_usage_view::{
     ConversationUsageInfo, ConversationUsageView, DisplayMode,
 };
@@ -112,7 +112,13 @@ impl UsageHistoryEntry {
         let total_credits =
             entry.usage_metadata.credits_spent + entry.usage_metadata.platform_credits_spent;
         let credits_spent = Text::new_inline(
-            format_credits(total_credits as f32),
+            format_credits_with_cost(
+                total_credits as f32,
+                entry
+                    .usage_metadata
+                    .total_provider_cost_in_cents
+                    .map(|cost| cost as f32),
+            ),
             appearance.ui_font_family(),
             14.,
         )

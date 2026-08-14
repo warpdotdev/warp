@@ -198,6 +198,13 @@ impl FirstTimeCloudAgentSetupView {
     }
 
     /// Renders the free credits banner - displayed INSIDE the form card at the top.
+    ///
+    /// This shows a remaining trial-credit *balance*, not a spent amount, so
+    /// there's no matching real-dollar cost to pair it with (the existing
+    /// per-conversation `totalProviderCostInCents` figure only covers usage
+    /// that has already been charged); no credit-to-dollar conversion rate
+    /// is exposed to the client for unspent balances. Left credits-only
+    /// pending a future data source.
     fn render_free_credits_banner(
         &self,
         credits: i32,

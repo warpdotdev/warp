@@ -22,7 +22,7 @@ use crate::ai::ambient_agents::{
     conversation_output_status_from_conversation,
 };
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
-use crate::ai::blocklist::{BlocklistAIHistoryModel, format_credits};
+use crate::ai::blocklist::{BlocklistAIHistoryModel, format_credits_with_cost};
 use crate::appearance::Appearance;
 use crate::server::ids::SyncId;
 use crate::server::server_api::ServerApiProvider;
@@ -108,7 +108,10 @@ impl TombstoneDisplayData {
             source: None,
             skill_name: None,
             run_time,
-            credits: Some(format_credits(conversation.credits_spent())),
+            credits: Some(format_credits_with_cost(
+                conversation.credits_spent(),
+                conversation.usage_totals().cost_in_cents,
+            )),
             working_directory: conversation.initial_working_directory(),
             artifacts: conversation.artifacts().to_vec(),
         }
@@ -142,7 +145,10 @@ impl TombstoneDisplayData {
             self.run_time = Some(human_readable_precise_duration(run_time));
         }
         if let Some(credits) = task.credits_used() {
-            self.credits = Some(format_credits(credits));
+            // The ambient task's REST-backed credit total has no matching
+            // dollar cost field today, so the cost suffix is omitted here
+            // (see api-layer-gap-analysis.md's Requirement 9/U11).
+            self.credits = Some(format_credits_with_cost(credits, None));
         }
 
         // Surface task artifacts (plans, PRs, files, screenshots) for third-party

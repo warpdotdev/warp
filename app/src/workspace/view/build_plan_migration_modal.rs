@@ -578,6 +578,12 @@ impl BuildPlanMigrationModal {
             None,
         );
 
+        // Note: no adjacent dollar figure is added here. The plan's monthly
+        // price is already shown separately above, and it isn't reliably the
+        // dollar-equivalent of this specific credit allotment across plans
+        // (e.g. per-seat Business pricing) — there's no dedicated "dollar
+        // value of base credits" field in `PlanPricing` to pull from without
+        // guessing at a conversion rate.
         let base_credits = Self::create_bullet_item(
             format!(
                 "{} base credits per month",

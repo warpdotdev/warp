@@ -654,6 +654,98 @@ fn test_status_filter_uses_display_status_for_task_backed_conversations() {
     });
 }
 
+/// The agent-management panel row (Requirement 12/U10) needs both the
+/// credit total and its matching real dollar cost. For a conversation-backed
+/// entry, both must come through from the loaded `AIConversation`'s usage
+/// metadata into `AgentConversationDisplayData`.
+#[test]
+fn test_get_entries_projects_conversation_provider_cost() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+        let history_model = BlocklistAIHistoryModel::handle(&app);
+
+        let conversation_id = AIConversationId::new();
+        let terminal_view_id = EntityId::new();
+
+        let conversation = create_restored_conversation(
+            conversation_id,
+            "root-task",
+            AgentConversationData {
+                server_conversation_token: None,
+                conversation_usage_metadata: Some(ConversationUsageMetadata {
+                    was_summarized: false,
+                    context_window_usage: 0.0,
+                    credits_spent: 2.0,
+                    platform_credits_spent: 0.0,
+                    total_provider_cost_in_cents: Some(36.0),
+                    credits_spent_for_last_block: None,
+                    token_usage: vec![],
+                    tool_usage_metadata: Default::default(),
+                    context_window_segments: Vec::new(),
+                }),
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                root_task_is_optimistic: None,
+                run_id: None,
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            },
+        );
+
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let mut model = create_test_model();
+        model.conversations.insert(
+            conversation_id,
+            create_test_conversation_metadata(conversation_id, "Conversation"),
+        );
+
+        app.update(|ctx| {
+            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entry = entries
+                .iter()
+                .find(|entry| entry.identity.local_conversation_id == Some(conversation_id))
+                .expect("conversation entry should be present");
+
+            assert_eq!(entry.display.request_usage, Some(2.0));
+            assert_eq!(entry.display.request_usage_cost_in_cents, Some(36.0));
+        });
+    });
+}
+
+/// An ambient-run entry has no per-run dollar cost source yet (REST only
+/// returns credits today), so the cost figure must stay `None` rather than
+/// being fabricated as zero.
+#[test]
+fn test_get_entries_ambient_task_has_no_cost_figure() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let mut model = create_test_model();
+        let task = create_test_task(&make_uuid(8200), "user-a", Utc::now());
+        model.tasks.insert(task.task_id, task.clone());
+
+        app.update(|ctx| {
+            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entry = entries
+                .iter()
+                .find(|entry| entry.id == AgentConversationEntryId::AmbientRun(task.task_id))
+                .expect("task entry should be present");
+
+            assert_eq!(entry.display.request_usage_cost_in_cents, None);
+        });
+    });
+}
+
 /// Helper to generate a unique UUID for task IDs
 fn make_uuid(index: usize) -> String {
     format!("550e8400-e29b-41d4-a716-{:012}", index)

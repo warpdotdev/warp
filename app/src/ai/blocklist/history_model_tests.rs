@@ -254,6 +254,73 @@ fn persisted_agent_conversation_from_update_event(event: ModelEvent) -> AgentCon
     }
 }
 
+/// The Settings usage-history collapsed header row and the agent management
+/// panel row (Requirement 12/U10) both read `total_provider_cost_in_cents`
+/// off `AIConversationMetadata`. It must be carried through from both
+/// construction paths -- a locally-loaded conversation and server-fetched
+/// metadata -- and stay `None` (never coerced to zero) when the source has
+/// no cost baseline.
+#[test]
+fn conversation_metadata_carries_provider_cost_from_loaded_conversation() {
+    use crate::persistence::model::{AgentConversationData, ConversationUsageMetadata};
+
+    let conversation_data = AgentConversationData {
+        server_conversation_token: None,
+        conversation_usage_metadata: Some(ConversationUsageMetadata {
+            total_provider_cost_in_cents: Some(42.0),
+            ..Default::default()
+        }),
+        reverted_action_ids: None,
+        forked_from_server_conversation_token: None,
+        artifacts_json: None,
+        parent_agent_id: None,
+        agent_name: None,
+        orchestration_harness_type: None,
+        parent_conversation_id: None,
+        is_remote_child: false,
+        root_task_is_optimistic: None,
+        run_id: None,
+        autoexecute_override: None,
+        last_event_sequence: None,
+        pinned: false,
+    };
+    let conversation = AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![create_api_task("root-task", vec![])],
+        Some(conversation_data),
+    )
+    .expect("restored conversation should build");
+
+    let metadata = AIConversationMetadata::from(&conversation);
+
+    assert_eq!(metadata.total_provider_cost_in_cents, Some(42.0));
+}
+
+#[test]
+fn conversation_metadata_carries_provider_cost_from_server_metadata() {
+    fn server_metadata_with_cost(cost_in_cents: Option<f32>) -> ServerAIConversationMetadata {
+        ServerAIConversationMetadata {
+            usage: crate::persistence::model::ConversationUsageMetadata {
+                total_provider_cost_in_cents: cost_in_cents,
+                ..crate::persistence::model::ConversationUsageMetadata::default()
+            },
+            ..create_server_metadata("Conversation", "token-1", 10.0, None)
+        }
+    }
+
+    let with_cost_metadata = AIConversationMetadata::from_server_metadata(
+        AIConversationId::new(),
+        server_metadata_with_cost(Some(18.5)),
+    );
+    let without_cost_metadata = AIConversationMetadata::from_server_metadata(
+        AIConversationId::new(),
+        server_metadata_with_cost(None),
+    );
+
+    assert_eq!(with_cost_metadata.total_provider_cost_in_cents, Some(18.5));
+    assert_eq!(without_cost_metadata.total_provider_cost_in_cents, None);
+}
+
 #[test]
 fn begin_conversation_rename_updates_title_and_cached_metadata() {
     App::test((), |mut app| async move {
