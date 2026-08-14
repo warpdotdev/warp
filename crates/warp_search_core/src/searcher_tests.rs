@@ -310,3 +310,65 @@ fn test_searcher_async() {
         "the index should be cleared and contain no documents"
     );
 }
+
+/// Regression test for a memory leak where a burst of full-index rebuild requests (e.g. from a
+/// filesystem watcher repeatedly firing config-reload events) would each enqueue a full
+/// clear-and-reinsert of every document on `AsyncSearcher`'s unbounded background channel, with
+/// nothing to coalesce or bound them. A sustained burst would grow the channel's backing queue
+/// without limit. `rebuild_index_async` must ensure that only the most recently requested
+/// document set is ever queued, and that the index still converges to the correct final content.
+#[test]
+fn test_searcher_async_rebuild_coalesces_burst() {
+    define_search_schema!(
+        schema_name: TEST_SCHEMA,
+        config_name: SchemaConfig,
+        search_doc: SearchDoc,
+        identifying_doc: IdentifyingDoc,
+        search_fields: [name: 1.0],
+        id_fields: [id: u64]
+    );
+
+    const BURST_SIZE: usize = 500;
+    const DOCS_PER_REBUILD: u64 = 50;
+
+    let background_executor = Arc::new(Background::default());
+    let searcher_async =
+        TEST_SCHEMA.create_async_searcher(MIN_MEMORY_BUDGET, background_executor.clone());
+
+    // Fire a burst of rebuild requests back-to-back, faster than the background writer could
+    // possibly drain them if each one were queued as a separate clear + N inserts.
+    for burst in 0..BURST_SIZE {
+        let documents = (0..DOCS_PER_REBUILD).map(|id| SearchDoc {
+            name: format!("burst {burst} doc {id}"),
+            id,
+        });
+        searcher_async.rebuild_index_async(documents).unwrap();
+    }
+
+    // Regardless of how many rebuilds were requested, at most one rebuild operation should ever
+    // be outstanding on the background queue: later requests must coalesce into the pending one
+    // rather than piling up as separate index operations.
+    let queue_len = searcher_async.tx.len();
+    assert!(
+        queue_len <= 1,
+        "a burst of rebuild requests should coalesce to at most one queued operation, found {queue_len}"
+    );
+
+    // Give the background writer time to drain the queue and apply the final rebuild.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let result = searcher_async.get_all_documents().unwrap();
+    assert_eq!(
+        result.len(),
+        DOCS_PER_REBUILD as usize,
+        "the index should converge to exactly the last requested document set"
+    );
+
+    let last_burst_prefix = format!("burst {}", BURST_SIZE - 1);
+    assert!(
+        result
+            .iter()
+            .all(|doc| doc.name.starts_with(&last_burst_prefix)),
+        "the index should contain only documents from the final, non-superseded rebuild"
+    );
+}

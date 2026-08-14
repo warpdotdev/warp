@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::iter::Peekable;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::available_parallelism;
 use std::time::Duration;
 
@@ -1178,15 +1179,62 @@ pub enum SearcherEvent {
     IndexCleared,
 }
 
+/// A message sent over `AsyncSearcher`'s background channel.
+///
+/// `Rebuild` is kept distinct from [`SearcherEvent`] so that a burst of full-index rebuild
+/// requests (clear + re-insert everything) can be coalesced into at most one outstanding
+/// operation, regardless of how many times a rebuild is requested before the background writer
+/// gets a chance to run. See [`AsyncSearcher::rebuild_index_async`].
+enum SearcherChannelMessage {
+    Event(SearcherEvent),
+    Rebuild,
+}
+
 const SEARCH_ASYNC_BATCH_INTERVAL: Duration = Duration::from_millis(75);
 const SEARCH_ASYNC_MAX_BATCH_SIZE: usize = 100;
 /// If this amount of time passes without any events, we will join with the
 /// index writer (waiting for any remaining operations to complete).
 const SEARCH_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Resolves the batch of raw channel messages into the concrete [`SearcherEvent`]s that should
+/// be applied to the index, expanding any coalesced `Rebuild` message into a clear followed by
+/// an insert of the most recently requested document set.
+///
+/// A `Rebuild` message is resolved to `None` (dropped) if the pending document set was already
+/// consumed by an earlier `Rebuild` message in the same batch, or by a race with a concurrent
+/// call to `rebuild_index_async` (see the comment there); this is safe because such a race
+/// always results in a follow-up `Rebuild` message being sent with the latest document set.
+fn resolve_batch(
+    batch: Vec<SearcherChannelMessage>,
+    pending_rebuild: &Mutex<Option<Vec<FullTextSearchDocumentEntry>>>,
+    rebuild_queued: &AtomicBool,
+) -> Vec<SearcherEvent> {
+    let mut events = Vec::with_capacity(batch.len());
+    for message in batch {
+        match message {
+            SearcherChannelMessage::Event(event) => events.push(event),
+            SearcherChannelMessage::Rebuild => {
+                // Clear the flag *before* taking the pending snapshot: if a new rebuild is
+                // requested concurrently after we clear the flag, it is guaranteed to either
+                // land in the snapshot we're about to take, or find the flag clear and enqueue
+                // its own follow-up `Rebuild` message. Either way, the latest document set is
+                // never silently dropped.
+                rebuild_queued.store(false, Ordering::Release);
+                if let Some(documents) = pending_rebuild.lock().take() {
+                    events.push(SearcherEvent::IndexCleared);
+                    events.extend(documents.into_iter().map(SearcherEvent::DocumentInserted));
+                }
+            }
+        }
+    }
+    events
+}
+
 async fn process_searcher_events(
-    rx: async_channel::Receiver<SearcherEvent>,
+    rx: async_channel::Receiver<SearcherChannelMessage>,
     writer_handle: SearcherWriterHandle,
+    pending_rebuild: Arc<Mutex<Option<Vec<FullTextSearchDocumentEntry>>>>,
+    rebuild_queued: Arc<AtomicBool>,
 ) {
     let mut running = true;
     while running {
@@ -1235,7 +1283,11 @@ async fn process_searcher_events(
         if batch.is_empty() {
             continue;
         }
-        if let Err(e) = writer_handle.lock().execute_operations(batch) {
+        let events = resolve_batch(batch, &pending_rebuild, &rebuild_queued);
+        if events.is_empty() {
+            continue;
+        }
+        if let Err(e) = writer_handle.lock().execute_operations(events) {
             report_error!(e.context("Failed to execute search events"));
         }
     }
@@ -1245,17 +1297,35 @@ async fn process_searcher_events(
 // All search (read) operations remain synchronous and blocking.
 pub struct AsyncSearcher<C: SearchSchemaConfig> {
     searcher: SimpleFullTextSearcher<C>,
-    tx: async_channel::Sender<SearcherEvent>,
+    tx: async_channel::Sender<SearcherChannelMessage>,
+    /// The document set for the most recently requested, not-yet-applied full-index rebuild.
+    /// See [`Self::rebuild_index_async`].
+    pending_rebuild: Arc<Mutex<Option<Vec<FullTextSearchDocumentEntry>>>>,
+    /// Whether a `Rebuild` message is currently outstanding on the channel. Used to coalesce a
+    /// burst of rebuild requests into at most one queued message.
+    rebuild_queued: Arc<AtomicBool>,
 }
 
 impl<C: SearchSchemaConfig> AsyncSearcher<C> {
     fn new(searcher: SimpleFullTextSearcher<C>, background_executor: Arc<Background>) -> Self {
         let (tx, rx) = async_channel::unbounded();
+        let pending_rebuild = Arc::new(Mutex::new(None));
+        let rebuild_queued = Arc::new(AtomicBool::new(false));
         background_executor
-            .spawn(process_searcher_events(rx, searcher.writer.clone()))
+            .spawn(process_searcher_events(
+                rx,
+                searcher.writer.clone(),
+                pending_rebuild.clone(),
+                rebuild_queued.clone(),
+            ))
             .detach();
 
-        Self { searcher, tx }
+        Self {
+            searcher,
+            tx,
+            pending_rebuild,
+            rebuild_queued,
+        }
     }
 
     pub fn search_id(
@@ -1284,8 +1354,11 @@ impl<C: SearchSchemaConfig> AsyncSearcher<C> {
 
     // Async write operations
     pub fn clear_search_index_async(&self) -> anyhow::Result<()> {
-        block_on(self.tx.send(SearcherEvent::IndexCleared))
-            .map_err(|e| anyhow::anyhow!("Failed to send clear index event: {}", e))
+        block_on(
+            self.tx
+                .send(SearcherChannelMessage::Event(SearcherEvent::IndexCleared)),
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to send clear index event: {}", e))
     }
 
     pub fn build_index_async(
@@ -1298,17 +1371,44 @@ impl<C: SearchSchemaConfig> AsyncSearcher<C> {
         Ok(())
     }
 
+    /// Clears the index and inserts `documents`, coalescing a burst of rebuild requests into at
+    /// most one outstanding operation on the background queue.
+    ///
+    /// Unlike calling [`Self::clear_search_index_async`] followed by
+    /// [`Self::build_index_async`], if this is called again before the background writer has
+    /// processed a previous rebuild, the earlier request is superseded rather than queued
+    /// alongside it: only the most recently requested document set is ever applied. This keeps
+    /// the background queue bounded even under a flood of rebuild requests (e.g. a filesystem
+    /// watcher repeatedly firing config-reload events), since the queue never grows past a
+    /// single pending rebuild regardless of how many times this is called.
+    pub fn rebuild_index_async(
+        &self,
+        documents: impl IntoIterator<Item = C::SearchDocEntry>,
+    ) -> anyhow::Result<()> {
+        let entries = documents
+            .into_iter()
+            .map(SearchDocumentEntry::into_document_entry)
+            .collect();
+        *self.pending_rebuild.lock() = Some(entries);
+        // Only enqueue a `Rebuild` message if one isn't already outstanding: any documents we
+        // just stored above will be picked up whenever that outstanding message is processed.
+        if !self.rebuild_queued.swap(true, Ordering::AcqRel) {
+            block_on(self.tx.send(SearcherChannelMessage::Rebuild))
+                .map_err(|e| anyhow::anyhow!("Failed to send rebuild index event: {}", e))?;
+        }
+        Ok(())
+    }
+
     pub fn insert_document_async(&self, entry: C::SearchDocEntry) -> anyhow::Result<()> {
-        block_on(
-            self.tx
-                .send(SearcherEvent::DocumentInserted(entry.into_document_entry())),
-        )
+        block_on(self.tx.send(SearcherChannelMessage::Event(
+            SearcherEvent::DocumentInserted(entry.into_document_entry()),
+        )))
         .map_err(|e| anyhow::anyhow!("Failed to send document insertion event: {}", e))
     }
 
     pub fn delete_document_async(&self, identifying_entry: C::SearchIdEntry) -> anyhow::Result<()> {
-        block_on(self.tx.send(SearcherEvent::DocumentDeleted(
-            identifying_entry.into_identifying_entry(),
+        block_on(self.tx.send(SearcherChannelMessage::Event(
+            SearcherEvent::DocumentDeleted(identifying_entry.into_identifying_entry()),
         )))
         .map_err(|e| anyhow::anyhow!("Failed to send document deletion event: {}", e))
     }
