@@ -298,13 +298,6 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
 
   # Clears the line editor's buffer and, if the active keymap is "vicmd" (vi command/normal
   # mode), switches back to "viins" (its insert companion).
-  #
-  # This is bound to ^P instead of the builtin `kill-buffer` widget (see `warp_precmd` below).
-  # Warp has an unbracketed-paste path (used whenever the shell hasn't signaled bracketed paste
-  # support, e.g. right after a program that disables it exits) where the command text following
-  # ^P is sent as raw keystrokes rather than pasted as a block. If the line editor were left in
-  # vi command mode after the clear, those keystrokes would be interpreted as vi motions/commands
-  # instead of being inserted into the buffer.
   function warp_kill_buffer_and_reset_insert_mode () {
     zle kill-buffer
     if [[ $KEYMAP == vicmd ]]; then
@@ -373,12 +366,6 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       # ends up being one we didn't rebind, the clear becomes a no-op and any leftover bootstrap bytes
       # still sitting in the line editor's buffer get echoed alongside the next command.
       # See https://github.com/warpdotdev/warp/issues/7099.
-      #
-      # `bindkey -M <keymap> key widget` replaces any existing binding for `key` outright, so no
-      # separate `bindkey -r` is needed. Each bind is guarded with `|| :` (not just a stderr
-      # redirect) because a keymap can be removed entirely via `bindkey -D <keymap>`, at which
-      # point `bindkey -M <keymap> ...` fails with a non-zero exit code; under `setopt ERR_EXIT`
-      # an unguarded failure here would abort the rest of the prompt.
       local warp_keymap
       for warp_keymap in main emacs viins vicmd; do
         bindkey -M "$warp_keymap" '^P' warp_kill_buffer_and_reset_insert_mode 2>/dev/null || :

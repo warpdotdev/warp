@@ -321,17 +321,6 @@ pub fn test_zsh_bootstraps_with_nounset_option() -> Builder {
 /// exact repro; prezto's `init.zsh` does the same thing) must not leak leftover buffer content,
 /// nor corrupt the command text, into the next command -- even when the line editor is in vi
 /// command (normal) mode, as it transiently can be after a stray byte from the bootstrap paste.
-///
-/// Both risk factors are reproduced using zsh-native mechanisms that Warp's Rust side has no
-/// visibility into (mirroring how the real bootstrap-paste residue is invisible to Warp until it
-/// shows up as corrupted command text):
-///   - `print -z` pushes literal text onto the line editor's buffer for the *next* read, exactly
-///     like genuine leftover bytes sitting unread in the buffer.
-///   - `zle-line-init` forces vi command (normal) mode on every new line, exactly like a stray
-///     Escape byte would transiently do.
-/// A real command is then submitted through Warp's normal input path (which prefixes every
-/// submitted command with the same kill-buffer byte the bootstrap script binds) and the
-/// resulting block's command text must be exactly the submitted command.
 pub fn test_zsh_cursor_mode_vi_bindings_do_not_corrupt_commands() -> Builder {
     new_builder()
         .set_should_run_test(|| {
