@@ -601,7 +601,7 @@ impl TemplatableMCPServerManager {
                 update_manager.update_templatable_mcp_server(
                     template_server,
                     cloud_templatable_mcp_server.id,
-                    cloud_templatable_mcp_server.metadata.revision.clone(),
+                    cloud_templatable_mcp_server.metadata.revision,
                     ctx,
                 );
             });
