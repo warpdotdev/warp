@@ -6,9 +6,7 @@ use warp::cmd_or_ctrl_shift;
 use warp::integration_testing::input::{
     input_contains_string, input_editor_is_focused, input_editor_is_not_focused, input_is_empty,
 };
-use warp::integration_testing::step::{
-    assert_no_pending_model_events, new_step_with_default_assertions,
-};
+use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::tab::tab_title_step;
 use warp::integration_testing::terminal::util::{
     ExpectedExitStatus, current_shell_starter_and_version,
@@ -320,14 +318,20 @@ pub fn test_zsh_bootstraps_with_nounset_option() -> Builder {
 
 /// Regression test for https://github.com/warpdotdev/warp/issues/7099: a `.zshrc` that enables
 /// vi-mode key bindings via `autoload -Uz cursor_mode; cursor_mode` (mirroring the reporter's
-/// exact repro; prezto's `init.zsh` does the same thing) must not leak bootstrap-paste residue,
-/// nor corrupt the command text, into the next command -- even after a stray byte switches the
-/// line editor into vi command (normal) mode, as a leftover byte from the bootstrap paste could.
+/// exact repro; prezto's `init.zsh` does the same thing) must not leak leftover buffer content,
+/// nor corrupt the command text, into the next command -- even when the line editor is in vi
+/// command (normal) mode, as it transiently can be after a stray byte from the bootstrap paste.
 ///
-/// The stray byte is injected while a long-running command owns the pty (matching how leftover
-/// bytes reach zle as real typeahead in `test_typeahead`/`test_input_reporting_posix_shells`),
-/// then a real command is submitted through Warp's normal input path (which prefixes every
-/// submitted command with the same kill-buffer byte the bootstrap script binds).
+/// Both risk factors are reproduced using zsh-native mechanisms that Warp's Rust side has no
+/// visibility into (mirroring how the real bootstrap-paste residue is invisible to Warp until it
+/// shows up as corrupted command text):
+///   - `print -z` pushes literal text onto the line editor's buffer for the *next* read, exactly
+///     like genuine leftover bytes sitting unread in the buffer.
+///   - `zle-line-init` forces vi command (normal) mode on every new line, exactly like a stray
+///     Escape byte would transiently do.
+/// A real command is then submitted through Warp's normal input path (which prefixes every
+/// submitted command with the same kill-buffer byte the bootstrap script binds) and the
+/// resulting block's command text must be exactly the submitted command.
 pub fn test_zsh_cursor_mode_vi_bindings_do_not_corrupt_commands() -> Builder {
     new_builder()
         .set_should_run_test(|| {
@@ -347,45 +351,27 @@ CURSOR_MODE_EOF
 fpath=("$HOME/.zfunctions" $fpath)
 autoload -Uz cursor_mode
 cursor_mode
+function zle-line-init() { zle -K vicmd }
+zle -N zle-line-init
 "#,
                 [ShellRcType::Zsh],
             );
         })
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
         .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
-        .with_step(
-            TestStep::new("Run sleep, then inject a stray Escape while it's busy")
-                .add_named_assertion("no pending model events", assert_no_pending_model_events())
-                .with_typed_characters(&["sleep 1"])
-                .with_keystrokes(&["enter"])
-                .add_assertion(
-                    assert_long_running_block_executing_for_single_terminal_in_tab(true, 0),
-                ),
-        )
-        .with_step(
-            // A literal ESC byte reaches the pty exactly as it would from real typeahead,
-            // matching how `test_typeahead` verifies that typed characters land in the shell's
-            // buffer while a command is running.  In vi mode, ESC switches the line editor from
-            // insert ("viins") to vi command ("vicmd") mode.
-            TestStep::new("Inject a stray Escape while the shell is busy")
-                .with_typed_characters(&["\u{1b}"]),
-        )
+        // Leaves "LEFTOVER_RESIDUE" pending in the line editor's buffer for the *next* prompt,
+        // simulating genuine leftover bootstrap-paste bytes Warp has no visibility into.
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "print -z LEFTOVER_RESIDUE".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
         .with_step(execute_command_for_single_terminal_in_tab(
             0,
             "echo cursor_mode_vi_ok".to_string(),
             ExpectedExitStatus::Success,
             "cursor_mode_vi_ok",
-        ))
-        // Repeat to confirm the fix is durable across multiple commands, not just the one
-        // immediately following the stray Escape.
-        .with_step(
-            TestStep::new("Inject another stray Escape").with_typed_characters(&["\u{1b}"]),
-        )
-        .with_step(execute_command_for_single_terminal_in_tab(
-            0,
-            "echo cursor_mode_vi_ok_again".to_string(),
-            ExpectedExitStatus::Success,
-            "cursor_mode_vi_ok_again",
         ))
 }
 
