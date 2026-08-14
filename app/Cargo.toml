@@ -776,13 +776,18 @@ heap_usage_tracking = ["jemalloc_pprof", "crash_reporting"]
 image_as_context = []
 in_band_generators_ssh = []
 jemalloc = ["dep:tikv-jemallocator", "ai/jemalloc"]
-jemalloc_with_profiling = [
-    "jemalloc",
-    "tikv-jemallocator/profiling",
+jemalloc_with_profiling = ["jemalloc", "tikv-jemallocator/profiling"]
+jemalloc_auto_heap_profiling = ["jemalloc_with_profiling"]
+# `tikv-jemallocator/stats` (and thus jemalloc's `--enable-stats`) is scoped to
+# this feature rather than `jemalloc_with_profiling`, so that
+# `jemalloc_auto_heap_profiling` builds don't pay for stats bookkeeping they
+# don't use.
+jemalloc_pprof = [
+    "jemalloc_with_profiling",
+    "dep:jemalloc_pprof",
+    "dep:tikv-jemalloc-ctl",
     "tikv-jemallocator/stats",
 ]
-jemalloc_auto_heap_profiling = ["jemalloc_with_profiling"]
-jemalloc_pprof = ["jemalloc_with_profiling", "dep:jemalloc_pprof", "dep:tikv-jemalloc-ctl"]
 run_generators_with_cmd_exe = []
 inline_ssh_banner = []
 kitty_images = []
