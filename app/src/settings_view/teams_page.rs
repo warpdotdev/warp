@@ -2255,10 +2255,9 @@ impl TeamsWidget {
             .set_border_color(appearance.theme().foreground().with_opacity(20).into())
             .set_padding(Coords::uniform(0.).top(4.).right(5.));
 
-        let use_workspace_admin_panel = AdminActions::should_use_workspace_admin_panel(
-            UserWorkspaces::as_ref(app).current_workspace(),
-            &current_user_email,
-        );
+        let use_workspace_admin_panel = UserWorkspaces::as_ref(app)
+            .current_workspace()
+            .is_some_and(|workspace| workspace.is_native_workspaces_admin(&current_user_email));
 
         // 1) Team name header
         main_content.add_child(self.render_header(

@@ -30,6 +30,50 @@ fn policy(
     }
 }
 
+const MEMBER_EMAIL: &str = "member@warp.dev";
+
+fn workspace_with_member(role: MembershipRole, native_workspaces_enabled: bool) -> Workspace {
+    let mut workspace = make_workspace(None);
+    workspace.members = vec![WorkspaceMember {
+        uid: UserUid::new("member-uid"),
+        email: MEMBER_EMAIL.to_string(),
+        role,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: false,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    }];
+    workspace.billing_metadata.tier.native_workspaces_policy = Some(NativeWorkspacesPolicy {
+        enabled: native_workspaces_enabled,
+    });
+    workspace
+}
+
+#[test]
+fn native_workspaces_admin_requires_admin_role_and_enabled_policy() {
+    // (workspace role, native workspaces enabled, viewer email, is native workspaces admin)
+    let cases = [
+        (MembershipRole::Admin, true, MEMBER_EMAIL, true),
+        (MembershipRole::Owner, true, MEMBER_EMAIL, true),
+        // An admin on a plan without native workspaces, a non-admin member, and
+        // a viewer absent from the roster are all excluded.
+        (MembershipRole::Owner, false, MEMBER_EMAIL, false),
+        (MembershipRole::User, true, MEMBER_EMAIL, false),
+        (MembershipRole::Owner, true, "someone-else@warp.dev", false),
+    ];
+
+    for (role, native_workspaces_enabled, email, expected) in cases {
+        assert_eq!(
+            workspace_with_member(role, native_workspaces_enabled)
+                .is_native_workspaces_admin(email),
+            expected,
+            "role={role:?}, native_workspaces_enabled={native_workspaces_enabled}, email={email}"
+        );
+    }
+}
+
 #[test]
 fn missing_policy_returns_defaults_for_admin_and_non_admin() {
     let workspace = make_workspace(None);
