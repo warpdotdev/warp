@@ -1567,6 +1567,8 @@ fn test_availability_refresh_skipped_when_logged_out() {
 
 #[cfg(feature = "tui")]
 mod tui_usage_snapshot_tests {
+    use chrono::TimeZone as _;
+
     use super::*;
     use crate::workspaces::team::{MembershipRole, Team, TeamMember};
     use crate::workspaces::workspace::{
@@ -1574,6 +1576,15 @@ mod tui_usage_snapshot_tests {
         AiCreditsUsageSource, BillingCycleUsageData, BillingCycleUsageEntry,
         BillingCycleUsageSummary, UsageVisibilityGranularity, UsageVisibilityPolicy,
     };
+
+    #[test]
+    fn refresh_time_matches_the_usage_design() {
+        let time = Local
+            .with_ymd_and_hms(2026, 7, 31, 17, 0, 0)
+            .single()
+            .expect("the local date should be valid");
+        assert_eq!(format_tui_usage_refresh_time(time), "July 31 at 5:00pm");
+    }
 
     fn payg_entry(
         credits_used: i32,

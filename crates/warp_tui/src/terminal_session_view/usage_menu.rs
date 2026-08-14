@@ -1,11 +1,4 @@
-//! Stateless projection for the `/usage` panel.
-//!
-//! Unlike the other read-only menus (`status_menu`, `shortcuts`, `todo_menu`),
-//! this panel needs interactive links ("Manage billing and usage", "Buy more
-//! credits or upgrade plan") and custom bar/circle visualizations that the
-//! shared [`crate::read_only_menu::TuiReadOnlyMenu`] row model can't express,
-//! so it composes its own element tree directly instead of going through that
-//! component.
+//! Rendering for the interactive `/usage` panel.
 
 use warp::tui_export::{TuiUsageCreditBar, TuiUsagePayAsYouGo, TuiUsageSnapshot};
 use warpui_core::AppContext;
@@ -18,15 +11,7 @@ use warpui_core::elements::{CrossAxisAlignment, MouseStateHandle};
 
 use crate::tui_builder::TuiUiBuilder;
 
-/// Credits represented by a single pay-as-you-go circle.
 const CREDITS_PER_CIRCLE: i64 = 500;
-
-/// A single-row bar that fills whatever width it's laid out at: the leading
-/// `ratio` fraction renders `filled_char`/`filled_style`, and the remainder
-/// renders `empty_char`/`empty_style`. Unlike a `TuiText` built from a
-/// fixed-length string, this measures against the constraint it's actually
-/// offered, so the credit bars reactively span the card's real width on any
-/// terminal size instead of a fixed guess tuned to one reference width.
 struct TuiUsageBar {
     ratio: f64,
     filled_char: char,
@@ -104,12 +89,6 @@ impl TuiElement for TuiUsageBar {
     }
 }
 
-/// One or more rows of filled/empty circles representing pay-as-you-go
-/// spend, wrapping onto as many rows as the offered width requires. Unlike
-/// the fixed-limit credit bars, pay-as-you-go spend has no ceiling, so it
-/// can't be split into rows ahead of a known width — this element performs
-/// that split during layout against whatever width it's actually offered,
-/// reactively wrapping instead of assuming a fixed guess.
 struct TuiUsagePayAsYouGoRows {
     total_circles: usize,
     filled_style: TuiStyle,
@@ -201,12 +180,6 @@ fn plain_row(text: impl Into<String>, style: TuiStyle) -> Box<dyn TuiElement> {
         .finish()
 }
 
-/// A row with `left` flush to the card's left edge and `right` flush to its
-/// right edge, via a flex spacer — the same pattern the header row uses.
-/// Plain string concatenation with fixed padding can't do this: a `TuiText`
-/// reports its own natural (fixed) width, so padding alone leaves the value
-/// stranded mid-card instead of at the edge once the row is stretched to the
-/// panel's full width.
 fn flex_row(left: Vec<(String, TuiStyle)>, right: Vec<(String, TuiStyle)>) -> Box<dyn TuiElement> {
     TuiFlex::row()
         .child(spans_row(left))
@@ -226,10 +199,6 @@ fn spans_row(spans: Vec<(String, TuiStyle)>) -> Box<dyn TuiElement> {
     TuiText::from_spans(spans).truncate().finish()
 }
 
-/// Renders a bar that reactively fills the card's real width: `used / limit`
-/// as a filled fraction followed by an empty remainder. `used` is drawn as a
-/// strict percentage of `limit`, regardless of the bar's current visual
-/// state.
 fn credit_bar_row(
     used: i64,
     limit: i64,
@@ -241,13 +210,8 @@ fn credit_bar_row(
     } else {
         (used as f64 / limit as f64).clamp(0.0, 1.0)
     };
-    // The filled segment is a solid block; the empty segment is a lighter,
-    // dithered fill — confirmed against the designer's own screenshot.
     TuiUsageBar::new(ratio, '█', '░', filled_style, empty_style).finish()
 }
-
-/// Renders the pay-as-you-go circle block, wrapping onto as many rows as the
-/// card's real width requires.
 fn pay_as_you_go_rows(
     credits_used: i64,
     filled_style: TuiStyle,
@@ -260,11 +224,11 @@ fn pay_as_you_go_rows(
 fn hoverable_link(
     text: &str,
     mouse_state: &MouseStateHandle,
-    builder: &TuiUiBuilder,
+    style: TuiStyle,
     url: String,
 ) -> Box<dyn TuiElement> {
     let is_hovered = mouse_state.lock().is_ok_and(|state| state.is_hovered());
-    let mut style = builder.link_text_style().add_modifier(Modifier::UNDERLINED);
+    let mut style = style.add_modifier(Modifier::UNDERLINED);
     if is_hovered {
         style = style.add_modifier(Modifier::BOLD);
     }
@@ -277,8 +241,32 @@ fn hoverable_link(
 }
 
 fn dollars(cents: i64) -> String {
+    if cents == 0 {
+        return "$0".to_owned();
+    }
     let sign = if cents < 0 { "-" } else { "" };
-    format!("{sign}${:.2}", (cents.unsigned_abs() as f64) / 100.0)
+    let cents = cents.unsigned_abs();
+    format!(
+        "{sign}${}.{:02}",
+        decimal_with_commas((cents / 100) as i64),
+        cents % 100
+    )
+}
+
+fn decimal_with_commas(value: i64) -> String {
+    if value.unsigned_abs() < 10_000 {
+        return value.to_string();
+    }
+    let mut digits = value.unsigned_abs().to_string();
+    let mut separator = digits.len();
+    while separator > 3 {
+        separator -= 3;
+        digits.insert(separator, ',');
+    }
+    if value < 0 {
+        digits.insert(0, '-');
+    }
+    digits
 }
 
 fn credit_section(
@@ -289,13 +277,10 @@ fn credit_section(
 ) -> Vec<Box<dyn TuiElement>> {
     let primary = builder.primary_text_style();
     let primary_bold = primary.add_modifier(Modifier::BOLD);
-    let muted = builder.muted_text_style();
+    let muted = builder.read_only_menu_label_style();
     let empty = builder.usage_bar_empty_style();
     let remaining = (bar.limit - bar.used).max(0);
 
-    // Only the numeric value is bold; the label and "remaining" stay regular
-    // weight, per the designer's screenshot ("Base credits **400** remaining").
-    // Right-aligned to the card's edge, per the designer's screenshot.
     let title_row = flex_row(
         vec![(title.to_owned(), primary)],
         vec![
@@ -304,9 +289,6 @@ fn credit_section(
         ],
     );
 
-    // The "Credits used:" label is muted; only the used/limit figure is
-    // brightened to match "Base credits", per the designer's screenshot. The
-    // note (right side) is right-aligned to the card's edge.
     let credits_used_row = flex_row(
         vec![
             ("Credits used: ".to_owned(), muted),
@@ -327,9 +309,9 @@ fn pay_as_you_go_section(
     builder: &TuiUiBuilder,
 ) -> Vec<Box<dyn TuiElement>> {
     let primary = builder.primary_text_style();
-    let muted = builder.muted_text_style();
+    let muted = builder.read_only_menu_label_style();
     let filled = builder.link_text_style();
-    let empty = builder.dim_text_style();
+    let empty = muted;
 
     let mut rows = vec![
         label_value_row("Pay-as-you-go", "No limit", primary),
@@ -340,15 +322,13 @@ fn pay_as_you_go_section(
     } else {
         NOT_KICKED_IN_NOTE
     };
-    // Same dim-label/bright-value split as "Credits used:", for consistency,
-    // and right-aligned to the card's edge the same way.
     rows.push(flex_row(
         vec![
             ("Spend: ".to_owned(), muted),
             (
                 format!(
                     "{} credits / {}",
-                    payg.credits_used,
+                    decimal_with_commas(payg.credits_used),
                     dollars(payg.cost_cents)
                 ),
                 primary,
@@ -359,9 +339,6 @@ fn pay_as_you_go_section(
     rows
 }
 
-/// Builds the `/usage` panel element tree for the given snapshot. `manage_billing_mouse`
-/// and `upgrade_mouse` are owned by the caller (not created inline here) so hover state
-/// survives element-tree rebuilds, per the shared `MouseStateHandle` convention.
 pub(super) fn render(
     info: &TuiUsageSnapshot,
     manage_billing_mouse: &MouseStateHandle,
@@ -369,32 +346,23 @@ pub(super) fn render(
     upgrade_url: &str,
     builder: &TuiUiBuilder,
 ) -> Box<dyn TuiElement> {
-    let primary_bold = builder.primary_text_style().add_modifier(Modifier::BOLD);
-    let muted = builder.muted_text_style();
-    let dim = builder.dim_text_style();
-    let accent = builder.accent_text_style();
+    let primary = builder.primary_text_style();
+    let primary_bold = primary.add_modifier(Modifier::BOLD);
+    let muted = builder.read_only_menu_label_style();
+    let shortcut = builder.link_text_style();
 
-    // Title on the left, metadata (and the admin-only manage-billing link)
-    // flush right on the same row, matching the design's single header line.
-    // The leading glyph and the " | " separators between the trailing items
-    // match the design's header row exactly. The header row gets its own
-    // background — one step lighter than the rest of the card, per the
-    // Figma file's own header frame — and its own left/right padding, rather
-    // than sharing the outer panel's padding: that keeps its background
-    // spanning the card's full width edge to edge, matching the body below,
-    // instead of stopping short at the body's shared padding inset.
     let mut metadata = format!("Plan: {}", info.plan_name);
     if let Some(team_name) = &info.team_name {
         metadata.push_str(&format!(" | Team: {team_name}"));
     }
-    let mut trailing = TuiFlex::row().child(plain_row(metadata, muted));
+    let mut trailing = TuiFlex::row().child(plain_row(metadata, primary));
     if let Some(manage_billing_url) = info.manage_billing_url.clone() {
         trailing = trailing
-            .child(plain_row(" | ", muted))
+            .child(plain_row(" | ", primary))
             .child(hoverable_link(
                 "Manage billing and usage",
                 manage_billing_mouse,
-                builder,
+                primary,
                 manage_billing_url,
             ));
     }
@@ -406,7 +374,7 @@ pub(super) fn render(
             .finish(),
     )
     .with_padding_x(1)
-    .with_background(builder.read_only_menu_header_background())
+    .with_background(builder.read_only_menu_background())
     .finish();
 
     let mut body = TuiFlex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
@@ -441,14 +409,14 @@ pub(super) fn render(
     let upgrade_link = hoverable_link(
         "Buy more credits or upgrade plan",
         upgrade_mouse,
-        builder,
+        primary,
         upgrade_url.to_owned(),
     );
     body = body.child(
         TuiFlex::row()
             .child(upgrade_link)
             .child(plain_row(" ", muted))
-            .child(plain_row("(ctrl+o)", accent))
+            .child(plain_row("(ctrl+o)", shortcut))
             .finish(),
     );
 
@@ -469,8 +437,11 @@ pub(super) fn render(
     // between the panel and it.
     TuiFlex::column()
         .child(panel)
-        .child(plain_row(" ", dim))
-        .child(plain_row("Esc to exit", dim))
+        .child(plain_row(" ", muted))
+        .child(spans_row(vec![
+            ("Esc ".to_owned(), primary),
+            ("to exit".to_owned(), muted),
+        ]))
         .finish()
 }
 

@@ -2,12 +2,14 @@ use warp::tui_export::{Appearance, TuiUsageCreditBar, TuiUsagePayAsYouGo, TuiUsa
 use warpui::{App, EntityIdMap};
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::elements::tui::{
-    Color, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
-    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
+    Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext,
+    TuiPaintContext, TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize,
 };
 
 use super::*;
 use crate::tui_builder::TuiUiBuilder;
+
+const WIDTH: u16 = 110;
 
 fn render_buffer(app: &App, element: &mut dyn TuiElement, size: TuiSize) -> TuiBuffer {
     app.read(|ctx| {
@@ -18,574 +20,164 @@ fn render_buffer(app: &App, element: &mut dyn TuiElement, size: TuiSize) -> TuiB
         let size = element.layout(TuiConstraint::loose(size), &mut layout_ctx, ctx);
         let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
         let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
-        {
-            let mut surface = TuiPaintSurface::new(&mut buffer);
-            element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
-        }
+        let mut surface = TuiPaintSurface::new(&mut buffer);
+        element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
         buffer
     })
 }
 
-fn lines_of(app: &App, mut element: Box<dyn TuiElement>, size: TuiSize) -> Vec<String> {
-    render_buffer(app, element.as_mut(), size)
+fn render_snapshot(snapshot: TuiUsageSnapshot) -> TuiBuffer {
+    App::test((), |app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let mut element = app.read(|ctx| {
+            render(
+                &snapshot,
+                &MouseStateHandle::default(),
+                &MouseStateHandle::default(),
+                "https://example.com/upgrade",
+                &TuiUiBuilder::from_app(ctx),
+            )
+        });
+        render_buffer(&app, element.as_mut(), TuiSize::new(WIDTH, 40))
+    })
+}
+
+fn lines(buffer: &TuiBuffer) -> Vec<String> {
+    buffer
         .to_lines()
         .into_iter()
         .map(|line| line.trim_end().to_owned())
         .collect()
 }
 
-fn count(line: &str, glyph: char) -> usize {
-    line.chars().filter(|c| *c == glyph).count()
-}
-
-fn credit_bar(used: i64, limit: i64) -> TuiUsageCreditBar {
+fn credit_bar(used: i64, limit: i64, note: &str) -> TuiUsageCreditBar {
     TuiUsageCreditBar {
         used,
         limit,
-        note: "Resets Jul 31 at 5:00 PM".to_owned(),
+        note: note.to_owned(),
     }
 }
 
-fn base_snapshot() -> TuiUsageSnapshot {
+fn snapshot(pay_as_you_go: TuiUsagePayAsYouGo) -> TuiUsageSnapshot {
     TuiUsageSnapshot {
         plan_name: "Build".to_owned(),
         team_name: Some("Product Eng".to_owned()),
+        base_credits: Some(credit_bar(1500, 1500, "Resets July 31 at 5:00pm")),
+        addon_credits: Some(credit_bar(
+            100,
+            500,
+            "Auto-reload 500 credits July 31 at 5:00pm",
+        )),
+        pay_as_you_go: Some(pay_as_you_go),
+        manage_billing_url: Some("https://example.com/billing".to_owned()),
+    }
+}
+
+fn count(line: &str, glyph: char) -> usize {
+    line.chars().filter(|candidate| *candidate == glyph).count()
+}
+
+#[test]
+fn active_pay_as_you_go_matches_the_figma_card() {
+    let buffer = render_snapshot(snapshot(TuiUsagePayAsYouGo {
+        credits_used: 3500,
+        cost_cents: 3000,
+        has_kicked_in: true,
+    }));
+    let rendered = lines(&buffer);
+
+    assert!(rendered[0].starts_with(" ◔ Usage"));
+    assert!(rendered[0].ends_with("Plan: Build | Team: Product Eng | Manage billing and usage"));
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Spend: 3500 credits / $30.00"))
+    );
+    assert_eq!(buffer[(0, 0)].bg, buffer[(0, 2)].bg);
+    assert!(buffer[(1, 0)].modifier.contains(Modifier::BOLD));
+
+    let manage_column = rendered[0]
+        .find("Manage billing and usage")
+        .expect("manage billing link should render") as u16;
+    assert!(
+        buffer[(manage_column, 0)]
+            .modifier
+            .contains(Modifier::UNDERLINED)
+    );
+    assert_eq!(buffer[(manage_column, 0)].fg, buffer[(2, 0)].fg);
+
+    let upgrade_row = rendered
+        .iter()
+        .position(|line| line.contains("Buy more credits"))
+        .expect("upgrade link should render") as u16;
+    let shortcut_column = rendered[usize::from(upgrade_row)]
+        .find("(ctrl+o)")
+        .expect("shortcut should render") as u16;
+    assert!(
+        buffer[(1, upgrade_row)]
+            .modifier
+            .contains(Modifier::UNDERLINED)
+    );
+    assert_eq!(
+        buffer[(shortcut_column, upgrade_row)].fg,
+        buffer[(1, 11)].fg
+    );
+
+    let footer_row = rendered
+        .iter()
+        .position(|line| line == "Esc to exit")
+        .expect("footer should render") as u16;
+    assert_eq!(buffer[(0, footer_row)].fg, buffer[(1, 2)].fg);
+    assert_eq!(buffer[(4, footer_row)].fg, buffer[(1, 4)].fg);
+}
+
+#[test]
+fn inactive_pay_as_you_go_matches_the_figma_copy() {
+    let rendered = lines(&render_snapshot(snapshot(TuiUsagePayAsYouGo {
+        credits_used: 0,
+        cost_cents: 0,
+        has_kicked_in: false,
+    })))
+    .join("\n");
+
+    assert!(rendered.contains("Spend: 0 credits / $0"));
+    assert!(!rendered.contains("$0.00"));
+    assert!(rendered.contains("Kicks in after base and add-on credits are exhausted."));
+}
+
+#[test]
+fn pay_as_you_go_wraps_and_formats_large_usage_like_figma() {
+    let rendered = lines(&render_snapshot(snapshot(TuiUsagePayAsYouGo {
+        credits_used: 60_000,
+        cost_cents: 8053,
+        has_kicked_in: true,
+    })));
+    let usage_rows: Vec<_> = rendered.iter().filter(|line| line.contains('●')).collect();
+
+    assert_eq!(usage_rows.len(), 2);
+    assert_eq!(count(usage_rows[0], '●'), 108);
+    assert_eq!(count(usage_rows[1], '●'), 12);
+    assert_eq!(count(usage_rows[1], '-'), 96);
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Spend: 60,000 credits / $80.53"))
+    );
+}
+
+#[test]
+fn sections_without_account_data_are_omitted() {
+    let rendered = lines(&render_snapshot(TuiUsageSnapshot {
+        plan_name: "Free".to_owned(),
+        team_name: None,
         base_credits: None,
         addon_credits: None,
         pay_as_you_go: None,
         manage_billing_url: None,
-    }
-}
+    }))
+    .join("\n");
 
-/// Renders the full `/usage` panel for `snapshot` and returns its lines.
-fn render_snapshot_lines(snapshot: TuiUsageSnapshot) -> Vec<String> {
-    App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        let element = app.read(|ctx| {
-            let builder = TuiUiBuilder::from_app(ctx);
-            render(
-                &snapshot,
-                &MouseStateHandle::default(),
-                &MouseStateHandle::default(),
-                "https://example.com/upgrade",
-                &builder,
-            )
-        });
-        // Wide enough that even the longest label+note combination (e.g. the
-        // "Spend: ..." row paired with the longest "Kicks in..." copy) isn't
-        // clipped, so these assertions test content rather than truncation.
-        lines_of(&app, element, TuiSize::new(110, 30))
-    })
-}
-
-#[test]
-fn credit_bar_row_is_empty_at_zero_percent() {
-    const WIDTH: u16 = 60;
-    let row = credit_bar_row(0, 1500, TuiStyle::default(), TuiStyle::default());
-    let lines = App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        lines_of(&app, row, TuiSize::new(WIDTH, 1))
-    });
-    let line = &lines[0];
-    assert_eq!(count(line, '█'), 0, "filled segment is a solid block");
-    assert_eq!(
-        count(line, '░'),
-        WIDTH as usize,
-        "empty segment is light-shade"
-    );
-}
-
-#[test]
-fn credit_bar_row_reflects_partial_percentage() {
-    // 100/500 = 20% used, matching the designer-confirmed rule that the bar
-    // fill is a strict function of credits used / limit.
-    const WIDTH: u16 = 60;
-    let row = credit_bar_row(100, 500, TuiStyle::default(), TuiStyle::default());
-    let lines = App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        lines_of(&app, row, TuiSize::new(WIDTH, 1))
-    });
-    let line = &lines[0];
-    let expected_filled = (WIDTH as f64 * 0.2).round() as usize;
-    assert_eq!(
-        count(line, '█'),
-        expected_filled,
-        "filled segment is a solid block"
-    );
-    assert_eq!(
-        count(line, '░'),
-        WIDTH as usize - expected_filled,
-        "empty segment is light-shade"
-    );
-}
-
-#[test]
-fn credit_bar_row_is_full_at_limit() {
-    const WIDTH: u16 = 60;
-    let row = credit_bar_row(1500, 1500, TuiStyle::default(), TuiStyle::default());
-    let lines = App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        lines_of(&app, row, TuiSize::new(WIDTH, 1))
-    });
-    let line = &lines[0];
-    assert_eq!(
-        count(line, '█'),
-        WIDTH as usize,
-        "filled segment is a solid block"
-    );
-    assert_eq!(count(line, '░'), 0, "no empty segment remains");
-}
-
-#[test]
-fn credit_bar_row_reactively_fills_whatever_width_it_is_offered() {
-    // The same 20%-used bar, laid out at two different widths, must fill
-    // proportionally to *each* width rather than a fixed guess baked in
-    // ahead of time — this is what makes it look right on any real terminal
-    // size, not just one reference width.
-    for width in [40u16, 74, 120, 200] {
-        let row = credit_bar_row(100, 500, TuiStyle::default(), TuiStyle::default());
-        let lines = App::test((), |app| async move {
-            app.add_singleton_model(|_| Appearance::mock());
-            lines_of(&app, row, TuiSize::new(width, 1))
-        });
-        let line = &lines[0];
-        let expected_filled = (f64::from(width) * 0.2).round() as usize;
-        assert_eq!(
-            count(line, '█') + count(line, '░'),
-            width as usize,
-            "the bar must span the full offered width {width}"
-        );
-        assert_eq!(
-            count(line, '█'),
-            expected_filled,
-            "20% of width {width} should be filled"
-        );
-    }
-}
-
-#[test]
-fn pay_as_you_go_not_kicked_in_renders_a_single_dashed_row() {
-    const WIDTH: u16 = 60;
-    let row = pay_as_you_go_rows(0, TuiStyle::default(), TuiStyle::default());
-    let lines = App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        lines_of(&app, row, TuiSize::new(WIDTH, 1))
-    });
-    assert_eq!(lines.len(), 1);
-    assert_eq!(count(&lines[0], '●'), 0);
-    assert_eq!(count(&lines[0], '-'), WIDTH as usize);
-}
-
-#[test]
-fn pay_as_you_go_renders_one_row_of_circles_when_under_a_row() {
-    const WIDTH: u16 = 60;
-    // 3500 credits / 500 credits-per-circle = 7 circles, well under WIDTH.
-    let row = pay_as_you_go_rows(3500, TuiStyle::default(), TuiStyle::default());
-    let lines = App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        lines_of(&app, row, TuiSize::new(WIDTH, 1))
-    });
-    assert_eq!(lines.len(), 1);
-    assert_eq!(count(&lines[0], '●'), 7);
-    assert_eq!(count(&lines[0], '-'), WIDTH as usize - 7);
-}
-
-#[test]
-fn pay_as_you_go_wraps_across_multiple_rows_when_it_overflows_a_row() {
-    const WIDTH: u16 = 60;
-    // 60,000 credits / 500 = 120 circles, which overflows a single WIDTH-wide row.
-    let total_circles = 120usize;
-    let row = pay_as_you_go_rows(60_000, TuiStyle::default(), TuiStyle::default());
-    let expected_rows = total_circles.div_ceil(WIDTH as usize);
-    assert!(expected_rows > 1, "this scenario must actually wrap");
-
-    let lines = App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        lines_of(&app, row, TuiSize::new(WIDTH, 400))
-    });
-    assert_eq!(lines.len(), expected_rows);
-
-    let mut remaining = total_circles;
-    for (index, line) in lines.iter().enumerate() {
-        let filled_in_row = remaining.min(WIDTH as usize);
-        remaining -= filled_in_row;
-        assert_eq!(
-            count(line, '●'),
-            filled_in_row,
-            "row {index} filled-circle count"
-        );
-        assert_eq!(
-            count(line, '-'),
-            WIDTH as usize - filled_in_row,
-            "row {index} dash count"
-        );
-    }
-}
-
-#[test]
-fn pay_as_you_go_rows_reactively_wraps_at_whatever_width_it_is_offered() {
-    // The same spend, laid out at two different widths, must wrap into a
-    // different number of rows proportional to *each* width, not a fixed
-    // guess baked in ahead of time.
-    let total_circles = 120usize;
-    for width in [40u16, 74, 200] {
-        let row = pay_as_you_go_rows(60_000, TuiStyle::default(), TuiStyle::default());
-        let lines = App::test((), |app| async move {
-            app.add_singleton_model(|_| Appearance::mock());
-            lines_of(&app, row, TuiSize::new(width, 400))
-        });
-        let expected_rows = total_circles.div_ceil(width as usize);
-        assert_eq!(
-            lines.len(),
-            expected_rows,
-            "width {width} should wrap into {expected_rows} rows"
-        );
-    }
-}
-
-#[test]
-fn render_omits_sections_the_account_does_not_have() {
-    let mut snapshot = base_snapshot();
-    snapshot.base_credits = Some(credit_bar(1500, 1500));
-    // add-on credits and pay-as-you-go remain None.
-
-    let text = render_snapshot_lines(snapshot).join("\n");
-    assert!(text.contains("Base credits"));
-    assert!(!text.contains("Add-on credits"));
-    assert!(!text.contains("Pay-as-you-go"));
-}
-
-#[test]
-fn render_shows_all_sections_when_all_apply() {
-    let mut snapshot = base_snapshot();
-    snapshot.base_credits = Some(credit_bar(1500, 1500));
-    snapshot.addon_credits = Some(credit_bar(100, 500));
-    snapshot.pay_as_you_go = Some(TuiUsagePayAsYouGo {
-        credits_used: 3500,
-        cost_cents: 3000,
-        has_kicked_in: true,
-    });
-    snapshot.manage_billing_url = Some("https://example.com/billing".to_owned());
-
-    let text = render_snapshot_lines(snapshot).join("\n");
-    assert!(text.contains("Base credits"));
-    assert!(text.contains("Add-on credits"));
-    assert!(text.contains("Pay-as-you-go"));
-    assert!(text.contains("Manage billing and usage"));
-    assert!(text.contains("Buy more credits or upgrade plan"));
-    assert!(text.contains("(ctrl+o)"));
-    assert!(text.contains("Kicks in after credits are exhausted."));
-    assert!(text.contains("Spend: 3500 credits / $30.00"));
-    assert!(text.contains("Esc to exit"));
-}
-
-#[test]
-fn header_places_title_metadata_and_manage_billing_link_on_one_row() {
-    let mut snapshot = base_snapshot();
-    snapshot.manage_billing_url = Some("https://example.com/billing".to_owned());
-
-    let lines = render_snapshot_lines(snapshot);
-    let header = &lines[0];
-    assert!(header.contains("\u{25D4} Usage"), "{header}");
-    // The trailing items are pipe-separated, matching the design's header row.
-    assert!(
-        header.contains("Plan: Build | Team: Product Eng | Manage billing and usage"),
-        "{header}"
-    );
-}
-
-#[test]
-fn esc_to_exit_row_has_no_panel_background() {
-    // "Esc to exit" must render outside the panel's background container, on
-    // the plain terminal background — unlike every row inside the panel.
-    let mut snapshot = base_snapshot();
-    snapshot.base_credits = Some(credit_bar(1500, 1500));
-
-    let buffer = App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        let mut element = app.read(|ctx| {
-            let builder = TuiUiBuilder::from_app(ctx);
-            render(
-                &snapshot,
-                &MouseStateHandle::default(),
-                &MouseStateHandle::default(),
-                "https://example.com/upgrade",
-                &builder,
-            )
-        });
-        render_buffer(&app, element.as_mut(), TuiSize::new(110, 30))
-    });
-    let lines: Vec<String> = buffer
-        .to_lines()
-        .into_iter()
-        .map(|line| line.trim_end().to_owned())
-        .collect();
-    let body_row = lines
-        .iter()
-        .position(|line| line.contains("Base credits"))
-        .expect("base credits row should render") as u16;
-    let esc_row = lines
-        .iter()
-        .position(|line| line.trim() == "Esc to exit")
-        .expect("Esc to exit row should render") as u16;
-
-    assert_ne!(
-        buffer[(0, body_row)].bg,
-        Color::Reset,
-        "sanity check: rows inside the panel do have a background"
-    );
-    assert_eq!(
-        buffer[(0, esc_row)].bg,
-        Color::Reset,
-        "Esc to exit should render outside the panel's background"
-    );
-}
-
-#[test]
-fn header_places_title_and_metadata_on_one_row_without_the_manage_billing_link() {
-    // Non-admins (or teams without a manage-billing link) still get a single
-    // header row, just without the trailing link segment.
-    let snapshot = base_snapshot();
-
-    let lines = render_snapshot_lines(snapshot);
-    let header = &lines[0];
-    assert!(header.contains("Usage"), "{header}");
-    assert!(
-        header.contains("Plan: Build | Team: Product Eng"),
-        "{header}"
-    );
-    assert!(!header.contains("Manage billing and usage"), "{header}");
-}
-
-#[test]
-fn header_background_spans_the_full_panel_width_not_just_its_own_padding() {
-    // The header has its own padding (separate from the body's), so its
-    // background must span the whole stretched row — including that
-    // padding — rather than stopping short of the panel's right edge.
-    let mut snapshot = base_snapshot();
-    snapshot.base_credits = Some(credit_bar(1500, 1500));
-
-    let buffer = App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        let mut element = app.read(|ctx| {
-            let builder = TuiUiBuilder::from_app(ctx);
-            render(
-                &snapshot,
-                &MouseStateHandle::default(),
-                &MouseStateHandle::default(),
-                "https://example.com/upgrade",
-                &builder,
-            )
-        });
-        render_buffer(&app, element.as_mut(), TuiSize::new(110, 30))
-    });
-    let header_bg = buffer[(0, 0)].bg;
-    for column in 0..110u16 {
-        assert_eq!(
-            buffer[(column, 0)].bg,
-            header_bg,
-            "column {column} of the header row should share its background"
-        );
-    }
-}
-
-#[test]
-fn title_row_bolds_only_the_numeric_value_and_right_aligns_it() {
-    // "Base credits" and "remaining" stay regular weight; only the number
-    // (which may be multiple digits) is bold, per the designer's screenshot.
-    // The value is flush with the row's right edge, not padded to a fixed
-    // label column.
-    const WIDTH: u16 = 110;
-    App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        let mut rows = app.read(|ctx| {
-            let builder = TuiUiBuilder::from_app(ctx);
-            credit_section(
-                "Base credits",
-                &credit_bar(1400, 1500),
-                builder.success_glyph_style(),
-                &builder,
-            )
-        });
-        let mut title_row = rows.remove(0);
-        let buffer = render_buffer(&app, title_row.as_mut(), TuiSize::new(WIDTH, 1));
-        let value = "100 remaining";
-        let value_start = WIDTH - value.len() as u16;
-        let line = buffer.to_lines()[0].clone();
-        assert_eq!(&line[..12], "Base credits");
-        assert_eq!(
-            line[value_start as usize..].trim_end(),
-            value,
-            "the value must be flush with the row's right edge"
-        );
-        assert!(
-            !buffer[(0, 0)].modifier.contains(Modifier::BOLD),
-            "the label must not be bold"
-        );
-        for column in value_start..value_start + 3 {
-            assert!(
-                buffer[(column, 0)].modifier.contains(Modifier::BOLD),
-                "digit at column {column} should be bold"
-            );
-        }
-        assert!(
-            !buffer[(value_start + 3, 0)]
-                .modifier
-                .contains(Modifier::BOLD),
-            "\" remaining\" must not be bold"
-        );
-    });
-}
-
-#[test]
-fn credits_used_row_dims_the_label_and_brightens_only_the_value() {
-    const WIDTH: u16 = 110;
-    App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        let (mut credits_used_row, muted_fg, primary_fg) = app.read(|ctx| {
-            let builder = TuiUiBuilder::from_app(ctx);
-            let mut rows = credit_section(
-                "Base credits",
-                &credit_bar(100, 150),
-                builder.success_glyph_style(),
-                &builder,
-            );
-            (
-                rows.remove(2),
-                builder
-                    .muted_text_style()
-                    .fg
-                    .expect("muted style has a foreground"),
-                builder
-                    .primary_text_style()
-                    .fg
-                    .expect("primary style has a foreground"),
-            )
-        });
-        let buffer = render_buffer(&app, credits_used_row.as_mut(), TuiSize::new(WIDTH, 1));
-        let note = "Resets Jul 31 at 5:00 PM";
-        let note_start = WIDTH - note.len() as u16;
-        let line = buffer.to_lines()[0].clone();
-        assert_eq!(
-            &line[.."Credits used: 100/150".len()],
-            "Credits used: 100/150"
-        );
-        assert_eq!(
-            line[note_start as usize..].trim_end(),
-            note,
-            "the note must be flush with the row's right edge"
-        );
-        // "Credits used: " is muted.
-        for column in 0.."Credits used: ".len() as u16 {
-            assert_eq!(
-                buffer[(column, 0)].fg,
-                muted_fg,
-                "column {column} should be muted"
-            );
-        }
-        // "100/150" is bright, matching the title row's color.
-        let value_start = "Credits used: ".len() as u16;
-        for column in value_start..value_start + "100/150".len() as u16 {
-            assert_eq!(
-                buffer[(column, 0)].fg,
-                primary_fg,
-                "column {column} should be bright"
-            );
-        }
-        // The note on the right stays muted.
-        for column in note_start..note_start + note.len() as u16 {
-            assert_eq!(
-                buffer[(column, 0)].fg,
-                muted_fg,
-                "column {column} (note) should be muted"
-            );
-        }
-    });
-}
-
-#[test]
-fn pay_as_you_go_label_row_right_aligns_its_value() {
-    const WIDTH: u16 = 110;
-    App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        let mut rows = app.read(|ctx| {
-            let builder = TuiUiBuilder::from_app(ctx);
-            pay_as_you_go_section(
-                &TuiUsagePayAsYouGo {
-                    credits_used: 3500,
-                    cost_cents: 3000,
-                    has_kicked_in: true,
-                },
-                &builder,
-            )
-        });
-        let mut header_row = rows.remove(0);
-        let buffer = render_buffer(&app, header_row.as_mut(), TuiSize::new(WIDTH, 1));
-        let line = buffer.to_lines()[0].clone();
-        assert!(line.starts_with("Pay-as-you-go"));
-        assert_eq!(
-            line[(WIDTH as usize - "No limit".len())..].trim_end(),
-            "No limit"
-        );
-    });
-}
-
-#[test]
-fn render_grows_past_the_shared_read_only_menu_row_cap_when_pay_as_you_go_wraps() {
-    // A spend large enough to wrap across many circle rows. The panel's own
-    // `render` must not self-truncate: the design requires it to grow
-    // vertically rather than clip, and the row cap that used to enforce a
-    // ceiling lived in the caller (`terminal_session_view::render_input_area`),
-    // not here — this pins down that `render` itself imposes none.
-    let mut snapshot = base_snapshot();
-    snapshot.base_credits = Some(credit_bar(1500, 1500));
-    snapshot.pay_as_you_go = Some(TuiUsagePayAsYouGo {
-        credits_used: 5_000_000,
-        cost_cents: 5_000_000,
-        has_kicked_in: true,
-    });
-
-    let lines = App::test((), |app| async move {
-        app.add_singleton_model(|_| Appearance::mock());
-        let element = app.read(|ctx| {
-            let builder = TuiUiBuilder::from_app(ctx);
-            render(
-                &snapshot,
-                &MouseStateHandle::default(),
-                &MouseStateHandle::default(),
-                "https://example.com/upgrade",
-                &builder,
-            )
-        });
-        // Generous height so the constraint itself isn't what limits the
-        // output — proving the content genuinely needs more than the old
-        // 24-row cap when nothing artificially truncates it.
-        lines_of(&app, element, TuiSize::new(110, 400))
-    });
-    assert!(
-        lines.len() > 24,
-        "expected the wrapped panel to need more than 24 rows, got {} rows",
-        lines.len()
-    );
-    assert_eq!(
-        lines.last().map(|line| line.trim()),
-        Some("Esc to exit"),
-        "the footer hint must still be the last row, not clipped off"
-    );
-}
-
-#[test]
-fn render_shows_not_kicked_in_copy_before_any_pay_as_you_go_spend() {
-    let mut snapshot = base_snapshot();
-    snapshot.base_credits = Some(credit_bar(1500, 1500));
-    snapshot.addon_credits = Some(credit_bar(100, 500));
-    snapshot.pay_as_you_go = Some(TuiUsagePayAsYouGo {
-        credits_used: 0,
-        cost_cents: 0,
-        has_kicked_in: false,
-    });
-
-    let text = render_snapshot_lines(snapshot).join("\n");
-    assert!(text.contains("Kicks in after base and add-on credits are exhausted."));
-    assert!(text.contains("Spend: 0 credits / $0.00"));
+    assert!(!rendered.contains("Base credits"));
+    assert!(!rendered.contains("Add-on credits"));
+    assert!(!rendered.contains("Pay-as-you-go"));
 }

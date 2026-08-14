@@ -640,16 +640,6 @@ impl AIRequestUsageModel {
         &self.bonus_grants
     }
 
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn set_bonus_grants_for_test(
-        &mut self,
-        bonus_grants: Vec<BonusGrant>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.bonus_grants = bonus_grants;
-        ctx.emit(AIRequestUsageModelEvent::RequestUsageUpdated);
-    }
-
     /// Returns the total remaining ambient-only credits for the user.
     /// Returns None if the user has never received any ambient-only grants.
     pub fn ambient_only_credits_remaining(&self) -> Option<i32> {
@@ -873,6 +863,11 @@ pub struct TuiUsageSnapshot {
     pub manage_billing_url: Option<String>,
 }
 
+#[cfg(feature = "tui")]
+fn format_tui_usage_refresh_time(time: DateTime<Local>) -> String {
+    time.format("%B %-d at %-I:%M%P").to_string()
+}
+
 /// Computes the data the TUI `/usage` panel renders from state the client
 /// already has locally: [`AIRequestUsageModel`] for base credits, the current
 /// workspace's non-ambient bonus grants for add-on credits, and the current
@@ -897,6 +892,7 @@ pub fn compute_tui_usage_snapshot(app: &AppContext) -> TuiUsageSnapshot {
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "Free".to_owned());
     let team_name = team.map(|team| team.name.clone());
+    let refresh_time = format_tui_usage_refresh_time(ai_model.next_refresh_time_local());
 
     let base_credits = (ai_model.request_limit() > 0).then(|| TuiUsageCreditBar {
         used: ai_model.requests_used() as i64,
@@ -904,10 +900,7 @@ pub fn compute_tui_usage_snapshot(app: &AppContext) -> TuiUsageSnapshot {
         note: if ai_model.is_unlimited() {
             "No limit".to_owned()
         } else {
-            ai_model
-                .next_refresh_time_local()
-                .format("Resets %b %d at %-I:%M %p")
-                .to_string()
+            format!("Resets {refresh_time}")
         },
     });
 
@@ -951,7 +944,9 @@ pub fn compute_tui_usage_snapshot(app: &AppContext) -> TuiUsageSnapshot {
                 used: (granted - remaining).max(0),
                 limit: granted,
                 note: match auto_reload_denomination {
-                    Some(credits) => format!("Auto-reload {credits} credits when balance is low"),
+                    Some(credits) => {
+                        format!("Auto-reload {credits} credits {refresh_time}")
+                    }
                     None => String::new(),
                 },
             }
@@ -1014,9 +1009,9 @@ pub fn compute_tui_usage_snapshot(app: &AppContext) -> TuiUsageSnapshot {
         })
     });
 
-    let manage_billing_url = user_email
-        .as_deref()
-        .and_then(|email| workspaces.admin_billing_link_for_default_team(email));
+    let manage_billing_url = team
+        .filter(|_| is_admin)
+        .map(|team| UserWorkspaces::admin_billing_link_for_team(team.uid));
 
     TuiUsageSnapshot {
         plan_name,

@@ -30,9 +30,7 @@ use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
-use crate::ai::request_usage_model::{
-    AIRequestUsageModel, BonusGrant, BonusGrantScope, BonusGrantType,
-};
+use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -67,11 +65,7 @@ use crate::user_config::WarpConfig;
 use crate::voice::transcriber::VoiceTranscriber;
 use crate::workspaces::team::{MembershipRole, Team, TeamMember};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::{
-    AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    AiCreditsUsageSource, BillingCycleUsageData, BillingCycleUsageEntry, BillingCycleUsageSummary,
-    Workspace,
-};
+use crate::workspaces::workspace::Workspace;
 
 /// Builds a history model with persisted AI queries for TUI tests.
 pub fn blocklist_ai_history_model_with_queries(queries: Vec<String>) -> BlocklistAIHistoryModel {
@@ -291,90 +285,6 @@ pub fn set_tui_default_team_admin_for_test(ctx: &mut AppContext) {
     UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
         workspaces.update_workspaces(vec![workspace], ctx);
         workspaces.set_current_workspace_uid(workspace_uid, ctx);
-    });
-}
-
-/// Seeds a single-team workspace, base-credit usage, an add-on credit grant,
-/// and pay-as-you-go billing-cycle spend for TUI `/usage` panel tests. Base
-/// credits go through [`AIRequestUsageModel::update_request_limit_info`]; the
-/// add-on grant and workspace/team are constructed directly since there's no
-/// server round-trip to fake in tests.
-pub fn set_tui_usage_test_data(
-    ctx: &mut AppContext,
-    base_used: usize,
-    base_limit: usize,
-    addon_granted: i32,
-    addon_remaining: i32,
-    payg_credits_used: i32,
-    payg_cost_cents: i32,
-) {
-    let auth = AuthStateProvider::as_ref(ctx).get();
-    let user_uid = auth.user_id().expect("test user should have an id");
-    let user_email = auth.user_email().expect("test user should have an email");
-    let mut team = Team::from_local_cache(123.into(), "test team".to_owned(), None, None, None);
-    team.members.push(TeamMember {
-        uid: user_uid,
-        email: user_email,
-        role: MembershipRole::Owner,
-    });
-    let team_uid = team.uid.to_string();
-    let mut workspace = Workspace::from_local_cache(
-        "workspace_uid123456789".to_owned().into(),
-        "test workspace".to_owned(),
-        Some(vec![team]),
-    );
-    workspace.settings.usage_based_pricing_settings.enabled = true;
-    let now = Local::now().with_timezone(&chrono::Utc);
-    let period_start = now - Duration::days(1);
-    let period_end = now + Duration::days(29);
-    workspace.billing_cycle_usage = Some(BillingCycleUsageData {
-        current_period_start: period_start,
-        current_period_end: period_end,
-        summaries: vec![BillingCycleUsageSummary {
-            period_start,
-            period_end,
-            entries: vec![BillingCycleUsageEntry {
-                subject_type: AiCreditsUsageAndCostSubjectType::User,
-                subject_uid: None,
-                subject_display_name: None,
-                cost_type: AiCreditsUsageAndCostType::Payg,
-                usage_bucket: AiCreditsUsageBucket::Ai,
-                usage_source: AiCreditsUsageSource::Local,
-                credits_used: payg_credits_used,
-                cost_cents: payg_cost_cents,
-                attributed_team_uid: Some(team_uid),
-            }],
-        }],
-    });
-    let workspace_uid = workspace.uid;
-    UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
-        workspaces.update_workspaces(vec![workspace], ctx);
-        workspaces.set_current_workspace_uid(workspace_uid, ctx);
-    });
-
-    AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
-        model.update_request_limit_info(
-            crate::ai::request_usage_model::RequestLimitInfo {
-                limit: base_limit,
-                num_requests_used_since_refresh: base_used,
-                ..Default::default()
-            },
-            ctx,
-        );
-        model.set_bonus_grants_for_test(
-            vec![BonusGrant {
-                created_at: now,
-                cost_cents: 0,
-                expiration: None,
-                grant_type: BonusGrantType::Any,
-                reason: "test".to_owned(),
-                user_facing_message: None,
-                request_credits_granted: addon_granted,
-                request_credits_remaining: addon_remaining,
-                scope: BonusGrantScope::User,
-            }],
-            ctx,
-        );
     });
 }
 

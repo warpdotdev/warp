@@ -294,30 +294,12 @@ impl TuiUiBuilder {
         cell_color(self.read_only_menu_background_fill())
     }
 
-    /// A second accent-blend step over [`Self::read_only_menu_background`],
-    /// for the `/usage` panel's "Usage" title row, which the design's own
-    /// header frame renders one step lighter than the rest of the card.
-    pub(crate) fn read_only_menu_header_background(&self) -> Color {
-        let accent = ThemeFill::from(self.warp_theme.terminal_colors().normal.cyan);
-        cell_color(
-            self.read_only_menu_background_fill()
-                .blend(&accent.with_opacity(10)),
-        )
-    }
-
-    /// Texture color for the empty segment of the `/usage` panel's credit
-    /// bars: the card's own background tinted with the foreground at enough
-    /// opacity that individual `░` dots are plainly visible against the card
-    /// — confirmed by pixel sampling, not just asserting the glyph is in the
-    /// string — while still reading as a distinct, subtler texture than the
-    /// bright, solid filled segment. Deliberately an explicit blended color
-    /// rather than `Modifier::DIM`, since terminal "faint" rendering support
-    /// is inconsistent and can't be relied on for this contrast.
+    /// The design's 60%-foreground texture over the usage card background.
     pub(crate) fn usage_bar_empty_style(&self) -> TuiStyle {
         let foreground = self.warp_theme.foreground();
         TuiStyle::default().fg(cell_color(
             self.read_only_menu_background_fill()
-                .blend(&foreground.with_opacity(45)),
+                .blend(&foreground.with_opacity(60)),
         ))
     }
 
