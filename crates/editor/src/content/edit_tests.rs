@@ -17,12 +17,12 @@ use warpui_core::{App, SingletonEntity};
 use super::{
     BlockLocation, LayOutArgs, LayoutTask, MAX_LAYOUT_CONTENT_CHARS_PER_PARALLEL_CHUNK,
     MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK, chunk_layout_tasks, layout_mermaid_diagram_block,
-    layout_table_block, layout_text_block,
+    layout_table_block, layout_temporary_blocks, layout_text_block,
 };
 use crate::content::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
 use crate::content::edit::{
-    EditDelta, ParsedUrl, highlight_urls, layout_mermaid_block_for_test, resolve_asset_source,
-    resolve_asset_source_relative_to_directory,
+    EditDelta, ParsedUrl, TemporaryBlock, highlight_urls, layout_mermaid_block_for_test,
+    resolve_asset_source, resolve_asset_source_relative_to_directory,
 };
 use crate::content::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
 use crate::content::text::{BufferBlockStyle, CodeBlockType, TextStylesWithMetadata};
@@ -30,7 +30,9 @@ use crate::render::layout::{
     TextLayout, add_link_to_style_and_font, markdown_inline_to_text_and_style_runs,
 };
 use crate::render::model::test_utils::TEST_STYLES;
-use crate::render::model::{BlockItem, RenderLayoutOptions};
+use crate::render::model::{
+    BlockItem, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES, LineCount, RenderLayoutOptions,
+};
 
 #[test]
 fn test_highlight_urls() {
@@ -1398,6 +1400,249 @@ fn test_layout_delta_single_chunk_matches_direct_layout() {
                 CharOffset::from(5)
             );
             assert!(laid_out.trailing_newline.is_some());
+        });
+    })
+}
+
+/// Builds a hidden, isolated `CodeBlock`-styled block whose gutter-button count (and thus its
+/// laid-out `line_count`) directly observes the `BlockLocation` it was laid out with: Start/End
+/// always get one button, but a genuine Middle location with `run_count >=
+/// CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES` gets two. `run_count` only matters for the Middle
+/// case; the run contents are never read since the block is hidden.
+fn isolated_hidden_code_block(run_count: usize, content_len: usize) -> StyledBufferBlock {
+    let style = BufferBlockStyle::CodeBlock {
+        code_block_type: CodeBlockType::Shell,
+    };
+    StyledBufferBlock::Text(StyledTextBlock {
+        block: vec![
+            StyledBufferRun {
+                run: String::new(),
+                text_styles: TextStylesWithMetadata::default(),
+                block_style: style.clone(),
+            };
+            run_count
+        ],
+        style,
+        content_length: CharOffset::from(content_len),
+    })
+}
+
+#[test]
+fn test_layout_delta_block_location_is_global_across_chunk_boundaries() {
+    // Regression test for APP-5392: BlockLocation must be computed from the delta's global
+    // index, not a chunk-local one. A hidden block's gutter-button count only depends on its
+    // BlockLocation when it's genuinely Middle with a large enough hidden run (2 buttons) vs.
+    // Start/End (always 1 button), so an isolated hidden block at a later chunk's first index
+    // makes a chunk-local-index regression directly observable.
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+
+            const TOTAL_BLOCKS: usize = MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK * 2 + 10;
+            const HIDDEN_AT_START: usize = 0;
+            const HIDDEN_AT_TRUE_MIDDLE: usize = 5;
+            // The first index of the second chunk: local index 0, but not the global start.
+            const HIDDEN_AT_CHUNK_BOUNDARY: usize = MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK;
+            const HIDDEN_AT_END: usize = TOTAL_BLOCKS - 1;
+            const RUN_COUNT: usize = CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES + 5;
+
+            let hidden_indices = [
+                HIDDEN_AT_START,
+                HIDDEN_AT_TRUE_MIDDLE,
+                HIDDEN_AT_CHUNK_BOUNDARY,
+                HIDDEN_AT_END,
+            ];
+
+            let mut new_lines = Vec::with_capacity(TOTAL_BLOCKS);
+            let mut block_starts = Vec::with_capacity(TOTAL_BLOCKS);
+            let mut offset = CharOffset::from(1);
+
+            for i in 0..TOTAL_BLOCKS {
+                block_starts.push(offset);
+                if hidden_indices.contains(&i) {
+                    new_lines.push(isolated_hidden_code_block(RUN_COUNT, 1));
+                    offset += 1;
+                } else {
+                    new_lines.push(identifiable_text_block(3));
+                    offset += 3;
+                }
+            }
+
+            // Each hidden index is isolated (its neighbors are visible), so none of them merge.
+            let mut hidden_ranges = RangeSet::new();
+            for &i in &hidden_indices {
+                hidden_ranges.insert(block_starts[i]..block_starts[i] + CharOffset::from(1));
+            }
+
+            let delta = EditDelta {
+                old_offset: CharOffset::from(1)..offset,
+                new_lines,
+                ..Default::default()
+            };
+
+            let laid_out = delta.layout_delta(
+                &text_layout,
+                None,
+                &RenderLayoutOptions::default(),
+                Some(hidden_ranges),
+                ctx,
+            );
+
+            // No collapsing occurred, so output indices line up with input indices.
+            assert_eq!(laid_out.laid_out_line.len(), TOTAL_BLOCKS);
+
+            let line_count_at = |global_idx: usize| match &laid_out.laid_out_line[global_idx] {
+                BlockItem::Hidden(config) => config.line_count(),
+                other => panic!("expected a Hidden item at index {global_idx}, got {other:?}"),
+            };
+
+            assert_eq!(
+                line_count_at(HIDDEN_AT_START),
+                LineCount::from(1),
+                "genuine Start should always get a single gutter button"
+            );
+            assert_eq!(
+                line_count_at(HIDDEN_AT_TRUE_MIDDLE),
+                LineCount::from(2),
+                "genuine Middle with a large hidden block should get two gutter buttons"
+            );
+            assert_eq!(
+                line_count_at(HIDDEN_AT_CHUNK_BOUNDARY),
+                LineCount::from(2),
+                "a later chunk's first task is still Middle (global index), not Start (chunk-local index)"
+            );
+            assert_eq!(
+                line_count_at(HIDDEN_AT_END),
+                LineCount::from(1),
+                "genuine End should always get a single gutter button"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_layout_delta_trailing_newline_carries_over_when_final_chunk_fully_fails() {
+    // Regression test for APP-5392: when every task in the final chunk fails, the
+    // trailing-newline result must still come from the last *successful* task in an earlier
+    // chunk, matching the old single-pass find_last() semantics over the whole (possibly
+    // filtered) sequence, rather than resetting to the default because the last chunk
+    // contributed nothing.
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+
+            const CHUNK_SIZE: usize = MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK;
+            const FAILING_TASKS: usize = 5;
+            const TOTAL_BLOCKS: usize = CHUNK_SIZE * 2 + FAILING_TASKS;
+            // The last successful task, at the end of the second chunk.
+            const LAST_SUCCESSFUL_INDEX: usize = CHUNK_SIZE * 2 - 1;
+
+            let mut new_lines = Vec::with_capacity(TOTAL_BLOCKS);
+            let mut offset = CharOffset::from(1);
+
+            for i in 0..TOTAL_BLOCKS {
+                if i >= CHUNK_SIZE * 2 {
+                    // The entire final chunk fails: an empty CodeBlock has no runs, so no
+                    // paragraph is ever pushed and layout_text_block errors instead of
+                    // producing a trailing-newline value.
+                    new_lines.push(StyledBufferBlock::Text(StyledTextBlock {
+                        block: vec![],
+                        style: BufferBlockStyle::CodeBlock {
+                            code_block_type: CodeBlockType::Shell,
+                        },
+                        content_length: CharOffset::from(3),
+                    }));
+                    offset += 3;
+                } else if i == LAST_SUCCESSFUL_INDEX {
+                    // No trailing newline, so this is distinguishable from the `true` default.
+                    new_lines.push(StyledBufferBlock::Text(StyledTextBlock {
+                        block: vec![StyledBufferRun {
+                            run: "ab".to_string(),
+                            text_styles: TextStylesWithMetadata::default(),
+                            block_style: BufferBlockStyle::PlainText,
+                        }],
+                        style: BufferBlockStyle::PlainText,
+                        content_length: CharOffset::from(2),
+                    }));
+                    offset += 2;
+                } else {
+                    new_lines.push(identifiable_text_block(3));
+                    offset += 3;
+                }
+            }
+
+            let delta = EditDelta {
+                old_offset: CharOffset::from(1)..offset,
+                new_lines,
+                ..Default::default()
+            };
+
+            let laid_out = delta.layout_delta(
+                &text_layout,
+                None,
+                &RenderLayoutOptions::default(),
+                None,
+                ctx,
+            );
+
+            // Every task in the final chunk failed and was dropped.
+            assert_eq!(laid_out.laid_out_line.len(), TOTAL_BLOCKS - FAILING_TASKS);
+            assert!(
+                laid_out.trailing_newline.is_none(),
+                "trailing newline should come from the last successful task (none), not the default that would result from losing an earlier chunk's result"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_layout_temporary_blocks_preserves_order_across_chunk_boundary() {
+    // layout_temporary_blocks shares chunk_layout_tasks with EditDelta::layout_delta (APP-5392);
+    // verify a batch spanning multiple chunks still groups its blocks by destination line in
+    // their original order.
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+
+            const TOTAL_BLOCKS: usize = MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK * 2 + 3;
+            let insert_before = LineCount::from(5);
+
+            let blocks: Vec<_> = (0..TOTAL_BLOCKS)
+                .map(|i| TemporaryBlock {
+                    content: format!("line-{i}\n"),
+                    insert_before,
+                    line_decoration: None,
+                    inline_text_decorations: Vec::new(),
+                })
+                .collect();
+
+            let mut result = layout_temporary_blocks(blocks, &text_layout);
+            let items = result
+                .remove(&insert_before)
+                .expect("all blocks share the same destination line");
+
+            assert_eq!(items.len(), TOTAL_BLOCKS);
+            for item in &items {
+                assert!(matches!(item, BlockItem::TemporaryBlock { .. }));
+            }
         });
     })
 }
