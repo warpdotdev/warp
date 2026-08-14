@@ -330,7 +330,6 @@ fn move_object(id: ServerId, folder_id: Option<FolderId>, app: &mut App) {
             revision: object
                 .metadata()
                 .revision
-                .clone()
                 .expect("Revision is required"),
             current_editor_uid: object.metadata().current_editor_uid.clone(),
             metadata_last_updated_ts: (object

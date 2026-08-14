@@ -735,7 +735,7 @@ impl WorkflowModal {
                     update_manager.update_workflow(
                         workflow,
                         workflow_id,
-                        self.revision_ts.clone(),
+                        self.revision_ts,
                         ctx,
                     );
                 });

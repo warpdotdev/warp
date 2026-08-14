@@ -129,7 +129,7 @@ impl FakeObjectClient {
             .map(|(id, stored)| {
                 let metadata = ServerMetadata {
                     uid: ServerId::from(*id),
-                    revision: stored.revision.clone(),
+                    revision: stored.revision,
                     metadata_last_updated_ts: stored.metadata_ts.into(),
                     trashed_ts: None,
                     folder_id: None,
@@ -246,7 +246,7 @@ impl ObjectClient for FakeObjectClient {
         stored.metadata_ts = Utc::now();
         Ok(UpdateCloudObjectResult::Success {
             revision_and_editor: RevisionAndLastEditor {
-                revision: stored.revision.clone(),
+                revision: stored.revision,
                 last_editor_uid: None,
             },
         })
