@@ -882,7 +882,12 @@ impl TeamsPageView {
         let Some(current_user_email) = self.auth_state.user_email() else {
             return;
         };
-        let items = self.team_to_item_list(team, &current_user_email);
+        let is_workspace_admin = self
+            .user_workspaces
+            .as_ref(ctx)
+            .current_workspace()
+            .is_some_and(|workspace| workspace.is_workspace_admin(&current_user_email));
+        let items = Self::team_to_item_list(team, &current_user_email, is_workspace_admin);
         let items_sorted = items.iter().sorted().collect_vec();
 
         let Some(item) = items_sorted.get(index) else {
@@ -1729,10 +1734,19 @@ impl TeamsPageView {
         ctx.notify();
     }
 
-    fn team_to_item_list(&self, team: &Team, current_user_email: &str) -> Vec<Item> {
+    fn team_to_item_list(
+        team: &Team,
+        current_user_email: &str,
+        is_workspace_admin: bool,
+    ) -> Vec<Item> {
         let mut combined = Vec::new();
         let current_user_has_admin_permissions = team.has_admin_permissions(current_user_email);
         let current_user_has_owner_permissions = team.has_owner_permissions(current_user_email);
+        // Workspace admins can manage team membership roles for the team they're currently
+        // viewing even without an explicit team-admin role. Ownership transfer stays gated on
+        // team-owner permissions only, and is unaffected by this.
+        let current_user_can_manage_team_members =
+            current_user_has_admin_permissions || is_workspace_admin;
 
         // pending email invites
         team.pending_email_invites.iter().for_each(|email_invite| {
@@ -1793,7 +1807,7 @@ impl TeamsPageView {
 
                 // Admins can promote and demote other admins
                 if team.is_multi_admin_enabled()
-                    && current_user_has_admin_permissions
+                    && current_user_can_manage_team_members
                     && !team_member_has_owner_permissions
                 {
                     if team_member_has_admin_permissions {
@@ -1820,7 +1834,7 @@ impl TeamsPageView {
                 }
 
                 // Admins can remove non-owner members
-                if current_user_has_admin_permissions && !team_member_has_owner_permissions {
+                if current_user_can_manage_team_members && !team_member_has_owner_permissions {
                     actions.push(ItemAction {
                         icon: Icon::X,
                         label: "Remove from team".to_string(),
@@ -2324,6 +2338,7 @@ impl TeamsWidget {
             &current_user_email,
             view,
             appearance,
+            app,
         ));
 
         // 6) Optional outgrow CTA
@@ -2962,6 +2977,7 @@ impl TeamsWidget {
         user_email: &str,
         view: &TeamsPageView,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let mut section = Flex::column().with_main_axis_size(MainAxisSize::Min);
 
@@ -2982,8 +2998,11 @@ impl TeamsWidget {
         );
 
         // 2) List of team members
+        let is_workspace_admin = UserWorkspaces::as_ref(app)
+            .current_workspace()
+            .is_some_and(|workspace| workspace.is_workspace_admin(user_email));
         section.add_child(self.render_item_list(
-            view.team_to_item_list(team, user_email),
+            TeamsPageView::team_to_item_list(team, user_email, is_workspace_admin),
             view.team_members_mouse_state_handles.clone(),
             view,
             appearance,
@@ -4522,3 +4541,7 @@ pub fn test_owner_state_chip_text_contrasts_with_accent_overlay() {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "teams_page_tests.rs"]
+mod teams_page_tests;
