@@ -11,7 +11,6 @@ use super::GlobalRules;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
-        use futures::stream::AbortHandle;
         use repo_metadata::{
             RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier, StandingQueryContent,
         };
@@ -204,18 +203,27 @@ impl ProjectRules {
 pub struct ProjectContextModel {
     /// Mapping from directory path to list of rule files found in that directory
     path_to_rules: HashMap<LocalOrRemotePath, ProjectRules>,
-    /// Latest metadata-backed async refresh per exact repository identity.
-    /// This uses the same identifier carried by metadata events rather than an arbitrary file path.
+    /// Generation of the current (or most recently completed) refresh per repository. Guards
+    /// against applying a result for a repository that was removed, or otherwise invalidated,
+    /// while its refresh was in flight. The entry for a repository is cleared once its
+    /// current-generation refresh completes.
     #[cfg(feature = "local_fs")]
     rule_refresh_generations: HashMap<RepositoryIdentifier, u64>,
     #[cfg(feature = "local_fs")]
     next_rule_refresh_generation: u64,
-    /// Abort handle for the in-flight refresh task per repository, if any. Superseding a
-    /// refresh aborts the previous task instead of letting it run to completion, so a burst of
-    /// standing-query updates for one repo (e.g. during initial indexing) can't pile up
-    /// concurrent uncancelled file reads.
+    /// Repositories with a rule-refresh read currently running in the background.
+    ///
+    /// The underlying file reads (`async_fs::read_to_string`, via a blocking thread pool) cannot
+    /// be cancelled once started, so aborting the outer future doesn't stop them. Instead, this
+    /// set is used to serialize refreshes per repository: while one is in flight, a superseding
+    /// request is recorded in `rule_refresh_pending` rather than spawning an overlapping read.
     #[cfg(feature = "local_fs")]
-    rule_refresh_abort_handles: HashMap<RepositoryIdentifier, AbortHandle>,
+    rule_refresh_in_flight: HashSet<RepositoryIdentifier>,
+    /// Repositories that received a refresh request while a refresh was already in flight. The
+    /// in-flight read's completion consults this to run exactly one coalesced follow-up refresh
+    /// against the latest standing results, instead of one read per superseding event.
+    #[cfg(feature = "local_fs")]
+    rule_refresh_pending: HashSet<RepositoryIdentifier>,
     /// File-based global rules and their local watcher state. Kept separate
     /// from `path_to_rules`, which is project-scoped.
     pub(super) global_rules: GlobalRules,
@@ -367,6 +375,11 @@ impl ProjectContextModel {
         Ok(())
     }
 
+    /// Requests a rule refresh for `repo_id`, reading the currently standing rule paths.
+    ///
+    /// If a refresh is already reading files for this repo, the request is coalesced: it is
+    /// recorded in `rule_refresh_pending` and a single follow-up refresh runs once the in-flight
+    /// read completes, instead of spawning a second, overlapping read.
     #[cfg(feature = "local_fs")]
     fn refresh_project_rules_for_repo(
         &mut self,
@@ -377,12 +390,25 @@ impl ProjectContextModel {
         if repo_id.to_local_or_remote_path().is_none() {
             return;
         };
-        // A new refresh supersedes any refresh already in flight for this repo. Abort it
-        // rather than letting it run to completion so concurrent file reads and their
-        // allocations don't pile up during a burst of standing-query updates.
-        if let Some(abort_handle) = self.rule_refresh_abort_handles.remove(&repo_id) {
-            abort_handle.abort();
+        if self.rule_refresh_in_flight.contains(&repo_id) {
+            self.rule_refresh_pending.insert(repo_id);
+            return;
         }
+        self.start_rule_refresh(repo_id, project_rule_content_reader, ctx);
+    }
+
+    /// Spawns the background read for a rule refresh. Callers must first confirm via
+    /// `rule_refresh_in_flight` that no refresh is already running for `repo_id`.
+    #[cfg(feature = "local_fs")]
+    fn start_rule_refresh(
+        &mut self,
+        repo_id: RepositoryIdentifier,
+        project_rule_content_reader: ProjectRuleContentReader,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.rule_refresh_in_flight.insert(repo_id.clone());
+        self.rule_refresh_pending.remove(&repo_id);
+
         let rule_paths = standing_project_rule_paths(
             &repo_id,
             RepoMetadataModel::as_ref(ctx)
@@ -397,28 +423,35 @@ impl ProjectContextModel {
         self.rule_refresh_generations
             .insert(repo_id.clone(), refresh_generation);
         let repo_id_for_result = repo_id.clone();
-        let refresh_handle = ctx.spawn(read_rule_contents, move |me, result, ctx| {
-            if me.rule_refresh_generations.get(&repo_id_for_result) != Some(&refresh_generation) {
-                return;
-            }
-            match result {
-                Ok(contents) => {
-                    let Some(project_root) = repo_id_for_result.to_local_or_remote_path() else {
-                        return;
-                    };
-                    let existing_rules = me
-                        .path_to_rules
-                        .get(&project_root)
-                        .cloned()
-                        .unwrap_or_default();
-                    let rules = Self::reconcile_project_rules(rule_paths, contents, existing_rules);
-                    me.apply_project_rules(repo_id_for_result, rules, ctx);
+        ctx.spawn(read_rule_contents, move |me, result, ctx| {
+            me.rule_refresh_in_flight.remove(&repo_id_for_result);
+            // Guards against applying a result for a repository that was removed (or
+            // otherwise invalidated) while this refresh was reading files.
+            if me.rule_refresh_generations.get(&repo_id_for_result) == Some(&refresh_generation) {
+                me.rule_refresh_generations.remove(&repo_id_for_result);
+                match result {
+                    Ok(contents) => {
+                        if let Some(project_root) = repo_id_for_result.to_local_or_remote_path() {
+                            let existing_rules = me
+                                .path_to_rules
+                                .get(&project_root)
+                                .cloned()
+                                .unwrap_or_default();
+                            let rules =
+                                Self::reconcile_project_rules(rule_paths, contents, existing_rules);
+                            me.apply_project_rules(repo_id_for_result.clone(), rules, ctx);
+                        }
+                    }
+                    Err(error) => log::warn!("Failed to read project rules: {error}"),
                 }
-                Err(error) => log::warn!("Failed to read project rules: {error}"),
+            }
+            // A refresh requested while this read was in flight couldn't be served by it (the
+            // standing results may have changed since this read started), so run exactly one
+            // coalesced follow-up against the latest standing results.
+            if me.rule_refresh_pending.remove(&repo_id_for_result) {
+                me.start_rule_refresh(repo_id_for_result, project_rule_content_reader, ctx);
             }
         });
-        self.rule_refresh_abort_handles
-            .insert(repo_id, refresh_handle.abort_handle());
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
@@ -442,9 +475,11 @@ impl ProjectContextModel {
         ctx: &mut ModelContext<Self>,
     ) {
         self.rule_refresh_generations.remove(repo_id);
-        if let Some(abort_handle) = self.rule_refresh_abort_handles.remove(repo_id) {
-            abort_handle.abort();
-        }
+        self.rule_refresh_pending.remove(repo_id);
+        // `rule_refresh_in_flight` is deliberately left untouched: its read may still be running
+        // in the background and cannot be cancelled, so leaving the entry in place makes any
+        // refresh request that arrives before it completes coalesce (via `rule_refresh_pending`)
+        // instead of racing a second, overlapping read for a repository that was just removed.
         let Some(project_root) = repo_id.to_local_or_remote_path() else {
             return;
         };
