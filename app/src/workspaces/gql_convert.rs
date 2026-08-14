@@ -366,6 +366,10 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             lines_added: tool.apply_file_diff_stats.lines_added,
             lines_removed: tool.apply_file_diff_stats.lines_removed,
             commands_executed: tool.run_command_stats.commands_executed,
+            // GAP: the settings usage-history surface sources this view from
+            // a GraphQL query that does not yet expose a per-category cost
+            // breakdown (Milestone 3 / vertical B).
+            charged_usage: None,
         }
     }
 }

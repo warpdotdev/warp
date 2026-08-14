@@ -44,6 +44,7 @@ fn placeholder_usage_info() -> ConversationUsageInfo {
         lines_added: 0,
         lines_removed: 0,
         commands_executed: 0,
+        charged_usage: None,
     }
 }
 
