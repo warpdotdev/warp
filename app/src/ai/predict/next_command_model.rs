@@ -33,12 +33,12 @@ use crate::completer::SessionContext;
 use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
 use crate::server::server_api::{AIApiError, ServerApi};
 use crate::settings::AISettings;
+#[cfg(feature = "local_fs")]
+use crate::terminal::ShellHost;
 use crate::terminal::event::UserBlockCompleted;
 use crate::terminal::input::{CompleterData, IntelligentAutosuggestionResult};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::{History, HistoryEntry, TerminalModel};
-#[cfg(feature = "local_fs")]
-use crate::terminal::ShellHost;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 cfg_if::cfg_if! {
