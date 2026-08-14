@@ -5,6 +5,7 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rangemap::RangeSet;
 use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
 use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
@@ -14,7 +15,9 @@ use warpui_core::text_layout::{LayoutCache, StyleAndFont, TextStyle};
 use warpui_core::{App, SingletonEntity};
 
 use super::{
-    BlockLocation, LayOutArgs, layout_mermaid_diagram_block, layout_table_block, layout_text_block,
+    BlockLocation, LayOutArgs, LayoutTask, MAX_LAYOUT_CONTENT_CHARS_PER_PARALLEL_CHUNK,
+    MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK, chunk_layout_tasks, layout_mermaid_diagram_block,
+    layout_table_block, layout_text_block,
 };
 use crate::content::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
 use crate::content::edit::{
@@ -1169,6 +1172,232 @@ fn test_layout_code_block_urls() {
                     (17..38, add_link_to_style_and_font(base_styles)),
                 ]
             );
+        });
+    })
+}
+
+#[test]
+fn test_chunk_layout_tasks_bounds_by_task_count() {
+    let make_tasks = |count: usize| -> Vec<(LayoutTask, bool, usize)> {
+        (0..count)
+            .map(|_| {
+                (
+                    LayoutTask::temporary_block(String::new(), None, vec![]),
+                    false,
+                    1,
+                )
+            })
+            .collect()
+    };
+
+    let chunks = chunk_layout_tasks(make_tasks(MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK + 5));
+    assert_eq!(chunks.len(), 2);
+    assert_eq!(chunks[0].len(), MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK);
+    assert_eq!(chunks[1].len(), 5);
+
+    // Exactly at the cap should still be a single chunk.
+    let chunks = chunk_layout_tasks(make_tasks(MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK));
+    assert_eq!(chunks.len(), 1);
+}
+
+#[test]
+fn test_chunk_layout_tasks_bounds_by_content_length() {
+    let make_tasks = |lengths: &[usize]| -> Vec<(LayoutTask, bool, usize)> {
+        lengths
+            .iter()
+            .map(|&len| {
+                (
+                    LayoutTask::temporary_block(String::new(), None, vec![]),
+                    false,
+                    len,
+                )
+            })
+            .collect()
+    };
+
+    // Each task is over half the content-length cap, so every task should start a new chunk
+    // well before the task-count cap is reached.
+    let oversized = MAX_LAYOUT_CONTENT_CHARS_PER_PARALLEL_CHUNK / 2 + 1;
+    let chunks = chunk_layout_tasks(make_tasks(&[oversized, oversized, oversized]));
+    assert_eq!(
+        chunks.len(),
+        3,
+        "each oversized task should start a new chunk"
+    );
+    assert!(chunks.iter().all(|chunk| chunk.len() == 1));
+
+    // A single task larger than the cap must still get its own chunk rather than stalling.
+    let huge = MAX_LAYOUT_CONTENT_CHARS_PER_PARALLEL_CHUNK * 4;
+    let chunks = chunk_layout_tasks(make_tasks(&[huge]));
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0].len(), 1);
+}
+
+/// Builds a single-line, single-run PlainText block whose content is exactly `content_len`
+/// characters (including the trailing newline), so its laid-out `content_length` uniquely
+/// identifies the block for order verification.
+fn identifiable_text_block(content_len: usize) -> StyledBufferBlock {
+    let run = "a".repeat(content_len - 1) + "\n";
+    StyledBufferBlock::Text(StyledTextBlock {
+        block: vec![StyledBufferRun {
+            run,
+            text_styles: TextStylesWithMetadata::default(),
+            block_style: BufferBlockStyle::PlainText,
+        }],
+        style: BufferBlockStyle::PlainText,
+        content_length: CharOffset::from(content_len),
+    })
+}
+
+#[test]
+fn test_layout_delta_chunk_boundary_preserves_order_hidden_collapsing_and_trailing_newline() {
+    // Regression test for APP-5392: bounding EditDelta::layout_delta's parallel fan-out into
+    // chunks must not change its observable behavior. This delta spans multiple chunks (given
+    // MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK), with a hidden run that straddles a chunk boundary.
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+
+            const TOTAL_BLOCKS: usize = MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK * 2 + 12;
+            // Straddles the boundary between the first and second chunks.
+            const HIDDEN_START: usize = MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK - 4;
+            const HIDDEN_END: usize = MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK + 11;
+
+            let mut new_lines = Vec::with_capacity(TOTAL_BLOCKS);
+            let mut block_starts = Vec::with_capacity(TOTAL_BLOCKS);
+            let mut content_lengths = Vec::with_capacity(TOTAL_BLOCKS);
+            let mut offset = CharOffset::from(1);
+
+            for i in 0..TOTAL_BLOCKS {
+                let content_len = i + 3;
+                block_starts.push(offset);
+                content_lengths.push(content_len);
+                new_lines.push(identifiable_text_block(content_len));
+                offset += content_len;
+            }
+
+            let mut hidden_ranges = RangeSet::new();
+            hidden_ranges.insert(block_starts[HIDDEN_START]..block_starts[HIDDEN_END]);
+
+            let delta = EditDelta {
+                old_offset: CharOffset::from(1)..offset,
+                new_lines,
+                ..Default::default()
+            };
+
+            let laid_out = delta.layout_delta(
+                &text_layout,
+                None,
+                &RenderLayoutOptions::default(),
+                Some(hidden_ranges),
+                ctx,
+            );
+
+            // The contiguous hidden run should collapse into exactly one BlockItem::Hidden.
+            let expected_len = HIDDEN_START + 1 + (TOTAL_BLOCKS - HIDDEN_END);
+            assert_eq!(laid_out.laid_out_line.len(), expected_len);
+
+            for (item, &expected_block_len) in laid_out.laid_out_line[0..HIDDEN_START]
+                .iter()
+                .zip(&content_lengths[0..HIDDEN_START])
+            {
+                assert!(
+                    matches!(item, BlockItem::Paragraph(_)),
+                    "expected a visible block, got {item:?}"
+                );
+                assert_eq!(item.content_length(), CharOffset::from(expected_block_len));
+            }
+
+            let hidden_item = &laid_out.laid_out_line[HIDDEN_START];
+            assert!(
+                matches!(hidden_item, BlockItem::Hidden(_)),
+                "the hidden run should collapse to a single item, got {hidden_item:?}"
+            );
+            let expected_hidden_length: usize =
+                content_lengths[HIDDEN_START..HIDDEN_END].iter().sum();
+            assert_eq!(
+                hidden_item.content_length(),
+                CharOffset::from(expected_hidden_length)
+            );
+
+            for (item, &expected_block_len) in laid_out.laid_out_line[HIDDEN_START + 1..]
+                .iter()
+                .zip(&content_lengths[HIDDEN_END..TOTAL_BLOCKS])
+            {
+                assert!(
+                    matches!(item, BlockItem::Paragraph(_)),
+                    "expected a visible block, got {item:?}"
+                );
+                assert_eq!(item.content_length(), CharOffset::from(expected_block_len));
+            }
+
+            // The last block is visible and ends with a newline, so the delta should report a
+            // trailing newline, matching what an unchunked single-pass layout would produce.
+            assert!(laid_out.trailing_newline.is_some());
+        });
+    })
+}
+
+#[test]
+fn test_layout_delta_single_chunk_matches_direct_layout() {
+    // A delta that fits within a single chunk should behave identically to laying out each
+    // block directly: no hidden collapsing, and a trailing newline exactly when the last block
+    // ends in one.
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+
+            let new_lines = vec![
+                identifiable_text_block(3),
+                identifiable_text_block(4),
+                identifiable_text_block(5),
+            ];
+            let total_len: usize = new_lines
+                .iter()
+                .map(StyledBufferBlock::content_length)
+                .map(CharOffset::as_usize)
+                .sum();
+
+            let delta = EditDelta {
+                old_offset: CharOffset::from(1)..CharOffset::from(1 + total_len),
+                new_lines,
+                ..Default::default()
+            };
+
+            let laid_out = delta.layout_delta(
+                &text_layout,
+                None,
+                &RenderLayoutOptions::default(),
+                None,
+                ctx,
+            );
+
+            assert_eq!(laid_out.laid_out_line.len(), 3);
+            assert_eq!(
+                laid_out.laid_out_line[0].content_length(),
+                CharOffset::from(3)
+            );
+            assert_eq!(
+                laid_out.laid_out_line[1].content_length(),
+                CharOffset::from(4)
+            );
+            assert_eq!(
+                laid_out.laid_out_line[2].content_length(),
+                CharOffset::from(5)
+            );
+            assert!(laid_out.trailing_newline.is_some());
         });
     })
 }
