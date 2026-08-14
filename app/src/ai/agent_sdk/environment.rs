@@ -989,7 +989,7 @@ impl EnvironmentCommandRunner {
         }
 
         // Update the environment via UpdateManager
-        let revision = environment.metadata.revision.clone();
+        let revision = environment.metadata.revision;
         UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
             update_manager
                 .update_object::<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>(

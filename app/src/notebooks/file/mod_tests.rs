@@ -15,7 +15,7 @@ use warp_files::FileModel;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, View};
 
-use super::{FileNotebookView, FileState, MarkdownDisplayMode, SourceFile};
+use super::{FileNotebookAction, FileNotebookView, FileState, MarkdownDisplayMode, SourceFile};
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -358,6 +358,85 @@ fn test_file_notebook_mermaid_blocks_default_to_rendered() {
                     .map(|item| item.item),
                 Some(BlockItem::MermaidDiagram { .. })
             ));
+        });
+    });
+}
+
+/// APP-5243: retrying and then discarding a failed open must not panic, and each attempt must
+/// release the file state it opened rather than stacking it on the shared [`FileModel`].
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_reload_and_discard_after_failed_open() {
+    use warpui::TypedActionView;
+
+    /// Opens the notebook's current file and waits for the read to settle.
+    async fn await_open(
+        app: &mut warpui::App,
+        handle: &warpui::ViewHandle<FileNotebookView>,
+        open: impl FnOnce(&mut FileNotebookView, &mut warpui::ViewContext<FileNotebookView>),
+    ) -> warp_util::file::FileId {
+        let (file_id, future) = handle.update(app, |file_notebook, ctx| {
+            open(file_notebook, ctx);
+            let file_id = file_notebook.file_id.expect("File should have a file_id");
+            let future_handle = FileModel::as_ref(ctx)
+                .get_future_handle(file_id)
+                .expect("Loading future should be present");
+            (file_id, ctx.await_spawned_future(future_handle.future_id()))
+        });
+        future.await;
+        file_id
+    }
+
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
+
+        // A path that cannot be read, mirroring the `Could not read ...` treatment the reporter hit.
+        let first_id = await_open(&mut app, &handle, |view, ctx| {
+            view.open_local("app-5243-does-not-exist.md", None, ctx)
+        })
+        .await;
+
+        handle.read(&app, |view, _| {
+            assert!(
+                matches!(view.file_state, FileState::Error(_)),
+                "expected an error state, got {:?}",
+                view.file_state
+            );
+        });
+
+        // "Try again" in the error treatment.
+        let second_id = await_open(&mut app, &handle, |view, ctx| {
+            view.handle_action(&FileNotebookAction::ReloadFile, ctx)
+        })
+        .await;
+
+        assert_ne!(first_id, second_id, "reload should open a fresh file id");
+        app.read(|ctx| {
+            assert!(
+                FileModel::as_ref(ctx).file_path(first_id).is_none(),
+                "reload should release the previous file id"
+            );
+        });
+        handle.read(&app, |view, _| {
+            assert!(
+                matches!(view.file_state, FileState::Error(_)),
+                "expected an error state after reload, got {:?}",
+                view.file_state
+            );
+        });
+
+        // Discarding the pane for good. Releasing is idempotent, so every teardown path can run it.
+        handle.update(&mut app, |file_notebook, ctx| {
+            file_notebook.release_file_model(ctx);
+            file_notebook.release_file_model(ctx);
+            assert!(file_notebook.file_id.is_none());
+        });
+        app.read(|ctx| {
+            assert!(
+                FileModel::as_ref(ctx).file_path(second_id).is_none(),
+                "discarding the pane should release the open file id"
+            );
         });
     });
 }

@@ -646,8 +646,8 @@ fn test_create_and_update_notebook() {
         let (tx, rx) = std::sync::mpsc::channel();
 
         let mut cloud_objects_client_mock = MockObjectClient::new();
-        let notebook_revision_after_create_clone = notebook_revision_after_create.clone();
-        let notebook_revision_after_update_clone = notebook_revision_after_update.clone();
+        let notebook_revision_after_create_clone = notebook_revision_after_create;
+        let notebook_revision_after_update_clone = notebook_revision_after_update;
         cloud_objects_client_mock
             .expect_create_notebook()
             .times(1)
@@ -1123,7 +1123,7 @@ fn test_sync_queue_dependency_failure() {
                     }
                     .into(),
                     id: SyncId::ClientId(client_id),
-                    revision: Some(revision_after_create.clone()),
+                    revision: Some(revision_after_create),
                 },
                 ctx,
             );
@@ -1138,7 +1138,7 @@ fn test_sync_queue_dependency_failure() {
                     }
                     .into(),
                     id: SyncId::ClientId(client_id),
-                    revision: Some(revision_after_create.clone()),
+                    revision: Some(revision_after_create),
                 },
                 ctx,
             );
@@ -1248,7 +1248,7 @@ fn test_sync_queue_dependency_mixed_ids() {
                     }
                     .into(),
                     id: SyncId::ClientId(client_id),
-                    revision: Some(revision_after_create.clone()),
+                    revision: Some(revision_after_create),
                 },
                 ctx,
             );
@@ -1272,7 +1272,7 @@ fn test_sync_queue_dependency_mixed_ids() {
                     creation_result: super::CreationResponseType::Success {
                         client_id,
                         revision_and_editor: super::RevisionAndLastEditor {
-                            revision: revision_after_create.clone(),
+                            revision: revision_after_create,
                             last_editor_uid: None,
                         },
                         metadata_ts: DateTime::<Utc>::default().into(),
@@ -1306,7 +1306,7 @@ fn test_sync_queue_dependency_mixed_ids() {
                     }
                     .into(),
                     id: server_id,
-                    revision: Some(revision_after_create.clone()),
+                    revision: Some(revision_after_create),
                 },
                 ctx,
             );
@@ -1359,7 +1359,7 @@ fn test_sync_queue_generic_string_object_update_depends_on_pending_create() {
                     }))
                     .into(),
                     id: SyncId::ClientId(client_id),
-                    revision: Some(revision_after_create.clone()),
+                    revision: Some(revision_after_create),
                 },
                 ctx,
             );
@@ -1381,7 +1381,7 @@ fn test_sync_queue_generic_string_object_update_depends_on_pending_create() {
                     creation_result: super::CreationResponseType::Success {
                         client_id,
                         revision_and_editor: super::RevisionAndLastEditor {
-                            revision: revision_after_create.clone(),
+                            revision: revision_after_create,
                             last_editor_uid: None,
                         },
                         metadata_ts: DateTime::<Utc>::default().into(),
@@ -1432,7 +1432,7 @@ fn test_sync_queue_generic_string_object_update_depends_on_pending_create() {
                 super::ResponseType::Update {
                     update_result: super::UpdateResponseType::Success {
                         revision_and_editor: super::RevisionAndLastEditor {
-                            revision: revision_after_update.clone(),
+                            revision: revision_after_update,
                             last_editor_uid: None,
                         },
                     },
@@ -1447,9 +1447,7 @@ fn test_sync_queue_generic_string_object_update_depends_on_pending_create() {
                 &HashSet::<QueueDependency>::new()
             );
             let queued_revision = sync_queue.queue().iter().find_map(|(_, item)| match item {
-                QueueItem::UpdateAIFact { id, revision, .. } if *id == server_id => {
-                    Some(revision.clone())
-                }
+                QueueItem::UpdateAIFact { id, revision, .. } if *id == server_id => Some(*revision),
                 _ => None,
             });
             assert_eq!(queued_revision, Some(Some(revision_after_update)));
@@ -1515,7 +1513,7 @@ fn test_sync_queue_bulk_generic_string_object_update_waits_for_matching_create()
                     }))
                     .into(),
                     id: SyncId::ClientId(client_id_b),
-                    revision: Some(revision_after_create_a.clone()),
+                    revision: Some(revision_after_create_a),
                 },
                 ctx,
             );
@@ -1568,7 +1566,7 @@ fn test_sync_queue_bulk_generic_string_object_update_waits_for_matching_create()
                     creation_result: super::CreationResponseType::Success {
                         client_id: client_id_b,
                         revision_and_editor: super::RevisionAndLastEditor {
-                            revision: revision_after_create_b.clone(),
+                            revision: revision_after_create_b,
                             last_editor_uid: None,
                         },
                         metadata_ts: DateTime::<Utc>::default().into(),
@@ -1600,7 +1598,7 @@ fn test_sync_queue_bulk_generic_string_object_update_waits_for_matching_create()
                 QueueItem::UpdateAIFact { id, revision, .. }
                     if *id == SyncId::ClientId(client_id_b) =>
                 {
-                    Some(revision.clone())
+                    Some(*revision)
                 }
                 _ => None,
             });
@@ -1725,7 +1723,7 @@ fn test_sync_queue_enum_dependency() {
                     creation_result: super::CreationResponseType::Success {
                         client_id: enum_id_1,
                         revision_and_editor: super::RevisionAndLastEditor {
-                            revision: revision_after_create.clone(),
+                            revision: revision_after_create,
                             last_editor_uid: None,
                         },
                         metadata_ts: DateTime::<Utc>::default().into(),
@@ -1798,7 +1796,7 @@ fn test_sync_queue_enum_dependency() {
                     creation_result: super::CreationResponseType::Success {
                         client_id: enum_id_2,
                         revision_and_editor: super::RevisionAndLastEditor {
-                            revision: revision_after_create.clone(),
+                            revision: revision_after_create,
                             last_editor_uid: None,
                         },
                         metadata_ts: DateTime::<Utc>::default().into(),

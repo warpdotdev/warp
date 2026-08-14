@@ -91,8 +91,10 @@ pub use crate::ai::blocklist::orchestration_event_streamer::{
     unregister_agent_event_consumer,
 };
 pub use crate::ai::blocklist::orchestration_topology::{
-    OrchestrationParticipantKind, OrderedOrchestrationDescendant, ResolvedOrchestrationParticipant,
-    descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
+    LoadedSubtreeRollup, OrchestrationParticipantKind, OrderedOrchestrationDescendant,
+    ResolvedOrchestrationParticipant, aggregated_orchestrator_status,
+    child_conversations_in_pill_order, descendant_conversation_ids_in_spawn_order,
+    descendant_conversations_in_pill_order, loaded_subtree_rollup,
     orchestration_root_conversation_id, orchestrator_agent_id_for_conversation,
     resolve_orchestration_participant,
 };

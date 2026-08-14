@@ -673,10 +673,9 @@ impl BillingCycleUsageSectionView {
     }
 
     fn viewer_is_native_workspaces_admin(&self, workspace: &Workspace, app: &AppContext) -> bool {
-        workspace.is_native_workspaces_enabled()
-            && Self::resolved_viewer_email(app)
-                .as_deref()
-                .is_some_and(|email| workspace.is_workspace_admin(email))
+        Self::resolved_viewer_email(app)
+            .as_deref()
+            .is_some_and(|email| workspace.is_native_workspaces_admin(email))
     }
 
     /// Renders the CTA banner that sits between the team-totals block and

@@ -23,8 +23,8 @@ use crate::server::server_api::ai::{AIClient, GitCredential};
 /// well ahead of the shortest-lived one-hour token expiry).
 pub(crate) const GIT_CREDENTIALS_REFRESH_INTERVAL: Duration = Duration::from_secs(50 * 60);
 
-const DEFAULT_GIT_NAME: &str = "Oz";
-const DEFAULT_GIT_EMAIL: &str = "oz-agent@warp.dev";
+const DEFAULT_GIT_NAME: &str = "Warp";
+const DEFAULT_GIT_EMAIL: &str = "agent@warp.dev";
 const GITHUB_HOST: &str = "github.com";
 const GH_HOSTS_FILENAME: &str = "hosts.yml";
 const GLAB_HOST: &str = "gitlab.com";
@@ -306,7 +306,7 @@ pub(crate) fn setup_git_config(credentials: &[GitCredential]) {
 /// Configure the git user identity from the server-returned credential.
 ///
 /// Uses the first credential's `username`/`email` fields, falling back to the
-/// Oz defaults when either is absent (e.g. service-account principals).
+/// Warp defaults when either is absent (e.g. service-account principals).
 pub(crate) fn configure_git_identity(credentials: &[GitCredential]) {
     let (name, email) = credentials
         .first()

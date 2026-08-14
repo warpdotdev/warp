@@ -6,8 +6,8 @@
 
 set -eo pipefail
 
-# Keep in sync with the cargo-bins/cargo-binstall action pin in .github/workflows/ci.yml
-# so local bootstraps and CI resolve binaries with the same binstall version.
+# Local bootstraps and CI both install binstall through this script, so this is
+# the single pinned version everywhere.
 BINSTALL_VERSION="1.18.1"
 
 # Every archive this script may run, keyed by asset name, with the SHA-256 that
@@ -96,9 +96,26 @@ if [ "$INSTALLED_VERSION" != "$BINSTALL_VERSION" ]; then
     # shellcheck disable=SC2064 # Expand WORKDIR now so the trap still resolves it later.
     trap "rm -rf \"$WORKDIR\"" EXIT
 
-    curl -L --proto '=https' --tlsv1.2 -sSf \
-        "https://github.com/cargo-bins/cargo-binstall/releases/download/v${BINSTALL_VERSION}/${ARCHIVE}" \
-        --output "$WORKDIR/$ARCHIVE"
+    # GitHub's release-asset CDN intermittently fails with errors curl's --retry
+    # won't retry, and its brownouts can last minutes, so retry at the shell level
+    # with exponential backoff.
+    DOWNLOAD_ATTEMPTS=5
+    RETRY_DELAY=10
+    for attempt in $(seq 1 "$DOWNLOAD_ATTEMPTS"); do
+        if curl -L --proto '=https' --tlsv1.2 -sSf \
+            --retry 5 --retry-delay 2 \
+            "https://github.com/cargo-bins/cargo-binstall/releases/download/v${BINSTALL_VERSION}/${ARCHIVE}" \
+            --output "$WORKDIR/$ARCHIVE"; then
+            break
+        fi
+        if [ "$attempt" -eq "$DOWNLOAD_ATTEMPTS" ]; then
+            echo "error: failed to download $ARCHIVE after $DOWNLOAD_ATTEMPTS attempts." >&2
+            exit 1
+        fi
+        echo "Download failed; retrying in ${RETRY_DELAY}s..." >&2
+        sleep "$RETRY_DELAY"
+        RETRY_DELAY=$((RETRY_DELAY * 2))
+    done
 
     ACTUAL_SHA256="$(sha256_of "$WORKDIR/$ARCHIVE")"
     if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then

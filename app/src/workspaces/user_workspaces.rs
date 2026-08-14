@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -88,6 +88,11 @@ pub enum UserWorkspacesEvent {
     TeamsChanged,
     /// Fired when the selected workspace actually changes to a different one.
     CurrentWorkspaceChanged,
+    /// Fired when a single window's team assignment changes. Windows are independent, so
+    /// subscribers that hold per-window state must only react to their own window.
+    WindowTeamChanged {
+        window_id: WindowId,
+    },
     CodebaseContextEnablementChanged,
     /// Fired when a service agreement's sunsetted_to_build_ts field is updated.
     SunsettedToBuildDataUpdated,
@@ -276,7 +281,11 @@ impl UserWorkspaces {
         team_uid: Option<ServerId>,
         ctx: &mut ModelContext<Self>,
     ) {
+        let previous_team_uid = self.team_uid_for_window(window_id);
         self.window_team_uids.entry(window_id).or_insert(team_uid);
+        if self.team_uid_for_window(window_id) != previous_team_uid {
+            ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
+        }
         ctx.notify();
     }
     pub fn inherited_or_default_team_uid(
@@ -301,6 +310,7 @@ impl UserWorkspaces {
         let window_team_uid = self.window_team_uids.entry(window_id).or_default();
         if window_team_uid.is_none() {
             *window_team_uid = Some(team_uid);
+            ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
             ctx.notify();
         }
     }
@@ -335,7 +345,9 @@ impl UserWorkspaces {
             .and_then(|window_id| self.team_for_window(window_id))
     }
 
-    fn reconcile_window_team_assignments(&mut self) {
+    /// Returns the windows whose team assignment changed.
+    #[must_use]
+    fn reconcile_window_team_assignments(&mut self) -> Vec<WindowId> {
         let team_uids = self
             .current_workspace()
             .map(|workspace| {
@@ -348,10 +360,21 @@ impl UserWorkspaces {
             .unwrap_or_default();
         let fallback_team_uid = team_uids.first().copied();
 
-        for window_team_uid in self.window_team_uids.values_mut() {
-            if window_team_uid.is_none_or(|team_uid| !team_uids.contains(&team_uid)) {
+        let mut reassigned_windows = Vec::new();
+        for (window_id, window_team_uid) in self.window_team_uids.iter_mut() {
+            if window_team_uid.is_none_or(|team_uid| !team_uids.contains(&team_uid))
+                && *window_team_uid != fallback_team_uid
+            {
                 *window_team_uid = fallback_team_uid;
+                reassigned_windows.push(*window_id);
             }
+        }
+        reassigned_windows
+    }
+
+    fn emit_window_team_changed(windows: Vec<WindowId>, ctx: &mut ModelContext<Self>) {
+        for window_id in windows {
+            ctx.emit(UserWorkspacesEvent::WindowTeamChanged { window_id });
         }
     }
 
@@ -360,6 +383,17 @@ impl UserWorkspaces {
             .iter()
             .flat_map(|w| w.teams.iter())
             .find(|t| t.uid == team_uid)
+    }
+
+    /// The teams [`Self::owner_to_space`] recognizes. An owner naming a team outside this set
+    /// resolves to the shared space instead of that team's space, so a change here remaps
+    /// objects between spaces without any of them changing.
+    pub fn team_uids_across_all_workspaces(&self) -> HashSet<ServerId> {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+            .map(|team| team.uid)
+            .collect()
     }
 
     pub fn workspace_from_uid(&self, workspace_uid: WorkspaceUid) -> Option<&Workspace> {
@@ -565,8 +599,9 @@ impl UserWorkspaces {
     ) {
         let changed = *self.current_workspace_uid != Some(workspace_uid);
         *self.current_workspace_uid = Some(workspace_uid);
-        self.reconcile_window_team_assignments();
+        let reassigned_windows = self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);
+        Self::emit_window_team_changed(reassigned_windows, ctx);
         if changed {
             ctx.emit(UserWorkspacesEvent::CurrentWorkspaceChanged);
         }
@@ -997,8 +1032,9 @@ impl UserWorkspaces {
         let sunsetted_to_build_changed = self.has_sunsetted_to_build_data_changed(&workspaces);
 
         *self.workspaces = workspaces;
-        self.reconcile_window_team_assignments();
+        let reassigned_windows = self.reconcile_window_team_assignments();
         self.notify_and_emit_teams_changed(ctx);
+        Self::emit_window_team_changed(reassigned_windows, ctx);
 
         if sunsetted_to_build_changed {
             ctx.emit(UserWorkspacesEvent::SunsettedToBuildDataUpdated);

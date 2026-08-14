@@ -142,14 +142,14 @@ fn agent_mcp_servers_maps_to_mcp_servers_page() {
 }
 
 #[test]
-fn code_subpages_map_to_code_backing_page() {
+fn code_subpages_map_to_their_own_backing_pages() {
     assert_eq!(
         SettingsSection::CodeIndexing.parent_page_section(),
-        SettingsSection::Code
+        SettingsSection::CodeIndexing
     );
     assert_eq!(
         SettingsSection::EditorAndCodeReview.parent_page_section(),
-        SettingsSection::Code
+        SettingsSection::EditorAndCodeReview
     );
 }
 

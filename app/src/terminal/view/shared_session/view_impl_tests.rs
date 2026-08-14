@@ -30,7 +30,7 @@ use crate::auth::user::TEST_USER_UID;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::context_chips::prompt_type::PromptType;
 use crate::editor::InteractionState;
-use crate::pane_group::BackingView;
+use crate::pane_group::{BackingView, PaneConfigurationEvent};
 use crate::server::ids::ServerId;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::server::server_api::ai::SpawnAgentRequest;
@@ -2553,6 +2553,16 @@ fn test_copy_shared_session_link_does_not_write_clipboard_when_session_pending()
         });
 
         let terminal = add_window_with_terminal(&mut app, None);
+        let link_change_events = Rc::new(RefCell::new(0));
+        let link_change_events_for_subscription = link_change_events.clone();
+        let pane_configuration = terminal.read(&app, |view, _| view.pane_configuration().clone());
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&pane_configuration, move |_, event, _| {
+                if matches!(event, PaneConfigurationEvent::SharedSessionLinkChanged) {
+                    *link_change_events_for_subscription.borrow_mut() += 1;
+                }
+            });
+        });
 
         // Put the terminal in ViewPending state without registering a session_id with the Manager.
         // This simulates a cloud agent environment still setting up (no join yet).
@@ -2588,6 +2598,47 @@ fn test_copy_shared_session_link_does_not_write_clipboard_when_session_pending()
         assert_eq!(
             clipboard_text, "sentinel",
             "copy_shared_session_link must not write the join link when no session_id is registered"
+        );
+
+        // A previous ended session id must not become copyable again while a new share attempt is
+        // pending on the same terminal.
+        terminal.update(&mut app, |_, ctx| {
+            let window_id = ctx.window_id();
+            Manager::handle(ctx).update(ctx, |manager, ctx| {
+                manager.started_share(terminal.downgrade(), SessionId::new(), window_id, ctx);
+                manager.stopped_share(terminal.id(), ctx);
+            });
+        });
+        *toast_text.borrow_mut() = None;
+
+        terminal.update(&mut app, |view, ctx| {
+            view.attempt_to_share_session(
+                SharedSessionScrollbackType::None,
+                None,
+                SharedSessionSource::user(None),
+                false,
+                ctx,
+            );
+        });
+        assert_eq!(
+            *link_change_events.borrow(),
+            1,
+            "starting a new share must refresh cached link and QR surfaces"
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.copy_shared_session_link(SharedSessionActionSource::RightClickMenu, ctx);
+        });
+
+        assert_eq!(
+            toast_text.borrow().as_deref(),
+            Some("Sharing link not yet available"),
+            "a retained ended id must not be copied while a new session is pending"
+        );
+        let clipboard_text = terminal.update(&mut app, |_, ctx| ctx.clipboard().read().plain_text);
+        assert_eq!(
+            clipboard_text, "sentinel",
+            "a retained ended id must not overwrite the clipboard during a pending retry"
         );
     });
 }

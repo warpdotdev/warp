@@ -1311,7 +1311,7 @@ impl UpdateManager {
             if let Some(current_object) = cloud_model.get_by_uid(&uid) {
 
                 // The revision and metadata_ts determine which parts of this update to accept
-                let current_object_revision = current_object.metadata().revision.clone();
+                let current_object_revision = current_object.metadata().revision;
 
                 // First, check if the incoming revision is greater than the in-memory revision.
                 if let Some(in_memory_revision) = current_object_revision {

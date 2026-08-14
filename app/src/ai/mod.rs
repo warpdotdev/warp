@@ -52,6 +52,7 @@ pub(crate) mod remote_agent_context;
 pub(crate) mod remote_context_files;
 pub mod request_usage_model;
 pub(crate) mod restored_conversations;
+pub(crate) mod runner_display;
 pub(crate) mod skills;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod tui_api_keys;

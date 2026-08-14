@@ -541,12 +541,22 @@ impl BlocklistAIHistoryModel {
     }
 
     /// Creates a new child agent conversation.
+    ///
+    /// `is_remote` must be `true` for children executing on a remote worker.
+    /// It is applied *before* the first persist below so that, if this
+    /// conversation is ever written to disk, the very first row already
+    /// carries the correct `is_remote_child` value — remote children must
+    /// never be persisted (see `write_updated_conversation_state`), and
+    /// setting the flag only after this initial persist would write a
+    /// garbage `is_remote_child=false`/`run_id=None` row that then blocks
+    /// all later, correct persists via that same guard.
     pub fn start_new_child_conversation(
         &mut self,
         terminal_surface_id: EntityId,
         name: String,
         parent_conversation_id: AIConversationId,
         orchestration_harness: Option<Harness>,
+        is_remote: bool,
         ctx: &mut ModelContext<Self>,
     ) -> AIConversationId {
         let parent_agent_id = self
@@ -573,9 +583,69 @@ impl BlocklistAIHistoryModel {
             if let Some(harness) = orchestration_harness {
                 conversation.set_orchestration_harness(harness);
             }
+            if is_remote {
+                conversation.mark_as_remote_child();
+            }
         }
         self.set_parent_for_conversation(conversation_id, parent_conversation_id);
         self.persist_conversation_state(conversation_id, ctx);
+        conversation_id
+    }
+
+    /// Returns the existing run-id mapping for a remote child, creating one
+    /// from the supplied task metadata if none exists yet. Idempotent: racing
+    /// `ChildStarted`, lifecycle, and viewer metadata callbacks all converge
+    /// on the same entry.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ensure_remote_child_conversation(
+        &mut self,
+        terminal_surface_id: EntityId,
+        parent_conversation_id: AIConversationId,
+        run_id: String,
+        task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        name: String,
+        fallback_title: String,
+        orchestration_harness: Option<Harness>,
+        ctx: &mut ModelContext<Self>,
+    ) -> AIConversationId {
+        if let Some(conversation_id) = self.conversation_id_for_agent_id(&run_id) {
+            // Re-index under the new parent if the recorded parent has changed.
+            // This happens on a live-session rejoin: the viewer creates a fresh
+            // conversation ID, while children in the DB still point at the
+            // previous session's parent ID.
+            let current_parent = self
+                .conversations_by_id
+                .get(&conversation_id)
+                .and_then(|c| c.parent_conversation_id());
+            if current_parent != Some(parent_conversation_id) {
+                self.set_parent_for_conversation(conversation_id, parent_conversation_id);
+            }
+            return conversation_id;
+        }
+
+        let conversation_id = self.start_new_child_conversation(
+            terminal_surface_id,
+            name,
+            parent_conversation_id,
+            orchestration_harness,
+            true,
+            ctx,
+        );
+        // `start_new_child_conversation` already marked this remote above;
+        // this call is now a no-op (kept for clarity / backward compat).
+        self.mark_conversation_as_remote_child(conversation_id, ctx);
+        if !fallback_title.is_empty()
+            && let Some(conversation) = self.conversation_mut(&conversation_id)
+        {
+            conversation.set_fallback_display_title(fallback_title);
+        }
+        self.assign_run_id_for_conversation(
+            conversation_id,
+            run_id,
+            Some(task_id),
+            terminal_surface_id,
+            ctx,
+        );
         conversation_id
     }
 
@@ -587,8 +657,21 @@ impl BlocklistAIHistoryModel {
         child_id: AIConversationId,
         parent_id: AIConversationId,
     ) {
+        let old_parent = self
+            .conversations_by_id
+            .get(&child_id)
+            .and_then(|c| c.parent_conversation_id());
         if let Some(conversation) = self.conversations_by_id.get_mut(&child_id) {
             conversation.set_parent_conversation_id(parent_id);
+        }
+        // Remove from the old parent's index when re-parenting to keep the
+        // index consistent. For initial creation the old parent is None so
+        // this is a no-op.
+        if let Some(old_parent) = old_parent
+            && old_parent != parent_id
+            && let Some(siblings) = self.children_by_parent.get_mut(&old_parent)
+        {
+            siblings.retain(|id| *id != child_id);
         }
         self.index_child_conversation(child_id, parent_id);
     }

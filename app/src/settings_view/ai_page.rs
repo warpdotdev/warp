@@ -115,10 +115,13 @@ use crate::view_components::{
 use crate::workspaces::user_workspaces::UserWorkspacesEvent;
 
 /// Identifies which subpage of the AI settings the user is viewing.
-/// When `None`, the page shows all widgets (legacy/full view).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Every subpage owns a disjoint slice of the page's widgets, so the page is
+/// always showing exactly one of them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AISubpage {
     /// The main "WarpAgent" page: global AI toggle + Active AI + Input + Other sections.
+    #[default]
     WarpAgent,
     /// Agent profiles and permissions.
     Profiles,
@@ -326,8 +329,8 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         vec![
             ToggleSettingActionPair::custom(
                 SettingActionPairDescriptions::new(
-                    "Show Oz changelog in new agent conversation view",
-                    "Hide Oz changelog in new agent conversation view",
+                    "Show Warp Agent changelog in new agent conversation view",
+                    "Hide Warp Agent changelog in new agent conversation view",
                 ),
                 builder(SettingsAction::AI(
                     AISettingsPageAction::ToggleShowOzUpdatesInZeroState,
@@ -710,7 +713,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 
 pub struct AISettingsPageView {
     page: PageType<Self>,
-    active_subpage: Option<AISubpage>,
+    active_subpage: AISubpage,
     voice_input_toggle_key_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     voice_input_language_dropdown: ViewHandle<FilterableDropdown<AISettingsPageAction>>,
     local_only_icon_tooltip_states: RefCell<HashMap<String, MouseStateHandle>>,
@@ -2026,8 +2029,8 @@ impl AISettingsPageView {
         );
 
         Self {
-            page: Self::build_page(None, ctx),
-            active_subpage: None,
+            page: Self::build_page(AISubpage::default(), ctx),
+            active_subpage: AISubpage::default(),
             voice_input_toggle_key_dropdown,
             voice_input_language_dropdown,
             autodetection_denylist_editor,
@@ -2845,7 +2848,7 @@ impl AISettingsPageView {
     }
 
     /// Set the active subpage and rebuild the widget list to show only relevant widgets.
-    pub fn set_active_subpage(&mut self, subpage: Option<AISubpage>, ctx: &mut ViewContext<Self>) {
+    pub fn set_active_subpage(&mut self, subpage: AISubpage, ctx: &mut ViewContext<Self>) {
         if self.active_subpage != subpage {
             self.active_subpage = subpage;
             self.page = Self::build_page(subpage, ctx);
@@ -2865,68 +2868,14 @@ impl AISettingsPageView {
         widgets
     }
 
-    fn build_page(subpage: Option<AISubpage>, ctx: &mut ViewContext<Self>) -> PageType<Self> {
+    fn build_page(subpage: AISubpage, ctx: &mut ViewContext<Self>) -> PageType<Self> {
         let ai_settings = AISettings::as_ref(ctx);
 
         let mut widgets: Vec<Box<dyn SettingsWidget<View = AISettingsPageView>>> = Vec::new();
 
-        // When viewing a specific subpage, only include its widgets.
-        // When subpage is None (legacy/backward-compat), show all widgets.
+        // Each subpage owns a disjoint slice of this page's widgets.
         match subpage {
-            None => {
-                // Full page: all widgets (legacy behavior)
-                widgets.push(Box::new(GlobalAIWidget::default()));
-                if !FeatureFlag::UsageBasedPricing.is_enabled() {
-                    widgets.push(Box::new(UsageWidget::new(ctx)));
-                }
-                if ai_settings
-                    .intelligent_autosuggestions_enabled_internal
-                    .is_supported_on_current_platform()
-                    || ai_settings
-                        .prompt_suggestions_enabled_internal
-                        .is_supported_on_current_platform()
-                    || (FeatureFlag::PredictAMQueries.is_enabled()
-                        && ai_settings
-                            .natural_language_autosuggestions_enabled_internal
-                            .is_supported_on_current_platform())
-                    || (FeatureFlag::SharedBlockTitleGeneration.is_enabled()
-                        && ai_settings
-                            .shared_block_title_generation_enabled_internal
-                            .is_supported_on_current_platform())
-                    || (FeatureFlag::GitOperationsInCodeReview.is_enabled()
-                        && ai_settings
-                            .git_operations_autogen_enabled_internal
-                            .is_supported_on_current_platform())
-                {
-                    widgets.push(Box::new(ActiveAIWidget::new(ctx)));
-                }
-                widgets.push(Box::new(AgentsWidget::default()));
-                widgets.push(Box::new(AIInputWidget::default()));
-                if MCPServersWidget::should_show_mcp() {
-                    widgets.push(Box::new(MCPServersWidget::default()));
-                }
-                if FeatureFlag::AIRules.is_enabled() {
-                    widgets.extend(Self::knowledge_widgets());
-                }
-                if cfg!(feature = "voice_input")
-                    && ai_settings
-                        .voice_input_enabled_internal
-                        .is_supported_on_current_platform()
-                {
-                    widgets.push(Box::new(VoiceWidget::default()));
-                }
-                widgets.push(Box::new(CloudHandoffWidget::default()));
-                widgets.extend(cli_agent_widgets());
-                widgets.push(Box::new(ApiKeysWidget::new(ctx)));
-                widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
-                widgets.push(Box::new(GeminiEnterpriseWidget::new(ctx)));
-                widgets.push(Box::new(AgentAttributionWidget::default()));
-                widgets.push(Box::new(OtherAIWidget::default()));
-                if FeatureFlag::AgentModeComputerUse.is_enabled() {
-                    widgets.push(Box::new(CloudAgentComputerUseWidget::default()));
-                }
-            }
-            Some(AISubpage::WarpAgent) => {
+            AISubpage::WarpAgent => {
                 // Oz page: global toggle + Active AI + Input + Other
                 widgets.push(Box::new(GlobalAIWidget::default()));
                 if ai_settings
@@ -2971,18 +2920,18 @@ impl AISettingsPageView {
                     widgets.push(Box::new(CloudAgentComputerUseWidget::default()));
                 }
             }
-            Some(AISubpage::Profiles) => {
+            AISubpage::Profiles => {
                 if !FeatureFlag::UsageBasedPricing.is_enabled() {
                     widgets.push(Box::new(UsageWidget::new(ctx)));
                 }
                 widgets.push(Box::new(AgentsWidget::default()));
             }
-            Some(AISubpage::Knowledge) => {
+            AISubpage::Knowledge => {
                 if FeatureFlag::AIRules.is_enabled() {
                     widgets.extend(Self::knowledge_widgets());
                 }
             }
-            Some(AISubpage::ThirdPartyCLIAgents) => {
+            AISubpage::ThirdPartyCLIAgents => {
                 widgets.extend(cli_agent_widgets());
             }
         }
@@ -2992,9 +2941,9 @@ impl AISettingsPageView {
         // Single-topic subpages follow the Account-page convention and render their title as
         // page chrome, so filtering their setting widgets never removes the title.
         let title = match subpage {
-            Some(AISubpage::Knowledge) => Some("Knowledge"),
-            Some(AISubpage::ThirdPartyCLIAgents) => Some("Third party CLI agents"),
-            None | Some(AISubpage::WarpAgent) | Some(AISubpage::Profiles) => None,
+            AISubpage::Knowledge => Some("Knowledge"),
+            AISubpage::ThirdPartyCLIAgents => Some("Third party CLI agents"),
+            AISubpage::WarpAgent | AISubpage::Profiles => None,
         };
         PageType::new_uncategorized(widgets, title)
     }
@@ -7551,7 +7500,7 @@ impl SettingsWidget for OtherAIWidget {
         if FeatureFlag::AgentView.is_enabled() {
             let mut agent_view_column = Flex::column()
                 .with_child(render_ai_setting_toggle::<ShouldShowOzUpdatesInZeroState>(
-                    "Show Oz changelog in new conversation view",
+                    "Show Warp Agent changelog in new conversation view",
                     AISettingsPageAction::ToggleShowOzUpdatesInZeroState,
                     *ai_settings.should_show_oz_updates_in_zero_state,
                     is_toggleable,
@@ -7651,7 +7600,7 @@ impl SettingsWidget for OtherAIWidget {
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub(crate) fn cli_agent_settings_widget_id() -> &'static str {
+pub fn cli_agent_settings_widget_id() -> &'static str {
     CLIAgentWidget::static_widget_id()
 }
 fn cli_agent_widgets() -> Vec<Box<dyn SettingsWidget<View = AISettingsPageView>>> {
@@ -8207,7 +8156,7 @@ impl SettingsWidget for AgentAttributionWidget {
             )
             .with_child(toggle_row)
             .with_child(render_ai_setting_description(
-                "Oz can add attribution to commit messages and pull requests it creates",
+                "Warp Agent can add attribution to commit messages and pull requests it creates",
                 !state.is_disabled,
                 app,
             ))
