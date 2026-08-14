@@ -3287,6 +3287,7 @@ impl BlocklistAIController {
             history_model.update_conversation_cost_and_usage_for_request(
                 conversation_id,
                 request_cost,
+                finished_event.request_charges.take(),
                 finished_event.token_usage,
                 finished_event.conversation_usage_metadata.take(),
                 did_request_contain_user_query,

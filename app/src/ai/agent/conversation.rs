@@ -66,8 +66,8 @@ use crate::code_review::CodeReviewTelemetryEvent;
 use crate::notebooks::NotebookId;
 use crate::persistence::ModelEvent;
 use crate::persistence::model::{
-    AgentConversationData, ContextWindowSegment, ConversationUsageMetadata, ModelTokenUsage,
-    PersistedAutoexecuteMode, ToolUsageMetadata,
+    AgentConversationData, ChargedUsageTotals, ContextWindowSegment, ConversationUsageMetadata,
+    ModelTokenUsage, PersistedAutoexecuteMode, ToolUsageMetadata,
 };
 use crate::server::ids::ServerId;
 use crate::terminal::general_settings::GeneralSettings;
@@ -193,6 +193,12 @@ pub struct ConversationUsageTotals {
     /// while a restored legacy conversation with real usage but an unknown
     /// historical cost still shows it.
     pub has_usage: bool,
+    /// Cumulative per-category charged-usage breakdown (input/output/
+    /// cache-read/cache-write cost + token counts) for the whole
+    /// conversation so far, from `ConversationUsageMetadata.total_charges`.
+    /// `None` when the server didn't provide it (flag off, or a legacy
+    /// conversation).
+    pub charged_usage: Option<ChargedUsageTotals>,
 }
 
 /// Whether persisted or server usage metadata carries evidence that the
@@ -833,6 +839,18 @@ impl AIConversation {
         self.conversation_usage_metadata
             .credits_spent_for_last_block
             .map(|credits| (credits * 10.0).round() / 10.0)
+    }
+
+    /// Per-category charged-usage breakdown over the last block, where the
+    /// block comprises all agent outputs since the most recent user input
+    /// (mirrors [`Self::credits_spent_for_last_block`], but as a full
+    /// input/output/cache-read/cache-write cost + token breakdown rather
+    /// than a bare credits figure). `None` when the server didn't provide
+    /// `StreamFinished.request_charges` (flag off) or before any block has
+    /// completed.
+    pub fn charged_usage_for_last_block(&self) -> Option<ChargedUsageTotals> {
+        self.conversation_usage_metadata
+            .charged_usage_for_last_block
     }
 
     /// Time to first token for the last completed set of agent responses
@@ -2210,6 +2228,7 @@ impl AIConversation {
     pub fn update_cost_and_usage_for_request(
         &mut self,
         request_cost: Option<RequestCost>,
+        request_charges: Option<stream_finished::RequestCharges>,
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<stream_finished::ConversationUsageMetadata>,
         was_user_initiated_request: bool,
@@ -2257,6 +2276,21 @@ impl AIConversation {
             self.total_request_cost += request_cost;
         }
 
+        if let Some(request_charges) = request_charges {
+            let totals = ChargedUsageTotals::from(&request_charges);
+            let charged_usage_for_last_block = self
+                .conversation_usage_metadata
+                .charged_usage_for_last_block
+                .get_or_insert_with(ChargedUsageTotals::default);
+
+            // Mirrors the `credits_spent_for_last_block` reset above: a
+            // user-initiated request starts a new response block.
+            if was_user_initiated_request {
+                *charged_usage_for_last_block = ChargedUsageTotals::default();
+            }
+            *charged_usage_for_last_block += totals;
+        }
+
         if let Some(usage_metadata) = usage_metadata {
             self.conversation_usage_metadata.context_window_usage =
                 usage_metadata.context_window_usage;
@@ -2266,6 +2300,10 @@ impl AIConversation {
                 self.conversation_usage_metadata.platform_credits_spent =
                     usage_metadata.platform_credits_spent;
             }
+            self.conversation_usage_metadata.total_charged_usage = usage_metadata
+                .total_charges
+                .as_ref()
+                .map(ChargedUsageTotals::from);
             let llm_preferences = LLMPreferences::as_ref(ctx);
             self.conversation_usage_metadata.token_usage =
                 footer_model_token_usage(&usage_metadata, llm_preferences);
@@ -3782,6 +3820,7 @@ impl AIConversation {
             credits_spent: self.inference_credits_spent() + self.platform_credits_spent(),
             cost_in_cents: self.total_provider_cost_in_cents,
             has_usage: self.has_usage_metadata,
+            charged_usage: self.conversation_usage_metadata.total_charged_usage,
         }
     }
 

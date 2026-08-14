@@ -217,6 +217,10 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
             platform_credits_spent: gql.platform_credits_spent as f32,
             total_provider_cost_in_cents: gql.total_provider_cost_in_cents.map(|cost| cost as f32),
             credits_spent_for_last_block: None,
+            // Not yet fetched by this GraphQL query (persisted-history
+            // vertical, milestone 3) -- left `None` rather than fabricated.
+            charged_usage_for_last_block: None,
+            total_charged_usage: None,
             token_usage: convert_token_usage(&gql.warp_token_usage, &gql.byok_token_usage),
             tool_usage_metadata: (&gql.tool_usage_metadata).into(),
             context_window_segments: gql.context_window_segments.iter().map(Into::into).collect(),
