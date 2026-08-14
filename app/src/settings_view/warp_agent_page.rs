@@ -8,6 +8,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Not;
+#[cfg(feature = "local_fs")]
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
