@@ -23,7 +23,6 @@ where
                     object
                         .metadata
                         .revision
-                        .clone()
                         .expect("revision should exist")
                 });
         async_assert!(
