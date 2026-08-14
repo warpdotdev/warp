@@ -320,16 +320,6 @@ pub enum SettingsSection {
     Teams,
     WarpDrive,
     Warpify,
-    // ── Aliases ──
-    // Accepted from deeplinks, persisted sessions and the command palette.
-    // These are neither sidebar nav targets nor page keys;
-    // [`SettingsSection::resolve_alias`] maps each to the page it opens.
-    /// Alias resolving to [`Self::WarpAgent`].
-    AI,
-    /// Alias resolving to [`Self::CodeIndexing`].
-    Code,
-    /// Alias resolving to [`Self::AgentMCPServers`].
-    MCPServers,
     // ── Agents umbrella subpages ──
     WarpAgent,
     AgentProfiles,
@@ -354,7 +344,6 @@ impl Display for SettingsSection {
             SettingsSection::BillingAndUsage => write!(f, "Billing and usage"),
             SettingsSection::Keybindings => write!(f, "Keyboard shortcuts"),
             SettingsSection::SharedBlocks => write!(f, "Shared blocks"),
-            SettingsSection::MCPServers => write!(f, "MCP Servers"),
             SettingsSection::Scripting => write!(f, "Scripting"),
             SettingsSection::WarpDrive => write!(f, "Warp Drive"),
             SettingsSection::WarpAgent => write!(f, "Warp Agent"),
@@ -372,24 +361,6 @@ impl Display for SettingsSection {
 }
 
 impl SettingsSection {
-    /// Resolves an alias variant to the section it actually navigates to.
-    /// Every other section resolves to itself.
-    ///
-    /// Aliases exist so that older persisted sessions, deeplinks and the
-    /// command palette can keep naming a page by a key that is not itself a
-    /// sidebar row. Resolving them at the two entry points into the view
-    /// ([`SettingsView::new`] and
-    /// [`SettingsView::set_and_refresh_current_page_internal`]) keeps every
-    /// other code path dealing only in real nav targets.
-    pub fn resolve_alias(self) -> Self {
-        match self {
-            Self::AI => Self::WarpAgent,
-            Self::Code => Self::CodeIndexing,
-            Self::MCPServers => Self::AgentMCPServers,
-            other => other,
-        }
-    }
-
     /// Stable identifier for this section, used everywhere the section leaves
     /// the process: the SQLite session-restore key and the
     /// `surface.settings.open --page` warpctrl vocabulary.
@@ -418,9 +389,6 @@ impl SettingsSection {
             Self::Teams => "Teams",
             Self::WarpDrive => "Warp Drive",
             Self::Warpify => "Warpify",
-            Self::AI => "AI",
-            Self::Code => "Code",
-            Self::MCPServers => "MCP Servers",
             Self::WarpAgent => "Warp Agent",
             Self::AgentProfiles => "Profiles",
             Self::AgentMCPServers => "MCP servers",
@@ -436,8 +404,10 @@ impl SettingsSection {
     /// Parses a [`Self::slug`], also accepting the legacy spellings that
     /// persisted sessions and existing warpctrl callers may still be using.
     ///
-    /// Alias sections are returned as-is rather than resolved, so callers keep
-    /// control over when [`Self::resolve_alias`] runs.
+    /// Legacy names for pages that no longer exist under that name resolve
+    /// here, at the boundary, rather than becoming sections of their own. That
+    /// keeps every `SettingsSection` value a real nav target, so no caller has
+    /// to remember to normalize one before navigating.
     pub fn from_slug(slug: &str) -> Option<Self> {
         let section = match slug {
             "About" => Self::About,
@@ -453,16 +423,16 @@ impl SettingsSection {
             "Teams" => Self::Teams,
             "Warp Drive" | "WarpDrive" => Self::WarpDrive,
             "Warpify" => Self::Warpify,
-            "AI" => Self::AI,
-            "Code" => Self::Code,
-            "MCP Servers" => Self::MCPServers,
-            // This page was called "Oz" at one point, keep for backward compatibility.
-            "Warp Agent" | "Oz" => Self::WarpAgent,
+            // "Oz" and "AI" are older names for what is now the Warp Agent page.
+            "Warp Agent" | "Oz" | "AI" => Self::WarpAgent,
             "Profiles" | "AgentProfiles" => Self::AgentProfiles,
-            "MCP servers" | "AgentMCPServers" => Self::AgentMCPServers,
+            // "MCP Servers" named the standalone page before it moved under the
+            // Agents umbrella; it differs from the current slug only by casing.
+            "MCP servers" | "MCP Servers" | "AgentMCPServers" => Self::AgentMCPServers,
             "Knowledge" => Self::Knowledge,
             "Third party CLI agents" | "ThirdPartyCLIAgents" => Self::ThirdPartyCLIAgents,
-            "Indexing and projects" | "CodeIndexing" => Self::CodeIndexing,
+            // "Code" named the combined page before it split in two.
+            "Indexing and projects" | "CodeIndexing" | "Code" => Self::CodeIndexing,
             "Editor and Code Review" | "EditorAndCodeReview" => Self::EditorAndCodeReview,
             "Environments" | "CloudEnvironments" => Self::CloudEnvironments,
             "Oz Cloud API Keys" | "OzCloudAPIKeys" => Self::OzCloudAPIKeys,
@@ -1474,8 +1444,7 @@ impl SettingsView {
             );
         }
 
-        // Resolve the initial page: alias sections map to the nav target they open.
-        let initial_page = match page.map(SettingsSection::resolve_alias) {
+        let initial_page = match page {
             Some(SettingsSection::Scripting) if !FeatureFlag::WarpControlCli.is_enabled() => {
                 SettingsSection::Account
             }
@@ -2061,10 +2030,6 @@ impl SettingsView {
         allow_steal_focus: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        // Alias sections (e.g. the persisted `MCPServers` backing key) map to
-        // the nav target they open. External callers may use either spelling.
-        let section = section.resolve_alias();
-
         // Every nav target owns its backing page. Check it exists.
         if self.settings_page(section).is_none() {
             return;

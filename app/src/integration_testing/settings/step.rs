@@ -37,19 +37,14 @@ pub fn toggle_setting(action: SettingsAction) -> TestStep {
 }
 
 /// Opens the settings pane at `section` and waits until it is showing.
-///
-/// `section` may be an alias (e.g. `MCPServers`), in which case the view lands
-/// on the nav target the alias resolves to. The assertion follows
-/// [`SettingsSection::resolve_alias`] so callers can dispatch either spelling.
 pub fn open_settings_page(section: SettingsSection) -> TestStep {
-    let selected = section.resolve_alias();
     new_step_with_default_assertions(&format!("Open settings at {section:?}"))
         .with_action(move |app, _, _| {
             dispatch_workspace_action(app, WorkspaceAction::ShowSettingsPage(section));
         })
         .add_named_assertion(
-            format!("Settings is showing {selected:?}"),
-            move |app, window_id| assert_section_selected(app, window_id, selected),
+            format!("Settings is showing {section:?}"),
+            move |app, window_id| assert_section_selected(app, window_id, section),
         )
 }
 

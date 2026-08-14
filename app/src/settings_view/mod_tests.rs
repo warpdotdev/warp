@@ -114,7 +114,7 @@ fn subpage_display_names_are_correct() {
 
 // ── slug / from_slug ───────────────────────────────────────────────
 
-/// Every `SettingsSection` variant, including the alias variants.
+/// Every `SettingsSection` variant.
 ///
 /// `all_sections_list_is_exhaustive` keeps this honest: adding a variant
 /// breaks the exhaustive match there, which is the prompt to add it here.
@@ -132,9 +132,6 @@ const ALL_SECTIONS: &[SettingsSection] = &[
     SettingsSection::Teams,
     SettingsSection::WarpDrive,
     SettingsSection::Warpify,
-    SettingsSection::AI,
-    SettingsSection::Code,
-    SettingsSection::MCPServers,
     SettingsSection::WarpAgent,
     SettingsSection::AgentProfiles,
     SettingsSection::AgentMCPServers,
@@ -163,9 +160,6 @@ fn all_sections_list_is_exhaustive() {
             | SettingsSection::Teams
             | SettingsSection::WarpDrive
             | SettingsSection::Warpify
-            | SettingsSection::AI
-            | SettingsSection::Code
-            | SettingsSection::MCPServers
             | SettingsSection::WarpAgent
             | SettingsSection::AgentProfiles
             | SettingsSection::AgentMCPServers
@@ -264,21 +258,21 @@ fn from_slug_accepts_legacy_spellings() {
 }
 
 #[test]
-fn from_slug_keeps_the_non_page_aliases_resolvable() {
-    // `AI`, `Code` and `MCP Servers` are not nav targets, but persisted
-    // sessions and warpctrl callers still name them, so they have to parse and
-    // then resolve to a real page.
-    assert_eq!(SettingsSection::from_slug("AI"), Some(SettingsSection::AI));
+fn from_slug_maps_superseded_page_names_to_the_page_that_replaced_them() {
+    // `AI`, `Code` and `MCP Servers` named pages that have since been split or
+    // moved. Persisted sessions and warpctrl callers still use them, so they
+    // resolve here, at the boundary, rather than existing as sections of their
+    // own that every caller would have to remember to normalize.
     assert_eq!(
-        SettingsSection::from_slug("AI").map(SettingsSection::resolve_alias),
+        SettingsSection::from_slug("AI"),
         Some(SettingsSection::WarpAgent)
     );
     assert_eq!(
-        SettingsSection::from_slug("Code").map(SettingsSection::resolve_alias),
+        SettingsSection::from_slug("Code"),
         Some(SettingsSection::CodeIndexing)
     );
     assert_eq!(
-        SettingsSection::from_slug("MCP Servers").map(SettingsSection::resolve_alias),
+        SettingsSection::from_slug("MCP Servers"),
         Some(SettingsSection::AgentMCPServers)
     );
 }

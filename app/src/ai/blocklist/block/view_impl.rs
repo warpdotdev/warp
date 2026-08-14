@@ -773,7 +773,7 @@ where
                                     ctx.dispatch_typed_action(
                                         WorkspaceAction::ShowSettingsPageWithSearch {
                                             search_query: "Autonomy".to_string(),
-                                            section: Some(SettingsSection::AI),
+                                            section: Some(SettingsSection::WarpAgent),
                                         },
                                     );
                                 })),
