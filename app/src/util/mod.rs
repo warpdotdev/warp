@@ -6,6 +6,7 @@ pub mod extensions;
 pub mod file;
 pub mod git;
 pub mod image;
+pub mod lazy;
 pub(crate) mod link_detection;
 pub mod links;
 pub mod openable_file_type;

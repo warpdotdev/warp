@@ -56,6 +56,7 @@ use crate::terminal::model::ansi::{
     self, Handler, PrecmdValue, PreexecValue, Processor, PromptMetadata,
 };
 use crate::terminal::model::blockgrid::BlockGrid;
+use crate::terminal::model::blocks::BlockList;
 use crate::terminal::model::grid::grid_handler::TermMode;
 use crate::terminal::model::index::{Point, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
@@ -65,6 +66,7 @@ use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::WithinBlockBanner;
 use crate::terminal::{BlockPadding, ShellHost, SizeInfo};
+use crate::util::lazy::Lazy;
 
 pub const LONG_RUNNING_COMMAND_DURATION_MS: u64 = 50;
 pub const LONG_RUNNING_BOTTOM_PADDING_LINES: f32 = 0.2;
@@ -526,6 +528,79 @@ pub struct PromptInfo {
     pub prompt_snapshot: Option<String>,
 }
 
+/// Computes [`UserBlockCompleted::command`] lazily from the live block. See
+/// [`crate::util::lazy::Lazy`].
+fn compute_command(block: &Block) -> String {
+    block.command_to_string()
+}
+
+/// Computes [`UserBlockCompleted::command_with_obfuscated_secrets`] lazily from the live block.
+fn compute_command_with_obfuscated_secrets(block: &Block) -> String {
+    let mut command = block.command_with_secrets_obfuscated(false);
+    // If secret redaction is disabled, we manually scan for secrets and redact them.
+    if matches!(
+        block.prompt_and_command_grid().should_scan_for_secrets,
+        ObfuscateSecrets::No
+    ) {
+        redact_secrets(&mut command);
+    }
+    command
+}
+
+/// Computes [`UserBlockCompleted::output_truncated`] lazily from the live block.
+fn compute_output_truncated(block: &Block) -> String {
+    if block.is_ai_ugc_telemetry_enabled {
+        // If telemetry is enabled, we collect the full output but are limiting it to
+        // the first and last 2500 lines in case the block is very large.
+        block.output_grid().content_summary(2500, 2500, false)
+    } else {
+        block
+            .output_grid()
+            .contents_to_string(false, Some(MAX_SERIALIZED_OUTPUT_LINES))
+    }
+}
+
+/// Computes [`UserBlockCompleted::output_truncated_with_obfuscated_secrets`] lazily from the live
+/// block.
+fn compute_output_truncated_with_obfuscated_secrets(block: &Block) -> String {
+    let mut output = if block.is_ai_ugc_telemetry_enabled {
+        block.output_grid().content_summary(2500, 2500, true)
+    } else {
+        block
+            .output_grid()
+            .contents_to_string_force_secrets_obfuscated(false, Some(MAX_SERIALIZED_OUTPUT_LINES))
+    };
+    // If secret redaction is disabled, we manually scan for secrets and redact them.
+    if matches!(
+        block.output_grid().should_scan_for_secrets,
+        ObfuscateSecrets::No
+    ) {
+        redact_secrets(&mut output);
+    }
+    output
+}
+
+/// Resolution is keyed on `BlockId`, not `BlockIndex`: block removal (e.g. clearing the screen)
+/// can reindex the remaining blocks, so a `BlockIndex` captured at construction time may no
+/// longer point at the same block (or may silently resolve to a different one entirely) by the
+/// time a deferred field is first read, possibly much later.
+fn resolve_and_compute<T: Default>(
+    block_list: &BlockList,
+    id: &BlockId,
+    compute: impl FnOnce(&Block) -> T,
+) -> T {
+    match block_list.block_with_id(id) {
+        Some(block) => compute(block),
+        None => {
+            report_error!(
+                "Tried to lazily compute a UserBlockCompleted field for a block that no longer exists",
+                extra: { "block_id" => ?id }
+            );
+            T::default()
+        }
+    }
+}
+
 impl From<&Block> for BlockType {
     fn from(block: &Block) -> Self {
         if block.is_for_in_band_command {
@@ -547,66 +622,55 @@ impl From<&Block> for BlockType {
                 }
             }
             BootstrapStage::PostBootstrapPrecmd => {
-                let serialized_block = block.into();
-
                 if block.is_background() {
-                    BlockType::Background(Arc::new(serialized_block))
+                    BlockType::Background(Arc::new(block.into()))
                 } else {
-                    let command = block.command_to_string();
-                    let mut command_with_obfuscated_secrets =
-                        block.command_with_secrets_obfuscated(false);
-
-                    let (output_truncated, mut output_truncated_with_obfuscated_secrets) =
-                        if block.is_ai_ugc_telemetry_enabled {
-                            // If telemetry is enabled, we collect the full output but are limiting it to
-                            // the first and last 2500 lines in case the block is very large.
-                            (
-                                block.output_grid().content_summary(2500, 2500, false),
-                                block.output_grid().content_summary(2500, 2500, true),
+                    // Captured (by stable `BlockId`, not `BlockIndex` — see `resolve_and_compute`)
+                    // by the `Lazy::deferred` closures below so they can look up this block again
+                    // (via a `&BlockList` given later, at read time) without holding onto `block`
+                    // itself.
+                    let index = block.block_index;
+                    let id = block.id().clone();
+                    BlockType::User(UserBlockCompleted::new(
+                        index,
+                        Lazy::deferred({
+                            let id = id.clone();
+                            move |block_list| {
+                                resolve_and_compute(block_list, &id, |block| Arc::new(block.into()))
+                            }
+                        }),
+                        Lazy::deferred({
+                            let id = id.clone();
+                            move |block_list| resolve_and_compute(block_list, &id, compute_command)
+                        }),
+                        Lazy::deferred({
+                            let id = id.clone();
+                            move |block_list| {
+                                resolve_and_compute(
+                                    block_list,
+                                    &id,
+                                    compute_command_with_obfuscated_secrets,
+                                )
+                            }
+                        }),
+                        Lazy::deferred({
+                            let id = id.clone();
+                            move |block_list| {
+                                resolve_and_compute(block_list, &id, compute_output_truncated)
+                            }
+                        }),
+                        Lazy::deferred(move |block_list| {
+                            resolve_and_compute(
+                                block_list,
+                                &id,
+                                compute_output_truncated_with_obfuscated_secrets,
                             )
-                        } else {
-                            (
-                                block
-                                    .output_grid()
-                                    .contents_to_string(false, Some(MAX_SERIALIZED_OUTPUT_LINES)),
-                                block
-                                    .output_grid()
-                                    .contents_to_string_force_secrets_obfuscated(
-                                        false,
-                                        Some(MAX_SERIALIZED_OUTPUT_LINES),
-                                    ),
-                            )
-                        };
-
-                    // If secret redaction is disabled, we manually scan for secrets and redact them.
-                    if matches!(
-                        block.prompt_and_command_grid().should_scan_for_secrets,
-                        ObfuscateSecrets::No
-                    ) {
-                        redact_secrets(&mut command_with_obfuscated_secrets);
-                    }
-                    if matches!(
-                        block.output_grid().should_scan_for_secrets,
-                        ObfuscateSecrets::No
-                    ) {
-                        redact_secrets(&mut output_truncated_with_obfuscated_secrets);
-                    }
-
-                    BlockType::User(UserBlockCompleted {
-                        index: block.block_index,
-                        serialized_block: Arc::new(serialized_block),
-                        command,
-                        command_with_obfuscated_secrets,
-                        output_truncated,
-                        output_truncated_with_obfuscated_secrets,
-                        was_part_of_agent_interaction: block.agent_interaction_metadata().is_some(),
-                        started_at: block.command_start_time(),
-                        num_output_lines: block.output_grid().len() as u64,
-                        num_output_lines_truncated: block
-                            .output_grid()
-                            .grid_handler()
-                            .num_lines_truncated(),
-                    })
+                        }),
+                        block.agent_interaction_metadata().is_some(),
+                        block.command_start_time(),
+                        block.output_grid().len() as u64,
+                        block.output_grid().grid_handler().num_lines_truncated(),
+                    ))
                 }
             }
         }

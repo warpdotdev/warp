@@ -18,10 +18,12 @@ use crate::server::ids::SyncId;
 use crate::server::telemetry::ImageProtocol;
 use crate::terminal::ClipboardType;
 use crate::terminal::model::block::{BlockMetadata, SerializedBlock};
+use crate::terminal::model::blocks::BlockList;
 use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::model::terminal_model::HandlerEvent;
 use crate::terminal::shell::ShellType;
 use crate::util::AsciiDebug;
+use crate::util::lazy::Lazy;
 
 #[derive(Clone)]
 /// Events sent to the main thread by the terminal model & event loop.
@@ -286,25 +288,33 @@ pub struct BlockWorkingDirectoryUpdatedEvent {
 
 #[derive(Clone, Debug)]
 /// Contents of a normal block that a user executed.
+///
+/// `serialized_block`, `command`, `command_with_obfuscated_secrets`, `output_truncated`, and
+/// `output_truncated_with_obfuscated_secrets` are all computed lazily: each defers looking up the
+/// live `Block` and computing its value until first read. This result will then be cached and accessed
+/// directly in subsequent reads
 pub struct UserBlockCompleted {
     pub index: BlockIndex,
 
-    pub serialized_block: Arc<SerializedBlock>,
+    /// The block's serialized representation. Despite being cheap to clone once computed (it's
+    /// wrapped in an `Arc`), computing it in the first place is not: like the other fields below,
+    /// it's deferred until the first read.
+    pub serialized_block: Lazy<Arc<SerializedBlock>, BlockList>,
 
     /// The input lines for a block without any escape sequences.
-    pub command: String,
+    pub command: Lazy<String, BlockList>,
 
     /// The command with secrets obfuscated.
-    pub command_with_obfuscated_secrets: String,
+    pub command_with_obfuscated_secrets: Lazy<String, BlockList>,
 
     /// The output lines for a block without any escape sequences.
     /// They are truncated to the number of lines specificed by the caller.
-    pub output_truncated: String,
+    pub output_truncated: Lazy<String, BlockList>,
 
     /// The output lines for a block without any escape sequences.
     /// They are truncated to the number of lines specificed by the caller.
     /// Forced secrets to be obfuscated as well.
-    pub output_truncated_with_obfuscated_secrets: String,
+    pub output_truncated_with_obfuscated_secrets: Lazy<String, BlockList>,
 
     /// `true` if the block was run as a requested command or was part of a CLI subagent interaction.
     pub was_part_of_agent_interaction: bool,
@@ -319,6 +329,64 @@ pub struct UserBlockCompleted {
     /// The number of lines of output that were truncated while the block
     /// was active and receiving output.
     pub num_output_lines_truncated: u64,
+}
+
+impl UserBlockCompleted {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new(
+        index: BlockIndex,
+        serialized_block: Lazy<Arc<SerializedBlock>, BlockList>,
+        command: Lazy<String, BlockList>,
+        command_with_obfuscated_secrets: Lazy<String, BlockList>,
+        output_truncated: Lazy<String, BlockList>,
+        output_truncated_with_obfuscated_secrets: Lazy<String, BlockList>,
+        was_part_of_agent_interaction: bool,
+        started_at: Option<Instant>,
+        num_output_lines: u64,
+        num_output_lines_truncated: u64,
+    ) -> Self {
+        Self {
+            index,
+            serialized_block,
+            command,
+            command_with_obfuscated_secrets,
+            output_truncated,
+            output_truncated_with_obfuscated_secrets,
+            was_part_of_agent_interaction,
+            started_at,
+            num_output_lines,
+            num_output_lines_truncated,
+        }
+    }
+
+    /// Test-only constructor that treats every lazy field as already computed.
+    #[cfg(any(test, feature = "test-util"))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_for_test(
+        index: BlockIndex,
+        serialized_block: Arc<SerializedBlock>,
+        command: String,
+        command_with_obfuscated_secrets: String,
+        output_truncated: String,
+        output_truncated_with_obfuscated_secrets: String,
+        was_part_of_agent_interaction: bool,
+        started_at: Option<Instant>,
+        num_output_lines: u64,
+        num_output_lines_truncated: u64,
+    ) -> Self {
+        Self::new(
+            index,
+            Lazy::provided(serialized_block),
+            Lazy::provided(command),
+            Lazy::provided(command_with_obfuscated_secrets),
+            Lazy::provided(output_truncated),
+            Lazy::provided(output_truncated_with_obfuscated_secrets),
+            was_part_of_agent_interaction,
+            started_at,
+            num_output_lines,
+            num_output_lines_truncated,
+        )
+    }
 }
 
 /// Emitted upon completion of an executor command that goes through the pty, such as the

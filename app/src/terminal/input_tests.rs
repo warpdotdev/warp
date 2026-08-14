@@ -1799,21 +1799,18 @@ fn queued_command_completion_preserves_draft() {
             input.deferred_remote_operations.latest_block_id = BlockId::new();
             input.handle_block_completed_event(
                 BlockCompletedEvent {
-                    block_type: BlockType::User(UserBlockCompleted {
-                        index: BlockIndex::zero(),
-                        serialized_block: Arc::new(SerializedBlock::new_for_test(
-                            b"echo 1".to_vec(),
-                            vec![],
-                        )),
-                        command: "echo 1".to_owned(),
-                        command_with_obfuscated_secrets: "echo 1".to_owned(),
-                        output_truncated: String::new(),
-                        output_truncated_with_obfuscated_secrets: String::new(),
-                        was_part_of_agent_interaction: false,
-                        started_at: None,
-                        num_output_lines: 0,
-                        num_output_lines_truncated: 0,
-                    }),
+                    block_type: BlockType::User(UserBlockCompleted::new_for_test(
+                        BlockIndex::zero(),
+                        Arc::new(SerializedBlock::new_for_test(b"echo 1".to_vec(), vec![])),
+                        "echo 1".to_owned(),
+                        "echo 1".to_owned(),
+                        String::new(),
+                        String::new(),
+                        false,
+                        None,
+                        0,
+                        0,
+                    )),
                     num_secrets_obfuscated: 0,
                     block_index: BlockIndex::zero(),
                     block_id: BlockId::new(),

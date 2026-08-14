@@ -1,4 +1,5 @@
 use float_cmp::{approx_eq, assert_approx_eq};
+use parking_lot::FairMutex;
 use warp_core::features::FeatureFlag;
 use warpui::App;
 use warpui::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
@@ -10,8 +11,8 @@ use crate::settings::TerminalSpacing;
 use crate::terminal::event::Event;
 use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::block::AgentInteractionMetadata;
-use crate::terminal::model::test_utils;
 use crate::terminal::model::test_utils::TestBlockListBuilder;
+use crate::terminal::model::{TerminalModel, test_utils};
 use crate::terminal::view::{InlineBannerItem, InlineBannerType};
 use crate::terminal::{BlockListSettings, SizeUpdateReason};
 
@@ -2264,8 +2265,14 @@ fn test_background_blocks_finished() {
     assert_eq!(block_completed_events.len(), 1);
     match &block_completed_events[0].block_type {
         BlockType::User(block) => {
-            assert_eq!(&block.command, "command");
-            assert_eq!(&block.output_truncated_with_obfuscated_secrets, "output");
+            assert_eq!(block.command.get(&block_list).as_str(), "command");
+            assert_eq!(
+                block
+                    .output_truncated_with_obfuscated_secrets
+                    .get(&block_list)
+                    .as_str(),
+                "output"
+            );
         }
         other => panic!("Expected BlockType::User, but was {other:?}"),
     }
@@ -2313,14 +2320,98 @@ fn test_background_blocks_finished() {
 
     match &block_completed_events[2].block_type {
         BlockType::User(block) => {
-            assert_eq!(&block.command, "next command");
+            assert_eq!(block.command.get(&block_list).as_str(), "next command");
             assert_eq!(
-                &block.output_truncated_with_obfuscated_secrets,
+                block
+                    .output_truncated_with_obfuscated_secrets
+                    .get(&block_list)
+                    .as_str(),
                 "next command output"
             );
         }
         other => panic!("Expected BlockType::User, but was {other:?}"),
     }
+}
+
+/// Regression test: `UserBlockCompleted`'s deferred fields must resolve by the block's stable
+/// `BlockId`, not by the `BlockIndex` captured at construction time. Removing blocks (e.g.
+/// clearing the screen) can reassign a removed block's old index to an entirely different block;
+/// resolving by index alone would silently return that unrelated block's data instead of
+/// detecting that the original block is gone.
+#[test]
+fn deferred_fields_resolve_by_block_id_not_stale_index() {
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(events_tx)
+        .build();
+
+    let mut model = TerminalModel::mock(None, None);
+    *model.block_list_mut() = new_bootstrapped_block_list(None, None, event_proxy);
+    let model = FairMutex::new(model);
+
+    command_finished_and_precmd(model.lock().block_list_mut());
+    // Flush events from bootstrapping.
+    while let Ok(_event) = events_rx.try_recv() {}
+
+    let first_index = insert_block(
+        model.lock().block_list_mut(),
+        "first_command\n",
+        "first_output\n",
+    );
+
+    let mut first_completed = None;
+    while let Ok(event) = events_rx.try_recv() {
+        if let Event::AfterBlockCompleted(event_content) = event
+            && let BlockType::User(user_block) = event_content.block_type
+        {
+            first_completed = Some(user_block);
+        }
+    }
+    let first_completed =
+        first_completed.expect("expected an AfterBlockCompleted event for the first block");
+
+    // Resetting the screen removes every block except the current (empty) active one and
+    // reassigns indices starting from zero, so `first_index` will soon belong to an unrelated
+    // block.
+    model
+        .lock()
+        .block_list_mut()
+        .clear_screen(ClearMode::ResetAndClear);
+    assert_eq!(model.lock().block_list().active_block().index(), 0.into());
+
+    // Insert enough new blocks that a genuinely different command ends up at `first_index`.
+    let mut collided = false;
+    for i in 0..4 {
+        let index = insert_block(
+            model.lock().block_list_mut(),
+            &format!("colliding_command_{i}\n"),
+            &format!("colliding_output_{i}\n"),
+        );
+        collided |= index == first_index;
+    }
+    assert!(
+        collided,
+        "expected a new, unrelated block to land at the original block's index"
+    );
+
+    // The original block no longer exists, so its fields must fall back to their defaults rather
+    // than resolving to the unrelated block that now sits at the same index.
+    assert_eq!(
+        first_completed.command.get_with(|compute| {
+            let model = model.lock();
+            compute(model.block_list())
+        }),
+        ""
+    );
+    assert_eq!(
+        first_completed
+            .output_truncated_with_obfuscated_secrets
+            .get_with(|compute| {
+                let model = model.lock();
+                compute(model.block_list())
+            }),
+        ""
+    );
 }
 
 #[test]

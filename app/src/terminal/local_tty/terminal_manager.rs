@@ -324,11 +324,6 @@ impl<S> TerminalManager<S> {
             )
         });
 
-        // Have ApiKeyManager subscribe to block completion events for AWS credential refresh
-        ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-            manager.register_model_event_dispatcher(&model_events, ctx);
-        });
-
         let preferred_shell = chosen_shell.unwrap_or_else(|| {
             AvailableShells::handle(ctx)
                 .read(ctx, |shells, ctx| shells.get_user_preferred_shell(ctx))
@@ -360,6 +355,13 @@ impl<S> TerminalManager<S> {
         );
         let colors = model.colors();
         let model = Arc::new(FairMutex::new(model));
+
+        // Have ApiKeyManager subscribe to block completion events for AWS credential refresh.
+        // This must happen after `model` is created, since the subscription needs it to resolve
+        // lazily-computed `UserBlockCompleted` fields.
+        ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.register_model_event_dispatcher(&model_events, model.clone(), ctx);
+        });
 
         // This is purely for measuring throughput on WarpDev.
         if FeatureFlag::RecordPtyThroughput.is_enabled() {
