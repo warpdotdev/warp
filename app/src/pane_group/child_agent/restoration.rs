@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use instant::Instant;
 use session_sharing_protocol::common::SessionId;
 use uuid::Uuid;
 use warp_errors::report_error;
@@ -47,6 +48,20 @@ const RESTORE_CHILD_SEED_FETCH_LIMIT: i32 = 100;
 /// entirely (see `finish_seed_child_conversations_from_task`) rather than
 /// retrying blindly.
 const TRANSIENT_SEED_FETCH_RETRY_DELAY: Duration = Duration::from_secs(5);
+
+/// Returns true if a fetch dispatched at `dispatched_at` must be treated as
+/// stale and dropped rather than applied: either the seed it was dispatched
+/// for is gone entirely, or a newer fetch has since been dispatched for the
+/// same `parent_task_id` (the seed was removed and a new one created while
+/// the old fetch was still in flight — e.g. the pane closed and the same
+/// parent conversation was reopened — or a retry/re-drive raced ahead of
+/// this completion).
+pub(in crate::pane_group) fn is_stale_ancestor_list_completion(
+    current_seed: Option<&PendingParentChildSeed>,
+    dispatched_at: Instant,
+) -> bool {
+    current_seed.is_none_or(|seed| seed.in_flight_fetch_started_at != Some(dispatched_at))
+}
 
 impl PaneGroup {
     /// Lazily restores hidden child panes for the given parent conversation.
@@ -159,6 +174,7 @@ impl PaneGroup {
             .or_insert_with(|| PendingParentChildSeed {
                 parent_conversation_id,
                 fetch_in_flight: false,
+                in_flight_fetch_started_at: None,
                 retry_handle: None,
             });
         self.ensure_pending_ambient_restoration_subscription(ctx);
@@ -183,8 +199,10 @@ impl PaneGroup {
             return;
         }
         let parent_conversation_id = seed.parent_conversation_id;
+        let dispatched_at = Instant::now();
         if let Some(seed) = self.pending_parent_child_seeds.get_mut(&parent_task_id) {
             seed.fetch_in_flight = true;
+            seed.in_flight_fetch_started_at = Some(dispatched_at);
         }
 
         #[cfg(test)]
@@ -204,6 +222,12 @@ impl PaneGroup {
                     .await
             },
             move |me, result, ctx| {
+                if is_stale_ancestor_list_completion(
+                    me.pending_parent_child_seeds.get(&parent_task_id),
+                    dispatched_at,
+                ) {
+                    return;
+                }
                 if let Some(seed) = me.pending_parent_child_seeds.get_mut(&parent_task_id) {
                     seed.fetch_in_flight = false;
                 }

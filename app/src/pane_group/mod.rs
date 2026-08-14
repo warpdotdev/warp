@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 
+use instant::Instant;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use markdown_parser::FormattedTextFragment;
@@ -1005,6 +1006,15 @@ struct PendingParentChildSeed {
     /// a `TasksUpdated` re-drive arriving before the previous fetch resolves
     /// doesn't dispatch a second, overlapping request for the same parent.
     fetch_in_flight: bool,
+    /// When the currently in-flight fetch (if any) was dispatched. The
+    /// completion closure captures this value at dispatch time and compares
+    /// it back against the seed's current value before applying anything,
+    /// so a stale completion for a seed that was removed and recreated for
+    /// the same `parent_task_id` while the old fetch was still in flight
+    /// (e.g. the pane closed and the same parent conversation was reopened)
+    /// can't clobber the new seed's in-flight state or feed stale results
+    /// into it.
+    in_flight_fetch_started_at: Option<Instant>,
     /// Handle for a scheduled one-shot retry after a transient fetch
     /// failure. Guarantees the fetch is retried even if nothing else ever
     /// emits another `TasksUpdated` for this parent (e.g. an idle

@@ -1,6 +1,6 @@
 pub(in crate::pane_group) mod hydration;
 pub(crate) mod materialization;
-mod restoration;
+pub(in crate::pane_group) mod restoration;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
