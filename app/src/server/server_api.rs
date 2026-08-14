@@ -1259,6 +1259,13 @@ impl ServerApi {
 pub struct ServerApiProvider {
     server_api: Arc<ServerApi>,
     auth_client: Arc<dyn AuthClient>,
+    /// Test-only override for `get_ai_client()`, letting unit tests inject a
+    /// `MockAIClient` for code that fetches its client via
+    /// `ServerApiProvider::as_ref(ctx).get_ai_client()` rather than storing
+    /// its own client field (which would otherwise need a dedicated
+    /// `..._for_test` constructor, as `OrchestrationEventStreamer` does).
+    #[cfg(test)]
+    ai_client_override: Option<Arc<dyn AIClient>>,
 }
 
 impl ServerApiProvider {
@@ -1341,7 +1348,17 @@ impl ServerApiProvider {
         Self {
             server_api,
             auth_client,
+            #[cfg(test)]
+            ai_client_override: None,
         }
+    }
+
+    /// Overrides the `AIClient` returned by `get_ai_client()` for the rest of
+    /// this provider's lifetime, so a test can inject a `MockAIClient` for
+    /// code that resolves its client on every call rather than caching one.
+    #[cfg(test)]
+    pub fn set_ai_client_for_test(&mut self, ai_client: Arc<dyn AIClient>) {
+        self.ai_client_override = Some(ai_client);
     }
 
     /// Returns a handle to the underlying [`ServerApi`] object.
@@ -1375,6 +1392,10 @@ impl ServerApiProvider {
     }
 
     pub fn get_ai_client(&self) -> Arc<dyn AIClient> {
+        #[cfg(test)]
+        if let Some(ai_client) = self.ai_client_override.clone() {
+            return ai_client;
+        }
         self.server_api.clone()
     }
 
