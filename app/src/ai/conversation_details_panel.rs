@@ -693,10 +693,6 @@ pub struct ConversationDetailsPanel {
     runners_loading: bool,
 }
 
-/// Returns the text shown and copied by the "Initial query" section, or
-/// `None` when there is no non-whitespace query to show. Shared by the
-/// render path and the copy action so both agree on exactly what "the
-/// initial query" is.
 fn trimmed_initial_query(source_prompt: &Option<String>) -> Option<&str> {
     let trimmed = source_prompt.as_ref()?.trim();
     (!trimmed.is_empty()).then_some(trimmed)
