@@ -194,8 +194,12 @@ impl SystemInfo {
         #[cfg(feature = "heap_usage_tracking")]
         {
             let breakdown_for_sentry = memory_breakdown.clone();
+            let footprint_at_threshold_trip_bytes = memory_footprint.as_u64();
             ctx.spawn(
-                crate::profiling::dump_jemalloc_heap_profile(breakdown_for_sentry),
+                crate::profiling::dump_jemalloc_heap_profile(
+                    breakdown_for_sentry,
+                    footprint_at_threshold_trip_bytes,
+                ),
                 |_, _, _| {},
             );
         }

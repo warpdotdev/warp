@@ -91,10 +91,23 @@ pub async fn dump_heap_profile_to_disk() -> anyhow::Result<std::path::PathBuf> {
 /// the bundled `pprof` binary to fetch and symbolicate the heap profile from
 /// the local HTTP server.  Either way, the resulting profile is attached to a
 /// Sentry event.
+///
+/// `footprint_at_threshold_trip_bytes` is the OS memory footprint that
+/// tripped the excessive-memory-usage threshold.  It's attached alongside a
+/// freshly-read footprint and jemalloc allocator stats so that a reader can
+/// distinguish memory that was freed between the threshold trip and this
+/// dump, memory retained (but not actively used) by the allocator, and
+/// genuinely non-heap memory that jemalloc never accounted for -- rather than
+/// only seeing the (possibly much smaller) set of live allocations sampled in
+/// the pprof.
 #[cfg(feature = "heap_usage_tracking")]
-pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
+pub async fn dump_jemalloc_heap_profile(
+    memory_breakdown: serde_json::Value,
+    footprint_at_threshold_trip_bytes: u64,
+) {
     use sentry::protocol::{Attachment, AttachmentType};
 
+    let memory_diagnostics = memory_diagnostics_for_sentry(footprint_at_threshold_trip_bytes);
     let result = dump_jemalloc_heap_profile_inner().await;
     match result {
         Ok(profile_data) => {
@@ -120,6 +133,17 @@ pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
                             sentry::protocol::Context::Other(context_map),
                         );
                     }
+
+                    if let serde_json::Value::Object(map) = memory_diagnostics {
+                        let context_map: std::collections::BTreeMap<
+                            String,
+                            sentry::protocol::Value,
+                        > = map.into_iter().collect();
+                        scope.set_context(
+                            "memory_diagnostics",
+                            sentry::protocol::Context::Other(context_map),
+                        );
+                    }
                 },
                 || {
                     sentry::capture_message(
@@ -134,6 +158,69 @@ pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
             log::warn!("Failed to dump heap profile: {err:#}");
         }
     }
+}
+
+/// Builds the `memory_diagnostics` blob attached to the excessive-memory
+/// Sentry event.
+///
+/// This exists because the heap profile only accounts for sampled *live*
+/// jemalloc allocations at dump time, so it can look small even when the OS
+/// footprint is enormous -- e.g. because memory was freed (but not yet
+/// returned to the OS) between the threshold trip and the dump, or because
+/// the usage is genuinely outside the heap (e.g. GPU buffers, mapped files).
+/// A failure to read any individual stat is logged and otherwise ignored, so
+/// this never prevents the Sentry event from being sent.
+#[cfg(feature = "heap_usage_tracking")]
+fn memory_diagnostics_for_sentry(footprint_at_threshold_trip_bytes: u64) -> serde_json::Value {
+    use tikv_jemalloc_ctl::{epoch, stats};
+
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "footprint_at_threshold_trip_bytes".to_string(),
+        footprint_at_threshold_trip_bytes.into(),
+    );
+    map.insert(
+        "footprint_at_dump_bytes".to_string(),
+        crate::system::memory_footprint::memory_footprint_bytes().into(),
+    );
+
+    // jemalloc's `stats.*` mallctls are cached and only refreshed when the
+    // epoch is advanced, so without this they could report values that are
+    // stale by however long it's been since the epoch was last advanced
+    // anywhere in the process.
+    if let Err(err) = epoch::advance() {
+        log::warn!("Failed to advance jemalloc epoch before reading stats: {err}");
+    }
+
+    match stats::allocated::read() {
+        Ok(value) => {
+            map.insert(
+                "jemalloc_allocated_bytes".to_string(),
+                (value as u64).into(),
+            );
+        }
+        Err(err) => log::warn!("Failed to read jemalloc stats.allocated: {err}"),
+    }
+    match stats::resident::read() {
+        Ok(value) => {
+            map.insert("jemalloc_resident_bytes".to_string(), (value as u64).into());
+        }
+        Err(err) => log::warn!("Failed to read jemalloc stats.resident: {err}"),
+    }
+    match stats::retained::read() {
+        Ok(value) => {
+            map.insert("jemalloc_retained_bytes".to_string(), (value as u64).into());
+        }
+        Err(err) => log::warn!("Failed to read jemalloc stats.retained: {err}"),
+    }
+    match stats::mapped::read() {
+        Ok(value) => {
+            map.insert("jemalloc_mapped_bytes".to_string(), (value as u64).into());
+        }
+        Err(err) => log::warn!("Failed to read jemalloc stats.mapped: {err}"),
+    }
+
+    serde_json::Value::Object(map)
 }
 
 #[cfg(feature = "heap_usage_tracking")]
@@ -309,3 +396,7 @@ pub async fn handle_get_heap()
     })?;
     Ok(pprof)
 }
+
+#[cfg(all(test, feature = "heap_usage_tracking"))]
+#[path = "profiling_tests.rs"]
+mod tests;
