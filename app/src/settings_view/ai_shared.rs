@@ -31,12 +31,10 @@ use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarIn
 use crate::appearance::Appearance;
 use crate::editor::{EditorView, InteractionState};
 
-/// Whether MCP servers are surfaced in the UI at all.
 pub fn should_show_mcp_servers() -> bool {
     FeatureFlag::McpServer.is_enabled() && ContextFlag::ShowMCPServers.is_enabled()
 }
 
-/// Enables or disables an editor embedded in a settings row.
 pub fn update_editor_interaction_state<V: View>(
     editor: ViewHandle<EditorView>,
     is_enabled: bool,
