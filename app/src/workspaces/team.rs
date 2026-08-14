@@ -16,7 +16,7 @@ pub enum MembershipRole {
 /// Governs which workspace members can discover and join a team. Orthogonal to
 /// workspace-level discoverability. Only `Open` teams support an invite link;
 /// `Private` and `Hidden` teams rely on admin-sent email invites instead.
-#[derive(Clone, Copy, Eq, PartialEq, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Default)]
 pub enum TeamVisibility {
     #[default]
     Open,
@@ -25,8 +25,6 @@ pub enum TeamVisibility {
 }
 
 impl TeamVisibility {
-    /// Only `Open` teams can have an invite link; `Private` and `Hidden` teams
-    /// use admin-sent email invites instead.
     pub fn supports_invite_link(&self) -> bool {
         matches!(self, TeamVisibility::Open)
     }

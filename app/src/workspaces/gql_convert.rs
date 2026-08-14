@@ -203,7 +203,8 @@ impl From<GqlTeamVisibility> for TeamVisibility {
             GqlTeamVisibility::Other(value) => {
                 report_error!(
                     "Invalid TeamVisibility from server; treating as Private",
-                    extra: { "value" => %value }
+                    extra: { "value" => %value },
+                    warp_errors::ReportErrorLogMode::OncePerRun
                 );
                 // Fail closed: an unrecognized value must not be treated as Open,
                 // since that would surface the invite-by-link control.
