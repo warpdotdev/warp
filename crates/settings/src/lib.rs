@@ -103,6 +103,13 @@ impl PublicPreferences {
     pub fn reload_from_disk(&self) -> Result<(), warpui_extras::user_preferences::Error> {
         self.0.reload_from_disk()
     }
+
+    /// Marks a key as write-inhibited so subsequent writes and removes for it
+    /// are silently skipped, preserving a broken-but-fixable value in the
+    /// settings file until the user corrects it.
+    pub fn inhibit_writes_for_key(&self, key: &str, hierarchy: Option<&str>) {
+        self.0.inhibit_writes_for_key(key, hierarchy);
+    }
 }
 
 impl warpui_core::Entity for PublicPreferences {

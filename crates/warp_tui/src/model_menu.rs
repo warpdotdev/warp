@@ -26,6 +26,9 @@ struct TuiModelMenuRow {
     is_key_connected: bool,
     is_profile_default: bool,
     discount_percentage: Option<f32>,
+    /// The GUI-shared `Custom · <endpoint>` description for a custom-endpoint
+    /// model. `None` for every other model.
+    custom_endpoint_description: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -102,6 +105,7 @@ impl TuiModelMenuModel {
                     is_key_connected: false,
                     is_profile_default: false,
                     discount_percentage: None,
+                    custom_endpoint_description: None,
                 })
                 .collect(),
             false,
@@ -273,17 +277,28 @@ fn model_menu_row(
     profile_default_id: &LLMId,
     app: &AppContext,
 ) -> TuiModelMenuRow {
+    // A custom-endpoint model cannot appear in the picker until its endpoint
+    // has a key (the effective projection excludes unkeyed endpoints), so the
+    // generic `(key connected)` suffix would be redundant for it. It shows
+    // only the shared `Custom · <endpoint>` description instead.
+    let is_custom_endpoint_model = LLMPreferences::as_ref(app)
+        .custom_llm_info_for_id(&choice.llm.id)
+        .is_some();
     let uses_external_inference = should_show_key_icon_for_model(&choice.llm, app)
         || should_show_bedrock_icon_for_model(&choice.llm, app)
         || should_show_gemini_enterprise_agent_platform_icon_for_model(&choice.llm, app);
     TuiModelMenuRow {
         is_selectable: choice.is_selectable(),
-        is_key_connected: should_show_key_icon_for_model(&choice.llm, app),
+        is_key_connected: !is_custom_endpoint_model
+            && should_show_key_icon_for_model(&choice.llm, app),
         discount_percentage: choice
             .llm
             .discount_percentage
             .filter(|_| !uses_external_inference),
         is_profile_default: choice.llm.id == *profile_default_id,
+        custom_endpoint_description: is_custom_endpoint_model
+            .then_some(choice.llm.description)
+            .flatten(),
         id: choice.llm.id,
         title: choice.llm.display_name,
     }
@@ -296,10 +311,14 @@ fn snapshot_row(row: &TuiModelMenuRow) -> TuiInlineMenuRow {
         (false, true) => Some("(key connected)".to_owned()),
         (false, false) => None,
     };
+    let description = row
+        .custom_endpoint_description
+        .clone()
+        .or_else(|| (!row.is_selectable).then(|| "disabled".to_owned()));
     TuiInlineMenuRow {
         title: row.title.clone(),
         prefix: None,
-        description: (!row.is_selectable).then(|| "disabled".to_owned()),
+        description,
         state_suffix,
         promotional_suffix: discount_label(row.discount_percentage),
         is_selectable: row.is_selectable,

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 
-use ai::api_keys::ApiKeyManager;
+use ai::api_keys::{ApiKeyManager, CustomEndpointPersistenceMode};
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::{Duration, Local};
 use warp_core::SessionId;
@@ -314,7 +314,23 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.update(AISettings::register_and_subscribe_to_events);
     app.update(TuiVoiceSettings::register);
     CloudAgentSettings::register(app);
-    app.add_singleton_model(ApiKeyManager::new);
+    // The TUI always stores custom endpoint definitions in settings.toml, so
+    // exercise the same `Split` persistence mode and `AISettings` bridge used
+    // in production, without needing a `LaunchMode` in this test harness.
+    app.add_singleton_model(|ctx| {
+        let mut manager = ApiKeyManager::new(CustomEndpointPersistenceMode::Split, ctx);
+        use crate::ai::custom_endpoints::{
+            CustomEndpointDefinitionsCoordinator as _, CustomEndpointSource,
+        };
+        // Matches `GlobalResourceHandles::mock`'s `settings_file_error: None`:
+        // this harness represents a successfully parsed settings file.
+        manager.subscribe_to_custom_endpoint_definitions(
+            CustomEndpointSource::SettingsCollection,
+            true,
+            ctx,
+        );
+        manager
+    });
 
     app.add_singleton_model(|_| NetworkStatus::new());
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());

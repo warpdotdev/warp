@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use ai::custom_endpoints::CustomEndpointDefinitionsConfig;
 use chrono::{DateTime, Utc};
 pub use cloud_object_models::{
     AgentModeCommandExecutionPredicate, DEFAULT_COMMAND_EXECUTION_ALLOWLIST,
@@ -1457,6 +1458,22 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.execution_profiles",
         max_table_depth: 2,
         description: "AI execution profiles and their permissions.",
+    }
+    // Custom LLM endpoint definitions authored in the TUI settings file or via
+    // /modify-settings. TUI-only: API keys are managed separately in
+    // /api-keys and never appear here. GUI custom endpoints remain in the
+    // legacy monolithic secure-storage blob in v1 (see
+    // `crates/ai/src/custom_endpoints.rs`).
+    custom_endpoints: CustomEndpointDefinitions {
+        type: CustomEndpointDefinitionsConfig,
+        default: CustomEndpointDefinitionsConfig::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::TUI,
+        private: false,
+        toml_path: "cloud_platform.custom_endpoints",
+        max_table_depth: 2,
+        description: "Custom LLM endpoint definitions. API keys are managed in /api-keys.",
     }
     // Which unit the TUI footer's usage entry displays (credits or provider
     // cost), flipped by clicking the entry.

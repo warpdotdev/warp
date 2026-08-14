@@ -5,9 +5,9 @@ use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use ai::grok_subscription::oauth::OauthAttempt;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
-use warp::tui_export::UserWorkspaces;
+use warp::tui_export::{UserWorkspaces, UserWorkspacesEvent, notify_tui_api_keys_changed};
 use warp_core::features::FeatureFlag;
-use warp_core::settings::ToggleableSetting as _;
+use warp_core::settings::{Setting as _, ToggleableSetting as _};
 use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity as _;
 use warpui_core::elements::tui::{TuiElement, TuiText};
@@ -27,39 +27,128 @@ use crate::tui_builder::TuiUiBuilder;
 const MAX_VISIBLE_ROWS: usize = result_row_capacity(MAX_INLINE_MENU_ROWS, true, false);
 const FALLBACK_DESCRIPTION: &str = "in the event of an error, requests may be routed to use Warp \
 credits. Warp will prioritize using your API keys over Warp credits.";
-const PROVIDER_ROWS: [TuiApiKeysRow; 4] = [
-    TuiApiKeysRow {
-        kind: TuiApiKeysRowKind::Provider(LLMProvider::Anthropic),
-        title: "Anthropic API key",
-    },
-    TuiApiKeysRow {
-        kind: TuiApiKeysRowKind::Provider(LLMProvider::Google),
-        title: "Google API key",
-    },
-    TuiApiKeysRow {
-        kind: TuiApiKeysRowKind::Provider(LLMProvider::OpenAI),
-        title: "OpenAI API key",
-    },
-    TuiApiKeysRow {
-        kind: TuiApiKeysRowKind::Provider(LLMProvider::Xai),
-        title: "X premium or SuperGrok subscription",
-    },
-];
-const FALLBACK_ROW: TuiApiKeysRow = TuiApiKeysRow {
-    kind: TuiApiKeysRowKind::WarpCreditFallbackSetting,
-    title: "Warp credit fallback",
-};
+const CUSTOM_ENDPOINT_ANNOTATION: &str = "custom endpoint";
+const CUSTOM_ENDPOINTS_HEADING: &str = "Custom endpoints";
+const PARTIAL_SUCCESS_NOTIFY_FAILURE_MESSAGE: &str =
+    "The API key changed, but other running Warp processes could not be notified.";
 
+fn provider_rows() -> [TuiApiKeysRow; 4] {
+    [
+        TuiApiKeysRow {
+            kind: TuiApiKeysRowKind::Provider(LLMProvider::Anthropic),
+            title: "Anthropic API key".to_owned(),
+        },
+        TuiApiKeysRow {
+            kind: TuiApiKeysRowKind::Provider(LLMProvider::Google),
+            title: "Google API key".to_owned(),
+        },
+        TuiApiKeysRow {
+            kind: TuiApiKeysRowKind::Provider(LLMProvider::OpenAI),
+            title: "OpenAI API key".to_owned(),
+        },
+        TuiApiKeysRow {
+            kind: TuiApiKeysRowKind::Provider(LLMProvider::Xai),
+            title: "X premium or SuperGrok subscription".to_owned(),
+        },
+    ]
+}
+
+fn fallback_row() -> TuiApiKeysRow {
+    TuiApiKeysRow {
+        kind: TuiApiKeysRowKind::WarpCreditFallbackSetting,
+        title: "Warp credit fallback".to_owned(),
+    }
+}
+
+/// Non-selectable placeholder states shown instead of individual custom
+/// endpoint rows (see `PRODUCT.md` Behaviors 17, 19, 20).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CustomEndpointStatusKind {
+    /// The `BYO_ENDPOINT` entitlement is unavailable for this user.
+    Unavailable,
+    /// The active workspace disallows member-provided custom endpoints.
+    DisabledByOrganization,
+    /// Custom endpoints are allowed, but none are defined (valid or invalid).
+    NoneConfigured,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum TuiApiKeysRowKind {
     Provider(LLMProvider),
+    CustomEndpoint(String),
+    CustomEndpointStatus(CustomEndpointStatusKind),
+    InvalidCustomEndpoint(String),
     WarpCreditFallbackSetting,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct TuiApiKeysRow {
     kind: TuiApiKeysRowKind,
-    title: &'static str,
+    title: String,
+}
+
+/// Builds `/api-keys` rows in the order fixed by `TECH.md` #7: built-in
+/// providers, then valid custom endpoints (or one status row), then invalid
+/// endpoint rows, then the Warp credit fallback row.
+fn build_rows(ctx: &AppContext) -> Vec<TuiApiKeysRow> {
+    let mut rows: Vec<TuiApiKeysRow> = provider_rows().into_iter().collect();
+
+    let workspaces = UserWorkspaces::as_ref(ctx);
+    let entitled = workspaces.is_custom_inference_enabled(ctx);
+    let policy_allowed = workspaces.are_member_byo_endpoints_allowed();
+    let definitions = AISettings::as_ref(ctx).custom_endpoints.value();
+
+    if !entitled {
+        rows.push(status_row(CustomEndpointStatusKind::Unavailable));
+    } else if !policy_allowed {
+        rows.push(status_row(CustomEndpointStatusKind::DisabledByOrganization));
+    } else if definitions.valid_len() == 0 && !definitions.has_diagnostics() {
+        rows.push(status_row(CustomEndpointStatusKind::NoneConfigured));
+    } else {
+        let mut names: Vec<&str> = definitions.valid().map(|(name, _)| name).collect();
+        names.sort_unstable();
+        rows.extend(names.into_iter().map(custom_endpoint_row));
+    }
+
+    // Invalid rows remain visible after the policy/entitlement row regardless
+    // of the gates above, so the user can still repair `settings.toml`.
+    let mut invalid_names: Vec<&str> = definitions.invalid().map(|(name, _)| name).collect();
+    invalid_names.sort_unstable();
+    rows.extend(invalid_names.into_iter().map(invalid_custom_endpoint_row));
+
+    rows.push(fallback_row());
+    rows
+}
+
+fn status_row(kind: CustomEndpointStatusKind) -> TuiApiKeysRow {
+    TuiApiKeysRow {
+        kind: TuiApiKeysRowKind::CustomEndpointStatus(kind),
+        title: CUSTOM_ENDPOINTS_HEADING.to_owned(),
+    }
+}
+
+fn custom_endpoint_row(name: &str) -> TuiApiKeysRow {
+    TuiApiKeysRow {
+        kind: TuiApiKeysRowKind::CustomEndpoint(name.to_owned()),
+        title: name.to_owned(),
+    }
+}
+
+fn invalid_custom_endpoint_row(name: &str) -> TuiApiKeysRow {
+    TuiApiKeysRow {
+        kind: TuiApiKeysRowKind::InvalidCustomEndpoint(name.to_owned()),
+        title: format!("Invalid custom endpoint: {name}"),
+    }
+}
+
+/// Whether `row` matches a lowercased search query. Custom endpoint rows also
+/// match on the "custom endpoint" annotation (`PRODUCT.md` Behavior 13).
+fn row_matches_query(row: &TuiApiKeysRow, query: &str) -> bool {
+    if row.title.to_ascii_lowercase().contains(query) {
+        return true;
+    }
+    matches!(row.kind, TuiApiKeysRowKind::CustomEndpoint(_))
+        && CUSTOM_ENDPOINT_ANNOTATION.contains(query)
 }
 
 #[derive(Default)]
@@ -74,16 +163,21 @@ enum TuiApiKeysMenuState {
         provider: LLMProvider,
         error: Option<String>,
     },
+    EditingCustomEndpoint {
+        name: String,
+        error: Option<String>,
+    },
     ConnectingGrok {
         controller: ModelHandle<TuiGrokOAuthController>,
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TuiApiKeysFooter {
     ProviderList { can_clear: bool },
     WarpCreditFallback,
     EditingProvider(LLMProvider),
+    EditingCustomEndpoint(String),
     ConnectingGrok,
 }
 
@@ -111,7 +205,8 @@ impl TuiApiKeysMenuModel {
                     error.take();
                     model.refresh_rows(ctx);
                 }
-                TuiApiKeysMenuState::EditingProvider { error, .. } => {
+                TuiApiKeysMenuState::EditingProvider { error, .. }
+                | TuiApiKeysMenuState::EditingCustomEndpoint { error, .. } => {
                     if error.take().is_some() {
                         ctx.emit(TuiApiKeysMenuEvent);
                     }
@@ -137,8 +232,14 @@ impl TuiApiKeysMenuModel {
                 && matches!(
                     event,
                     AISettingsChangedEvent::CanUseWarpCreditsForFallback { .. }
+                        | AISettingsChangedEvent::CustomEndpointDefinitions { .. }
                 )
             {
+                model.refresh_rows(ctx);
+            }
+        });
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |model, _, event, ctx| {
+            if model.is_open(ctx) && matches!(event, UserWorkspacesEvent::TeamsChanged) {
                 model.refresh_rows(ctx);
             }
         });
@@ -222,6 +323,7 @@ impl TuiApiKeysMenuModel {
             TuiApiKeysMenuState::Closed => {}
             TuiApiKeysMenuState::Browsing { .. } => self.close(ctx),
             TuiApiKeysMenuState::EditingProvider { .. }
+            | TuiApiKeysMenuState::EditingCustomEndpoint { .. }
             | TuiApiKeysMenuState::ConnectingGrok { .. } => self.transition_to_browsing(ctx),
         }
     }
@@ -232,7 +334,8 @@ impl TuiApiKeysMenuModel {
             return TuiInlineMenuInputOwnership::Composer;
         }
         match self.state {
-            TuiApiKeysMenuState::EditingProvider { .. } => {
+            TuiApiKeysMenuState::EditingProvider { .. }
+            | TuiApiKeysMenuState::EditingCustomEndpoint { .. } => {
                 TuiInlineMenuInputOwnership::InlineMenuMasked
             }
             TuiApiKeysMenuState::Browsing { .. } | TuiApiKeysMenuState::ConnectingGrok { .. } => {
@@ -247,6 +350,7 @@ impl TuiApiKeysMenuModel {
             && matches!(
                 self.state,
                 TuiApiKeysMenuState::EditingProvider { .. }
+                    | TuiApiKeysMenuState::EditingCustomEndpoint { .. }
                     | TuiApiKeysMenuState::ConnectingGrok { .. }
             )
     }
@@ -258,18 +362,31 @@ impl TuiApiKeysMenuModel {
         match &self.state {
             TuiApiKeysMenuState::Closed => None,
             TuiApiKeysMenuState::Browsing { list, .. } => {
-                Some(match list.selected_row().map(|row| row.kind) {
+                Some(match list.selected_row().map(|row| &row.kind) {
                     Some(TuiApiKeysRowKind::WarpCreditFallbackSetting) => {
                         TuiApiKeysFooter::WarpCreditFallback
                     }
                     Some(TuiApiKeysRowKind::Provider(provider)) => TuiApiKeysFooter::ProviderList {
-                        can_clear: provider_connected(provider, ctx),
+                        can_clear: provider_connected(*provider, ctx),
                     },
-                    None => TuiApiKeysFooter::ProviderList { can_clear: false },
+                    Some(TuiApiKeysRowKind::CustomEndpoint(name)) => {
+                        TuiApiKeysFooter::ProviderList {
+                            can_clear: ApiKeyManager::as_ref(ctx)
+                                .custom_endpoint_key_is_connected(name),
+                        }
+                    }
+                    Some(
+                        TuiApiKeysRowKind::InvalidCustomEndpoint(_)
+                        | TuiApiKeysRowKind::CustomEndpointStatus(_),
+                    )
+                    | None => TuiApiKeysFooter::ProviderList { can_clear: false },
                 })
             }
             TuiApiKeysMenuState::EditingProvider { provider, .. } => {
                 Some(TuiApiKeysFooter::EditingProvider(*provider))
+            }
+            TuiApiKeysMenuState::EditingCustomEndpoint { name, .. } => {
+                Some(TuiApiKeysFooter::EditingCustomEndpoint(name.clone()))
             }
             TuiApiKeysMenuState::ConnectingGrok { .. } => Some(TuiApiKeysFooter::ConnectingGrok),
         }
@@ -278,30 +395,75 @@ impl TuiApiKeysMenuModel {
     pub(crate) fn can_clear_selected(&self, ctx: &AppContext) -> bool {
         match &self.state {
             TuiApiKeysMenuState::Browsing { list, .. } => {
-                match list.selected_row().map(|row| row.kind) {
+                match list.selected_row().map(|row| &row.kind) {
                     Some(TuiApiKeysRowKind::Provider(provider)) => {
-                        provider_connected(provider, ctx)
+                        provider_connected(*provider, ctx)
                     }
-                    Some(TuiApiKeysRowKind::WarpCreditFallbackSetting) | None => false,
+                    Some(TuiApiKeysRowKind::CustomEndpoint(name)) => {
+                        ApiKeyManager::as_ref(ctx).custom_endpoint_key_is_connected(name)
+                    }
+                    Some(
+                        TuiApiKeysRowKind::WarpCreditFallbackSetting
+                        | TuiApiKeysRowKind::InvalidCustomEndpoint(_)
+                        | TuiApiKeysRowKind::CustomEndpointStatus(_),
+                    )
+                    | None => false,
                 }
             }
             TuiApiKeysMenuState::Closed
             | TuiApiKeysMenuState::EditingProvider { .. }
+            | TuiApiKeysMenuState::EditingCustomEndpoint { .. }
             | TuiApiKeysMenuState::ConnectingGrok { .. } => false,
         }
     }
 
     pub(crate) fn clear_selected(&mut self, ctx: &mut ModelContext<Self>) {
-        let provider = match &self.state {
+        enum ClearTarget {
+            Provider(LLMProvider),
+            CustomEndpoint(String),
+        }
+        let target = match &self.state {
             TuiApiKeysMenuState::Browsing { list, .. } => {
-                match list.selected_row().map(|row| row.kind) {
-                    Some(TuiApiKeysRowKind::Provider(provider)) => provider,
-                    Some(TuiApiKeysRowKind::WarpCreditFallbackSetting) | None => return,
+                match list.selected_row().map(|row| row.kind.clone()) {
+                    Some(TuiApiKeysRowKind::Provider(provider)) => ClearTarget::Provider(provider),
+                    Some(TuiApiKeysRowKind::CustomEndpoint(name)) => {
+                        ClearTarget::CustomEndpoint(name)
+                    }
+                    Some(
+                        TuiApiKeysRowKind::WarpCreditFallbackSetting
+                        | TuiApiKeysRowKind::InvalidCustomEndpoint(_)
+                        | TuiApiKeysRowKind::CustomEndpointStatus(_),
+                    )
+                    | None => return,
                 }
             }
             TuiApiKeysMenuState::Closed
             | TuiApiKeysMenuState::EditingProvider { .. }
+            | TuiApiKeysMenuState::EditingCustomEndpoint { .. }
             | TuiApiKeysMenuState::ConnectingGrok { .. } => return,
+        };
+        if let ClearTarget::CustomEndpoint(name) = target {
+            match ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                manager.persist_custom_endpoint_key(&name, None, ctx)
+            }) {
+                Ok(()) => {
+                    self.refresh_rows(ctx);
+                    if notify_tui_api_keys_changed().is_err() {
+                        self.set_browsing_error(
+                            PARTIAL_SUCCESS_NOTIFY_FAILURE_MESSAGE.to_owned(),
+                            ctx,
+                        );
+                    }
+                }
+                Err(_) => self.set_browsing_error(
+                    "Could not clear the selected API key. Try again.".to_owned(),
+                    ctx,
+                ),
+            }
+            return;
+        }
+        let ClearTarget::Provider(provider) = target else {
+            unreachable!("custom endpoint target handled above")
         };
         let result = if provider == LLMProvider::Xai {
             ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -326,7 +488,7 @@ impl TuiApiKeysMenuModel {
         let TuiApiKeysMenuState::Browsing { list, .. } = &mut self.state else {
             return;
         };
-        list.select_previous(MAX_VISIBLE_ROWS, |_| true);
+        list.select_previous(MAX_VISIBLE_ROWS, row_is_selectable);
         ctx.emit(TuiApiKeysMenuEvent);
     }
 
@@ -334,7 +496,7 @@ impl TuiApiKeysMenuModel {
         let TuiApiKeysMenuState::Browsing { list, .. } = &mut self.state else {
             return;
         };
-        list.select_next(MAX_VISIBLE_ROWS, |_| true);
+        list.select_next(MAX_VISIBLE_ROWS, row_is_selectable);
         ctx.emit(TuiApiKeysMenuEvent);
     }
 
@@ -346,7 +508,7 @@ impl TuiApiKeysMenuModel {
         let TuiApiKeysMenuState::Browsing { list, .. } = &mut self.state else {
             return false;
         };
-        let selected = list.select_absolute(index, MAX_VISIBLE_ROWS, |_| true);
+        let selected = list.select_absolute(index, MAX_VISIBLE_ROWS, row_is_selectable);
         ctx.emit(TuiApiKeysMenuEvent);
         selected
     }
@@ -363,17 +525,24 @@ impl TuiApiKeysMenuModel {
         match &self.state {
             TuiApiKeysMenuState::Closed => {}
             TuiApiKeysMenuState::Browsing { list, .. } => {
-                let Some(kind) = list.selected_row().map(|row| row.kind) else {
+                let Some(kind) = list.selected_row().map(|row| row.kind.clone()) else {
                     return;
                 };
                 match kind {
                     TuiApiKeysRowKind::Provider(provider) => self.edit_provider(provider, ctx),
+                    TuiApiKeysRowKind::CustomEndpoint(name) => self.edit_custom_endpoint(name, ctx),
                     TuiApiKeysRowKind::WarpCreditFallbackSetting => self.toggle_fallback(ctx),
+                    TuiApiKeysRowKind::InvalidCustomEndpoint(_)
+                    | TuiApiKeysRowKind::CustomEndpointStatus(_) => {}
                 }
             }
             TuiApiKeysMenuState::EditingProvider { provider, .. } => {
                 let provider = *provider;
                 self.save_provider(provider, ctx);
+            }
+            TuiApiKeysMenuState::EditingCustomEndpoint { name, .. } => {
+                let name = name.clone();
+                self.save_custom_endpoint_key(name, ctx);
             }
             TuiApiKeysMenuState::ConnectingGrok { controller } => {
                 let controller = controller.clone();
@@ -424,11 +593,25 @@ impl TuiApiKeysMenuModel {
                     status: error.clone().map(TuiInlineMenuStatus::Empty),
                 })
             }
+            TuiApiKeysMenuState::EditingCustomEndpoint { name, error } => {
+                Some(TuiInlineMenuSnapshot {
+                    header: Some(TuiInlineMenuHeader {
+                        title: Some(format!("{name} API key")),
+                        tabs: Vec::new(),
+                    }),
+                    rows: Vec::new(),
+                    selected_index: None,
+                    scroll_offset: 0,
+                    scroll_anchor: TuiInlineMenuScrollAnchor::Selection,
+                    max_visible_rows: MAX_VISIBLE_ROWS,
+                    status: error.clone().map(TuiInlineMenuStatus::Empty),
+                })
+            }
             TuiApiKeysMenuState::ConnectingGrok { controller } => {
                 let error = controller.as_ref(ctx).error().map(ToOwned::to_owned);
-                let rows = PROVIDER_ROWS
+                let rows = provider_rows()
                     .into_iter()
-                    .chain(std::iter::once(FALLBACK_ROW))
+                    .chain(std::iter::once(fallback_row()))
                     .map(|row| self.snapshot_row(&row, ctx, true))
                     .collect();
                 Some(TuiInlineMenuSnapshot {
@@ -453,25 +636,31 @@ impl TuiApiKeysMenuModel {
         ctx: &AppContext,
         connecting_grok: bool,
     ) -> TuiInlineMenuRow {
-        let (description, state_suffix, is_selectable) = match row.kind {
+        match &row.kind {
             TuiApiKeysRowKind::Provider(provider) => {
-                let connected = provider_connected(provider, ctx);
-                let suffix = if connecting_grok && provider == LLMProvider::Xai {
+                let connected = provider_connected(*provider, ctx);
+                let suffix = if connecting_grok && *provider == LLMProvider::Xai {
                     "(Connecting...)"
                 } else if connected {
                     "(Connected)"
                 } else {
                     "(Not connected)"
                 };
-                (
-                    Some(String::new()),
-                    Some(suffix.to_owned()),
-                    !connecting_grok,
-                )
+                TuiInlineMenuRow {
+                    title: row.title.clone(),
+                    prefix: None,
+                    description: Some(String::new()),
+                    state_suffix: Some(suffix.to_owned()),
+                    promotional_suffix: None,
+                    is_selectable: !connecting_grok,
+                    style: TuiInlineMenuRowStyle::InlineMenuItem,
+                }
             }
-            TuiApiKeysRowKind::WarpCreditFallbackSetting => (
-                Some(FALLBACK_DESCRIPTION.to_owned()),
-                Some(format!(
+            TuiApiKeysRowKind::WarpCreditFallbackSetting => TuiInlineMenuRow {
+                title: row.title.clone(),
+                prefix: None,
+                description: Some(FALLBACK_DESCRIPTION.to_owned()),
+                state_suffix: Some(format!(
                     "({})",
                     if *AISettings::as_ref(ctx).can_use_warp_credits_for_fallback {
                         "on"
@@ -479,22 +668,63 @@ impl TuiApiKeysMenuModel {
                         "off"
                     }
                 )),
-                !connecting_grok,
-            ),
-        };
-        let style = if row.kind == TuiApiKeysRowKind::WarpCreditFallbackSetting {
-            TuiInlineMenuRowStyle::StateWithDetail
-        } else {
-            TuiInlineMenuRowStyle::InlineMenuItem
-        };
-        TuiInlineMenuRow {
-            title: row.title.to_owned(),
-            prefix: None,
-            description,
-            state_suffix,
-            promotional_suffix: None,
-            is_selectable,
-            style,
+                promotional_suffix: None,
+                is_selectable: !connecting_grok,
+                style: TuiInlineMenuRowStyle::StateWithDetail,
+            },
+            TuiApiKeysRowKind::CustomEndpoint(name) => {
+                let connected = ApiKeyManager::as_ref(ctx).custom_endpoint_key_is_connected(name);
+                TuiInlineMenuRow {
+                    title: row.title.clone(),
+                    prefix: None,
+                    description: Some(CUSTOM_ENDPOINT_ANNOTATION.to_owned()),
+                    // A custom model row cannot appear until its endpoint has a
+                    // key, so `(key connected)` would be redundant here too —
+                    // only the existing `(Connected)` provider-style suffix
+                    // applies, and only once a key exists.
+                    state_suffix: connected.then(|| "(Connected)".to_owned()),
+                    promotional_suffix: None,
+                    is_selectable: !connecting_grok,
+                    style: TuiInlineMenuRowStyle::CustomEndpoint,
+                }
+            }
+            TuiApiKeysRowKind::InvalidCustomEndpoint(_) => TuiInlineMenuRow {
+                title: row.title.clone(),
+                prefix: None,
+                // A non-`None`, even-if-empty description is required so the
+                // `InlineMenuItem` style's second column (which carries
+                // `state_suffix`) actually renders; see the provider row above.
+                description: Some(String::new()),
+                state_suffix: Some("(Skipped)".to_owned()),
+                promotional_suffix: None,
+                is_selectable: false,
+                style: TuiInlineMenuRowStyle::InlineMenuItem,
+            },
+            TuiApiKeysRowKind::CustomEndpointStatus(status) => {
+                let (description, state_suffix) = match status {
+                    CustomEndpointStatusKind::Unavailable => (
+                        "Custom endpoints are not available for this workspace.".to_owned(),
+                        "(Unavailable)",
+                    ),
+                    CustomEndpointStatusKind::DisabledByOrganization => (
+                        "Your organization does not allow member custom endpoints.".to_owned(),
+                        "(Disabled by organization)",
+                    ),
+                    CustomEndpointStatusKind::NoneConfigured => (
+                        "Add one in settings.toml or use /modify-settings.".to_owned(),
+                        "(None configured)",
+                    ),
+                };
+                TuiInlineMenuRow {
+                    title: row.title.clone(),
+                    prefix: None,
+                    description: Some(description),
+                    state_suffix: Some(state_suffix.to_owned()),
+                    promotional_suffix: None,
+                    is_selectable: false,
+                    style: TuiInlineMenuRowStyle::InlineMenuItem,
+                }
+            }
         }
     }
 
@@ -531,6 +761,46 @@ impl TuiApiKeysMenuModel {
             Ok(()) => self.transition_to_browsing(ctx),
             Err(_) => {
                 if let TuiApiKeysMenuState::EditingProvider { error, .. } = &mut self.state {
+                    *error = Some("Could not save this API key. Try again.".to_owned());
+                }
+                ctx.emit(TuiApiKeysMenuEvent);
+            }
+        }
+    }
+
+    /// Opens the masked editor for a custom endpoint's key, prefilled with any
+    /// existing value for replacement (`PRODUCT.md` Behavior 14).
+    fn edit_custom_endpoint(&mut self, name: String, ctx: &mut ModelContext<Self>) {
+        let key = ApiKeyManager::as_ref(ctx)
+            .keys()
+            .custom_endpoints
+            .iter()
+            .find(|endpoint| endpoint.name == name)
+            .map(|endpoint| endpoint.api_key.clone())
+            .unwrap_or_default();
+        self.set_input(&key, ctx);
+        self.state = TuiApiKeysMenuState::EditingCustomEndpoint { name, error: None };
+        ctx.emit(TuiApiKeysMenuEvent);
+    }
+
+    /// Saves (or, on an empty input, clears) a custom endpoint's key. A
+    /// successful save notifies other running TUI processes; if that
+    /// notification fails, the save itself still stands and the current TUI
+    /// shows the partial-success message (`PRODUCT.md` Behavior 14).
+    fn save_custom_endpoint_key(&mut self, name: String, ctx: &mut ModelContext<Self>) {
+        let value = input_text(&self.input_editor, ctx);
+        let value = (!value.is_empty()).then_some(value);
+        match ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.persist_custom_endpoint_key(&name, value, ctx)
+        }) {
+            Ok(()) => {
+                self.transition_to_browsing(ctx);
+                if notify_tui_api_keys_changed().is_err() {
+                    self.set_browsing_error(PARTIAL_SUCCESS_NOTIFY_FAILURE_MESSAGE.to_owned(), ctx);
+                }
+            }
+            Err(_) => {
+                if let TuiApiKeysMenuState::EditingCustomEndpoint { error, .. } = &mut self.state {
                     *error = Some("Could not save this API key. Try again.".to_owned());
                 }
                 ctx.emit(TuiApiKeysMenuEvent);
@@ -583,7 +853,8 @@ impl TuiApiKeysMenuModel {
             TuiApiKeysMenuState::ConnectingGrok { controller } => Some(controller.clone()),
             TuiApiKeysMenuState::Closed
             | TuiApiKeysMenuState::Browsing { .. }
-            | TuiApiKeysMenuState::EditingProvider { .. } => None,
+            | TuiApiKeysMenuState::EditingProvider { .. }
+            | TuiApiKeysMenuState::EditingCustomEndpoint { .. } => None,
         };
         self.state = TuiApiKeysMenuState::Closed;
         if let Some(controller) = grok_controller
@@ -601,19 +872,26 @@ impl TuiApiKeysMenuModel {
             return;
         };
         let query = input_text(&self.input_editor, ctx).to_ascii_lowercase();
-        let rows = PROVIDER_ROWS
+        // The Warp credit fallback row is always the last row `build_rows`
+        // produces and stays pinned regardless of the search query.
+        let mut all_rows = build_rows(ctx);
+        let fallback = all_rows.pop();
+        let mut rows: Vec<TuiApiKeysRow> = all_rows
             .into_iter()
-            .filter(|row| row.title.to_ascii_lowercase().contains(&query))
-            .chain(std::iter::once(FALLBACK_ROW))
+            .filter(|row| row_matches_query(row, &query))
             .collect();
-        let previous_kind = list.selected_row().map(|row| row.kind);
+        rows.extend(fallback);
+        let previous_kind = list.selected_row().map(|row| row.kind.clone());
         let preferred_index = previous_kind
-            .and_then(|kind| {
-                let rows: &Vec<TuiApiKeysRow> = &rows;
-                rows.iter().position(|row| row.kind == kind)
-            })
+            .and_then(|kind| rows.iter().position(|row| row.kind == kind))
             .or(Some(0));
-        list.replace_rows(rows, false, preferred_index, MAX_VISIBLE_ROWS, |_| true);
+        list.replace_rows(
+            rows,
+            false,
+            preferred_index,
+            MAX_VISIBLE_ROWS,
+            row_is_selectable,
+        );
         ctx.emit(TuiApiKeysMenuEvent);
     }
 
@@ -635,6 +913,15 @@ impl TuiApiKeysMenuModel {
             editor.user_insert(text, ctx);
         });
     }
+}
+
+/// Whether a row can be keyboard/mouse-selected. Invalid-definition and
+/// custom-endpoint policy/status rows are informational only.
+fn row_is_selectable(row: &TuiApiKeysRow) -> bool {
+    !matches!(
+        row.kind,
+        TuiApiKeysRowKind::InvalidCustomEndpoint(_) | TuiApiKeysRowKind::CustomEndpointStatus(_)
+    )
 }
 
 /// Returns whether the provider has a configured API key or connected subscription.
@@ -696,6 +983,14 @@ pub(crate) fn render_api_keys_footer(
                 format!("Connect {} API key", provider.display_name()),
                 accent,
             ),
+            (" | ".to_owned(), muted),
+            ("enter".to_owned(), key),
+            (" to save key | ".to_owned(), muted),
+            ("esc".to_owned(), key),
+            (" to cancel".to_owned(), muted),
+        ],
+        TuiApiKeysFooter::EditingCustomEndpoint(name) => vec![
+            (format!("Connect {name} API key"), accent),
             (" | ".to_owned(), muted),
             ("enter".to_owned(), key),
             (" to save key | ".to_owned(), muted),

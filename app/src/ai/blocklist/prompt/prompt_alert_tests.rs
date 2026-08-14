@@ -36,7 +36,9 @@ fn initialize_app_with_workspaces(app: &mut App, workspaces: Vec<Workspace>) {
     }
     app.update(|ctx| {
         warpui_extras::secure_storage::register_noop("test", ctx);
-        ctx.add_singleton_model(ApiKeyManager::new);
+        ctx.add_singleton_model(|ctx| {
+            ApiKeyManager::new(ai::api_keys::CustomEndpointPersistenceMode::Monolithic, ctx)
+        });
     });
     app.add_singleton_model(|_| crate::pricing::PricingInfoModel::new());
     app.add_singleton_model(|ctx| {

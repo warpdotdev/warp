@@ -54,6 +54,34 @@ fn auto_approve_denylist_bypass_defaults_on_and_is_available_in_gui_and_tui_sett
     assert!(surfaces.includes(SettingsMode::Tui));
 }
 
+#[test]
+fn custom_endpoints_setting_is_tui_only_and_excludes_secrets() {
+    assert_eq!(
+        CustomEndpointDefinitions::toml_path(),
+        Some("cloud_platform.custom_endpoints")
+    );
+
+    let entry = inventory::iter::<SettingSchemaEntry>
+        .into_iter()
+        .find(|entry| {
+            entry.hierarchy == Some("cloud_platform") && entry.storage_key == "custom_endpoints"
+        })
+        .expect("expected custom_endpoints schema entry");
+    let surfaces: SettingSurfaces = (entry.surfaces_fn)();
+    assert!(surfaces.includes(SettingsMode::Tui));
+    assert!(!surfaces.includes(SettingsMode::Gui));
+
+    let mut schema_gen = schemars::SchemaGenerator::default();
+    let schema = (entry.schema_fn)(&mut schema_gen).to_value();
+    let schema_str = serde_json::to_string(&schema).unwrap();
+    for forbidden in ["api_key", "config_key"] {
+        assert!(
+            !schema_str.contains(forbidden),
+            "schema must not expose {forbidden}: {schema_str}"
+        );
+    }
+}
+
 fn add_ai_enablement_dependencies_for_test(app: &mut App) {
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(UserWorkspaces::default_mock);

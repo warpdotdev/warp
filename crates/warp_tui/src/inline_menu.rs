@@ -48,6 +48,10 @@ const MIN_REAL_ROWS_WITH_SCROLL_INDICATORS: usize = 3;
 pub(crate) enum TuiInlineMenuRowStyle {
     Default,
     InlineMenuItem,
+    /// Like `InlineMenuItem`, but the description always renders in the muted
+    /// italic style used by the `/api-keys` custom-endpoint annotation,
+    /// regardless of selection/hover state.
+    CustomEndpoint,
     StateWithDetail,
 }
 
@@ -1078,7 +1082,12 @@ fn build_inline_menu(
     let slash_command_row_text = snapshot
         .rows
         .iter()
-        .filter(|row| row.style == TuiInlineMenuRowStyle::InlineMenuItem)
+        .filter(|row| {
+            matches!(
+                row.style,
+                TuiInlineMenuRowStyle::InlineMenuItem | TuiInlineMenuRowStyle::CustomEndpoint
+            )
+        })
         .filter_map(|row| {
             let mut description = row.description.clone()?;
             if let Some(suffix) = &row.state_suffix {
@@ -1350,9 +1359,11 @@ fn menu_result_row(
     } else if is_hovered && row.is_selectable {
         // Hover: bold the text to indicate the row is interactive.
         match row.style {
-            TuiInlineMenuRowStyle::InlineMenuItem => builder
-                .slash_command_text_style()
-                .add_modifier(Modifier::BOLD),
+            TuiInlineMenuRowStyle::InlineMenuItem | TuiInlineMenuRowStyle::CustomEndpoint => {
+                builder
+                    .slash_command_text_style()
+                    .add_modifier(Modifier::BOLD)
+            }
             TuiInlineMenuRowStyle::Default => {
                 builder.primary_text_style().add_modifier(Modifier::BOLD)
             }
@@ -1360,11 +1371,17 @@ fn menu_result_row(
         }
     } else {
         match (row.is_selectable, row.style) {
-            (true, TuiInlineMenuRowStyle::InlineMenuItem) => builder.slash_command_text_style(),
+            (
+                true,
+                TuiInlineMenuRowStyle::InlineMenuItem | TuiInlineMenuRowStyle::CustomEndpoint,
+            ) => builder.slash_command_text_style(),
             (true, TuiInlineMenuRowStyle::Default) => builder.primary_text_style(),
-            (false, TuiInlineMenuRowStyle::Default | TuiInlineMenuRowStyle::InlineMenuItem) => {
-                builder.dim_text_style()
-            }
+            (
+                false,
+                TuiInlineMenuRowStyle::Default
+                | TuiInlineMenuRowStyle::InlineMenuItem
+                | TuiInlineMenuRowStyle::CustomEndpoint,
+            ) => builder.dim_text_style(),
             (_, TuiInlineMenuRowStyle::StateWithDetail) => unreachable!(),
         }
     };
@@ -1374,7 +1391,7 @@ fn menu_result_row(
                 || row.state_suffix.is_some()
                 || row.promotional_suffix.is_some()
         }
-        TuiInlineMenuRowStyle::InlineMenuItem => {
+        TuiInlineMenuRowStyle::InlineMenuItem | TuiInlineMenuRowStyle::CustomEndpoint => {
             slash_command_columns.show_second && row.description.is_some()
         }
         TuiInlineMenuRowStyle::StateWithDetail => unreachable!(),
@@ -1387,10 +1404,12 @@ fn menu_result_row(
     let single_line_title = single_line_menu_title(&row.title);
     let title = match row.style {
         TuiInlineMenuRowStyle::Default => single_line_title,
-        TuiInlineMenuRowStyle::InlineMenuItem => format_tui_first_column(
-            &single_line_title,
-            slash_command_columns.with_second_visible(show_description),
-        ),
+        TuiInlineMenuRowStyle::InlineMenuItem | TuiInlineMenuRowStyle::CustomEndpoint => {
+            format_tui_first_column(
+                &single_line_title,
+                slash_command_columns.with_second_visible(show_description),
+            )
+        }
         TuiInlineMenuRowStyle::StateWithDetail => unreachable!(),
     };
     let title = if let Some(prefix) = &row.prefix {
@@ -1410,7 +1429,11 @@ fn menu_result_row(
             .truncate_with_ellipsis()
             .finish()
     };
-    let description_style = if is_selected {
+    let description_style = if row.style == TuiInlineMenuRowStyle::CustomEndpoint {
+        // The "custom endpoint" annotation is always muted italic, regardless
+        // of selection or hover, matching the GUI's connected-key styling.
+        builder.key_connected_suffix_style()
+    } else if is_selected {
         builder.slash_command_selection_text_style()
     } else if is_hovered && row.is_selectable {
         match row.style {
@@ -1420,13 +1443,17 @@ fn menu_result_row(
             TuiInlineMenuRowStyle::InlineMenuItem => {
                 builder.primary_text_style().add_modifier(Modifier::BOLD)
             }
-            TuiInlineMenuRowStyle::StateWithDetail => unreachable!(),
+            TuiInlineMenuRowStyle::CustomEndpoint | TuiInlineMenuRowStyle::StateWithDetail => {
+                unreachable!()
+            }
         }
     } else {
         match row.style {
             TuiInlineMenuRowStyle::Default => builder.muted_text_style(),
             TuiInlineMenuRowStyle::InlineMenuItem => builder.primary_text_style(),
-            TuiInlineMenuRowStyle::StateWithDetail => unreachable!(),
+            TuiInlineMenuRowStyle::CustomEndpoint | TuiInlineMenuRowStyle::StateWithDetail => {
+                unreachable!()
+            }
         }
     };
 
@@ -1434,12 +1461,14 @@ fn menu_result_row(
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .child(match row.style {
             TuiInlineMenuRowStyle::Default => title,
-            TuiInlineMenuRowStyle::InlineMenuItem => TuiConstrainedBox::new(title)
-                .with_max_cols(
-                    u16::try_from(title_columns)
-                        .expect("title columns come from the u16 width constraint"),
-                )
-                .finish(),
+            TuiInlineMenuRowStyle::InlineMenuItem | TuiInlineMenuRowStyle::CustomEndpoint => {
+                TuiConstrainedBox::new(title)
+                    .with_max_cols(
+                        u16::try_from(title_columns)
+                            .expect("title columns come from the u16 width constraint"),
+                    )
+                    .finish()
+            }
             TuiInlineMenuRowStyle::StateWithDetail => unreachable!(),
         });
     if show_description {
@@ -1447,7 +1476,9 @@ fn menu_result_row(
         if let Some(description) = row.description.as_ref() {
             let description_prefix = match row.style {
                 TuiInlineMenuRowStyle::Default => format!("  {description}"),
-                TuiInlineMenuRowStyle::InlineMenuItem => description.clone(),
+                TuiInlineMenuRowStyle::InlineMenuItem | TuiInlineMenuRowStyle::CustomEndpoint => {
+                    description.clone()
+                }
                 TuiInlineMenuRowStyle::StateWithDetail => unreachable!(),
             };
             description_spans.push((description_prefix, description_style));
@@ -1455,10 +1486,14 @@ fn menu_result_row(
         if let Some(suffix) = &row.state_suffix {
             let suffix_style = match row.style {
                 TuiInlineMenuRowStyle::Default => builder.key_connected_suffix_style(),
-                TuiInlineMenuRowStyle::InlineMenuItem if is_selected => {
+                TuiInlineMenuRowStyle::InlineMenuItem | TuiInlineMenuRowStyle::CustomEndpoint
+                    if is_selected =>
+                {
                     builder.slash_command_selection_state_suffix_style()
                 }
-                TuiInlineMenuRowStyle::InlineMenuItem => builder.success_glyph_style(),
+                TuiInlineMenuRowStyle::InlineMenuItem | TuiInlineMenuRowStyle::CustomEndpoint => {
+                    builder.success_glyph_style()
+                }
                 TuiInlineMenuRowStyle::StateWithDetail => unreachable!(),
             };
             description_spans.push((format!(" {suffix}"), suffix_style));

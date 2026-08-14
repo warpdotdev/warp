@@ -319,9 +319,15 @@ impl RequestParams {
             user_workspaces.is_aws_bedrock_credentials_enabled(app),
             geap_binding,
         );
-        let is_custom_inference_enabled = user_workspaces.is_custom_inference_enabled(app);
+        // Both the entitlement (BYO_ENDPOINT) and the active workspace's member
+        // custom-endpoint policy must allow custom inference, matching the
+        // combined gate already used for the picker (`LLMPreferences`) and
+        // `/api-keys`. Passing only the entitlement here would let a stale
+        // selected model or retained key bypass workspace policy.
+        let include_member_custom_endpoints = user_workspaces.is_custom_inference_enabled(app)
+            && user_workspaces.are_member_byo_endpoints_allowed();
         let custom_model_providers =
-            api_key_manager.custom_model_providers_for_request(is_custom_inference_enabled);
+            api_key_manager.custom_model_providers_for_request(include_member_custom_endpoints);
         let custom_model_routers = FeatureFlag::CustomModelRouters.is_enabled().then(|| {
             LLMPreferences::as_ref(app).custom_model_routers_for_request(
                 &request_input.model_id,

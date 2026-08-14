@@ -146,8 +146,12 @@ pub fn init(
 
     // Validate all public settings to detect values that parsed as TOML
     // but cannot be deserialized into the expected Rust types.
-    let invalid_setting_keys =
+    let mut invalid_setting_keys =
         settings::SettingsManager::as_ref(ctx).validate_all_public_settings(ctx);
+    // The generic `SettingsValue` contract can't return a valid subset plus
+    // diagnostics, so per-endpoint custom-endpoint validation is tracked
+    // separately and folded in here.
+    append_and_inhibit_invalid_custom_endpoints(&mut invalid_setting_keys, ctx);
     let settings_file_error = if let Some(err) = startup_toml_parse_error {
         Some(super::SettingsFileError::FileParseFailed(err.to_string()))
     } else if !invalid_setting_keys.is_empty() {
@@ -266,8 +270,9 @@ fn handle_warp_config_change(
         });
         return;
     }
-    let failed_keys = settings::SettingsManager::handle(ctx)
+    let mut failed_keys = settings::SettingsManager::handle(ctx)
         .update(ctx, |manager, ctx| manager.reload_all_public_settings(ctx));
+    append_and_inhibit_invalid_custom_endpoints(&mut failed_keys, ctx);
     WarpConfig::handle(ctx).update(ctx, |_, ctx| {
         if failed_keys.is_empty() {
             ctx.emit(WarpConfigUpdateEvent::SettingsErrorsCleared);
@@ -278,6 +283,30 @@ fn handle_warp_config_change(
         }
     });
 }
+/// Appends `cloud_platform.custom_endpoints."<name>"` for every endpoint
+/// definition that currently fails validation, and inhibits writes for the
+/// whole `cloud_platform.custom_endpoints` setting while any diagnostic
+/// exists — an ordinary setting write would otherwise serialize only the
+/// valid subset and silently erase the user's broken-but-fixable entry.
+/// `/modify-settings` remains free to repair the file directly.
+fn append_and_inhibit_invalid_custom_endpoints(
+    invalid_setting_keys: &mut Vec<String>,
+    ctx: &AppContext,
+) {
+    let custom_endpoints = &AISettings::as_ref(ctx).custom_endpoints;
+    if !custom_endpoints.has_diagnostics() {
+        return;
+    }
+    for (name, _) in custom_endpoints.invalid() {
+        invalid_setting_keys.push(format!("cloud_platform.custom_endpoints.\"{name}\""));
+    }
+    let prefs = <settings::PublicPreferences as warpui::SingletonEntity>::as_ref(ctx);
+    prefs.inhibit_writes_for_key(
+        super::CustomEndpointDefinitions::toml_key(),
+        super::CustomEndpointDefinitions::hierarchy(),
+    );
+}
+
 /// Returns the platform-native preferences backend.
 ///
 /// Used directly for private settings, and also as the fallback for public

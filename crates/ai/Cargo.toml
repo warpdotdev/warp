@@ -19,6 +19,7 @@ bytes.workspace = true
 cfg-if.workspace = true
 computer_use.workspace = true
 dunce.workspace = true
+indexmap = { version = "2.0.2", features = ["serde"] }
 prost-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -46,6 +47,8 @@ dirs.workspace = true
 lazy_static.workspace = true
 regex.workspace = true
 rmcp.workspace = true
+schemars.workspace = true
+settings_value.workspace = true
 sha2 = "0.10.8"
 strsim.workspace = true
 thiserror.workspace = true
@@ -61,6 +64,7 @@ chrono.workspace = true
 persistence.workspace = true
 priority-queue = "2.3.1"
 repo_metadata.workspace = true
+url = { workspace = true, features = ["serde"] }
 uuid.workspace = true
 unicode-width.workspace = true
 

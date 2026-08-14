@@ -70,7 +70,9 @@ fn add_request_usage_model_without_auth(app: &mut App) -> ModelHandle<AIRequestU
     app.update(|ctx| {
         warpui_extras::secure_storage::register_noop("test", ctx);
         MockTelemetryContextProvider::register(ctx);
-        ctx.add_singleton_model(ApiKeyManager::new);
+        ctx.add_singleton_model(|ctx| {
+            ApiKeyManager::new(ai::api_keys::CustomEndpointPersistenceMode::Monolithic, ctx)
+        });
     });
     app.add_singleton_model(|_| PricingInfoModel::new());
     app.add_singleton_model(|ctx| {

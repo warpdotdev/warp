@@ -33,7 +33,9 @@ fn persisted_provider_api_key_updates_request_state() {
             warpui_extras::secure_storage::register_noop("test", ctx);
             warp_core::telemetry::testing::MockTelemetryContextProvider::register(ctx);
         });
-        let manager = app.add_singleton_model(ApiKeyManager::new);
+        let manager = app.add_singleton_model(|ctx| {
+            ApiKeyManager::new(CustomEndpointPersistenceMode::Monolithic, ctx)
+        });
 
         manager
             .update(&mut app, |manager, ctx| {
@@ -61,7 +63,9 @@ fn persisted_provider_api_key_can_be_cleared() {
             warpui_extras::secure_storage::register_noop("test", ctx);
             warp_core::telemetry::testing::MockTelemetryContextProvider::register(ctx);
         });
-        let manager = app.add_singleton_model(ApiKeyManager::new);
+        let manager = app.add_singleton_model(|ctx| {
+            ApiKeyManager::new(CustomEndpointPersistenceMode::Monolithic, ctx)
+        });
 
         manager
             .update(&mut app, |manager, ctx| {
@@ -79,6 +83,389 @@ fn persisted_provider_api_key_can_be_cleared() {
         });
     });
 }
+// ── Split-mode (settings-backed) custom endpoint keys ───────────
+
+/// A faithful in-memory [`secure_storage::SecureStorage`] double. Unlike
+/// `register_noop` (which reads back an empty string instead of `NotFound`
+/// and discards writes), this actually round-trips values, which the reload
+/// test below depends on.
+#[derive(Default)]
+struct FakeSecureStorage {
+    values: std::cell::RefCell<std::collections::HashMap<String, String>>,
+}
+
+impl secure_storage::SecureStorage for FakeSecureStorage {
+    fn write_value(&self, key: &str, value: &str) -> Result<(), secure_storage::Error> {
+        self.values
+            .borrow_mut()
+            .insert(key.to_owned(), value.to_owned());
+        Ok(())
+    }
+
+    fn read_value(&self, key: &str) -> Result<String, secure_storage::Error> {
+        self.values
+            .borrow()
+            .get(key)
+            .cloned()
+            .ok_or(secure_storage::Error::NotFound)
+    }
+
+    fn remove_value(&self, key: &str) -> Result<(), secure_storage::Error> {
+        self.values.borrow_mut().remove(key);
+        Ok(())
+    }
+}
+
+fn register_fake_secure_storage(ctx: &mut warpui_core::AppContext) {
+    ctx.add_singleton_model(|_| -> secure_storage::Model {
+        Box::new(FakeSecureStorage::default())
+    });
+}
+
+fn split_mode_manager(ctx: &mut ModelContext<ApiKeyManager>) -> ApiKeyManager {
+    ApiKeyManager::new(CustomEndpointPersistenceMode::Split, ctx)
+}
+
+fn valid_definitions(entries: &[(&str, &[&str])]) -> CustomEndpointDefinitionsConfig {
+    let mut object = serde_json::Map::new();
+    for (name, models) in entries {
+        object.insert(
+            (*name).to_owned(),
+            serde_json::json!({
+                "url": "https://example.com/v1",
+                "models": models.iter().map(|m| serde_json::json!({"name": m})).collect::<Vec<_>>(),
+            }),
+        );
+    }
+    CustomEndpointDefinitionsConfig::from_object(&object)
+}
+
+#[test]
+fn split_mode_persists_and_joins_custom_endpoint_key() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(register_fake_secure_storage);
+        let manager = app.add_singleton_model(split_mode_manager);
+        manager.update(&mut app, |manager, ctx| {
+            manager
+                .set_custom_endpoint_definitions(valid_definitions(&[("Acme", &["gpt-4o"])]), ctx);
+        });
+        manager.read(&app, |manager, _| {
+            assert!(!manager.custom_endpoint_key_is_connected("Acme"));
+        });
+
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key("Acme", Some("sk-acme".to_owned()), ctx)
+            })
+            .expect("no-op secure storage should accept the endpoint key");
+
+        manager.read(&app, |manager, _| {
+            assert!(manager.custom_endpoint_key_is_connected("Acme"));
+            assert_eq!(manager.keys().custom_endpoints.len(), 1);
+            assert_eq!(manager.keys().custom_endpoints[0].api_key, "sk-acme");
+        });
+    });
+}
+
+#[test]
+fn split_mode_clearing_key_removes_connection() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(register_fake_secure_storage);
+        let manager = app.add_singleton_model(split_mode_manager);
+        manager.update(&mut app, |manager, ctx| {
+            manager
+                .set_custom_endpoint_definitions(valid_definitions(&[("Acme", &["gpt-4o"])]), ctx);
+        });
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key("Acme", Some("sk-acme".to_owned()), ctx)
+            })
+            .unwrap();
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key("Acme", None, ctx)
+            })
+            .unwrap();
+        manager.read(&app, |manager, _| {
+            assert!(!manager.custom_endpoint_key_is_connected("Acme"));
+        });
+    });
+}
+
+#[test]
+fn split_mode_unkeyed_valid_endpoint_stays_out_of_request_registry() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(register_fake_secure_storage);
+        let manager = app.add_singleton_model(split_mode_manager);
+        manager.update(&mut app, |manager, ctx| {
+            manager
+                .set_custom_endpoint_definitions(valid_definitions(&[("Acme", &["gpt-4o"])]), ctx);
+        });
+        manager.read(&app, |manager, _| {
+            assert!(manager.custom_model_providers_for_request(true).is_none());
+        });
+    });
+}
+
+#[test]
+fn split_mode_rename_orphans_old_key_and_new_name_starts_unkeyed() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(register_fake_secure_storage);
+        let manager = app.add_singleton_model(split_mode_manager);
+        manager.update(&mut app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(
+                valid_definitions(&[("Old Name", &["gpt-4o"])]),
+                ctx,
+            );
+        });
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key("Old Name", Some("sk-1".to_owned()), ctx)
+            })
+            .unwrap();
+
+        // Renaming is delete-plus-add: a new map key replaces the old one.
+        manager.update(&mut app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(
+                valid_definitions(&[("New Name", &["gpt-4o"])]),
+                ctx,
+            );
+        });
+
+        manager.read(&app, |manager, _| {
+            assert!(!manager.custom_endpoint_key_is_connected("New Name"));
+            assert!(!manager.custom_endpoint_key_is_connected("Old Name"));
+        });
+    });
+}
+
+#[test]
+fn split_mode_invalid_then_repaired_definition_reconnects_preserved_key() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(register_fake_secure_storage);
+        let manager = app.add_singleton_model(split_mode_manager);
+        manager.update(&mut app, |manager, ctx| {
+            manager
+                .set_custom_endpoint_definitions(valid_definitions(&[("Acme", &["gpt-4o"])]), ctx);
+        });
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key("Acme", Some("sk-acme".to_owned()), ctx)
+            })
+            .unwrap();
+
+        // The definition becomes invalid (e.g. a typo'd URL); the name is still
+        // present in the file, so the key must be preserved, not orphaned.
+        let mut object = serde_json::Map::new();
+        object.insert(
+            "Acme".to_owned(),
+            serde_json::json!({"url": "not-a-url", "models": [{"name": "gpt-4o"}]}),
+        );
+        let broken = CustomEndpointDefinitionsConfig::from_object(&object);
+        manager.update(&mut app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(broken, ctx);
+        });
+        manager.read(&app, |manager, _| {
+            assert!(manager.keys().custom_endpoints.is_empty());
+        });
+
+        // Fixing the definition reconnects the preserved key without
+        // re-entering it.
+        manager.update(&mut app, |manager, ctx| {
+            manager
+                .set_custom_endpoint_definitions(valid_definitions(&[("Acme", &["gpt-4o"])]), ctx);
+        });
+        manager.read(&app, |manager, _| {
+            assert!(manager.custom_endpoint_key_is_connected("Acme"));
+        });
+    });
+}
+
+#[test]
+fn split_mode_reload_from_secure_storage_picks_up_other_process_change() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(register_fake_secure_storage);
+        let manager = app.add_singleton_model(split_mode_manager);
+        manager.update(&mut app, |manager, ctx| {
+            manager
+                .set_custom_endpoint_definitions(valid_definitions(&[("Acme", &["gpt-4o"])]), ctx);
+        });
+        // Simulate another TUI process writing the key directly, then this
+        // process reloading from the (shared, in this test, no-op) storage.
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key("Acme", Some("sk-acme".to_owned()), ctx)
+            })
+            .unwrap();
+        manager.update(&mut app, |manager, ctx| {
+            manager.reload_keys_from_secure_storage(ctx);
+        });
+        manager.read(&app, |manager, _| {
+            assert!(manager.custom_endpoint_key_is_connected("Acme"));
+        });
+    });
+}
+
+// ── APP-5380 review: concurrent-process regressions ─────────────
+
+#[test]
+fn split_mode_concurrent_key_updates_for_different_endpoints_do_not_clobber_each_other() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(register_fake_secure_storage);
+        // Two independent `ApiKeyManager`s sharing the same secure storage,
+        // simulating two separate TUI processes.
+        let manager_a = app.add_model(split_mode_manager);
+        let manager_b = app.add_model(split_mode_manager);
+        let definitions = || valid_definitions(&[("Acme", &["gpt-4o"]), ("Widgets", &["gpt-4o"])]);
+        manager_a.update(&mut app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(definitions(), ctx);
+        });
+        manager_b.update(&mut app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(definitions(), ctx);
+        });
+
+        // Process A sets a key for "Acme".
+        manager_a
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key("Acme", Some("sk-acme".to_owned()), ctx)
+            })
+            .unwrap();
+
+        // Process B, unaware of A's write (its in-memory cache is still
+        // empty), sets a key for a *different* endpoint, "Widgets". Without
+        // rereading fresh state before writing, B's write would overwrite
+        // the persisted map with only its own change, dropping Acme's key.
+        manager_b
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key("Widgets", Some("sk-widgets".to_owned()), ctx)
+            })
+            .unwrap();
+
+        // A fresh manager loading from the shared storage must see both keys.
+        let manager_c = app.add_model(split_mode_manager);
+        manager_c.update(&mut app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(definitions(), ctx);
+        });
+        manager_c.read(&app, |manager, _| {
+            assert!(
+                manager.custom_endpoint_key_is_connected("Acme"),
+                "process A's key must survive process B's concurrent write to a different endpoint"
+            );
+            assert!(manager.custom_endpoint_key_is_connected("Widgets"));
+        });
+    });
+}
+
+#[test]
+fn split_mode_orphan_cleanup_racing_a_concurrent_key_update_does_not_clobber_it() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(register_fake_secure_storage);
+        let manager_a = app.add_model(split_mode_manager);
+        // Acme starts valid and keyed.
+        manager_a.update(&mut app, |manager, ctx| {
+            manager
+                .set_custom_endpoint_definitions(valid_definitions(&[("Acme", &["gpt-4o"])]), ctx);
+        });
+        manager_a
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key("Acme", Some("sk-acme".to_owned()), ctx)
+            })
+            .unwrap();
+
+        // Process B independently keys a *different*, still-valid endpoint,
+        // representing a write landing between A's orphan-list computation
+        // and A's cleanup write.
+        let manager_b = app.add_model(split_mode_manager);
+        manager_b.update(&mut app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(
+                valid_definitions(&[("Widgets", &["gpt-4o"])]),
+                ctx,
+            );
+        });
+        manager_b
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key("Widgets", Some("sk-widgets".to_owned()), ctx)
+            })
+            .unwrap();
+
+        // Acme is now deleted from settings on process A. Its orphan cleanup
+        // must remove only "Acme" from the *current* persisted map, not
+        // revert to A's stale pre-race snapshot (which never learned about
+        // Widgets).
+        manager_a.update(&mut app, |manager, ctx| {
+            manager
+                .set_custom_endpoint_definitions(CustomEndpointDefinitionsConfig::default(), ctx);
+        });
+
+        let manager_c = app.add_model(split_mode_manager);
+        manager_c.update(&mut app, |manager, ctx| {
+            manager.set_custom_endpoint_definitions(
+                valid_definitions(&[("Widgets", &["gpt-4o"])]),
+                ctx,
+            );
+        });
+        manager_c.read(&app, |manager, _| {
+            assert!(
+                manager.custom_endpoint_key_is_connected("Widgets"),
+                "orphan cleanup for a deleted endpoint must not drop a concurrently \
+                 added key for a different endpoint"
+            );
+        });
+    });
+}
+
+#[test]
+fn split_mode_provider_key_save_does_not_leak_custom_endpoints_into_legacy_blob() {
+    warpui_core::App::test((), |mut app| async move {
+        app.update(register_fake_secure_storage);
+        app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
+        let manager = app.add_singleton_model(split_mode_manager);
+        manager.update(&mut app, |manager, ctx| {
+            manager
+                .set_custom_endpoint_definitions(valid_definitions(&[("Acme", &["gpt-4o"])]), ctx);
+        });
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_custom_endpoint_key("Acme", Some("sk-acme".to_owned()), ctx)
+            })
+            .unwrap();
+
+        // Editing a built-in provider key must not persist the joined
+        // `custom_endpoints` projection into the legacy monolithic blob.
+        manager
+            .update(&mut app, |manager, ctx| {
+                manager.persist_provider_key(LLMProvider::OpenAI, Some("sk-openai".to_owned()), ctx)
+            })
+            .unwrap();
+
+        app.read(|ctx| {
+            let raw = ctx
+                .secure_storage()
+                .read_value(SECURE_STORAGE_KEY)
+                .expect("provider key save should have written the legacy blob");
+            let persisted: ApiKeys = serde_json::from_str(&raw).unwrap();
+            assert!(
+                persisted.custom_endpoints.is_empty(),
+                "Split-mode AiApiKeys must serialize custom_endpoints: [] (found {:?})",
+                persisted.custom_endpoints
+            );
+            assert_eq!(persisted.openai.as_deref(), Some("sk-openai"));
+
+            let custom_endpoint_keys_raw = ctx
+                .secure_storage()
+                .read_value(CUSTOM_ENDPOINT_API_KEYS_STORAGE_KEY)
+                .expect("custom endpoint key entry should be unaffected by a provider key save");
+            assert!(custom_endpoint_keys_raw.contains("sk-acme"));
+        });
+
+        // The in-memory projection must still carry the joined endpoint for
+        // request-path/`/api-keys` use.
+        manager.read(&app, |manager, _| {
+            assert_eq!(manager.keys().custom_endpoints.len(), 1);
+        });
+    });
+}
+
 #[test]
 fn llm_provider_rejects_unsupported_api_key_provider() {
     assert_eq!(
@@ -128,6 +515,9 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         geap_credentials_state: GeapCredentialsState::Missing,
         secure_storage_write_version: 0,
         grok_secure_storage_write_version: 0,
+        custom_endpoint_persistence_mode: CustomEndpointPersistenceMode::Monolithic,
+        custom_endpoint_definitions: CustomEndpointDefinitionsConfig::default(),
+        custom_endpoint_keys: IndexMap::new(),
     }
 }
 
