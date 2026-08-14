@@ -13,6 +13,25 @@ pub enum MembershipRole {
     User,
 }
 
+/// Governs which workspace members can discover and join a team. Orthogonal to
+/// workspace-level discoverability. Only `Open` teams support an invite link;
+/// `Private` and `Hidden` teams rely on admin-sent email invites instead.
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Default, Serialize, Deserialize)]
+pub enum TeamVisibility {
+    #[default]
+    Open,
+    Private,
+    Hidden,
+}
+
+impl TeamVisibility {
+    /// Only `Open` teams can have an invite link; `Private` and `Hidden` teams
+    /// use admin-sent email invites instead.
+    pub fn supports_invite_link(&self) -> bool {
+        matches!(self, TeamVisibility::Open)
+    }
+}
+
 impl MembershipRole {
     pub fn is_admin_or_owner(&self) -> bool {
         matches!(self, MembershipRole::Admin | MembershipRole::Owner)
@@ -90,6 +109,7 @@ pub struct Team {
     /// If the team is eligible for discovery, then show toggle for setting discoverability to the team's admin
     pub is_eligible_for_discovery: bool,
     pub has_billing_history: bool,
+    pub visibility: TeamVisibility,
 }
 
 impl Team {
@@ -113,6 +133,7 @@ impl Team {
             settings: settings.unwrap_or_default(),
             is_eligible_for_discovery: false,
             has_billing_history: false,
+            visibility: TeamVisibility::default(),
         }
     }
 

@@ -33,7 +33,7 @@ use warp_graphql::workspace::{
     SecretRedactionSettingsInfo as GqlSecretRedactionSettingsInfo,
     StringListSettingInfo as GqlStringListSettingInfo, Team as GqlTeam,
     TeamMember as GqlTeamMember, TeamSettings as GqlTeamSettings,
-    TelemetrySettings as GqlTelemetrySettings,
+    TeamVisibility as GqlTeamVisibility, TelemetrySettings as GqlTelemetrySettings,
     UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting,
     UgcCollectionSettingInfo as GqlUgcCollectionSettingInfo,
     UgcCollectionSettings as GqlUgcCollectionSettings,
@@ -64,7 +64,7 @@ use crate::system::SystemStats;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
 use crate::workspaces::gql_convert::PLACEHOLDER_WORKSPACE_UID;
-use crate::workspaces::team::{Team, TeamMember};
+use crate::workspaces::team::{Team, TeamMember, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -178,6 +178,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     };
 
     let workspace = Workspace {
@@ -313,6 +314,7 @@ fn team_for_test() -> Team {
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     }
 }
 
@@ -1269,6 +1271,7 @@ fn test_joining_team_moves_objects() {
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     };
     let team_uid = team.uid;
     let workspace = Workspace {
@@ -1507,6 +1510,7 @@ fn test_leaving_team_moves_objects() {
         settings: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
+        visibility: TeamVisibility::Open,
     };
     let team_uid = team.uid;
     let workspace = Workspace {
@@ -1969,6 +1973,7 @@ fn gql_team(uid: &str, name: &str, member_uids: &[&str]) -> GqlTeam {
             .collect(),
         settings: gql_team_settings(),
         invite_link: None,
+        visibility: GqlTeamVisibility::Open,
     }
 }
 

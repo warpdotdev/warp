@@ -111,6 +111,8 @@ const INVALID_DOMAINS_INSTRUCTIONS: &str =
     "Some of the provided domains are invalid, or have already been added.";
 
 const INVITE_LINK_TOGGLE_INSTRUCTIONS: &str = "As an admin, you can choose whether to enable or disable the ability for team members to invite others by invitation link.";
+const INVITE_LINK_UNAVAILABLE_INSTRUCTIONS: &str =
+    "Invite links are unavailable for private and hidden teams.";
 const INVITE_LINK_DOMAIN_RESTRICTIONS_INSTRUCTIONS: &str = "Restrict by domain — only allow users with emails at specific domains to join your team through the invite link.";
 
 const INVITE_BY_EMAIL_EXPIRY_INSTRUCTIONS: &str = "Email invitations are valid for 7 days.";
@@ -2746,8 +2748,13 @@ impl TeamsWidget {
         }
 
         // Invite by link section
-        // Only show invite-by-link if user is admin OR if invite links are enabled
-        if is_invite_link_enabled || has_admin_permissions {
+        // Only show invite-by-link if user is admin (so they can see the
+        // toggle, or why it's unavailable for a Private/Hidden team) OR if
+        // invite links are actually usable (enabled on a team whose
+        // visibility supports them).
+        if has_admin_permissions
+            || (team_metadata.visibility.supports_invite_link() && is_invite_link_enabled)
+        {
             invitation_section.add_child(self.render_invite_by_link_section(
                 team_metadata,
                 is_invite_link_enabled,
@@ -2796,17 +2803,23 @@ impl TeamsWidget {
         appearance: &Appearance,
         chip_editor_style: UiComponentStyles,
     ) -> Box<dyn Element> {
+        let supports_invite_link = team.visibility.supports_invite_link();
         let mut section = Flex::column();
 
         // Header + admin-only subtext on the left, toggle on the right. The
         // text is stacked so the toggle centers against the whole block.
         let header = self.render_subsubsection_header("By link".to_owned(), appearance);
         let text_column = if has_admin_permissions {
+            let instructions = if supports_invite_link {
+                INVITE_LINK_TOGGLE_INSTRUCTIONS
+            } else {
+                INVITE_LINK_UNAVAILABLE_INSTRUCTIONS
+            };
             Flex::column()
                 .with_child(header)
                 .with_child(
                     Container::new(self.render_sub_text(
-                        INVITE_LINK_TOGGLE_INSTRUCTIONS.into(),
+                        instructions.into(),
                         appearance,
                         Some(Coords::uniform(0.).right(48.)),
                     ))
@@ -2824,8 +2837,9 @@ impl TeamsWidget {
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_child(Shrinkable::new(1., text_column).finish());
 
-        // Toggle on the right only renders if user is admin
-        if has_admin_permissions {
+        // Toggle on the right only renders if user is admin and the team's
+        // visibility supports an invite link (Private/Hidden teams never do).
+        if has_admin_permissions && supports_invite_link {
             let team_uid = team.uid;
             let current_state = is_invite_link_enabled;
             let invite_by_link_toggle = appearance
@@ -2846,8 +2860,9 @@ impl TeamsWidget {
         section.add_child(invite_by_link_header_row.finish());
 
         // 3) Invite link + domain restrictions
-        // Only renders if invite by link is enabled
-        if is_invite_link_enabled {
+        // Only renders if invite by link is enabled and the team's visibility
+        // supports it.
+        if supports_invite_link && is_invite_link_enabled {
             section.add_child(self.render_copy_link_row(team, appearance));
 
             // Render invite link reset text if admin user
