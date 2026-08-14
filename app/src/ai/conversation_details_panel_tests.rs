@@ -6,7 +6,7 @@ use warp_cli::agent::Harness;
 use warp_multi_agent_api as api;
 use warpui::{App, EntityId, SingletonEntity};
 
-use super::{ConversationDetailsData, ConversationDetailsPanel, PanelMode};
+use super::{ConversationDetailsData, ConversationDetailsPanel, PanelMode, trimmed_initial_query};
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
@@ -570,6 +570,21 @@ fn test_from_task_leaves_the_runner_absent_when_the_run_names_none() {
             ));
         });
     });
+}
+
+// The Slack request behind this test: users want to copy their initial
+// query the same way they can copy the Error field, so they can re-paste it
+// after hitting a failure. Both the "Initial query" section and its copy
+// action derive the copied/displayed text from this shared helper, so
+// locking in its behavior covers the copy path too.
+#[test]
+fn test_trimmed_initial_query_trims_and_filters_blank_prompts() {
+    assert_eq!(
+        trimmed_initial_query(&Some("  fix the failing build  \n".to_string())),
+        Some("fix the failing build")
+    );
+    assert_eq!(trimmed_initial_query(&Some("   \n".to_string())), None);
+    assert_eq!(trimmed_initial_query(&None), None);
 }
 
 // A local conversation has no runner to report, so the panel must not carry
