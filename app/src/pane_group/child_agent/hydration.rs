@@ -435,13 +435,13 @@ impl PaneGroup {
                         "child transcript upgrade fetch-empty \
                          child_conversation_id={child_id:?}"
                     );
-                    // Re-queue for retry when task data refreshes; the
-                    // transcript may not be written yet or the fetch was
-                    // transient.
+                    // Re-queue without evicting the task so the retry is
+                    // driven by the normal TasksUpdated cadence rather than
+                    // firing immediately on every round-trip. Evicting would
+                    // create an unbounded loop on permanent failures such as
+                    // a 403 from an Observer that can see the task row but
+                    // not the conversation transcript.
                     group.pending_child_hydrations.insert(task_id, child_id);
-                    AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
-                        model.evict_and_refetch_task(&task_id, ctx);
-                    });
                     return;
                 }
             };
