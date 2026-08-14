@@ -41,18 +41,7 @@ fn workspace_member(uid: UserUid, email: &str, role: MembershipRole) -> Workspac
     }
 }
 
-/// `role_detachment_enabled` mirrors the server-computed
-/// `nativeWorkspacesRoleDetachmentEnabled` GraphQL field, which is already the
-/// combination of native workspaces being enabled for the workspace AND the
-/// server-wide workspace role sync detachment feature being on (see
-/// `Workspace::is_workspace_role_detachment_enabled`). Passing `false` here
-/// exercises the exact state prod is in today: native workspaces can be
-/// enabled for a workspace while roles are still synced 1:1, so the derived
-/// field is `false`.
-fn workspace_with_members(
-    members: Vec<WorkspaceMember>,
-    role_detachment_enabled: bool,
-) -> Workspace {
+fn workspace_with_members(members: Vec<WorkspaceMember>) -> Workspace {
     Workspace {
         uid: "workspace_uid123456789".to_string().into(),
         name: "Workspace".to_string(),
@@ -69,7 +58,6 @@ fn workspace_with_members(
         is_eligible_for_discovery: false,
         members,
         total_requests_used_since_last_refresh: 0,
-        native_workspaces_role_detachment_enabled: role_detachment_enabled,
     }
 }
 
@@ -78,52 +66,6 @@ fn item_for<'a>(items: &'a [Item], email: &str) -> &'a Item {
         .iter()
         .find(|item| item.text == email)
         .unwrap_or_else(|| panic!("expected an item for {email}"))
-}
-
-#[test]
-fn workspace_admin_badge_supersedes_team_owner_chip_when_roles_are_detached() {
-    let owner_uid = UserUid::new("owner");
-    let team = team_with_members(vec![TeamMember {
-        uid: owner_uid,
-        email: "owner@example.com".to_string(),
-        role: MembershipRole::Owner,
-    }]);
-    let workspace = workspace_with_members(
-        vec![workspace_member(
-            owner_uid,
-            "owner@example.com",
-            MembershipRole::Admin,
-        )],
-        true,
-    );
-
-    let items = TeamsPageView::team_to_item_list(&team, "viewer@example.com", Some(&workspace));
-
-    let owner_item = item_for(&items, "owner@example.com");
-    assert_eq!(owner_item.state, ItemState::WorkspaceAdmin);
-}
-
-#[test]
-fn workspace_owner_badge_shown_for_workspace_owner_role() {
-    let member_uid = UserUid::new("member");
-    let team = team_with_members(vec![TeamMember {
-        uid: member_uid,
-        email: "member@example.com".to_string(),
-        role: MembershipRole::User,
-    }]);
-    let workspace = workspace_with_members(
-        vec![workspace_member(
-            member_uid,
-            "member@example.com",
-            MembershipRole::Owner,
-        )],
-        true,
-    );
-
-    let items = TeamsPageView::team_to_item_list(&team, "viewer@example.com", Some(&workspace));
-
-    let member_item = item_for(&items, "member@example.com");
-    assert_eq!(member_item.state, ItemState::WorkspaceOwner);
 }
 
 #[test]
@@ -142,14 +84,11 @@ fn workspace_admin_viewer_gets_team_admin_powers() {
             role: MembershipRole::User,
         },
     ]);
-    let workspace = workspace_with_members(
-        vec![workspace_member(
-            admin_uid,
-            "admin@example.com",
-            MembershipRole::Admin,
-        )],
-        true,
-    );
+    let workspace = workspace_with_members(vec![workspace_member(
+        admin_uid,
+        "admin@example.com",
+        MembershipRole::Admin,
+    )]);
 
     let items = TeamsPageView::team_to_item_list(&team, "admin@example.com", Some(&workspace));
 
@@ -170,61 +109,8 @@ fn workspace_admin_viewer_gets_team_admin_powers() {
     );
 }
 
-/// This is prod's state today: native workspaces can be enabled for a
-/// workspace, but the server-wide workspace role sync detachment feature is
-/// off, so roles are still mirrored 1:1 and the server reports
-/// `nativeWorkspacesRoleDetachmentEnabled: false`. A workspace admin still
-/// gets member-management powers in this state (the server permits it, and
-/// the admin site's shipped workspace-admin path already grants it the same
-/// way) -- only the *badge* stays unaffected, since relabeling every mirrored
-/// team admin as "Workspace admin" would be a separate, much more visible
-/// change this feature does not make. See the doc comment on
-/// `team_to_item_list` for why the permission and badge gates intentionally
-/// diverge.
-#[test]
-fn workspace_admin_badge_unaffected_when_roles_are_still_synced() {
-    let admin_uid = UserUid::new("admin");
-    let target_uid = UserUid::new("target");
-    let team = team_with_members(vec![
-        TeamMember {
-            uid: admin_uid,
-            email: "admin@example.com".to_string(),
-            role: MembershipRole::User,
-        },
-        TeamMember {
-            uid: target_uid,
-            email: "target@example.com".to_string(),
-            role: MembershipRole::User,
-        },
-    ]);
-    let workspace = workspace_with_members(
-        vec![workspace_member(
-            admin_uid,
-            "admin@example.com",
-            MembershipRole::Admin,
-        )],
-        false,
-    );
-
-    let items = TeamsPageView::team_to_item_list(&team, "admin@example.com", Some(&workspace));
-
-    let target_item = item_for(&items, "target@example.com");
-    assert!(
-        target_item
-            .actions
-            .iter()
-            .any(|action| action.label == "Remove from team"),
-        "a workspace admin should still get member actions when roles are synced: {target_item:?}"
-    );
-    assert_eq!(
-        target_item.state,
-        ItemState::Valid,
-        "the badge must not relabel a mirrored role when roles are still synced"
-    );
-}
-
 /// A pure team admin's badge and powers are unaffected by this feature,
-/// whether or not the workspace / an independent workspace role exist.
+/// whether or not the workspace / a workspace role exist.
 #[test]
 fn pure_team_admin_is_unaffected() {
     let admin_uid = UserUid::new("admin");
@@ -238,4 +124,116 @@ fn pure_team_admin_is_unaffected() {
         TeamsPageView::team_to_item_list(&team, "viewer@example.com", None);
     let admin_item = item_for(&items_without_workspace, "admin@example.com");
     assert_eq!(admin_item.state, ItemState::Admin);
+}
+
+/// The workspace chip fills the gap: it only shows for a member with no team
+/// OWNER/ADMIN chip of their own. A team owner keeps their OWNER chip even
+/// when their workspace role happens to be admin-level (e.g. mirrored from
+/// being that team's owner).
+#[test]
+fn team_owner_keeps_owner_chip_despite_admin_level_workspace_role() {
+    let owner_uid = UserUid::new("owner");
+    let team = team_with_members(vec![TeamMember {
+        uid: owner_uid,
+        email: "owner@example.com".to_string(),
+        role: MembershipRole::Owner,
+    }]);
+    let workspace = workspace_with_members(vec![workspace_member(
+        owner_uid,
+        "owner@example.com",
+        MembershipRole::Admin,
+    )]);
+
+    let items = TeamsPageView::team_to_item_list(&team, "viewer@example.com", Some(&workspace));
+
+    let owner_item = item_for(&items, "owner@example.com");
+    assert_eq!(owner_item.state, ItemState::Owner);
+}
+
+/// A team admin keeps their ADMIN chip even when their workspace role happens
+/// to be owner-level.
+#[test]
+fn team_admin_keeps_admin_chip_despite_owner_level_workspace_role() {
+    let admin_uid = UserUid::new("admin");
+    let team = team_with_members(vec![TeamMember {
+        uid: admin_uid,
+        email: "admin@example.com".to_string(),
+        role: MembershipRole::Admin,
+    }]);
+    let workspace = workspace_with_members(vec![workspace_member(
+        admin_uid,
+        "admin@example.com",
+        MembershipRole::Owner,
+    )]);
+
+    let items = TeamsPageView::team_to_item_list(&team, "viewer@example.com", Some(&workspace));
+
+    let admin_item = item_for(&items, "admin@example.com");
+    assert_eq!(admin_item.state, ItemState::Admin);
+}
+
+/// A plain team member (no team OWNER/ADMIN chip) with an admin-level
+/// workspace role gets the workspace chip filled in.
+#[test]
+fn plain_member_gets_workspace_admin_chip() {
+    let member_uid = UserUid::new("member");
+    let team = team_with_members(vec![TeamMember {
+        uid: member_uid,
+        email: "member@example.com".to_string(),
+        role: MembershipRole::User,
+    }]);
+    let workspace = workspace_with_members(vec![workspace_member(
+        member_uid,
+        "member@example.com",
+        MembershipRole::Admin,
+    )]);
+
+    let items = TeamsPageView::team_to_item_list(&team, "viewer@example.com", Some(&workspace));
+
+    let member_item = item_for(&items, "member@example.com");
+    assert_eq!(member_item.state, ItemState::WorkspaceAdmin);
+}
+
+/// A plain team member with an owner-level workspace role gets the
+/// workspace-owner chip filled in.
+#[test]
+fn plain_member_gets_workspace_owner_chip() {
+    let member_uid = UserUid::new("member");
+    let team = team_with_members(vec![TeamMember {
+        uid: member_uid,
+        email: "member@example.com".to_string(),
+        role: MembershipRole::User,
+    }]);
+    let workspace = workspace_with_members(vec![workspace_member(
+        member_uid,
+        "member@example.com",
+        MembershipRole::Owner,
+    )]);
+
+    let items = TeamsPageView::team_to_item_list(&team, "viewer@example.com", Some(&workspace));
+
+    let member_item = item_for(&items, "member@example.com");
+    assert_eq!(member_item.state, ItemState::WorkspaceOwner);
+}
+
+/// A plain team member with no admin-level workspace role (or no workspace
+/// role at all) keeps the plain "Valid" state, i.e. no chip.
+#[test]
+fn plain_member_with_no_admin_level_workspace_role_gets_no_chip() {
+    let member_uid = UserUid::new("member");
+    let team = team_with_members(vec![TeamMember {
+        uid: member_uid,
+        email: "member@example.com".to_string(),
+        role: MembershipRole::User,
+    }]);
+    let workspace = workspace_with_members(vec![workspace_member(
+        member_uid,
+        "member@example.com",
+        MembershipRole::User,
+    )]);
+
+    let items = TeamsPageView::team_to_item_list(&team, "viewer@example.com", Some(&workspace));
+
+    let member_item = item_for(&items, "member@example.com");
+    assert_eq!(member_item.state, ItemState::Valid);
 }

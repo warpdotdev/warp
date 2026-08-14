@@ -377,18 +377,18 @@ enum GrowTeamWarningCta {
 /// The order of the ItemState enum values determines the ordering of the members and
 /// invites list in the team management page (see `impl Ord for Item`` below).
 ///
-/// `WorkspaceOwner`/`WorkspaceAdmin` are independent workspace-level roles that
-/// supersede the team `Owner`/`Admin` chip for a member (see
-/// `TeamsPageView::team_to_item_list`); they sort alongside the team owner/admin
-/// rows.
+/// `WorkspaceOwner`/`WorkspaceAdmin` fill in a workspace-level badge for a
+/// member who has no team `Owner`/`Admin` chip of their own (see
+/// `TeamsPageView::team_to_item_list`); they sort below the real team
+/// owner/admin rows, since they never apply to an actual team owner/admin.
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
 enum ItemState {
     Expired,
     Pending,
-    WorkspaceOwner,
-    WorkspaceAdmin,
     Owner,
     Admin,
+    WorkspaceOwner,
+    WorkspaceAdmin,
     Valid,
 }
 
@@ -1744,13 +1744,15 @@ impl TeamsPageView {
     /// detachment check), and the admin site's shipped workspace-admin path
     /// (`isWorkspaceAdmin`/`canAccess` in `useWorkspaceAdminPanel.ts` /
     /// `TeamAdminDetail.tsx`) already grants cross-team actions the same way.
-    /// A member's workspace role supersedes their team role's *chip*, however,
-    /// only when `workspace.is_workspace_role_detachment_enabled()`: relabeling
-    /// every mirrored team admin/owner as "Workspace admin"/"Workspace owner"
-    /// on every native-but-still-synced workspace would be a highly visible,
-    /// unrequested UI change for an assignment that hasn't actually changed,
-    /// unlike the permission grant above which has no user-visible surface of
-    /// its own. Do not fold this gate back into the permission check above.
+    ///
+    /// A member's workspace role only *fills in* a "Workspace
+    /// admin"/"Workspace owner" chip when they have no team OWNER/ADMIN chip
+    /// of their own; it never supersedes an existing team chip. A member who
+    /// is already a team admin/owner elsewhere in the workspace can have a
+    /// mirrored (not independently assigned) admin-level workspace role, in a
+    /// single-team workspace the two always coincide anyway, so treating an
+    /// admin-level workspace role as authoritative over an existing team
+    /// chip would relabel members whose assignment hasn't actually changed.
     fn team_to_item_list(
         team: &Team,
         current_user_email: &str,
@@ -1797,27 +1799,28 @@ impl TeamsPageView {
         team.members.iter().for_each(|member| {
             let team_member_has_owner_permissions = team.has_owner_permissions(&member.email);
             let team_member_has_admin_permissions = team.has_admin_permissions(&member.email);
-            let member_workspace_role =
-                if workspace.is_some_and(Workspace::is_workspace_role_detachment_enabled) {
+            let member_workspace_role = workspace
+                .and_then(|workspace| {
                     workspace
-                        .and_then(|workspace| {
-                            workspace
-                                .members
-                                .iter()
-                                .find(|workspace_member| workspace_member.email == member.email)
-                        })
-                        .map(|workspace_member| workspace_member.role)
-                } else {
-                    None
-                };
+                        .members
+                        .iter()
+                        .find(|workspace_member| workspace_member.email == member.email)
+                })
+                .map(|workspace_member| workspace_member.role);
 
-            // A member's workspace role supersedes their team role's chip.
-            let state = match member_workspace_role {
-                Some(MembershipRole::Owner) => ItemState::WorkspaceOwner,
-                Some(MembershipRole::Admin) => ItemState::WorkspaceAdmin,
-                _ if team_member_has_owner_permissions => ItemState::Owner,
-                _ if team_member_has_admin_permissions => ItemState::Admin,
-                _ => ItemState::Valid,
+            // The workspace role only fills the gap for a member who has no
+            // team OWNER/ADMIN chip of their own; an existing team chip
+            // always wins (see the doc comment above).
+            let state = if team_member_has_owner_permissions {
+                ItemState::Owner
+            } else if team_member_has_admin_permissions {
+                ItemState::Admin
+            } else {
+                match member_workspace_role {
+                    Some(MembershipRole::Owner) => ItemState::WorkspaceOwner,
+                    Some(MembershipRole::Admin) => ItemState::WorkspaceAdmin,
+                    _ => ItemState::Valid,
+                }
             };
 
             let mut actions = Vec::new();

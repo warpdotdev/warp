@@ -1929,7 +1929,6 @@ impl UserWorkspaces {
             pending_email_invites: vec![],
             is_eligible_for_discovery: false,
             total_requests_used_since_last_refresh: 0,
-            native_workspaces_role_detachment_enabled: false,
         };
 
         self.update_workspaces(vec![workspace], ctx);

@@ -195,7 +195,6 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         is_eligible_for_discovery: false,
         members: vec![],
         total_requests_used_since_last_refresh: 0,
-        native_workspaces_role_detachment_enabled: false,
     };
 
     App::test((), |mut app| async move {
@@ -740,7 +739,6 @@ fn workspace_for_test(team: &Team) -> Workspace {
         is_eligible_for_discovery: false,
         members: vec![],
         total_requests_used_since_last_refresh: 0,
-        native_workspaces_role_detachment_enabled: false,
     }
 }
 
@@ -1288,7 +1286,6 @@ fn test_joining_team_moves_objects() {
         is_eligible_for_discovery: false,
         members: vec![],
         total_requests_used_since_last_refresh: 0,
-        native_workspaces_role_detachment_enabled: false,
     };
 
     let shared_object = CloudWorkflow::new_local(
@@ -1527,7 +1524,6 @@ fn test_leaving_team_moves_objects() {
         is_eligible_for_discovery: false,
         members: vec![],
         total_requests_used_since_last_refresh: 0,
-        native_workspaces_role_detachment_enabled: false,
     };
 
     let shared_object = CloudWorkflow::new_local(
@@ -1850,7 +1846,6 @@ fn gql_workspace(
         pending_email_invites: vec![],
         invite_link_domain_restrictions: vec![],
         is_eligible_for_discovery: false,
-        native_workspaces_role_detachment_enabled: false,
         feature_model_choice: GqlFeatureModelChoice {
             agent_mode: empty_llms.clone(),
             planning: empty_llms.clone(),
