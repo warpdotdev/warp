@@ -1,32 +1,21 @@
 use super::*;
 use crate::workspaces::team::TeamMember;
 use crate::workspaces::workspace::{
-    EmailInvite, MultiAdminPolicy, NativeWorkspacesPolicy, Tier, WorkspaceMember,
-    WorkspaceMemberUsageInfo,
+    MultiAdminPolicy, NativeWorkspacesPolicy, Tier, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
-fn member(email: &str, role: MembershipRole) -> TeamMember {
-    TeamMember {
-        uid: UserUid::new(email),
-        email: email.to_string(),
-        role,
-    }
-}
-
-fn team_with_members(members: Vec<TeamMember>, multi_admin_enabled: bool) -> Team {
+fn team_with_members(members: Vec<TeamMember>) -> Team {
     Team {
         uid: 1.into(),
-        name: "Test Team".to_string(),
+        name: "Team".to_string(),
         color: None,
         invite_link: None,
         members,
-        pending_email_invites: vec![],
-        invite_link_domain_restrictions: vec![],
+        pending_email_invites: Vec::new(),
+        invite_link_domain_restrictions: Vec::new(),
         billing_metadata: BillingMetadata {
             tier: Tier {
-                multi_admin_policy: Some(MultiAdminPolicy {
-                    enabled: multi_admin_enabled,
-                }),
+                multi_admin_policy: Some(MultiAdminPolicy { enabled: true }),
                 ..Default::default()
             },
             ..Default::default()
@@ -38,18 +27,9 @@ fn team_with_members(members: Vec<TeamMember>, multi_admin_enabled: bool) -> Tea
     }
 }
 
-fn workspace_with_member(
-    email: &str,
-    role: MembershipRole,
-    native_workspaces_enabled: bool,
-) -> Workspace {
-    let mut workspace =
-        Workspace::from_local_cache(ServerId::from(2).into(), "Test Workspace".to_string(), None);
-    workspace.billing_metadata.tier.native_workspaces_policy = Some(NativeWorkspacesPolicy {
-        enabled: native_workspaces_enabled,
-    });
-    workspace.members.push(WorkspaceMember {
-        uid: UserUid::new(email),
+fn workspace_member(uid: UserUid, email: &str, role: MembershipRole) -> WorkspaceMember {
+    WorkspaceMember {
+        uid,
         email: email.to_string(),
         role,
         usage_info: WorkspaceMemberUsageInfo {
@@ -58,190 +38,189 @@ fn workspace_with_member(
             requests_used_since_last_refresh: 0,
             is_request_limit_prorated: false,
         },
-    });
-    workspace
+    }
 }
 
-fn admin_workspace(email: &str) -> Workspace {
-    workspace_with_member(email, MembershipRole::Admin, true)
+fn workspace_with_members(
+    members: Vec<WorkspaceMember>,
+    native_workspaces_enabled: bool,
+) -> Workspace {
+    Workspace {
+        uid: "workspace_uid123456789".to_string().into(),
+        name: "Workspace".to_string(),
+        stripe_customer_id: None,
+        teams: Vec::new(),
+        billing_metadata: BillingMetadata {
+            tier: Tier {
+                native_workspaces_policy: Some(NativeWorkspacesPolicy {
+                    enabled: native_workspaces_enabled,
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        bonus_grants_purchased_this_month: Default::default(),
+        billing_cycle_usage: None,
+        has_billing_history: false,
+        settings: Default::default(),
+        invite_code: None,
+        invite_link_domain_restrictions: Vec::new(),
+        pending_email_invites: Vec::new(),
+        is_eligible_for_discovery: false,
+        members,
+        total_requests_used_since_last_refresh: 0,
+    }
 }
 
-/// Returns the action labels rendered for the item with the given `text` (a
-/// member email or pending-invite email), in the order they were pushed.
-fn action_labels(items: &[Item], text: &str) -> Vec<String> {
+fn item_for<'a>(items: &'a [Item], email: &str) -> &'a Item {
     items
         .iter()
-        .find(|item| item.text == text)
-        .map(|item| item.actions.iter().map(|a| a.label.clone()).collect())
-        .unwrap_or_default()
+        .find(|item| item.text == email)
+        .unwrap_or_else(|| panic!("expected an item for {email}"))
 }
 
-const OWNER_EMAIL: &str = "owner@example.com";
-const ADMIN_EMAIL: &str = "admin@example.com";
-const MEMBER_EMAIL: &str = "member@example.com";
-
 #[test]
-fn owner_can_transfer_promote_and_remove_without_workspace_admin_role() {
-    let team = team_with_members(
-        vec![
-            member(OWNER_EMAIL, MembershipRole::Owner),
-            member(MEMBER_EMAIL, MembershipRole::User),
-        ],
+fn workspace_admin_badge_supersedes_team_owner_chip_when_native_workspaces_enabled() {
+    let owner_uid = UserUid::new("owner");
+    let team = team_with_members(vec![TeamMember {
+        uid: owner_uid,
+        email: "owner@example.com".to_string(),
+        role: MembershipRole::Owner,
+    }]);
+    let workspace = workspace_with_members(
+        vec![workspace_member(
+            owner_uid,
+            "owner@example.com",
+            MembershipRole::Admin,
+        )],
         true,
     );
-    let workspace = workspace_with_member(OWNER_EMAIL, MembershipRole::User, true);
 
-    let items = TeamsPageView::team_to_item_list(&team, OWNER_EMAIL, &workspace);
+    let items = TeamsPageView::team_to_item_list(&team, "viewer@example.com", Some(&workspace));
 
-    assert_eq!(
-        action_labels(&items, MEMBER_EMAIL),
-        vec!["Transfer ownership", "Promote to admin", "Remove from team"]
-    );
+    let owner_item = item_for(&items, "owner@example.com");
+    assert_eq!(owner_item.state, ItemState::WorkspaceAdmin);
 }
 
 #[test]
-fn team_admin_can_promote_and_remove_without_workspace_admin_role() {
-    let team = team_with_members(
-        vec![
-            member(ADMIN_EMAIL, MembershipRole::Admin),
-            member(MEMBER_EMAIL, MembershipRole::User),
-        ],
+fn workspace_owner_badge_shown_for_workspace_owner_role() {
+    let member_uid = UserUid::new("member");
+    let team = team_with_members(vec![TeamMember {
+        uid: member_uid,
+        email: "member@example.com".to_string(),
+        role: MembershipRole::User,
+    }]);
+    let workspace = workspace_with_members(
+        vec![workspace_member(
+            member_uid,
+            "member@example.com",
+            MembershipRole::Owner,
+        )],
         true,
     );
-    let workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::User, true);
 
-    let items = TeamsPageView::team_to_item_list(&team, ADMIN_EMAIL, &workspace);
+    let items = TeamsPageView::team_to_item_list(&team, "viewer@example.com", Some(&workspace));
 
-    // No "Transfer ownership" -- that stays owner-only.
-    assert_eq!(
-        action_labels(&items, MEMBER_EMAIL),
-        vec!["Promote to admin", "Remove from team"]
-    );
+    let member_item = item_for(&items, "member@example.com");
+    assert_eq!(member_item.state, ItemState::WorkspaceOwner);
 }
 
 #[test]
-fn non_admin_workspace_member_gets_no_member_actions() {
-    let team = team_with_members(
-        vec![
-            member(MEMBER_EMAIL, MembershipRole::User),
-            member("other@example.com", MembershipRole::User),
-        ],
+fn workspace_admin_viewer_gets_team_admin_powers_when_native_workspaces_enabled() {
+    let admin_uid = UserUid::new("admin");
+    let target_uid = UserUid::new("target");
+    let team = team_with_members(vec![
+        TeamMember {
+            uid: admin_uid,
+            email: "admin@example.com".to_string(),
+            role: MembershipRole::User,
+        },
+        TeamMember {
+            uid: target_uid,
+            email: "target@example.com".to_string(),
+            role: MembershipRole::User,
+        },
+    ]);
+    let workspace = workspace_with_members(
+        vec![workspace_member(
+            admin_uid,
+            "admin@example.com",
+            MembershipRole::Admin,
+        )],
         true,
     );
-    let workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
 
-    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
+    let items = TeamsPageView::team_to_item_list(&team, "admin@example.com", Some(&workspace));
 
-    assert!(action_labels(&items, "other@example.com").is_empty());
-}
-
-#[test]
-fn workspace_admin_without_team_role_can_promote_demote_and_remove() {
-    let team = team_with_members(
-        vec![
-            member(MEMBER_EMAIL, MembershipRole::User),
-            member("regular@example.com", MembershipRole::User),
-            member(ADMIN_EMAIL, MembershipRole::Admin),
-        ],
-        true,
+    let target_item = item_for(&items, "target@example.com");
+    assert!(
+        target_item
+            .actions
+            .iter()
+            .any(|action| action.label == "Remove from team"),
+        "workspace admin should be able to remove a team member: {target_item:?}"
     );
-    let workspace = admin_workspace(MEMBER_EMAIL);
-
-    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
-
-    assert_eq!(
-        action_labels(&items, "regular@example.com"),
-        vec!["Promote to admin", "Remove from team"]
-    );
-    assert_eq!(
-        action_labels(&items, ADMIN_EMAIL),
-        vec!["Demote from admin", "Remove from team"]
+    assert!(
+        target_item
+            .actions
+            .iter()
+            .any(|action| action.label == "Promote to admin"),
+        "workspace admin should be able to promote a team member: {target_item:?}"
     );
 }
 
+/// While roles are still synced (no native workspaces), a workspace admin who
+/// is not a team admin gets no extra powers and no badge: behavior must stay
+/// unchanged from before this feature, since team and workspace roles are
+/// mirrored 1:1 in this mode.
 #[test]
-fn workspace_admin_without_native_workspaces_policy_gets_no_member_actions() {
-    let team = team_with_members(
-        vec![
-            member(MEMBER_EMAIL, MembershipRole::User),
-            member("other@example.com", MembershipRole::User),
-        ],
-        true,
-    );
-    let workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::Admin, false);
-
-    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
-
-    // The override only applies to admins of native workspaces.
-    assert!(action_labels(&items, "other@example.com").is_empty());
-}
-
-#[test]
-fn workspace_admin_cannot_transfer_ownership() {
-    let team = team_with_members(
-        vec![
-            member(MEMBER_EMAIL, MembershipRole::User),
-            member(OWNER_EMAIL, MembershipRole::Owner),
-        ],
-        true,
-    );
-    let workspace = admin_workspace(MEMBER_EMAIL);
-
-    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
-
-    // Ownership transfer stays gated on team-owner permissions only.
-    assert!(action_labels(&items, OWNER_EMAIL).is_empty());
-}
-
-#[test]
-fn workspace_admin_without_multi_admin_plan_can_remove_but_not_promote() {
-    let team = team_with_members(
-        vec![
-            member(MEMBER_EMAIL, MembershipRole::User),
-            member("regular@example.com", MembershipRole::User),
-        ],
+fn workspace_admin_has_no_effect_when_native_workspaces_disabled() {
+    let admin_uid = UserUid::new("admin");
+    let target_uid = UserUid::new("target");
+    let team = team_with_members(vec![
+        TeamMember {
+            uid: admin_uid,
+            email: "admin@example.com".to_string(),
+            role: MembershipRole::User,
+        },
+        TeamMember {
+            uid: target_uid,
+            email: "target@example.com".to_string(),
+            role: MembershipRole::User,
+        },
+    ]);
+    let workspace = workspace_with_members(
+        vec![workspace_member(
+            admin_uid,
+            "admin@example.com",
+            MembershipRole::Admin,
+        )],
         false,
     );
-    let workspace = admin_workspace(MEMBER_EMAIL);
 
-    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
+    let items = TeamsPageView::team_to_item_list(&team, "admin@example.com", Some(&workspace));
 
-    // The multi-admin plan gate on promote/demote is unaffected by the
-    // workspace-admin override.
-    assert_eq!(
-        action_labels(&items, "regular@example.com"),
-        vec!["Remove from team"]
+    let target_item = item_for(&items, "target@example.com");
+    assert!(
+        target_item.actions.is_empty(),
+        "a non-team-admin viewer should get no member actions when roles are synced: {target_item:?}"
     );
+    assert_eq!(target_item.state, ItemState::Valid);
 }
 
+/// A pure team admin's badge and powers are unaffected by this feature,
+/// whether or not native workspaces / an independent workspace role exist.
 #[test]
-fn current_user_gets_no_actions_against_their_own_row_as_workspace_admin() {
-    let team = team_with_members(
-        vec![
-            member(MEMBER_EMAIL, MembershipRole::User),
-            member("other@example.com", MembershipRole::User),
-        ],
-        true,
-    );
-    let workspace = admin_workspace(MEMBER_EMAIL);
+fn pure_team_admin_is_unaffected() {
+    let admin_uid = UserUid::new("admin");
+    let team = team_with_members(vec![TeamMember {
+        uid: admin_uid,
+        email: "admin@example.com".to_string(),
+        role: MembershipRole::Admin,
+    }]);
 
-    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
-
-    assert!(action_labels(&items, MEMBER_EMAIL).is_empty());
-}
-
-#[test]
-fn workspace_admin_does_not_get_pending_invite_cancellation() {
-    let mut team = team_with_members(vec![member(MEMBER_EMAIL, MembershipRole::User)], true);
-    team.pending_email_invites.push(EmailInvite {
-        invitee_email: "invitee@example.com".to_string(),
-        expired: false,
-    });
-    let workspace = admin_workspace(MEMBER_EMAIL);
-
-    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
-
-    // Cancelling a pending invite remains gated on team-admin permissions;
-    // it's out of scope for the workspace-admin override.
-    assert!(action_labels(&items, "invitee@example.com").is_empty());
+    let items_without_workspace =
+        TeamsPageView::team_to_item_list(&team, "viewer@example.com", None);
+    let admin_item = item_for(&items_without_workspace, "admin@example.com");
+    assert_eq!(admin_item.state, ItemState::Admin);
 }

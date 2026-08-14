@@ -376,16 +376,23 @@ enum GrowTeamWarningCta {
 
 /// The order of the ItemState enum values determines the ordering of the members and
 /// invites list in the team management page (see `impl Ord for Item`` below).
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord)]
+///
+/// `WorkspaceOwner`/`WorkspaceAdmin` are independent workspace-level roles that
+/// supersede the team `Owner`/`Admin` chip for a member (see
+/// `TeamsPageView::team_to_item_list`); they sort alongside the team owner/admin
+/// rows.
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
 enum ItemState {
     Expired,
     Pending,
+    WorkspaceOwner,
+    WorkspaceAdmin,
     Owner,
     Admin,
     Valid,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ItemAction {
     icon: Icon,
     label: String,
@@ -393,7 +400,7 @@ struct ItemAction {
 }
 
 /// An item (team member, pending email invite, or domain) consists of its text, and actions associated with it.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Item {
     text: String,
     actions: Vec<ItemAction>,
@@ -878,12 +885,10 @@ impl TeamsPageView {
         let Some(team) = user_workspaces.team_for_view(ctx) else {
             return;
         };
-        let Some(workspace) = user_workspaces.current_workspace() else {
-            return;
-        };
         let Some(current_user_email) = self.auth_state.user_email() else {
             return;
         };
+        let workspace = user_workspaces.current_workspace();
         let items = Self::team_to_item_list(team, &current_user_email, workspace);
         let items_sorted = items.iter().sorted().collect_vec();
 
@@ -1729,19 +1734,33 @@ impl TeamsPageView {
         ctx.notify();
     }
 
+    /// Builds the member/invite list for the team management page.
+    ///
+    /// `workspace` is the current workspace, when known. A workspace admin gets
+    /// the same team-admin powers a team admin has, and a member's workspace
+    /// role supersedes their team role's chip. This is only derived when
+    /// `workspace.is_native_workspaces_enabled()`: on plans without native
+    /// workspaces, team and workspace roles are always mirrored 1:1, so a team
+    /// admin's workspace role would trivially equal Admin too, and deriving
+    /// from it here would be a no-op that could misclassify a synced team
+    /// admin as workspace-admin-derived.
     fn team_to_item_list(
         team: &Team,
         current_user_email: &str,
-        workspace: &Workspace,
+        workspace: Option<&Workspace>,
     ) -> Vec<Item> {
         let mut combined = Vec::new();
-        let current_user_has_admin_permissions = team.has_admin_permissions(current_user_email);
+        let workspace_roles_are_independent =
+            workspace.is_some_and(Workspace::is_native_workspaces_enabled);
+        let current_user_has_admin_permissions = team.has_admin_permissions(current_user_email)
+            || (workspace_roles_are_independent
+                && workspace
+                    .is_some_and(|workspace| workspace.is_workspace_admin(current_user_email)));
         let current_user_has_owner_permissions = team.has_owner_permissions(current_user_email);
         // Admins of the team's native workspace can manage team membership roles even without
         // an explicit team-admin role. Ownership transfer stays gated on team-owner permissions
         // only, and is unaffected by this.
-        let current_user_can_manage_team_members = current_user_has_admin_permissions
-            || workspace.is_native_workspaces_admin(current_user_email);
+        let current_user_can_manage_team_members = current_user_has_admin_permissions;
 
         // pending email invites
         team.pending_email_invites.iter().for_each(|email_invite| {
@@ -1775,13 +1794,26 @@ impl TeamsPageView {
         team.members.iter().for_each(|member| {
             let team_member_has_owner_permissions = team.has_owner_permissions(&member.email);
             let team_member_has_admin_permissions = team.has_admin_permissions(&member.email);
-
-            let state = if team_member_has_owner_permissions {
-                ItemState::Owner
-            } else if team_member_has_admin_permissions {
-                ItemState::Admin
+            let member_workspace_role = if workspace_roles_are_independent {
+                workspace
+                    .and_then(|workspace| {
+                        workspace
+                            .members
+                            .iter()
+                            .find(|workspace_member| workspace_member.email == member.email)
+                    })
+                    .map(|workspace_member| workspace_member.role)
             } else {
-                ItemState::Valid
+                None
+            };
+
+            // A member's workspace role supersedes their team role's chip.
+            let state = match member_workspace_role {
+                Some(MembershipRole::Owner) => ItemState::WorkspaceOwner,
+                Some(MembershipRole::Admin) => ItemState::WorkspaceAdmin,
+                _ if team_member_has_owner_permissions => ItemState::Owner,
+                _ if team_member_has_admin_permissions => ItemState::Admin,
+                _ => ItemState::Valid,
             };
 
             let mut actions = Vec::new();
@@ -2333,6 +2365,7 @@ impl TeamsWidget {
             &current_user_email,
             view,
             appearance,
+            app,
         ));
 
         // 6) Optional outgrow CTA
@@ -2970,6 +3003,7 @@ impl TeamsWidget {
         user_email: &str,
         view: &TeamsPageView,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let mut section = Flex::column().with_main_axis_size(MainAxisSize::Min);
 
@@ -2990,6 +3024,7 @@ impl TeamsWidget {
         );
 
         // 2) List of team members
+        let workspace = view.user_workspaces.as_ref(app).current_workspace();
         section.add_child(self.render_item_list(
             TeamsPageView::team_to_item_list(team, user_email, workspace),
             view.team_members_mouse_state_handles.clone(),
@@ -3570,6 +3605,42 @@ impl TeamsWidget {
                                 *EMAIL_INVITE_PENDING_COLOR,
                                 themes::theme::Fill::from(*EMAIL_INVITE_PENDING_COLOR)
                                     .with_opacity(30)
+                                    .into(),
+                                appearance.ui_font_size() - 1.,
+                                Weight::Normal,
+                            ),
+                        );
+                    }
+                    ItemState::WorkspaceOwner => {
+                        pending_and_close_row.add_child(
+                            self.render_state_chip(
+                                appearance,
+                                "WORKSPACE OWNER".into(),
+                                owner_state_chip_text_color(appearance.theme()),
+                                appearance
+                                    .theme()
+                                    .accent()
+                                    .with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY)
+                                    .into(),
+                                appearance.ui_font_size() - 1.,
+                                Weight::Normal,
+                            ),
+                        );
+                    }
+                    ItemState::WorkspaceAdmin => {
+                        pending_and_close_row.add_child(
+                            self.render_state_chip(
+                                appearance,
+                                "WORKSPACE ADMIN".into(),
+                                appearance
+                                    .theme()
+                                    .background()
+                                    .blend(&appearance.theme().foreground().with_opacity(60))
+                                    .into(),
+                                appearance
+                                    .theme()
+                                    .background()
+                                    .blend(&appearance.theme().foreground().with_opacity(25))
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
@@ -4523,4 +4594,4 @@ pub fn test_owner_state_chip_text_contrasts_with_accent_overlay() {
 
 #[cfg(test)]
 #[path = "teams_page_tests.rs"]
-mod teams_page_tests;
+mod tests;
