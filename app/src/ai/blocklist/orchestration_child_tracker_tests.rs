@@ -130,7 +130,10 @@ fn lifecycle_discovers_a_child_that_was_never_announced() {
     with_tracker(|tracker, ctx| {
         tracker.observe_child(
             CHILD_A_RUN_ID,
-            ChildSignal::Lifecycle(api::LifecycleEventType::InProgress),
+            ChildSignal::Lifecycle {
+                kind: api::LifecycleEventType::InProgress,
+                sequence: 1,
+            },
             &no_killed_runs(),
             ctx,
         );
@@ -148,7 +151,10 @@ fn lifecycle_then_started_does_not_duplicate_discovery() {
     with_tracker(|tracker, ctx| {
         tracker.observe_child(
             CHILD_A_RUN_ID,
-            ChildSignal::Lifecycle(api::LifecycleEventType::InProgress),
+            ChildSignal::Lifecycle {
+                kind: api::LifecycleEventType::InProgress,
+                sequence: 1,
+            },
             &no_killed_runs(),
             ctx,
         );
@@ -171,7 +177,10 @@ fn signals_for_a_killed_run_are_dropped() {
 
         tracker.observe_child(
             CHILD_A_RUN_ID,
-            ChildSignal::Lifecycle(api::LifecycleEventType::InProgress),
+            ChildSignal::Lifecycle {
+                kind: api::LifecycleEventType::InProgress,
+                sequence: 1,
+            },
             &killed,
             ctx,
         );

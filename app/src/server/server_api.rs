@@ -604,6 +604,39 @@ impl ServerApi {
         Ok(self.wrap_eventsource_with_iap_detection(request.eventsource()))
     }
 
+    /// Opens an SSE stream against the subtree-scoped agent event endpoint.
+    /// The stream covers the root run itself plus every descendant run
+    /// (children, grandchildren, ...). Only valid for tree roots — the
+    /// server rejects mid-tree anchors with 400.
+    pub async fn stream_agent_events_for_subtree(
+        &self,
+        root_run_id: &str,
+        since_sequence: i64,
+    ) -> Result<http_client::EventSourceStream> {
+        debug_assert!(!root_run_id.is_empty(), "root_run_id must not be empty");
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for SSE stream")?;
+
+        let url = format!(
+            "{}/api/v1/agent/events/stream?subtree_root_run_id={}&since={since_sequence}",
+            ChannelState::rtc_http_url(),
+            urlencoding::encode(root_run_id),
+        );
+
+        let mut request = self.base_client.http_client().get(&url);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        Ok(self.wrap_eventsource_with_iap_detection(request.eventsource()))
+    }
+
     pub async fn stream_agent_events_for_task(
         &self,
         task_id: &AmbientAgentTaskId,

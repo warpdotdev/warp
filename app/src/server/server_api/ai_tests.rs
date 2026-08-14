@@ -1036,6 +1036,7 @@ fn build_list_agent_runs_url_all_fields() {
         skill_spec: Some("owner/repo:SKILL.md".to_string()),
         schedule_id: Some("sched-1".to_string()),
         ancestor_run_id: Some("run-parent".to_string()),
+        root_run_id: Some("run-root".to_string()),
         config_name: Some("nightly".to_string()),
         model_id: Some("claude-4-5".to_string()),
         artifact_type: Some(ArtifactType::PullRequest),
@@ -1061,6 +1062,7 @@ fn build_list_agent_runs_url_all_fields() {
          &skill_spec=owner%2Frepo%3ASKILL.md\
          &schedule_id=sched-1\
          &ancestor_run_id=run-parent\
+         &root_run_id=run-root\
          &name=nightly\
          &model_id=claude-4-5\
          &artifact_type=PULL_REQUEST\
@@ -1108,6 +1110,41 @@ fn build_list_agent_runs_url_routes_to_runs_not_tasks() {
     let url = build_list_agent_runs_url(10, &TaskListFilter::default());
     assert!(url.starts_with("agent/runs?"));
     assert!(!url.starts_with("agent/tasks"));
+}
+
+#[test]
+fn agent_run_event_parses_without_parent_run_id_and_depth() {
+    // Old servers omit the additive orchestration-tree fields.
+    let event: AgentRunEvent = serde_json::from_value(serde_json::json!({
+        "event_type": "run_in_progress",
+        "run_id": "child-run",
+        "ref_id": null,
+        "execution_id": null,
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "sequence": 7,
+    }))
+    .unwrap();
+
+    assert_eq!(event.parent_run_id, None);
+    assert_eq!(event.depth, None);
+}
+
+#[test]
+fn agent_run_event_parses_parent_run_id_and_depth() {
+    let event: AgentRunEvent = serde_json::from_value(serde_json::json!({
+        "event_type": "run_in_progress",
+        "run_id": "grandchild-run",
+        "ref_id": null,
+        "execution_id": null,
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "sequence": 7,
+        "parent_run_id": "child-run",
+        "depth": 2,
+    }))
+    .unwrap();
+
+    assert_eq!(event.parent_run_id.as_deref(), Some("child-run"));
+    assert_eq!(event.depth, Some(2));
 }
 
 #[test]

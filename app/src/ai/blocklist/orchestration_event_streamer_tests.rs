@@ -81,8 +81,8 @@ fn restored_observer_registration_hydrates_local_cursor() {
                 .expect("Observer must re-register");
             assert_eq!(entry.event_cursor, 27);
             assert!(
-                entry.tracker.is_none(),
-                "tracker is initialized lazily by the family drain"
+                entry.family_trackers.is_empty(),
+                "trackers are initialized lazily by the family drain"
             );
         });
     });
@@ -134,8 +134,10 @@ fn observer_placeholder_completion_creates_one_named_history_mapping() {
                 .viewer_mode_orchestrators
                 .entry(parent_task_id)
                 .or_default()
-                .tracker = Some(tracker);
+                .family_trackers
+                .insert(parent_task_id, tracker);
             streamer.finish_remote_child_placeholder(
+                parent_id,
                 parent_id,
                 child_task_id.to_string(),
                 FamilyDrainMode::Observer,
@@ -143,6 +145,7 @@ fn observer_placeholder_completion_creates_one_named_history_mapping() {
                 ctx,
             );
             streamer.finish_remote_child_placeholder(
+                parent_id,
                 parent_id,
                 child_task_id.to_string(),
                 FamilyDrainMode::Observer,
@@ -196,6 +199,8 @@ fn make_run_event(event_type: &str, run_id: &str, ref_id: Option<&str>) -> Agent
         execution_id: None,
         occurred_at: "2026-01-01T00:00:00Z".to_string(),
         sequence: 1,
+        parent_run_id: None,
+        depth: None,
     }
 }
 
@@ -677,6 +682,8 @@ async fn dormant_claude_wake_consumer_stops_on_first_target_event() {
         execution_id: None,
         occurred_at: "2026-01-01T00:00:00Z".to_string(),
         sequence: 7,
+        parent_run_id: None,
+        depth: None,
     };
     assert_eq!(
         consumer.on_event(ignored_event).await.unwrap(),
@@ -691,6 +698,8 @@ async fn dormant_claude_wake_consumer_stops_on_first_target_event() {
         execution_id: None,
         occurred_at: "2026-01-01T00:00:00Z".to_string(),
         sequence: 7,
+        parent_run_id: None,
+        depth: None,
     };
     assert_eq!(
         consumer.on_event(ignored_same_run_lifecycle).await.unwrap(),
@@ -709,6 +718,8 @@ async fn dormant_claude_wake_consumer_stops_on_first_target_event() {
         execution_id: None,
         occurred_at: "2026-01-01T00:00:01Z".to_string(),
         sequence: 8,
+        parent_run_id: None,
+        depth: None,
     };
     assert_eq!(
         consumer.on_event(target_event).await.unwrap(),
@@ -924,6 +935,8 @@ fn handle_event_batch_persists_max_seq_to_history_model() {
                 execution_id: None,
                 occurred_at: "2026-01-01T00:00:00Z".to_string(),
                 sequence: 17,
+                parent_run_id: None,
+                depth: None,
             },
             AgentRunEvent {
                 event_type: "unrecognized_event_type".to_string(),
@@ -932,6 +945,8 @@ fn handle_event_batch_persists_max_seq_to_history_model() {
                 execution_id: None,
                 occurred_at: "2026-01-01T00:00:00Z".to_string(),
                 sequence: 42,
+                parent_run_id: None,
+                depth: None,
             },
         ];
 
@@ -1012,6 +1027,8 @@ fn handle_event_batch_drops_events_for_killed_run_ids_after_persisting_cursor() 
                         execution_id: None,
                         occurred_at: "2026-01-01T00:00:00Z".to_string(),
                         sequence: 17,
+                        parent_run_id: None,
+                        depth: None,
                     },
                     AgentRunEvent {
                         event_type: "run_cancelled".to_string(),
@@ -1020,6 +1037,8 @@ fn handle_event_batch_drops_events_for_killed_run_ids_after_persisting_cursor() 
                         execution_id: None,
                         occurred_at: "2026-01-01T00:00:01Z".to_string(),
                         sequence: 18,
+                        parent_run_id: None,
+                        depth: None,
                     },
                     AgentRunEvent {
                         event_type: "new_message".to_string(),
@@ -1028,6 +1047,8 @@ fn handle_event_batch_drops_events_for_killed_run_ids_after_persisting_cursor() 
                         execution_id: None,
                         occurred_at: "2026-01-01T00:00:02Z".to_string(),
                         sequence: 19,
+                        parent_run_id: None,
+                        depth: None,
                     },
                 ],
                 vec![
@@ -2619,8 +2640,9 @@ fn register_parent_on_wait_flag_off_is_noop() {
 fn classify_child_agent_started_on_self_is_child_started() {
     let event = make_run_event(EVENT_CHILD_AGENT_STARTED, "parent-run", Some("child-run"));
     assert_eq!(
-        classify_family_event(&event, "parent-run"),
+        classify_family_event(&event, "parent-run", FamilyDrainScope::AnchorFamily),
         FamilyEvent::ChildStarted {
+            family_run_id: "parent-run".to_string(),
             child_run_id: "child-run".to_string(),
         }
     );
@@ -2631,7 +2653,7 @@ fn classify_child_agent_started_without_ref_id_is_opaque() {
     // A discovery event with no child run id carries nothing actionable.
     let event = make_run_event(EVENT_CHILD_AGENT_STARTED, "parent-run", None);
     assert_eq!(
-        classify_family_event(&event, "parent-run"),
+        classify_family_event(&event, "parent-run", FamilyDrainScope::AnchorFamily),
         FamilyEvent::Opaque
     );
 }
@@ -2640,8 +2662,9 @@ fn classify_child_agent_started_without_ref_id_is_opaque() {
 fn classify_run_session_linked_on_child_is_session_linked() {
     let event = make_run_event(EVENT_RUN_SESSION_LINKED, "child-run", Some("session-uuid"));
     assert_eq!(
-        classify_family_event(&event, "parent-run"),
+        classify_family_event(&event, "parent-run", FamilyDrainScope::AnchorFamily),
         FamilyEvent::ChildSessionLinked {
+            family_run_id: "parent-run".to_string(),
             child_run_id: "child-run".to_string(),
             session_uuid: "session-uuid".to_string(),
         }
@@ -2652,10 +2675,12 @@ fn classify_run_session_linked_on_child_is_session_linked() {
 fn classify_run_in_progress_on_child_is_child_lifecycle() {
     let event = make_run_event("run_in_progress", "child-run", None);
     assert_eq!(
-        classify_family_event(&event, "parent-run"),
+        classify_family_event(&event, "parent-run", FamilyDrainScope::AnchorFamily),
         FamilyEvent::ChildLifecycle {
+            family_run_id: "parent-run".to_string(),
             child_run_id: "child-run".to_string(),
             kind: api::LifecycleEventType::InProgress,
+            sequence: 1,
         }
     );
 }
@@ -2664,7 +2689,7 @@ fn classify_run_in_progress_on_child_is_child_lifecycle() {
 fn classify_new_message_on_self_is_parent_self() {
     let event = make_run_event("new_message", "parent-run", Some("msg-1"));
     assert_eq!(
-        classify_family_event(&event, "parent-run"),
+        classify_family_event(&event, "parent-run", FamilyDrainScope::AnchorFamily),
         FamilyEvent::ParentSelf(event.clone())
     );
 }
@@ -2675,7 +2700,7 @@ fn classify_lifecycle_on_self_is_parent_self() {
     // not the child tracker.
     let event = make_run_event("run_in_progress", "parent-run", None);
     assert_eq!(
-        classify_family_event(&event, "parent-run"),
+        classify_family_event(&event, "parent-run", FamilyDrainScope::AnchorFamily),
         FamilyEvent::ParentSelf(event.clone())
     );
 }
@@ -2684,8 +2709,78 @@ fn classify_lifecycle_on_self_is_parent_self() {
 fn classify_unknown_type_is_opaque() {
     let event = make_run_event("some_unknown_event", "child-run", None);
     assert_eq!(
-        classify_family_event(&event, "parent-run"),
+        classify_family_event(&event, "parent-run", FamilyDrainScope::AnchorFamily),
         FamilyEvent::Opaque
+    );
+}
+
+#[test]
+fn classify_descendant_discovery_is_attributed_to_the_run_it_fired_on_in_subtree_scope() {
+    // A `child_agent_started` on a mid-tree run announces a grandchild; the
+    // family is the run the discovery fired on.
+    let event = make_run_event(EVENT_CHILD_AGENT_STARTED, "mid-run", Some("grandchild-run"));
+    assert_eq!(
+        classify_family_event(&event, "root-run", FamilyDrainScope::Subtree),
+        FamilyEvent::ChildStarted {
+            family_run_id: "mid-run".to_string(),
+            child_run_id: "grandchild-run".to_string(),
+        }
+    );
+}
+
+#[test]
+fn classify_descendant_discovery_is_opaque_in_anchor_scope() {
+    // Anchor-scoped streams only recognise discovery on the anchor's own
+    // run; a descendant's discovery event advances the cursor only.
+    let event = make_run_event(EVENT_CHILD_AGENT_STARTED, "mid-run", Some("grandchild-run"));
+    assert_eq!(
+        classify_family_event(&event, "root-run", FamilyDrainScope::AnchorFamily),
+        FamilyEvent::Opaque
+    );
+}
+
+#[test]
+fn classify_descendant_lifecycle_uses_wire_parent_in_subtree_scope() {
+    let mut event = make_run_event("run_succeeded", "grandchild-run", None);
+    event.parent_run_id = Some("mid-run".to_string());
+    assert_eq!(
+        classify_family_event(&event, "root-run", FamilyDrainScope::Subtree),
+        FamilyEvent::ChildLifecycle {
+            family_run_id: "mid-run".to_string(),
+            child_run_id: "grandchild-run".to_string(),
+            kind: api::LifecycleEventType::Succeeded,
+            sequence: 1,
+        }
+    );
+}
+
+#[test]
+fn classify_descendant_lifecycle_without_wire_parent_falls_back_to_anchor() {
+    // Old servers omit parent_run_id; the anchor family absorbs the child
+    // so behavior degrades to the flat direct-children shape.
+    let event = make_run_event("run_succeeded", "grandchild-run", None);
+    assert_eq!(
+        classify_family_event(&event, "root-run", FamilyDrainScope::Subtree),
+        FamilyEvent::ChildLifecycle {
+            family_run_id: "root-run".to_string(),
+            child_run_id: "grandchild-run".to_string(),
+            kind: api::LifecycleEventType::Succeeded,
+            sequence: 1,
+        }
+    );
+}
+
+#[test]
+fn classify_descendant_session_link_uses_wire_parent_in_subtree_scope() {
+    let mut event = make_run_event(EVENT_RUN_SESSION_LINKED, "grandchild-run", Some("sess-1"));
+    event.parent_run_id = Some("mid-run".to_string());
+    assert_eq!(
+        classify_family_event(&event, "root-run", FamilyDrainScope::Subtree),
+        FamilyEvent::ChildSessionLinked {
+            family_run_id: "mid-run".to_string(),
+            child_run_id: "grandchild-run".to_string(),
+            session_uuid: "sess-1".to_string(),
+        }
     );
 }
 
@@ -2750,17 +2845,21 @@ fn drain_family_events_primary_routes_mixed_batch_and_delivers_inbox() {
         }];
 
         streamer.update(&mut app, |me, ctx| {
-            let tracker = OrchestrationChildTracker::new(parent_task_id);
-            let tracker = me.drain_family_events(
+            let trackers = me.drain_family_events(
                 conversation_id,
                 &parent_run_id,
+                parent_task_id,
                 FamilyDrainMode::Primary,
-                tracker,
+                FamilyDrainScope::AnchorFamily,
+                HashMap::new(),
                 0,
                 events,
                 messages,
                 ctx,
             );
+            let tracker = trackers
+                .get(&parent_task_id)
+                .expect("anchor family tracker is created on demand");
             assert!(
                 tracker.is_awaiting_metadata(&child_a),
                 "ChildStarted / ChildLifecycle must route into the tracker"
@@ -2834,19 +2933,23 @@ fn drain_family_events_observer_advances_cursor_without_server_push() {
         ];
 
         streamer.update(&mut app, |me, ctx| {
-            let tracker = OrchestrationChildTracker::new(parent_task_id);
-            let tracker = me.drain_family_events(
+            let trackers = me.drain_family_events(
                 placeholder_id,
                 &parent_run_id,
+                parent_task_id,
                 FamilyDrainMode::Observer,
-                tracker,
+                FamilyDrainScope::AnchorFamily,
+                HashMap::new(),
                 0,
                 events,
                 Vec::new(),
                 ctx,
             );
             assert!(
-                tracker.is_awaiting_metadata(&child),
+                trackers
+                    .get(&parent_task_id)
+                    .expect("anchor family tracker is created on demand")
+                    .is_awaiting_metadata(&child),
                 "child lifecycle must route into the Observer tracker"
             );
         });
@@ -2861,6 +2964,355 @@ fn drain_family_events_observer_advances_cursor_without_server_push() {
             );
         });
     });
+}
+
+#[test]
+fn drain_family_events_subtree_scope_routes_descendants_to_their_families() {
+    // On a subtree-scoped drain, a mid-tree discovery event and the
+    // grandchild's lifecycle must land in the mid-tree parent's family
+    // tracker, not the anchor's.
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let _event_service = app.add_singleton_model(|_| OrchestrationEventService::default());
+
+        let root_task_id = make_parent_task_id_for_test(0xa1);
+        let root_run_id = root_task_id.to_string();
+        let mid_task_id = make_parent_task_id_for_test(0xa2);
+        let mid_run_id = mid_task_id.to_string();
+        let leaf_run_id = make_parent_task_id_for_test(0xa3).to_string();
+
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(root_run_id.clone());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let mut mock = MockAIClient::new();
+        mock.expect_update_event_sequence_on_server()
+            .returning(|_, _| Ok(()));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        // Root starts mid; mid starts leaf; leaf reports lifecycle with
+        // wire parent attribution.
+        let mut leaf_lifecycle = make_seq_event("run_in_progress", &leaf_run_id, None, 12);
+        leaf_lifecycle.parent_run_id = Some(mid_run_id.clone());
+        let events = vec![
+            make_seq_event(
+                EVENT_CHILD_AGENT_STARTED,
+                &root_run_id,
+                Some(&mid_run_id),
+                10,
+            ),
+            make_seq_event(
+                EVENT_CHILD_AGENT_STARTED,
+                &mid_run_id,
+                Some(&leaf_run_id),
+                11,
+            ),
+            leaf_lifecycle,
+        ];
+
+        streamer.update(&mut app, |me, ctx| {
+            let trackers = me.drain_family_events(
+                conversation_id,
+                &root_run_id,
+                root_task_id,
+                FamilyDrainMode::Primary,
+                FamilyDrainScope::Subtree,
+                HashMap::new(),
+                0,
+                events,
+                Vec::new(),
+                ctx,
+            );
+            assert!(
+                trackers
+                    .get(&root_task_id)
+                    .is_some_and(|t| t.is_awaiting_metadata(&mid_run_id)),
+                "the mid-tree run must be tracked in the anchor's family"
+            );
+            let mid_family = trackers
+                .get(&mid_task_id)
+                .expect("a family tracker must be created for the mid-tree parent");
+            assert!(
+                mid_family.is_awaiting_metadata(&leaf_run_id),
+                "the grandchild must be tracked in the mid-tree parent's family"
+            );
+            assert!(
+                !trackers
+                    .get(&root_task_id)
+                    .is_some_and(|t| t.is_awaiting_metadata(&leaf_run_id)),
+                "the grandchild must not be attributed to the anchor family"
+            );
+            // The mid-tree parent has no local conversation yet, so the
+            // grandchild's placeholder must be parked on it.
+            assert!(
+                me.descendants_waiting_on_family.contains_key(&mid_run_id),
+                "grandchild placeholder must park until the mid-tree placeholder exists"
+            );
+        });
+    });
+}
+
+#[test]
+fn drain_family_events_drops_stale_lifecycle_replays() {
+    // A lifecycle event at or below the child's last applied sequence must
+    // not regress the broadcast status (subtree replays resume from the
+    // root cursor and can re-deliver old descendant events).
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let _event_service = app.add_singleton_model(|_| OrchestrationEventService::default());
+        // The terminal-lifecycle arm evicts and refetches the child's cached
+        // task row via AgentConversationsModel.
+        app.add_singleton_model(|_ctx| ServerApiProvider::new_for_test());
+        app.add_singleton_model(crate::ai::agent_conversations_model::AgentConversationsModel::new);
+
+        let parent_task_id = make_parent_task_id_for_test(0xa4);
+        let parent_run_id = parent_task_id.to_string();
+        let child_run_id = make_parent_task_id_for_test(0xa5).to_string();
+
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(parent_run_id.clone());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let mut mock = MockAIClient::new();
+        mock.expect_update_event_sequence_on_server()
+            .returning(|_, _| Ok(()));
+        // The lifecycle backstop kicks a placeholder metadata fetch for the
+        // unknown child; its outcome is irrelevant to the guard.
+        mock.expect_get_ambient_agent_task()
+            .returning(|_| Err(anyhow::anyhow!("metadata fetch not under test")));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let statuses: Arc<parking_lot::Mutex<Vec<(String, ConversationStatus)>>> =
+            Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let statuses_sink = statuses.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&streamer, move |_, event, _| {
+                if let OrchestrationEventStreamerEvent::ChildStatusChanged {
+                    run_id, status, ..
+                } = event
+                {
+                    statuses_sink.lock().push((run_id.clone(), status.clone()));
+                }
+            })
+        });
+
+        streamer.update(&mut app, |me, ctx| {
+            let trackers = me.drain_family_events(
+                conversation_id,
+                &parent_run_id,
+                parent_task_id,
+                FamilyDrainMode::Primary,
+                FamilyDrainScope::AnchorFamily,
+                HashMap::new(),
+                0,
+                vec![make_seq_event("run_succeeded", &child_run_id, None, 20)],
+                Vec::new(),
+                ctx,
+            );
+            // Replay an older InProgress event for the same run.
+            let _ = me.drain_family_events(
+                conversation_id,
+                &parent_run_id,
+                parent_task_id,
+                FamilyDrainMode::Primary,
+                FamilyDrainScope::AnchorFamily,
+                trackers,
+                0,
+                vec![make_seq_event("run_in_progress", &child_run_id, None, 19)],
+                Vec::new(),
+                ctx,
+            );
+        });
+
+        let recorded = statuses.lock().clone();
+        let child_statuses: Vec<&ConversationStatus> = recorded
+            .iter()
+            .filter(|(run_id, _)| *run_id == child_run_id)
+            .map(|(_, status)| status)
+            .collect();
+        assert_eq!(
+            child_statuses,
+            vec![&ConversationStatus::Success],
+            "the stale InProgress replay must be dropped by the sequence guard"
+        );
+    });
+}
+
+// ---- subtree filter selection ---------------------------------------------
+
+#[test]
+fn root_parent_uses_subtree_filter_when_multi_level_and_unified_stack_are_on() {
+    App::test((), |mut app| async move {
+        let _multi_level = FeatureFlag::MultiLevelOrchestration.override_enabled(true);
+        let _unified = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440801";
+        let child_run_id = "550e8400-e29b-41d4-a716-446655440802";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let poller = streamer_with_no_fetch_expected(&mut app);
+        poller.update(&mut app, |me, _| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            stream.watched_run_ids.insert(child_run_id.to_string());
+        });
+
+        poller.read(&app, |me, ctx| {
+            let DesiredSseFilter::Filter(filter) = me.desired_sse_filter(conversation_id, ctx)
+            else {
+                panic!("parent conversation must produce a filter");
+            };
+            assert!(
+                matches!(
+                    filter,
+                    AgentEventFilter::SubtreeRootRunId { ref root_run_id }
+                        if root_run_id == own_run_id
+                ),
+                "tree-root parent must stream its whole subtree, got {filter:?}"
+            );
+        });
+    });
+}
+
+#[test]
+fn mid_tree_parent_keeps_ancestor_filter_under_subtree_flags() {
+    // A parent that is itself a child (mid-tree node) must not open a
+    // subtree stream: the server rejects non-root subtree anchors.
+    App::test((), |mut app| async move {
+        let _multi_level = FeatureFlag::MultiLevelOrchestration.override_enabled(true);
+        let _unified = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440803";
+        let child_run_id = "550e8400-e29b-41d4-a716-446655440804";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        conversation.set_parent_agent_id("550e8400-e29b-41d4-a716-446655440805".to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let poller = streamer_with_no_fetch_expected(&mut app);
+        poller.update(&mut app, |me, _| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            stream.watched_run_ids.insert(child_run_id.to_string());
+        });
+
+        poller.read(&app, |me, ctx| {
+            let DesiredSseFilter::Filter(filter) = me.desired_sse_filter(conversation_id, ctx)
+            else {
+                panic!("parent conversation must produce a filter");
+            };
+            assert!(
+                matches!(
+                    filter,
+                    AgentEventFilter::AncestorRunId { ref ancestor_run_id, include_self: true }
+                        if ancestor_run_id == own_run_id
+                ),
+                "mid-tree parent must keep the ancestor scope, got {filter:?}"
+            );
+        });
+    });
+}
+
+#[test]
+fn root_parent_keeps_ancestor_filter_when_multi_level_is_off() {
+    App::test((), |mut app| async move {
+        let _multi_level = FeatureFlag::MultiLevelOrchestration.override_enabled(false);
+        let _unified = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440806";
+        let child_run_id = "550e8400-e29b-41d4-a716-446655440807";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let poller = streamer_with_no_fetch_expected(&mut app);
+        poller.update(&mut app, |me, _| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            stream.watched_run_ids.insert(child_run_id.to_string());
+        });
+
+        poller.read(&app, |me, ctx| {
+            let DesiredSseFilter::Filter(filter) = me.desired_sse_filter(conversation_id, ctx)
+            else {
+                panic!("parent conversation must produce a filter");
+            };
+            assert!(
+                matches!(filter, AgentEventFilter::AncestorRunId { .. }),
+                "subtree scope requires MultiLevelOrchestration, got {filter:?}"
+            );
+        });
+    });
+}
+
+#[test]
+fn subtree_filters_equivalence_compares_root_run_ids() {
+    let a = AgentEventFilter::SubtreeRootRunId {
+        root_run_id: "root-1".to_string(),
+    };
+    let b = AgentEventFilter::SubtreeRootRunId {
+        root_run_id: "root-1".to_string(),
+    };
+    let c = AgentEventFilter::SubtreeRootRunId {
+        root_run_id: "root-2".to_string(),
+    };
+    let ancestor = AgentEventFilter::AncestorRunId {
+        ancestor_run_id: "root-1".to_string(),
+        include_self: true,
+    };
+    assert!(agent_event_filters_equivalent(&a, &b));
+    assert!(!agent_event_filters_equivalent(&a, &c));
+    assert!(!agent_event_filters_equivalent(&a, &ancestor));
 }
 
 // ---- should_register_parent_on_wait eligibility ---------------------------

@@ -45,7 +45,11 @@ pub(crate) const DEFAULT_AGENT_EVENT_MAX_RETRY_DURATION: Duration = Duration::fr
 /// child of the supplied parent run (the shared-session viewer's pill bar),
 /// and with `include_self=true` it additionally streams the parent run's
 /// own events so an owner-side orchestrator can receive child lifecycle
-/// events plus its own inbox on one ordered stream.
+/// events plus its own inbox on one ordered stream. `SubtreeRootRunId`
+/// maps to the `?subtree_root_run_id=` shape: it streams events for the
+/// root run itself and its entire descendant subtree (children,
+/// grandchildren, ...), so a tree-root orchestrator can observe runs
+/// spawned by its remote children.
 #[derive(Clone, Debug)]
 pub(crate) enum AgentEventFilter {
     /// One stream per multiplexed set of run IDs. Matches today's
@@ -58,6 +62,11 @@ pub(crate) enum AgentEventFilter {
         ancestor_run_id: String,
         include_self: bool,
     },
+    /// Stream events for the supplied root run and its whole descendant
+    /// subtree. The root is inherently included. Matches the
+    /// `?subtree_root_run_id=` endpoint; only valid for tree roots (the
+    /// server rejects mid-tree anchors with 400).
+    SubtreeRootRunId { root_run_id: String },
 }
 
 impl AgentEventFilter {
@@ -70,6 +79,9 @@ impl AgentEventFilter {
                 ancestor_run_id,
                 include_self,
             } => format!("ancestor_run_id={ancestor_run_id} include_self={include_self}"),
+            AgentEventFilter::SubtreeRootRunId { root_run_id } => {
+                format!("subtree_root_run_id={root_run_id}")
+            }
         }
     }
 }
@@ -258,6 +270,11 @@ impl AgentEventSource for ServerApiAgentEventSource {
                         *include_self,
                         since_sequence,
                     )
+                    .await?
+            }
+            AgentEventFilter::SubtreeRootRunId { root_run_id } => {
+                self.server_api
+                    .stream_agent_events_for_subtree(root_run_id, since_sequence)
                     .await?
             }
         };

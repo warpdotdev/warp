@@ -56,8 +56,15 @@ pub enum ChildSignal {
     /// UUID directly, so `session_id` can be filled in without a metadata
     /// fetch.
     SessionLinked { session_uuid: String },
-    /// Any recognised lifecycle event on the child run.
-    Lifecycle(api::LifecycleEventType),
+    /// Any recognised lifecycle event on the child run. `sequence` is the
+    /// wire event's sequence number; the tracker drops signals at or below
+    /// the child's last applied lifecycle sequence so replays (e.g. a
+    /// subtree stream resuming from an older cursor) cannot regress a
+    /// child's status.
+    Lifecycle {
+        kind: api::LifecycleEventType,
+        sequence: i64,
+    },
     /// A REST seed row (cold-start seed / restore fetch). Boxed because the
     /// task row dwarfs the other variants.
     #[allow(dead_code)]
@@ -83,6 +90,9 @@ pub struct TrackedChild {
     /// any. Used by the placeholder-completion callback to backfill status
     /// when a lifecycle event arrived before the async metadata fetch finished.
     last_lifecycle: Option<api::LifecycleEventType>,
+    /// Sequence number of the last applied lifecycle signal. Monotonic
+    /// guard: stale replays (sequence <= this) are dropped.
+    last_lifecycle_sequence: Option<i64>,
 }
 
 /// Owns discovery, placeholder bookkeeping, claim-time metadata refetch, and
@@ -162,8 +172,8 @@ impl OrchestrationChildTracker {
             ChildSignal::SessionLinked { session_uuid } => {
                 self.apply_session_linked(task_id, &session_uuid);
             }
-            ChildSignal::Lifecycle(kind) => {
-                self.apply_lifecycle(task_id, child_run_id, kind, ctx);
+            ChildSignal::Lifecycle { kind, sequence } => {
+                self.apply_lifecycle(task_id, child_run_id, kind, sequence, ctx);
             }
             ChildSignal::Seeded(task) => {
                 self.apply_seeded(*task, ctx);
@@ -203,6 +213,7 @@ impl OrchestrationChildTracker {
                 last_state: None,
                 is_remote_child: true,
                 last_lifecycle: None,
+                last_lifecycle_sequence: None,
             },
             ctx,
         );
@@ -221,12 +232,22 @@ impl OrchestrationChildTracker {
         task_id: AmbientAgentTaskId,
         run_id: &str,
         kind: api::LifecycleEventType,
+        sequence: i64,
         ctx: &mut ModelContext<OrchestrationEventStreamer>,
     ) {
         let tracker_known = self.children.contains_key(&task_id);
         if tracker_known {
             if let Some(child) = self.children.get_mut(&task_id) {
+                if child
+                    .last_lifecycle_sequence
+                    .is_some_and(|last| sequence <= last)
+                {
+                    // Stale replay: an equal-or-older lifecycle event must not
+                    // overwrite a status derived from a newer one.
+                    return;
+                }
                 child.last_lifecycle = Some(kind);
+                child.last_lifecycle_sequence = Some(sequence);
             }
             let status = conversation_status_from_lifecycle_event_type(kind);
             // Write status through immediately so the pill bar badge reflects
@@ -269,6 +290,7 @@ impl OrchestrationChildTracker {
         self.apply_started(task_id, run_id, ctx);
         if let Some(child) = self.children.get_mut(&task_id) {
             child.last_lifecycle = Some(kind);
+            child.last_lifecycle_sequence = Some(sequence);
         }
         let status = conversation_status_from_lifecycle_event_type(kind);
         ctx.emit(OrchestrationEventStreamerEvent::ChildStatusChanged {
@@ -306,6 +328,7 @@ impl OrchestrationChildTracker {
                 // never persisted as `is_remote_child` placeholders.
                 is_remote_child: false,
                 last_lifecycle: None,
+                last_lifecycle_sequence: None,
             },
             ctx,
         );
@@ -352,6 +375,7 @@ impl OrchestrationChildTracker {
                 last_state: Some(state),
                 is_remote_child: true,
                 last_lifecycle: None,
+                last_lifecycle_sequence: None,
             },
             ctx,
         );

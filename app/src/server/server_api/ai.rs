@@ -373,6 +373,14 @@ pub struct AgentRunEvent {
     pub execution_id: Option<String>,
     pub occurred_at: String,
     pub sequence: i64,
+    /// The direct parent run of `run_id`, when the run is part of an
+    /// orchestration tree. Absent on old servers and for tree roots.
+    #[serde(default)]
+    pub parent_run_id: Option<String>,
+    /// Depth of `run_id` in its orchestration tree (roots are 0). Absent
+    /// on old servers.
+    #[serde(default)]
+    pub depth: Option<i64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -722,6 +730,7 @@ pub struct TaskListFilter {
     pub skill_spec: Option<String>,
     pub schedule_id: Option<String>,
     pub ancestor_run_id: Option<String>,
+    pub root_run_id: Option<String>,
     pub config_name: Option<String>,
     pub model_id: Option<String>,
     pub artifact_type: Option<ArtifactType>,
@@ -834,6 +843,9 @@ pub(crate) fn build_list_agent_runs_url(limit: i32, filter: &TaskListFilter) -> 
     }
     if let Some(ancestor_run_id) = filter.ancestor_run_id.as_deref() {
         push("ancestor_run_id", ancestor_run_id);
+    }
+    if let Some(root_run_id) = filter.root_run_id.as_deref() {
+        push("root_run_id", root_run_id);
     }
     if let Some(config_name) = filter.config_name.as_deref() {
         push("name", config_name);

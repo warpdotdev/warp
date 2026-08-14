@@ -12,7 +12,9 @@ use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
-use crate::ai::blocklist::orchestration_event_streamer::agent_task_harness;
+use crate::ai::blocklist::orchestration_event_streamer::{
+    agent_task_harness, multi_level_subtree_scope_enabled,
+};
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::features::FeatureFlag;
 use crate::pane_group::{
@@ -27,7 +29,11 @@ use crate::terminal::view::load_ai_conversation::{
 
 /// Max direct children fetched per ancestor-list restore seed. The server
 /// caps at 100 regardless, matching the Observer-side ancestor seed fetch.
-const RESTORE_CHILD_SEED_FETCH_LIMIT: i32 = 100;
+const RESTORE_CHILD_SEED_FETCH_LIMIT: i32 = 30;
+
+/// Bounds the recursive ancestor-pane materialization used when revealing a
+/// deep descendant whose intermediate parents have no panes yet.
+const MAX_ANCESTOR_PANE_CHAIN_DEPTH: usize = 16;
 
 impl PaneGroup {
     /// Lazily restores hidden child panes for the given parent conversation.
@@ -108,11 +114,15 @@ impl PaneGroup {
     }
 
     /// Rebuilds the parent→child conversation index for a restored cloud agent
-    /// parent from the server's `?ancestor_run_id=` listing — the same query
-    /// path the Observer-side ancestor seed (`spawn_ancestor_seed_fetch`) uses
-    /// to discover children on cold start. This is the only pill-bar source
-    /// on clients without cross-session SQLite (web) and on the first restore
-    /// of a run whose parent was never persisted.
+    /// parent from the server's run listing — the same query path the
+    /// Observer-side seed (`spawn_ancestor_seed_fetch`) uses to discover
+    /// children on cold start. Tree roots list their whole subtree
+    /// (`?root_run_id=`) when multi-level orchestration is enabled so
+    /// descendants spawned by remote mid-tree children are restored too;
+    /// mid-tree parents keep the direct-children `?ancestor_run_id=` listing.
+    /// This is the only pill-bar source on clients without cross-session
+    /// SQLite (web) and on the first restore of a run whose parent was never
+    /// persisted.
     ///
     /// Idempotent: children that already resolve locally are left untouched, so
     /// racing the SSE family drain, the local conversation index, or a repeat
@@ -136,9 +146,30 @@ impl PaneGroup {
         self.ensure_pending_ambient_restoration_subscription(ctx);
 
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let filter = TaskListFilter {
-            ancestor_run_id: Some(parent_task_id.to_string()),
-            ..TaskListFilter::default()
+        // Root-ness comes from the parent's own task row (a root has no
+        // parent_run_id). When the row is not cached yet, stay pending and
+        // let the shared TasksUpdated re-drive retry once the fetch lands —
+        // guessing the scope here could permanently miss grandchildren.
+        let filter = if multi_level_subtree_scope_enabled() {
+            let parent_task = AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+                model.get_or_async_fetch_task_data(&parent_task_id, ctx)
+            });
+            match parent_task {
+                Some(task) if task.parent_run_id.is_none() => TaskListFilter {
+                    root_run_id: Some(parent_task_id.to_string()),
+                    ..TaskListFilter::default()
+                },
+                Some(_) => TaskListFilter {
+                    ancestor_run_id: Some(parent_task_id.to_string()),
+                    ..TaskListFilter::default()
+                },
+                None => return,
+            }
+        } else {
+            TaskListFilter {
+                ancestor_run_id: Some(parent_task_id.to_string()),
+                ..TaskListFilter::default()
+            }
         };
         ctx.spawn(
             async move {
@@ -195,36 +226,77 @@ impl PaneGroup {
         };
 
         // Children whose task data is still being fetched keep the parent
-        // pending.
+        // pending. Root-scoped listings return the whole subtree in
+        // arbitrary order, so rows are linked in passes: each pass links
+        // every row whose parent conversation already exists (direct
+        // children attach to the anchor; deeper rows attach to their
+        // parent's placeholder), unlocking that row's own children for the
+        // next pass.
+        let anchor_run_id = parent_task_id.to_string();
         let mut all_children_resolved = true;
-        for child_run_id in children
+        let mut remaining: Vec<&crate::ai::ambient_agents::task::AmbientAgentTask> = children
             .iter()
-            .map(|task| task.task_id)
-            .filter(|task_id| *task_id != parent_task_id)
-        {
-            let child_task = AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
-                model.get_or_async_fetch_task_data(&child_run_id, ctx)
-            });
-            let Some(child_task) = child_task else {
-                all_children_resolved = false;
-                continue;
-            };
+            .filter(|task| task.task_id != parent_task_id)
+            .collect();
+        loop {
+            let mut linked_any = false;
+            let mut deferred = Vec::new();
+            for row in remaining {
+                let child_run_id = row.task_id;
+                // The conversation this row nests under: the anchor for
+                // direct children (and rows without parent attribution from
+                // old servers), the parent's placeholder otherwise.
+                let row_parent_conversation_id = match row.parent_run_id.as_deref() {
+                    Some(parent) if parent != anchor_run_id => {
+                        match BlocklistAIHistoryModel::as_ref(ctx)
+                            .conversation_id_for_agent_id(parent)
+                        {
+                            Some(conversation_id) => conversation_id,
+                            None => {
+                                // Parent row not linked yet; retry next pass.
+                                deferred.push(row);
+                                continue;
+                            }
+                        }
+                    }
+                    _ => parent_conversation_id,
+                };
+                let child_task = AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.get_or_async_fetch_task_data(&child_run_id, ctx)
+                });
+                let Some(child_task) = child_task else {
+                    all_children_resolved = false;
+                    linked_any = true;
+                    continue;
+                };
 
-            let name = child_task.display_name().to_string();
-            let fallback_title = child_task.title.trim().to_string();
-            let harness = agent_task_harness(&child_task);
-            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                history.ensure_remote_child_conversation(
-                    terminal_surface_id,
-                    parent_conversation_id,
-                    child_run_id.to_string(),
-                    child_task.task_id,
-                    name,
-                    fallback_title,
-                    harness,
-                    ctx,
-                )
-            });
+                let name = child_task.display_name().to_string();
+                let fallback_title = child_task.title.trim().to_string();
+                let harness = agent_task_harness(&child_task);
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.ensure_remote_child_conversation(
+                        terminal_surface_id,
+                        row_parent_conversation_id,
+                        child_run_id.to_string(),
+                        child_task.task_id,
+                        name,
+                        fallback_title,
+                        harness,
+                        ctx,
+                    )
+                });
+                linked_any = true;
+            }
+            if deferred.is_empty() || !linked_any {
+                // Rows still deferred here reference parents outside the
+                // listing (or ones whose task data is still fetching); keep
+                // the seed pending so TasksUpdated re-drives it.
+                if !deferred.is_empty() {
+                    all_children_resolved = false;
+                }
+                break;
+            }
+            remaining = deferred;
         }
 
         if all_children_resolved {
@@ -321,6 +393,19 @@ impl PaneGroup {
         child_conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
+        self.ensure_hidden_child_agent_pane_for_conversation_at_depth(child_conversation_id, 0, ctx)
+    }
+
+    /// Body of [`Self::ensure_hidden_child_agent_pane_for_conversation`].
+    /// `depth` counts recursive ancestor materializations: revealing a deep
+    /// descendant first materializes each missing ancestor pane, bottoming
+    /// out at [`MAX_ANCESTOR_PANE_CHAIN_DEPTH`].
+    fn ensure_hidden_child_agent_pane_for_conversation_at_depth(
+        &mut self,
+        child_conversation_id: AIConversationId,
+        depth: usize,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
         if self
             .child_agent_panes
             .get(&child_conversation_id)
@@ -357,8 +442,27 @@ impl PaneGroup {
 
         let child_owner_terminal_view_id =
             self.terminal_view_id_for_owned_conversation(child_conversation_id, ctx);
-        let Some(parent_pane_id) = self.pane_id_for_owned_conversation(parent_conversation_id, ctx)
-        else {
+        let mut parent_pane_id = self.pane_id_for_owned_conversation(parent_conversation_id, ctx);
+        if parent_pane_id.is_none()
+            && multi_level_subtree_scope_enabled()
+            && depth < MAX_ANCESTOR_PANE_CHAIN_DEPTH
+            && self.ensure_hidden_child_agent_pane_for_conversation_at_depth(
+                parent_conversation_id,
+                depth + 1,
+                ctx,
+            )
+        {
+            // The parent was itself an unrevealed descendant placeholder:
+            // its pane chain has just been materialized, so retry the
+            // lookup through the child-pane index it registered in.
+            parent_pane_id = self
+                .child_agent_panes
+                .get(&parent_conversation_id)
+                .copied()
+                .filter(|pane_id| self.has_pane_id(*pane_id))
+                .or_else(|| self.pane_id_for_owned_conversation(parent_conversation_id, ctx));
+        }
+        let Some(parent_pane_id) = parent_pane_id else {
             return child_owner_terminal_view_id.is_some();
         };
 
