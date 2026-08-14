@@ -102,6 +102,10 @@ impl Workspace {
             .is_some_and(|policy| policy.enabled)
     }
 
+    pub fn is_native_workspaces_admin(&self, user_email: &str) -> bool {
+        self.is_workspace_admin(user_email) && self.is_native_workspaces_enabled()
+    }
+
     pub fn resolve_usage_visibility(&self, is_admin: bool) -> UsageVisibility {
         let Some(policy) = self.billing_metadata.tier.usage_visibility_policy else {
             return UsageVisibility::default();
@@ -607,6 +611,12 @@ pub struct BillingCycleUsageEntry {
     pub usage_source: AiCreditsUsageSource,
     pub credits_used: i32,
     pub cost_cents: i32,
+    /// Uid of the team this usage is attributed to. `billingCycleUsageHistory`
+    /// is workspace-wide, so this is what scopes an entry to a single team.
+    /// `None` for rows written before usage attribution shipped and for the
+    /// synthetic aggregate rows the server emits below `FullBreakdown`
+    /// visibility.
+    pub attributed_team_uid: Option<String>,
 }
 
 /// Per-cycle bucket of redacted usage entries with explicit period bounds.

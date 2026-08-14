@@ -11,7 +11,9 @@ use warpui_core::elements::tui::{TuiChildView, TuiElement};
 use warpui_core::keymap::FixedBinding;
 use warpui_core::keymap::macros::*;
 use warpui_core::platform::TerminationMode;
-use warpui_core::{AppContext, Entity, EntityId, TuiView, TypedActionView, ViewContext, keymap};
+use warpui_core::{
+    AppContext, Entity, EntityId, FocusContext, TuiView, TypedActionView, ViewContext, keymap,
+};
 
 use crate::clipboard::copy_to_clipboard;
 use crate::keybindings::TUI_BINDING_GROUP;
@@ -209,6 +211,14 @@ impl TuiView for RootTuiView {
         }
     }
 
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused()
+            && matches!(self.state, RootTuiState::Terminal)
+            && let Some(view) = self.focused_session_view(ctx)
+        {
+            view.activate(ctx);
+        }
+    }
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
         match self.state {
             RootTuiState::Auth => match TuiLoginModel::as_ref(ctx).phase() {

@@ -91,7 +91,12 @@ impl TuiTerminalSessionView {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            TuiHandoffModelEvent::Changed { .. } => return,
+            TuiHandoffModelEvent::Changed { focus_block } => {
+                if *focus_block {
+                    self.reconcile_focus(ctx);
+                }
+                return;
+            }
             TuiHandoffModelEvent::Cancelled(restoration) => {
                 self.clear_handoff_interaction();
                 if let Some(restoration) = restoration {

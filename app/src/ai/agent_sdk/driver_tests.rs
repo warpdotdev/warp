@@ -28,15 +28,18 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentDriverError, IdleTimeoutSender,
+    AgentDriver, AgentDriverError, CLIAgentSessionStatus, IdleTimeoutSender,
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
     OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
-    build_secret_env_vars,
+    PlatformErrorCode, SDKConversationOutputStatus, build_secret_env_vars,
+    idle_window_for_cli_session_status, idle_window_for_terminal_status,
+    setup_failure_status_update, terminal_status_log_outcome,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
-    AIAgentOutputMessage, ArtifactCreatedData, MessageId, UploadArtifactResult,
+    AIAgentOutputMessage, ArtifactCreatedData, CancellationReason, MessageId, RenderableAIError,
+    UploadArtifactResult,
 };
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -630,6 +633,197 @@ fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_
     // Sender was never consumed by the cancelled timer, so the channel is
     // still open but empty.
     assert_eq!(rx.try_recv().unwrap(), None);
+}
+
+// ── Terminal-status idle window routing ──────────────────────────────────────────
+
+fn error_status() -> SDKConversationOutputStatus {
+    SDKConversationOutputStatus::Error {
+        error: RenderableAIError::InternalWarpError,
+    }
+}
+
+#[test]
+fn terminal_error_defers_by_idle_on_fail() {
+    // The agent process is the shared-session sharer, so a failed run must be able to outlive
+    // its own failure for the session to stay attachable while the sandbox is retained.
+    let window =
+        idle_window_for_terminal_status(&error_status(), None, Some(Duration::from_secs(15 * 60)));
+
+    assert_eq!(window, Some(Duration::from_secs(15 * 60)));
+}
+
+#[test]
+fn terminal_error_exits_immediately_without_idle_on_fail() {
+    let window =
+        idle_window_for_terminal_status(&error_status(), Some(Duration::from_secs(45 * 60)), None);
+
+    assert_eq!(
+        window, None,
+        "--idle-on-complete must not act as a fallback for a terminal error"
+    );
+}
+
+#[test]
+fn non_error_completion_defers_by_idle_on_complete() {
+    // The failure window must not leak into the success/blocked/cancelled lifecycle.
+    let cases = [
+        ("success", SDKConversationOutputStatus::Success),
+        (
+            "blocked",
+            SDKConversationOutputStatus::Blocked {
+                blocked_action: "approve".to_string(),
+            },
+        ),
+        (
+            "cancelled",
+            SDKConversationOutputStatus::Cancelled {
+                reason: CancellationReason::ManuallyCancelled,
+            },
+        ),
+    ];
+
+    for (label, status) in cases {
+        let window = idle_window_for_terminal_status(
+            &status,
+            Some(Duration::from_secs(45 * 60)),
+            Some(Duration::from_secs(15 * 60)),
+        );
+
+        assert_eq!(
+            window,
+            Some(Duration::from_secs(45 * 60)),
+            "unexpected window for {label}"
+        );
+    }
+}
+
+#[test]
+fn setup_failure_is_reported_as_an_environment_setup_failure() {
+    // Not just a label: `TaskStatusMessage::is_environment_setup_failure` matches this variant
+    // alone, and the cloud-continuation resolver uses it to decide that a setup failure with no
+    // conversation gets a tombstone with no continue CTA. A generic code silently reroutes those
+    // runs into continuation handling that has nothing to continue.
+    let status = setup_failure_status_update("Environment setup failed: bad command".to_string());
+
+    assert_eq!(
+        status.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+}
+
+#[test]
+fn debug_window_refresh_uses_the_most_recently_armed_outcome() {
+    // A run can fail, be resumed, and fail again. The refresh subscription is installed once and
+    // outlives each individual failure, so refreshing must reschedule the *current* outcome; an
+    // outcome captured at first arm would exit the run reporting the earlier failure.
+    let (tx, rx) = oneshot::channel::<SDKConversationOutputStatus>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+
+    idle_timeout.arm_refreshable(Duration::from_secs(15 * 60), error_status());
+    idle_timeout.arm_refreshable(
+        Duration::ZERO,
+        SDKConversationOutputStatus::Blocked {
+            blocked_action: "second failure".to_string(),
+        },
+    );
+
+    assert_eq!(
+        idle_timeout.refresh(),
+        Some(Duration::ZERO),
+        "refresh should reschedule using the window most recently armed"
+    );
+
+    // Awaited rather than polled: the reschedule completes on a timer task, so a `try_recv` here
+    // races it and only passes when the machine is idle.
+    let blocked_action = match block_on(rx) {
+        Ok(SDKConversationOutputStatus::Blocked { blocked_action }) => Some(blocked_action),
+        _ => None,
+    };
+    assert_eq!(
+        blocked_action.as_deref(),
+        Some("second failure"),
+        "refresh rescheduled a stale outcome instead of the most recent failure"
+    );
+}
+
+#[test]
+fn debug_window_refresh_is_inert_before_anything_is_armed() {
+    let (tx, _rx) = oneshot::channel::<SDKConversationOutputStatus>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+
+    assert_eq!(idle_timeout.refresh(), None);
+}
+
+#[test]
+fn cancelling_the_idle_timeout_stops_a_later_refresh_from_resurrecting_it() {
+    // A follow-up cancels the pending exit, but the viewer-input subscription outlives that
+    // cancellation. Without clearing the armed outcome, typing in the session afterwards would
+    // reschedule the old failure and exit the run mid-follow-up.
+    let (tx, mut rx) = oneshot::channel::<SDKConversationOutputStatus>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+
+    // Long enough that the armed timer cannot fire before the cancellation below, which would
+    // otherwise make this race under load rather than test the cancellation.
+    idle_timeout.arm_refreshable(Duration::from_secs(60), error_status());
+    idle_timeout.cancel_idle_timeout();
+
+    assert_eq!(
+        idle_timeout.refresh(),
+        None,
+        "a cancelled debug window must not be refreshable"
+    );
+    assert!(
+        matches!(rx.try_recv(), Ok(None)),
+        "the run must not have been ended by the cancelled window"
+    );
+}
+
+#[test]
+fn failed_cli_harness_session_defers_by_idle_on_fail() {
+    // The flag lives on `warp agent run`, so it has to behave the same whichever harness the run
+    // uses; a failed CLI session is the same "process is the session sharer" situation.
+    let idle_on_complete = Some(Duration::from_secs(45 * 60));
+    let idle_on_fail = Some(Duration::from_secs(15 * 60));
+
+    let failed = CLIAgentSessionStatus::Failed {
+        error_type: None,
+        message: Some("boom".to_string()),
+    };
+    assert_eq!(
+        idle_window_for_cli_session_status(&failed, idle_on_complete, idle_on_fail),
+        idle_on_fail
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(&failed, idle_on_complete, None),
+        None,
+        "--idle-on-complete must not act as a fallback for a failed CLI session"
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(
+            &CLIAgentSessionStatus::Success,
+            idle_on_complete,
+            idle_on_fail
+        ),
+        idle_on_complete
+    );
+    assert_eq!(
+        idle_window_for_cli_session_status(
+            &CLIAgentSessionStatus::InProgress,
+            idle_on_complete,
+            idle_on_fail
+        ),
+        None
+    );
+}
+
+#[test]
+fn terminal_status_log_outcome_labels_are_low_cardinality() {
+    assert_eq!(
+        terminal_status_log_outcome(&SDKConversationOutputStatus::Success),
+        "non_error_completion"
+    );
+    assert_eq!(terminal_status_log_outcome(&error_status()), "error");
 }
 
 #[test]

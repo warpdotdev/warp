@@ -2,7 +2,7 @@ use settings::macros::define_settings_group;
 use settings::{SupportedPlatforms, SyncToCloud};
 
 define_settings_group!(TuiAutoupdateSettings, settings: [
-    // Whether the `warp-tui` background auto-updater is enabled.
+    // Whether the `warp-tui` background update check is enabled.
     //
     // TUI-only (`surface: Tui`): the GUI has its own autoupdater and update
     // preferences, so this key only appears in (and is read from) the TUI's
@@ -16,6 +16,6 @@ define_settings_group!(TuiAutoupdateSettings, settings: [
         surface: settings::SettingSurfaces::TUI,
         private: false,
         toml_path: "general.autoupdate_enabled",
-        description: "Whether Warp Agent CLI automatically installs updates in the background.",
+        description: "Whether Warp Agent CLI checks for updates and automatically installs them when supported by the installation method.",
     },
 ]);

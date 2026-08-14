@@ -1226,7 +1226,7 @@ impl View for AIBlock {
             });
         let should_add_top_padding = contains_user_query_and_is_not_pin_to_top
             || renders_below_requested_command_view
-            || (!is_previous_blocklist_item_ai_block && !self.is_passive_conversation(app));
+            || (!is_previous_blocklist_item_ai_block && !self.is_passive_conversation());
 
         if should_add_top_padding {
             content = content.with_padding_top(CONTENT_VERTICAL_PADDING);

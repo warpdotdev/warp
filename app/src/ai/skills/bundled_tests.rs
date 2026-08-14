@@ -35,6 +35,14 @@ fn remote_content<'a>(bundled_skills: &'a BundledSkills, host_id: &HostId) -> Op
 }
 
 #[test]
+fn factory_mcp_bundled_skill_bootstraps_canonical_mcp_resource() {
+    let skill = include_str!("../../../../resources/bundled/skills/factory-mcp/SKILL.md");
+
+    assert!(skill.contains("skill://warp/factory-mcp/SKILL.md"));
+    assert!(!skill.contains("references/factory-mcp-tools.md"));
+}
+
+#[test]
 fn local_and_remote_catalogs_are_isolated() {
     let first_host_id = HostId::new("first-host".to_string());
     let second_host_id = HostId::new("second-host".to_string());

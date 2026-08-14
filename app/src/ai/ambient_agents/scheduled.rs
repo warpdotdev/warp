@@ -52,7 +52,7 @@ impl StringModel for ScheduledAmbientAgent {
         QueueItem::UpdateScheduledAmbientAgent {
             model: object.model().clone().into(),
             id: object.id,
-            revision: revision_ts.or_else(|| object.metadata.revision.clone()),
+            revision: revision_ts.or(object.metadata.revision),
         }
     }
 
@@ -225,7 +225,7 @@ impl ScheduledAgentManager {
                 let mut updated_config = schedule_obj.model().string_model.clone();
                 modifier(&mut updated_config);
 
-                let revision = schedule_obj.metadata.revision.clone();
+                let revision = schedule_obj.metadata.revision;
 
                 let update_future =
                     UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {

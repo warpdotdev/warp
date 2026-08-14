@@ -86,6 +86,14 @@ fn failed_autoupdate_status_has_visible_label() {
 }
 
 #[test]
+fn homebrew_update_status_shows_the_upgrade_command() {
+    assert_eq!(
+        autoupdate_status_label(TuiAutoupdateStatus::UpdateAvailable),
+        Some("update available — run brew upgrade --cask warp-agent-cli")
+    );
+}
+
+#[test]
 fn first_zero_state_matches_welcome_design_copy() {
     App::test((), |mut app| async move {
         register_tui_session_view_test_singletons(&mut app);

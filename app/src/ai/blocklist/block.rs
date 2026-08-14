@@ -910,6 +910,11 @@ fn default_orchestration_collapsible_state(expanded: bool) -> CollapsibleElement
 
 pub struct AIBlock {
     model: Rc<dyn AIBlockModel<View = AIBlock>>,
+
+    /// Cached result of `model.request_type(app).is_passive()`. Safe to cache because whether a
+    /// conversation is passive or active is fixed at exchange creation and never changes for the
+    /// lifetime of the block (see `is_passive_conversation`).
+    is_passive: bool,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     client_ids: ClientIdentifiers,
     profile_image_path: Option<String>,
@@ -1490,8 +1495,11 @@ impl AIBlock {
             comment_states.insert(id, state);
         }
 
+        let is_passive = model.request_type(ctx).is_passive();
+
         let mut me = Self {
             model,
+            is_passive,
             terminal_model,
             client_ids,
             profile_image_path: user_avatar_info.profile_image_path,
@@ -1844,6 +1852,7 @@ impl AIBlock {
 
         self.client_ids.conversation_id = new_conversation_id;
         self.model = new_model;
+        self.is_passive = self.model.request_type(ctx).is_passive();
         let user_avatar_info = user_avatar_info_for_ai_block(self.model.as_ref(), ctx);
         self.profile_image_path = user_avatar_info.profile_image_path;
         self.user_display_name = user_avatar_info.display_name;
@@ -1935,6 +1944,7 @@ impl AIBlock {
                     let output = output.get();
                     self.handle_updated_output(&output, ctx);
                 }
+                self.notify_run_agents_card_views(ctx);
                 self.spawn_link_detection(ctx);
                 self.finish(FinishReason::Cancelled, ctx);
 
@@ -1972,6 +1982,7 @@ impl AIBlock {
                 );
                 self.maybe_create_aws_bedrock_credentials_error_view(&error, ctx);
                 self.maybe_create_gemini_enterprise_credentials_error_view(&error, ctx);
+                self.notify_run_agents_card_views(ctx);
                 // There are no actions to be taken in this block, it is finished.
                 self.finish(FinishReason::Error, ctx);
             }
@@ -2992,12 +3003,14 @@ impl AIBlock {
             //
             // These correspond to AI blocks with a successfully received suggested code diff or
             // unit test suggestion.
-            !self.model.request_type(app).is_passive()
+            !self.is_passive
         }
     }
 
-    pub fn is_passive_conversation(&self, app: &AppContext) -> bool {
-        self.model.request_type(app).is_passive()
+    /// Returns `true` if this block's conversation was started from a passive entrypoint (e.g. a
+    /// suggested code diff or unit test suggestion), as opposed to a directly-issued user query.
+    pub fn is_passive_conversation(&self) -> bool {
+        self.is_passive
     }
 
     fn handle_code_section_stream_update(
@@ -7233,6 +7246,17 @@ impl AIBlock {
             }
         });
         self.run_agents_card_views.insert(action_id.clone(), view);
+    }
+
+    /// Re-renders the orchestrate cards after the block's output stream ends
+    /// without succeeding. A `RunAgents` tool call that was still streaming at
+    /// that point never reaches the action queue, so it produces no action
+    /// result and no event of its own; without this nudge its card would keep
+    /// rendering the "Configuring agents…" placeholder forever.
+    fn notify_run_agents_card_views(&self, ctx: &mut ViewContext<Self>) {
+        for view in self.run_agents_card_views.values().cloned().collect_vec() {
+            view.update(ctx, |_, ctx| ctx.notify());
+        }
     }
 }
 #[cfg(test)]

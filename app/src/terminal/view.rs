@@ -122,7 +122,8 @@ use session_sharing_protocol::sharer::{
 use settings::{Setting, ToggleableSetting};
 use shared_session::cloud_conversation_continuation::CloudConversationContinuationUiState;
 pub(crate) use shared_session::cloud_conversation_continuation::{
-    AIQueryRouting, resolve_ai_query_routing,
+    AIQueryRouting, CompletedChildPresentation, ConversationAccess,
+    completed_child_conversation_access, completed_child_presentation, resolve_ai_query_routing,
 };
 use shared_session::{SharedSessionAdapter, Viewer};
 use ssh_file_upload::{FileUpload, FileUploadEvent};
@@ -217,7 +218,8 @@ use crate::ai::agent::{
 use crate::ai::agent::{CurrentHead, DiffBase};
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::ambient_agents::{
-    AmbientAgentTaskId, AmbientConversationStatus, conversation_output_status_from_conversation,
+    AmbientAgentTask, AmbientAgentTaskId, AmbientConversationStatus,
+    conversation_output_status_from_conversation,
 };
 use crate::ai::blocklist::agent_view::agent_input_footer::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::agent_view::orchestration_conversation_links::pane_group_id_containing_terminal_view;
@@ -668,7 +670,7 @@ const CONTEXT_MENU_WIDTH: f32 = 280.;
 const MIN_DELTA_FOR_TEXT_SELECTION: f32 = 0.5;
 
 /// Notifications-specific info
-/// TODO (suraj): add documentation for notifications in gitbook
+/// TODO (suraj): add documentation for notifications in docs
 const NOTIFICATIONS_LEARN_MORE_URL: &str =
     "https://docs.warp.dev/terminal/more-features/notifications";
 pub const NOTIFICATIONS_TROUBLESHOOT_URL: &str =
@@ -1678,6 +1680,10 @@ pub enum Event {
     /// Event propagates terminal inputs up to the workspace,
     /// to be processed on the way back down through the view hierarchy.
     SyncInput(SyncEvent),
+    /// A shared-session viewer sent input into this (sharer-side) session: raw PTY bytes,
+    /// a command execution, or an edit to the shared input buffer. Distinct from sharer-local
+    /// input, which cannot occur for a headless cloud agent.
+    SharedSessionViewerInput,
     /// Event used to propagate a state change for one of the terminal views
     /// inside this pane group.
     TerminalViewStateChanged,
@@ -2024,6 +2030,20 @@ pub enum Event {
         conversation_id: AIConversationId,
         session_id: session_sharing_protocol::common::SessionId,
     },
+    /// Unified-stack counterpart to [`Self::EnsureSharedSessionViewerChildPane`].
+    /// Carries the fetched task snapshot so pane construction uses the same
+    /// current-state materialization decision as pill-click restoration.
+    EnsureUnifiedViewerChildPane {
+        conversation_id: AIConversationId,
+        task: Box<AmbientAgentTask>,
+    },
+    /// A unified-stack child viewer could not join its dedicated live
+    /// execution session. The pane group keeps the child passive and
+    /// re-drives it from current task metadata.
+    OrchestrationChildSharedSessionJoinFailed {
+        conversation_id: AIConversationId,
+        session_id: session_sharing_protocol::common::SessionId,
+    },
     /// Emitted when "Open in new tab" is picked from a child pill's 3-dot menu.
     /// Bubbles up to the workspace to create the new tab.
     OpenChildAgentInNewTab {
@@ -2341,6 +2361,17 @@ struct TerminalViewMouseStates {
     /// in a `NewScrollable::horizontal` keyed on this handle so the user
     /// can pan to read clipped labels.
     breadcrumbs_horizontal_scroll: ClippedScrollStateHandle,
+}
+
+/// The output a test-only dummy AI block should report, selecting which
+/// `FakeAIBlockModel` shape backs the inserted block.
+#[cfg(any(test, feature = "integration_tests"))]
+enum DummyAIBlockOutput {
+    /// Still streaming, so the block never finishes.
+    Streaming,
+    Complete(crate::ai::agent::AIAgentOutput),
+    /// The stream was cancelled with this partial output.
+    Cancelled(crate::ai::agent::AIAgentOutput),
 }
 
 /// Where content was routed when sent to a CLI agent.
@@ -2855,6 +2886,9 @@ pub struct TerminalView {
 
     ambient_agent_view_model: Option<ModelHandle<ambient_agent::AmbientAgentViewModel>>,
     pending_cloud_followup_task_id: Option<AmbientAgentTaskId>,
+    /// A passive orchestration child whose live execution session could not
+    /// be joined. Task refresh may later replace this with a transcript.
+    orchestration_child_live_unavailable: bool,
 
     /// Conversation details panel (side panel showing conversation/task metadata).
     /// Available for cloud Oz runs and for any active local AI conversation.
@@ -4425,6 +4459,7 @@ impl TerminalView {
             has_auto_opened_conversation_details_panel: false,
             conversation_details_panel_auto_open_policy: Default::default(),
             pending_cloud_followup_task_id: None,
+            orchestration_child_live_unavailable: false,
             conversation_details_panel_toggle_mouse_state: Default::default(),
             ambient_agent_cancel_mouse_state: Default::default(),
             active_init_project_model: None,
@@ -6240,8 +6275,7 @@ impl TerminalView {
                     );
                 });
                 let ai_block_clone = ai_block.clone();
-                let is_passive_conversation =
-                    ai_block_clone.as_ref(ctx).is_passive_conversation(ctx);
+                let is_passive_conversation = ai_block_clone.as_ref(ctx).is_passive_conversation();
                 self.find_model.update(ctx, move |find_model, _ctx| {
                     find_model.register_findable_rich_content_view(ai_block_clone);
                 });
@@ -7669,24 +7703,24 @@ impl TerminalView {
                 .get_pending_action(app)
                 .map(|action| match &action.action {
                     AIAgentActionType::RequestCommandOutput { command, .. } => {
-                        format!("Oz needs your permission to run `{command}`")
+                        format!("Warp Agent needs your permission to run `{command}`")
                     }
                     AIAgentActionType::ReadFiles(..) => {
-                        "Oz needs your permission to read files".to_string()
+                        "Warp Agent needs your permission to read files".to_string()
                     }
                     AIAgentActionType::SearchCodebase(..) => {
-                        "Oz needs your permission to search your codebase".to_string()
+                        "Warp Agent needs your permission to search your codebase".to_string()
                     }
                     AIAgentActionType::RequestFileEdits { .. } => {
-                        "Oz needs your permission to edit a file".to_string()
+                        "Warp Agent needs your permission to edit a file".to_string()
                     }
                     AIAgentActionType::WriteToLongRunningShellCommand { .. } => {
-                        "Oz needs your permission to interact with a running shell command"
+                        "Warp Agent needs your permission to interact with a running shell command"
                             .to_string()
                     }
-                    _ => "Oz needs your confirmation to continue".to_string(),
+                    _ => "Warp Agent needs your confirmation to continue".to_string(),
                 })
-                .unwrap_or("Oz needs your confirmation to continue".to_string());
+                .unwrap_or("Warp Agent needs your confirmation to continue".to_string());
             return Some(AIBlockNotificationSummary {
                 success: false,
                 title,
@@ -7949,6 +7983,13 @@ impl TerminalView {
         &self.ai_input_model
     }
 
+    /// Used by [`crate::ai::agent_sdk::driver::checkpoint_coordinator`] to check whether the
+    /// terminal's conversation has any pending or running actions before starting a periodic
+    /// checkpoint attempt.
+    pub fn ai_action_model(&self) -> &ModelHandle<BlocklistAIActionModel> {
+        &self.ai_action_model
+    }
+
     pub fn agent_view_controller(&self) -> &ModelHandle<AgentViewController> {
         &self.agent_view_controller
     }
@@ -8150,6 +8191,29 @@ impl TerminalView {
     pub(crate) fn suppress_initial_conversation_details_panel_auto_open(&mut self) {
         self.conversation_details_panel_auto_open_policy =
             ConversationDetailsPanelAutoOpenPolicy::DefaultClosed;
+    }
+
+    pub(crate) fn set_orchestration_child_live_unavailable(
+        &mut self,
+        unavailable: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.orchestration_child_live_unavailable == unavailable {
+            return;
+        }
+        self.orchestration_child_live_unavailable = unavailable;
+        ctx.notify();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_orchestration_child_live_unavailable_for_test(&self) -> bool {
+        self.orchestration_child_live_unavailable
+    }
+    #[cfg(test)]
+    pub(crate) fn has_agent_view_zero_state_for_test(&self) -> bool {
+        self.rich_content_views
+            .iter()
+            .any(|view| view.is_agent_view_zero_state())
     }
 
     #[cfg(test)]
@@ -15176,7 +15240,7 @@ impl TerminalView {
                 if ai_metadata
                     .ai_block_handle
                     .as_ref(ctx)
-                    .is_passive_conversation(ctx)
+                    .is_passive_conversation()
                     && matches!(
                         ai_metadata.ai_block_handle.as_ref(ctx).status(ctx),
                         AIBlockOutputStatus::Failed { .. }
@@ -15203,7 +15267,7 @@ impl TerminalView {
         self.rich_content_views.retain(|rich_content| {
             if let Some(ai_metadata) = rich_content.ai_block_metadata() {
                 let is_hidden = ai_metadata.ai_block_handle.read(ctx, |ai_block, ctx| {
-                    ai_block.is_hidden(ctx) && ai_block.is_passive_conversation(ctx)
+                    ai_block.is_passive_conversation() && ai_block.is_hidden(ctx)
                 });
                 if is_hidden {
                     ai_block_ids_to_remove.push(ai_metadata.ai_block_handle.id());
@@ -16164,7 +16228,9 @@ impl TerminalView {
 
         let new_size = size_update.new_size.pane_size_px();
         if new_size.x() == 0. || new_size.y() == 0. {
-            log::info!("Tried to resize with size {new_size:?}. Skipping resize");
+            // This can recur on every layout pass (e.g. while a pane is collapsed),
+            // so keep it at debug to avoid flooding release logs at frame rate.
+            log::debug!("Tried to resize with size {new_size:?}. Skipping resize");
             return;
         }
 
@@ -16848,7 +16914,8 @@ impl TerminalView {
                             .block_at(tail_block_index)
                             .is_none_or(|b| b.is_restored());
 
-                    let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+                    let has_session_link = Manager::as_ref(ctx)
+                        .has_session_link(&ctx.view_id(), model.shared_session_status());
                     items.extend(self.session_sharing_context_menu_items(
                         &model,
                         is_share_session_disabled,
@@ -17061,7 +17128,8 @@ impl TerminalView {
                 if FeatureFlag::CreatingSharedSessions.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled()
                 {
-                    let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+                    let has_session_link = Manager::as_ref(ctx)
+                        .has_session_link(&ctx.view_id(), model.shared_session_status());
                     items.extend(self.session_sharing_context_menu_items(
                         &model,
                         false,
@@ -17537,7 +17605,8 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+            let has_session_link = Manager::as_ref(ctx)
+                .has_session_link(&ctx.view_id(), model.shared_session_status());
             items.extend(self.session_sharing_context_menu_items(&model, false, has_session_link));
         }
 
@@ -17776,7 +17845,8 @@ impl TerminalView {
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
         {
-            let has_session_link = Manager::as_ref(ctx).has_session_link(&ctx.view_id());
+            let has_session_link = Manager::as_ref(ctx)
+                .has_session_link(&ctx.view_id(), model.shared_session_status());
             menu_items.extend(self.session_sharing_context_menu_items(
                 &model,
                 false,
@@ -20867,8 +20937,8 @@ impl TerminalView {
             let ai_block = ai_metadata.ai_block_handle.as_ref(ctx);
 
             (!ai_block.is_finished()
-                && !ai_block.is_hidden(ctx)
-                && !ai_block.is_passive_conversation(ctx))
+                && !ai_block.is_passive_conversation()
+                && !ai_block.is_hidden(ctx))
             .then_some(&ai_metadata.ai_block_handle)
         })
     }
@@ -22986,7 +23056,23 @@ impl TerminalView {
         output: String,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<AIBlock> {
-        self.insert_dummy_ai_block_internal(query, Some(output), ctx)
+        use crate::ai::agent::{
+            AIAgentOutput, AIAgentOutputMessage, AIAgentText, AIAgentTextSection, MessageId,
+        };
+
+        let output = AIAgentOutput {
+            messages: vec![AIAgentOutputMessage::text(
+                MessageId::new("fake-id".to_owned()),
+                AIAgentText {
+                    sections: vec![AIAgentTextSection::PlainText {
+                        text: output.into(),
+                    }],
+                },
+            )],
+            server_output_id: Some(Self::dummy_server_output_id()),
+            ..Default::default()
+        };
+        self.insert_dummy_ai_block_internal(query, DummyAIBlockOutput::Complete(output), ctx)
     }
 
     /// Inserts a dummy AI block that is still streaming (unfinished), for tests
@@ -22997,25 +23083,97 @@ impl TerminalView {
         query: String,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<AIBlock> {
-        self.insert_dummy_ai_block_internal(query, None, ctx)
+        self.insert_dummy_ai_block_internal(query, DummyAIBlockOutput::Streaming, ctx)
+    }
+
+    /// Inserts a dummy AI block whose stream was cancelled while a `run_agents`
+    /// tool call for `agent_names` was still streaming, so the call never
+    /// reached the action queue and has no action status.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn insert_dummy_cancelled_run_agents_ai_block(
+        &mut self,
+        query: String,
+        summary: String,
+        agent_names: Vec<String>,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<AIBlock> {
+        use ai::agent::action::{
+            RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest,
+        };
+
+        use crate::ai::agent::task::TaskId;
+        use crate::ai::agent::{
+            AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentOutput, AIAgentOutputMessage,
+            AIAgentText, AIAgentTextSection, MessageId,
+        };
+
+        let request = RunAgentsRequest {
+            summary: summary.clone(),
+            base_prompt: "Shared instructions for every child agent.".to_owned(),
+            skills: vec![],
+            model_id: "auto".to_owned(),
+            harness_type: "oz".to_owned(),
+            execution_mode: RunAgentsExecutionMode::Local,
+            agent_run_configs: agent_names
+                .into_iter()
+                .map(|name| RunAgentsAgentRunConfig {
+                    name,
+                    prompt: "Do the work.".to_owned(),
+                    title: String::new(),
+                    agent_identity_uid: String::new(),
+                    model_id: String::new(),
+                })
+                .collect(),
+            plan_id: String::new(),
+            harness_auth_secret_name: None,
+        };
+
+        let output = AIAgentOutput {
+            messages: vec![
+                AIAgentOutputMessage::text(
+                    MessageId::new("fake-run-agents-text-id".to_owned()),
+                    AIAgentText {
+                        sections: vec![AIAgentTextSection::PlainText {
+                            text: summary.into(),
+                        }],
+                    },
+                ),
+                AIAgentOutputMessage::action(
+                    MessageId::new("fake-run-agents-action-message-id".to_owned()),
+                    AIAgentAction {
+                        id: AIAgentActionId::from("fake-run-agents-action-id".to_owned()),
+                        task_id: TaskId::new("fake-task-id".to_owned()),
+                        action: AIAgentActionType::RunAgents(request),
+                        requires_result: true,
+                    },
+                ),
+            ],
+            server_output_id: Some(Self::dummy_server_output_id()),
+            ..Default::default()
+        };
+        self.insert_dummy_ai_block_internal(query, DummyAIBlockOutput::Cancelled(output), ctx)
+    }
+
+    #[cfg(any(test, feature = "integration_tests"))]
+    fn dummy_server_output_id() -> crate::ai::agent::ServerOutputId {
+        use rand::distributions::{Alphanumeric, DistString};
+
+        crate::ai::agent::ServerOutputId::new(format!(
+            "test_output_id_{}",
+            Alphanumeric.sample_string(&mut rand::thread_rng(), 24)
+        ))
     }
 
     /// Shared body for the dummy AI block insertion helpers. Creates a fresh
-    /// conversation for the block; a `None` output models a block that is
-    /// still streaming (unfinished).
+    /// conversation for the block.
     #[cfg(any(test, feature = "integration_tests"))]
     fn insert_dummy_ai_block_internal(
         &mut self,
         query: String,
-        output: Option<String>,
+        output: DummyAIBlockOutput,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<AIBlock> {
-        use rand::distributions::{Alphanumeric, DistString};
-
-        use crate::ai::agent::{
-            AIAgentInput, AIAgentOutput, AIAgentOutputMessage, AIAgentText, AIAgentTextSection,
-            MessageId, ServerOutputId,
-        };
+        use crate::ai::agent::AIAgentInput;
         use crate::ai::blocklist::FakeAIBlockModel;
 
         let inputs = vec![AIAgentInput::UserQuery {
@@ -23033,22 +23191,6 @@ impl TerminalView {
             intended_agent: None,
         }];
 
-        let output = output.map(|output| AIAgentOutput {
-            messages: vec![AIAgentOutputMessage::text(
-                MessageId::new("fake-id".to_owned()),
-                AIAgentText {
-                    sections: vec![AIAgentTextSection::PlainText {
-                        text: output.into(),
-                    }],
-                },
-            )],
-            server_output_id: Some(ServerOutputId::new(format!(
-                "test_output_id_{}",
-                Alphanumeric.sample_string(&mut rand::thread_rng(), 24)
-            ))),
-            ..Default::default()
-        });
-
         // Create a real conversation in the history model for this dummy block so it renders.
         let terminal_view_id = ctx.view_id();
         let mut new_conversation_id = None;
@@ -23062,8 +23204,11 @@ impl TerminalView {
         let conversation_id = new_conversation_id.expect("conversation created for dummy AI block");
 
         let ai_block_model = Rc::new(match output {
-            Some(output) => FakeAIBlockModel::new(inputs, output),
-            None => FakeAIBlockModel::new_streaming(inputs),
+            DummyAIBlockOutput::Complete(output) => FakeAIBlockModel::new(inputs, output),
+            DummyAIBlockOutput::Streaming => FakeAIBlockModel::new_streaming(inputs),
+            DummyAIBlockOutput::Cancelled(output) => {
+                FakeAIBlockModel::new_cancelled(inputs, output)
+            }
         });
         let ai_block = ctx.add_typed_action_view(|ctx| {
             AIBlock::new(
@@ -23645,6 +23790,42 @@ impl TerminalView {
                 },
             ),
             filter_button_position_id(block_index).as_str(),
+        )
+        .finish()
+    }
+
+    fn render_orchestration_child_live_unavailable(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let color = appearance
+            .theme()
+            .sub_text_color(appearance.theme().background());
+
+        SavePosition::new(
+            Align::new(
+                Flex::column()
+                    .with_child(
+                        Text::new_inline(
+                            "Live session unavailable",
+                            appearance.ui_font_family(),
+                            14.,
+                        )
+                        .with_color(color.into())
+                        .finish(),
+                    )
+                    .with_child(
+                        Text::new_inline(
+                            "The transcript will appear when this child finishes.",
+                            appearance.ui_font_family(),
+                            12.,
+                        )
+                        .with_color(color.into())
+                        .finish(),
+                    )
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .finish(),
+            )
+            .finish(),
+            &self.content_element_position_id,
         )
         .finish()
     }
@@ -26106,15 +26287,16 @@ impl TerminalView {
 
     pub(super) fn toggle_file_tree(
         &mut self,
+        source: crate::server::telemetry::FileTreeSource,
         cli_agent: Option<crate::server::telemetry::CLIAgentType>,
         ctx: &mut ViewContext<Self>,
     ) {
-        use crate::server::telemetry::{FileTreeSource, TelemetryEvent};
+        use crate::server::telemetry::TelemetryEvent;
 
         self.toggle_left_panel_file_tree(false, ctx);
         send_telemetry_from_ctx!(
             TelemetryEvent::FileTreeToggled {
-                source: FileTreeSource::LeftPanelToolbelt,
+                source,
                 is_code_mode_v2: true,
                 cli_agent,
             },
@@ -27857,7 +28039,9 @@ impl View for TerminalView {
                         && !self.is_ambient_agent_session(app);
                     let is_loading_transcript = model.is_loading_conversation_transcript();
                     let should_show_loading = is_view_pending_clause || is_loading_transcript;
-                    let output_area = if should_show_loading {
+                    let output_area = if self.orchestration_child_live_unavailable {
+                        self.render_orchestration_child_live_unavailable(app)
+                    } else if should_show_loading {
                         self.render_viewer_loading(app)
                     } else if is_alt_screen_active {
                         did_wrap_terminal_size = true;

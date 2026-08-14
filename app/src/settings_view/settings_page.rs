@@ -31,7 +31,8 @@ use super::about_page::AboutPageView;
 use super::ai_page::{AISettingsPageAction, AISettingsPageView};
 use super::appearance_page::AppearanceSettingsPageView;
 use super::billing_and_usage_dispatch::BillingAndUsageDispatchView;
-use super::code_page::CodeSettingsPageView;
+use super::code_editor_review_page::EditorAndCodeReviewPageView;
+use super::code_indexing_page::CodeIndexingPageView;
 use super::environments_page::EnvironmentsPageView;
 use super::features_page::FeaturesPageView;
 use super::keybindings::KeybindingsView;
@@ -108,7 +109,8 @@ pub enum SettingsPageViewHandle {
     SharedBlocks(ViewHandle<ShowBlocksView>),
     Keybindings(ViewHandle<KeybindingsView>),
     About(ViewHandle<AboutPageView>),
-    Code(ViewHandle<CodeSettingsPageView>),
+    CodeIndexing(ViewHandle<CodeIndexingPageView>),
+    EditorAndCodeReview(ViewHandle<EditorAndCodeReviewPageView>),
     Teams(ViewHandle<TeamsPageView>),
     OzCloudAPIKeys(ViewHandle<super::platform_page::PlatformPageView>),
     Privacy(ViewHandle<PrivacyPageView>),
@@ -132,7 +134,8 @@ impl SettingsPageViewHandle {
             SharedBlocks(view_handle) => ChildView::new(view_handle).finish(),
             Keybindings(view_handle) => ChildView::new(view_handle).finish(),
             About(view_handle) => ChildView::new(view_handle).finish(),
-            Code(view_handle) => ChildView::new(view_handle).finish(),
+            CodeIndexing(view_handle) => ChildView::new(view_handle).finish(),
+            EditorAndCodeReview(view_handle) => ChildView::new(view_handle).finish(),
             Teams(view_handle) => ChildView::new(view_handle).finish(),
             OzCloudAPIKeys(view_handle) => ChildView::new(view_handle).finish(),
             Privacy(view_handle) => ChildView::new(view_handle).finish(),

@@ -185,23 +185,18 @@ impl TerminalView {
         ctx: &AppContext,
     ) -> Option<AmbientAgentTaskId> {
         let task_id = self.ambient_agent_task_id_for_details_panel(ctx)?;
-        self.is_current_user_creator_of_ambient_task(task_id, ctx)
-            .then_some(task_id)
-    }
-
-    fn is_current_user_creator_of_ambient_task(
-        &self,
-        task_id: AmbientAgentTaskId,
-        ctx: &AppContext,
-    ) -> bool {
-        let Some(current_user_uid) = self.auth_state.user_id().map(|uid| uid.as_string()) else {
-            return false;
-        };
 
         AgentConversationsModel::as_ref(ctx)
             .get_task_data(&task_id)
-            .and_then(|task| task.creator.map(|creator| creator.uid))
-            .is_some_and(|creator_uid| creator_uid == current_user_uid)
+            .is_some_and(|task| {
+                let Some(current_user_uid) = self.auth_state.user_id().map(|uid| uid.as_string())
+                else {
+                    return false;
+                };
+                task.creator
+                    .is_some_and(|creator| creator.uid == current_user_uid)
+            })
+            .then_some(task_id)
     }
 
     pub(in crate::terminal::view) fn enable_cloud_followup_input(
@@ -213,6 +208,33 @@ impl TerminalView {
         self.input.update(ctx, |input, ctx| {
             input.reset_after_cloud_followup_submission(ctx);
             input.set_input_mode_agent(true, ctx);
+            input.editor().update(ctx, |editor, ctx| {
+                editor.set_interaction_state(InteractionState::Editable, ctx);
+            });
+        });
+        self.update_pane_configuration(ctx);
+        ctx.notify();
+    }
+
+    /// Clears the finished/read-only state a pane accumulates when its shared session ends, so it
+    /// can host a live session again. Idempotent.
+    ///
+    /// A failed run whose environment is retained for debugging leaves the pane read-only with an
+    /// ended-conversation tombstone even though its session is still reachable; reattaching must
+    /// produce a writable terminal rather than that ended-run view.
+    pub(crate) fn prepare_for_live_session_reattach(&mut self, ctx: &mut ViewContext<Self>) {
+        self.remove_conversation_ended_tombstone(ctx);
+
+        {
+            let mut model = self.model.lock();
+            if model.shared_session_status().is_finished_viewer() {
+                // The join performed by the caller moves this to `ViewPending` and then
+                // `ActiveViewer`; clearing it here just lifts `TerminalModel::is_read_only`.
+                model.set_shared_session_status(SharedSessionStatus::NotShared);
+            }
+        }
+
+        self.input().update(ctx, |input, ctx| {
             input.editor().update(ctx, |editor, ctx| {
                 editor.set_interaction_state(InteractionState::Editable, ctx);
             });
@@ -236,6 +258,16 @@ impl TerminalView {
         }
 
         self.enable_cloud_followup_input(task_id, ctx);
+    }
+
+    /// Enables the established continuation input after pane hydration has
+    /// already resolved explicit conversation Edit access.
+    pub(crate) fn enable_completed_cloud_continuation(
+        &mut self,
+        task_id: AmbientAgentTaskId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.enable_cloud_followup_input_after_conversation_end(task_id, ctx);
     }
 
     pub(super) fn handle_viewer_role_change_menu_event(
@@ -588,6 +620,7 @@ impl TerminalView {
         self.model
             .lock()
             .set_shared_session_status(SharedSessionStatus::SharePending);
+        self.notify_shared_session_link_changed(ctx);
         log::info!("Emitting request to start sharing current session");
 
         ctx.emit(Event::StartSharingCurrentSession {
@@ -606,6 +639,12 @@ impl TerminalView {
                 ctx
             );
         }
+    }
+
+    pub(crate) fn notify_shared_session_link_changed(&mut self, ctx: &mut ViewContext<Self>) {
+        self.pane_configuration.update(ctx, |pane_config, ctx| {
+            pane_config.notify_shared_session_link_changed(ctx);
+        });
     }
 
     /// Sets the PresenceManager and decorates the view accordingly when a shared session has been started.
@@ -1442,10 +1481,10 @@ impl TerminalView {
     ) {
         #[cfg(target_family = "wasm")]
         {
+            let shared_session_status = self.model.lock().shared_session_status().clone();
             let manager = Manager::as_ref(ctx);
-            let Some(session_id) = manager
-                .session_id(&ctx.view_id())
-                .or_else(|| manager.ended_session_id(&ctx.view_id()))
+            let Some(session_id) =
+                manager.session_id_for_link(&ctx.view_id(), &shared_session_status)
             else {
                 return;
             };
@@ -1557,11 +1596,10 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         let view_id = ctx.view_id();
+        let shared_session_status = self.model.lock().shared_session_status().clone();
         let session_id_opt = {
             let manager = Manager::as_ref(ctx);
-            manager
-                .session_id(&view_id)
-                .or_else(|| manager.ended_session_id(&view_id))
+            manager.session_id_for_link(&view_id, &shared_session_status)
         };
         let Some(session_id) = session_id_opt else {
             let window_id = ctx.window_id();

@@ -36,6 +36,7 @@ use crate::launch_configs::launch_config::LaunchConfig;
 use crate::menu::{MenuAction, MenuItem, MenuItemFields};
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::shell_indicator::ShellIndicatorType;
+use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::render_util::shared_session_indicator_color;
 use crate::terminal::view::TerminalViewState;
@@ -135,6 +136,20 @@ impl SelectedTabColor {
             SelectedTabColor::Cleared => None,
             SelectedTabColor::Unset => default,
         }
+    }
+}
+
+pub(crate) fn next_tab_color(current: Option<AnsiColorIdentifier>) -> SelectedTabColor {
+    match current.and_then(|color| {
+        TAB_COLOR_OPTIONS
+            .iter()
+            .position(|candidate| *candidate == color)
+    }) {
+        Some(index) if index + 1 < TAB_COLOR_OPTIONS.len() => {
+            SelectedTabColor::Color(TAB_COLOR_OPTIONS[index + 1])
+        }
+        Some(_) => SelectedTabColor::Cleared,
+        None => SelectedTabColor::Color(TAB_COLOR_OPTIONS[0]),
     }
 }
 
@@ -354,21 +369,24 @@ impl TabData {
         // Disable the item (rather than silently no-op) when the Manager does not yet have a
         // session id (e.g. during ViewPending / SharePending while the session is still setting up).
         let focused_session_view = self.pane_group.as_ref(ctx).focused_session_view(ctx);
-        let is_shared_or_viewed = focused_session_view
-            .as_ref()
-            .map(|view| {
-                view.as_ref(ctx)
-                    .model
-                    .lock()
-                    .shared_session_status()
-                    .is_sharer_or_viewer()
-            })
-            .unwrap_or(false);
+        let focused_session_status = focused_session_view.as_ref().map(|view| {
+            view.as_ref(ctx)
+                .model
+                .lock()
+                .shared_session_status()
+                .clone()
+        });
 
-        if is_shared_or_viewed {
+        if focused_session_status
+            .as_ref()
+            .is_some_and(SharedSessionStatus::is_sharer_or_viewer)
+        {
             let has_session_link = focused_session_view
                 .as_ref()
-                .is_some_and(|view| Manager::as_ref(ctx).has_session_link(&view.id()));
+                .zip(focused_session_status.as_ref())
+                .is_some_and(|(view, status)| {
+                    Manager::as_ref(ctx).has_session_link(&view.id(), status)
+                });
             menu_items.push(
                 MenuItemFields::new("Copy link")
                     .with_on_select_action(WorkspaceAction::CopySharedSessionLinkFromTab {

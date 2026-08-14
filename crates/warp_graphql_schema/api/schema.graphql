@@ -4154,6 +4154,18 @@ input UpdateAgentTaskInput {
   """
   conversationId: ID
 
+  """
+  When a failed run's shared session stops being held open for debugging.
+  
+  The agent process owns that window and reports this on arm and on each refresh, so the
+  value tracks a sliding deadline. It is deliberately separate from statusMessage: a refresh
+  carries only a new deadline and must not overwrite the failure text the run reported.
+  
+  Display-only. Nothing is scheduled off it; the agent process remains the sole authority on
+  when the window actually ends.
+  """
+  sessionDebugUntil: Time
+
   """If set, the task is associated with this shared session."""
   sessionId: ID
 
@@ -4439,6 +4451,7 @@ input UsageBasedPricingSettingsInput {
 }
 
 type UsageEntry {
+  attributedTeamUid: String
   costCents: Int!
   costType: AICreditsUsageAndCostType!
   creditsUsed: Int!

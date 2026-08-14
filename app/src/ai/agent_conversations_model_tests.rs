@@ -1523,6 +1523,91 @@ fn test_resolve_open_action_opens_active_ambient_session_from_link() {
 }
 
 #[test]
+fn test_resolve_open_action_opens_retained_failed_ambient_session_from_link() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let session_id = make_uuid(8207);
+        let mut task = create_test_task(&make_uuid(8208), "user-a", Utc::now());
+        task.state = AmbientAgentTaskState::Failed;
+        task.session_link = Some(format!("https://example.com/session/{session_id}"));
+        task.conversation_id = Some("retained-failed-token".to_string());
+        task.is_sandbox_running = true;
+        let task_id = task.task_id;
+
+        app.add_singleton_model(|_| {
+            let mut model = create_test_model();
+            model.tasks.insert(task_id, task);
+            model
+        });
+
+        app.update(|ctx| {
+            let action = AgentConversationsModel::resolve_open_action(
+                AgentConversationNavigationSubject::Entry(AgentConversationEntryId::AmbientRun(
+                    task_id,
+                )),
+                None,
+                ctx,
+            );
+
+            assert!(matches!(
+                action,
+                Some(WorkspaceAction::OpenOrAttachAmbientAgentConversation {
+                    session_id: resolved_session_id,
+                    task_id: resolved_task_id,
+                }) if resolved_session_id.to_string() == session_id && resolved_task_id == task_id
+            ));
+
+            let entry = AgentConversationsModel::as_ref(ctx)
+                .get_entry_by_id(&AgentConversationEntryId::AmbientRun(task_id), ctx)
+                .expect("retained task entry should exist");
+            assert!(entry.capabilities.can_open);
+        });
+    });
+}
+
+#[test]
+fn test_resolve_open_action_uses_transcript_for_ended_failed_task() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let session_id = make_uuid(8209);
+        let token = "ended-failed-token";
+        let mut task = create_test_task(&make_uuid(8210), "user-a", Utc::now());
+        task.state = AmbientAgentTaskState::Failed;
+        task.session_id = Some(session_id.clone());
+        task.session_link = Some(format!("https://example.com/session/{session_id}"));
+        task.conversation_id = Some(token.to_string());
+        task.is_sandbox_running = false;
+        let task_id = task.task_id;
+
+        app.add_singleton_model(|_| {
+            let mut model = create_test_model();
+            model.tasks.insert(task_id, task);
+            model
+        });
+
+        app.update(|ctx| {
+            let action = AgentConversationsModel::resolve_open_action(
+                AgentConversationNavigationSubject::Entry(AgentConversationEntryId::AmbientRun(
+                    task_id,
+                )),
+                None,
+                ctx,
+            );
+
+            assert!(matches!(
+                action,
+                Some(WorkspaceAction::OpenConversationTranscriptViewer {
+                    conversation_id,
+                    ambient_agent_task_id: Some(resolved_task_id),
+                }) if conversation_id.as_str() == token && resolved_task_id == task_id
+            ));
+        });
+    });
+}
+
+#[test]
 fn test_resolve_open_action_returns_none_for_active_unattachable_session() {
     App::test((), |mut app| async move {
         add_entry_projection_test_models(&mut app);
@@ -1730,6 +1815,75 @@ fn test_resolve_copy_link_prefers_active_session_link() {
             );
 
             assert_eq!(link.as_deref(), Some(session_link));
+        });
+    });
+}
+
+#[test]
+fn test_resolve_copy_link_prefers_session_link_for_retained_failed_task() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let session_id = make_uuid(8304);
+        let session_link = format!("https://example.com/session/{session_id}");
+        let mut task = create_test_task(&make_uuid(8305), "user-a", Utc::now());
+        task.state = AmbientAgentTaskState::Error;
+        task.session_link = Some(session_link.clone());
+        task.conversation_id = Some("retained-error-token".to_string());
+        task.is_sandbox_running = true;
+        let task_id = task.task_id;
+
+        app.add_singleton_model(|_| {
+            let mut model = create_test_model();
+            model.tasks.insert(task_id, task);
+            model
+        });
+
+        app.update(|ctx| {
+            let link = AgentConversationsModel::resolve_copy_link(
+                AgentConversationNavigationSubject::Entry(AgentConversationEntryId::AmbientRun(
+                    task_id,
+                )),
+                ctx,
+            );
+
+            assert_eq!(link.as_deref(), Some(session_link.as_str()));
+        });
+    });
+}
+
+#[test]
+fn test_resolve_copy_link_uses_conversation_link_for_ended_failed_task() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let session_id = make_uuid(8306);
+        let token = "ended-failed-copy-token";
+        let mut task = create_test_task(&make_uuid(8307), "user-a", Utc::now());
+        task.state = AmbientAgentTaskState::Failed;
+        task.session_link = Some(format!("https://example.com/session/{session_id}"));
+        task.conversation_id = Some(token.to_string());
+        task.is_sandbox_running = false;
+        let task_id = task.task_id;
+
+        app.add_singleton_model(|_| {
+            let mut model = create_test_model();
+            model.tasks.insert(task_id, task);
+            model
+        });
+
+        app.update(|ctx| {
+            let link = AgentConversationsModel::resolve_copy_link(
+                AgentConversationNavigationSubject::Entry(AgentConversationEntryId::AmbientRun(
+                    task_id,
+                )),
+                ctx,
+            );
+
+            assert_eq!(
+                link,
+                Some(ServerConversationToken::new(token.to_string()).conversation_link())
+            );
         });
     });
 }

@@ -125,7 +125,14 @@ pub fn wire_ambient_agent_session_events(
                     }
                 }
                 AmbientAgentViewModelEvent::ExecutionSessionReady { session_id } => {
-                    manager.attach_execution_session(*session_id, ctx);
+                    // Returns false when the viewer is mid-connect, in which case the pane stays
+                    // on its current session. Recoverable, but silent otherwise: the attach is
+                    // driven by an event, so the caller that requested it has already returned.
+                    if !manager.attach_execution_session(*session_id, ctx) {
+                        log::warn!(
+                            "Ambient viewer could not re-attach to execution session {session_id}"
+                        );
+                    }
                 }
                 AmbientAgentViewModelEvent::EnteredSetupState
                 | AmbientAgentViewModelEvent::EnteredComposingState

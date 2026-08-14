@@ -15,6 +15,7 @@ use ai::skills::{
     resolve_skills_dirs,
 };
 use anyhow::{Context as _, anyhow};
+use chrono::Utc;
 use futures::FutureExt as _;
 use futures::channel::oneshot;
 use futures::future::{self, Either, join_all};
@@ -24,6 +25,7 @@ use oneshot::{Canceled, Receiver};
 use repo_metadata::local_model::IndexedRepoState;
 use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
 use session_sharing_protocol::sharer::SessionRetentionReason;
+use tracing::Instrument as _;
 use uuid::Uuid;
 use warp_cli::agent::{Harness, OutputFormat};
 use warp_cli::mcp::MCPSpec;
@@ -33,7 +35,7 @@ use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::{safe_debug, safe_error, safe_info};
 use warp_errors::{ErrorExt, register_error, report_error, report_if_error};
-use warp_graphql::ai::AgentTaskState;
+use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::r#async::{FutureExt, TimeoutError, Timer};
@@ -104,6 +106,7 @@ use crate::terminal::view::ConversationRestorationInNewPaneType;
 pub(crate) mod attachments;
 #[cfg(feature = "local_fs")]
 pub(crate) mod cache_setup;
+mod checkpoint_coordinator;
 pub(crate) mod cloud_provider;
 pub(crate) mod environment;
 mod error_classification;
@@ -206,6 +209,21 @@ const LEGACY_OZ_PARENT_STATE_ROOT_ENV: &str = "OZ_PARENT_STATE_ROOT";
 struct IdleTimeoutSender<T: Send + 'static> {
     tx_cell: Arc<Mutex<Option<oneshot::Sender<T>>>>,
     generation: Arc<AtomicUsize>,
+    /// Most recent [`Self::arm_refreshable`] call. Held here rather than by the caller so a
+    /// long-lived refresher cannot re-arm with a superseded outcome.
+    pending: Arc<Mutex<Option<(T, Duration)>>>,
+}
+
+// Hand-written so cloning does not require `T: Clone`. Every field is a shared handle, so
+// clones drive the same completion.
+impl<T: Send + 'static> Clone for IdleTimeoutSender<T> {
+    fn clone(&self) -> Self {
+        Self {
+            tx_cell: Arc::clone(&self.tx_cell),
+            generation: Arc::clone(&self.generation),
+            pending: Arc::clone(&self.pending),
+        }
+    }
 }
 
 impl<T: Send + 'static> IdleTimeoutSender<T> {
@@ -213,6 +231,7 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         Self {
             tx_cell: Arc::new(Mutex::new(Some(tx))),
             generation: Arc::new(AtomicUsize::new(0)),
+            pending: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -253,22 +272,117 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
     }
 
     /// Cancel any pending idle timers.
+    ///
+    /// Also drops the recorded [`Self::arm_refreshable`] outcome, so a refresher that outlives the
+    /// cancellation cannot reschedule the exit it was cancelling.
     fn cancel_idle_timeout(&self) {
+        if let Ok(mut pending) = self.pending.lock() {
+            *pending = None;
+        }
         if self.generation.load(Ordering::SeqCst) > 0 {
             self.generation.fetch_add(1, Ordering::SeqCst);
         }
     }
 
-    /// End the run with `value`, deferring by `idle_on_complete` when set so the
-    /// driver stays alive long enough to accept a follow-up. Use for "graceful"
-    /// terminal statuses (Success / Blocked / Cancelled). Falls back to
-    /// immediate completion when `idle_on_complete` is `None`.
-    fn complete_with_optional_idle(&self, idle_on_complete: Option<Duration>, value: T) {
-        if let Some(idle_timeout) = idle_on_complete {
+    /// End the run with `value`, deferring by `idle_timeout` when set and completing immediately
+    /// when it is `None`.
+    fn complete_with_optional_idle(&self, idle_timeout: Option<Duration>, value: T) {
+        if let Some(idle_timeout) = idle_timeout {
             self.end_run_after(idle_timeout, value);
         } else {
             self.end_run_now(value);
         }
+    }
+}
+
+impl<T: Clone + Send + 'static> IdleTimeoutSender<T> {
+    /// End the run with `value` after `window`, recording both for [`Self::refresh`].
+    ///
+    /// Re-arming replaces the recorded outcome, so a run that fails, resumes, and fails again
+    /// exits reporting its most recent failure.
+    fn arm_refreshable(&self, window: Duration, value: T) {
+        if let Ok(mut pending) = self.pending.lock() {
+            *pending = Some((value.clone(), window));
+        }
+        self.end_run_after(window, value);
+    }
+
+    /// Push an armed deadline out by its original window. Returns that window, or `None` if
+    /// nothing was armed.
+    fn refresh(&self) -> Option<Duration> {
+        let (value, window) = {
+            let pending = self.pending.lock().ok()?;
+            pending.clone()?
+        };
+        self.end_run_after(window, value);
+        Some(window)
+    }
+}
+
+/// The status update reported for a run that failed during environment preparation.
+///
+/// The code must stay `EnvironmentSetupFailed`: `TaskStatusMessage::is_environment_setup_failure`
+/// matches that variant alone, and the cloud-continuation resolver keys its no-CTA tombstone off
+/// that check.
+fn setup_failure_status_update(message: String) -> TaskStatusUpdate {
+    TaskStatusUpdate::with_error_code(message, PlatformErrorCode::EnvironmentSetupFailed)
+}
+
+/// How long the driver should stay alive after the conversation reaches `status`. `None` exits
+/// immediately.
+///
+/// The two windows are deliberately independent and neither is a fallback for the other:
+/// `idle_on_complete` keeps a healthy run available for a follow-up, while `idle_on_fail` keeps a
+/// failed run's shared session attachable. The agent process is the session sharer, so exiting on
+/// error is what tears that session down.
+fn idle_window_for_terminal_status(
+    status: &SDKConversationOutputStatus,
+    idle_on_complete: Option<Duration>,
+    idle_on_fail: Option<Duration>,
+) -> Option<Duration> {
+    match status {
+        SDKConversationOutputStatus::Success
+        | SDKConversationOutputStatus::Blocked { .. }
+        | SDKConversationOutputStatus::Cancelled { .. } => idle_on_complete,
+        SDKConversationOutputStatus::Error { .. } => idle_on_fail,
+    }
+}
+
+/// [`idle_window_for_terminal_status`] for a third-party CLI harness session.
+///
+/// A failed CLI session is the same situation as a failed Oz conversation — the agent process is
+/// still the session sharer — so `--idle-on-fail` has to apply to both, or the flag silently does
+/// nothing depending on which harness the run happened to use.
+fn idle_window_for_cli_session_status(
+    status: &CLIAgentSessionStatus,
+    idle_on_complete: Option<Duration>,
+    idle_on_fail: Option<Duration>,
+) -> Option<Duration> {
+    match status {
+        CLIAgentSessionStatus::Success | CLIAgentSessionStatus::Blocked { .. } => idle_on_complete,
+        CLIAgentSessionStatus::Failed { .. } => idle_on_fail,
+        CLIAgentSessionStatus::InProgress => None,
+    }
+}
+
+/// Low-cardinality `outcome=` label for the ambient agent idle lifecycle logs.
+fn terminal_status_log_outcome(status: &SDKConversationOutputStatus) -> &'static str {
+    match status {
+        SDKConversationOutputStatus::Success
+        | SDKConversationOutputStatus::Blocked { .. }
+        | SDKConversationOutputStatus::Cancelled { .. } => "non_error_completion",
+        SDKConversationOutputStatus::Error { .. } => "error",
+    }
+}
+
+/// [`terminal_status_log_outcome`] for a third-party CLI harness session.
+fn cli_session_status_log_outcome(status: &CLIAgentSessionStatus) -> &'static str {
+    match status {
+        CLIAgentSessionStatus::Success | CLIAgentSessionStatus::Blocked { .. } => {
+            "non_error_completion"
+        }
+        CLIAgentSessionStatus::Failed { .. } => "error",
+        CLIAgentSessionStatus::InProgress => "in_progress",
     }
 }
 
@@ -296,6 +410,10 @@ pub struct AgentDriverOptions {
     pub should_share: bool,
     /// How long to keep the session alive after the agent run completes, if at all.
     pub idle_on_complete: Option<Duration>,
+    /// How long to keep the session alive after the agent run ends in a terminal error, if at
+    /// all. Set by the cloud worker from the environment's post-failure session retention policy
+    /// so the failed run's shared session stays attachable for debugging.
+    pub idle_on_fail: Option<Duration>,
     /// If set, resume an existing conversation instead of starting fresh. The variant
     /// determines which harness-specific path is taken (Oz transcript restore vs.
     /// third-party-harness payload rehydration).
@@ -317,6 +435,8 @@ pub struct AgentDriverOptions {
     pub snapshot_upload_timeout: Option<Duration>,
     /// Declarations script timeout override.
     pub snapshot_script_timeout: Option<Duration>,
+    /// Periodic checkpoint cadence override. Only used when `FeatureFlag::PeriodicHandoffCheckpoints` is enabled.
+    pub checkpoint_interval: Option<Duration>,
     /// Skip the initial `StartFromAmbientRunPrompt` so the agent waits for a
     /// follow-up instead of hallucinating an empty turn. Sourced from the
     /// `--skip-initial-turn` CLI flag, which the worker emits when the
@@ -362,6 +482,19 @@ pub struct AgentDriver {
     // and exit after this period of inactivity.
     idle_on_complete: Option<Duration>,
 
+    // Optional idle timeout after a terminal error. If set, the process (and with it the shared
+    // session it is sharing) stays alive after the conversation fails, so a human can attach to
+    // the failed run and keep working in its environment.
+    idle_on_fail: Option<Duration>,
+
+    // Whether a viewer-input subscription is already refreshing an open debug window. Guards
+    // against stacking a second subscription when a run fails, is resumed, and fails again.
+    debug_window_refresh_installed: bool,
+
+    // When the debug window's deadline was last published to the server, used to throttle
+    // republishing on high-frequency viewer input.
+    last_published_debug_deadline: Option<SystemTime>,
+
     // The conversation ID to continue (if provided).
     restored_conversation_id: Option<AIConversationId>,
 
@@ -381,6 +514,9 @@ pub struct AgentDriver {
     snapshot_disabled: bool,
     snapshot_upload_timeout: Duration,
     snapshot_script_timeout: Duration,
+
+    /// Periodic workspace-handoff checkpoint coordinator; `None` unless both handoff flags are enabled and the run has a cloud task id.
+    checkpoint_coordinator: Option<checkpoint_coordinator::CheckpointCoordinatorHandle>,
 
     /// Conversation ID this driver is running. Set at construction for
     /// resumed runs and on `ConversationServerTokenAssigned` for fresh
@@ -413,6 +549,7 @@ pub struct AgentDriver {
     mcp_startup_timeout: Duration,
 }
 
+#[derive(Clone)]
 pub(crate) enum SDKConversationOutputStatus {
     Success,
     Error { error: RenderableAIError },
@@ -654,6 +791,7 @@ impl AgentDriver {
             parent_run_id,
             should_share,
             idle_on_complete,
+            idle_on_fail,
             secrets,
             resume,
             cloud_providers,
@@ -664,6 +802,7 @@ impl AgentDriver {
             snapshot_disabled,
             snapshot_upload_timeout,
             snapshot_script_timeout,
+            checkpoint_interval,
             skip_initial_turn,
             strict_mcp_startup,
             mcp_startup_timeout,
@@ -679,9 +818,9 @@ impl AgentDriver {
         };
 
         safe_info!(
-            safe: ("Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}"),
+            safe: ("Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}, idle_on_fail={idle_on_fail:?}"),
             full: (
-                "Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}, working_dir={}",
+                "Initializing agent driver: share={should_share}, idle_on_complete={idle_on_complete:?}, idle_on_fail={idle_on_fail:?}, working_dir={}",
                 working_dir.display()
             )
         );
@@ -772,6 +911,36 @@ impl AgentDriver {
             _ => None,
         };
 
+        // Spawn the periodic checkpoint coordinator under the same gates as the
+        // declarations writer above, plus the dedicated rollout flag. `None` keeps
+        // `run_snapshot_upload` on the legacy one-shot upload path unchanged.
+        let checkpoint_coordinator = match task_id {
+            Some(id)
+                if FeatureFlag::OzHandoff.is_enabled()
+                    && FeatureFlag::PeriodicHandoffCheckpoints.is_enabled()
+                    && !snapshot_disabled_value =>
+            {
+                let client = ServerApiProvider::as_ref(ctx).get_harness_support_client();
+                Some(checkpoint_coordinator::CheckpointCoordinatorHandle::new(
+                    client,
+                    id,
+                    working_dir.clone(),
+                    // Shared with the history subscription so every attempt can drain
+                    // queued `file` appends before the declarations script runs, exactly
+                    // as `run_snapshot_upload` does on the legacy path.
+                    snapshot_file_writer.clone(),
+                    ctx.spawner(),
+                    checkpoint_interval
+                        .unwrap_or(checkpoint_coordinator::DEFAULT_CHECKPOINT_INTERVAL),
+                    snapshot_script_timeout
+                        .unwrap_or(snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT),
+                    snapshot_upload_timeout.unwrap_or(snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT),
+                    ctx.background_executor(),
+                ))
+            }
+            _ => None,
+        };
+
         Ok(Self {
             terminal_driver,
             working_dir,
@@ -781,6 +950,9 @@ impl AgentDriver {
             task_id,
             harness: None,
             idle_on_complete,
+            idle_on_fail,
+            debug_window_refresh_installed: false,
+            last_published_debug_deadline: None,
             restored_conversation_id,
             resume_payload,
             cloud_providers,
@@ -791,6 +963,7 @@ impl AgentDriver {
                 .unwrap_or(snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT),
             snapshot_script_timeout: snapshot_script_timeout
                 .unwrap_or(snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT),
+            checkpoint_coordinator,
             run_conversation_id,
             parent_run_id: parent_run_id_for_self,
             third_party_harness_model_config,
@@ -826,6 +999,9 @@ impl AgentDriver {
             task_id: None,
             harness: None,
             idle_on_complete: None,
+            idle_on_fail: None,
+            debug_window_refresh_installed: false,
+            last_published_debug_deadline: None,
             restored_conversation_id: None,
             resume_payload: None,
             cloud_providers: Vec::new(),
@@ -834,6 +1010,7 @@ impl AgentDriver {
             snapshot_disabled: false,
             snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
             snapshot_script_timeout: snapshot::DEFAULT_DECLARATIONS_SCRIPT_TIMEOUT,
+            checkpoint_coordinator: None,
             run_conversation_id: None,
             parent_run_id: None,
             third_party_harness_model_config: None,
@@ -897,6 +1074,7 @@ impl AgentDriver {
                         .update_agent_task(
                             task_id,
                             Some(AgentTaskState::InProgress),
+                            None,
                             None,
                             None,
                             None,
@@ -1636,6 +1814,7 @@ impl AgentDriver {
                     None,
                     None,
                     Some(TaskStatusUpdate::message(message)),
+                    None,
                 )
                 .await
             {
@@ -2240,7 +2419,15 @@ impl AgentDriver {
             safe: ("Running agent driver"),
             full: ("Running agent driver for query `{:?}`", task.prompt)
         );
-        let setup_events = foreground
+
+        let setup_span = tracing::info_span!("agent_run_setup", tags.cloud_agent = true);
+        let (
+            setup_events,
+            task_id_for_refresh,
+            ai_client_for_refresh,
+            oidc_strategy_for_refresh,
+        ) = async {
+            let setup_events = foreground
             .spawn(|me, ctx| {
                 let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
                 match me.task_id {
@@ -2455,10 +2642,14 @@ impl AgentDriver {
         let additional_source_repos = foreground
             .spawn(|me, _| me.additional_source_repos.clone())
             .await?;
-        let setup_commands = environment_opt
+        let mut setup_commands = environment_opt
             .as_ref()
             .map(|environment| environment.setup_commands.clone())
             .unwrap_or_default();
+        // The Factory definition checkout is run-scoped: the dispatch decides
+        // whether this run gets one by attaching the clone variables,
+        // independent of which environment the run executes in.
+        environment::prepend_factory_definition_clone(&mut setup_commands);
         let source_repos = environment::merge_repos_deduped(
             environment_opt
                 .as_ref()
@@ -2467,7 +2658,7 @@ impl AgentDriver {
             additional_source_repos,
         )?;
 
-        if environment_opt.is_some() || !source_repos.is_empty() {
+        if environment_opt.is_some() || !source_repos.is_empty() || !setup_commands.is_empty() {
             log::info!("Loading environment...");
             environment_skill_repos = source_repos.clone();
 
@@ -2497,7 +2688,7 @@ impl AgentDriver {
             let harness = task.harness.harness();
             let setup_events_for_environment = setup_events.clone();
             let source_repos_for_prepare = source_repos;
-            foreground
+            let prepare_outcome = foreground
                 .spawn(move |me, ctx| {
                     let working_dir = me.working_dir.clone();
                     me.terminal_driver.update(ctx, |_, ctx| {
@@ -2514,7 +2705,13 @@ impl AgentDriver {
                 })
                 .await?
                 .await
-                .map_err(AgentDriverError::from)?;
+                .map_err(AgentDriverError::from);
+            if let Err(error) = prepare_outcome {
+                // A broken environment is the case post-failure retention exists for, so this
+                // failure must not take the session down with it on the way out.
+                Self::linger_after_failure(&foreground, "environment_setup", &error).await;
+                return Err(error);
+            }
 
             if let Some(file_based_discovery_rx) = file_based_discovery_rx {
                 // Await discovery: collect UUIDs of file-based MCP servers that were auto-started
@@ -2618,6 +2815,16 @@ impl AgentDriver {
             })
             .await?;
 
+            Ok::<_, AgentDriverError>((
+                setup_events,
+                task_id_for_refresh,
+                ai_client_for_refresh,
+                oidc_strategy_for_refresh,
+            ))
+        }
+        .instrument(setup_span)
+        .await?;
+
         // Run the harness with a prompt, racing it against optional background refresh
         // loops for git credentials and Bedrock OIDC credentials via
         // `with_credential_refreshes`. Refresh futures never resolve on their own —
@@ -2701,6 +2908,166 @@ impl AgentDriver {
                     "The {harness} harness is only supported for local child agent launches."
                 ),
             }),
+        }
+    }
+
+    /// Holds the agent process — and with it the run's shared session — open for the
+    /// `--idle-on-fail` window before a setup failure propagates. A no-op without that flag.
+    ///
+    /// The session is established before environment preparation, so a run that dies during setup
+    /// still has a joinable one, which is the case this feature exists for: the environment is
+    /// broken and someone wants to look around inside it.
+    async fn linger_after_failure(
+        foreground: &ModelSpawner<Self>,
+        stage: &str,
+        error: &AgentDriverError,
+    ) {
+        let idle_on_fail = match foreground.spawn(|me, _| me.idle_on_fail).await {
+            Ok(idle_on_fail) => idle_on_fail,
+            Err(spawn_error) => {
+                log::warn!(
+                    "Could not read idle-on-fail window after {stage} failure: {spawn_error}"
+                );
+                return;
+            }
+        };
+        let Some(window) = idle_on_fail else {
+            return;
+        };
+
+        Self::report_failure_before_lingering(foreground, stage, error).await;
+
+        let (tx, rx) = oneshot::channel::<()>();
+        let armed = foreground.spawn(move |me, ctx| {
+            me.arm_debug_window(IdleTimeoutSender::new(tx), (), window, ctx);
+        });
+        if let Err(error) = armed.await {
+            log::warn!("Could not arm the post-failure debug window: {error}");
+            return;
+        }
+
+        log::info!(
+            "Ambient agent idle lifecycle: event=idle_timeout_scheduled stage={stage} timeout={window:?} outcome=setup_failure"
+        );
+        let _ = rx.await;
+        log::info!(
+            "Ambient agent idle lifecycle: event=idle_window_elapsed stage={stage} outcome=setup_failure"
+        );
+    }
+
+    /// Arms a post-failure debug window and pushes its deadline out on every viewer input, so a
+    /// session someone is working in is not torn down underneath them.
+    ///
+    /// Both failure paths route through here so a conversation error and a setup failure behave
+    /// identically. The refresh subscription is installed once per driver.
+    fn arm_debug_window<T: Clone + Send + 'static>(
+        &mut self,
+        idle_timeout: IdleTimeoutSender<T>,
+        value: T,
+        window: Duration,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        // Recorded on the timer rather than captured below, so re-arming supersedes it.
+        idle_timeout.arm_refreshable(window, value);
+
+        // A newly armed window always publishes. The throttle exists for keystroke-level
+        // refreshes; letting it suppress this would leave the previous window's deadline on the
+        // run, which reads as already-expired and hides that the session is reachable.
+        self.last_published_debug_deadline = None;
+        self.publish_debug_window_deadline(window, ctx);
+
+        if self.debug_window_refresh_installed {
+            return;
+        }
+        self.debug_window_refresh_installed = true;
+
+        let terminal_driver = self.terminal_driver.clone();
+        ctx.subscribe_to_model(&terminal_driver, move |me, _, event, ctx| {
+            if matches!(event, TerminalDriverEvent::SharedSessionViewerInput)
+                && let Some(window) = idle_timeout.refresh()
+            {
+                log::debug!(
+                    "Ambient agent idle lifecycle: event=idle_timeout_refreshed trigger=viewer_input"
+                );
+                me.publish_debug_window_deadline(window, ctx);
+            }
+        });
+    }
+
+    /// Publishes the debug window's current deadline for display on run surfaces.
+    ///
+    /// Throttled, since the window refreshes on keystroke-level events. The published value is
+    /// advisory and lags the real deadline conservatively; the agent process owns the timer.
+    fn publish_debug_window_deadline(&mut self, window: Duration, ctx: &mut ModelContext<Self>) {
+        const MIN_PUBLISH_INTERVAL: Duration = Duration::from_secs(30);
+
+        let Some(task_id) = self.task_id else {
+            return;
+        };
+        let now = SystemTime::now();
+        if let Some(last) = self.last_published_debug_deadline
+            && now
+                .duration_since(last)
+                .is_ok_and(|elapsed| elapsed < MIN_PUBLISH_INTERVAL)
+        {
+            return;
+        }
+        self.last_published_debug_deadline = Some(now);
+
+        let deadline = Utc::now() + chrono::Duration::from_std(window).unwrap_or_default();
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        ctx.spawn(
+            async move {
+                ai_client
+                    .update_agent_task(task_id, None, None, None, None, Some(deadline))
+                    .await
+            },
+            move |_me, result, _ctx| {
+                if let Err(error) = result {
+                    log::warn!(
+                        "Failed to publish debug window deadline for run {task_id}: {error:#}"
+                    );
+                }
+            },
+        );
+    }
+
+    /// Reports the run's terminal failure state before the debug window starts.
+    ///
+    /// A setup failure never creates a conversation, so `LocalAgentTaskSyncModel` — which derives
+    /// task state from conversation status — never fires for it, and the run would otherwise read
+    /// as in-progress for the whole window.
+    async fn report_failure_before_lingering(
+        foreground: &ModelSpawner<Self>,
+        stage: &str,
+        error: &AgentDriverError,
+    ) {
+        let message = error.to_string();
+        let resolved = foreground
+            .spawn(|me, ctx| {
+                me.task_id
+                    .map(|task_id| (task_id, ServerApiProvider::as_ref(ctx).get_ai_client()))
+            })
+            .await;
+        let Ok(Some((task_id, ai_client))) = resolved else {
+            return;
+        };
+
+        let status = setup_failure_status_update(message);
+        if let Err(error) = ai_client
+            .update_agent_task(
+                task_id,
+                Some(AgentTaskState::Failed),
+                None,
+                None,
+                Some(status),
+                None,
+            )
+            .await
+        {
+            log::warn!(
+                "Failed to report {stage} failure for run {task_id} before lingering: {error:#}"
+            );
         }
     }
 
@@ -3519,37 +3886,40 @@ impl AgentDriver {
                             }
                         };
 
-                        match output_status {
-                            SDKConversationOutputStatus::Success
-                            | SDKConversationOutputStatus::Blocked { .. }
-                            | SDKConversationOutputStatus::Cancelled { .. } => {
-                                // Whether to keep the process alive after completion is controlled by
-                                // the `warp agent run --idle-on-complete[=<DURATION>]` flag.
-                                if let Some(idle_timeout) = me.idle_on_complete {
-                                    log::info!(
-                                        "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome=non_error_completion",
-                                        me.task_id
-                                    );
-                                } else {
-                                    log::info!(
-                                        "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome=non_error_completion",
-                                        me.task_id
-                                    );
-                                }
-                                run_exit.complete_with_optional_idle(
-                                    me.idle_on_complete,
+                        // Errors here are terminal: in-flight recoveries surface as
+                        // TransientError (handled above). Whether the process outlives either
+                        // kind of terminal status is controlled by the `--idle-on-complete` /
+                        // `--idle-on-fail` flags; see `idle_window_for_terminal_status`.
+                        let idle_window = idle_window_for_terminal_status(
+                            &output_status,
+                            me.idle_on_complete,
+                            me.idle_on_fail,
+                        );
+                        let outcome = terminal_status_log_outcome(&output_status);
+                        if let Some(idle_timeout) = idle_window {
+                            log::info!(
+                                "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={idle_timeout:?} outcome={outcome}",
+                                me.task_id
+                            );
+                        } else {
+                            log::info!(
+                                "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome={outcome}",
+                                me.task_id
+                            );
+                        }
+                        match idle_window {
+                            // A failure window is held open by the human working in the session,
+                            // so it goes through the shared arming path that refreshes on viewer
+                            // input. The success window has no such notion.
+                            Some(window)
+                                if matches!(
                                     output_status,
-                                );
+                                    SDKConversationOutputStatus::Error { .. }
+                                ) =>
+                            {
+                                me.arm_debug_window(run_exit.clone(), output_status, window, ctx);
                             }
-                            // Errors here are terminal: in-flight recoveries surface as
-                            // TransientError (handled above).
-                            SDKConversationOutputStatus::Error { .. } => {
-                                log::info!(
-                                    "Ambient agent idle lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_id:?} outcome=error",
-                                    me.task_id
-                                );
-                                run_exit.end_run_now(output_status);
-                            }
+                            _ => run_exit.complete_with_optional_idle(idle_window, output_status),
                         }
                     }
                 }
@@ -3635,6 +4005,8 @@ impl AgentDriver {
 
         // Submit the AI query.
         if !self.skip_initial_turn {
+            tracing::info!("Submitting initial AI query");
+
             self.terminal_driver.update(ctx, |td, ctx| {
                 td.with_terminal_view(ctx, |terminal, ctx| match task_prompt {
                     AgentRunPrompt::Local(prompt_str) => {
@@ -3747,23 +4119,38 @@ impl AgentDriver {
                         return;
                     }
 
-                    // Drive idle-on-complete timer for the harness exit signal.
+                    // Drive the idle timer for the harness exit signal.
                     match status {
                         CLIAgentSessionStatus::Success
                         | CLIAgentSessionStatus::Failed { .. }
                         | CLIAgentSessionStatus::Blocked { .. } => {
-                            if let Some(idle_timeout) = me.idle_on_complete {
+                            let idle_window = idle_window_for_cli_session_status(
+                                status,
+                                me.idle_on_complete,
+                                me.idle_on_fail,
+                            );
+                            let outcome = cli_session_status_log_outcome(status);
+                            if let Some(idle_timeout) = idle_window {
                                 log::info!(
-                                    "Ambient agent CLI lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_view_id:?} timeout={idle_timeout:?}",
+                                    "Ambient agent CLI lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_view_id:?} timeout={idle_timeout:?} outcome={outcome}",
                                     me.task_id
                                 );
                             } else {
                                 log::info!(
-                                    "Ambient agent CLI lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_view_id:?}",
+                                    "Ambient agent CLI lifecycle: event=run_completion_immediate task_id={:?} terminal_view_id={terminal_view_id:?} outcome={outcome}",
                                     me.task_id
                                 );
                             }
-                            harness_exit.complete_with_optional_idle(me.idle_on_complete, ());
+                            match idle_window {
+                                // A failure window is held open by whoever is debugging in the
+                                // session, so it refreshes on viewer input like the Oz path.
+                                Some(window)
+                                    if matches!(status, CLIAgentSessionStatus::Failed { .. }) =>
+                                {
+                                    me.arm_debug_window(harness_exit.clone(), (), window, ctx);
+                                }
+                                _ => harness_exit.complete_with_optional_idle(idle_window, ()),
+                            }
                         }
                         CLIAgentSessionStatus::InProgress => {
                             log::info!(
@@ -3855,7 +4242,14 @@ impl AgentDriver {
                         async move {
                             report_if_error!(
                                 server_api
-                                    .update_agent_task(task_id, None, Some(session_id), None, None)
+                                    .update_agent_task(
+                                        task_id,
+                                        None,
+                                        Some(session_id),
+                                        None,
+                                        None,
+                                        None
+                                    )
                                     .await
                                     .context("Error setting ambient agent shared session ID")
                             );
@@ -3864,6 +4258,9 @@ impl AgentDriver {
                     );
                 }
             }
+            // Only meaningful while a post-failure debug window is open, which subscribes to
+            // the terminal driver separately. Nothing to do on the steady-state path.
+            TerminalDriverEvent::SharedSessionViewerInput => {}
         }
     }
 
@@ -3938,13 +4335,20 @@ impl AgentDriver {
 
         // Snapshot upload is only meaningful for cloud task runs, so short-circuit before
         // pulling the rest of the context onto this task.
-        let Ok((Some(task_id), snapshot_disabled, upload_timeout, script_timeout)) = spawner
+        let Ok((
+            Some(task_id),
+            snapshot_disabled,
+            upload_timeout,
+            script_timeout,
+            checkpoint_coordinator,
+        )) = spawner
             .spawn(|me, _| {
                 (
                     me.task_id,
                     me.snapshot_disabled,
                     me.snapshot_upload_timeout,
                     me.snapshot_script_timeout,
+                    me.checkpoint_coordinator.clone(),
                 )
             })
             .await
@@ -3953,6 +4357,19 @@ impl AgentDriver {
         };
         if snapshot_disabled {
             log::info!("Skipping snapshot upload because --no-snapshot was specified");
+            return;
+        }
+
+        // An active coordinator replaces the legacy upload below. Budget must come from
+        // `finalize_budget`: the coordinator's floor is `script_timeout + upload_timeout`,
+        // so a smaller budget silently skips the final attempt.
+        if let Some(coordinator) = checkpoint_coordinator {
+            coordinator
+                .finalize(checkpoint_coordinator::finalize_budget(
+                    script_timeout,
+                    upload_timeout,
+                ))
+                .await;
             return;
         }
 
@@ -4145,7 +4562,7 @@ pub(super) async fn report_driver_error(
 ) {
     let (state, status_update) = error_classification::classify_driver_error(err);
     if let Err(e) = server_api
-        .update_agent_task(task_id, Some(state), None, None, Some(status_update))
+        .update_agent_task(task_id, Some(state), None, None, Some(status_update), None)
         .await
     {
         report_error!(

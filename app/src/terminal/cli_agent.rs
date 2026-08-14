@@ -328,7 +328,7 @@ impl CLIAgent {
     }
 
     /// Whether Warp should show its CLI-agent footer for this agent.
-    pub(super) fn supports_cli_agent_footer(&self) -> bool {
+    pub(crate) fn supports_cli_agent_footer(&self) -> bool {
         !matches!(self, CLIAgent::WarpTui)
     }
 

@@ -365,7 +365,7 @@ pub struct AgentMessageHeader {
     pub read_at: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AgentRunEvent {
     pub event_type: String,
     pub run_id: String,
@@ -863,6 +863,7 @@ pub(crate) fn build_list_agent_runs_url(limit: i32, filter: &TaskListFilter) -> 
 pub(crate) fn build_run_followup_url(run_id: &AmbientAgentTaskId) -> String {
     format!("agent/runs/{run_id}/followups")
 }
+
 pub(crate) fn build_fork_conversation_url(conversation_id: &str) -> String {
     format!(
         "agent/conversations/{}/fork",
@@ -1221,6 +1222,12 @@ pub trait AIClient: 'static + Send + Sync {
         config: Option<AgentConfigSnapshot>,
     ) -> anyhow::Result<AmbientAgentTaskId, anyhow::Error>;
 
+    /// Updates a run's server-side record. Every argument is independently optional; omitted
+    /// fields are left untouched rather than cleared.
+    ///
+    /// `session_debug_until` is the deadline of an open post-failure debug window. It is
+    /// deliberately separate from `status_message` so a refresh can move the deadline without
+    /// rewriting the failure text the run reported.
     async fn update_agent_task(
         &self,
         task_id: AmbientAgentTaskId,
@@ -1228,6 +1235,7 @@ pub trait AIClient: 'static + Send + Sync {
         session_id: Option<session_sharing_protocol::common::SessionId>,
         conversation_id: Option<String>,
         status_message: Option<TaskStatusUpdate>,
+        session_debug_until: Option<DateTime<Utc>>,
     ) -> anyhow::Result<(), anyhow::Error>;
 
     async fn spawn_agent(
@@ -2139,6 +2147,7 @@ impl AIClient for ServerApi {
         session_id: Option<session_sharing_protocol::common::SessionId>,
         conversation_id: Option<String>,
         status_message: Option<TaskStatusUpdate>,
+        session_debug_until: Option<DateTime<Utc>>,
     ) -> anyhow::Result<(), anyhow::Error> {
         let variables = UpdateAgentTaskVariables {
             input: UpdateAgentTaskInput {
@@ -2150,6 +2159,7 @@ impl AIClient for ServerApi {
                     message: update.message,
                     error_code: update.error_code,
                 }),
+                session_debug_until: session_debug_until.map(Into::into),
             },
             request_context: get_request_context(),
         };
