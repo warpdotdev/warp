@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
+use instant::Instant;
 use session_sharing_protocol::common::SessionId;
 use uuid::Uuid;
 use warp_errors::report_error;
-use warpui::{SingletonEntity, ViewContext};
+use warpui::{EntityId, SingletonEntity, ViewContext};
 
 use super::{HiddenChildAgentTaskContext, apply_hidden_child_agent_task_context};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
@@ -16,8 +18,10 @@ use crate::ai::blocklist::orchestration_event_streamer::agent_task_harness;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::features::FeatureFlag;
 use crate::pane_group::{
-    AmbientAgentViewModelHandleExt, PaneGroup, PaneId, TerminalPane, TerminalViewResources,
+    AmbientAgentViewModelHandleExt, PaneGroup, PaneId, ParentChildSeedFetchState,
+    PendingParentChildSeed, TerminalPane, TerminalViewResources,
 };
+use crate::server::retry_strategies::is_transient_http_error;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::TaskListFilter;
 use crate::terminal::shared_session::IsSharedSessionCreator;
@@ -28,6 +32,13 @@ use crate::terminal::view::load_ai_conversation::{
 /// Max direct children fetched per ancestor-list restore seed. The server
 /// caps at 100 regardless, matching the Observer-side ancestor seed fetch.
 const RESTORE_CHILD_SEED_FETCH_LIMIT: i32 = 100;
+
+/// How long to back off before retrying a parent's ancestor-list fetch after
+/// a transient error (network blip, 5xx, 408, 429). A permanent
+/// (non-transient) failure instead drops the parent from
+/// `pending_parent_child_seeds` entirely (see
+/// `finish_seed_child_conversations_from_task`) rather than backing off.
+const TRANSIENT_SEED_FETCH_COOLDOWN: Duration = Duration::from_secs(5);
 
 impl PaneGroup {
     /// Lazily restores hidden child panes for the given parent conversation.
@@ -114,9 +125,10 @@ impl PaneGroup {
     /// on clients without cross-session SQLite (web) and on the first restore
     /// of a run whose parent was never persisted.
     ///
-    /// Idempotent: children that already resolve locally are left untouched, so
-    /// racing the SSE family drain, the local conversation index, or a repeat
-    /// ancestor-list fetch costs nothing.
+    /// This is a one-shot catch-up seed, not a live poller — the SSE family
+    /// drain covers children spawned afterward. Idempotent: children that
+    /// already resolve locally are left untouched, and a parent already
+    /// pending doesn't get re-listed (see `spawn_ancestor_list_fetch_if_needed`).
     pub(in crate::pane_group) fn seed_child_conversations_from_task(
         &mut self,
         parent_conversation_id: AIConversationId,
@@ -127,13 +139,58 @@ impl PaneGroup {
             return;
         }
 
-        // Mark pending until the fetch resolves. `process_pending_parent_child_seeds`
-        // re-drives this on the next `TasksUpdated`, and a repeat fetch while one is
-        // already in flight is harmless since every child is routed through the
-        // idempotent `ensure_remote_child_conversation`.
+        // Mark pending until every direct child resolves locally.
+        // `process_pending_parent_child_seeds` re-drives this on the next
+        // `TasksUpdated`.
         self.pending_parent_child_seeds
-            .insert(parent_task_id, parent_conversation_id);
+            .entry(parent_task_id)
+            .or_insert_with(|| PendingParentChildSeed {
+                parent_conversation_id,
+                known_child_task_ids: None,
+                fetch_state: ParentChildSeedFetchState::Idle,
+            });
         self.ensure_pending_ambient_restoration_subscription(ctx);
+
+        self.spawn_ancestor_list_fetch_if_needed(parent_task_id, ctx);
+    }
+
+    /// Spawns the `?ancestor_run_id=` fetch for `parent_task_id` unless one is
+    /// already in flight, a prior failure's backoff hasn't elapsed yet, or the
+    /// direct-child list is already known. In the last case,
+    /// `process_pending_parent_child_seeds` re-drives through
+    /// `try_resolve_pending_parent_children` instead, so a parent waiting only
+    /// on child task-cache resolution never triggers another network round
+    /// trip.
+    fn spawn_ancestor_list_fetch_if_needed(
+        &mut self,
+        parent_task_id: AmbientAgentTaskId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(seed) = self.pending_parent_child_seeds.get(&parent_task_id) else {
+            return;
+        };
+        if seed.known_child_task_ids.is_some() {
+            return;
+        }
+        match seed.fetch_state {
+            ParentChildSeedFetchState::InFlight => return,
+            ParentChildSeedFetchState::TransientlyFailed { at } => {
+                if at.elapsed() < TRANSIENT_SEED_FETCH_COOLDOWN {
+                    return;
+                }
+            }
+            ParentChildSeedFetchState::Idle => {}
+        }
+
+        let parent_conversation_id = seed.parent_conversation_id;
+        if let Some(seed) = self.pending_parent_child_seeds.get_mut(&parent_task_id) {
+            seed.fetch_state = ParentChildSeedFetchState::InFlight;
+        }
+
+        #[cfg(test)]
+        {
+            self.parent_child_seed_fetch_dispatch_count += 1;
+        }
 
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let filter = TaskListFilter {
@@ -158,9 +215,9 @@ impl PaneGroup {
     }
 
     /// Applies the ancestor-list fetch result kicked off by
-    /// `seed_child_conversations_from_task`: links each reported direct child
-    /// under `parent_conversation_id` and clears the pending entry once every
-    /// child's own task data has resolved.
+    /// `spawn_ancestor_list_fetch_if_needed`: records the direct-child list
+    /// (so later re-drives don't re-list) and attempts to link each child
+    /// under `parent_conversation_id`.
     fn finish_seed_child_conversations_from_task(
         &mut self,
         parent_conversation_id: AIConversationId,
@@ -175,33 +232,86 @@ impl PaneGroup {
                     "seed_child_conversations_from_task: ancestor-list fetch failed for \
                      parent_task_id={parent_task_id}: {err:#}"
                 );
-                // Leave pending; `process_pending_parent_child_seeds` retries
-                // on the next `TasksUpdated`.
+                let now = Instant::now();
+                if is_transient_http_error(&err) {
+                    // Stay pending; the cooldown bounds how often the next
+                    // `TasksUpdated` can retry the list.
+                    if let Some(seed) = self.pending_parent_child_seeds.get_mut(&parent_task_id) {
+                        seed.fetch_state = ParentChildSeedFetchState::TransientlyFailed { at: now };
+                    }
+                } else {
+                    // Permanent failure (401/403/404/...): retrying blindly on
+                    // every `TasksUpdated` can't succeed until something
+                    // external changes, so give up on this parent entirely
+                    // instead of leaving it pending forever. A later restore
+                    // entry point that re-opens the parent's pane re-seeds it
+                    // from scratch.
+                    self.pending_parent_child_seeds.remove(&parent_task_id);
+                }
                 return;
             }
         };
 
         // The terminal surface lookup is loop-invariant: if the parent
-        // conversation has no surface now, TasksUpdated won't fix it, so bail
-        // early with a single warn rather than repeating it per child.
+        // conversation has no surface now, TasksUpdated won't fix it, so give
+        // up rather than leaving this parent pending forever and re-listing
+        // on every future `TasksUpdated`. A restore entry point that actually
+        // opens the parent's own pane re-seeds it (see
+        // `restore_missing_child_agent_panes_for_parent`).
         let Some(terminal_surface_id) = BlocklistAIHistoryModel::as_ref(ctx)
             .terminal_surface_id_for_conversation(&parent_conversation_id)
         else {
             log::warn!(
                 "seed_child_conversations_from_task: parent conversation \
-                 {parent_conversation_id:?} has no terminal surface; leaving pending"
+                 {parent_conversation_id:?} has no terminal surface; giving up"
             );
+            self.pending_parent_child_seeds.remove(&parent_task_id);
+            return;
+        };
+
+        let child_task_ids: Vec<AmbientAgentTaskId> = children
+            .iter()
+            .map(|task| task.task_id)
+            .filter(|task_id| *task_id != parent_task_id)
+            .collect();
+
+        if let Some(seed) = self.pending_parent_child_seeds.get_mut(&parent_task_id) {
+            seed.known_child_task_ids = Some(child_task_ids);
+            seed.fetch_state = ParentChildSeedFetchState::Idle;
+        }
+
+        self.try_resolve_pending_parent_children(
+            parent_conversation_id,
+            parent_task_id,
+            terminal_surface_id,
+            ctx,
+        );
+    }
+
+    /// Links every known direct child of `parent_task_id` under
+    /// `parent_conversation_id`, clearing the pending entry once all of them
+    /// have resolved locally. Shared by the first successful ancestor-list
+    /// fetch and by later `TasksUpdated` re-drives, which reuse the already
+    /// known child list instead of re-issuing the list request.
+    fn try_resolve_pending_parent_children(
+        &mut self,
+        parent_conversation_id: AIConversationId,
+        parent_task_id: AmbientAgentTaskId,
+        terminal_surface_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(child_task_ids) = self
+            .pending_parent_child_seeds
+            .get(&parent_task_id)
+            .and_then(|seed| seed.known_child_task_ids.clone())
+        else {
             return;
         };
 
         // Children whose task data is still being fetched keep the parent
         // pending.
         let mut all_children_resolved = true;
-        for child_run_id in children
-            .iter()
-            .map(|task| task.task_id)
-            .filter(|task_id| *task_id != parent_task_id)
-        {
+        for child_run_id in child_task_ids {
             let child_task = AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
                 model.get_or_async_fetch_task_data(&child_run_id, ctx)
             });
@@ -229,10 +339,6 @@ impl PaneGroup {
 
         if all_children_resolved {
             self.pending_parent_child_seeds.remove(&parent_task_id);
-        } else {
-            self.pending_parent_child_seeds
-                .insert(parent_task_id, parent_conversation_id);
-            self.ensure_pending_ambient_restoration_subscription(ctx);
         }
 
         // Pills render straight off the conversation index, so a parent pane
@@ -241,9 +347,9 @@ impl PaneGroup {
         if let Some(parent_pane_id) =
             self.pane_id_for_owned_conversation(parent_conversation_id, ctx)
         {
-            // `false`: this call is itself the completion of a seed fetch,
-            // so an empty result here must not immediately kick off another
-            // one (that would loop forever for a parent with no children).
+            // `false`: this call is itself part of a seed re-drive, so an
+            // empty result here must not immediately kick off another one
+            // (that would loop forever for a parent with no children).
             self.restore_missing_child_agent_panes_for_parent(
                 parent_conversation_id,
                 parent_pane_id,
@@ -254,8 +360,11 @@ impl PaneGroup {
         ctx.notify();
     }
 
-    /// Re-drives parent seeds whose task data (or a child's) was still being
-    /// fetched, using the shared `TasksUpdated` subscription.
+    /// Re-drives pending parent seeds using the shared `TasksUpdated`
+    /// subscription: parents without a known child list yet get a
+    /// (coalesced, backed-off) ancestor-list fetch, while parents that
+    /// already know their children only wait on those children's task-cache
+    /// resolution — never re-listing just to make that kind of progress.
     pub(in crate::pane_group) fn process_pending_parent_child_seeds(
         &mut self,
         ctx: &mut ViewContext<Self>,
@@ -269,10 +378,33 @@ impl PaneGroup {
         let pending: Vec<_> = self
             .pending_parent_child_seeds
             .iter()
-            .map(|(task_id, conversation_id)| (*task_id, *conversation_id))
+            .map(|(task_id, seed)| {
+                (
+                    *task_id,
+                    seed.parent_conversation_id,
+                    seed.known_child_task_ids.is_some(),
+                )
+            })
             .collect();
-        for (parent_task_id, parent_conversation_id) in pending {
-            self.seed_child_conversations_from_task(parent_conversation_id, parent_task_id, ctx);
+        for (parent_task_id, parent_conversation_id, has_known_children) in pending {
+            if !has_known_children {
+                self.spawn_ancestor_list_fetch_if_needed(parent_task_id, ctx);
+                continue;
+            }
+            let Some(terminal_surface_id) = BlocklistAIHistoryModel::as_ref(ctx)
+                .terminal_surface_id_for_conversation(&parent_conversation_id)
+            else {
+                // The parent's pane went away between the successful list
+                // fetch and this re-drive; nothing left to seed into.
+                self.pending_parent_child_seeds.remove(&parent_task_id);
+                continue;
+            };
+            self.try_resolve_pending_parent_children(
+                parent_conversation_id,
+                parent_task_id,
+                terminal_surface_id,
+                ctx,
+            );
         }
     }
 

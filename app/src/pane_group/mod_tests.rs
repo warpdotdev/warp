@@ -1503,6 +1503,149 @@ fn test_pane_group_restore_loop_keeps_orchestration_topology_and_materializes_ch
     });
 }
 
+/// QUALITY-1656 regression: while any listed child is still missing from
+/// the task cache, a parent stays in `pending_parent_child_seeds`, and every
+/// `TasksUpdated` re-drives every pending parent. Without coalescing, a
+/// concurrent seed call (e.g. from `restore_missing_child_agent_panes_for_parent`)
+/// racing a `TasksUpdated` re-drive would dispatch a second `?ancestor_run_id=`
+/// request for the same parent while the first is still in flight.
+#[test]
+fn seed_child_conversations_from_task_coalesces_concurrent_ancestor_list_fetches() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let parent_task_id = new_ambient_agent_task_id();
+
+            // Simulate multiple entry points trying to seed the same parent
+            // before its first ancestor-list fetch has resolved: a direct
+            // re-entrant call, plus two `TasksUpdated` re-drives.
+            panes.seed_child_conversations_from_task(parent_conversation_id, parent_task_id, ctx);
+            panes.seed_child_conversations_from_task(parent_conversation_id, parent_task_id, ctx);
+            panes.process_pending_parent_child_seeds(ctx);
+            panes.process_pending_parent_child_seeds(ctx);
+
+            assert_eq!(
+                panes.parent_child_seed_fetch_dispatch_count, 1,
+                "a parent with an ancestor-list fetch already in flight must not get a second \
+                 request dispatched by a concurrent seed call or TasksUpdated re-drive",
+            );
+            assert!(
+                panes
+                    .pending_parent_child_seeds
+                    .contains_key(&parent_task_id),
+                "the parent should remain pending until the in-flight fetch resolves",
+            );
+        });
+    });
+}
+
+/// QUALITY-1656 regression: once the direct-child list is known (as it would
+/// be after the first successful ancestor-list fetch), later `TasksUpdated`
+/// re-drives must only wait on each child's own task-cache resolution
+/// instead of re-issuing the `?ancestor_run_id=` request — this is a
+/// one-shot catch-up seed, not a live poller.
+#[test]
+fn process_pending_parent_child_seeds_resolves_known_children_without_relisting() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let parent_task_id = new_ambient_agent_task_id();
+            let child_task_id = new_ambient_agent_task_id();
+
+            // Seed the child's task data directly so `get_or_async_fetch_task_data`
+            // resolves from cache instead of issuing a network call.
+            AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+                model.insert_task_for_test(ambient_agent_task_for_current_user(child_task_id));
+            });
+
+            // Simulate a first successful ancestor-list fetch having already
+            // recorded the direct-child list, as
+            // `finish_seed_child_conversations_from_task` does on success.
+            panes.pending_parent_child_seeds.insert(
+                parent_task_id,
+                PendingParentChildSeed {
+                    parent_conversation_id,
+                    known_child_task_ids: Some(vec![child_task_id]),
+                    fetch_state: ParentChildSeedFetchState::Idle,
+                },
+            );
+
+            panes.process_pending_parent_child_seeds(ctx);
+
+            assert_eq!(
+                panes.parent_child_seed_fetch_dispatch_count, 0,
+                "a parent whose direct-child list is already known must never re-list the \
+                 ancestor endpoint; it only waits on child task-cache resolution",
+            );
+            assert!(
+                !panes
+                    .pending_parent_child_seeds
+                    .contains_key(&parent_task_id),
+                "the parent must be cleared once its only known child has resolved locally",
+            );
+
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            assert_eq!(
+                history
+                    .child_conversation_ids_of(&parent_conversation_id)
+                    .len(),
+                1,
+                "the known child must be linked under the parent",
+            );
+        });
+    });
+}
+
+/// QUALITY-1656 regression: a parent with no terminal surface to seed into
+/// (e.g. a background ancestor several levels above the conversation the
+/// user actually opened) must not stay pending forever, since that would
+/// re-list it on every future `TasksUpdated` indefinitely.
+#[test]
+fn process_pending_parent_child_seeds_gives_up_when_parent_has_no_terminal_surface() {
+    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            // Never attached via `start_new_conversation` / `restore_conversations`,
+            // so it has no terminal surface.
+            let orphan_parent_conversation_id = AIConversationId::new();
+            let parent_task_id = new_ambient_agent_task_id();
+            let child_task_id = new_ambient_agent_task_id();
+
+            panes.pending_parent_child_seeds.insert(
+                parent_task_id,
+                PendingParentChildSeed {
+                    parent_conversation_id: orphan_parent_conversation_id,
+                    known_child_task_ids: Some(vec![child_task_id]),
+                    fetch_state: ParentChildSeedFetchState::Idle,
+                },
+            );
+
+            panes.process_pending_parent_child_seeds(ctx);
+
+            assert!(
+                !panes
+                    .pending_parent_child_seeds
+                    .contains_key(&parent_task_id),
+                "a parent with no terminal surface to seed into must not stay pending forever \
+                 and be re-listed on every future TasksUpdated",
+            );
+        });
+    });
+}
+
 #[test]
 fn test_create_missing_child_agent_panes_restores_remote_child_from_history_model() {
     App::test((), |mut app| async move {

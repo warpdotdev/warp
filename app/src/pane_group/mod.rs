@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 
+use instant::Instant;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use markdown_parser::FormattedTextFragment;
@@ -960,7 +961,13 @@ pub struct PaneGroup {
     /// fully materialized as local child conversations, keyed by the parent's
     /// run id. Re-driven from the shared `TasksUpdated` subscription until
     /// every child in the server-reported list has a local conversation.
-    pending_parent_child_seeds: HashMap<AmbientAgentTaskId, AIConversationId>,
+    pending_parent_child_seeds: HashMap<AmbientAgentTaskId, PendingParentChildSeed>,
+
+    /// Test-only: counts `spawn_ancestor_list_fetch_if_needed` dispatches, so
+    /// tests can assert that a burst of `TasksUpdated` re-drives coalesces
+    /// into a single ancestor-list fetch instead of one per event.
+    #[cfg(test)]
+    parent_child_seed_fetch_dispatch_count: usize,
 
     /// The most recent live session that failed to join for each viewer child.
     /// Re-drive does not retry the same session, but a later execution with a
@@ -987,6 +994,40 @@ pub struct PaneGroup {
 
     /// Tab-level custom title set via the rename-tab flow.
     custom_title: Option<String>,
+}
+
+/// A cloud orchestration parent whose direct children (per the server's
+/// `?ancestor_run_id=` listing) have not yet all materialized as local child
+/// conversations.
+struct PendingParentChildSeed {
+    parent_conversation_id: AIConversationId,
+    /// Direct children reported by the last successful ancestor-list fetch,
+    /// excluding the parent itself. `None` until the first successful fetch
+    /// completes. This is a one-shot catch-up seed, not a live poller (SSE
+    /// covers children spawned afterward), so once populated,
+    /// `process_pending_parent_child_seeds` re-drives reuse this list instead
+    /// of re-issuing the `?ancestor_run_id=` request — all that's left to
+    /// wait on is each child's own task-cache resolution.
+    known_child_task_ids: Option<Vec<AmbientAgentTaskId>>,
+    /// Coalescing/backoff state for the ancestor-list fetch itself.
+    fetch_state: ParentChildSeedFetchState,
+}
+
+/// Mirrors `AgentConversationsModel`'s per-task fetch-state guard so a given
+/// parent never has more than one `?ancestor_run_id=` request in flight, and
+/// a failed fetch backs off before the next `TasksUpdated` re-drive retries
+/// it.
+#[derive(Debug, Clone, Copy)]
+enum ParentChildSeedFetchState {
+    /// No fetch is running and none has failed recently.
+    Idle,
+    /// A fetch is currently outstanding.
+    InFlight,
+    /// The fetch failed with a transient error; back off briefly before
+    /// retrying. A permanent (non-transient) failure instead removes the
+    /// pending entry entirely (see `finish_seed_child_conversations_from_task`),
+    /// since retrying blindly can't succeed until something external changes.
+    TransientlyFailed { at: Instant },
 }
 
 /// Origin metadata for a split-off child agent tab; used to re-adopt the
@@ -3187,6 +3228,8 @@ impl PaneGroup {
             pending_remote_child_hydrations: HashMap::new(),
             pending_child_hydrations: HashMap::new(),
             pending_parent_child_seeds: HashMap::new(),
+            #[cfg(test)]
+            parent_child_seed_fetch_dispatch_count: 0,
             failed_viewer_child_sessions: HashMap::new(),
             pending_ambient_restoration_subscription_installed: false,
             child_agent_panes: HashMap::new(),
@@ -4665,9 +4708,9 @@ impl PaneGroup {
         }
         // Drop any pending parent seed associated with the view being removed
         // so the re-drive subscription doesn't fire for a closed pane.
-        self.pending_parent_child_seeds.retain(|_, parent_conv_id| {
+        self.pending_parent_child_seeds.retain(|_, seed| {
             BlocklistAIHistoryModel::as_ref(ctx)
-                .terminal_surface_id_for_conversation(parent_conv_id)
+                .terminal_surface_id_for_conversation(&seed.parent_conversation_id)
                 .is_some_and(|tv_id| tv_id != parent_terminal_view_id)
         });
     }
