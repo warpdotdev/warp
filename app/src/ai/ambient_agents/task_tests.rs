@@ -159,6 +159,17 @@ fn ambient_agent_task_deserializes_github_webhook_source() {
 }
 
 #[test]
+fn ambient_agent_task_deserializes_orchestration_source() {
+    let mut task = task_json_with_run_time("run_time", json!("PT1S"));
+    task["source"] = json!("ORCHESTRATION");
+
+    let task: AmbientAgentTask = serde_json::from_value(task).unwrap();
+
+    assert_eq!(task.source, Some(AgentSource::Orchestration));
+    assert!(!task.blocks_cloud_followups());
+}
+
+#[test]
 fn retained_failed_and_error_tasks_have_attachable_live_sessions() {
     let session_id = "22222222-2222-2222-2222-222222222222";
 
