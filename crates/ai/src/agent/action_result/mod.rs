@@ -192,24 +192,18 @@ impl Display for AIAgentActionResultType {
 ///
 /// A command that redirects its output to a file, suppresses it entirely, or
 /// computes silently is indistinguishable from a hung one when judged from the
-/// terminal grid alone. These tiers give the agent something to look at besides
-/// the grid before deciding to cancel.
+/// terminal grid alone. Process-tree activity gives the agent something to look
+/// at besides the grid before deciding to cancel.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 pub struct LrcActivity {
-    /// Time since the most recent activity on any tier. `None` when no tier has
-    /// ever reported activity.
+    /// Time since the process tree last showed activity — CPU accrual, I/O
+    /// writes, or a change in the set of live processes. `None` when no
+    /// activity has ever been observed.
     ///
     /// This is derived from a fixed-rate sampler rather than from the interval
     /// between agent polls, so it stays accurate no matter how far apart the
     /// agent's reads are.
     pub since_last_activity: Option<Duration>,
-
-    /// Whether the terminal output grid changed since the previous snapshot
-    /// delivered to the agent.
-    pub output_changed_since_last_read: bool,
-
-    /// Time since the terminal output grid last changed.
-    pub since_output_change: Option<Duration>,
 
     /// Present whenever the process tree was actually inspected, including when
     /// every reading in it is zero: an exited tree is a real answer. Absent only
@@ -217,16 +211,10 @@ pub struct LrcActivity {
     /// [`Self::signals_unavailable`].
     pub process: Option<LrcProcessActivity>,
 
-    /// One entry per identified write target that exists, including targets that
-    /// have not grown since the previous snapshot. Empty when the command has no
-    /// identifiable write targets.
-    pub files: Vec<LrcFileActivity>,
-
-    /// Set when the process tier could not be collected: a remote session, whose
-    /// processes live on another host, or a first snapshot built before the
-    /// sampler has had a chance to look. Distinguishes "we looked and found
-    /// nothing" from "we could not look", which the agent must not read as
-    /// evidence of a hang.
+    /// Set when the process tree could not be collected: a first snapshot built
+    /// before the sampler has had a chance to look. Distinguishes "we looked
+    /// and found nothing" from "we could not look", which the agent must not
+    /// read as evidence of a hang.
     pub signals_unavailable: bool,
 }
 
@@ -281,16 +269,6 @@ impl LrcProcessState {
             _ => LrcProcessState::Unknown,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-pub struct LrcFileActivity {
-    pub path: String,
-    pub size_bytes: u64,
-    /// Change in size since the previous snapshot.
-    pub size_delta_bytes: i64,
-    /// Secret-redacted tail of a `.log` file. Empty for other, non-text, or unreadable files.
-    pub tail: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
