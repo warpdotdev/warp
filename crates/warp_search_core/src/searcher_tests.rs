@@ -1,11 +1,29 @@
 use std::sync::Arc;
+use std::time::Duration;
 
+use instant::Instant;
 use itertools::Itertools;
 use tantivy::tokenizer::{TextAnalyzer, Token};
 use warpui_core::r#async::executor::Background;
 
 use crate::define_search_schema;
 use crate::searcher::{CustomTokenizer, MIN_MEMORY_BUDGET};
+
+/// Polls `condition` until it returns `true` or `deadline` elapses, sleeping briefly between
+/// checks. Used instead of a fixed sleep to wait for `AsyncSearcher`'s background writer to
+/// converge, so the assertion doesn't flake under a slow or contended test runner.
+fn poll_until(deadline: Duration, mut condition: impl FnMut() -> bool) -> bool {
+    let start = Instant::now();
+    loop {
+        if condition() {
+            return true;
+        }
+        if start.elapsed() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 
 fn token_stream_helper(text: &str) -> Vec<Token> {
     let mut a = TextAnalyzer::from(CustomTokenizer::default());
@@ -348,27 +366,111 @@ fn test_searcher_async_rebuild_coalesces_burst() {
     // Regardless of how many rebuilds were requested, at most one rebuild operation should ever
     // be outstanding on the background queue: later requests must coalesce into the pending one
     // rather than piling up as separate index operations.
-    let queue_len = searcher_async.tx.len();
+    let queue_len = searcher_async.queue.ops.lock().len();
     assert!(
         queue_len <= 1,
         "a burst of rebuild requests should coalesce to at most one queued operation, found {queue_len}"
     );
 
-    // Give the background writer time to drain the queue and apply the final rebuild.
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    // Poll (rather than sleep a fixed duration) until the background writer has drained the
+    // queue and applied the *final* rebuild specifically -- every burst produces the same
+    // document count, so polling on count alone could return as soon as any intermediate,
+    // superseded rebuild happens to be committed.
+    let last_burst_prefix = format!("burst {}", BURST_SIZE - 1);
+    let converged = poll_until(Duration::from_secs(5), || {
+        searcher_async.get_all_documents().is_ok_and(|docs| {
+            docs.len() == DOCS_PER_REBUILD as usize
+                && docs
+                    .iter()
+                    .all(|doc| doc.name.starts_with(&last_burst_prefix))
+        })
+    });
+    assert!(
+        converged,
+        "the index did not converge to the final rebuild's document set within the deadline, got: {:?}",
+        searcher_async.get_all_documents().unwrap()
+    );
+}
 
-    let result = searcher_async.get_all_documents().unwrap();
-    assert_eq!(
-        result.len(),
-        DOCS_PER_REBUILD as usize,
-        "the index should converge to exactly the last requested document set"
+/// Regression test for a correctness bug in an earlier version of the rebuild coalescer: when a
+/// second rebuild superseded a first, not-yet-applied rebuild, the coalescer reused the first
+/// rebuild's position in the operation queue for the second rebuild's (newer) document set. Any
+/// insert/delete call made in between -- as Warp Drive's per-object updates do -- ended up placed
+/// *after* the superseding rebuild in the resolved operation list, even though it was requested
+/// *before* that rebuild. Because inserts overwrite by composite key, the stale interleaved
+/// update would silently win over the newer rebuild's value for the same document.
+///
+/// `rebuild_index_async` must instead preserve request order: an insert/delete made before a
+/// rebuild must never be applied after (and so clobber) that rebuild, and one made after a
+/// rebuild must never be silently overwritten by it.
+#[test]
+fn test_searcher_async_rebuild_preserves_operation_order_with_interleaved_updates() {
+    define_search_schema!(
+        schema_name: TEST_SCHEMA,
+        config_name: SchemaConfig,
+        search_doc: SearchDoc,
+        identifying_doc: IdentifyingDoc,
+        search_fields: [name: 1.0],
+        id_fields: [id: u64]
     );
 
-    let last_burst_prefix = format!("burst {}", BURST_SIZE - 1);
+    let background_executor = Arc::new(Background::default());
+    let searcher_async =
+        TEST_SCHEMA.create_async_searcher(MIN_MEMORY_BUDGET, background_executor.clone());
+
+    let get_name = || {
+        searcher_async
+            .get_all_documents()
+            .unwrap()
+            .into_iter()
+            .find(|doc| doc.id == 1)
+            .map(|doc| doc.name)
+    };
+
+    // Request a rebuild (R1), then -- before the background writer gets a chance to apply it --
+    // an incremental update for the same document lands (as Warp Drive's per-object insert calls
+    // do), then a second rebuild (R2) is requested whose snapshot reflects a newer value for that
+    // same document. R2 supersedes R1 in the coalescer, but the interleaved incremental update
+    // must still be treated as older than R2, since it was requested before R2.
+    searcher_async
+        .rebuild_index_async([SearchDoc {
+            name: "r1 stale".to_owned(),
+            id: 1,
+        }])
+        .unwrap();
+    searcher_async
+        .insert_document_async(SearchDoc {
+            name: "stale interleaved update".to_owned(),
+            id: 1,
+        })
+        .unwrap();
+    searcher_async
+        .rebuild_index_async([SearchDoc {
+            name: "r2 fresh".to_owned(),
+            id: 1,
+        }])
+        .unwrap();
+
     assert!(
-        result
-            .iter()
-            .all(|doc| doc.name.starts_with(&last_burst_prefix)),
-        "the index should contain only documents from the final, non-superseded rebuild"
+        poll_until(Duration::from_secs(5), || get_name().as_deref()
+            == Some("r2 fresh")),
+        "the newer rebuild (r2) must win over the interleaved update that preceded it, got {:?}",
+        get_name()
+    );
+
+    // Conversely, an update requested *after* a rebuild must not be silently overwritten by it:
+    // it should still win, since it is the most recent operation.
+    searcher_async
+        .insert_document_async(SearchDoc {
+            name: "fresh update after rebuild".to_owned(),
+            id: 1,
+        })
+        .unwrap();
+
+    assert!(
+        poll_until(Duration::from_secs(5), || get_name().as_deref()
+            == Some("fresh update after rebuild")),
+        "an update requested after a rebuild must win over that rebuild, got {:?}",
+        get_name()
     );
 }
