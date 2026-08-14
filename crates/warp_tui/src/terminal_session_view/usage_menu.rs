@@ -11,7 +11,33 @@ use warpui_core::elements::{CrossAxisAlignment, MouseStateHandle};
 
 use crate::tui_builder::TuiUiBuilder;
 
-const CREDITS_PER_CIRCLE: i64 = 500;
+const MIN_CREDITS_PER_CIRCLE: u64 = 500;
+const MAX_PAY_AS_YOU_GO_ROWS: usize = 2;
+
+fn paint_text(
+    surface: &mut TuiPaintSurface<'_>,
+    origin: TuiScreenPosition,
+    row: u16,
+    column: &mut usize,
+    limit: usize,
+    text: &str,
+    style: TuiStyle,
+) {
+    for glyph in text.chars() {
+        if *column >= limit {
+            break;
+        }
+        let Ok(column_offset) = u16::try_from(*column) else {
+            break;
+        };
+        if let Some(cell) =
+            surface.cell_mut(origin.offset(i32::from(column_offset), i32::from(row)))
+        {
+            cell.set_symbol(glyph.to_string().as_str()).set_style(style);
+        }
+        *column += 1;
+    }
+}
 struct TuiUsageBar {
     ratio: f64,
     filled_char: char,
@@ -90,19 +116,43 @@ impl TuiElement for TuiUsageBar {
 }
 
 struct TuiUsagePayAsYouGoRows {
-    total_circles: usize,
+    credits_used: u64,
+    cost_cents: i64,
+    summary_note: &'static str,
+    credits_per_circle: u64,
+    visible_circles: usize,
+    circle_rows: u16,
     filled_style: TuiStyle,
     empty_style: TuiStyle,
+    primary_style: TuiStyle,
+    muted_style: TuiStyle,
     size: Option<TuiSize>,
     origin: Option<TuiScreenPoint>,
 }
 
 impl TuiUsagePayAsYouGoRows {
-    fn new(total_circles: usize, filled_style: TuiStyle, empty_style: TuiStyle) -> Self {
+    fn new(
+        payg: &TuiUsagePayAsYouGo,
+        filled_style: TuiStyle,
+        empty_style: TuiStyle,
+        primary_style: TuiStyle,
+        muted_style: TuiStyle,
+    ) -> Self {
         Self {
-            total_circles,
+            credits_used: payg.credits_used.max(0) as u64,
+            cost_cents: payg.cost_cents,
+            summary_note: if payg.has_kicked_in {
+                KICKED_IN_NOTE
+            } else {
+                NOT_KICKED_IN_NOTE
+            },
+            credits_per_circle: MIN_CREDITS_PER_CIRCLE,
+            visible_circles: 0,
+            circle_rows: 1,
             filled_style,
             empty_style,
+            primary_style,
+            muted_style,
             size: None,
             origin: None,
         }
@@ -117,12 +167,22 @@ impl TuiElement for TuiUsagePayAsYouGoRows {
         _app: &AppContext,
     ) -> TuiSize {
         let width = usize::from(constraint.max.width.max(1));
-        let rows = if self.total_circles == 0 {
+        let capacity = width.saturating_mul(MAX_PAY_AS_YOU_GO_ROWS);
+        let minimum_credits_per_circle = self.credits_used.div_ceil(capacity as u64);
+        self.credits_per_circle = MIN_CREDITS_PER_CIRCLE;
+        while self.credits_per_circle < minimum_credits_per_circle {
+            self.credits_per_circle = self.credits_per_circle.saturating_mul(10);
+        }
+        self.visible_circles = usize::try_from(self.credits_used.div_ceil(self.credits_per_circle))
+            .unwrap_or(capacity)
+            .min(capacity);
+        let circle_rows = if self.visible_circles == 0 {
             1
         } else {
-            self.total_circles.div_ceil(width)
+            self.visible_circles.div_ceil(width)
         };
-        let rows = u16::try_from(rows).unwrap_or(u16::MAX);
+        self.circle_rows = u16::try_from(circle_rows).unwrap_or(u16::MAX);
+        let rows = self.circle_rows.saturating_add(1);
         let size = TuiSize::new(constraint.max.width, constraint.constrain_height(rows));
         self.size = Some(size);
         size
@@ -142,8 +202,8 @@ impl TuiElement for TuiUsagePayAsYouGoRows {
             return;
         }
         let width = usize::from(size.width);
-        let mut remaining = self.total_circles;
-        for row in 0..size.height {
+        let mut remaining = self.visible_circles;
+        for row in 0..self.circle_rows.min(size.height) {
             let filled_in_row = remaining.min(width);
             remaining -= filled_in_row;
             for column in 0..size.width {
@@ -159,6 +219,77 @@ impl TuiElement for TuiUsagePayAsYouGoRows {
                 }
             }
         }
+        if self.circle_rows >= size.height {
+            return;
+        }
+        let note_width = self.summary_note.chars().count().min(width);
+        let note_start = width.saturating_sub(note_width);
+        let left_limit = note_start.saturating_sub(1);
+        let mut column = 0;
+        paint_text(
+            surface,
+            origin,
+            self.circle_rows,
+            &mut column,
+            left_limit,
+            "Spend: ",
+            self.muted_style,
+        );
+        paint_text(
+            surface,
+            origin,
+            self.circle_rows,
+            &mut column,
+            left_limit,
+            format!(
+                "{} credits / {}",
+                decimal_with_commas(self.credits_used as i64),
+                dollars(self.cost_cents)
+            )
+            .as_str(),
+            self.primary_style,
+        );
+        paint_text(
+            surface,
+            origin,
+            self.circle_rows,
+            &mut column,
+            left_limit,
+            " • ",
+            self.muted_style,
+        );
+        paint_text(
+            surface,
+            origin,
+            self.circle_rows,
+            &mut column,
+            left_limit,
+            "●",
+            self.filled_style,
+        );
+        paint_text(
+            surface,
+            origin,
+            self.circle_rows,
+            &mut column,
+            left_limit,
+            format!(
+                " = {} credits",
+                unsigned_decimal_with_commas(self.credits_per_circle)
+            )
+            .as_str(),
+            self.muted_style,
+        );
+        let mut note_column = note_start;
+        paint_text(
+            surface,
+            origin,
+            self.circle_rows,
+            &mut note_column,
+            width,
+            self.summary_note,
+            self.muted_style,
+        );
     }
 
     fn size(&self) -> Option<TuiSize> {
@@ -213,12 +344,14 @@ fn credit_bar_row(
     TuiUsageBar::new(ratio, '█', '░', filled_style, empty_style).finish()
 }
 fn pay_as_you_go_rows(
-    credits_used: i64,
+    payg: &TuiUsagePayAsYouGo,
     filled_style: TuiStyle,
     empty_style: TuiStyle,
+    primary_style: TuiStyle,
+    muted_style: TuiStyle,
 ) -> Box<dyn TuiElement> {
-    let total_circles = (credits_used.max(0) as f64 / CREDITS_PER_CIRCLE as f64).ceil() as usize;
-    TuiUsagePayAsYouGoRows::new(total_circles, filled_style, empty_style).finish()
+    TuiUsagePayAsYouGoRows::new(payg, filled_style, empty_style, primary_style, muted_style)
+        .finish()
 }
 
 fn hoverable_link(
@@ -257,14 +390,19 @@ fn decimal_with_commas(value: i64) -> String {
     if value.unsigned_abs() < 10_000 {
         return value.to_string();
     }
-    let mut digits = value.unsigned_abs().to_string();
+    let digits = unsigned_decimal_with_commas(value.unsigned_abs());
+    if value < 0 {
+        format!("-{digits}")
+    } else {
+        digits
+    }
+}
+fn unsigned_decimal_with_commas(value: u64) -> String {
+    let mut digits = value.to_string();
     let mut separator = digits.len();
     while separator > 3 {
         separator -= 3;
         digits.insert(separator, ',');
-    }
-    if value < 0 {
-        digits.insert(0, '-');
     }
     digits
 }
@@ -313,30 +451,10 @@ fn pay_as_you_go_section(
     let filled = builder.link_text_style();
     let empty = muted;
 
-    let mut rows = vec![
+    vec![
         label_value_row("Pay-as-you-go", "No limit", primary),
-        pay_as_you_go_rows(payg.credits_used, filled, empty),
-    ];
-    let kicks_in_note = if payg.has_kicked_in {
-        KICKED_IN_NOTE
-    } else {
-        NOT_KICKED_IN_NOTE
-    };
-    rows.push(flex_row(
-        vec![
-            ("Spend: ".to_owned(), muted),
-            (
-                format!(
-                    "{} credits / {}",
-                    decimal_with_commas(payg.credits_used),
-                    dollars(payg.cost_cents)
-                ),
-                primary,
-            ),
-        ],
-        vec![(kicks_in_note.to_owned(), muted)],
-    ));
-    rows
+        pay_as_you_go_rows(payg, filled, empty, primary, muted),
+    ]
 }
 
 pub(super) fn render(

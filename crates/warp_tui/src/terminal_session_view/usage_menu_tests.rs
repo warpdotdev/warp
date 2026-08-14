@@ -91,7 +91,7 @@ fn active_pay_as_you_go_matches_the_figma_card() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("Spend: 3500 credits / $30.00"))
+            .any(|line| line.contains("Spend: 3500 credits / $30.00 • ● = 500 credits"))
     );
     assert_eq!(buffer[(0, 0)].bg, buffer[(0, 2)].bg);
     assert!(buffer[(1, 0)].modifier.contains(Modifier::BOLD));
@@ -140,7 +140,7 @@ fn inactive_pay_as_you_go_matches_the_figma_copy() {
     })))
     .join("\n");
 
-    assert!(rendered.contains("Spend: 0 credits / $0"));
+    assert!(rendered.contains("Spend: 0 credits / $0 • ● = 500 credits"));
     assert!(!rendered.contains("$0.00"));
     assert!(rendered.contains("Kicks in after base and add-on credits are exhausted."));
 }
@@ -152,7 +152,10 @@ fn pay_as_you_go_wraps_and_formats_large_usage_like_figma() {
         cost_cents: 8053,
         has_kicked_in: true,
     })));
-    let usage_rows: Vec<_> = rendered.iter().filter(|line| line.contains('●')).collect();
+    let usage_rows: Vec<_> = rendered
+        .iter()
+        .filter(|line| count(line, '●') > 1)
+        .collect();
 
     assert_eq!(usage_rows.len(), 2);
     assert_eq!(count(usage_rows[0], '●'), 108);
@@ -161,7 +164,30 @@ fn pay_as_you_go_wraps_and_formats_large_usage_like_figma() {
     assert!(
         rendered
             .iter()
-            .any(|line| line.contains("Spend: 60,000 credits / $80.53"))
+            .any(|line| line.contains("Spend: 60,000 credits / $80.53 • ● = 500 credits"))
+    );
+}
+
+#[test]
+fn pay_as_you_go_scales_circle_value_at_high_usage() {
+    let overflow = lines(&render_snapshot(snapshot(TuiUsagePayAsYouGo {
+        credits_used: 841_138,
+        cost_cents: 3_364_552,
+        has_kicked_in: true,
+    })));
+    let overflow_rows: Vec<_> = overflow
+        .iter()
+        .filter(|line| count(line, '●') > 1)
+        .collect();
+
+    assert_eq!(overflow_rows.len(), 2);
+    assert_eq!(count(overflow_rows[0], '●'), 108);
+    assert_eq!(count(overflow_rows[1], '●'), 61);
+    assert_eq!(count(overflow_rows[1], '-'), 47);
+    assert!(
+        overflow
+            .iter()
+            .any(|line| line.contains("Spend: 841,138 credits / $33,645.52 • ● = 5,000 credits"))
     );
 }
 

@@ -952,6 +952,17 @@ pub fn compute_tui_usage_snapshot(app: &AppContext) -> TuiUsageSnapshot {
             }
         })
     };
+    let _ = (base_credits, addon_credits);
+    let base_credits = Some(TuiUsageCreditBar {
+        used: 1100,
+        limit: 1500,
+        note: "Resets September 1 at 12:00am".to_owned(),
+    });
+    let addon_credits = Some(TuiUsageCreditBar {
+        used: 100,
+        limit: 500,
+        note: "Auto-reload 500 credits September 1 at 12:00am".to_owned(),
+    });
 
     let pay_as_you_go = workspace.and_then(|workspace| {
         let payg_available = workspace.are_overages_enabled()
