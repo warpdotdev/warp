@@ -127,7 +127,7 @@ fn workspace_owner_badge_shown_for_workspace_owner_role() {
 }
 
 #[test]
-fn workspace_admin_viewer_gets_team_admin_powers_when_roles_are_detached() {
+fn workspace_admin_viewer_gets_team_admin_powers() {
     let admin_uid = UserUid::new("admin");
     let target_uid = UserUid::new("target");
     let team = team_with_members(vec![
@@ -173,10 +173,16 @@ fn workspace_admin_viewer_gets_team_admin_powers_when_roles_are_detached() {
 /// This is prod's state today: native workspaces can be enabled for a
 /// workspace, but the server-wide workspace role sync detachment feature is
 /// off, so roles are still mirrored 1:1 and the server reports
-/// `nativeWorkspacesRoleDetachmentEnabled: false`. A workspace admin who is
-/// not a team admin must get no extra powers and no badge in this state.
+/// `nativeWorkspacesRoleDetachmentEnabled: false`. A workspace admin still
+/// gets member-management powers in this state (the server permits it, and
+/// the admin site's shipped workspace-admin path already grants it the same
+/// way) -- only the *badge* stays unaffected, since relabeling every mirrored
+/// team admin as "Workspace admin" would be a separate, much more visible
+/// change this feature does not make. See the doc comment on
+/// `team_to_item_list` for why the permission and badge gates intentionally
+/// diverge.
 #[test]
-fn workspace_admin_has_no_effect_when_roles_are_still_synced() {
+fn workspace_admin_badge_unaffected_when_roles_are_still_synced() {
     let admin_uid = UserUid::new("admin");
     let target_uid = UserUid::new("target");
     let team = team_with_members(vec![
@@ -204,10 +210,17 @@ fn workspace_admin_has_no_effect_when_roles_are_still_synced() {
 
     let target_item = item_for(&items, "target@example.com");
     assert!(
-        target_item.actions.is_empty(),
-        "a non-team-admin viewer should get no member actions when roles are synced: {target_item:?}"
+        target_item
+            .actions
+            .iter()
+            .any(|action| action.label == "Remove from team"),
+        "a workspace admin should still get member actions when roles are synced: {target_item:?}"
     );
-    assert_eq!(target_item.state, ItemState::Valid);
+    assert_eq!(
+        target_item.state,
+        ItemState::Valid,
+        "the badge must not relabel a mirrored role when roles are still synced"
+    );
 }
 
 /// A pure team admin's badge and powers are unaffected by this feature,

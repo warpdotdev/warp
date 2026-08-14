@@ -1737,26 +1737,28 @@ impl TeamsPageView {
     /// Builds the member/invite list for the team management page.
     ///
     /// `workspace` is the current workspace, when known. A workspace admin gets
-    /// the same team-admin powers a team admin has, and a member's workspace
-    /// role supersedes their team role's chip. This is only derived when
-    /// `workspace.is_workspace_role_detachment_enabled()`: native workspaces
-    /// enabled alone is not enough, since workspace roles are still mirrored
-    /// 1:1 from team roles until the server's workspace role sync detachment
-    /// is also on (see `Workspace::is_workspace_role_detachment_enabled`).
-    /// Deriving from a merely-native, still-synced workspace would misclassify
-    /// every mirrored team admin/owner as workspace-admin-derived.
+    /// the same team-admin powers a team admin has on the current team,
+    /// regardless of whether their workspace role is independently set or just
+    /// mirrored from being a team admin elsewhere in the workspace: the server
+    /// permits this already (`HasAdminLevelPermissionsInWorkspace` carries no
+    /// detachment check), and the admin site's shipped workspace-admin path
+    /// (`isWorkspaceAdmin`/`canAccess` in `useWorkspaceAdminPanel.ts` /
+    /// `TeamAdminDetail.tsx`) already grants cross-team actions the same way.
+    /// A member's workspace role supersedes their team role's *chip*, however,
+    /// only when `workspace.is_workspace_role_detachment_enabled()`: relabeling
+    /// every mirrored team admin/owner as "Workspace admin"/"Workspace owner"
+    /// on every native-but-still-synced workspace would be a highly visible,
+    /// unrequested UI change for an assignment that hasn't actually changed,
+    /// unlike the permission grant above which has no user-visible surface of
+    /// its own. Do not fold this gate back into the permission check above.
     fn team_to_item_list(
         team: &Team,
         current_user_email: &str,
         workspace: Option<&Workspace>,
     ) -> Vec<Item> {
         let mut combined = Vec::new();
-        let workspace_roles_are_independent =
-            workspace.is_some_and(Workspace::is_workspace_role_detachment_enabled);
         let current_user_has_admin_permissions = team.has_admin_permissions(current_user_email)
-            || (workspace_roles_are_independent
-                && workspace
-                    .is_some_and(|workspace| workspace.is_workspace_admin(current_user_email)));
+            || workspace.is_some_and(|workspace| workspace.is_workspace_admin(current_user_email));
         let current_user_has_owner_permissions = team.has_owner_permissions(current_user_email);
         // Admins of the team's native workspace can manage team membership roles even without
         // an explicit team-admin role. Ownership transfer stays gated on team-owner permissions
@@ -1795,18 +1797,19 @@ impl TeamsPageView {
         team.members.iter().for_each(|member| {
             let team_member_has_owner_permissions = team.has_owner_permissions(&member.email);
             let team_member_has_admin_permissions = team.has_admin_permissions(&member.email);
-            let member_workspace_role = if workspace_roles_are_independent {
-                workspace
-                    .and_then(|workspace| {
-                        workspace
-                            .members
-                            .iter()
-                            .find(|workspace_member| workspace_member.email == member.email)
-                    })
-                    .map(|workspace_member| workspace_member.role)
-            } else {
-                None
-            };
+            let member_workspace_role =
+                if workspace.is_some_and(Workspace::is_workspace_role_detachment_enabled) {
+                    workspace
+                        .and_then(|workspace| {
+                            workspace
+                                .members
+                                .iter()
+                                .find(|workspace_member| workspace_member.email == member.email)
+                        })
+                        .map(|workspace_member| workspace_member.role)
+                } else {
+                    None
+                };
 
             // A member's workspace role supersedes their team role's chip.
             let state = match member_workspace_role {
