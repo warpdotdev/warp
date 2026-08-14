@@ -7,7 +7,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 
-use instant::Instant;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use markdown_parser::FormattedTextFragment;
@@ -999,39 +998,19 @@ pub struct PaneGroup {
 
 /// A cloud orchestration parent whose direct children (per the server's
 /// `?ancestor_run_id=` listing) have not yet all materialized as local child
-/// conversations, or whose parent run isn't yet confirmed terminal (so more
-/// children could still appear).
+/// conversations.
 struct PendingParentChildSeed {
     parent_conversation_id: AIConversationId,
-    /// Direct children reported by the last successful ancestor-list fetch,
-    /// excluding the parent itself. `None` until the first successful fetch
-    /// completes.
-    known_child_task_ids: Option<Vec<AmbientAgentTaskId>>,
-    /// Whether the last successful fetch found the parent's own task record
-    /// (which the ancestor-list endpoint is documented to include) already
-    /// in a terminal run state. While `false`, re-drives keep re-listing on
-    /// a bounded cadence instead of only reacting to `TasksUpdated`, since
-    /// this passive/restore path has no SSE coverage for children spawned
-    /// after the last snapshot (unlike the live viewer's ancestor stream).
-    parent_confirmed_terminal: bool,
-    /// True while an ancestor-list fetch for this parent is outstanding.
+    /// True while an ancestor-list fetch for this parent is outstanding, so
+    /// a `TasksUpdated` re-drive arriving before the previous fetch resolves
+    /// doesn't dispatch a second, overlapping request for the same parent.
     fetch_in_flight: bool,
-    /// When the most recent fetch attempt (successful or not) was
-    /// dispatched. Throttles `spawn_ancestor_list_fetch_if_needed` to at
-    /// most one dispatch per `PENDING_PARENT_CHILD_SEED_REPOLL_INTERVAL`,
-    /// regardless of how often `TasksUpdated` or the self-scheduled repoll
-    /// timer re-drive this parent.
-    last_fetch_attempt_at: Option<Instant>,
-    /// Consecutive successful fetches whose response didn't include the
-    /// parent's own task record. Bounds giving up on a parent that can
-    /// never be confirmed terminal (e.g. an ACL edge case, or an older
-    /// server that doesn't echo the parent back), so this can never repeat
-    /// forever. Reset to 0 by any response that does include the parent's
-    /// record, regardless of whether it's terminal yet — an ordinary
-    /// long-running parent is not bounded by this counter.
-    consecutive_parent_record_misses: u32,
-    /// Handle for the currently scheduled repoll timer, if any.
-    repoll_handle: Option<SpawnedFutureHandle>,
+    /// Handle for a scheduled one-shot retry after a transient fetch
+    /// failure. Guarantees the fetch is retried even if nothing else ever
+    /// emits another `TasksUpdated` for this parent (e.g. an idle
+    /// conversation), so a transient error can't silently strand the parent
+    /// without ever linking its children.
+    retry_handle: Option<SpawnedFutureHandle>,
 }
 
 /// Origin metadata for a split-off child agent tab; used to re-adopt the
