@@ -1003,23 +1003,17 @@ pub struct PaneGroup {
 struct PendingParentChildSeed {
     parent_conversation_id: AIConversationId,
     /// True while an ancestor-list fetch for this parent is outstanding, so
-    /// a `TasksUpdated` re-drive arriving before the previous fetch resolves
-    /// doesn't dispatch a second, overlapping request for the same parent.
+    /// a second, overlapping request for the same parent is never dispatched.
     fetch_in_flight: bool,
-    /// When the currently in-flight fetch (if any) was dispatched. The
-    /// completion closure captures this value at dispatch time and compares
-    /// it back against the seed's current value before applying anything,
-    /// so a stale completion for a seed that was removed and recreated for
-    /// the same `parent_task_id` while the old fetch was still in flight
-    /// (e.g. the pane closed and the same parent conversation was reopened)
-    /// can't clobber the new seed's in-flight state or feed stale results
-    /// into it.
+    /// When the currently in-flight fetch (if any) was dispatched. Compared
+    /// against the value captured at dispatch time before a completion is
+    /// applied, so a completion for a seed that was removed and recreated
+    /// for the same `parent_task_id` while the old fetch was still in
+    /// flight can't clobber the new seed's state or feed it stale results.
     in_flight_fetch_started_at: Option<Instant>,
     /// Handle for a scheduled one-shot retry after a transient fetch
-    /// failure. Guarantees the fetch is retried even if nothing else ever
-    /// emits another `TasksUpdated` for this parent (e.g. an idle
-    /// conversation), so a transient error can't silently strand the parent
-    /// without ever linking its children.
+    /// failure, so a transient error can't silently strand the parent
+    /// pending forever without ever linking its children.
     retry_handle: Option<SpawnedFutureHandle>,
 }
 
@@ -4699,9 +4693,8 @@ impl PaneGroup {
             self.panes.remove_hidden_pane(child_pane_id);
             self.discard_pane(child_pane_id, ctx);
         }
-        // Drop any pending parent seed associated with the view being removed
-        // so the re-drive subscription (and any scheduled repoll timer)
-        // doesn't fire for a closed pane.
+        // Drop any pending parent seed for the view being removed, aborting
+        // its retry timer so it can't fire after the pane is gone.
         let parent_task_ids_to_remove: Vec<AmbientAgentTaskId> = self
             .pending_parent_child_seeds
             .iter()

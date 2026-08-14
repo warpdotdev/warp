@@ -1507,12 +1507,9 @@ fn test_pane_group_restore_loop_keeps_orchestration_topology_and_materializes_ch
     });
 }
 
-/// QUALITY-1656 regression: while any listed child is still missing from
-/// the task cache, a parent stays in `pending_parent_child_seeds`, and every
-/// `TasksUpdated` re-drives every pending parent. Without coalescing, a
-/// concurrent seed call (e.g. from `restore_missing_child_agent_panes_for_parent`)
-/// racing a `TasksUpdated` re-drive would dispatch a second `?ancestor_run_id=`
-/// request for the same parent while the first is still in flight.
+/// A concurrent seed call racing a re-drive must not dispatch a second
+/// `?ancestor_run_id=` request for the same parent while the first is
+/// still in flight.
 #[test]
 fn seed_child_conversations_from_task_coalesces_concurrent_ancestor_list_fetches() {
     let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
@@ -1548,11 +1545,9 @@ fn seed_child_conversations_from_task_coalesces_concurrent_ancestor_list_fetches
     });
 }
 
-/// QUALITY-1656 regression: drives `finish_seed_child_conversations_from_task`
-/// directly (the real completion handler, not fabricated pending state) with
-/// a synthetic successful response whose only child is already cached. Both
-/// the child link and the pending-entry removal must happen with zero
-/// additional network dispatches.
+/// Drives the real completion handler with a synthetic successful response
+/// whose only child is already cached. Both the child link and the
+/// pending-entry removal must happen with zero additional network dispatches.
 #[test]
 fn finish_seed_child_conversations_from_task_links_children_and_clears_pending_once_resolved() {
     let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
@@ -1612,11 +1607,11 @@ fn finish_seed_child_conversations_from_task_links_children_and_clears_pending_o
     });
 }
 
-/// Deliberate parity with the pre-fix behavior: while any reported child
-/// hasn't resolved from the local task cache yet, the parent must stay
-/// pending (not be dropped), so a subsequent `TasksUpdated` re-drive still
-/// re-lists and can pick up a child spawned in the interim. Only once every
-/// currently reported child resolves does the parent clear.
+/// While any reported child hasn't resolved from the local task cache yet,
+/// the parent must stay pending (not be dropped) so a subsequent re-drive
+/// still re-lists and can pick up a child spawned in the interim; clearing
+/// early would stop discovering such children. Only once every currently
+/// reported child resolves does the parent clear.
 #[test]
 fn finish_seed_child_conversations_from_task_stays_pending_while_a_child_is_unresolved() {
     let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
@@ -1674,11 +1669,10 @@ fn finish_seed_child_conversations_from_task_stays_pending_while_a_child_is_unre
     });
 }
 
-/// QUALITY-1656 regression: a transient ancestor-list failure (e.g. a
-/// network blip) must not leave the parent stranded waiting on an
-/// incidental `TasksUpdated` that may never come for an idle completed
-/// conversation — a one-shot retry must be scheduled so the fetch is
-/// retried without any external event.
+/// A transient ancestor-list failure (e.g. a network blip) must not leave
+/// the parent stranded waiting on an incidental external event that may
+/// never come (e.g. an idle completed conversation) — a one-shot retry
+/// must be scheduled so the fetch is retried on its own.
 #[test]
 fn finish_seed_child_conversations_from_task_schedules_retry_on_transient_failure() {
     let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
@@ -1727,12 +1721,11 @@ fn finish_seed_child_conversations_from_task_schedules_retry_on_transient_failur
     });
 }
 
-/// Reviewer-flagged stale-fetch-completion race: if a pending seed is
-/// removed (e.g. its pane closes) and a new one created for the same
-/// `parent_task_id` while the old fetch is still in flight (e.g. the same
-/// parent conversation is reopened), the old completion must be recognized
-/// as stale so it can't clobber the new seed's in-flight state or feed it
-/// stale results.
+/// If a pending seed is removed (e.g. its pane closes) and a new one
+/// created for the same `parent_task_id` while the old fetch is still in
+/// flight (e.g. the same parent conversation is reopened), the old
+/// completion must be recognized as stale so it can't clobber the new
+/// seed's in-flight state or feed it stale results.
 #[test]
 fn stale_ancestor_list_completion_is_detected_when_seed_removed_or_recreated() {
     let dispatched_at = Instant::now();
@@ -1768,9 +1761,9 @@ fn stale_ancestor_list_completion_is_detected_when_seed_removed_or_recreated() {
     );
 }
 
-/// QUALITY-1656 regression: a permanent (non-transient) ancestor-list
-/// failure such as a 404/403 can't succeed by retrying blindly, so the
-/// parent must be dropped instead of staying pending forever.
+/// A permanent (non-transient) ancestor-list failure such as a 404/403
+/// can't succeed by retrying blindly, so the parent must be dropped
+/// instead of staying pending forever.
 #[test]
 fn finish_seed_child_conversations_from_task_gives_up_on_permanent_failure() {
     let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
@@ -1806,10 +1799,10 @@ fn finish_seed_child_conversations_from_task_gives_up_on_permanent_failure() {
     });
 }
 
-/// QUALITY-1656 regression: a parent with no terminal surface to seed into
-/// (e.g. a background ancestor several levels above the conversation the
-/// user actually opened) must not stay pending forever, since that would
-/// re-list it on every future re-drive indefinitely.
+/// A parent with no terminal surface to seed into (e.g. a background
+/// ancestor several levels above the conversation the user actually
+/// opened) must not stay pending forever, since that would re-list it on
+/// every future re-drive indefinitely.
 #[test]
 fn finish_seed_child_conversations_from_task_gives_up_when_parent_has_no_terminal_surface() {
     let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
@@ -1826,8 +1819,9 @@ fn finish_seed_child_conversations_from_task_gives_up_when_parent_has_no_termina
 
             // Mark pending directly (bypassing `seed_child_conversations_from_task`,
             // which would spawn a real network fetch) then drive the real
-            // completion handler — this is the exact defect that caused the
-            // reported loop, so the test must actually reach this code path.
+            // completion handler, so the test exercises the actual
+            // no-terminal-surface early return instead of asserting against
+            // fabricated state.
             panes.pending_parent_child_seeds.insert(
                 parent_task_id,
                 PendingParentChildSeed {
