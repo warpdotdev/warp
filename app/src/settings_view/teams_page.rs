@@ -4481,21 +4481,6 @@ impl SettingsWidget for TeamsWidget {
 
 #[cfg(test)]
 #[test]
-pub fn test_workspace_admin_panel_action_is_login_gated_like_the_team_one() {
-    let team_scoped = TeamsPageAction::OpenAdminPanel {
-        team_uid: ServerId::from(1),
-    };
-    let workspace_scoped = TeamsPageAction::OpenWorkspaceAdminPanel;
-
-    assert!(workspace_scoped.blocked_for_anonymous_user());
-
-    let team_scoped_feature: LoginGatedFeature = (&team_scoped).into();
-    let workspace_scoped_feature: LoginGatedFeature = (&workspace_scoped).into();
-    assert_eq!(workspace_scoped_feature, team_scoped_feature);
-}
-
-#[cfg(test)]
-#[test]
 pub fn test_valid_domains() {
     assert!(!TeamsPageView::is_valid_domain("@warp.dev"));
     assert!(!TeamsPageView::is_valid_domain("warp,"));

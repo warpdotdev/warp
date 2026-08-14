@@ -46,37 +46,30 @@ fn test_workspace_admin_panel_link_generation() {
 }
 
 #[test]
-fn test_workspace_admin_on_native_workspaces_plan_uses_workspace_panel() {
-    assert!(AdminActions::should_use_workspace_admin_panel(
-        Some(&workspace(MembershipRole::Admin, true)),
-        MEMBER_EMAIL,
-    ));
-}
+fn test_workspace_admin_panel_routing() {
+    // (workspace role, native workspaces enabled, viewer email, uses workspace panel)
+    let cases = [
+        (MembershipRole::Admin, true, MEMBER_EMAIL, true),
+        (MembershipRole::Owner, true, MEMBER_EMAIL, true),
+        // An admin on a plan without native workspaces, a non-admin member, and
+        // a viewer absent from the roster all keep the team-scoped panel.
+        (MembershipRole::Owner, false, MEMBER_EMAIL, false),
+        (MembershipRole::User, true, MEMBER_EMAIL, false),
+        (MembershipRole::Owner, true, "someone-else@warp.dev", false),
+    ];
 
-#[test]
-fn test_workspace_admin_without_native_workspaces_keeps_team_panel() {
-    assert!(!AdminActions::should_use_workspace_admin_panel(
-        Some(&workspace(MembershipRole::Owner, false)),
-        MEMBER_EMAIL,
-    ));
-}
+    for (role, native_workspaces_enabled, email, expected) in cases {
+        assert_eq!(
+            AdminActions::should_use_workspace_admin_panel(
+                Some(&workspace(role, native_workspaces_enabled)),
+                email,
+            ),
+            expected,
+            "role={role:?}, native_workspaces_enabled={native_workspaces_enabled}, email={email}"
+        );
+    }
 
-#[test]
-fn test_non_workspace_admin_keeps_team_panel() {
-    assert!(!AdminActions::should_use_workspace_admin_panel(
-        Some(&workspace(MembershipRole::User, true)),
-        MEMBER_EMAIL,
-    ));
-
-    // A viewer absent from the workspace roster.
-    assert!(!AdminActions::should_use_workspace_admin_panel(
-        Some(&workspace(MembershipRole::Owner, true)),
-        "someone-else@warp.dev",
-    ));
-}
-
-#[test]
-fn test_missing_workspace_keeps_team_panel() {
+    // No workspace at all also keeps the team-scoped panel.
     assert!(!AdminActions::should_use_workspace_admin_panel(
         None,
         MEMBER_EMAIL
